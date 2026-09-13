@@ -1298,8 +1298,8 @@
                 terminalView?.cancelCursorNavigation()
             }
 
-            // Establish input first, then let the native scroll view reveal the
-            // tail when it receives its first real on-screen layout.
+            // Record input intent and request the initial native tail reveal.
+            // Focus is deferred; the bottom anchor follows later inset changes.
             context.coordinator.finishInitialPresentation(
                 scrollView: scrollView,
                 inputEnabled: inputEnabled,
@@ -1329,6 +1329,10 @@
             Coordinator()
         }
 
+        static func dismantleUIView(_ uiView: UIScrollView, coordinator: Coordinator) {
+            coordinator.terminalView?.invalidateInput()
+        }
+
         @MainActor
         final class Coordinator: NSObject, UIScrollViewDelegate {
             var terminalView: InteractiveTerminalView?
@@ -1337,13 +1341,6 @@
             var cellSize: CGSize = .zero
             var widthConstraint: NSLayoutConstraint?
             var heightConstraint: NSLayoutConstraint?
-
-            private var requestedInputPresentation = TerminalInputPresentation.State(
-                inputEnabled: false,
-                keyboardRequested: false
-            )
-            private var appliedInputPresentation: TerminalInputPresentation.State?
-            private var didFinishInitialPresentation = false
 
             /// Y offset captured at the start of a user drag. Used to lock
             /// vertical scrolling while mouse mode is active — vertical pans
@@ -1415,40 +1412,23 @@
                 inputEnabled: Bool,
                 keyboardRequested: Bool
             ) {
-                requestedInputPresentation = TerminalInputPresentation.State(
+                updateInteraction(
                     inputEnabled: inputEnabled,
                     keyboardRequested: keyboardRequested
                 )
-                didFinishInitialPresentation = true
 
-                // Establish the responder and its input accessory first. Those
-                // change SwiftUI's safe area asynchronously, so any bottom
-                // offset calculated before this point is provisional.
-                applyRequestedInteraction()
-
+                // Focus is applied asynchronously outside SwiftUI's update.
+                // The native bottom anchor follows the later accessory/inset
+                // change, independently of this one-time initial tail reveal.
                 scrollView.requestInitialTailPresentation { [weak terminalView] in
                     terminalView?.presentCurrentTail()
                 }
             }
 
             func updateInteraction(inputEnabled: Bool, keyboardRequested: Bool) {
-                requestedInputPresentation = TerminalInputPresentation.State(
-                    inputEnabled: inputEnabled,
+                terminalView?.updateInput(
+                    isEnabled: inputEnabled,
                     keyboardRequested: keyboardRequested
-                )
-                guard didFinishInitialPresentation else { return }
-                applyRequestedInteraction()
-            }
-
-            private func applyRequestedInteraction() {
-                guard
-                    appliedInputPresentation != requestedInputPresentation,
-                    let terminalView
-                else { return }
-                appliedInputPresentation = requestedInputPresentation
-                terminalView.updateInput(
-                    isEnabled: requestedInputPresentation.inputEnabled,
-                    keyboardRequested: requestedInputPresentation.keyboardRequested
                 )
             }
 

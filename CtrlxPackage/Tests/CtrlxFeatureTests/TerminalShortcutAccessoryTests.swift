@@ -9,8 +9,10 @@
     @Suite("Terminal shortcut accessory", .serialized)
     struct TerminalShortcutAccessoryTests {
         @Test("Shortcut buttons share the first row's height")
-        func sharedHeight() throws {
-            let terminal = makeTerminal()
+        func sharedHeight() async throws {
+            let fixture = TerminalSelectionRoutingTests()
+            let (window, terminal) = await fixture.makeView()
+            defer { fixture.close(window, terminal) }
             let accessory = try #require(terminal.inputAccessoryView as? TerminalAccessory)
 
             #expect(!accessory.configuration.showsHorizontalArrows)
@@ -56,7 +58,9 @@
         }
 
         private func makeTerminal() -> InteractiveTerminalView {
-            InteractiveTerminalView(frame: CGRect(x: 0, y: 0, width: 420, height: 300), font: nil)
+            let terminal = InteractiveTerminalView(frame: CGRect(x: 0, y: 0, width: 420, height: 300), font: nil)
+            terminal.updateInput(isEnabled: true, keyboardRequested: false)
+            return terminal
         }
 
         private func press(_ action: Selector, in accessory: TerminalAccessory) throws {

@@ -10,8 +10,8 @@
     @Suite("Terminal input-row selection routing", .serialized)
     struct TerminalSelectionRoutingTests {
         @Test("The whole current input row opts out, including blank cells and wide glyphs")
-        func inputRow() throws {
-            let (window, view) = makeView()
+        func inputRow() async throws {
+            let (window, view) = await makeView()
             defer { close(window, view) }
             view.feed(text: "正文\r\n> 中🙂 input")
             view.scroll(toPosition: 1)
@@ -37,8 +37,8 @@
         }
 
         @Test("History, inactive input and mouse-mode TUIs retain selection")
-        func selectionFallbacks() {
-            let (window, view) = makeView()
+        func selectionFallbacks() async {
+            let (window, view) = await makeView()
             defer { close(window, view) }
             for line in 0..<100 {
                 view.feed(text: "history \(line)\r\n")
@@ -63,7 +63,7 @@
 
         @Test("Input multi-taps open the menu, and explicit Select/Copy act on the terminal", arguments: [2, 3])
         func inputMenuActions(tapCount: Int) async throws {
-            let (window, view) = makeView()
+            let (window, view) = await makeView()
             defer { close(window, view) }
             let proxy = try inputProxy(in: window)
             proxy.insertText("shadow editor only")
@@ -107,8 +107,8 @@
         }
 
         @Test("Body double-tap Copy ignores the native shadow editor")
-        func bodyCopyAction() throws {
-            let (window, view) = makeView()
+        func bodyCopyAction() async throws {
+            let (window, view) = await makeView()
             defer { close(window, view) }
             let proxy = try inputProxy(in: window)
             proxy.insertText("not the visible text")
@@ -123,8 +123,8 @@
         }
 
         @Test("Select All from an input menu selects the terminal, not the shadow document")
-        func selectAllAction() throws {
-            let (window, view) = makeView()
+        func selectAllAction() async throws {
+            let (window, view) = await makeView()
             defer { close(window, view) }
             let proxy = try inputProxy(in: window)
             proxy.insertText("shadow editor only")
@@ -143,8 +143,8 @@
         }
 
         @Test("Typing and IME commits still use the shadow editor after opening an input menu")
-        func typingAndIMEAfterMenu() throws {
-            let (window, view) = makeView()
+        func typingAndIMEAfterMenu() async throws {
+            let (window, view) = await makeView()
             defer { close(window, view) }
             let proxy = try inputProxy(in: window)
             view.feed(text: "> input")
@@ -178,8 +178,8 @@
         }
 
         @Test("Cross-row taps wait for visible cursor feedback and correct the actual column once")
-        func multilineCursorFeedback() {
-            let (window, view) = makeView()
+        func multilineCursorFeedback() async {
+            let (window, view) = await makeView()
             defer { close(window, view) }
             paintMultilineDraft(view)
             var sent: [[TmuxKey]] = []
@@ -202,8 +202,8 @@
         }
 
         @Test("Ordinary typing or parent controls cancel a pending column correction", arguments: [false, true])
-        func typingCancelsMove(parentControl: Bool) {
-            let (window, view) = makeView()
+        func typingCancelsMove(parentControl: Bool) async {
+            let (window, view) = await makeView()
             defer { close(window, view) }
             paintMultilineDraft(view)
             var sent: [[TmuxKey]] = []
@@ -220,8 +220,8 @@
         }
 
         @Test("Copy routing stays independent on every line of a multiline draft")
-        func multilineSelectionUnchanged() {
-            let (window, view) = makeView()
+        func multilineSelectionUnchanged() async {
+            let (window, view) = await makeView()
             defer { close(window, view) }
             paintMultilineDraft(view)
             var sent: [[TmuxKey]] = []
@@ -237,8 +237,8 @@
         }
 
         @Test("Cross-row taps never send keys for body, padding, mouse mode, IME or inactive input")
-        func multilineInputGates() throws {
-            let (window, view) = makeView()
+        func multilineInputGates() async throws {
+            let (window, view) = await makeView()
             defer { close(window, view) }
             paintMultilineDraft(view)
             var sent: [[TmuxKey]] = []
@@ -282,9 +282,9 @@
             target.perform(action, with: menu)
         }
 
-        fileprivate func close(_ window: UIWindow, _ view: InteractiveTerminalView) {
+        func close(_ window: UIWindow, _ view: InteractiveTerminalView) {
             UIMenuController.shared.hideMenu()
-            view.updateInput(isEnabled: false, keyboardRequested: false)
+            view.invalidateInput()
             view.updateUiClosed()
             window.isHidden = true
         }
@@ -304,7 +304,7 @@
             }
         }
 
-        fileprivate func makeView() -> (UIWindow, InteractiveTerminalView) {
+        func makeView() async -> (UIWindow, InteractiveTerminalView) {
             let frame = CGRect(x: 0, y: 0, width: 400, height: 700)
             let window: UIWindow
             let application = UIApplication.perform(#selector(getter: UIApplication.shared))?.takeUnretainedValue() as? UIApplication
@@ -324,6 +324,7 @@
             window.makeKeyAndVisible()
             terminal.updateInput(isEnabled: true, keyboardRequested: false)
             controller.view.layoutIfNeeded()
+            await terminal.inputFocusUpdates.pendingTask?.value
             return (window, terminal)
         }
     }
@@ -337,7 +338,7 @@
             try XCTSkipUnless(ProcessInfo.processInfo.environment["CTRLX_MENU_UI_TESTS"] == "1")
             let fixture = TerminalSelectionRoutingTests()
             for tapCount in [2, 3] {
-                let (window, view) = fixture.makeView()
+                let (window, view) = await fixture.makeView()
                 defer { fixture.close(window, view) }
                 view.feed(text: "body\r\n> hello world")
                 let proxy = try XCTUnwrap(window.rootViewController?.view.subviews

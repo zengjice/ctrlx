@@ -23,9 +23,11 @@ SwiftTerm's iOS `TerminalView` is a `UIScrollView` subclass that handles termina
 - `scroll(toPosition: 1)` targets the live screen's first row, not the current
   cursor row. A repeated request must synchronize pixels even when the logical
   display row is unchanged.
-- Initial presentation waits for a native window and usable bounds, with the
-  input responder/accessory established first. Later reset/resize uses native
-  viewport synchronization; neither path depends on another output byte.
+- Initial presentation waits for a native window and usable bounds. Input
+  responder changes run separately, outside SwiftUI's synchronous update;
+  the bottom anchor follows the resulting accessory/safe-area changes. Later
+  reset/resize uses native viewport synchronization; neither path depends on
+  another output byte.
 - A layout update preserves deliberate history scrolling, fractional offsets,
   active dragging, history momentum and selection. It must not force the inner
   terminal to the bottom on every feed or layout.
@@ -34,6 +36,33 @@ See `terminal-rendering-investigation.md` for the reproduced 5-row drift and the
 iOS-only regression suite. The sections below retain historical implementation
 examples; old minimum-terminal-height constraints, scroll-blocking flags and
 fixed-delay presentation snippets are **not** the current implementation.
+
+## Deferred input focus (multi-pane hang)
+
+Four iPhone Air watchdog reports on September 13, 2026 showed the same cycle:
+`updateUIView → updateInput → become/resignFirstResponder → _UIHostingView
+responderNode → AttributeGraph::print_cycle`. Switching between pane proxies
+synchronously during SwiftUI's graph update prevented the main thread from
+returning, including when the app tried to exit. This was a focus-reentrancy
+bug, not a relay timeout or terminal-history replay stall.
+
+`InteractiveTerminalView` now owns one `TerminalInputFocusUpdates` instance:
+
+- `updateInput` immediately gates input but only records responder intent.
+  A cancellable MainActor task suspends before applying the latest request.
+- Mounting uses the same scheduler. Detached views cancel pending work;
+  reattachment reapplies the latest state, even if its values are unchanged.
+- `dismantleUIView` permanently invalidates the old view's pending requests.
+  Failed focus acquisition is not marked applied and does not retry in a loop.
+- Inactive terminals drop input from a still-focused proxy/accessory during
+  the deferred handoff. No rendering, selection, IME-document, wire protocol,
+  Mac, Relay, or SwiftTerm changes are needed for this fix.
+
+Platform-independent scheduler tests cover deferral, coalescing, cancellation,
+reattachment, teardown, failed acquisition, multi-pane handoff and the copy
+page. Native selection/shortcut fixtures await the actual focus task. Device
+acceptance must exercise entering 2+ panes, rapid pane/window changes, keyboard
+show/hide, the copy page and exit/re-entry; check for new AttributeGraph cycles.
 
 ## Input toolbar layout
 

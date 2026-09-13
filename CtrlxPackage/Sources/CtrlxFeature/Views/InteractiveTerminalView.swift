@@ -78,7 +78,11 @@ enum TerminalCursorTapNavigation {
         /// Controls whether the terminal can accept keyboard input.
         /// When false, tapping the terminal won't show the keyboard.
         /// Use `updateInput(isEnabled:keyboardRequested:)` to control this.
-        var inputEnabled = false
+        private(set) var inputEnabled = false
+
+        private(set) lazy var inputFocusUpdates = TerminalInputFocusUpdates { [weak self] state in
+            self?.applyInputPresentation(state) ?? false
+        }
 
         /// A transparent input view hides the software keyboard while keeping
         /// UIKit's input accessory (Esc/Ctrl/Tab/arrows) attached to the responder.
@@ -193,9 +197,7 @@ enum TerminalCursorTapNavigation {
         override func didMoveToWindow() {
             super.didMoveToWindow()
             if window == nil { cancelCursorNavigation() }
-            if inputEnabled, window != nil, !inputProxy.isFirstResponder {
-                _ = inputProxy.becomeFirstResponder()
-            }
+            inputFocusUpdates.setAttached(window != nil)
         }
 
         /// SwiftTerm's accessory toggles its custom input view through the
@@ -262,28 +264,42 @@ enum TerminalCursorTapNavigation {
         /// Keeps the shortcut accessory available for the active terminal while
         /// independently showing or hiding the software keyboard.
         func updateInput(isEnabled: Bool, keyboardRequested: Bool) {
-            guard isEnabled else {
-                cancelCursorNavigation()
-                inputEnabled = false
-                inputProxy.inputEnabled = false
-                if inputProxy.isFirstResponder {
-                    _ = inputProxy.resignFirstResponder()
-                }
-                return
+            guard !inputFocusUpdates.isInvalidated else { return }
+            // Stop accepting input immediately, but never synchronously mutate
+            // UIKit's responder chain from make/updateUIView or mounting.
+            if !isEnabled { cancelCursorNavigation() }
+            inputEnabled = isEnabled
+            inputProxy.inputEnabled = isEnabled
+            inputFocusUpdates.request(.init(
+                inputEnabled: isEnabled,
+                keyboardRequested: isEnabled && keyboardRequested
+            ))
+        }
+
+        func invalidateInput() {
+            cancelCursorNavigation()
+            inputEnabled = false
+            inputProxy.inputEnabled = false
+            inputFocusUpdates.invalidate()
+        }
+
+        private func applyInputPresentation(_ state: TerminalInputPresentation.State) -> Bool {
+            guard let window, inputProxy.window === window else { return false }
+            guard state.inputEnabled else {
+                return !inputProxy.isFirstResponder || inputProxy.resignFirstResponder()
             }
 
-            let keyboardRequestChanged = self.keyboardRequested != keyboardRequested
-            self.keyboardRequested = keyboardRequested
-            inputView = keyboardRequested ? nil : hiddenKeyboardView
-            inputEnabled = true
-            inputProxy.inputEnabled = true
+            let keyboardRequestChanged = keyboardRequested != state.keyboardRequested
+            keyboardRequested = state.keyboardRequested
+            inputView = state.keyboardRequested ? nil : hiddenKeyboardView
 
             if inputProxy.isFirstResponder {
                 if keyboardRequestChanged {
                     inputProxy.reloadInputViews()
                 }
+                return true
             } else {
-                _ = inputProxy.becomeFirstResponder()
+                return inputProxy.becomeFirstResponder()
             }
         }
 
@@ -928,6 +944,9 @@ enum TerminalCursorTapNavigation {
     /// Swift 6 strict concurrency while acknowledging this UIKit threading guarantee.
     extension InteractiveTerminalView: @preconcurrency TerminalViewDelegate {
         func send(source: TerminalView, data: ArraySlice<UInt8>) {
+            // Focus release is deferred; keys from the previous responder or
+            // its still-visible accessory must not reach an inactive pane.
+            guard inputEnabled else { return }
             // Defense-in-depth: DA queries are stripped from the feed on the macOS host,
             // but catch any remaining auto-responses (cursor position reports, terminal
             // parameter reports) that SwiftTerm may still generate.
