@@ -1,10 +1,16 @@
 #if os(iOS)
+    import CtrlxCommon
     import CtrlxNetworking
     import SwiftUI
 
     /// Shared by the SwiftUI input controls and the native shortcut accessory.
     enum TerminalInputControlMetrics {
         static let buttonHeight: CGFloat = 32
+        /// With the shared 10-point side insets these produce 64-point controls.
+        /// Keyboard no longer expands to consume all spare width; Send keeps its
+        /// text instead of collapsing to the roughly 32-point Return icon.
+        static let keyboardContentMaxWidth: CGFloat = 44
+        static let sendContentWidth: CGFloat = 44
     }
 
     /// A dedicated terminal-input control that stays outside terminal content.
@@ -18,13 +24,17 @@
         var sendAgentCommand: @MainActor (AgentCommandRequest) -> Bool = { _ in false }
 
         var body: some View {
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 Button(action: action) {
-                    Label(
-                        "Keyboard",
-                        symbol: keyboardRequested ? .keyboardChevronCompactDown : .keyboard
-                    )
-                    .frame(maxWidth: .infinity)
+                    ViewThatFits(in: .horizontal) {
+                        Label(
+                            "Keyboard",
+                            symbol: keyboardRequested ? .keyboardChevronCompactDown : .keyboard
+                        )
+                        .fixedSize()
+                        (keyboardRequested ? Symbols.keyboardChevronCompactDown : Symbols.keyboard).image
+                    }
+                    .frame(maxWidth: TerminalInputControlMetrics.keyboardContentMaxWidth)
                     .terminalInputControlStyle()
                     .contentShape(Capsule())
                 }
@@ -36,10 +46,11 @@
 
                 TerminalVoiceInputButton(
                     isDisabled: !isEnabled,
-                    showsLabel: true,
+                    showsLabel: false,
                     contextProvider: contextProvider,
                     sendKeys: sendKeys
                 )
+                .terminalInputControlStyle()
 
                 TerminalAgentCommandButton(
                     context: agentCommandContext,
@@ -75,13 +86,25 @@
                     sendKeys: sendKeys
                 )
 
+                Button(action: sendEscape) {
+                    Text("esc")
+                        .frame(minWidth: 20)
+                        .terminalInputControlStyle()
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!isEnabled)
+                .opacity(isEnabled ? 1 : 0.4)
+                .accessibilityLabel("Escape")
+                .accessibilityIdentifier("terminal-escape-control")
+
                 Button(action: sendReturn) {
-                    HStack(spacing: 4) {
-                        Text("↵")
-                        Text("Send")
-                    }
-                    .terminalInputControlStyle()
-                    .contentShape(Capsule())
+                    Text("Send")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .frame(width: TerminalInputControlMetrics.sendContentWidth)
+                        .terminalInputControlStyle()
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(!isEnabled)
@@ -89,6 +112,7 @@
                 .accessibilityLabel("Send Return")
                 .accessibilityIdentifier("terminal-return-control")
             }
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)
             .background(.bar)
@@ -99,6 +123,10 @@
 
         private func sendReturn() {
             sendKeys([.enter])
+        }
+
+        private func sendEscape() {
+            sendKeys([.escape])
         }
     }
 

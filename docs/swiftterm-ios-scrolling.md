@@ -67,11 +67,16 @@ show/hide, the copy page and exit/re-entry; check for new AttributeGraph cycles.
 ## Input toolbar layout
 
 The first-row input controls and SwiftTerm's second-row shortcut accessory share
-the 32-point `TerminalInputControlMetrics.buttonHeight`. The accessory hides
-horizontal arrows (already present in the first row) and optional function keys,
+the 32-point `TerminalInputControlMetrics.buttonHeight`. Voice is microphone-only
+in the first row, preserving hold-to-dictate and its accessibility label. Esc is
+immediately before Send and sends one `.escape` through the normal toolbar queue;
+it does not auto-repeat. The accessory hides Esc, horizontal arrows (already
+present in the first row) and optional function keys,
 then distributes its remaining controls across the available width. This is a
 presentation configuration only: Ctrl/modifier handling, up/down auto-repeat,
 touch mode, keyboard switching and the input proxy keep their existing paths.
+SwiftTerm's `showsEscapeKey` defaults to `true`; only CtrlX opts out, so other
+consumers retain their existing keyboard. Layout tests cover both configurations.
 
 ### Agent command panel
 
@@ -124,7 +129,10 @@ detection does not turn Return into a newline. Keeping the delay in the existing
 key protocol prevents network batching from removing this boundary. The command
 cancels pending cursor correction like other toolbar keys.
 It does not arm the background prompt monitor. The button retains the 32-point
-control height.
+control height. Keyboard is capped at 64 points (and may shrink further or use
+its icon when space is tight), instead of taking all spare width. Send reserves
+64 points, roughly twice the previous icon-only button, and always shows `Send`.
+The first row uses 4-point gaps to keep the wider Send reachable on narrow phones.
 No terminal renderer, SwiftTerm gesture, wire protocol or host change is needed.
 
 Coverage: `AgentCommandMenuTests` checks catalog isolation, unique command IDs,

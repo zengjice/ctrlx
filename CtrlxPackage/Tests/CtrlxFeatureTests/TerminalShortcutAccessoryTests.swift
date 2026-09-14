@@ -17,9 +17,14 @@
 
             #expect(!accessory.configuration.showsHorizontalArrows)
             #expect(!accessory.configuration.showsFunctionKeys)
+            #expect(!accessory.configuration.showsEscapeKey)
             #expect(accessory.configuration.buttonHeight == TerminalInputControlMetrics.buttonHeight)
             #expect(accessory.bounds.height == TerminalInputControlMetrics.buttonHeight + 8)
-            #expect(accessory.views.count == 11)
+            #expect(accessory.views.count == 10)
+            #expect(!accessory.views.compactMap { $0 as? UIButton }.contains {
+                $0.actions(forTarget: accessory, forControlEvent: .touchDown)?
+                    .contains(NSStringFromSelector(#selector(TerminalAccessory.esc(_:)))) == true
+            })
             for button in accessory.views {
                 #expect(button.frame.height == TerminalInputControlMetrics.buttonHeight)
             }
@@ -36,11 +41,10 @@
             var sent: [TmuxKey] = []
             terminal.onInput = { sent += $0 }
 
-            try press(#selector(TerminalAccessory.esc(_:)), in: accessory)
             try press(#selector(TerminalAccessory.tab(_:)), in: accessory)
             try press(#selector(TerminalAccessory.down(_:)), in: accessory)
             try press(#selector(TerminalAccessory.up(_:)), in: accessory)
-            #expect(sent == [.escape, .tab, .down, .up])
+            #expect(sent == [.tab, .down, .up])
             #expect(accessory.repeatTask?.isCancelled == true)
             #expect(accessory.repeatTimer == nil)
 

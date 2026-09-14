@@ -176,7 +176,8 @@ enum TerminalCursorTapNavigation {
                 accessory.configuration = .init(
                     showsHorizontalArrows: false,
                     showsFunctionKeys: false,
-                    buttonHeight: TerminalInputControlMetrics.buttonHeight
+                    buttonHeight: TerminalInputControlMetrics.buttonHeight,
+                    showsEscapeKey: false
                 )
             }
             // Always render cursor as filled on iOS since the user is typically viewing
