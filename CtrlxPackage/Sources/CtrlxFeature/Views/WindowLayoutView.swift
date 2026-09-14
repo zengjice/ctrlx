@@ -34,6 +34,8 @@
         @State private var voiceKeystrokePaneId: String?
         @State private var voiceInputContextProviders: [String: TerminalVoiceInputContextProvider] = [:]
         @State private var cursorNavigationCancellations: [String: @MainActor () -> Void] = [:]
+        @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
+        @State private var agentCommandInputRevision: UInt64 = 0
 
         /// Service for the active pane's Claude session (nil if no session)
         @State private var activeService: SessionDetailService?
@@ -167,7 +169,9 @@
                         isEnabled: relayClient.isHostConnected && activePaneId != nil,
                         action: { isKeyboardActive.toggle() },
                         contextProvider: activeVoiceInputContext,
-                        sendKeys: sendVoiceKeys
+                        sendKeys: sendVoiceKeys,
+                        agentCommandContext: activeAgentCommandContext,
+                        sendAgentCommand: sendAgentCommand
                     )
                 }
             }
@@ -404,6 +408,7 @@
                 lastWrittenClipboardContent = content
             }
             .onChange(of: activePaneId) { oldValue, newValue in
+                agentCommandInputRevision &+= 1
                 voiceKeystrokeDebouncer?.cancelAll()
                 voiceKeystrokeDebouncer = nil
                 voiceKeystrokePaneId = nil
@@ -632,6 +637,9 @@
                 },
                 onCursorNavigationCancellationChange: { cancellation in
                     cursorNavigationCancellations[pane.paneId] = cancellation
+                },
+                onTerminalInputReadinessChange: { readiness in
+                    terminalInputReadiness[pane.paneId] = readiness
                 }
             )
             .environment(relayClient)
@@ -642,6 +650,7 @@
             paneId: String,
             windowName: String
         ) {
+            agentCommandInputRevision &+= 1
             guard
                 settings.agentBackgroundMonitoringEnabled,
                 relayClient.isHostConnected
@@ -790,6 +799,31 @@
 
         // MARK: - Command Sending
 
+        private var activeAgentCommandContext: AgentCommandContext? {
+            let pane = window?.panes.first { $0.paneId == activePaneId }
+            return AgentCommandContext(
+                hostID: hostId,
+                paneID: activePaneId,
+                session: pane?.agentSession,
+                isConnected: relayClient.isHostConnected,
+                isInputAvailable: scenePhase == .active
+                    && pane.map { terminalInputReadiness[$0.paneId]?() == true } == true,
+                hasExternalEditor: pane?.editorSession != nil,
+                inputRevision: agentCommandInputRevision
+            )
+        }
+
+        private func sendAgentCommand(_ request: AgentCommandRequest) -> Bool {
+            guard request.isValid(in: activeAgentCommandContext) else { return false }
+
+            // Same queue as the other toolbar controls. Do not treat a slash
+            // command as a new prompt or arm the background-turn monitor.
+            enqueueToolbarKeys(request.command.keys, paneId: request.context.target.paneID, immediately: true)
+            agentCommandInputRevision &+= 1
+            backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
+            return true
+        }
+
         private func sendCommand(_ command: CommandType, paneId: String) async {
             cursorNavigationCancellations[paneId]?()
             await relayClient.send(command, paneId: paneId)
@@ -802,22 +836,30 @@
                 let activePaneId
             else { return }
 
-            cursorNavigationCancellations[activePaneId]?()
-            if voiceKeystrokePaneId != activePaneId {
-                voiceKeystrokeDebouncer?.cancelAll()
-                voiceKeystrokeDebouncer = KeystrokeDebouncer(
-                    paneId: activePaneId,
-                    relayClient: relayClient
-                )
-                voiceKeystrokePaneId = activePaneId
-            }
-
-            voiceKeystrokeDebouncer?.enqueue(keys)
+            enqueueToolbarKeys(keys, paneId: activePaneId)
             observeTerminalInput(
                 keys,
                 paneId: activePaneId,
                 windowName: window?.windowName ?? ""
             )
+        }
+
+        private func enqueueToolbarKeys(_ keys: [TmuxKey], paneId: String, immediately: Bool = false) {
+            cursorNavigationCancellations[paneId]?()
+            if voiceKeystrokePaneId != paneId {
+                voiceKeystrokeDebouncer?.cancelAll()
+                voiceKeystrokeDebouncer = KeystrokeDebouncer(
+                    paneId: paneId,
+                    relayClient: relayClient
+                )
+                voiceKeystrokePaneId = paneId
+            }
+
+            if immediately {
+                voiceKeystrokeDebouncer?.enqueueImmediately(keys)
+            } else {
+                voiceKeystrokeDebouncer?.enqueue(keys)
+            }
         }
 
         private func activeVoiceInputContext() -> String? {

@@ -73,6 +73,70 @@ then distributes its remaining controls across the available width. This is a
 presentation configuration only: Ctrl/modifier handling, up/down auto-repeat,
 touch mode, keyboard switching and the input proxy keep their existing paths.
 
+### Agent command panel
+
+The first row's `/` button opens a native sheet for the selected **host + pane +
+plugin**, not the session title. The adaptive button grid shows only command
+names (such as `/model`), without descriptions or section headers. It adapts to
+width and Dynamic Type, scrolls when needed, and can expand from medium to large.
+Codex retains these 19 commands in order (no submenu or extra confirmation):
+
+- Common: `/model`, `/status`, `/usage`.
+- Session and context: `/plan`, `/compact`, `/resume`, `/fork`, `/rename`, `/agent`.
+- Inspection and review: `/diff`, `/review`, `/ps`.
+- Tools and settings: `/permissions`, `/skills`, `/mcp`, `/plugins`, `/theme`,
+  `/statusline`, `/debug-config`.
+
+Claude Code retains only `/model`, `/status` and `/usage`; unknown plugins have
+no fallback commands. The flat catalog is also the submission allowlist, so
+Codex-only commands cannot leak into another agent's panel or send path.
+These are documented commands, not live discovery of every remote version's
+capabilities (checked 2026-09-12; local Codex CLI 0.153.4;
+[Codex reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli),
+[Claude Code reference](https://code.claude.com/docs/en/commands)).
+The remote CLI remains responsible for its own pickers and command support.
+Commands that reset/delete sessions, exit/logout, stop background work or need
+inline arguments are excluded, as are account/feature-gated toggles such as
+`/fast`. `/compact` intentionally summarizes context.
+
+Selecting a command submits immediately and closes the panel, without a
+confirmation dialog or a second Send tap. Closing or swiping down sends nothing.
+The `/` entry is enabled whenever the selected pane has a supported agent,
+independently of whether it can currently receive input. While disconnected,
+unready, awaiting a response/approval or in an external editor, the panel stays
+browsable, explains the block, and disables only command submission. Working
+agents are not blocked: the remote agent decides which commands it accepts
+mid-turn. Availability updates in an open panel follow the live context and
+recover automatically; the captured host/pane/plugin and local input revision
+must still match. Atomic-reset state is observable so readiness refreshes even
+when the stream stays `.streaming` throughout the reset.
+Use it in the agent's empty normal composer. Neither terminal
+pixels nor the native keyboard's shadow text is an authoritative draft model,
+so the panel never clears text, injects Ctrl+C, or guesses emptiness from a
+placeholder. Local keyboard/voice input and changes in target close the captured
+panel and invalidate stale actions. The final send revalidates connection,
+readiness, blocking forms and editor state before enqueueing any keys.
+
+Selection immediately queues `[.text(command), .delay(200), .enter]` through the
+existing FIFO toolbar key queue. The host separates literal text from Return by
+200 ms, matching the reply composer's submission pattern so rapid-input/paste
+detection does not turn Return into a newline. Keeping the delay in the existing
+key protocol prevents network batching from removing this boundary. The command
+cancels pending cursor correction like other toolbar keys.
+It does not arm the background prompt monitor. The button retains the 32-point
+control height.
+No terminal renderer, SwiftTerm gesture, wire protocol or host change is needed.
+
+Coverage: `AgentCommandMenuTests` checks catalog isolation, unique command IDs,
+captured panel identity, browsing while blocked, live availability recovery,
+working-agent submission, excluded commands, gating, immediate submission, exact key batches and
+target/input invalidation for all 19 commands. `KeystrokeDebouncerTests` checks
+immediate dispatch, FIFO ordering and preservation of the host-side delay and
+Return. On a device, check dismissing the panel with a multiline draft, one-tap
+command execution with an empty composer, switching split panes, dictation
+finishing while the panel is open, and
+the unchanged keyboard/selection/cursor controls on narrow screens.
+
 ## Cursor placement by single tap
 
 - The original same-row shortcut is retained. Cross-row taps additionally need

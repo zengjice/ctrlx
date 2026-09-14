@@ -14,6 +14,8 @@
         let action: () -> Void
         var contextProvider: TerminalVoiceInputContextProvider = { nil }
         let sendKeys: ([TmuxKey]) -> Void
+        var agentCommandContext: AgentCommandContext? = nil
+        var sendAgentCommand: @MainActor (AgentCommandRequest) -> Bool = { _ in false }
 
         var body: some View {
             HStack(spacing: 6) {
@@ -38,6 +40,13 @@
                     contextProvider: contextProvider,
                     sendKeys: sendKeys
                 )
+
+                TerminalAgentCommandButton(
+                    context: agentCommandContext,
+                    sendCommand: sendAgentCommand
+                )
+                // An open panel must not silently switch to another pane/agent.
+                .id(agentCommandContext?.target)
 
                 RepeatingTerminalKeyButton(
                     title: "←",

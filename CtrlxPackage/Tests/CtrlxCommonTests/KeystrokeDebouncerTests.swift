@@ -176,6 +176,38 @@ struct KeystrokeDebouncerTests {
         }
     }
 
+    @Test("Immediate command preserves its host-side pause and Return without another send")
+    func immediateCommandPreservesSubmission() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            let sentOps = LockIsolated<[KeystrokeDebouncer.SendOp]>([])
+            await withDependencies {
+                $0.continuousClock = clock
+            } operation: { @MainActor in
+                let debouncer = KeystrokeDebouncer(
+                    paneId: "%0",
+                    debounceInterval: .seconds(1)
+                ) { op in
+                    sentOps.withValue { $0.append(op) }
+                }
+                let command: [TmuxKey] = [.text("/model"), .delay(200), .enter]
+                debouncer.enqueue([.left])
+                debouncer.enqueueImmediately(command)
+                debouncer.enqueue([.down])
+                await Task.megaYield()
+
+                // No local clock advance or second Send tap is needed. The host
+                // receives the whole submission, including its timing boundary.
+                #expect(sentOps.value == [.keys([.left]), .keys(command)])
+
+                await clock.advance(by: .seconds(2))
+                await Task.megaYield()
+                #expect(sentOps.value == [.keys([.left]), .keys(command), .keys([.down])])
+                debouncer.cancelAll()
+            }
+        }
+    }
+
     @Test("A cancelled sender restarts for the next immediate batch")
     func restartsAfterCancellation() async {
         await withMainSerialExecutor {

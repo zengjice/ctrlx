@@ -69,6 +69,10 @@
         /// before sending their own keys to this pane.
         let onCursorNavigationCancellationChange: @MainActor ((@MainActor () -> Void)?) -> Void
 
+        /// Lets a parent-owned command menu fail closed while this pane is
+        /// bootstrapping or reconnecting, without reading terminal pixels.
+        let onTerminalInputReadinessChange: @MainActor ((@MainActor () -> Bool)?) -> Void
+
         /// Live OTEL telemetry for this pane's session (issue #597), shown as a
         /// thin meter strip above the terminal (surface C).
         var telemetry: SessionTelemetry?
@@ -112,7 +116,8 @@
             onVoiceInputContextProviderChange: @escaping @MainActor (
                 TerminalVoiceInputContextProvider?
             ) -> Void = { _ in },
-            onCursorNavigationCancellationChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in }
+            onCursorNavigationCancellationChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
+            onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in }
         ) {
             self.paneId = paneId
             self._responseState = responseState
@@ -131,6 +136,7 @@
             self.onTerminalInput = onTerminalInput
             self.onVoiceInputContextProviderChange = onVoiceInputContextProviderChange
             self.onCursorNavigationCancellationChange = onCursorNavigationCancellationChange
+            self.onTerminalInputReadinessChange = onTerminalInputReadinessChange
             self.coordinator = StreamCoordinator(
                 paneId: paneId,
                 fontName: settings.terminalFontName,
@@ -244,10 +250,14 @@
                 onCursorNavigationCancellationChange { [weak coordinator] in
                     coordinator?.terminalState?.cancelCursorNavigation?()
                 }
+                onTerminalInputReadinessChange { [weak coordinator] in
+                    coordinator?.isReadyForAgentCommand == true
+                }
             }
             .onDisappear {
                 onVoiceInputContextProviderChange(nil)
                 onCursorNavigationCancellationChange(nil)
+                onTerminalInputReadinessChange(nil)
                 coordinator.terminalState?.cancelCursorNavigation?()
                 Task { await stopStreaming() }
             }
@@ -622,7 +632,9 @@
         @ObservationIgnored private var bootstrapAccumulator = TerminalStreamSnapshotAccumulator()
         @ObservationIgnored private var recoveryPolicy = TerminalStreamRecoveryPolicy()
         @ObservationIgnored private var resetAccumulator = TerminalStreamSnapshotAccumulator()
-        @ObservationIgnored private var pendingResetState: TerminalStreamMessage.InitialState?
+        // Command availability must refresh when an atomic reset starts/ends,
+        // even while streamState stays .streaming throughout the reset.
+        private var pendingResetState: TerminalStreamMessage.InitialState?
 
         private var bootstrapDimensions: (width: Int, height: Int)?
         private var bootstrapScrollbackLineLimit = TerminalScrollbackPolicy.defaultLineLimit
@@ -641,6 +653,10 @@
 
         func voiceInputContext() -> String? {
             terminalState?.makeTextSnapshot?()?.text
+        }
+
+        var isReadyForAgentCommand: Bool {
+            streamState == .streaming && terminalState != nil && pendingResetState == nil
         }
 
         func nextStartMode() -> TerminalStreamRecoveryPolicy.StartMode {
