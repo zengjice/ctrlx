@@ -98,7 +98,7 @@ enum TerminalCursorTapNavigation {
             return view
         }()
         private var keyboardRequested = false
-        private var pendingCursorMove: TerminalMultilineCursorNavigation.PendingMove?
+        private var cursorNavigation = TerminalCursorNavigation()
         private var isSendingCursorNavigation = false
 
         /// UIKit keyboard/IME state belongs to a native shadow editor. The
@@ -115,6 +115,9 @@ enum TerminalCursorTapNavigation {
             proxy.onFocusChange = { [weak self] focused in
                 if !focused { self?.cancelCursorNavigation() }
                 self?.getTerminal().setTerminalFocus(focused)
+            }
+            proxy.onCompositionStart = { [weak self] in
+                self?.cancelCursorNavigation()
             }
             proxy.inputAccessoryViewProvider = { [weak self] in
                 self?.inputAccessoryView
@@ -457,8 +460,6 @@ enum TerminalCursorTapNavigation {
                 cancelCursorNavigation()
                 return false
             }
-            if gestureRecognizer === contentTapGesture,
-               let pendingCursorMove, .now < pendingCursorMove.deadline { return false }
             if gestureRecognizer === mouseModePanGesture {
                 guard isMouseModeActive, let mouseModePanGesture else { return false }
                 // Only consume vertical pans as wheel events — horizontal pans
@@ -612,8 +613,6 @@ enum TerminalCursorTapNavigation {
 
         @objc
         private func handleURLTap(_ gesture: UITapGestureRecognizer) {
-            if let pendingCursorMove, .now < pendingCursorMove.deadline { return }
-            cancelCursorNavigation()
             guard !selectionActive else { return }
             // Single tap opens URLs in Safari regardless of mouse mode. Underlines
             // are still suppressed in mouse mode (visual policy), but iOS doesn't
@@ -636,6 +635,7 @@ enum TerminalCursorTapNavigation {
                     cellPayload: closures.cellPayload
                 ),
                 let nsURL = URL(string: url) {
+                cancelCursorNavigation()
                 UIApplication.shared.open(nsURL)
                 return
             }
@@ -646,45 +646,28 @@ enum TerminalCursorTapNavigation {
         /// The remote editor owns its draft. Never move the shadow UITextView's
         /// selection or rewrite terminal bytes to simulate moving that cursor.
         func moveInputCursor(to position: (col: Int, row: Int)) {
-            // Ignore a second positioning request while vertical keys are in
-            // flight; otherwise it would be based on the old remote cursor.
-            if let pendingCursorMove, .now < pendingCursorMove.deadline { return }
-            cancelCursorNavigation()
-            guard canNavigateInput else { return }
+            guard canNavigateInput else {
+                cancelCursorNavigation()
+                return
+            }
             let terminal = getTerminal()
             let buffer = terminal.buffer
             let cursor = TerminalMultilineCursorNavigation.Point(column: buffer.x, row: buffer.y)
             let tap = TerminalMultilineCursorNavigation.Point(
                 column: position.col, row: position.row - buffer.yDisp
             )
-            if tap.row != cursor.row {
-                guard let move = TerminalMultilineCursorNavigation.PendingMove(
-                    lines: navigationLines(), cursor: cursor, tap: tap, displayRow: buffer.yDisp
-                ) else { return }
-                pendingCursorMove = move
-                sendCursorNavigationSteps(move.verticalSteps, negative: .up, positive: .down)
-                return
-            }
-
-            // Preserve the original same-row behavior, including unrecognized
-            // shell prompts. It does not broaden the double-tap copy heuristic.
-            guard let line = activeInputLine(atRow: position.row) else { return }
-
-            let cellCount = min(line.count, terminal.cols)
-            let cellWidths = (0..<cellCount).map { line.getWidth(index: $0) }
-            let signedSteps = TerminalCursorTapNavigation.signedStepCount(
-                cursorColumn: buffer.x,
-                tappedColumn: position.col,
-                cellWidths: cellWidths
-            )
-            sendCursorNavigationSteps(signedSteps, negative: .left, positive: .right)
+            let stable = terminal.isCursorVisible && !terminal.synchronizedOutputActive
+            let lines = TerminalMultilineCursorNavigation.lines(in: terminal, backgroundAt: stable ? nil : tap)
+            sendCursorNavigation(cursorNavigation.request(
+                lines: lines, cursor: cursor, tap: tap, displayRow: buffer.yDisp, isStable: stable
+            ))
         }
 
         /// Cancellation is synchronous, including input from parent-owned voice
         /// and shortcut controls. Navigation's own send must not cancel itself.
         func cancelCursorNavigation() {
             guard !isSendingCursorNavigation else { return }
-            pendingCursorMove = nil
+            cursorNavigation.cancel()
         }
 
         @objc private func cancelNavigationForPan(_ gesture: UIPanGestureRecognizer) {
@@ -694,7 +677,6 @@ enum TerminalCursorTapNavigation {
         private var canNavigateInput: Bool {
             inputEnabled && inputProxy.isFirstResponder && inputProxy.markedTextRange == nil
                 && !selectionActive && !isMouseModeActive && window != nil
-                && getTerminal().isCursorVisible && !getTerminal().synchronizedOutputActive
                 && activeInputLine(atRow: getTerminal().buffer.yDisp + getTerminal().buffer.y) != nil
         }
 
@@ -703,31 +685,28 @@ enum TerminalCursorTapNavigation {
         }
 
         private func finishCursorNavigationIfReady() {
-            guard let move = pendingCursorMove else { return }
-            guard .now < move.deadline else {
-                cancelCursorNavigation()
-                return
-            }
-            let terminal = getTerminal()
-            // Hidden/synchronized redraws can temporarily visit any row. Wait
-            // for real cursor feedback, not a timer or a guessed column.
-            guard terminal.isCursorVisible, !terminal.synchronizedOutputActive else { return }
+            guard cursorNavigation.isPending else { return }
             guard canNavigateInput else {
                 cancelCursorNavigation()
                 return
             }
-            switch move.progress(
-                lines: navigationLines(),
+            let terminal = getTerminal()
+            let stable = terminal.isCursorVisible && !terminal.synchronizedOutputActive
+            sendCursorNavigation(cursorNavigation.advance(
+                lines: stable ? navigationLines() : [],
                 cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
-                displayRow: terminal.buffer.yDisp
-            ) {
-            case .waiting:
-                break
-            case .cancelled:
-                cancelCursorNavigation()
-            case let .horizontalSteps(steps):
-                cancelCursorNavigation()
+                displayRow: terminal.buffer.yDisp, isStable: stable
+            ))
+        }
+
+        private func sendCursorNavigation(_ steps: TerminalCursorNavigation.Steps?) {
+            switch steps {
+            case let .vertical(steps):
+                sendCursorNavigationSteps(steps, negative: .up, positive: .down)
+            case let .horizontal(steps):
                 sendCursorNavigationSteps(steps, negative: .left, positive: .right)
+            case nil:
+                break
             }
         }
 
@@ -962,7 +941,7 @@ enum TerminalCursorTapNavigation {
         func scrolled(source: TerminalView, position: Double) {
             // SwiftTerm also calls this after synchronized output, even when
             // nothing scrolled. Only an actual viewport change invalidates it.
-            if let pendingCursorMove, getTerminal().buffer.yDisp != pendingCursorMove.displayRow {
+            if let displayRow = cursorNavigation.displayRow, getTerminal().buffer.yDisp != displayRow {
                 cancelCursorNavigation()
             }
             // No-op - URL underlines scroll naturally with content via absolute positioning

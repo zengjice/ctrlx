@@ -190,14 +190,66 @@
             }
             view.moveInputCursor(to: (8, 1))
             #expect(sent == [[.up]])
-            // A rapid second tap cannot use a cursor that has not moved yet.
-            view.moveInputCursor(to: (2, 3))
-            #expect(sent == [[.up]])
             feed(view, "\u{1b}[?2026h\u{1b}[?25l\u{1b}[2;3H")
             #expect(sent == [[.up]])
             feed(view, "\u{1b}[?25h\u{1b}[?2026l")
             #expect(sent == [[.up], Array(repeating: .right, count: 6)])
             feed(view, "\u{1b}[2;9H")
+            #expect(sent.count == 2)
+        }
+
+        @Test("The last valid tap is retained during remote cursor feedback")
+        func latestTapWins() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            paintMultilineDraft(view)
+            var sent: [[TmuxKey]] = []
+            view.onInput = { sent.append($0) }
+            view.moveInputCursor(to: (8, 1))
+            let contentTap = try #require(view.gestureRecognizers?.compactMap { $0 as? UITapGestureRecognizer }
+                .last(where: { $0.numberOfTapsRequired == 1 }))
+            #expect(view.gestureRecognizerShouldBegin(contentTap))
+            view.moveInputCursor(to: (3, 3))
+            view.moveInputCursor(to: (2, 3))
+            view.moveInputCursor(to: (3, 0)) // body must not replace the valid tap
+            #expect(sent == [[.up]])
+            feed(view, "\u{1b}[?2026h\u{1b}[?25l\u{1b}[2;3H")
+            #expect(sent == [[.up]])
+            feed(view, "\u{1b}[?25h\u{1b}[?2026l")
+            #expect(sent == [[.up], [.down, .down]])
+            feed(view, "\u{1b}[4;3H")
+            #expect(sent.count == 2)
+        }
+
+        @Test("A first tap during redraw survives a hidden cursor visiting body output")
+        func tapDuringRedraw() async {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            paintMultilineDraft(view)
+            var sent: [[TmuxKey]] = []
+            view.onInput = { sent.append($0) }
+            feed(view, "\u{1b}[?2026h\u{1b}[?25l\u{1b}[1;1H")
+            view.moveInputCursor(to: (8, 1))
+            #expect(sent.isEmpty)
+            feed(view, "\u{1b}[3;5H\u{1b}[?25h\u{1b}[?2026l")
+            #expect(sent == [[.up]])
+            feed(view, "\u{1b}[2;3H")
+            #expect(sent == [[.up], Array(repeating: .right, count: 6)])
+        }
+
+        @Test("Same-row repeat taps cannot calculate from a stale remote column")
+        func sameRowSerialFeedback() async {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            paintMultilineDraft(view)
+            var sent: [[TmuxKey]] = []
+            view.onInput = { sent.append($0) }
+            view.moveInputCursor(to: (7, 2))
+            view.moveInputCursor(to: (2, 2))
+            #expect(sent == [Array(repeating: .right, count: 3)])
+            feed(view, "\u{1b}[3;8H")
+            #expect(sent == [Array(repeating: .right, count: 3), Array(repeating: .left, count: 5)])
+            feed(view, "\u{1b}[3;3H")
             #expect(sent.count == 2)
         }
 
@@ -209,6 +261,7 @@
             var sent: [[TmuxKey]] = []
             view.onInput = { sent.append($0) }
             view.moveInputCursor(to: (8, 1))
+            view.moveInputCursor(to: (2, 3))
             if parentControl {
                 view.cancelCursorNavigation()
             } else {
@@ -229,11 +282,30 @@
             #expect(!view.shouldBeginSelection(at: .init(col: 3, row: 2)))
             #expect(view.shouldBeginSelection(at: .init(col: 3, row: 1)))
             view.moveInputCursor(to: (8, 1))
+            view.moveInputCursor(to: (2, 3))
             tap(view, count: 2, column: 3, row: 1)
             #expect(view.selectionActive)
             feed(view, "\u{1b}[2;3H")
             view.moveInputCursor(to: (4, 2))
             #expect(sent == [[.up]])
+        }
+
+        @Test("Abandoned IME composition cancels queued navigation before any output arrives")
+        func compositionCancelsWithoutFeed() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            paintMultilineDraft(view)
+            var sent: [[TmuxKey]] = []
+            view.onInput = { sent.append($0) }
+            view.moveInputCursor(to: (8, 1))
+            view.moveInputCursor(to: (2, 3))
+            let proxy = try inputProxy(in: window)
+            proxy.setMarkedText("zhong", selectedRange: .init(location: 5, length: 0))
+            proxy.setMarkedText("", selectedRange: .init(location: 0, length: 0))
+            proxy.unmarkText()
+            let count = sent.count
+            feed(view, "\u{1b}[2;3H")
+            #expect(sent.count == count)
         }
 
         @Test("Cross-row taps never send keys for body, padding, mouse mode, IME or inactive input")

@@ -155,16 +155,30 @@ the unchanged keyboard/selection/cursor controls on narrow screens.
   An ambiguous blank trailing draft line cannot be distinguished from padding
   unless it contains the live cursor. Unrecognized editors retain same-row
   placement only, rather than guessing a range that could navigate history.
-- There is at most one outstanding vertical move. It expires after two seconds
-  without retries; a subsequent tap cannot stack another move on a stale cursor.
-  Correction only runs after visible, non-synchronized cursor feedback, with
-  the original input cells and viewport unchanged. Typing, IME composition,
-  parent-owned voice/shortcut input, selection, dragging, loss of focus, stream
-  replacement and resize cancel the correction. No buffer reset, forced scroll,
+- There is at most one outstanding batch of navigation keys, including same-row
+  Left/Right. While waiting for its actual cursor feedback, keep only the latest
+  valid tap in the same captured input region. Once that batch finishes, plan
+  from the returned cursor directly to the latest target (skip obsolete column
+  corrections). Never compute repeat-tap deltas from an unconfirmed cursor.
+- A tap during hidden/synchronized redraw can be deferred when its nonblank row
+  identifies a bounded input surface. No keys are sent until the real cursor is
+  visible, synchronization ends, and it is inside that unchanged surface. Body,
+  ambiguous blank padding and unrecognized shell rows do not opt into deferral.
+- Each outstanding batch or initial redraw deferral expires after two seconds
+  without retries; more taps do not extend an outstanding batch's deadline.
+  Input-cell or viewport changes invalidate the request. Typing, IME composition
+  (even if abandoned), parent-owned voice/shortcut input, selection, dragging,
+  loss of focus, stream replacement and resize cancel both the batch's remaining
+  correction and the queued destination. No buffer reset, forced scroll, polling,
   redraw timer, or terminal-stream change is involved.
+- Single taps still wait for double/triple-tap recognition to fail. Removing this
+  arbitration would move the remote cursor before a copy-menu tap is recognized;
+  the copy/selection gesture contract is intentionally unchanged.
 
 Coverage: `TerminalMultilineCursorNavigationTests` exercises region boundaries,
 short/empty/wide-character lines, actual-column correction and stale feedback.
+`TerminalCursorNavigationTests` covers latest-valid-tap coalescing, both-axis
+feedback, redraw deferral, bounded timeout and cancellation of queued targets.
 `TerminalCursorSnapshotTests` parses real SGR/DECTCEM bytes in SwiftTerm (with
 and without scrollback). iOS `TerminalSelectionRoutingTests` additionally covers
 feedback split across feeds, cancellation and unchanged selection/IME routing.

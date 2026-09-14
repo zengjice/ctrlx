@@ -56,6 +56,7 @@ struct TerminalInputDocumentSynchronizer {
         var onInsertText: ((String) -> Void)?
         var onDeleteBackward: (() -> Void)?
         var onFocusChange: ((Bool) -> Void)?
+        var onCompositionStart: (() -> Void)?
         var inputAccessoryViewProvider: (() -> UIView?)?
         var inputViewProvider: (() -> UIView?)?
         weak var forwardedNextResponder: UIResponder?
@@ -145,6 +146,13 @@ struct TerminalInputDocumentSynchronizer {
 
         func textViewDidChange(_: UITextView) {
             synchronizeCommittedDocument()
+        }
+
+        override func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+            // Cancel remote navigation even if composition is later abandoned
+            // without committing text or receiving a terminal output frame.
+            if markedText != nil { onCompositionStart?() }
+            super.setMarkedText(markedText, selectedRange: selectedRange)
         }
 
         func textViewDidChangeSelection(_: UITextView) {

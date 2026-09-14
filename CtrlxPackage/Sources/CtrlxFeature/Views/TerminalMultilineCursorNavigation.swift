@@ -159,12 +159,17 @@ enum TerminalMultilineCursorNavigation {
     extension TerminalMultilineCursorNavigation {
         /// Read terminal cells (including wide-character continuation cells),
         /// never the native keyboard's incomplete shadow draft.
-        static func lines(in terminal: Terminal) -> [Line] {
+        static func lines(in terminal: Terminal, backgroundAt point: Point? = nil) -> [Line] {
             let buffer = terminal.buffer
-            guard let cursorLine = terminal.getScrollInvariantLine(row: buffer.yDisp + buffer.y),
-                  buffer.x >= 0, buffer.x < min(cursorLine.count, terminal.cols)
+            let reference = point ?? Point(column: buffer.x, row: buffer.y)
+            guard let cursorLine = terminal.getScrollInvariantLine(row: buffer.yDisp + reference.row),
+                  reference.column >= 0, reference.column < min(cursorLine.count, terminal.cols)
             else { return [] }
-            let background = cursorLine[buffer.x].attribute.bg
+            var backgroundColumn = reference.column
+            while backgroundColumn > 0, cursorLine.getWidth(index: backgroundColumn) == 0 {
+                backgroundColumn -= 1
+            }
+            let background = cursorLine[backgroundColumn].attribute.bg
             let isDistinct = background != .defaultColor && background != .defaultInvertedColor
             return (0..<terminal.rows).map { row in
                 guard let line = terminal.getScrollInvariantLine(row: buffer.yDisp + row) else {

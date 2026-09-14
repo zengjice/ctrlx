@@ -50,6 +50,37 @@
                                       cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y)) == nil)
         }
 
+        @Test("Tap-anchored input survives a redraw cursor in body output", arguments: [false, true])
+        func deferredTapSnapshot(wideHalf: Bool) {
+            let delegate = Delegate()
+            let terminal = Terminal(delegate: delegate, options: .init(cols: 24, rows: 8))
+            terminal.feed(text: "\u{1b}[2J\u{1b}[Hbody")
+            for (row, text) in [(2, "› first line"), (3, "  中🙂 end")] {
+                terminal.feed(text: "\u{1b}[\(row);1H\u{1b}[48;5;236m\u{1b}[2K\(text)")
+            }
+            terminal.feed(text: "\u{1b}[0m\u{1b}[?2026h\u{1b}[?25l\u{1b}[1;1H")
+            let tap = Navigation.Point(column: wideHalf ? 3 : 2, row: 2)
+            var state = TerminalCursorNavigation()
+            #expect(state.request(lines: Navigation.lines(in: terminal, backgroundAt: tap),
+                                  cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
+                                  tap: tap, displayRow: terminal.buffer.yDisp, isStable: false) == nil)
+            #expect(state.isPending)
+            terminal.feed(text: "\u{1b}[2;5H\u{1b}[?25h\u{1b}[?2026l")
+            #expect(state.advance(lines: Navigation.lines(in: terminal),
+                                  cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
+                                  displayRow: terminal.buffer.yDisp,
+                                  isStable: terminal.isCursorVisible && !terminal.synchronizedOutputActive) == .vertical(1))
+            terminal.feed(text: "\u{1b}[3;7H")
+            #expect(state.advance(lines: Navigation.lines(in: terminal),
+                                  cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
+                                  displayRow: terminal.buffer.yDisp, isStable: true) == .horizontal(-2))
+            terminal.feed(text: "\u{1b}[3;3H")
+            #expect(state.advance(lines: Navigation.lines(in: terminal),
+                                  cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
+                                  displayRow: terminal.buffer.yDisp, isStable: true) == nil)
+            #expect(!state.isPending)
+        }
+
         private final class Delegate: TerminalDelegate {
             func send(source: Terminal, data: ArraySlice<UInt8>) {}
         }
