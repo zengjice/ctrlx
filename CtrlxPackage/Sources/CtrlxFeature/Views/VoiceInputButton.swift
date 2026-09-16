@@ -581,6 +581,13 @@ extension View {
                     labeledContent {
                         (controller.isRecording ? Symbols.micFill : Symbols.mic).image
                     }
+                } else if usesControlStyle {
+                    // The shared row style owns the font, foreground and background.
+                    // Standalone accessory styling must not dim an enabled row button.
+                    (controller.isRecording ? Symbols.micFill : Symbols.mic).image
+                        .frame(width: 30, height: 30)
+                        .scaleEffect(controller.isRecording ? 1.08 : 1)
+                        .animation(.easeInOut(duration: 0.15), value: controller.isRecording)
                 } else {
                     (controller.isRecording ? Symbols.micFill : Symbols.mic).image
                         .font(.body)
