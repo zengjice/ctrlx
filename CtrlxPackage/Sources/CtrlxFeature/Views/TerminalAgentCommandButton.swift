@@ -7,6 +7,7 @@
         let context: AgentCommandContext?
         /// The owner revalidates the live target and connection before enqueueing.
         let sendCommand: @MainActor (AgentCommandRequest) -> Bool
+        @Binding var isPresented: Bool
 
         @State private var presentedContext: AgentCommandContext?
 
@@ -25,7 +26,7 @@
                 ? "No supported agent in this pane."
                 : "Choose a command for the current agent")
             .accessibilityIdentifier("terminal-agent-command-control")
-            .sheet(item: $presentedContext) { capturedContext in
+            .sheet(item: $presentedContext, onDismiss: { isPresented = false }) { capturedContext in
                 TerminalAgentCommandPanel(
                     capturedContext: capturedContext,
                     currentContext: context,
@@ -41,10 +42,12 @@
                     self.presentedContext = nil
                 }
             }
+            .onDisappear { isPresented = false }
         }
 
         private func showPanel() {
             guard let context else { return }
+            isPresented = true
             presentedContext = context
         }
     }

@@ -86,6 +86,9 @@
 
         // MARK: - Properties
 
+        /// Device-local phrase library, independent of sessions and agent plugins.
+        let quickPhrases = QuickPhraseStore()
+
         /// Unique device identifier (generated once and persisted)
         public var deviceId = "" {
             didSet { preferences.setString(deviceId, Keys.deviceId) }

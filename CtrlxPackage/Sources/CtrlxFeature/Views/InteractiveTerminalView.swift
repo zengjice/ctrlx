@@ -100,6 +100,7 @@ enum TerminalCursorTapNavigation {
         private var keyboardRequested = false
         private var cursorNavigation = TerminalCursorNavigation()
         private var isSendingCursorNavigation = false
+        private var isForwardingProxyInput = false
 
         /// UIKit keyboard/IME state belongs to a native shadow editor. The
         /// terminal remains the renderer and byte encoder; the editor retains
@@ -107,10 +108,18 @@ enum TerminalCursorTapNavigation {
         private lazy var inputProxy: TerminalInputProxyView = {
             let proxy = TerminalInputProxyView(frame: .zero)
             proxy.onInsertText = { [weak self] text in
-                self?.insertText(text)
+                guard let self else { return }
+                forwardProxyInput { insertText(text) }
             }
             proxy.onDeleteBackward = { [weak self] in
-                self?.deleteBackward()
+                guard let self else { return }
+                forwardProxyInput { deleteBackward() }
+            }
+            proxy.onMoveCursor = { [weak self] steps in
+                guard let self, steps != 0 else { return }
+                forwardProxyInput {
+                    onInput?(Array(repeating: steps < 0 ? .left : .right, count: abs(steps)))
+                }
             }
             proxy.onFocusChange = { [weak self] focused in
                 if !focused { self?.cancelCursorNavigation() }
@@ -644,8 +653,8 @@ enum TerminalCursorTapNavigation {
             moveInputCursor(to: pos)
         }
 
-        /// The remote editor owns its draft. Never move the shadow UITextView's
-        /// selection or rewrite terminal bytes to simulate moving that cursor.
+        /// The remote editor owns its draft. Tap navigation sends only arrows,
+        /// then starts a fresh keyboard context at that remote insertion point.
         func moveInputCursor(to position: (col: Int, row: Int)) {
             guard canNavigateInput else {
                 cancelCursorNavigation()
@@ -669,6 +678,23 @@ enum TerminalCursorTapNavigation {
         func cancelCursorNavigation() {
             guard !isSendingCursorNavigation else { return }
             cursorNavigation.cancel()
+        }
+
+        /// Toolbar, paste and accessory input bypass the native document. End
+        /// its context before those keys, but never during its own edit callbacks.
+        func prepareForExternalInput() {
+            guard !isForwardingProxyInput, !isSendingCursorNavigation else { return }
+            cancelCursorNavigation()
+            inputProxy.prepareForExternalInput()
+        }
+
+        private func forwardProxyInput(_ input: () -> Void) {
+            guard inputEnabled else { return }
+            let wasForwarding = isForwardingProxyInput
+            isForwardingProxyInput = true
+            defer { isForwardingProxyInput = wasForwarding }
+            cancelCursorNavigation()
+            input()
         }
 
         @objc private func cancelNavigationForPan(_ gesture: UIPanGestureRecognizer) {
@@ -713,6 +739,7 @@ enum TerminalCursorTapNavigation {
 
         private func sendCursorNavigationSteps(_ steps: Int, negative: TmuxKey, positive: TmuxKey) {
             guard steps != 0 else { return }
+            inputProxy.prepareForExternalInput()
             isSendingCursorNavigation = true
             defer { isSendingCursorNavigation = false }
             onInput?(Array(repeating: steps < 0 ? negative : positive, count: abs(steps)))
@@ -935,6 +962,7 @@ enum TerminalCursorTapNavigation {
             // Convert raw bytes to TmuxKey representations
             let keys = TmuxKey.from(bytes: Data(data))
             guard !keys.isEmpty else { return }
+            prepareForExternalInput()
             cancelCursorNavigation()
             onInput?(keys)
         }

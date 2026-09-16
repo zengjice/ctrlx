@@ -177,6 +177,116 @@
                 .compactMap { $0 as? TerminalInputProxyView }.first)
         }
 
+        @Test("Native paired quotes forward caret-only changes and typing outside")
+        func pairedQuoteCaret() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            var sent: [TmuxKey] = []
+            view.onInput = { sent += $0 }
+            proxy.insertText("“”")
+            proxy.selectedRange = NSRange(location: 2, length: 0) // anchor + opening quote
+            proxy.textViewDidChangeSelection(proxy)
+            proxy.insertText("你好")
+            proxy.selectedRange = NSRange(location: 5, length: 0)
+            proxy.textViewDidChangeSelection(proxy)
+            proxy.insertText("之后")
+            #expect(sent == [.text("“”"), .left, .text("你好"), .right, .text("之后")])
+        }
+
+        @Test("Toolbar navigation and accessory input forget stale native context")
+        func externalInputContext() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            proxy.insertText("“”")
+            proxy.selectedRange = NSRange(location: 2, length: 0)
+            proxy.textViewDidChangeSelection(proxy)
+            var sent: [TmuxKey] = []
+            view.onInput = { sent += $0 }
+            view.prepareForExternalInput()
+            view.onInput?([.right])
+            proxy.insertText("outside")
+            #expect(sent == [.right, .text("outside")])
+
+            sent = []
+            view.send(source: view, data: Array("\u{1b}[D".utf8)[...])
+            proxy.insertText("X")
+            #expect(sent == [.left, .text("X")])
+            #expect(proxy.text == "\u{200B}X")
+        }
+
+        @Test("The native caret cannot edit the anchor, but boundary backspace reaches the terminal")
+        func contextStartBoundary() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            proxy.insertText("suffix")
+            proxy.selectedRange = NSRange(location: 0, length: 0)
+            proxy.textViewDidChangeSelection(proxy)
+            #expect(proxy.selectedRange == NSRange(location: 1, length: 0))
+            var sent: [TmuxKey] = []
+            view.onInput = { sent += $0 }
+            proxy.deleteBackward()
+            proxy.insertText("X")
+            #expect(sent == [.backspace, .text("X")])
+            #expect(proxy.text == "\u{200B}Xsuffix")
+        }
+
+        @Test("IME candidates inside paired quotes stay local until committed")
+        func pairedQuoteComposition() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            proxy.insertText("“”")
+            proxy.selectedRange = NSRange(location: 2, length: 0)
+            proxy.textViewDidChangeSelection(proxy)
+            var sent: [TmuxKey] = []
+            view.onInput = { sent += $0 }
+            proxy.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0))
+            proxy.setMarkedText("你", selectedRange: NSRange(location: 1, length: 0))
+            #expect(sent.isEmpty)
+            proxy.unmarkText()
+            proxy.textViewDidChange(proxy)
+            proxy.textViewDidChangeSelection(proxy)
+            #expect(sent == [.text("你")])
+            #expect(proxy.text == "\u{200B}“你”")
+            #expect(proxy.selectedRange.location == 3)
+        }
+
+        @Test("External navigation commits a pending candidate before resetting context")
+        func compositionBeforeExternalInput() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            var sent: [TmuxKey] = []
+            view.onInput = { sent += $0 }
+            proxy.setMarkedText("你", selectedRange: NSRange(location: 1, length: 0))
+            view.prepareForExternalInput()
+            view.onInput?([.right])
+            proxy.insertText("好")
+            #expect(sent == [.text("你"), .right, .text("好")])
+            #expect(proxy.text == "\u{200B}好")
+        }
+
+        @Test("A cross-row tap starts a fresh keyboard context without changing selection routing")
+        func contextAfterCrossRowTap() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            proxy.insertText("“”")
+            proxy.selectedRange = NSRange(location: 2, length: 0)
+            proxy.textViewDidChangeSelection(proxy)
+            paintMultilineDraft(view)
+            var sent: [TmuxKey] = []
+            view.onInput = { sent += $0 }
+            view.moveInputCursor(to: (8, 1))
+            proxy.insertText("new")
+            #expect(sent == [.up, .text("new")])
+            #expect(proxy.text == "\u{200B}new")
+            #expect(!view.selectionActive)
+        }
+
         @Test("Cross-row taps wait for visible cursor feedback and correct the actual column once")
         func multilineCursorFeedback() async {
             let (window, view) = await makeView()

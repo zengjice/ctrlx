@@ -9,6 +9,31 @@ import Testing
 @Suite("KeystrokeDebouncer")
 @MainActor
 struct KeystrokeDebouncerTests {
+    @Test("Native quote edits, toolbar navigation and subsequent typing share FIFO order")
+    func quoteCaretThenToolbar() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            let sentOps = LockIsolated<[KeystrokeDebouncer.SendOp]>([])
+            await withDependencies {
+                $0.continuousClock = clock
+            } operation: { @MainActor in
+                let debouncer = KeystrokeDebouncer(paneId: "%0") { op in
+                    sentOps.withValue { $0.append(op) }
+                }
+                defer { debouncer.cancelAll() }
+                debouncer.enqueue([.text("“”"), .left, .text("你好")])
+                debouncer.enqueue([.right])
+                debouncer.enqueue([.text("之后")])
+                debouncer.enqueueImmediately([.enter])
+                await Task.megaYield()
+                #expect(sentOps.value == [
+                    .keys([.text("“”"), .left, .text("你好"), .right, .text("之后")]),
+                    .keys([.enter]),
+                ])
+            }
+        }
+    }
+
     @Test("The batch deadline does not slide when more keys arrive")
     func boundedBatchWindow() async {
         await withMainSerialExecutor {

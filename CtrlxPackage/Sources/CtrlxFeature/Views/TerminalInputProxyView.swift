@@ -38,6 +38,67 @@ struct TerminalInputDocumentSynchronizer {
     }
 }
 
+/// A keyboard edit is relative to its last forwarded caret, not the end of the
+/// shadow document. Keep this separate from voice's append/correction stream.
+struct TerminalInputCursorDelta: Equatable {
+    let movementBeforeEdit: Int
+    let deletionCount: Int
+    let insertion: String
+    let movementAfterEdit: Int
+}
+
+struct TerminalInputCursorSynchronizer {
+    private(set) var forwardedText = ""
+    private(set) var forwardedCaret = 0
+
+    mutating func advance(to text: String, caretUTF16Offset: Int) -> TerminalInputCursorDelta {
+        let old = Array(forwardedText)
+        let new = Array(text)
+        // UIKit uses UTF-16 positions; terminal arrows/backspace use characters.
+        var caret = 0
+        var utf16Offset = 0
+        for character in new {
+            utf16Offset += String(character).utf16.count
+            guard utf16Offset <= caretUTF16Offset else { break }
+            caret += 1
+        }
+        defer {
+            forwardedText = text
+            forwardedCaret = caret
+        }
+
+        guard old != new else {
+            return TerminalInputCursorDelta(
+                movementBeforeEdit: caret - forwardedCaret,
+                deletionCount: 0, insertion: "", movementAfterEdit: 0
+            )
+        }
+
+        var prefix = 0
+        while prefix < min(old.count, new.count), old[prefix] == new[prefix] {
+            prefix += 1
+        }
+        var suffix = 0
+        while suffix < min(old.count, new.count) - prefix,
+              old[old.count - suffix - 1] == new[new.count - suffix - 1] {
+            suffix += 1
+        }
+        let oldEditEnd = old.count - suffix
+        let newEditEnd = new.count - suffix
+        return TerminalInputCursorDelta(
+            movementBeforeEdit: oldEditEnd - forwardedCaret,
+            deletionCount: oldEditEnd - prefix,
+            insertion: String(new[prefix..<newEditEnd]),
+            movementAfterEdit: caret - newEditEnd
+        )
+    }
+
+    mutating func reset() {
+        forwardedText = ""
+        forwardedCaret = 0
+    }
+}
+
 #if os(iOS)
     import UIKit
 
@@ -55,6 +116,7 @@ struct TerminalInputDocumentSynchronizer {
 
         var onInsertText: ((String) -> Void)?
         var onDeleteBackward: (() -> Void)?
+        var onMoveCursor: ((Int) -> Void)?
         var onFocusChange: ((Bool) -> Void)?
         var onCompositionStart: (() -> Void)?
         var inputAccessoryViewProvider: (() -> UIView?)?
@@ -63,8 +125,9 @@ struct TerminalInputDocumentSynchronizer {
 
         var inputEnabled = false
 
-        private var synchronizer = TerminalInputDocumentSynchronizer()
+        private var synchronizer = TerminalInputCursorSynchronizer()
         private var isApplyingInternalEdit = false
+        private var nativeEditDepth = 0
         private var assignedInputAccessoryView: UIView?
         private var assignedInputView: UIView?
 
@@ -148,11 +211,42 @@ struct TerminalInputDocumentSynchronizer {
             synchronizeCommittedDocument()
         }
 
+        override func insertText(_ text: String) {
+            performNativeEdit { super.insertText(text) }
+        }
+
+        override func deleteBackward() {
+            performNativeEdit { super.deleteBackward() }
+        }
+
+        override func replace(_ range: UITextRange, withText text: String) {
+            performNativeEdit { super.replace(range, withText: text) }
+        }
+
         override func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
             // Cancel remote navigation even if composition is later abandoned
             // without committing text or receiving a terminal output frame.
             if markedText != nil { onCompositionStart?() }
-            super.setMarkedText(markedText, selectedRange: selectedRange)
+            performNativeEdit { super.setMarkedText(markedText, selectedRange: selectedRange) }
+        }
+
+        override func unmarkText() {
+            performNativeEdit { super.unmarkText() }
+        }
+
+        private func performNativeEdit(_ edit: () -> Void) {
+            nativeEditDepth += 1
+            edit()
+            nativeEditDepth -= 1
+            synchronizeCommittedDocument()
+        }
+
+        /// An explicit remote edit/navigation establishes a new insertion point.
+        /// Commit any candidate first, then forget only local keyboard context;
+        /// never erase remote text or guess the remote draft from screen pixels.
+        func prepareForExternalInput() {
+            if inputEnabled, markedTextRange != nil { unmarkText() }
+            resetDocument()
         }
 
         func textViewDidChangeSelection(_: UITextView) {
@@ -163,7 +257,7 @@ struct TerminalInputDocumentSynchronizer {
         }
 
         private func synchronizeCommittedDocument() {
-            guard !isApplyingInternalEdit else { return }
+            guard !isApplyingInternalEdit, nativeEditDepth == 0 else { return }
             restoreAnchorIfNeeded()
 
             // An IME owns marked text until it commits. Forwarding provisional
@@ -173,20 +267,34 @@ struct TerminalInputDocumentSynchronizer {
                 return
             }
 
+            // Home/keyboard cursor gestures can reach the invisible anchor.
+            // Keep it outside the editable selection without moving the remote
+            // caret, which is already at the start of this local context.
+            if selectedRange.location < Self.anchorLength {
+                let end = NSMaxRange(selectedRange)
+                isApplyingInternalEdit = true
+                selectedRange = NSRange(location: Self.anchorLength, length: max(0, end - Self.anchorLength))
+                isApplyingInternalEdit = false
+            }
+
             let committedText = payload
-            let delta = synchronizer.advance(to: committedText)
-            guard delta.deletionCount > 0 || !delta.insertion.isEmpty else { return }
+            let delta = synchronizer.advance(
+                to: committedText,
+                caretUTF16Offset: max(0, selectedRange.location - Self.anchorLength)
+            )
             trace(
                 "document utf16=\(committedText.utf16.count) " +
                     "delete=\(delta.deletionCount) insert=\(delta.insertion.debugDescription)"
             )
 
+            if delta.movementBeforeEdit != 0 { onMoveCursor?(delta.movementBeforeEdit) }
             for _ in 0..<delta.deletionCount {
                 onDeleteBackward?()
             }
             if !delta.insertion.isEmpty {
                 onInsertText?(delta.insertion)
             }
+            if delta.movementAfterEdit != 0 { onMoveCursor?(delta.movementAfterEdit) }
 
             // Return starts a new terminal input line. The remote command has
             // already received the newline, so reset only the local context.
@@ -202,9 +310,10 @@ struct TerminalInputDocumentSynchronizer {
         ) -> Bool {
             guard range.location < Self.anchorLength else { return true }
 
-            // Preserve the invisible anchor at an otherwise empty input line so
-            // software-keyboard Backspace continues to reach the terminal.
-            if text.isEmpty, payload.isEmpty {
+            // At this context's start there may still be text to its right and
+            // older remote text to its left. Backspace must reach that remote
+            // prefix without removing the anchor or rewriting the local suffix.
+            if text.isEmpty, range.length == Self.anchorLength, selectedRange.length == 0 {
                 onDeleteBackward?()
             }
             return false

@@ -20,6 +20,7 @@
         private var stableTranscriptState = VoiceInputStableTranscriptState()
         private var isFinishing = false
         private var hasAudioTap = false
+        private var ownsAudioSession = false
         private var audioRecorder: VoiceAudioRecorder?
 
         init(contextualTerms: [String]) {
@@ -28,6 +29,7 @@
 
         func start(onUpdate: @escaping UpdateHandler) async throws {
             let transcriber = try await ModernSpeechTranscriber.preferred(for: preferredLocale)
+            try Task.checkCancellation()
             let modules = [transcriber.module]
             VoiceInputDiagnostics.recognizer(
                 transcriber.diagnosticName,
@@ -39,8 +41,10 @@
             if let installationRequest = try await AssetInventory.assetInstallationRequest(
                 supporting: modules
             ) {
+                try Task.checkCancellation()
                 try await installationRequest.downloadAndInstall()
             }
+            try Task.checkCancellation()
 
             guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
                 compatibleWith: modules
@@ -48,6 +52,7 @@
                 throw SpeechAnalyzerVoiceSessionError.compatibleAudioFormatUnavailable
             }
 
+            try Task.checkCancellation()
             let options = SpeechAnalyzer.Options(
                 priority: .userInitiated,
                 modelRetention: .lingering
@@ -56,7 +61,9 @@
             let context = AnalysisContext()
             context.contextualStrings[.general] = contextualTerms
             try await analyzer.setContext(context)
+            try Task.checkCancellation()
             try await analyzer.prepareToAnalyze(in: analyzerFormat)
+            try Task.checkCancellation()
 
             let (inputSequence, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream()
             self.analyzer = analyzer
@@ -65,6 +72,7 @@
 
             do {
                 try await analyzer.start(inputSequence: inputSequence)
+                try Task.checkCancellation()
                 try startAudioInput(
                     analyzerFormat: analyzerFormat,
                     inputContinuation: inputContinuation
@@ -199,6 +207,7 @@
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.setCategory(.playAndRecord, mode: .spokenAudio, options: .duckOthers)
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+            ownsAudioSession = true
 
             let inputNode = audioEngine.inputNode
             let inputFormat = inputNode.outputFormat(forBus: 0)
@@ -237,10 +246,15 @@
                 audioEngine.inputNode.removeTap(onBus: 0)
                 hasAudioTap = false
             }
-            try? AVAudioSession.sharedInstance().setActive(
-                false,
-                options: .notifyOthersOnDeactivation
-            )
+            // A cancelled preparation can finish after a new recording starts.
+            // Only deactivate audio if this session actually activated it.
+            if ownsAudioSession {
+                ownsAudioSession = false
+                try? AVAudioSession.sharedInstance().setActive(
+                    false,
+                    options: .notifyOthersOnDeactivation
+                )
+            }
         }
 
         private func transcribeRecordedAudio(

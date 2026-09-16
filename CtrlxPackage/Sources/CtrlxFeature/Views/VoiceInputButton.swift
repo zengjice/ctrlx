@@ -71,6 +71,7 @@ extension View {
 
 #if os(iOS)
     import AVFoundation
+    import CtrlxCommon
     import CtrlxNetworking
     import Observation
     import Speech
@@ -103,13 +104,6 @@ extension View {
         }
     }
 
-    private enum VoiceInputPhase: Equatable {
-        case idle
-        case requestingPermission
-        case recording
-        case finalizing
-    }
-
     @Observable
     @MainActor
     private final class VoiceInputController {
@@ -122,7 +116,6 @@ extension View {
         @ObservationIgnored private var recognitionTask: SFSpeechRecognitionTask?
         @ObservationIgnored private var permissionTask: Task<Void, Never>?
         @ObservationIgnored private var finalizationTask: Task<Void, Never>?
-        @ObservationIgnored private var isPressActive = false
         @ObservationIgnored private var hasAudioTap = false
         @ObservationIgnored private var activeRecognitionID: UUID?
         @ObservationIgnored private var modernSession: AnyObject?
@@ -133,25 +126,12 @@ extension View {
             phase == .recording
         }
 
-        var accessibilityValue: String {
-            switch phase {
-            case .idle:
-                "Ready"
-            case .requestingPermission:
-                "Requesting permission"
-            case .recording:
-                "Recording"
-            case .finalizing:
-                "Finishing transcription"
-            }
-        }
-
-        func beginPress(
+        private func beginRecording(
             context: String?,
             correctionSelection: VoiceCorrectionSelection?
         ) {
-            guard !isPressActive, phase == .idle else { return }
-            isPressActive = true
+            guard phase == .idle else { return }
+            errorMessage = nil
             recognitionContext = context
             self.correctionSelection = correctionSelection
             transcript = ""
@@ -177,11 +157,6 @@ extension View {
                     return
                 }
 
-                guard isPressActive else {
-                    phase = .idle
-                    return
-                }
-
                 do {
                     try await startRecognition()
                 } catch {
@@ -191,8 +166,7 @@ extension View {
             }
         }
 
-        func endPress() {
-            isPressActive = false
+        private func finishRecording() {
             guard phase == .recording else { return }
 
             if #available(iOS 26.0, *), let session = modernSession as? SpeechAnalyzerVoiceSession {
@@ -202,22 +176,26 @@ extension View {
             }
         }
 
-        func toggleForAccessibility(
+        func toggleRecording(
             context: String?,
             correctionSelection: VoiceCorrectionSelection?
         ) {
-            if isPressActive || phase == .recording {
-                endPress()
-            } else {
-                beginPress(
+            switch phase.tapAction {
+            case .start:
+                beginRecording(
                     context: context,
                     correctionSelection: correctionSelection
                 )
+            case .cancelPreparation:
+                cancel()
+            case .finish:
+                finishRecording()
+            case .none:
+                break
             }
         }
 
         func cancel() {
-            isPressActive = false
             permissionTask?.cancel()
             permissionTask = nil
             cancelModernSession()
@@ -228,7 +206,6 @@ extension View {
         }
 
         private func finishPermissionRequest(message: String) {
-            isPressActive = false
             cancelModernSession()
             stopAudio(cancelRecognition: true)
             recognitionContext = nil
@@ -251,20 +228,21 @@ extension View {
             modernSession = session
 
             do {
-                try await session.start { [weak self] updatedTranscript in
-                    guard let self, transcript != updatedTranscript else { return }
+                try await session.start { [weak self, weak session] updatedTranscript in
+                    guard let self, let session, modernSession === session,
+                          phase == .requestingPermission || phase == .recording,
+                          transcript != updatedTranscript
+                    else { return }
                     transcript = updatedTranscript
                 }
             } catch {
-                modernSession = nil
+                if modernSession === session { modernSession = nil }
                 await session.cancel()
                 throw error
             }
 
-            guard isPressActive else {
-                modernSession = nil
+            guard !Task.isCancelled, modernSession === session else {
                 await session.cancel()
-                phase = .idle
                 return
             }
 
@@ -538,51 +516,51 @@ extension View {
 
     struct VoiceInputButton: View {
         @Environment(IOSSettings.self) private var settings
+        @Environment(\.scenePhase) private var scenePhase
 
         @Binding var text: String
         let isDisabled: Bool
         var showsLabel = false
+        var usesControlStyle = false
         var onInputStart: (() -> Void)?
         var contextProvider: TerminalVoiceInputContextProvider = { nil }
 
         @State private var controller = VoiceInputController()
         @State private var baseText = ""
-        @State private var isGestureActive = false
 
         var body: some View {
-            buttonContent
-                .contentShape(.circle)
-                .gesture(pressGesture, including: isDisabled ? .none : .all)
-                .opacity(isDisabled ? 0.4 : 1)
-                .accessibilityElement()
-                .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Voice Input")
-                .accessibilityValue(controller.accessibilityValue)
-                .accessibilityHint("Press and hold to dictate, then release to finish")
-                .accessibilityAction {
-                    guard !isDisabled else { return }
-                    if controller.phase == .idle {
-                        prepareInput()
-                    }
-                    controller.toggleForAccessibility(
-                        context: contextProvider(),
-                        correctionSelection: settings.voiceCorrectionSelection
-                    )
+            Button(action: toggleRecording) {
+                if usesControlStyle, !showsLabel {
+                    buttonContent
+                        .terminalInputControlStyle(isActive: controller.isRecording)
+                        .contentShape(Capsule())
+                } else {
+                    buttonContent.contentShape(.rect)
                 }
-                .sensoryFeedback(.impact(weight: .light), trigger: controller.isRecording)
-                .onChange(of: controller.transcript, updateText)
-                .onChange(of: isDisabled) {
-                    if isDisabled {
-                        endGesture()
-                        controller.cancel()
-                    }
+            }
+            .buttonStyle(.plain)
+            .disabled(isDisabled || controller.phase.tapAction == .none)
+            .opacity(isDisabled ? 0.4 : 1)
+            .accessibilityLabel("Voice Input")
+            .accessibilityValue(controller.phase.accessibilityValue)
+            .accessibilityHint(controller.phase.accessibilityHint)
+            .accessibilityIdentifier("terminal-voice-input-control")
+            .sensoryFeedback(.impact(weight: .light), trigger: controller.isRecording)
+            .onChange(of: controller.transcript, updateText)
+            .onChange(of: isDisabled) {
+                if isDisabled {
+                    controller.cancel()
                 }
-                .onDisappear(perform: controller.cancel)
-                .alert("Voice Input Unavailable", isPresented: isShowingError) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text(controller.errorMessage ?? "Please try again.")
-                }
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase != .active { controller.cancel() }
+            }
+            .onDisappear(perform: controller.cancel)
+            .alert("Voice Input Unavailable", isPresented: isShowingError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(controller.errorMessage ?? "Please try again.")
+            }
         }
 
         @ViewBuilder
@@ -601,10 +579,10 @@ extension View {
             } else {
                 if showsLabel {
                     labeledContent {
-                        Image(systemName: controller.isRecording ? "mic.fill" : "mic")
+                        (controller.isRecording ? Symbols.micFill : Symbols.mic).image
                     }
                 } else {
-                    Image(systemName: controller.isRecording ? "mic.fill" : "mic")
+                    (controller.isRecording ? Symbols.micFill : Symbols.mic).image
                         .font(.body)
                         .foregroundStyle(controller.isRecording ? .red : .secondary)
                         .frame(width: 30, height: 30)
@@ -621,27 +599,21 @@ extension View {
         private func labeledContent<Icon: View>(@ViewBuilder icon: () -> Icon) -> some View {
             HStack(spacing: 5) {
                 icon()
-                Text(controller.isRecording ? "Release" : "Voice")
+                Text(controller.isRecording ? "Stop" : "Voice")
             }
             .terminalInputControlStyle(isActive: controller.isRecording)
             .scaleEffect(controller.isRecording ? 1.04 : 1)
             .animation(.easeInOut(duration: 0.15), value: controller.isRecording)
         }
 
-        private var pressGesture: some Gesture {
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    guard !isGestureActive, controller.phase == .idle else { return }
-                    isGestureActive = true
-                    prepareInput()
-                    controller.beginPress(
-                        context: contextProvider(),
-                        correctionSelection: settings.voiceCorrectionSelection
-                    )
-                }
-                .onEnded { _ in
-                    endGesture()
-                }
+        private func toggleRecording() {
+            guard !isDisabled, controller.phase.tapAction != .none else { return }
+            let isStarting = controller.phase.tapAction == .start
+            if isStarting { prepareInput() }
+            controller.toggleRecording(
+                context: isStarting ? contextProvider() : nil,
+                correctionSelection: isStarting ? settings.voiceCorrectionSelection : nil
+            )
         }
 
         private var isShowingError: Binding<Bool> {
@@ -653,12 +625,6 @@ extension View {
                     }
                 }
             )
-        }
-
-        private func endGesture() {
-            guard isGestureActive else { return }
-            isGestureActive = false
-            controller.endPress()
         }
 
         private func prepareInput() {
@@ -674,11 +640,12 @@ extension View {
         }
     }
 
-    /// Reuses the native keyboard's shadow-document delta logic so recognition
-    /// revisions are rendered directly by the remote terminal.
+    /// Dictation is an end-of-document correction stream, independent of the
+    /// native keyboard's caret-aware shadow editor.
     struct TerminalVoiceInputButton: View {
         let isDisabled: Bool
         var showsLabel = false
+        var usesControlStyle = false
         var contextProvider: TerminalVoiceInputContextProvider = { nil }
         let sendKeys: ([TmuxKey]) -> Void
 
@@ -690,6 +657,7 @@ extension View {
                 text: $transcript,
                 isDisabled: isDisabled,
                 showsLabel: showsLabel,
+                usesControlStyle: usesControlStyle,
                 onInputStart: beginInput,
                 contextProvider: contextProvider
             )

@@ -30,12 +30,12 @@
         @State private var isKeyboardActive: Bool
 
         /// Ordered sender for partial speech-recognition edits to the selected pane.
-        @State private var voiceKeystrokeDebouncer: KeystrokeDebouncer?
-        @State private var voiceKeystrokePaneId: String?
+        @State private var externalInputSenders: [String: @MainActor ([TmuxKey], Bool) -> Bool] = [:]
         @State private var voiceInputContextProviders: [String: TerminalVoiceInputContextProvider] = [:]
         @State private var cursorNavigationCancellations: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
-        @State private var agentCommandInputRevision: UInt64 = 0
+        @State private var terminalInputRevision: UInt64 = 0
+        @State private var isPhrasePanelPresented = false
 
         /// Service for the active pane's Claude session (nil if no session)
         @State private var activeService: SessionDetailService?
@@ -170,6 +170,10 @@
                         action: { isKeyboardActive.toggle() },
                         contextProvider: activeVoiceInputContext,
                         sendKeys: sendVoiceKeys,
+                        quickPhrases: settings.quickPhrases,
+                        phraseContext: activePhraseContext,
+                        sendPhrase: sendPhrase,
+                        isPhrasePanelPresented: $isPhrasePanelPresented,
                         agentCommandContext: activeAgentCommandContext,
                         sendAgentCommand: sendAgentCommand
                     )
@@ -269,6 +273,7 @@
                             contextProvider: activeVoiceInputContext,
                             sendKeys: sendVoiceKeys
                         )
+                        .id(activePhraseContext.target)
                     }
 
                     ToolbarItem(placement: .topBarTrailing) {
@@ -408,10 +413,7 @@
                 lastWrittenClipboardContent = content
             }
             .onChange(of: activePaneId) { oldValue, newValue in
-                agentCommandInputRevision &+= 1
-                voiceKeystrokeDebouncer?.cancelAll()
-                voiceKeystrokeDebouncer = nil
-                voiceKeystrokePaneId = nil
+                terminalInputRevision &+= 1
                 updateActiveService()
                 // Mark session as handled when switching to a pane with attention
                 Task { await activeService?.markHandledIfNeeded() }
@@ -422,9 +424,6 @@
                 Task {
                     await sendCommand(.selectTmuxPane, paneId: newValue)
                 }
-            }
-            .onDisappear {
-                voiceKeystrokeDebouncer?.cancelAll()
             }
         }
 
@@ -601,6 +600,7 @@
         private func paneTerminal(pane: PaneState, windowName: String) -> some View {
             LiveTerminalView(
                 paneId: pane.paneId,
+                hostId: hostId,
                 responseState: .constant(nil),
                 terminalTitle: Binding(
                     get: { terminalTitles[pane.paneId] },
@@ -615,6 +615,7 @@
                 showKeyboardButton: false,
                 showCopyButton: pane.paneId == activePaneId,
                 isActive: pane.paneId == activePaneId,
+                isInputSuspended: isPhrasePanelPresented,
                 parentKeyboardRequested: isKeyboardActive,
                 settings: settings,
                 telemetry: pane.telemetry,
@@ -638,6 +639,9 @@
                 onCursorNavigationCancellationChange: { cancellation in
                     cursorNavigationCancellations[pane.paneId] = cancellation
                 },
+                onExternalInputSenderChange: { sender in
+                    externalInputSenders[pane.paneId] = sender
+                },
                 onTerminalInputReadinessChange: { readiness in
                     terminalInputReadiness[pane.paneId] = readiness
                 }
@@ -650,7 +654,7 @@
             paneId: String,
             windowName: String
         ) {
-            agentCommandInputRevision &+= 1
+            terminalInputRevision &+= 1
             guard
                 settings.agentBackgroundMonitoringEnabled,
                 relayClient.isHostConnected
@@ -704,9 +708,7 @@
                 // Send tmux prefix key (Ctrl+B)
                 Button {
                     guard let activePaneId else { return }
-                    Task {
-                        await sendCommand(.sendKeystroke([.ctrl("b")]), paneId: activePaneId)
-                    }
+                    enqueueToolbarKeys([.ctrl("b")], paneId: activePaneId)
                 } label: {
                     Label("Tmux Prefix", symbol: .terminal)
                 }
@@ -799,6 +801,30 @@
 
         // MARK: - Command Sending
 
+        private var activePhraseContext: TerminalPhraseContext {
+            let pane = window?.panes.first { $0.paneId == activePaneId }
+            return TerminalPhraseContext(
+                hostID: hostId,
+                paneID: pane?.paneId,
+                inputRevision: terminalInputRevision,
+                isConnected: relayClient.isHostConnected,
+                isInputAvailable: scenePhase == .active
+                    && pane.map { terminalInputReadiness[$0.paneId]?() == true } == true,
+                hasExternalEditor: pane?.editorSession != nil,
+                hasBlockingForm: pane?.agentSession?.state.openForm?.request.isBlocking == true
+            )
+        }
+
+        private func sendPhrase(_ request: TerminalPhraseRequest) -> Bool {
+            guard request.isValid(in: activePhraseContext, savedPhrases: settings.quickPhrases.phrases),
+                  let paneId = request.context.target.paneID
+            else { return false }
+            guard enqueueToolbarKeys(request.phrase.keys, paneId: paneId, immediately: true) else { return false }
+            // Phrases are ordinary user input; retain normal prompt monitoring.
+            observeTerminalInput(request.phrase.keys, paneId: paneId, windowName: window?.windowName ?? "")
+            return true
+        }
+
         private var activeAgentCommandContext: AgentCommandContext? {
             let pane = window?.panes.first { $0.paneId == activePaneId }
             return AgentCommandContext(
@@ -809,7 +835,7 @@
                 isInputAvailable: scenePhase == .active
                     && pane.map { terminalInputReadiness[$0.paneId]?() == true } == true,
                 hasExternalEditor: pane?.editorSession != nil,
-                inputRevision: agentCommandInputRevision
+                inputRevision: terminalInputRevision
             )
         }
 
@@ -818,8 +844,9 @@
 
             // Same queue as the other toolbar controls. Do not treat a slash
             // command as a new prompt or arm the background-turn monitor.
-            enqueueToolbarKeys(request.command.keys, paneId: request.context.target.paneID, immediately: true)
-            agentCommandInputRevision &+= 1
+            guard enqueueToolbarKeys(request.command.keys, paneId: request.context.target.paneID, immediately: true)
+            else { return false }
+            terminalInputRevision &+= 1
             backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
             return true
         }
@@ -836,7 +863,7 @@
                 let activePaneId
             else { return }
 
-            enqueueToolbarKeys(keys, paneId: activePaneId)
+            guard enqueueToolbarKeys(keys, paneId: activePaneId) else { return }
             observeTerminalInput(
                 keys,
                 paneId: activePaneId,
@@ -844,22 +871,9 @@
             )
         }
 
-        private func enqueueToolbarKeys(_ keys: [TmuxKey], paneId: String, immediately: Bool = false) {
-            cursorNavigationCancellations[paneId]?()
-            if voiceKeystrokePaneId != paneId {
-                voiceKeystrokeDebouncer?.cancelAll()
-                voiceKeystrokeDebouncer = KeystrokeDebouncer(
-                    paneId: paneId,
-                    relayClient: relayClient
-                )
-                voiceKeystrokePaneId = paneId
-            }
-
-            if immediately {
-                voiceKeystrokeDebouncer?.enqueueImmediately(keys)
-            } else {
-                voiceKeystrokeDebouncer?.enqueue(keys)
-            }
+        @discardableResult
+        private func enqueueToolbarKeys(_ keys: [TmuxKey], paneId: String, immediately: Bool = false) -> Bool {
+            externalInputSenders[paneId]?(keys, immediately) == true
         }
 
         private func activeVoiceInputContext() -> String? {

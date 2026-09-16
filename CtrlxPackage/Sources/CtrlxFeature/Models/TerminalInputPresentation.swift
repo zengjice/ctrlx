@@ -7,9 +7,10 @@ enum TerminalInputPresentation {
     static func resolve(
         keyboardRequested: Bool,
         isActive: Bool,
-        isCopyPresented: Bool
+        isCopyPresented: Bool,
+        isInputSuspended: Bool = false
     ) -> State {
-        guard isActive, !isCopyPresented else {
+        guard isActive, !isCopyPresented, !isInputSuspended else {
             return State(inputEnabled: false, keyboardRequested: false)
         }
         return State(inputEnabled: true, keyboardRequested: keyboardRequested)

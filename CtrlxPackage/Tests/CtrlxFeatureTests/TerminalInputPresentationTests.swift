@@ -50,6 +50,29 @@ struct TerminalInputPresentationTests {
             keyboardRequested: false
         ))
     }
+
+    @Test("Phrase panels suspend native input without losing keyboard intent", arguments: [false, true])
+    func phrasePanel(keyboardRequested: Bool) {
+        #expect(TerminalInputPresentation.resolve(
+            keyboardRequested: keyboardRequested, isActive: true,
+            isCopyPresented: false, isInputSuspended: true
+        ) == TerminalInputPresentation.State(inputEnabled: false, keyboardRequested: false))
+        #expect(TerminalInputPresentation.resolve(
+            keyboardRequested: keyboardRequested, isActive: true,
+            isCopyPresented: false, isInputSuspended: false
+        ) == TerminalInputPresentation.State(inputEnabled: true, keyboardRequested: keyboardRequested))
+        // Dismissing the editor must not activate another pane or bypass Copy.
+        for isCopyPresented in [false, true] {
+            #expect(TerminalInputPresentation.resolve(
+                keyboardRequested: keyboardRequested, isActive: false,
+                isCopyPresented: isCopyPresented, isInputSuspended: false
+            ) == TerminalInputPresentation.State(inputEnabled: false, keyboardRequested: false))
+        }
+        #expect(TerminalInputPresentation.resolve(
+            keyboardRequested: keyboardRequested, isActive: true,
+            isCopyPresented: true, isInputSuspended: false
+        ) == TerminalInputPresentation.State(inputEnabled: false, keyboardRequested: false))
+    }
 }
 
 @Suite("Terminal initial tail presentation")

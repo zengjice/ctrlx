@@ -14,6 +14,7 @@
     /// forwarded to tmux via the relay server.
     struct LiveTerminalView: View {
         let paneId: String
+        let hostId: String
 
         /// Binding to the response state for displaying response options above the terminal
         @Binding var responseState: ResponseState?
@@ -49,6 +50,7 @@
         /// When false, keyboard input and its shortcut bar are suppressed.
         /// Used in multi-pane layouts where only the selected pane accepts input.
         let isActive: Bool
+        let isInputSuspended: Bool
 
         /// Whether a parent-managed multi-pane layout wants the software keyboard.
         /// The selected pane keeps its shortcut bar available even when this is false.
@@ -69,6 +71,10 @@
         /// before sending their own keys to this pane.
         let onCursorNavigationCancellationChange: @MainActor ((@MainActor () -> Void)?) -> Void
 
+        /// Parent controls use this pane's existing FIFO, not a second queue
+        /// that could overtake a native keyboard edit or caret movement.
+        let onExternalInputSenderChange: @MainActor ((@MainActor ([TmuxKey], Bool) -> Bool)?) -> Void
+
         /// Lets a parent-owned command menu fail closed while this pane is
         /// bootstrapping or reconnecting, without reading terminal pixels.
         let onTerminalInputReadinessChange: @MainActor ((@MainActor () -> Bool)?) -> Void
@@ -82,6 +88,9 @@
 
         /// Whether this standalone terminal requests the software keyboard.
         @State private var isInteractive = false
+        @State private var isPhrasePanelPresented = false
+        @State private var phraseInputRevision: UInt64 = 0
+        @Environment(\.scenePhase) private var scenePhase
 
         /// Changes when the user manually retries a failed stream. Combined with
         /// `isConnected`, this gives the stream task a stable, explicit identity.
@@ -99,6 +108,7 @@
 
         init(
             paneId: String,
+            hostId: String,
             responseState: Binding<ResponseState?>,
             terminalTitle: Binding<String?>,
             clipboardContent: Binding<String?> = .constant(nil),
@@ -108,6 +118,7 @@
             showKeyboardButton: Bool = true,
             showCopyButton: Bool = true,
             isActive: Bool = true,
+            isInputSuspended: Bool = false,
             parentKeyboardRequested: Bool = false,
             settings: IOSSettings,
             telemetry: SessionTelemetry? = nil,
@@ -117,9 +128,11 @@
                 TerminalVoiceInputContextProvider?
             ) -> Void = { _ in },
             onCursorNavigationCancellationChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
+            onExternalInputSenderChange: @escaping @MainActor ((@MainActor ([TmuxKey], Bool) -> Bool)?) -> Void = { _ in },
             onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in }
         ) {
             self.paneId = paneId
+            self.hostId = hostId
             self._responseState = responseState
             self._terminalTitle = terminalTitle
             self._clipboardContent = clipboardContent
@@ -130,12 +143,14 @@
             self.settings = settings
             self.showCopyButton = showCopyButton
             self.isActive = isActive
+            self.isInputSuspended = isInputSuspended
             self.parentKeyboardRequested = parentKeyboardRequested
             self.telemetry = telemetry
             self.submitResponse = submitResponse
             self.onTerminalInput = onTerminalInput
             self.onVoiceInputContextProviderChange = onVoiceInputContextProviderChange
             self.onCursorNavigationCancellationChange = onCursorNavigationCancellationChange
+            self.onExternalInputSenderChange = onExternalInputSenderChange
             self.onTerminalInputReadinessChange = onTerminalInputReadinessChange
             self.coordinator = StreamCoordinator(
                 paneId: paneId,
@@ -185,6 +200,7 @@
                                         contextProvider: terminalVoiceInputContext,
                                         sendKeys: sendTerminalKeys
                                     )
+                                    .id(phraseContext.target)
                                     keyboardOverlayButton
                                 }
                             }
@@ -198,7 +214,11 @@
                         isEnabled: isConnected && coordinator.streamState == .streaming,
                         action: { isInteractive.toggle() },
                         contextProvider: terminalVoiceInputContext,
-                        sendKeys: sendTerminalKeys
+                        sendKeys: sendTerminalKeys,
+                        quickPhrases: settings.quickPhrases,
+                        phraseContext: phraseContext,
+                        sendPhrase: sendPhrase,
+                        isPhrasePanelPresented: $isPhrasePanelPresented
                     )
                 }
             }
@@ -216,6 +236,7 @@
                             contextProvider: terminalVoiceInputContext,
                             sendKeys: sendTerminalKeys
                         )
+                        .id(phraseContext.target)
                     }
 
                     ToolbarItem(placement: .topBarTrailing) {
@@ -250,13 +271,21 @@
                 onCursorNavigationCancellationChange { [weak coordinator] in
                     coordinator?.terminalState?.cancelCursorNavigation?()
                 }
+                onExternalInputSenderChange { [weak coordinator, relayClient] keys, immediately in
+                    guard let coordinator, coordinator.isReadyForToolbarInput,
+                          relayClient.isHostConnected, !keys.isEmpty else { return false }
+                    coordinator.terminalState?.prepareForExternalInput?()
+                    coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: immediately)
+                    return true
+                }
                 onTerminalInputReadinessChange { [weak coordinator] in
-                    coordinator?.isReadyForAgentCommand == true
+                    coordinator?.isReadyForToolbarInput == true
                 }
             }
             .onDisappear {
                 onVoiceInputContextProviderChange(nil)
                 onCursorNavigationCancellationChange(nil)
+                onExternalInputSenderChange(nil)
                 onTerminalInputReadinessChange(nil)
                 coordinator.terminalState?.cancelCursorNavigation?()
                 Task { await stopStreaming() }
@@ -393,9 +422,10 @@
                         inputEnabled: inputPresentation.inputEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
                         onInput: { keys in
-                            sendTerminalKeys(keys)
+                            enqueueTerminalKeys(keys)
                         },
                         onRawInput: { data in
+                            phraseInputRevision &+= 1
                             coordinator.enqueueRawInput(data: data, relayClient: relayClient)
                         }
                     )
@@ -446,14 +476,40 @@
             TerminalInputPresentation.resolve(
                 keyboardRequested: showKeyboardButton ? isInteractive : parentKeyboardRequested,
                 isActive: isActive,
-                isCopyPresented: isCopyPresented
+                isCopyPresented: isCopyPresented,
+                isInputSuspended: isInputSuspended || isPhrasePanelPresented
             )
         }
 
         private func sendTerminalKeys(_ keys: [TmuxKey]) {
             guard canSendTerminalInput, !keys.isEmpty else { return }
+            coordinator.terminalState?.prepareForExternalInput?()
+            enqueueTerminalKeys(keys)
+        }
+
+        private func enqueueTerminalKeys(_ keys: [TmuxKey]) {
+            guard canSendTerminalInput, !keys.isEmpty else { return }
+            phraseInputRevision &+= 1
             coordinator.enqueueKeySend(keys: keys, relayClient: relayClient)
             onTerminalInput(keys)
+        }
+
+        private var phraseContext: TerminalPhraseContext {
+            TerminalPhraseContext(
+                hostID: hostId, paneID: paneId, inputRevision: phraseInputRevision,
+                isConnected: isConnected,
+                isInputAvailable: scenePhase == .active && isActive && coordinator.isReadyForToolbarInput,
+                hasBlockingForm: responseState?.request.isBlocking == true
+            )
+        }
+
+        private func sendPhrase(_ request: TerminalPhraseRequest) -> Bool {
+            guard request.isValid(in: phraseContext, savedPhrases: settings.quickPhrases.phrases) else { return false }
+            coordinator.terminalState?.prepareForExternalInput?()
+            phraseInputRevision &+= 1
+            coordinator.enqueueKeySend(keys: request.phrase.keys, relayClient: relayClient, immediately: true)
+            onTerminalInput(request.phrase.keys)
+            return true
         }
 
         // MARK: - Streaming
@@ -655,7 +711,7 @@
             terminalState?.makeTextSnapshot?()?.text
         }
 
-        var isReadyForAgentCommand: Bool {
+        var isReadyForToolbarInput: Bool {
             streamState == .streaming && terminalState != nil && pendingResetState == nil
         }
 
@@ -751,12 +807,16 @@
         }
 
         /// Accumulates rapid keystrokes and flushes them as a single command after a short delay.
-        func enqueueKeySend(keys: [TmuxKey], relayClient: ViewerRelayClient) {
+        func enqueueKeySend(keys: [TmuxKey], relayClient: ViewerRelayClient, immediately: Bool = false) {
             terminalState?.cancelCursorNavigation?()
             if keystrokeDebouncer == nil {
                 keystrokeDebouncer = KeystrokeDebouncer(paneId: paneId, relayClient: relayClient)
             }
-            keystrokeDebouncer?.enqueue(keys)
+            if immediately {
+                keystrokeDebouncer?.enqueueImmediately(keys)
+            } else {
+                keystrokeDebouncer?.enqueue(keys)
+            }
         }
 
         /// Forwards raw bytes (e.g., SGR mouse escape sequences) to the host via the relay.
@@ -1082,6 +1142,7 @@
         var makeTextSnapshot: (() -> TerminalTextSnapshot?)?
 
         var cancelCursorNavigation: (() -> Void)?
+        var prepareForExternalInput: (() -> Void)?
 
         init(
             width: Int,
@@ -1312,6 +1373,9 @@
             }
             terminalState.cancelCursorNavigation = { [weak terminalView] in
                 terminalView?.cancelCursorNavigation()
+            }
+            terminalState.prepareForExternalInput = { [weak terminalView] in
+                terminalView?.prepareForExternalInput()
             }
 
             // Record input intent and request the initial native tail reveal.
@@ -1572,6 +1636,7 @@
         NavigationStack {
             LiveTerminalView(
                 paneId: "%1",
+                hostId: "preview",
                 responseState: .init(get: { nil }, set: { _ in }),
                 terminalTitle: .init(get: { nil }, set: { _ in }),
                 isConnected: true,

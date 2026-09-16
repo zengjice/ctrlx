@@ -76,6 +76,8 @@ public enum Symbols: String {
     case lockTriangleBadgeExclamationmark = "lock.trianglebadge.exclamationmark"
     case macwindow
     case magnifyingglass
+    case mic
+    case micFill = "mic.fill"
     case minusCircleFill = "minus.circle.fill"
     case moonFill = "moon.fill"
     case number
@@ -108,6 +110,7 @@ public enum Symbols: String {
     case stopFill = "stop.fill"
     case terminal
     case textBubbleFill = "text.bubble.fill"
+    case trash
     case wandAndStars = "wand.and.stars"
     case wifi
     case wifiSlash = "wifi.slash"

@@ -68,7 +68,7 @@ show/hide, the copy page and exit/re-entry; check for new AttributeGraph cycles.
 
 The first-row input controls and SwiftTerm's second-row shortcut accessory share
 the 32-point `TerminalInputControlMetrics.buttonHeight`. Voice is microphone-only
-in the first row, preserving hold-to-dictate and its accessibility label. Esc is
+in the first row, using tap-to-toggle dictation and its accessibility label. Esc is
 immediately before Send and sends one `.escape` through the normal toolbar queue;
 it does not auto-repeat. The accessory hides Esc, horizontal arrows (already
 present in the first row) and optional function keys,
@@ -77,6 +77,56 @@ presentation configuration only: Ctrl/modifier handling, up/down auto-repeat,
 touch mode, keyboard switching and the input proxy keep their existing paths.
 SwiftTerm's `showsEscapeKey` defaults to `true`; only CtrlX opts out, so other
 consumers retain their existing keyboard. Layout tests cover both configurations.
+
+### Tap-to-toggle voice input
+
+The shared `VoiceInputButton` is a native SwiftUI `Button`, not a zero-distance
+drag gesture. One tap starts dictation; the microphone turns red when recording.
+A second tap finishes recognition/correction; it never sends Return. `Send`
+remains a separate explicit action. A tap while preparing cancels preparation;
+finalization disables repeat taps until the result is ready. Touch and VoiceOver
+use the same action, and context/draft preparation happens only on start.
+
+Terminal voice controls are keyed by host + pane so switching targets cancels
+the old recording instead of forwarding later text to another pane. Disconnect,
+leaving the view/app, or opening the toolbar's phrase/command panel cancels input
+without deleting text already entered. Modern speech startup checks cancellation
+after async preparation, and late callbacks are checked against the current
+session. A cancelled session that never activated audio cannot deactivate a new
+one. No speech model, correction prompt, terminal rendering, or send protocol
+changes are involved. `VoiceInputPhaseTests` covers tap routing, accessibility,
+and preservation of existing terminal input; device audio remains a manual check.
+
+### Custom quick phrases
+
+The first row's speech-bubble button opens **Quick Phrases**, a medium/large
+sheet with the same adaptive bordered-button grid as `/`. The entry is always
+available, including ordinary shell windows, unsupported agents, and offline
+panes. **Add Phrase** saves literal single-line text locally, without sending it;
+the library is shared across hosts, sessions, and panes through `IOSSettings`'s
+`QuickPhraseStore`, persisted with `PreferencesService` under
+`terminalQuickPhrases.v1`. Long-press a phrase to delete it. Blank, duplicate and
+embedded-control-character entries are rejected. Unreadable stored data is
+reported and preserved rather than overwritten.
+
+Tapping a phrase immediately queues `[.text(phrase), .delay(200), .enter]` to the
+selected pane and closes the panel. It does not clear existing terminal input.
+The same toolbar FIFO and cursor-navigation cancellation are used; unlike slash
+commands, ordinary phrases participate in the existing prompt-monitoring path.
+The final send rechecks the captured host/pane/local input revision, saved phrase,
+connection, stream readiness, pending blocking form, and external editor state.
+Only sending is disabled while unavailable; browsing and adding remain usable.
+No supported-agent catalog is required. Changing target or local input dismisses
+the old panel, and advancing the revision rejects duplicate stale submissions.
+
+While the panel/editor is presented, both standalone and tiled terminal views
+suspend native input through the existing presentation policy. Keyboard intent is
+preserved and restored on dismissal; the terminal must not reclaim first
+responder while a phrase is being edited. The first-row controls can scroll
+horizontally on narrow screens, with **Send** always pinned at the right.
+This feature needs only an iOS update, not a host, relay, or SwiftTerm update.
+`QuickPhraseTests` covers persistence, validation, ordinary panes, availability,
+stale/deleted requests, and exact one-tap key batches.
 
 ### Agent command panel
 
@@ -144,6 +194,38 @@ Return. On a device, check dismissing the panel with a multiline draft, one-tap
 command execution with an empty composer, switching split panes, dictation
 finishing while the panel is open, and
 the unchanged keyboard/selection/cursor controls on narrow screens.
+
+## Native keyboard text and caret synchronization
+
+`TerminalInputProxyView` owns a native UITextView shadow document, not the
+remote editor's full draft. Keyboards can insert paired quotes/brackets and
+then move only their local selection back inside. Forwarding text differences
+alone left the remote caret at the end; a toolbar Right could not move the
+keyboard's hidden caret, so subsequent typing stayed inside the quotes.
+
+- `TerminalInputCursorSynchronizer` tracks committed text **and** caret, converts
+  UIKit UTF-16 offsets to whole-character steps, and preserves the unchanged
+  prefix/suffix. A middle insertion does not delete/retype the closing quote.
+- Native insert/delete/replace/marked-text operations defer delegate handling
+  until the operation completes. Marked candidates remain local; unmark forwards
+  one committed edit. Selection-only changes emit only Left/Right keys.
+- Explicit tap navigation, toolbar input, paste and accessory keys start a new
+  local keyboard context. A pending candidate is committed before external input;
+  resetting the context sends no remote deletion. Native callbacks do not reset
+  their own document. Copy/menu actions do not reset it either.
+- Parent toolbar controls use the pane coordinator's existing FIFO alongside
+  keyboard edits, instead of a separate toolbar queue. This preserves the order
+  of quote insertion, caret movement and subsequent input, even before a flush.
+- Voice keeps its separate end-of-document `TerminalInputDocumentSynchronizer`;
+  recognition correction, terminal selection and deferred focus are unchanged.
+
+Coverage: `TerminalInputCursorSynchronizerTests` checks paired delimiters,
+middle edits, Unicode offsets, reset boundaries and an old/new caret matrix.
+`TerminalSelectionRoutingTests` covers native quote/candidate/navigation paths
+and existing copy/menu behavior; `KeystrokeDebouncerTests` checks shared ordering.
+Physical-device checks still need the user's third-party keyboard: type paired
+quotes, Chinese text inside, then Right/tap outside and type more; repeat after
+a wrapped-line tap, paste, voice input and switching panes.
 
 ## Cursor placement by single tap
 

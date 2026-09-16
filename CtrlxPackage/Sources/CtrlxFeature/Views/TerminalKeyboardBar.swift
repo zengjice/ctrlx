@@ -20,10 +20,47 @@
         let action: () -> Void
         var contextProvider: TerminalVoiceInputContextProvider = { nil }
         let sendKeys: ([TmuxKey]) -> Void
+        let quickPhrases: QuickPhraseStore
+        let phraseContext: TerminalPhraseContext
+        let sendPhrase: @MainActor (TerminalPhraseRequest) -> Bool
+        @Binding var isPhrasePanelPresented: Bool
         var agentCommandContext: AgentCommandContext? = nil
         var sendAgentCommand: @MainActor (AgentCommandRequest) -> Bool = { _ in false }
+        @State private var isAgentCommandPanelPresented = false
 
         var body: some View {
+            HStack(spacing: 4) {
+                // Keep Send visible even on narrow screens or large text sizes.
+                ScrollView(.horizontal) {
+                    inputControls
+                }
+                .scrollIndicators(.hidden)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Button(action: sendReturn) {
+                    Text("Send")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .frame(width: TerminalInputControlMetrics.sendContentWidth)
+                        .terminalInputControlStyle()
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!isEnabled)
+                .opacity(isEnabled ? 1 : 0.4)
+                .accessibilityLabel("Send Return")
+                .accessibilityIdentifier("terminal-return-control")
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(.bar)
+            .overlay(alignment: .top) {
+                Divider()
+            }
+        }
+
+        private var inputControls: some View {
             HStack(spacing: 4) {
                 Button(action: action) {
                     ViewThatFits(in: .horizontal) {
@@ -45,16 +82,25 @@
                 .accessibilityIdentifier("terminal-keyboard-control")
 
                 TerminalVoiceInputButton(
-                    isDisabled: !isEnabled,
+                    isDisabled: !isEnabled || isPhrasePanelPresented || isAgentCommandPanelPresented,
                     showsLabel: false,
+                    usesControlStyle: true,
                     contextProvider: contextProvider,
                     sendKeys: sendKeys
                 )
-                .terminalInputControlStyle()
+                .id(phraseContext.target)
+
+                TerminalQuickPhraseButton(
+                    store: quickPhrases,
+                    context: phraseContext,
+                    sendPhrase: sendPhrase,
+                    isPresented: $isPhrasePanelPresented
+                )
 
                 TerminalAgentCommandButton(
                     context: agentCommandContext,
-                    sendCommand: sendAgentCommand
+                    sendCommand: sendAgentCommand,
+                    isPresented: $isAgentCommandPanelPresented
                 )
                 // An open panel must not silently switch to another pane/agent.
                 .id(agentCommandContext?.target)
@@ -97,27 +143,6 @@
                 .opacity(isEnabled ? 1 : 0.4)
                 .accessibilityLabel("Escape")
                 .accessibilityIdentifier("terminal-escape-control")
-
-                Button(action: sendReturn) {
-                    Text("Send")
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .frame(width: TerminalInputControlMetrics.sendContentWidth)
-                        .terminalInputControlStyle()
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(!isEnabled)
-                .opacity(isEnabled ? 1 : 0.4)
-                .accessibilityLabel("Send Return")
-                .accessibilityIdentifier("terminal-return-control")
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(.bar)
-            .overlay(alignment: .top) {
-                Divider()
             }
         }
 
