@@ -1,20 +1,20 @@
 import CtrlxNetworking
 
 /// Unlike slash commands, phrase input does not require a recognized agent.
-struct TerminalPhraseContext: Identifiable, Equatable, Sendable {
-    struct Target: Hashable, Sendable {
-        let hostID: String
-        let paneID: String?
+package struct TerminalPhraseContext: Identifiable, Equatable, Sendable {
+    package struct Target: Hashable, Sendable {
+        package let hostID: String
+        package let paneID: String?
     }
 
-    let target: Target
-    let inputRevision: UInt64
-    let unavailableReason: String?
+    package let target: Target
+    package let inputRevision: UInt64
+    package let unavailableReason: String?
 
-    var id: Target { target }
-    var canSend: Bool { unavailableReason == nil }
+    package var id: Target { target }
+    package var canSend: Bool { unavailableReason == nil }
 
-    init(hostID: String, paneID: String?, inputRevision: UInt64,
+    package init(hostID: String, paneID: String?, inputRevision: UInt64,
          isConnected: Bool, isInputAvailable: Bool, hasExternalEditor: Bool = false,
          hasBlockingForm: Bool = false) {
         target = Target(hostID: hostID, paneID: paneID)
@@ -34,16 +34,21 @@ struct TerminalPhraseContext: Identifiable, Equatable, Sendable {
         }
     }
 
-    func hasSameInput(as current: Self) -> Bool {
+    package func hasSameInput(as current: Self) -> Bool {
         target == current.target && inputRevision == current.inputRevision
     }
 }
 
-struct TerminalPhraseRequest: Sendable {
-    let phrase: QuickPhrase
-    let context: TerminalPhraseContext
+package struct TerminalPhraseRequest: Sendable {
+    package let phrase: QuickPhrase
+    package let context: TerminalPhraseContext
 
-    func isValid(in current: TerminalPhraseContext, savedPhrases: [QuickPhrase]) -> Bool {
+    package init(phrase: QuickPhrase, context: TerminalPhraseContext) {
+        self.phrase = phrase
+        self.context = context
+    }
+
+    package func isValid(in current: TerminalPhraseContext, savedPhrases: [QuickPhrase]) -> Bool {
         context.canSend && current.canSend && context.hasSameInput(as: current)
             && savedPhrases.contains(phrase)
     }

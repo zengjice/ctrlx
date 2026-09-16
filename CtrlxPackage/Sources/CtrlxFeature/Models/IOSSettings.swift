@@ -410,6 +410,7 @@
 
         /// Remove a paired host by ID
         public func removePairing(id: String) {
+            quickPhrases.setSyncEnabled(false, for: id)
             pairedHosts.removeAll { $0.id == id }
             remoteSessionOrderByHost.removeValue(forKey: id)
         }
@@ -436,6 +437,7 @@
 
         /// Clear all pairings
         public func clearAllPairings() {
+            for host in pairedHosts { quickPhrases.setSyncEnabled(false, for: host.id) }
             pairedHosts = []
             remoteSessionOrderByHost = [:]
         }

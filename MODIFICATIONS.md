@@ -7,6 +7,21 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.30 — Shared quick actions and phrase synchronization
+
+- Add Mac toolbar panels for agent commands and saved phrases, targeting the
+  focused local or remote pane and reusing its ordered keyboard input queue.
+- Share the curated command catalog across iOS and Mac. Phrases remain usable
+  in ordinary shells and are saved locally before optional synchronization.
+- Add per-pair, bilateral opt-in phrase synchronization over the existing E2EE
+  connection, with offline merge, stable IDs, permanent deletion markers,
+  bounded snapshots and backward-compatible capability negotiation.
+- Preserve existing phrases through v1-to-v2 storage migration. Synchronization
+  is disabled by default and never submits commands or changes terminal rendering.
+- Include the recent iOS quick-phrase, tap-to-record, paired-quote input and
+  compact toolbar improvements. Update both clients for phrase synchronization;
+  the existing Qcloud Relay remains compatible and is not redeployed.
+
 ## 3.0.29 — Mac completion attention
 
 - Acknowledge completed agent tasks from each displayed terminal pane, covering

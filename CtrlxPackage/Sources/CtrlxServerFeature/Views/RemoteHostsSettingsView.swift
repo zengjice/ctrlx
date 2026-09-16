@@ -190,6 +190,7 @@ public struct RemoteHostsSettingsView: View {
                         showDeleteConfirmation = true
                     }
                 )
+                QuickPhraseSyncToggle(store: settings.quickPhrases, pairID: host.id)
             }
 
             Button {

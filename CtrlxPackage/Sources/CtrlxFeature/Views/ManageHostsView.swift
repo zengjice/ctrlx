@@ -59,6 +59,12 @@
                     Text("Tap to edit name. Use Edit to reorder or remove hosts.")
                 }
 
+                ForEach(settings.pairedHosts) { host in
+                    Section(host.displayName) {
+                        QuickPhraseSyncToggle(store: settings.quickPhrases, pairID: host.id)
+                    }
+                }
+
                 // Add host section
                 Section {
                     Button {

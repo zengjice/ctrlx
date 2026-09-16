@@ -1,9 +1,8 @@
-import CtrlxCommon
+@testable import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
 import Foundation
 import Testing
-@testable import CtrlxFeature
 
 @MainActor
 @Suite("Device-local quick phrases")

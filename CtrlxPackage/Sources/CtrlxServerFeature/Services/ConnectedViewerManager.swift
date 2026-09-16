@@ -184,6 +184,7 @@ final public class ConnectedViewerManager {
             }
 
             connection = ConnectedViewer(pairedViewer: viewer, e2eeService: viewerE2EE)
+            connection.configureQuickPhraseSync(store: settings.quickPhrases)
             setupConnectionCallbacks(connection)
             connections[viewer.id] = connection
             logger.info("Created new connection for viewer: \(viewer.displayName)")

@@ -3975,6 +3975,7 @@
 
             do {
                 let manager = try await ViewerConnectionManager()
+                manager.configureQuickPhraseSync(store: settings.quickPhrases)
                 viewerConnectionManager = manager
 
                 // Create session store for remote sessions

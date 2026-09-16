@@ -12,9 +12,12 @@ public struct PeerHelloMessage: Codable, Sendable {
     /// Minimum partner version the sending peer is willing to talk to.
     public let minRequiredPartnerVersion: String
 
-    public init(appVersion: String, minRequiredPartnerVersion: String) {
+    public let quickPhraseSync: QuickPhraseSyncOffer?
+
+    public init(appVersion: String, minRequiredPartnerVersion: String, quickPhraseSync: QuickPhraseSyncOffer? = nil) {
         self.appVersion = appVersion
         self.minRequiredPartnerVersion = minRequiredPartnerVersion
+        self.quickPhraseSync = quickPhraseSync
     }
 }
 

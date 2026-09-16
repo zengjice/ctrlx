@@ -2,7 +2,7 @@ import CtrlxNetworking
 
 /// A curated command catalog, not runtime capability discovery. Keep commands
 /// that delete/reset sessions, stop work, or require inline arguments out of it.
-enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
+package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
     case model
     case status
     case usage
@@ -23,15 +23,15 @@ enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
     case statusline
     case debugConfig = "debug-config"
 
-    var id: String { rawValue }
-    var text: String { "/\(rawValue)" }
+    package var id: String { rawValue }
+    package var text: String { "/\(rawValue)" }
     /// Keep Return outside the TUI's rapid-input/paste window. Like the reply
     /// composer, send the pause to the host so network batching cannot remove it.
-    var keys: [TmuxKey] { [.text(text), .delay(200), .enter] }
+    package var keys: [TmuxKey] { [.text(text), .delay(200), .enter] }
 
     /// The panel's display order is also the send allowlist. Do not give other
     /// agents the Codex catalog.
-    static func commands(for pluginID: String) -> [Self] {
+    package static func commands(for pluginID: String) -> [Self] {
         switch pluginID {
         case "codex": [
             .model, .status, .usage,
@@ -45,31 +45,31 @@ enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-struct AgentCommandContext: Identifiable, Equatable, Sendable {
-    struct Target: Hashable, Sendable {
-        let hostID: String
-        let paneID: String
-        let pluginID: String
+package struct AgentCommandContext: Identifiable, Equatable, Sendable {
+    package struct Target: Hashable, Sendable {
+        package let hostID: String
+        package let paneID: String
+        package let pluginID: String
     }
 
-    let target: Target
+    package let target: Target
     /// Reject stale panel actions if local input changed while the panel was open.
     /// This is NOT a remote draft model.
-    let inputRevision: UInt64
-    let unavailableReason: String?
+    package let inputRevision: UInt64
+    package let unavailableReason: String?
 
-    var id: Target { target }
-    var commands: [AgentQuickCommand] { AgentQuickCommand.commands(for: target.pluginID) }
-    var canSend: Bool { unavailableReason == nil }
+    package var id: Target { target }
+    package var commands: [AgentQuickCommand] { AgentQuickCommand.commands(for: target.pluginID) }
+    package var canSend: Bool { unavailableReason == nil }
 
     /// Availability may change while browsing; only a different input target or
     /// local draft edit makes the captured panel stale.
-    func hasSameInput(as current: Self?) -> Bool {
+    package func hasSameInput(as current: Self?) -> Bool {
         guard let current else { return false }
         return target == current.target && inputRevision == current.inputRevision
     }
 
-    init?(
+    package init?(
         hostID: String,
         paneID: String?,
         session: AgentSession?,
@@ -103,17 +103,17 @@ struct AgentCommandContext: Identifiable, Equatable, Sendable {
 
 /// Selecting an item submits immediately. Capture its target so a stale panel
 /// action cannot silently type into a different pane or agent.
-struct AgentCommandRequest: Equatable, Sendable {
-    let command: AgentQuickCommand
-    let context: AgentCommandContext
+package struct AgentCommandRequest: Equatable, Sendable {
+    package let command: AgentQuickCommand
+    package let context: AgentCommandContext
 
-    init?(_ command: AgentQuickCommand, in context: AgentCommandContext?) {
+    package init?(_ command: AgentQuickCommand, in context: AgentCommandContext?) {
         guard let context, context.canSend, context.commands.contains(command) else { return nil }
         self.command = command
         self.context = context
     }
 
-    func isValid(in current: AgentCommandContext?) -> Bool {
+    package func isValid(in current: AgentCommandContext?) -> Bool {
         context.hasSameInput(as: current) && context.canSend
             && current?.canSend == true && current?.commands.contains(command) == true
     }

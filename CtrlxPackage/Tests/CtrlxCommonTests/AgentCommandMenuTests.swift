@@ -1,6 +1,6 @@
 import CtrlxNetworking
 import Testing
-@testable import CtrlxFeature
+@testable import CtrlxCommon
 
 @Suite("Agent command panel")
 struct AgentCommandMenuTests {

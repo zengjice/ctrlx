@@ -177,6 +177,9 @@ public struct PairedViewer: Codable, Identifiable, Sendable, Hashable {
 @Observable
 @MainActor
 final public class AppSettings {
+    /// Device-local library shared by all panes scenes, including remote viewers.
+    let quickPhrases = QuickPhraseStore()
+
     // MARK: - Dependencies
 
     /// Preferences service for persistent storage
@@ -770,6 +773,7 @@ final public class AppSettings {
 
     /// Remove a paired viewer by ID
     public func removePairing(id: String) {
+        quickPhrases.setSyncEnabled(false, for: id)
         pairedViewers.removeAll { $0.id == id }
     }
 
@@ -787,6 +791,7 @@ final public class AppSettings {
 
     /// Clear all pairings
     public func clearAllPairings() {
+        for viewer in pairedViewers { quickPhrases.setSyncEnabled(false, for: viewer.id) }
         pairedViewers = []
     }
 
@@ -803,6 +808,7 @@ final public class AppSettings {
 
     /// Remove a paired host by ID
     public func removeHostPairing(id: String) {
+        quickPhrases.setSyncEnabled(false, for: id)
         pairedHosts.removeAll { $0.id == id }
         remoteSessionOrderByHost.removeValue(forKey: id)
     }
@@ -830,6 +836,7 @@ final public class AppSettings {
 
     /// Clear all host pairings
     public func clearAllHostPairings() {
+        for host in pairedHosts { quickPhrases.setSyncEnabled(false, for: host.id) }
         pairedHosts = []
         remoteSessionOrderByHost = [:]
     }

@@ -119,6 +119,13 @@ final public class ViewerConnectionManager {
 
     // MARK: - Connection Management
 
+    @ObservationIgnored private var quickPhraseStore: QuickPhraseStore?
+
+    /// Configure once before connecting. Notification-only managers leave this nil.
+    package func configureQuickPhraseSync(store: QuickPhraseStore) {
+        quickPhraseStore = store
+    }
+
     /// Get the connection for a specific host
     public func connection(for hostId: String) -> ViewerConnection? {
         connections[hostId]
@@ -181,6 +188,9 @@ final public class ViewerConnectionManager {
             }
 
             connection = ViewerConnection(pairedDevice: host, e2eeService: e2eeService)
+            if let quickPhraseStore {
+                connection.relayClient.configureQuickPhraseSync(store: quickPhraseStore, pairID: host.id)
+            }
             setupConnectionCallbacks(connection)
             connections[host.id] = connection
             logger.info("Created new connection for host: \(host.displayName)")

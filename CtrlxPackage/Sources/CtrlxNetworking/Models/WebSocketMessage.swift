@@ -78,6 +78,7 @@ public enum WebSocketMessage: Codable, Sendable {
     /// Carries each client's version info so peers can gate the session on
     /// compatibility without the relay server seeing or touching versions.
     case peerHello(PeerHelloMessage)
+    case quickPhraseSync(QuickPhraseSyncMessage)
 
     /// Ping to keep connection alive
     case ping
@@ -223,6 +224,7 @@ public extension WebSocketMessage {
         case hostSubscriptionInactive
         case unpaired
         case peerHello
+        case quickPhraseSync
         case ping
         case pong
         case error
@@ -288,6 +290,8 @@ public extension WebSocketMessage {
         case .peerHello:
             let payload = try container.decode(PeerHelloMessage.self, forKey: .payload)
             self = .peerHello(payload)
+        case .quickPhraseSync:
+            self = .quickPhraseSync(try container.decode(QuickPhraseSyncMessage.self, forKey: .payload))
         case .ping:
             self = .ping
         case .pong:
@@ -369,6 +373,9 @@ public extension WebSocketMessage {
         case let .peerHello(payload):
             try container.encode(MessageType.peerHello, forKey: .type)
             try container.encode(payload, forKey: .payload)
+        case let .quickPhraseSync(payload):
+            try container.encode(MessageType.quickPhraseSync, forKey: .type)
+            try container.encode(payload, forKey: .payload)
         case .ping:
             try container.encode(MessageType.ping, forKey: .type)
         case .pong:
@@ -418,6 +425,7 @@ public extension WebSocketMessage {
         case .hostSubscriptionInactive: MessageType.hostSubscriptionInactive.rawValue
         case .unpaired: MessageType.unpaired.rawValue
         case .peerHello: MessageType.peerHello.rawValue
+        case .quickPhraseSync: MessageType.quickPhraseSync.rawValue
         case .ping: MessageType.ping.rawValue
         case .pong: MessageType.pong.rawValue
         case .error: MessageType.error.rawValue
@@ -442,6 +450,7 @@ public extension WebSocketMessage {
              .commandResponse,
              .terminalStream,
              .peerHello,
+             .quickPhraseSync,
              .agentSessionStatus,
              .agentResponseSubmission,
              .pluginPresentations,

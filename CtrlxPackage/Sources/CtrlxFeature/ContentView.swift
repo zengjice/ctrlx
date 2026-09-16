@@ -311,7 +311,9 @@
             guard connectionManager == nil else { return }
 
             do {
-                connectionManager = try await ViewerConnectionManager()
+                let manager = try await ViewerConnectionManager()
+                manager.configureQuickPhraseSync(store: settings.quickPhrases)
+                connectionManager = manager
             } catch {
                 initializationError = "Failed to initialize encryption: \(error.localizedDescription)"
             }

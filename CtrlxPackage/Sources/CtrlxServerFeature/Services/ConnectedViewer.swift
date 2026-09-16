@@ -48,6 +48,14 @@ final public class ConnectedViewer: Identifiable {
     // MARK: - Properties
 
     private let logger = Logger(label: "com.jicezeng.ctrlx.connectedviewer")
+    @ObservationIgnored private var quickPhraseSync: QuickPhraseSyncSession?
+
+    func configureQuickPhraseSync(store: QuickPhraseStore) {
+        quickPhraseSync?.reset()
+        quickPhraseSync = QuickPhraseSyncSession(store: store, pairID: id) { [weak self] message in
+            await self?.sendEncrypted(.quickPhraseSync(message))
+        }
+    }
 
     @ObservationIgnored
     @Dependency(PushNotificationLogService.self) private var pushNotificationLog
@@ -509,9 +517,11 @@ final public class ConnectedViewer: Identifiable {
     /// Send this host's peerHello to the viewer once the E2EE session is up.
     /// Called right after establishing E2EE on `.viewerConnected`.
     private func sendPeerHello() async {
+        let generation = connectionGeneration.current
         let hello = PeerHelloMessage(
             appVersion: VersionCompatibility.currentAppVersion,
-            minRequiredPartnerVersion: VersionCompatibility.minRequiredViewerVersion
+            minRequiredPartnerVersion: VersionCompatibility.minRequiredViewerVersion,
+            quickPhraseSync: quickPhraseSync?.offer
         )
         logger.info(
             "Sending peerHello to viewer",
@@ -521,6 +531,7 @@ final public class ConnectedViewer: Identifiable {
             ]
         )
         await sendEncrypted(.peerHello(hello))
+        if connectionGeneration.isCurrent(generation), state.isConnected { quickPhraseSync?.didSendHello() }
     }
 
     /// Proactively push current session state to viewer
@@ -687,6 +698,7 @@ final public class ConnectedViewer: Identifiable {
     }
 
     private func handleWebSocketMessage(_ message: WebSocketMessage) async {
+        let generation = connectionGeneration.current
         // Decrypt encrypted messages first
         let decryptedMessage: WebSocketMessage
         if case .encrypted = message {
@@ -825,10 +837,17 @@ final public class ConnectedViewer: Identifiable {
                 // Compatible — now safe to surface the viewer as connected; the
                 // session-state push will fire when the viewer requests it.
                 isViewerConnected = true
+                if case .encrypted = message, connectionGeneration.isCurrent(generation) {
+                    quickPhraseSync?.receiveHello(peerHello.quickPhraseSync)
+                }
                 // Push the current plugin presentations now that the viewer is
                 // ready to receive (the session-state push is still pull-based).
                 await onViewerConnected?()
             }
+
+        case let .quickPhraseSync(payload):
+            guard case .encrypted = message, isViewerConnected, connectionGeneration.isCurrent(generation) else { return }
+            quickPhraseSync?.receive(payload)
 
         case .viewerDisconnected:
             logger.info("Viewer device disconnected")
@@ -1133,6 +1152,7 @@ final public class ConnectedViewer: Identifiable {
     }
 
     private func invalidateConnectionWork() {
+        quickPhraseSync?.reset()
         connectionGeneration.invalidate()
         pendingFireAndForget?.cancel()
         pendingFireAndForget = nil

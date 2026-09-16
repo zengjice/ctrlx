@@ -82,6 +82,14 @@ final public class ViewerRelayClient {
 
     private let logger = Logger(label: "com.jicezeng.ctrlx.viewerrelayclient")
     private let messageDecoder = WebSocketMessageDecoder()
+    @ObservationIgnored private var quickPhraseSync: QuickPhraseSyncSession?
+
+    package func configureQuickPhraseSync(store: QuickPhraseStore, pairID: String) {
+        quickPhraseSync?.reset()
+        quickPhraseSync = QuickPhraseSyncSession(store: store, pairID: pairID) { [weak self] message in
+            await self?.sendEncrypted(.quickPhraseSync(message))
+        }
+    }
 
     /// Current connection state
     public private(set) var state: ConnectionState = .disconnected
@@ -618,9 +626,11 @@ final public class ViewerRelayClient {
     /// Send this viewer's peerHello to the host once the E2EE session is up.
     /// Called right after establishing E2EE on `.hostConnected`.
     private func sendPeerHello() async {
+        let generation = connectionGeneration.current
         let hello = PeerHelloMessage(
             appVersion: VersionCompatibility.currentAppVersion,
-            minRequiredPartnerVersion: VersionCompatibility.minRequiredHostVersion
+            minRequiredPartnerVersion: VersionCompatibility.minRequiredHostVersion,
+            quickPhraseSync: quickPhraseSync?.offer
         )
         logger.info(
             "Sending peerHello to host",
@@ -629,7 +639,9 @@ final public class ViewerRelayClient {
                 "minRequiredPartnerVersion": "\(hello.minRequiredPartnerVersion)",
             ]
         )
-        await sendEncrypted(.peerHello(hello))
+        if await sendEncrypted(.peerHello(hello)), connectionGeneration.isCurrent(generation) {
+            quickPhraseSync?.didSendHello()
+        }
     }
 
     /// Send push notification token to the relay server (iOS only).
@@ -1011,15 +1023,22 @@ final public class ViewerRelayClient {
             }
             // Compatible — now safe to surface the host as connected and ask for state.
             isHostConnected = true
+            if case .encrypted = message { quickPhraseSync?.receiveHello(peerHello.quickPhraseSync) }
             await requestSessionState()
 
+        case let .quickPhraseSync(payload):
+            guard case .encrypted = message, isHostConnected else { return }
+            quickPhraseSync?.receive(payload)
+
         case .hostDisconnected:
+            quickPhraseSync?.reset()
             logger.info("Host device disconnected")
             isHostConnected = false
             connectedHostName = nil
             await onHostDisconnected?()
 
         case .hostSubscriptionInactive:
+            quickPhraseSync?.reset()
             logger.info("Host blocked: subscription inactive")
             hostSubscriptionInactive = true
             isHostConnected = false
@@ -1313,6 +1332,7 @@ final public class ViewerRelayClient {
     }
 
     private func cleanupConnection() async {
+        quickPhraseSync?.reset()
         connectionGeneration.invalidate()
         awaitingPong = false
         livenessPolicy.receivedInboundFrame()

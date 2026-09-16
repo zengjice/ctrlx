@@ -21,6 +21,7 @@ public struct MainView: View {
 
     /// Selection state: either a local window or a remote session (hostId + sessionName)
     @State private var selectedWindow: LocalTmuxWindow?
+    @State private var terminalQuickActions = TerminalQuickActionRouter()
     @State private var selectedRemoteSession: RemoteSessionSelection?
     @State private var selectedRemoteWindowId: String?
     @State private var localSessionRenameRequest: String?
@@ -153,6 +154,7 @@ public struct MainView: View {
                 }
         }
         .navigationSplitViewStyle(.balanced)
+        .environment(\.terminalQuickActions, terminalQuickActions)
         .background(settings.theme.workspaceBackgroundColor)
         .containerBackground(settings.theme.workspaceBackgroundColor, for: .window)
         .toolbarBackground(settings.theme.chromeBackgroundColor, for: .windowToolbar)
@@ -1861,6 +1863,8 @@ public struct MainView: View {
 
         // Actions for selected window
         ToolbarItemGroup(placement: .primaryAction) {
+            TerminalQuickActionButtons(router: terminalQuickActions)
+
             if let window = selectedWindow, selectedRemoteSession == nil {
                 let claudePane = window.panes.first { windowManager.paneStates[$0.paneId]?.agentSession != nil }
                 let activePane = window.activePane

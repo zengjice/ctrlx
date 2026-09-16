@@ -66,6 +66,15 @@ final class KeystrokeCoalescer {
         flushBufferedKeys()
     }
 
+    /// Explicit toolbar input is one standalone batch, ordered after buffered
+    /// keyboard input and before the next key. In particular, its delayed Return
+    /// must not merge with a Meta sequence or an immediately-following key.
+    func enqueueImmediately(_ keys: [TmuxKey]) {
+        guard !keys.isEmpty else { return }
+        flushBufferedKeys()
+        flush(Batch(keys: keys, acceptedAt: .now))
+    }
+
     /// Drop any buffered keys and clear the pending-flush flag (teardown).
     ///
     /// Any flush `Task` already scheduled still fires, but the snapshot-then-drain

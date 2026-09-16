@@ -580,6 +580,7 @@ enum RemoteStreamState: Equatable {
 
 /// NSViewRepresentable that wraps an InteractiveTerminalView for remote terminal streaming.
 private struct RemoteTerminalNSView: NSViewRepresentable {
+    @Environment(\.terminalQuickActions) private var quickActions
     let paneId: String
     let connection: ViewerConnection
     let isHostConnected: Bool
@@ -616,20 +617,22 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             onTitleChange: onTitleChange,
         )
         coordinator.terminalView.isEditorActive = isEditorActive
-        coordinator.terminalView.onBecomeFirstResponder = onFocus
+        coordinator.bindQuickActions(quickActions, onFocus: onFocus)
         coordinator.terminalView.onOpenURL = onOpenURL
         // Route image pastes through the SwiftUI parent so the upload state
         // and cancel popover live alongside the terminal view in the body
         // hierarchy. Returning `true` consumes the paste — `Ctrl+V` is sent
         // by the host once it has the bytes on its pasteboard.
-        coordinator.terminalView.onImagePaste = { image in
+        coordinator.terminalView.onImagePaste = { [weak coordinator] image in
+            coordinator?.quickActionEndpoint?.recordInput()
             onImagePaste(image)
             return true
         }
         // Same shape as image paste: let the SwiftUI parent run the upload
         // overlay; the host will save the files and dispatch the paste once
         // the bytes have arrived.
-        coordinator.terminalView.onFileDrop = { urls in
+        coordinator.terminalView.onFileDrop = { [weak coordinator] urls in
+            coordinator?.quickActionEndpoint?.recordInput()
             onFileDrop(urls)
         }
 
@@ -637,6 +640,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: InteractiveTerminalView, context: Context) {
+        let coordinator = context.coordinator
         nsView.showsFocusIndicator = showsFocusIndicator
         context.coordinator.updateSettings(settings)
         context.coordinator.updateContainerSize(nsView.frame.size)
@@ -647,13 +651,15 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
         // Re-bind focus, paste and URL-click callbacks so closures captured
         // here reflect the current parent state on every layout pass.
-        nsView.onBecomeFirstResponder = onFocus
+        context.coordinator.bindQuickActions(quickActions, onFocus: onFocus)
         nsView.onOpenURL = onOpenURL
-        nsView.onImagePaste = { image in
+        nsView.onImagePaste = { [weak coordinator] image in
+            coordinator?.quickActionEndpoint?.recordInput()
             onImagePaste(image)
             return true
         }
-        nsView.onFileDrop = { urls in
+        nsView.onFileDrop = { [weak coordinator] urls in
+            coordinator?.quickActionEndpoint?.recordInput()
             onFileDrop(urls)
         }
 
@@ -678,6 +684,8 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         @Dependency(ClipboardClient.self) private var clipboard
 
         private var paneId: String?
+        private(set) var quickActionEndpoint: TerminalQuickActionEndpoint?
+        private weak var quickActionRouter: TerminalQuickActionRouter?
         private weak var connection: ViewerConnection?
         private var streamSubscriptionId: UUID?
         private var streamAttemptId: UUID?
@@ -739,6 +747,17 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
             terminalView.terminalAccessibilityIdentifier = "terminal-\(paneId)"
             self.onTitleChange = onTitleChange
+            quickActionEndpoint = TerminalQuickActionEndpoint(
+                hostID: initialConnection.id, paneID: paneId,
+                isVisible: { [weak self] in
+                    guard let view = self?.terminalView else { return false }
+                    return view.window != nil && !view.isHiddenOrHasHiddenAncestor
+                },
+                enqueue: { [weak self] keys in
+                    guard let self else { return }
+                    self.keyCoalescer.enqueueImmediately(keys)
+                }
+            )
 
             updateFont(name: settings.fontName, size: CGFloat(settings.fontSize))
             terminalView.applyTheme(settings.theme)
@@ -751,6 +770,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                     let connection,
                     connection.isHostConnected
                 else { return }
+                quickActionEndpoint?.recordInput()
                 keyCoalescer.enqueue(keys)
             }
 
@@ -762,6 +782,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                     let connection,
                     connection.isHostConnected
                 else { return }
+                quickActionEndpoint?.recordInput()
                 keyCoalescer.flushPending()
                 enqueueRawInput(data: data, connection: connection)
             }
@@ -793,7 +814,23 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             restartStreaming()
         }
 
+        func bindQuickActions(_ router: TerminalQuickActionRouter?, onFocus: (@MainActor () -> Void)?) {
+            quickActionRouter = router
+            terminalView.onBecomeFirstResponder = { [weak self] in
+                if let self, let endpoint = self.quickActionEndpoint {
+                    self.quickActionRouter?.focus(endpoint)
+                }
+                onFocus?()
+            }
+        }
+
         func stop() {
+            if let endpoint = quickActionEndpoint {
+                endpoint.invalidate()
+                let router = quickActionRouter
+                Task { @MainActor in router?.retire(endpoint) }
+            }
+            terminalView.onBecomeFirstResponder = nil
             terminalView.onRawInput = nil
             terminalView.onInput = nil
             terminalView.onImagePaste = nil
@@ -1283,6 +1320,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
         private func updateState(_ state: RemoteStreamState) {
             streamState = state
+            quickActionEndpoint?.isReady = state == .streaming
             notifyStateChange()
         }
 

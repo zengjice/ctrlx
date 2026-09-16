@@ -58,6 +58,7 @@ struct TerminalContainerView: NSViewRepresentable {
     @Environment(TmuxService.self) private var tmuxService
     @Environment(PaneStreamManager.self) private var paneStreamManager
     @Environment(EditorSessionManager.self) private var editorSessionManager
+    @Environment(\.terminalQuickActions) private var quickActions
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -88,7 +89,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // URL-click handler is set on every layout pass so it picks up fresh
         // state captured by parent closures (window/session selection).
         coordinator.terminalView.onOpenURL = onOpenURL
-        coordinator.terminalView.onBecomeFirstResponder = onFocus
+        coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
         return coordinator.terminalView
     }
@@ -119,7 +120,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // Re-bind the URL click handler so closures captured here reflect the
         // current parent state on every layout pass.
         nsView.onOpenURL = onOpenURL
-        nsView.onBecomeFirstResponder = onFocus
+        coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
         // Update container size on layout changes
         coordinator.updateContainerSize(nsView.frame.size)
@@ -148,6 +149,8 @@ struct TerminalContainerView: NSViewRepresentable {
         // MARK: State
 
         private var paneState: PaneState?
+        private(set) var quickActionEndpoint: TerminalQuickActionEndpoint?
+        private weak var quickActionRouter: TerminalQuickActionRouter?
         private var subscriptionId: UUID?
         private var streamState: StreamState = .disconnected
         private var columns = 80
@@ -258,6 +261,17 @@ struct TerminalContainerView: NSViewRepresentable {
             self.tmuxService = tmuxService
             self.onStateChange = onStateChange
             self.onTitleChange = onTitleChange
+            quickActionEndpoint = TerminalQuickActionEndpoint(
+                hostID: nil, paneID: paneState.paneId,
+                isVisible: { [weak self] in
+                    guard let view = self?.terminalView else { return false }
+                    return view.window != nil && !view.isHiddenOrHasHiddenAncestor
+                },
+                enqueue: { [weak self] keys in
+                    guard let self else { return }
+                    self.keyCoalescer.enqueueImmediately(keys)
+                }
+            )
             _ = externalDimensionTracker.record(width: paneState.width, height: paneState.height)
 
             terminalView.terminalAccessibilityIdentifier = "terminal-\(paneState.paneId)"
@@ -275,6 +289,7 @@ struct TerminalContainerView: NSViewRepresentable {
             // deletes one character; batched into a single `send-keys` they arrive
             // as the intended Meta combination (ESC DEL → delete word).
             terminalView.onInput = { [weak self] keys in
+                self?.quickActionEndpoint?.recordInput()
                 self?.keyCoalescer.enqueue(keys)
             }
 
@@ -284,6 +299,7 @@ struct TerminalContainerView: NSViewRepresentable {
             // chains them ahead of this raw send and keeps overall input FIFO.
             terminalView.onRawInput = { [weak self] data in
                 guard let self, let paneState = self.paneState else { return }
+                self.quickActionEndpoint?.recordInput()
                 self.keyCoalescer.flushPending()
                 let generation = self.inputGeneration
                 let byteCount = data.count
@@ -303,6 +319,7 @@ struct TerminalContainerView: NSViewRepresentable {
             // straight into tmux's bracketed-paste buffer.
             terminalView.onFileDrop = { [weak self] urls in
                 guard let self, let paneState = self.paneState else { return }
+                self.quickActionEndpoint?.recordInput()
                 Task {
                     await self.handleLocalFileDrop(urls: urls, target: paneState.target)
                 }
@@ -408,7 +425,23 @@ struct TerminalContainerView: NSViewRepresentable {
             paneState = newState
         }
 
+        func bindQuickActions(_ router: TerminalQuickActionRouter?, onFocus: (@MainActor () -> Void)?) {
+            quickActionRouter = router
+            terminalView.onBecomeFirstResponder = { [weak self] in
+                if let self, let endpoint = self.quickActionEndpoint {
+                    self.quickActionRouter?.focus(endpoint)
+                }
+                onFocus?()
+            }
+        }
+
         func stop() {
+            if let endpoint = quickActionEndpoint {
+                endpoint.invalidate()
+                let router = quickActionRouter
+                Task { @MainActor in router?.retire(endpoint) }
+            }
+            terminalView.onBecomeFirstResponder = nil
             // Disconnect input handlers first so no new tmux commands fire
             // after the pane is destroyed (prevents SIGABRT from NSTask).
             terminalView.onInput = nil
@@ -770,6 +803,7 @@ struct TerminalContainerView: NSViewRepresentable {
 
         private func updateState(_ state: StreamState) {
             streamState = state
+            quickActionEndpoint?.isReady = state == .connected
             notifyStateChange()
         }
 
