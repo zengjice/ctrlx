@@ -21,6 +21,25 @@ or extra Send step, and existing terminal input is never cleared automatically.
   destroying its native view invalidates the captured action; it cannot silently
   move to another pane or submit twice.
 
+On iOS, the two first-row buttons open a shared **in-page overlay**, not a system
+sheet. The overlay covers terminal content without contributing to its layout:
+opening, switching and closing it leave the native first responder, keyboard
+intent and second-row shortcut accessory in place. Tap the same toolbar button
+again, outside the panel or Close to dismiss; the other button switches panels
+directly. Panel toggles remain usable in **Add Phrase**, while terminal-key
+buttons stay disabled. Only entering **Add Phrase** borrows input focus for its native editor;
+returning restores the terminal's existing keyboard intent. Both tiled windows
+and standalone terminal views use the same presentation state and target checks.
+The overlay uses plain headers and local state for its phrase editor, with no
+nested navigation stack, navigation destinations or environment dismiss action.
+Closing a panel or cancelling/saving its editor cannot pop the session route.
+Both panels share a rounded Liquid Glass surface on iOS 26+, falling back to
+ultra-thin material on older systems. Only the overlay moves 24 points and fades
+over 0.2 seconds, without an extra shadow layer; it no longer slides its full
+height across the live terminal. The animation never wraps the terminal or keyboard rows. Reduce Motion uses a
+fade only, and Reduce Transparency uses an opaque, legible surface. The phrase
+editor hides its Form background so it does not obscure the shared material.
+
 ## Implementation boundaries
 
 `CtrlxCommon/Models` owns `AgentCommandMenu`, `QuickPhraseStore` and

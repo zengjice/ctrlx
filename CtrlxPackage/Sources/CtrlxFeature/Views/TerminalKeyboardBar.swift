@@ -20,13 +20,14 @@
         let action: () -> Void
         var contextProvider: TerminalVoiceInputContextProvider = { nil }
         let sendKeys: ([TmuxKey]) -> Void
-        let quickPhrases: QuickPhraseStore
         let phraseContext: TerminalPhraseContext
-        let sendPhrase: @MainActor (TerminalPhraseRequest) -> Bool
-        @Binding var isPhrasePanelPresented: Bool
+        @Binding var quickActionPresentation: TerminalQuickActionPresentation
         var agentCommandContext: AgentCommandContext? = nil
-        var sendAgentCommand: @MainActor (AgentCommandRequest) -> Bool = { _ in false }
-        @State private var isAgentCommandPanelPresented = false
+
+        // Editing a phrase disables terminal keystrokes, not the panel toggles.
+        private var terminalInputEnabled: Bool {
+            isEnabled && !quickActionPresentation.suspendsTerminalInput
+        }
 
         var body: some View {
             HStack(spacing: 4) {
@@ -46,8 +47,8 @@
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(!isEnabled)
-                .opacity(isEnabled ? 1 : 0.4)
+                .disabled(!terminalInputEnabled)
+                .opacity(terminalInputEnabled ? 1 : 0.4)
                 .accessibilityLabel("Send Return")
                 .accessibilityIdentifier("terminal-return-control")
             }
@@ -76,13 +77,13 @@
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(!isEnabled)
-                .opacity(isEnabled ? 1 : 0.4)
+                .disabled(!terminalInputEnabled)
+                .opacity(terminalInputEnabled ? 1 : 0.4)
                 .accessibilityLabel(keyboardRequested ? "Hide Keyboard" : "Show Keyboard")
                 .accessibilityIdentifier("terminal-keyboard-control")
 
                 TerminalVoiceInputButton(
-                    isDisabled: !isEnabled || isPhrasePanelPresented || isAgentCommandPanelPresented,
+                    isDisabled: !terminalInputEnabled || quickActionPresentation.isPresented,
                     showsLabel: false,
                     usesControlStyle: true,
                     contextProvider: contextProvider,
@@ -91,26 +92,21 @@
                 .id(phraseContext.target)
 
                 TerminalQuickPhraseButton(
-                    store: quickPhrases,
                     context: phraseContext,
-                    sendPhrase: sendPhrase,
-                    isPresented: $isPhrasePanelPresented
+                    presentation: $quickActionPresentation
                 )
 
                 TerminalAgentCommandButton(
                     context: agentCommandContext,
-                    sendCommand: sendAgentCommand,
-                    isPresented: $isAgentCommandPanelPresented
+                    presentation: $quickActionPresentation
                 )
-                // An open panel must not silently switch to another pane/agent.
-                .id(agentCommandContext?.target)
 
                 RepeatingTerminalKeyButton(
                     title: "←",
                     key: .left,
                     accessibilityLabel: "Move Left",
                     accessibilityIdentifier: "terminal-left-control",
-                    isEnabled: isEnabled,
+                    isEnabled: terminalInputEnabled,
                     sendKeys: sendKeys
                 )
 
@@ -119,7 +115,7 @@
                     key: .right,
                     accessibilityLabel: "Move Right",
                     accessibilityIdentifier: "terminal-right-control",
-                    isEnabled: isEnabled,
+                    isEnabled: terminalInputEnabled,
                     sendKeys: sendKeys
                 )
 
@@ -128,7 +124,7 @@
                     key: .backspace,
                     accessibilityLabel: "Delete",
                     accessibilityIdentifier: "terminal-delete-control",
-                    isEnabled: isEnabled,
+                    isEnabled: terminalInputEnabled,
                     sendKeys: sendKeys
                 )
 
@@ -139,8 +135,8 @@
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(!isEnabled)
-                .opacity(isEnabled ? 1 : 0.4)
+                .disabled(!terminalInputEnabled)
+                .opacity(terminalInputEnabled ? 1 : 0.4)
                 .accessibilityLabel("Escape")
                 .accessibilityIdentifier("terminal-escape-control")
             }

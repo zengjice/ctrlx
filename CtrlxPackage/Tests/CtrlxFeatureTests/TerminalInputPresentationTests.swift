@@ -51,8 +51,8 @@ struct TerminalInputPresentationTests {
         ))
     }
 
-    @Test("Phrase panels suspend native input without losing keyboard intent", arguments: [false, true])
-    func phrasePanel(keyboardRequested: Bool) {
+    @Test("Phrase editors suspend native input without losing keyboard intent", arguments: [false, true])
+    func phraseEditor(keyboardRequested: Bool) {
         #expect(TerminalInputPresentation.resolve(
             keyboardRequested: keyboardRequested, isActive: true,
             isCopyPresented: false, isInputSuspended: true

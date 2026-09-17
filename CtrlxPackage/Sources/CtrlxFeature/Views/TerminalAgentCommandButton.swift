@@ -5,14 +5,10 @@
     @MainActor
     struct TerminalAgentCommandButton: View {
         let context: AgentCommandContext?
-        /// The owner revalidates the live target and connection before enqueueing.
-        let sendCommand: @MainActor (AgentCommandRequest) -> Bool
-        @Binding var isPresented: Bool
-
-        @State private var presentedContext: AgentCommandContext?
+        @Binding var presentation: TerminalQuickActionPresentation
 
         var body: some View {
-            Button(action: showPanel) {
+            Button(action: togglePanel) {
                 Text("/")
                     .frame(minWidth: 16)
                     .terminalInputControlStyle()
@@ -26,39 +22,21 @@
                 ? "No supported agent in this pane."
                 : "Choose a command for the current agent")
             .accessibilityIdentifier("terminal-agent-command-control")
-            .sheet(item: $presentedContext, onDismiss: { isPresented = false }) { capturedContext in
-                TerminalAgentCommandPanel(
-                    capturedContext: capturedContext,
-                    currentContext: context,
-                    sendCommand: sendCommand
-                )
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-            }
-            .onChange(of: context) { _, currentContext in
-                // Keep browsing through availability changes, but never move an
-                // open panel to a different pane/agent or a changed local draft.
-                if let presentedContext, !presentedContext.hasSameInput(as: currentContext) {
-                    self.presentedContext = nil
-                }
-            }
-            .onDisappear { isPresented = false }
         }
 
-        private func showPanel() {
+        private func togglePanel() {
             guard let context else { return }
-            isPresented = true
-            presentedContext = context
+            presentation.toggle(.commands(context))
         }
     }
 
     @MainActor
-    private struct TerminalAgentCommandPanel: View {
+    struct TerminalAgentCommandPanel: View {
         let capturedContext: AgentCommandContext
         let currentContext: AgentCommandContext?
         let sendCommand: @MainActor (AgentCommandRequest) -> Bool
+        let close: () -> Void
 
-        @Environment(\.dismiss) private var dismiss
         @ScaledMetric(relativeTo: .subheadline) private var minimumButtonWidth: CGFloat = 112
         @State private var hasSubmitted = false
         @State private var showsUnavailableAlert = false
@@ -75,7 +53,9 @@
         }
 
         var body: some View {
-            NavigationStack {
+            VStack(spacing: 0) {
+                TerminalQuickActionPanelHeader(title: "Commands", close: close)
+                Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if let unavailableReason {
@@ -106,17 +86,6 @@
                     }
                     .padding(16)
                 }
-                .navigationTitle("Commands")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button { dismiss() } label: {
-                            Label("Close", symbol: .xmark)
-                                .labelStyle(.iconOnly)
-                        }
-                        .accessibilityIdentifier("terminal-agent-command-close")
-                    }
-                }
             }
             .alert("Command Not Sent", isPresented: $showsUnavailableAlert) {
                 Button("OK", role: .cancel) { }
@@ -132,7 +101,7 @@
                 return
             }
             hasSubmitted = true
-            dismiss()
+            close()
         }
     }
 #endif

@@ -35,7 +35,7 @@
         @State private var cursorNavigationCancellations: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
         @State private var terminalInputRevision: UInt64 = 0
-        @State private var isPhrasePanelPresented = false
+        @State private var quickActionPresentation = TerminalQuickActionPresentation()
 
         /// Service for the active pane's Claude session (nil if no session)
         @State private var activeService: SessionDetailService?
@@ -162,6 +162,14 @@
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { newWidth in
                 barWidth = newWidth
             }
+            .modifier(TerminalQuickActionOverlay(
+                presentation: $quickActionPresentation,
+                store: settings.quickPhrases,
+                phraseContext: activePhraseContext,
+                sendPhrase: sendPhrase,
+                commandContext: activeAgentCommandContext,
+                sendCommand: sendAgentCommand
+            ))
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if window != nil, settings.terminalKeyboardControlPosition == .bottomBar {
                     TerminalKeyboardBar(
@@ -170,12 +178,9 @@
                         action: { isKeyboardActive.toggle() },
                         contextProvider: activeVoiceInputContext,
                         sendKeys: sendVoiceKeys,
-                        quickPhrases: settings.quickPhrases,
                         phraseContext: activePhraseContext,
-                        sendPhrase: sendPhrase,
-                        isPhrasePanelPresented: $isPhrasePanelPresented,
-                        agentCommandContext: activeAgentCommandContext,
-                        sendAgentCommand: sendAgentCommand
+                        quickActionPresentation: $quickActionPresentation,
+                        agentCommandContext: activeAgentCommandContext
                     )
                 }
             }
@@ -615,7 +620,7 @@
                 showKeyboardButton: false,
                 showCopyButton: pane.paneId == activePaneId,
                 isActive: pane.paneId == activePaneId,
-                isInputSuspended: isPhrasePanelPresented,
+                isInputSuspended: quickActionPresentation.suspendsTerminalInput,
                 parentKeyboardRequested: isKeyboardActive,
                 settings: settings,
                 telemetry: pane.telemetry,

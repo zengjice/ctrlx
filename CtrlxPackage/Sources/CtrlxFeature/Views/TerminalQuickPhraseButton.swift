@@ -4,15 +4,11 @@
 
     @MainActor
     struct TerminalQuickPhraseButton: View {
-        let store: QuickPhraseStore
         let context: TerminalPhraseContext
-        let sendPhrase: @MainActor (TerminalPhraseRequest) -> Bool
-        /// Suspend the terminal's native input while the phrase editor owns focus.
-        @Binding var isPresented: Bool
-        @State private var presentedContext: TerminalPhraseContext?
+        @Binding var presentation: TerminalQuickActionPresentation
 
         var body: some View {
-            Button(action: showPanel) {
+            Button(action: togglePanel) {
                 Symbols.textBubbleFill.image
                     .frame(minWidth: 16)
                     .terminalInputControlStyle()
@@ -21,40 +17,23 @@
             .buttonStyle(.plain)
             .accessibilityLabel("Quick Phrases")
             .accessibilityIdentifier("terminal-quick-phrase-control")
-            .sheet(item: $presentedContext, onDismiss: { isPresented = false }) { capturedContext in
-                TerminalQuickPhrasePanel(
-                    store: store,
-                    capturedContext: capturedContext,
-                    currentContext: context,
-                    sendPhrase: sendPhrase
-                )
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-            }
-            .onChange(of: context) { _, current in
-                if let presentedContext, !presentedContext.hasSameInput(as: current) {
-                    self.presentedContext = nil
-                }
-            }
-            .onDisappear { isPresented = false }
         }
 
-        private func showPanel() {
-            isPresented = true
-            presentedContext = context
+        private func togglePanel() {
+            presentation.toggle(.phrases(context))
         }
     }
 
     @MainActor
-    private struct TerminalQuickPhrasePanel: View {
+    struct TerminalQuickPhrasePanel: View {
         let store: QuickPhraseStore
         let capturedContext: TerminalPhraseContext
         let currentContext: TerminalPhraseContext
         let sendPhrase: @MainActor (TerminalPhraseRequest) -> Bool
+        let close: () -> Void
+        @Binding var showsAddPhrase: Bool
 
-        @Environment(\.dismiss) private var dismiss
         @ScaledMetric(relativeTo: .subheadline) private var minimumButtonWidth: CGFloat = 112
-        @State private var showsAddPhrase = false
         @State private var hasSubmitted = false
         @State private var errorMessage: String?
 
@@ -66,7 +45,17 @@
         }
 
         var body: some View {
-            NavigationStack {
+            if showsAddPhrase {
+                QuickPhraseEditor(store: store, finish: { showsAddPhrase = false })
+            } else {
+                phraseList
+            }
+        }
+
+        private var phraseList: some View {
+            VStack(spacing: 0) {
+                TerminalQuickActionPanelHeader(title: "Quick Phrases", close: close)
+                Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if let message = store.loadError ?? unavailableReason {
@@ -119,18 +108,6 @@
                     }
                     .padding(16)
                 }
-                .navigationTitle("Quick Phrases")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button { dismiss() } label: {
-                            Label("Close", symbol: .xmark).labelStyle(.iconOnly)
-                        }
-                    }
-                }
-                .navigationDestination(isPresented: $showsAddPhrase) {
-                    QuickPhraseEditor(store: store)
-                }
             }
         }
 
@@ -142,7 +119,7 @@
                 return
             }
             hasSubmitted = true
-            dismiss()
+            close()
         }
 
         private func remove(_ phrase: QuickPhrase) {
@@ -154,36 +131,43 @@
     @MainActor
     private struct QuickPhraseEditor: View {
         let store: QuickPhraseStore
-        @Environment(\.dismiss) private var dismiss
+        /// Returns to the phrase list; never dismisses the surrounding session.
+        let finish: () -> Void
         @State private var text = ""
         @State private var errorMessage: String?
         @FocusState private var isFocused: Bool
 
         var body: some View {
-            Form {
-                Section {
-                    TextField("Phrase", text: $text)
-                        .focused($isFocused)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.done)
-                        .onSubmit(save)
-                        .accessibilityIdentifier("terminal-quick-phrase-text")
-                } footer: {
-                    Text("Saved on this iPhone for all windows. Use a single line; saving does not send it.")
-                }
-                if let errorMessage {
-                    Text(errorMessage).foregroundStyle(.red)
-                }
-            }
-            .navigationTitle("Add Phrase")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Cancel", action: finish)
+                        .accessibilityIdentifier("terminal-quick-phrase-cancel")
+                    Spacer()
+                    Text("Add Phrase").font(.headline)
+                    Spacer()
                     Button("Save", action: save)
                         .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("terminal-quick-phrase-save")
                 }
+                .padding(16)
+                Divider()
+                Form {
+                    Section {
+                        TextField("Phrase", text: $text)
+                            .focused($isFocused)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.done)
+                            .onSubmit(save)
+                            .accessibilityIdentifier("terminal-quick-phrase-text")
+                    } footer: {
+                        Text("Saved on this iPhone for all windows. Use a single line; saving does not send it.")
+                    }
+                    if let errorMessage {
+                        Text(errorMessage).foregroundStyle(.red)
+                    }
+                }
+                .scrollContentBackground(.hidden)
             }
             .task { isFocused = true }
         }
@@ -191,7 +175,7 @@
         private func save() {
             do {
                 try store.add(text)
-                dismiss()
+                finish()
             } catch {
                 errorMessage = error.localizedDescription
             }

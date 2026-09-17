@@ -88,7 +88,7 @@
 
         /// Whether this standalone terminal requests the software keyboard.
         @State private var isInteractive = false
-        @State private var isPhrasePanelPresented = false
+        @State private var quickActionPresentation = TerminalQuickActionPresentation()
         @State private var phraseInputRevision: UInt64 = 0
         @Environment(\.scenePhase) private var scenePhase
 
@@ -207,6 +207,12 @@
                         }
                     }
             }
+            .modifier(TerminalQuickActionOverlay(
+                presentation: $quickActionPresentation,
+                store: settings.quickPhrases,
+                phraseContext: phraseContext,
+                sendPhrase: sendPhrase
+            ))
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if showKeyboardButton, settings.terminalKeyboardControlPosition == .bottomBar {
                     TerminalKeyboardBar(
@@ -215,10 +221,8 @@
                         action: { isInteractive.toggle() },
                         contextProvider: terminalVoiceInputContext,
                         sendKeys: sendTerminalKeys,
-                        quickPhrases: settings.quickPhrases,
                         phraseContext: phraseContext,
-                        sendPhrase: sendPhrase,
-                        isPhrasePanelPresented: $isPhrasePanelPresented
+                        quickActionPresentation: $quickActionPresentation
                     )
                 }
             }
@@ -477,7 +481,7 @@
                 keyboardRequested: showKeyboardButton ? isInteractive : parentKeyboardRequested,
                 isActive: isActive,
                 isCopyPresented: isCopyPresented,
-                isInputSuspended: isInputSuspended || isPhrasePanelPresented
+                isInputSuspended: isInputSuspended || quickActionPresentation.suspendsTerminalInput
             )
         }
 
