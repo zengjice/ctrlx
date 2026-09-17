@@ -50,6 +50,9 @@ package final class QuickPhraseStore {
     package private(set) var phrases: [QuickPhrase] = []
     package private(set) var loadError: String?
     package var syncErrors: [String: String] = [:]
+    package private(set) var syncDevices: [QuickPhraseSyncDevice] = []
+    private var syncDeviceByPair: [String: String]?
+    private var syncConnections: [String: (epoch: UUID, status: QuickPhraseSyncStatus)] = [:]
     package private(set) var records: [QuickPhraseRecord] = []
     private var consentRevision = 0
     @ObservationIgnored private var observers: [UUID: @MainActor () -> Void] = [:]
@@ -133,16 +136,110 @@ package final class QuickPhraseStore {
 
     package func isSyncEnabled(for pairID: String) -> Bool {
         _ = consentRevision
+        if let syncDeviceByPair {
+            guard let deviceID = syncDeviceByPair[pairID] else { return false }
+            if let enabled = preferences.optionalBool(deviceConsentKey(deviceID)) { return enabled }
+        }
         return preferences.optionalBool("terminalQuickPhrases.sync.\(pairID)") == true
     }
 
+    /// Retained for callers that hold a pair ID; registered pairs always change
+    /// the device-wide choice. Legacy, unregistered stores support migration.
     package func setSyncEnabled(_ enabled: Bool, for pairID: String) {
+        if let syncDeviceByPair {
+            guard let deviceID = syncDeviceByPair[pairID] else { return }
+            setDeviceSyncEnabled(enabled, deviceID: deviceID)
+            return
+        }
         guard enabled != isSyncEnabled(for: pairID) else { return }
         preferences.setBool(enabled, "terminalQuickPhrases.sync.\(pairID)")
         consentRevision += 1
         syncErrors[pairID] = nil
         notify()
     }
+
+    /// Called by platform settings after loading BOTH pairing lists, and whenever
+    /// they change. Migration must not run on only one half of reciprocal pairs.
+    package func updateSyncPairings(_ pairings: [QuickPhraseSyncPairing]) {
+        let devices = QuickPhraseSyncDevice.grouped(pairings)
+        let mapping = Dictionary(pairings.map { ($0.pairID, $0.deviceID) }, uniquingKeysWith: { first, _ in first })
+        guard syncDeviceByPair != mapping || syncDevices != devices else { return }
+
+        for (pairID, oldDevice) in syncDeviceByPair ?? [:] where mapping[pairID] != oldDevice {
+            // Removed pairings and key changes cannot inherit legacy consent.
+            preferences.setBool(false, "terminalQuickPhrases.sync.\(pairID)")
+            syncConnections[pairID] = nil
+            syncErrors[pairID] = nil
+        }
+        let remaining = Set(devices.map(\.id))
+        for device in syncDevices where !remaining.contains(device.id) {
+            preferences.setData(nil, deviceConsentKey(device.id))
+        }
+        for device in devices where preferences.optionalBool(deviceConsentKey(device.id)) == nil {
+            let legacy = Set(device.pairIDs.map { preferences.optionalBool("terminalQuickPhrases.sync.\($0)") == true })
+            if legacy.count == 1, let enabled = legacy.first {
+                preferences.setBool(enabled, deviceConsentKey(device.id))
+            }
+            // Mixed legacy choices remain per-connection until explicitly
+            // confirmed. OR-ing them could silently create a new sharing path.
+        }
+        syncDevices = devices
+        syncDeviceByPair = mapping
+        consentRevision += 1
+        notify()
+    }
+
+    package func syncDeviceID(for pairID: String) -> String? { syncDeviceByPair?[pairID] }
+
+    package func syncConsent(for deviceID: String) -> QuickPhraseSyncConsent {
+        _ = consentRevision
+        guard syncDevices.contains(where: { $0.id == deviceID }) else { return .disabled }
+        guard let enabled = preferences.optionalBool(deviceConsentKey(deviceID)) else { return .needsConfirmation }
+        return enabled ? .enabled : .disabled
+    }
+
+    package func setDeviceSyncEnabled(_ enabled: Bool, deviceID: String) {
+        guard let device = syncDevices.first(where: { $0.id == deviceID }) else { return }
+        guard syncConsent(for: deviceID) != (enabled ? .enabled : .disabled) else { return }
+        preferences.setBool(enabled, deviceConsentKey(deviceID))
+        for pairID in device.pairIDs {
+            // Keep old preferences consistent for a possible app downgrade.
+            preferences.setBool(enabled, "terminalQuickPhrases.sync.\(pairID)")
+            syncErrors[pairID] = nil
+        }
+        consentRevision += 1
+        notify()
+    }
+
+    package func syncStatus(for deviceID: String) -> QuickPhraseSyncStatus {
+        guard loadError == nil else { return .unavailable }
+        switch syncConsent(for: deviceID) {
+        case .disabled: return .disabled
+        case .needsConfirmation: return .needsConfirmation
+        case .enabled: break
+        }
+        let states = syncDevices.first(where: { $0.id == deviceID })?.pairIDs.compactMap { syncConnections[$0]?.status } ?? []
+        // One usable route suffices, even when the reverse pairing is offline
+        // or a peer still has mixed settings on an older app version.
+        if states.contains(.ready) { return .ready }
+        if states.contains(.waitingForPeer) { return .waitingForPeer }
+        if states.contains(.unsupported) { return .unsupported }
+        return .offline
+    }
+
+    package func updateSyncConnection(pairID: String, epoch: UUID, status: QuickPhraseSyncStatus) {
+        if let syncDeviceByPair, syncDeviceByPair[pairID] == nil { return }
+        guard syncConnections[pairID]?.epoch != epoch || syncConnections[pairID]?.status != status else { return }
+        syncConnections[pairID] = (epoch, status)
+    }
+
+    package func clearSyncConnection(pairID: String, epoch: UUID) {
+        guard syncConnections[pairID]?.epoch == epoch else { return }
+        syncConnections[pairID] = nil
+        syncErrors[pairID] = nil
+    }
+
+    private func deviceConsentKey(_ deviceID: String) -> String { "terminalQuickPhrases.deviceSync.\(deviceID)" }
 
     package func observe(_ action: @escaping @MainActor () -> Void) -> UUID {
         let id = UUID()

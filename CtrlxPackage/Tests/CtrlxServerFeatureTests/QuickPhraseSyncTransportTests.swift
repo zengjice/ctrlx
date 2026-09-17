@@ -33,6 +33,8 @@ struct QuickPhraseSyncTransportTests {
             let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
             let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
             let hostStore = library(), viewerStore = library()
+            hostStore.updateSyncPairings([.init(pairID: "pair", name: "Viewer", publicKey: viewerEncryption.publicKey.base64EncodedString())])
+            viewerStore.updateSyncPairings([.init(pairID: "pair", name: "Host", publicKey: hostEncryption.publicKey.base64EncodedString())])
             try hostStore.add("Mac-only secret")
             try viewerStore.add("iPhone-only secret")
             let host = ConnectedViewer(
@@ -54,10 +56,13 @@ struct QuickPhraseSyncTransportTests {
                 hostStore.setSyncEnabled(true, for: "pair")
                 viewerStore.setSyncEnabled(true, for: "pair")
                 try await waitUntil { hostStore.phrases.count == 2 && hostStore.phrases == viewerStore.phrases }
+                #expect(hostStore.syncStatus(for: hostStore.syncDevices[0].id) == .ready)
+                #expect(viewerStore.syncStatus(for: viewerStore.syncDevices[0].id) == .ready)
                 try viewerStore.add("live addition")
                 try await waitUntil { hostStore.phrases.count == 3 }
                 await viewer.disconnect()
                 try await waitUntil { !host.isViewerConnected }
+                #expect(hostStore.syncStatus(for: hostStore.syncDevices[0].id) == .offline)
                 try hostStore.remove(hostStore.phrases[0].id)
                 try viewerStore.add("offline addition")
                 await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)

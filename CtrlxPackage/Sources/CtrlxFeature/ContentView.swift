@@ -593,6 +593,16 @@
                     }
                 }
 
+                // Quick phrase device sync (independent of terminal roles)
+                Section {
+                    NavigationLink {
+                        QuickPhraseSyncSettingsView(store: settings.quickPhrases)
+                    } label: {
+                        Label("Quick Phrase Sync", symbol: .textBubbleFill)
+                    }
+                    .accessibilityIdentifier("quick-phrase-sync-settings-link")
+                }
+
                 // Appearance Section
                 Section {
                     @Bindable var settings = settings

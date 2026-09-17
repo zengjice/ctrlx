@@ -202,7 +202,6 @@ public struct RemoteAccessSettingsView: View {
                     }
                 }
             )
-            QuickPhraseSyncToggle(store: settings.quickPhrases, pairID: viewer.id)
         }
 
         Button {

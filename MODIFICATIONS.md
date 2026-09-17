@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.31 — Device-level quick phrase sync settings
+
+- Unify Mac and iOS phrase synchronization in Settings → Quick Phrase Sync,
+  with one local switch per paired device instead of separate Host/Viewer
+  controls. Both devices must allow sharing; neither role has priority.
+- Group reciprocal pairings by their trusted public key, not their name.
+  Preserve consistent legacy choices and ask for confirmation when old
+  connection switches disagree, without silently expanding sharing permission.
+- Show actual connection and consent status. Preserve offline merges and
+  deletion markers, and explain how phrases propagate through trusted devices.
+- Include the iOS quick-action glass overlay improvements: keep the terminal
+  and keyboard stationary, toggle panels from their toolbar buttons, and
+  match the microphone button's appearance to other toolbar controls.
+- Add migration, pairing lifecycle, reciprocal permission-combination and
+  four-device convergence regressions. Update both clients for the unified
+  settings; the existing Qcloud Relay needs no redeployment.
+
 ## 3.0.30 — Shared quick actions and phrase synchronization
 
 - Add Mac toolbar panels for agent commands and saved phrases, targeting the

@@ -56,17 +56,38 @@ change or SwiftTerm fork change is involved.
 
 ## Optional device sync
 
-Enable **Sync Quick Phrases** on **both sides of each pairing**:
+On **both Mac and iOS**, open **Settings → Quick Phrase Sync**. Each paired device
+has **one local switch**, covering every connection to it, regardless of terminal
+Host/Viewer roles. Remote Access, Remote Hosts and Manage Hosts contain no phrase
+sync controls. Both devices must allow sync; there is no master or role priority.
+For reciprocal Office/Home pairings this means two switches total, not four.
 
-- iOS: Settings → Manage Hosts → the host's sync section.
-- Mac acting as Host: Settings → Remote Access → the paired Viewer.
-- Mac acting as Viewer: Settings → Remote Hosts → the paired Host.
+Devices are grouped by the SHA-256 fingerprint of their paired Curve25519 public
+key, never by device name or pair ID. The short fingerprint shown with each row distinguishes
+same-name devices. Missing/malformed keys remain isolated per pairing. Renaming
+does not change consent. Another pairing to the same key inherits that device's
+choice; a new key does not inherit the replaced pairing's permission. Removing one
+route keeps the other routes' consent; removing the last route clears the choice.
 
-The switch is off by default, persisted locally per pair, and cleared when that
-pairing is removed. It applies to the **whole phrase library**, not the currently
-visible session. Merged phrases also propagate through other opted-in pairings.
-Turning it off stops sharing but does not erase already downloaded phrases.
-Do not enable it for a device/user with whom you don't want to share your phrases.
+New devices default off. For upgrades, both pairing lists are loaded **before**
+migrating old per-pair choices. Unanimous choices carry forward. Mixed choices show
+**Needs confirmation → Review…**, preserving each old connection's behavior until
+the user explicitly enables or disables all routes. They are never merged with OR,
+which could turn two mismatched legacy gates into a new sharing path. Choices are
+local permissions, not synchronized phrase records. Older peers may still require
+their original per-pair switches; the wire protocol is unchanged.
+
+Rows distinguish local off, confirmation needed, not connected, waiting for the
+other device, unsupported peer, and connected/both sides enabled. These reflect
+the actual version/consent handshake, **not a delivery acknowledgement**. A usable
+route wins over an offline reverse route; individual errors remain visible. Status
+clears on disconnect and ignores a superseded connection's late reset.
+
+The setting applies to the **whole phrase library**, not the currently visible
+session. Merged phrases also propagate through other opted-in devices. Turning a
+device off stops direct sharing, but does not erase downloaded phrases or block
+indirect propagation through other devices. Only enable sharing within a trusted
+group. Built-in agent commands have no separate sync switch.
 
 Both app clients need this implementation. `PeerHelloMessage.quickPhraseSync` is
 an optional versioned capability/consent offer. Older clients ignore it and
@@ -99,7 +120,9 @@ Snapshots are atomic and bounded: at most 4,096 records including tombstones and
 overwriting local data. Tombstones are not automatically pruned (offline peers
 may still carry the deleted addition). At capacity, save/merge fails visibly.
 
-Regression coverage: `AgentCommandMenuTests`, `QuickPhraseTests`, `QuickPhraseSyncTests`,
+Regression coverage: `AgentCommandMenuTests`, `QuickPhraseTests`, `QuickPhraseDeviceSyncTests`,
+`QuickPhraseDeviceSettingsTests` (real Mac settings load/pair/unpair), `QuickPhraseSyncTests`
+(including all 16 reciprocal legacy combinations and a four-device cycle),
 `QuickPhraseSyncTransportTests` (real local WebSockets with both production clients/E2EE),
 `TerminalQuickActionRouterTests`, `LocalKeystrokeInputTests`, and
 `KeystrokeDebouncerTests`. When manually checking the UI, cover local and remote

@@ -88,6 +88,7 @@
 
         /// Device-local phrase library, independent of sessions and agent plugins.
         let quickPhrases = QuickPhraseStore()
+        @ObservationIgnored private var quickPhrasePairingsLoaded = false
 
         /// Unique device identifier (generated once and persisted)
         public var deviceId = "" {
@@ -102,7 +103,10 @@
 
         /// All paired host servers
         public private(set) var pairedHosts: [PairedHost] = [] {
-            didSet { savePairedHosts() }
+            didSet {
+                savePairedHosts()
+                updateQuickPhraseSyncPairings()
+            }
         }
 
         /// Viewer-local session order, isolated by remote host pair ID.
@@ -336,6 +340,8 @@
             // notifications even if the user hasn't changed pairings since
             // upgrading.
             mirrorHostNamesToAppGroup()
+            quickPhrasePairingsLoaded = true
+            updateQuickPhraseSyncPairings()
         }
 
         private func persistTestedVoiceCorrectionModels() {
@@ -344,6 +350,13 @@
         }
 
         // MARK: - Paired Hosts Storage
+
+        private func updateQuickPhraseSyncPairings() {
+            guard quickPhrasePairingsLoaded else { return }
+            quickPhrases.updateSyncPairings(
+                pairedHosts.map { .init(pairID: $0.id, name: $0.displayName, publicKey: $0.partnerPublicKey) }
+            )
+        }
 
         private func loadPairedHosts() -> [PairedHost] {
             guard let data = preferences.data(Keys.pairedHosts) else {
@@ -410,7 +423,6 @@
 
         /// Remove a paired host by ID
         public func removePairing(id: String) {
-            quickPhrases.setSyncEnabled(false, for: id)
             pairedHosts.removeAll { $0.id == id }
             remoteSessionOrderByHost.removeValue(forKey: id)
         }
@@ -437,7 +449,6 @@
 
         /// Clear all pairings
         public func clearAllPairings() {
-            for host in pairedHosts { quickPhrases.setSyncEnabled(false, for: host.id) }
             pairedHosts = []
             remoteSessionOrderByHost = [:]
         }

@@ -55,6 +55,7 @@ public enum SettingsTab: String, Sendable {
     case browser
     case remoteAccess
     case remoteHosts
+    case quickPhraseSync
     case sidebarLayout
     case editors
     case agents
@@ -179,6 +180,7 @@ public struct PairedViewer: Codable, Identifiable, Sendable, Hashable {
 final public class AppSettings {
     /// Device-local library shared by all panes scenes, including remote viewers.
     let quickPhrases = QuickPhraseStore()
+    @ObservationIgnored private var quickPhrasePairingsLoaded = false
 
     // MARK: - Dependencies
 
@@ -344,12 +346,18 @@ final public class AppSettings {
 
     /// All paired viewers
     public private(set) var pairedViewers: [PairedViewer] = [] {
-        didSet { savePairedViewers() }
+        didSet {
+            savePairedViewers()
+            updateQuickPhraseSyncPairings()
+        }
     }
 
     /// All paired hosts (for viewing remote hosts)
     public private(set) var pairedHosts: [PairedHost] = [] {
-        didSet { savePairedHosts() }
+        didSet {
+            savePairedHosts()
+            updateQuickPhraseSyncPairings()
+        }
     }
 
     /// Viewer-local session order, isolated by remote host pair ID.
@@ -527,6 +535,8 @@ final public class AppSettings {
         // Launch at Login
         self.launchAtLogin = preferences.optionalBool(Keys.launchAtLogin) ?? Defaults.launchAtLogin
         self.hasAskedAboutLaunchAtLogin = preferences.optionalBool(Keys.hasAskedAboutLaunchAtLogin) ?? Defaults.hasAskedAboutLaunchAtLogin
+        quickPhrasePairingsLoaded = true
+        updateQuickPhraseSyncPairings()
     }
 
     // MARK: - Terminal Font Size
@@ -764,16 +774,27 @@ final public class AppSettings {
 
     // MARK: - Pairing Management
 
+    private func updateQuickPhraseSyncPairings() {
+        // @Observable's generated setters can run didSet during initialization.
+        // Never migrate against the viewer list before the host list is loaded.
+        guard quickPhrasePairingsLoaded else { return }
+        quickPhrases.updateSyncPairings(
+            pairedViewers.map { .init(pairID: $0.id, name: $0.displayName, publicKey: $0.partnerPublicKey) }
+                + pairedHosts.map { .init(pairID: $0.id, name: $0.displayName, publicKey: $0.partnerPublicKey) }
+        )
+    }
+
     /// Add a new paired viewer
     public func addPairing(_ viewer: PairedViewer) {
-        // Remove any existing pairing with same ID (update case)
-        pairedViewers.removeAll { $0.id == viewer.id }
-        pairedViewers.append(viewer)
+        if let index = pairedViewers.firstIndex(where: { $0.id == viewer.id }) {
+            pairedViewers[index] = viewer
+        } else {
+            pairedViewers.append(viewer)
+        }
     }
 
     /// Remove a paired viewer by ID
     public func removePairing(id: String) {
-        quickPhrases.setSyncEnabled(false, for: id)
         pairedViewers.removeAll { $0.id == id }
     }
 
@@ -791,7 +812,6 @@ final public class AppSettings {
 
     /// Clear all pairings
     public func clearAllPairings() {
-        for viewer in pairedViewers { quickPhrases.setSyncEnabled(false, for: viewer.id) }
         pairedViewers = []
     }
 
@@ -808,7 +828,6 @@ final public class AppSettings {
 
     /// Remove a paired host by ID
     public func removeHostPairing(id: String) {
-        quickPhrases.setSyncEnabled(false, for: id)
         pairedHosts.removeAll { $0.id == id }
         remoteSessionOrderByHost.removeValue(forKey: id)
     }
@@ -836,7 +855,6 @@ final public class AppSettings {
 
     /// Clear all host pairings
     public func clearAllHostPairings() {
-        for host in pairedHosts { quickPhrases.setSyncEnabled(false, for: host.id) }
         pairedHosts = []
         remoteSessionOrderByHost = [:]
     }

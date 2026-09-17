@@ -14,59 +14,56 @@ public struct SettingsView: View {
         @Bindable var settings = settings
 
         TabView(selection: $settings.selectedSettingsTab) {
-            GeneralSettingsView()
-                .tabItem {
-                    Label("General", symbol: .gearshape)
-                }
-                .tag(SettingsTab.general)
-
-            AppearanceSettingsView()
-                .tabItem {
-                    Label("Appearance", symbol: .circleLefthalfFilled)
-                }
-                .tag(SettingsTab.appearance)
-
-            BrowserSettingsView()
-                .tabItem {
-                    Label("Browser", symbol: .globe)
-                }
-                .tag(SettingsTab.browser)
-
-            SidebarLayoutSettingsView()
-                .tabItem {
-                    Label("Sidebar", symbol: .listBulletClipboard)
-                }
-                .tag(SettingsTab.sidebarLayout)
-
-            EditorsSettingsView()
-                .tabItem {
-                    Label("Editors", symbol: .pencil)
-                }
-                .tag(SettingsTab.editors)
-
-            RemoteAccessSettingsView()
-                .tabItem {
-                    Label("Remote Access", symbol: .iphone)
-                }
-                .tag(SettingsTab.remoteAccess)
-
-            RemoteHostsSettingsView()
-                .tabItem {
-                    Label("Remote Hosts", symbol: .laptopcomputer)
-                }
-                .tag(SettingsTab.remoteHosts)
-
-            AgentsSettingsView()
-                .tabItem {
-                    Label("Agents", symbol: .puzzlepiece)
-                }
-                .tag(SettingsTab.agents)
-
-            AboutView()
-                .tabItem {
-                    Label("About", symbol: .infoCircle)
-                }
-                .tag(SettingsTab.about)
+            Tab(value: SettingsTab.general) {
+                GeneralSettingsView()
+            } label: {
+                Label("General", symbol: .gearshape)
+            }
+            Tab(value: SettingsTab.appearance) {
+                AppearanceSettingsView()
+            } label: {
+                Label("Appearance", symbol: .circleLefthalfFilled)
+            }
+            Tab(value: SettingsTab.browser) {
+                BrowserSettingsView()
+            } label: {
+                Label("Browser", symbol: .globe)
+            }
+            Tab(value: SettingsTab.sidebarLayout) {
+                SidebarLayoutSettingsView()
+            } label: {
+                Label("Sidebar", symbol: .listBulletClipboard)
+            }
+            Tab(value: SettingsTab.editors) {
+                EditorsSettingsView()
+            } label: {
+                Label("Editors", symbol: .pencil)
+            }
+            Tab(value: SettingsTab.remoteAccess) {
+                RemoteAccessSettingsView()
+            } label: {
+                Label("Remote Access", symbol: .iphone)
+            }
+            Tab(value: SettingsTab.remoteHosts) {
+                RemoteHostsSettingsView()
+            } label: {
+                Label("Remote Hosts", symbol: .laptopcomputer)
+            }
+            Tab(value: SettingsTab.quickPhraseSync) {
+                QuickPhraseSyncSettingsView(store: settings.quickPhrases)
+            } label: {
+                Label("Quick Phrase Sync", symbol: .textBubbleFill)
+            }
+            Tab(value: SettingsTab.agents) {
+                AgentsSettingsView()
+            } label: {
+                Label("Agents", symbol: .puzzlepiece)
+            }
+            Tab(value: SettingsTab.about) {
+                AboutView()
+            } label: {
+                Label("About", symbol: .infoCircle)
+            }
         }
         .frame(minWidth: 900, minHeight: 500)
     }

@@ -144,6 +144,138 @@ struct QuickPhraseSyncTests {
         func disconnect() { a.reset(); b.reset() }
     }
 
+    private func pairings(_ ids: [String], key: UInt8) -> [QuickPhraseSyncPairing] {
+        ids.map { .init(pairID: $0, name: "Device", publicKey: Data(repeating: key, count: 32).base64EncodedString()) }
+    }
+
+    @Test("All 16 reciprocal legacy switch combinations preserve their sharing graph", arguments: 0..<16)
+    func reciprocalMigration(mask: Int) async throws {
+        let a = store(), b = store()
+        a.setSyncEnabled(mask & 1 != 0, for: "forward")
+        a.setSyncEnabled(mask & 2 != 0, for: "reverse")
+        b.setSyncEnabled(mask & 4 != 0, for: "forward")
+        b.setSyncEnabled(mask & 8 != 0, for: "reverse")
+        a.updateSyncPairings(pairings(["forward", "reverse"], key: 2))
+        b.updateSyncPairings(pairings(["forward", "reverse"], key: 1))
+        try a.add("Office")
+        try b.add("Home")
+        let forward = Link(a, b, pairID: "forward"), reverse = Link(a, b, pairID: "reverse")
+        defer { forward.disconnect(); reverse.disconnect() }
+        await forward.connect()
+        await reverse.connect()
+        await forward.settle()
+        await reverse.settle()
+        let shared = (mask & 5 == 5) || (mask & 10 == 10)
+        #expect(a.phrases.count == (shared ? 2 : 1))
+        #expect(b.phrases.count == (shared ? 2 : 1))
+        if !shared {
+            #expect((forward.sentA + forward.sentB + reverse.sentA + reverse.sentB).allSatisfy { $0.records == nil })
+        }
+        let count = forward.sentA.count + forward.sentB.count + reverse.sentA.count + reverse.sentB.count
+        await forward.settle()
+        await reverse.settle()
+        #expect(count == forward.sentA.count + forward.sentB.count + reverse.sentA.count + reverse.sentB.count)
+    }
+
+    @Test("One device switch gates both live routes; disable blocks queued data and keeps downloaded phrases")
+    func reciprocalDeviceConsent() async throws {
+        let a = store(), b = store()
+        a.updateSyncPairings(pairings(["forward", "reverse"], key: 2))
+        b.updateSyncPairings(pairings(["forward", "reverse"], key: 1))
+        let forward = Link(a, b, pairID: "forward"), reverse = Link(a, b, pairID: "reverse")
+        defer { forward.disconnect(); reverse.disconnect() }
+        await forward.connect()
+        await reverse.connect()
+        a.setDeviceSyncEnabled(true, deviceID: a.syncDevices[0].id)
+        await forward.settle()
+        await reverse.settle()
+        #expect(a.syncStatus(for: a.syncDevices[0].id) == .waitingForPeer)
+        b.setDeviceSyncEnabled(true, deviceID: b.syncDevices[0].id)
+        try a.add("shared")
+        await forward.settle()
+        await reverse.settle()
+        #expect(b.phrases == a.phrases)
+        #expect(a.syncStatus(for: a.syncDevices[0].id) == .ready)
+        forward.disconnect()
+        #expect(a.syncStatus(for: a.syncDevices[0].id) == .ready)
+        try a.add("not shared")
+        a.setDeviceSyncEnabled(false, deviceID: a.syncDevices[0].id)
+        await reverse.settle()
+        #expect(b.phrases.map(\.text) == ["shared"])
+        reverse.disconnect()
+        #expect(b.syncStatus(for: b.syncDevices[0].id) == .offline)
+    }
+
+    @Test("All four new device-switch combinations gate both reciprocal routes", arguments: 0..<4)
+    func deviceSwitchCombinations(mask: Int) async throws {
+        let a = store(), b = store()
+        a.updateSyncPairings(pairings(["forward", "reverse"], key: 2))
+        b.updateSyncPairings(pairings(["forward", "reverse"], key: 1))
+        a.setDeviceSyncEnabled(mask & 1 != 0, deviceID: a.syncDevices[0].id)
+        b.setDeviceSyncEnabled(mask & 2 != 0, deviceID: b.syncDevices[0].id)
+        try a.add("Office")
+        try b.add("Home")
+        let forward = Link(a, b, pairID: "forward"), reverse = Link(a, b, pairID: "reverse")
+        defer { forward.disconnect(); reverse.disconnect() }
+        await forward.connect()
+        await reverse.connect()
+        await forward.settle()
+        await reverse.settle()
+        #expect(a.phrases.count == (mask == 3 ? 2 : 1))
+        #expect(b.phrases.count == (mask == 3 ? 2 : 1))
+        if mask != 3 {
+            #expect((forward.sentA + forward.sentB + reverse.sentA + reverse.sentB).allSatisfy { $0.records == nil })
+        }
+    }
+
+    @Test("Four-device cycle converges, deletes stay deleted, and stopped links do not block alternative routes")
+    func deviceCycle() async throws {
+        let office = store(), home = store(), hk = store(), phone = store()
+        let libraries = [office, home, hk, phone]
+        let ids = ["office-home", "home-hk", "hk-phone", "phone-office"]
+        for i in 0..<4 {
+            let next = (i + 1) % 4, previous = (i + 3) % 4
+            libraries[i].updateSyncPairings(
+                pairings([ids[i]], key: UInt8(next + 1)) + pairings([ids[previous]], key: UInt8(previous + 1))
+            )
+            for device in libraries[i].syncDevices { libraries[i].setDeviceSyncEnabled(true, deviceID: device.id) }
+            try libraries[i].add("device \(i)")
+        }
+        let links = (0..<4).map { Link(libraries[$0], libraries[($0 + 1) % 4], pairID: ids[$0]) }
+        defer { for link in links { link.disconnect() } }
+        for link in links { await link.connect() }
+        for _ in 0..<4 { for link in links { await link.settle() } }
+        #expect(libraries.allSatisfy { $0.records == office.records && $0.phrases.count == 4 })
+        office.setSyncEnabled(false, for: ids[0])
+        try office.remove(office.phrases[0].id)
+        for _ in 0..<4 { for link in links { await link.settle() } }
+        #expect(libraries.allSatisfy { $0.records == office.records && $0.phrases.count == 3 })
+        let count = links.reduce(0) { $0 + $1.sentA.count + $1.sentB.count }
+        for link in links { await link.settle() }
+        #expect(count == links.reduce(0) { $0 + $1.sentA.count + $1.sentB.count })
+    }
+
+    @Test("Old sessions cannot use a newly trusted key's consent")
+    func identityChangeInvalidatesSession() async throws {
+        let a = store()
+        a.updateSyncPairings(pairings(["pair"], key: 1))
+        a.setSyncEnabled(true, for: "pair")
+        try a.add("private")
+        var sent: [QuickPhraseSyncMessage] = []
+        let sync = QuickPhraseSyncSession(store: a, pairID: "pair") { sent.append($0) }
+        defer { sync.reset() }
+        let peer = QuickPhraseSyncOffer(epoch: UUID(), enabled: true)
+        sync.receiveHello(peer)
+        sync.didSendHello()
+        a.updateSyncPairings(pairings(["pair"], key: 2))
+        a.setSyncEnabled(true, for: "pair")
+        await sync.flush()
+        #expect(sent.allSatisfy { $0.records == nil && !$0.enabled })
+        sync.receive(.init(senderEpoch: peer.epoch, recipientEpoch: sync.offer.epoch, enabled: true,
+                           records: [.init(id: UUID(), order: 0, text: "old identity")]))
+        #expect(a.phrases.map(\.text) == ["private"])
+    }
+
     @Test("No contents leave either device until both sides opt in; online enable works")
     func bilateralConsent() async throws {
         let a = store(), b = store()
