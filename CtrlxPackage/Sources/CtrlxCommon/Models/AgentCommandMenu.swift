@@ -6,22 +6,40 @@ package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
     case model
     case status
     case usage
+    case effort
+    case fast
+    case personality
     case plan
+    case goal
     case compact
+    case autocompact
+    case context
     case resume
     case fork
+    case branch
     case rename
     case agent
     case diff
     case review
     case ps
+    case tasks
     case permissions
     case skills
+    case reloadSkills = "reload-skills"
     case mcp
     case plugins
+    case plugin
+    case reloadPlugins = "reload-plugins"
+    case config
+    case memory
+    case hooks
     case theme
+    case outputStyle = "output-style"
+    case keymap
+    case experimental
     case statusline
     case debugConfig = "debug-config"
+    case help
 
     package var id: String { rawValue }
     package var text: String { "/\(rawValue)" }
@@ -35,11 +53,20 @@ package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
         switch pluginID {
         case "codex": [
             .model, .status, .usage,
-            .plan, .compact, .resume, .fork, .rename, .agent,
+            .fast, .personality, .plan, .goal, .compact, .resume, .fork, .rename, .agent,
             .diff, .review, .ps,
-            .permissions, .skills, .mcp, .plugins, .theme, .statusline, .debugConfig,
+            .permissions, .skills, .mcp, .plugins, .theme, .keymap, .statusline, .experimental, .debugConfig,
         ]
-        case "claude-code": [.model, .status, .usage]
+        // Checked against Claude 2.1.276: bare /rename auto-names the session;
+        // /branch switches to a conversation copy, while /fork runs one in the
+        // background. /agents is removed; /plugin remains singular.
+        case "claude-code": [
+            .model, .status, .usage,
+            .effort, .plan, .goal, .compact, .autocompact, .context, .resume, .branch, .rename,
+            .diff, .review,
+            .permissions, .skills, .mcp, .plugin, .reloadSkills, .reloadPlugins,
+            .config, .theme, .outputStyle, .memory, .hooks, .tasks, .help,
+        ]
         default: []
         }
     }

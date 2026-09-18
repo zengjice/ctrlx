@@ -42,6 +42,63 @@ editor hides its Form background so it does not obscure the shared material.
 
 ## Implementation boundaries
 
+### Curated command catalogs
+
+Both clients use `AgentQuickCommand.commands(for:)` as the display order and
+send allowlist. Keep the agents' lists independent: matching command names do
+not guarantee matching behavior. The current catalog was checked against Codex
+CLI 0.154.0 and Claude Code 2.1.276 plus their official command references:
+[Codex](https://developers.openai.com/codex/cli/slash-commands) and
+[Claude Code](https://code.claude.com/docs/en/commands).
+
+- **Codex (24):** `/model`, `/status`, `/usage`, `/fast`, `/personality`, `/plan`,
+  `/goal`, `/compact`, `/resume`, `/fork`, `/rename`, `/agent`, `/diff`, `/review`,
+  `/ps`, `/permissions`, `/skills`, `/mcp`, `/plugins`, `/theme`, `/keymap`,
+  `/statusline`, `/experimental`, `/debug-config`.
+- **Claude Code (27):** `/model`, `/status`, `/usage`, `/effort`, `/plan`, `/goal`,
+  `/compact`, `/autocompact`, `/context`, `/resume`, `/branch`, `/rename`, `/diff`,
+  `/review`, `/permissions`, `/skills`, `/mcp`, `/plugin`, `/reload-skills`,
+  `/reload-plugins`, `/config`, `/theme`, `/output-style`, `/memory`, `/hooks`,
+  `/tasks`, `/help`.
+
+Only include commands with a useful no-argument invocation. Bare `/goal`
+inspects the goal; it does not create one. Codex `/fast` changes the service
+tier and can increase usage. Model, account, version and feature flags may still
+limit commands on the actual host; the panel does not discover capabilities or
+promise that every command can execute during a running turn.
+
+Claude's `/plugin` remains singular, not Codex's `/plugins`. In the checked
+baseline, bare `/effort`, `/autocompact` and `/output-style` open configuration
+choices; `/rename` auto-generates a session name; `/branch` switches to a copy
+of the conversation while preserving the original. `/diff` inspects changes,
+and `/review` starts a review without adding `--fix` or `--comment`.
+`/reload-skills` and `/reload-plugins` pick up pending changes without restarting;
+CtrlX never appends `--force` to bypass Claude's plugin-reload warning.
+
+`/agents` no longer opens an agent manager (since 2.1.198), so it is removed.
+`/cost` and `/stats` are aliases of `/usage`, and `/code-review` duplicates
+`/review`. Claude's `/fork` starts a background copy rather than switching into
+a normal branch; `/fast` has additional cost and account restrictions. These,
+`/statusline` (a setup task), `/doctor` (a repair workflow), and `/simplify`
+(applies code changes) are deliberately excluded from Claude's one-tap catalog.
+Clear/delete/exit/stop/approval actions and argument-required commands remain
+outside these one-tap catalogs. Newer version-dependent entries are not added
+solely because they appear in the latest documentation.
+
+The Claude expansion was checked against the installed 2.1.276 command
+definitions as well as the reference above. Updating Claude on a viewer Mac
+does not update the agent on its remote hosts; those hosts need a compatible
+Claude version too. Updating these built-in lists requires the Mac/iOS client
+update, not a Relay deployment or phrase-library synchronization.
+
+The Mac command grid scrolls within a capped height; its header and target label
+stay visible. iOS retains its existing scrollable overlay and keyboard behavior.
+Catalog tests cover both agents independently, including commands accepted by
+one agent but rejected by the other, direct Return submission and stale-target
+guards.
+
+### Shared models and routing
+
 `CtrlxCommon/Models` owns `AgentCommandMenu`, `QuickPhraseStore` and
 `TerminalPhraseContext` for both platforms. `QuickPhraseStore` migrates the existing
 `terminalQuickPhrases.v1` array into `terminalQuickPhrases.v2`, preserving IDs and

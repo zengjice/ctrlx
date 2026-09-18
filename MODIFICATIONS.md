@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.33 — Expanded agent commands and iOS Shift shortcuts
+
+- Expand the shared Mac/iOS command panels to 24 Codex and 27 Claude Code
+  commands, with independent per-agent allowlists and stable display order.
+- Check Claude commands against 2.1.276: add effort, diff, review, goal,
+  autocompact, output-style, branch, rename and skill/plugin reload entries;
+  remove the retired agents manager and omit duplicate or higher-risk actions.
+- Keep one-tap submission, the host-side pause before Return, and existing
+  draft, permission, connection and focused-pane protections. Bound the Mac
+  command grid with scrolling so the expanded catalog remains accessible.
+- Pin the published SwiftTerm extension-keyboard update for iOS: Shift arrows,
+  Shift-Tab and Shift-Enter send complete chords without sticky Shift state or
+  an extra Return. Keep both always-visible shortcut rows unchanged.
+- Add command-catalog, submission-guard and Shift transport/accessory tests.
+  New commands depend on the Claude/Codex version running on the actual host;
+  the existing Relay protocol and phrase synchronization remain unchanged.
+
 ## 3.0.32 — Mac modified arrow-key input
 
 - Send Shift+arrow keys through the shared Mac Host/Viewer terminal input path

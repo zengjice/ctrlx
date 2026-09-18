@@ -155,23 +155,27 @@ private struct MacAgentCommandPanel: View {
             if let reason = unavailableReason ?? error {
                 Text(reason).font(.caption).foregroundStyle(.secondary)
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 105))], spacing: 8) {
-                ForEach(commands) { command in
-                    Button {
-                        guard !hasSubmitted else { return }
-                        if send(command) {
-                            hasSubmitted = true
-                            dismiss()
-                        } else {
-                            error = "The terminal changed. Reopen the panel to send."
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 105))], spacing: 8) {
+                    ForEach(commands) { command in
+                        Button {
+                            guard !hasSubmitted else { return }
+                            if send(command) {
+                                hasSubmitted = true
+                                dismiss()
+                            } else {
+                                error = "The terminal changed. Reopen the panel to send."
+                            }
+                        } label: {
+                            Text(command.text).monospaced().frame(maxWidth: .infinity, minHeight: 26)
                         }
-                    } label: {
-                        Text(command.text).monospaced().frame(maxWidth: .infinity, minHeight: 26)
+                        .buttonStyle(.bordered)
+                        .disabled(unavailableReason != nil || hasSubmitted)
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(unavailableReason != nil || hasSubmitted)
                 }
             }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: 360)
         }
         .padding(16)
         .frame(width: 380)

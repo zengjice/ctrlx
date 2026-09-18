@@ -21,21 +21,68 @@ struct AgentCommandMenuTests {
     func codexCatalog() {
         #expect(AgentQuickCommand.commands(for: "codex").map(\.text) == [
             "/model", "/status", "/usage",
-            "/plan", "/compact", "/resume", "/fork", "/rename", "/agent",
+            "/fast", "/personality", "/plan", "/goal", "/compact", "/resume", "/fork", "/rename", "/agent",
             "/diff", "/review", "/ps",
-            "/permissions", "/skills", "/mcp", "/plugins", "/theme", "/statusline", "/debug-config",
+            "/permissions", "/skills", "/mcp", "/plugins", "/theme", "/keymap", "/statusline", "/experimental", "/debug-config",
         ])
         #expect(context()?.canSend == true)
     }
 
-    @Test("Claude retains its original catalog and rejects Codex-only actions")
+    @Test("Claude includes its own zero-argument commands in stable display order")
     func claudeCatalog() {
         let claude = context(pluginID: "claude-code")
-        #expect(claude?.commands == [.model, .status, .usage])
+        #expect(claude?.commands.map(\.text) == [
+            "/model", "/status", "/usage",
+            "/effort", "/plan", "/goal", "/compact", "/autocompact", "/context", "/resume", "/branch", "/rename",
+            "/diff", "/review",
+            "/permissions", "/skills", "/mcp", "/plugin", "/reload-skills", "/reload-plugins",
+            "/config", "/theme", "/output-style", "/memory", "/hooks", "/tasks", "/help",
+        ])
         #expect(claude?.canSend == true)
-        for command in AgentQuickCommand.allCases where ![.model, .status, .usage].contains(command) {
-            #expect(AgentCommandRequest(command, in: claude) == nil)
+    }
+
+    @Test("Each agent accepts only its own catalog", arguments: ["codex", "claude-code"])
+    func agentAllowlist(pluginID: String) throws {
+        let current = try #require(context(pluginID: pluginID))
+        for command in AgentQuickCommand.allCases {
+            let request = AgentCommandRequest(command, in: current)
+            #expect((request != nil) == current.commands.contains(command))
         }
+    }
+
+    @Test("Agent-specific names and bare-command semantics do not leak between catalogs")
+    func distinctCommandSemantics() {
+        for command in [AgentQuickCommand.agent, .plugins, .statusline, .fast, .fork] {
+            #expect(AgentCommandRequest(command, in: context()) != nil)
+            #expect(AgentCommandRequest(command, in: context(pluginID: "claude-code")) == nil)
+        }
+        for command in [AgentQuickCommand.plugin, .context, .memory, .tasks, .help,
+                        .effort, .autocompact, .branch, .outputStyle, .reloadSkills, .reloadPlugins] {
+            #expect(AgentCommandRequest(command, in: context(pluginID: "claude-code")) != nil)
+            #expect(AgentCommandRequest(command, in: context()) == nil)
+        }
+    }
+
+    @Test("Claude's expanded catalog submits bare commands without adding action-changing flags")
+    func claudeExpandedCommands() throws {
+        let claude = try #require(context(pluginID: "claude-code"))
+        for text in ["/effort", "/diff", "/review", "/goal", "/autocompact", "/output-style",
+                     "/branch", "/rename", "/reload-skills", "/reload-plugins"] {
+            let command = try #require(claude.commands.first { $0.text == text })
+            let request = try #require(AgentCommandRequest(command, in: claude))
+            #expect(request.isValid(in: claude))
+            #expect(request.command.keys == [.text(text), .delay(200), .enter])
+        }
+    }
+
+    @Test("Claude excludes removed entries, duplicate aliases and commands with different side effects")
+    func claudeExcludedCommands() {
+        let commands = Set(AgentQuickCommand.commands(for: "claude-code").map(\.text))
+        #expect(commands.isDisjoint(with: [
+            "/agents", "/agent", "/plugins", "/cost", "/stats", "/code-review",
+            "/fast", "/fork", "/statusline", "/doctor", "/simplify",
+        ]))
+        #expect(AgentQuickCommand(rawValue: "agents") == nil)
     }
 
     @Test("Panel buttons use the unique send allowlist in stable order", arguments: ["codex", "claude-code"])
@@ -64,14 +111,19 @@ struct AgentCommandMenuTests {
         #expect(context(state: .working) == captured)
     }
 
-    @Test("One-tap catalog excludes destructive, interruption and argument-only commands")
-    func excludedCommands() {
-        let commands = Set(AgentQuickCommand.commands(for: "codex").map(\.text))
+    @Test("One-tap catalogs exclude destructive, interruption and argument-only commands", arguments: ["codex", "claude-code"])
+    func excludedCommands(pluginID: String) {
+        let commands = Set(AgentQuickCommand.commands(for: pluginID).map(\.text))
         #expect(commands.isDisjoint(with: [
             "/new", "/clear", "/delete", "/archive", "/exit", "/quit", "/logout", "/stop", "/init",
-            "/mention", "/sandbox-add-read-dir", "/approve",
+            "/mention", "/sandbox-add-read-dir", "/approve", "/rewind", "/add-dir", "/cd", "/batch",
         ]))
-        #expect(Set(AgentQuickCommand.allCases.map(\.text)) == commands)
+    }
+
+    @Test("Every command belongs to at least one agent catalog")
+    func catalogCoverage() {
+        let commands = ["codex", "claude-code"].flatMap { AgentQuickCommand.commands(for: $0) }
+        #expect(Set(AgentQuickCommand.allCases) == Set(commands))
     }
 
     @Test("Unknown agents do not inherit another agent's commands", arguments: ["zsh", "pi", "", "Codex"])
@@ -109,26 +161,19 @@ struct AgentCommandMenuTests {
         }
     }
 
-    @Test("Working agents accept every catalog command without a second confirmation", arguments: AgentQuickCommand.allCases)
-    func working(command: AgentQuickCommand) throws {
-        let working = try #require(context(state: .working))
-        let request = try #require(AgentCommandRequest(command, in: working))
+    @Test("Working agents accept every catalog command without a second confirmation", arguments: ["codex", "claude-code"])
+    func working(pluginID: String) throws {
+        let working = try #require(context(pluginID: pluginID, state: .working))
         #expect(working.canSend)
-        #expect(request.isValid(in: context(state: .working)))
-        #expect(request.isValid(in: context(state: .idle)))
-        #expect(request.isValid(in: context(state: .doneWorking(summary: "Finished"))))
-        #expect(request.command.keys == [.text(command.text), .delay(200), .enter])
-        let idleRequest = try #require(AgentCommandRequest(command, in: context()))
-        #expect(idleRequest.isValid(in: working))
-    }
-
-    @Test("Claude working state keeps the same three commands available")
-    func claudeWorking() throws {
-        let working = try #require(context(pluginID: "claude-code", state: .working))
-        #expect(working.commands == [.model, .status, .usage])
+        #expect(working.commands == context(pluginID: pluginID)?.commands)
         for command in working.commands {
             let request = try #require(AgentCommandRequest(command, in: working))
             #expect(request.isValid(in: working))
+            #expect(request.isValid(in: context(pluginID: pluginID, state: .idle)))
+            #expect(request.isValid(in: context(pluginID: pluginID, state: .doneWorking(summary: "Finished"))))
+            #expect(request.command.keys == [.text(command.text), .delay(200), .enter])
+            let idleRequest = try #require(AgentCommandRequest(command, in: context(pluginID: pluginID)))
+            #expect(idleRequest.isValid(in: working))
         }
     }
 
@@ -170,12 +215,14 @@ struct AgentCommandMenuTests {
         #expect(!request.isValid(in: blocked))
     }
 
-    @Test("Selecting a command immediately supplies text, host-side pause and Return", arguments: AgentQuickCommand.allCases)
-    func directSubmission(command: AgentQuickCommand) throws {
-        let current = context()
-        let request = try #require(AgentCommandRequest(command, in: current))
-        #expect(request.isValid(in: current))
-        #expect(request.command.keys == [.text(command.text), .delay(200), .enter])
+    @Test("Selecting a command immediately supplies text, host-side pause and Return", arguments: ["codex", "claude-code"])
+    func directSubmission(pluginID: String) throws {
+        let current = try #require(context(pluginID: pluginID))
+        for command in current.commands {
+            let request = try #require(AgentCommandRequest(command, in: current))
+            #expect(request.isValid(in: current))
+            #expect(request.command.keys == [.text(command.text), .delay(200), .enter])
+        }
     }
 
     @Test("Commands send one real Return without clearing, interrupting or inserting a literal newline")
@@ -208,15 +255,23 @@ struct AgentCommandMenuTests {
         #expect(AgentCommandRequest(.model, in: nil) == nil)
     }
 
-    @Test("Expanded commands retain availability and target guards", arguments: AgentQuickCommand.allCases)
-    func expandedCommandGuards(command: AgentQuickCommand) throws {
-        let request = try #require(AgentCommandRequest(command, in: context()))
-        for changed in [context(connected: false), context(ready: false),
-                        context(externalEditor: true)] {
-            #expect(AgentCommandRequest(command, in: changed) == nil)
-            #expect(!request.isValid(in: changed))
+    @Test("Expanded commands retain availability and target guards", arguments: ["codex", "claude-code"])
+    func expandedCommandGuards(pluginID: String) throws {
+        let current = try #require(context(pluginID: pluginID))
+        for command in current.commands {
+            let request = try #require(AgentCommandRequest(command, in: current))
+            for changed in [context(pluginID: pluginID, connected: false), context(pluginID: pluginID, ready: false),
+                            context(pluginID: pluginID, externalEditor: true),
+                            context(pluginID: pluginID, state: .awaitingReplies(AskUserQuestionRequest(questions: []), requestID: "q")),
+                            context(pluginID: pluginID, state: .awaitingPermission(PermissionRequest(title: "Shell", description: "Run pwd"), requestID: "p")),
+                            context(pluginID: pluginID, state: .awaitingPlanApproval(ApprovePlanRequest(title: "Plan", plan: "Run tests"), requestID: "a")),
+                            context(paneID: "%13", pluginID: pluginID), context(hostID: "host-b", pluginID: pluginID),
+                            context(pluginID: pluginID, revision: 1), context(pluginID: pluginID == "codex" ? "claude-code" : "codex")] {
+                #expect(!request.isValid(in: changed))
+                if let changed, !changed.canSend {
+                    #expect(AgentCommandRequest(command, in: changed) == nil)
+                }
+            }
         }
-        #expect(!request.isValid(in: context(paneID: "%13")))
-        #expect(!request.isValid(in: context(hostID: "host-b")))
     }
 }

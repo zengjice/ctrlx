@@ -78,6 +78,17 @@ touch mode, keyboard switching and the input proxy keep their existing paths.
 SwiftTerm's `showsEscapeKey` defaults to `true`; only CtrlX opts out, so other
 consumers retain their existing keyboard. Layout tests cover both configurations.
 
+The extended keyboard (the rightmost keyboard toggle, with Home/End and function
+keys) has a separate six-button row: `⇧←`, `⇧→`, `⇧↑`, `⇧↓`, `⇧Tab`, `⇧Enter`.
+Each sends one complete chord immediately; there is no sticky Shift state and no
+appended Return. The two always-visible toolbar rows are unchanged. Its minimum
+height is 196 points to fit four rows without shrinking the key height below 36
+points. Shift arrows use `CSI 1;2 D/C/A/B` even in application cursor mode;
+Shift-Tab uses `CSI Z`, and Shift-Enter uses `CSI 13;2u`. They go through the
+existing SwiftTerm delegate → `TmuxKey.from` → pane input queue, including input
+enablement and IME preparation. No agent detection or relay protocol change is
+involved; the existing Mac modified-key handling is reused.
+
 ### Tap-to-toggle voice input
 
 The shared `VoiceInputButton` is a native SwiftUI `Button`, not a zero-distance
