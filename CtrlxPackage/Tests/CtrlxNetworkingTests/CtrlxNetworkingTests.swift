@@ -237,15 +237,31 @@ struct TmuxKeyCsiParsingTests {
 
     // MARK: - Modified arrow keys (parameterized CSI)
 
-    @Test("Parses modified arrow keys CSI 1;mod X")
-    func parsesModifiedArrowKeys() {
-        // ESC [ 1 ; 5 C — Ctrl+Right (modifier 5)
-        let ctrlRight = Data([0x1B, 0x5B, 0x31, 0x3B, 0x35, 0x43])
-        #expect(TmuxKey.from(bytes: ctrlRight) == [.right])
+    @Test("Modified arrows retain every Shift/Alt/Control combination", arguments: ["A", "B", "C", "D"], 2 ... 8)
+    func parsesModifiedArrowKeys(direction: String, modifier: Int) throws {
+        let sequence = "\u{1B}[1;\(modifier)\(direction)"
+        let keys = TmuxKey.from(bytes: Data(sequence.utf8))
+        #expect(keys == [.text(sequence)])
+        #expect(keys.allSatisfy { $0.requiresLiteralMode })
 
-        // ESC [ 1 ; 2 A — Shift+Up (modifier 2)
-        let shiftUp = Data([0x1B, 0x5B, 0x31, 0x3B, 0x32, 0x41])
-        #expect(TmuxKey.from(bytes: shiftUp) == [.up])
+        // Reuse the existing wire representation, understood by older hosts.
+        let encoded = try JSONEncoder().encode(keys)
+        #expect(try JSONDecoder().decode([TmuxKey].self, from: encoded) == [.text(sequence)])
+    }
+
+    @Test("Explicit default arrow modifiers remain named keys")
+    func defaultArrowModifiersRemainNamed() {
+        for (direction, key) in [("A", TmuxKey.up), ("B", .down), ("C", .right), ("D", .left)] {
+            #expect(TmuxKey.from(bytes: Data("\u{1B}[1;1\(direction)".utf8)) == [key])
+        }
+    }
+
+    @Test("Modified arrows preserve their boundaries in mixed input")
+    func modifiedArrowsInMixedInput() {
+        let sequence = "中\u{1B}[1;2Da\u{1B}[1;5C\r"
+        #expect(TmuxKey.from(bytes: Data(sequence.utf8)) == [
+            .text("中"), .text("\u{1B}[1;2D"), .text("a"), .text("\u{1B}[1;5C"), .enter,
+        ])
     }
 
     // MARK: - CSI u (kitty keyboard protocol)

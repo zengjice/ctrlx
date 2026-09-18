@@ -25,6 +25,32 @@
             #expect(commands == ["send-keys -t %7 -H 61 3b 0a e4 b8 ad"])
         }
 
+        @Test("Modified arrows survive parsing, wire transport and both tmux input paths",
+              arguments: ["A", "B", "C", "D"], 2 ... 8)
+        func modifiedArrowsReachTmux(direction: String, modifier: Int) async throws {
+            let sequence = "\u{1B}[1;\(modifier)\(direction)"
+            let wire = try JSONEncoder().encode(TmuxKey.from(bytes: Data(sequence.utf8)))
+            let keys = try JSONDecoder().decode([TmuxKey].self, from: wire)
+            let hex = sequence.utf8.map { String(format: "%02x", $0) }.joined(separator: " ")
+            #expect(TmuxControlInputEncoder.commands(paneId: "%7", keys: keys) == [
+                "send-keys -t %7 -H \(hex)",
+            ])
+
+            let commands = LockIsolated<[[String]]>([])
+            try await withDependencies {
+                $0[ProcessRunner.self].run = { @Sendable _, arguments, _, _ in
+                    commands.withValue { $0.append(arguments) }
+                    return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
+                }
+            } operation: {
+                let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
+                try await tmux.sendKeystrokes("%7", keys: keys)
+            }
+            #expect(commands.value.filter { $0.contains("send-keys") } == [
+                ["send-keys", "-t", "%7", "-l", "--", sequence],
+            ])
+        }
+
         @Test("Control mode keeps split Option-Backspace in one named command")
         func controlModeKeepsOptionBackspaceTogether() {
             let commands = TmuxControlInputEncoder.commands(
@@ -301,6 +327,78 @@
                 #expect(content.contains(input))
 
                 try await tmux.killSession(created.sessionName)
+            }
+        }
+
+        @Test("An isolated tmux PTY receives modified arrows verbatim", arguments: [false, true])
+        func modifiedArrowsReachRealPTY(useControlMode: Bool) async throws {
+            let tmuxPath = try #require(TmuxBinaryLocator.liveValue.find())
+            let socketPath = "/tmp/ctrlx-arrows-\(UUID().uuidString.prefix(8)).sock"
+            defer { killTmuxServer(tmuxPath: tmuxPath, socketPath: socketPath) }
+
+            try await withDependencies {
+                $0[ProcessRunner.self] = .liveValue
+                $0.continuousClock = ContinuousClock()
+            } operation: {
+                let tmux = TmuxService(tmuxPath: tmuxPath, socketPath: socketPath)
+                // Start the byte reader directly, without a login shell or
+                // the user's tmux config/history. Readiness is real PTY output,
+                // never an echoed command line containing the marker.
+                let probe = "stty raw -echo; printf 'ARROW_READY\\r\\n'; "
+                    + "dd bs=1 count=24 2>/dev/null | od -An -tx1; "
+                    + "printf '\\r\\nARROW_DONE\\r\\n'; cat"
+                let created = try await ProcessRunner.liveValue.run(
+                    tmuxPath,
+                    ["-f", "/dev/null", "-S", socketPath, "new-session", "-d", "-s", "arrows",
+                     "-x", "100", "-y", "24", "-P", "-F", "#{pane_id}", "/bin/sh", "-c", probe],
+                    nil, 5
+                )
+                try #require(created.exitCode == 0)
+                let paneId = created.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Even a conflicting root binding must not intercept direct
+                // pane injection. Never attach to or send input to user panes.
+                let bound = try await ProcessRunner.liveValue.run(
+                    tmuxPath, ["-S", socketPath, "bind-key", "-n", "S-Left", "previous-window"], nil, 5
+                )
+                #expect(bound.exitCode == 0)
+                let manager = TmuxControlClientManager(tmuxPath: tmuxPath, socketPath: socketPath)
+                if useControlMode {
+                    try await manager.registerPaneDimensions(
+                        paneId: paneId, sessionName: "arrows", dimensions: (100, 24)
+                    )
+                }
+
+                let readyDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+                var content = ""
+                repeat {
+                    content = try await tmux.capturePaneText(paneId, scrollback: true)
+                    if content.contains("ARROW_READY") { break }
+                    await Task.yield()
+                } while ContinuousClock.now < readyDeadline
+                try #require(content.contains("ARROW_READY"))
+
+                let sequence = ["D", "C", "A", "B"].map { "\u{1B}[1;2\($0)" }.joined()
+                let keys = TmuxKey.from(bytes: Data(sequence.utf8))
+                if useControlMode {
+                    let sent = try await manager.sendKeystrokesIfConnected(
+                        paneId: paneId, sessionName: "arrows", keys: keys
+                    )
+                    #expect(sent)
+                } else {
+                    try await tmux.sendKeystrokes(paneId, keys: keys)
+                }
+
+                let outputDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+                repeat {
+                    content = try await tmux.capturePaneText(paneId, scrollback: true)
+                    if content.contains("ARROW_DONE") { break }
+                    await Task.yield()
+                } while ContinuousClock.now < outputDeadline
+                let hex = sequence.utf8.map { String(format: "%02x", $0) }.joined(separator: " ")
+                #expect(content.split(whereSeparator: \.isWhitespace).joined(separator: " ").contains(hex))
+                #expect(content.contains("ARROW_DONE"))
+                await manager.disconnectAll()
+                try await tmux.killSession("arrows")
             }
         }
 

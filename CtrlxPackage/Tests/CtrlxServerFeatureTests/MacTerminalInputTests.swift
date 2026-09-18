@@ -133,6 +133,37 @@
             #expect(input == [.shiftEnter])
         }
 
+        @Test("Shift+arrows reach the shared Host/Viewer input callback with modifiers",
+              arguments: ["A", "B", "C", "D"])
+        func shiftedArrowsReachPaneInput(direction: String) throws {
+            let (window, view) = makeTerminalWindow()
+            var input: [TmuxKey] = []
+            view.onInput = { input.append(contentsOf: $0) }
+            #expect(view.focusTerminal())
+
+            let (scalar, code): (Int, UInt16)
+            switch direction {
+            case "A": (scalar, code) = (NSUpArrowFunctionKey, 126)
+            case "B": (scalar, code) = (NSDownArrowFunctionKey, 125)
+            case "C": (scalar, code) = (NSRightArrowFunctionKey, 124)
+            default: (scalar, code) = (NSLeftArrowFunctionKey, 123)
+            }
+            let characters = String(try #require(UnicodeScalar(scalar)))
+            let event = try #require(makeKeyEvent(
+                window: window,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                modifierFlags: [.shift, .function, .numericPad],
+                keyCode: code
+            ))
+
+            // The local monitor must leave this to SwiftTerm. Exercise the
+            // actual keyDown -> delegate.send -> TmuxKey.from -> onInput path.
+            #expect(!view.interceptTerminalKeyDown(event))
+            view.terminalView.keyDown(with: event)
+            #expect(input == [.text("\u{1B}[1;2\(direction)")])
+        }
+
         private func makeTerminalWindow() -> (NSWindow, InteractiveTerminalView) {
             let frame = NSRect(x: 0, y: 0, width: 800, height: 600)
             let window = NSWindow(

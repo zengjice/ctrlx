@@ -7,6 +7,19 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.32 — Mac modified arrow-key input
+
+- Send Shift+arrow keys through the shared Mac Host/Viewer terminal input path
+  instead of letting AppKit consume them as unsupported selection commands.
+- Preserve Shift/Alt/Control arrow modifiers in the existing literal keystroke
+  transport, including Codex's Shift+Left shortcut for queued questions.
+- Preserve ordinary arrows, Option word movement, Command shortcuts, IME
+  composition and mouse selection; pin the tested SwiftTerm fork revision.
+- Add native keyboard, wire round-trip and isolated real-tmux regressions for
+  both control-mode and process-based input, including conflicting root bindings.
+- Update the Mac where keyboard input originates. No tmux configuration change,
+  Codex update or Relay redeployment is required for this input-path fix.
+
 ## 3.0.31 — Device-level quick phrase sync settings
 
 - Unify Mac and iOS phrase synchronization in Settings → Quick Phrase Sync,

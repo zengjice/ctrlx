@@ -32,6 +32,17 @@ Detailed documentation for Ctrlx services. Reference when modifying specific com
 
 **Config:** `tmuxPath` (default: `/opt/homebrew/bin/tmux`), optional `socketPath`, `overrideVisualInShellPanes` (mirrors `AppSettings.editorOverrideMode`)
 
+**Modified arrows:** Mac Host and Viewer share `InteractiveTerminalView`. The
+SwiftTerm fork encodes Shift+arrows as legacy `ESC [ 1 ; modifier A/B/C/D`
+without requiring Kitty negotiation. `TmuxKey.from(bytes:)` preserves these
+modified sequences as `.text`, rather than collapsing them to plain arrows.
+They use the existing wire format and literal tmux paths (`send-keys -H` in
+control mode, `send-keys -l --` in the process fallback), bypassing tmux root
+key bindings. Update the Mac where the keyboard input originates; an older
+host can already receive these literal bytes, and no Relay update is needed.
+Regression coverage: `MacTerminalInputTests`, `TmuxKeyCsiParsingTests`, and
+`LocalKeystrokeInputTests` (including isolated real-PTY checks).
+
 ### Editor Override (Ctrl-G)
 
 Gallager points `$VISUAL` at the bundled `gallager edit` CLI (via tmux `-e` on every session) so Ctrl-G in Claude Code / Codex opens the in-app prompt editor. Spawned panes run a login shell that sources the user's rc files **after** the session env is applied, so a user with `export VISUAL=<their editor>` in `~/.zshrc`/`~/.bashrc` clobbers Gallager's value and Ctrl-G opens *their* editor instead. The override is **consent-based** (issue #591) — Gallager's env is a default, never a silent override.

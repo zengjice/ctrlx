@@ -281,6 +281,14 @@ private extension TmuxKey {
                     params.append(currentParam)
                 }
                 let nextIndex = j + 1
+                // Modified arrows have no named TmuxKey case. Preserve their
+                // CSI bytes using the existing literal transport; collapsing
+                // them to .left/.up/etc. loses Shift/Alt/Control before tmux.
+                if (0x41 ... 0x44).contains(b), params.count == 2,
+                   params[0] == 1, (2 ... 8).contains(params[1]) {
+                    let sequence = String(decoding: data[escIndex ..< nextIndex], as: UTF8.self)
+                    return CsiParseResult(keys: [.text(sequence)], nextIndex: nextIndex)
+                }
                 return mapCsiFinalByte(params: params, finalByte: b, nextIndex: nextIndex)
             } else {
                 return nil // Invalid byte in CSI params
