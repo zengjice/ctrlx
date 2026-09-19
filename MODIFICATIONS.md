@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.34 — Agent sessions in arbitrary Host directories
+
+- Add New Session → Start in Directory on Mac (local and Viewer) and iOS.
+  Enter an existing absolute Host path or ~/… and choose an enabled agent;
+  a directory no longer needs to appear in the Projects history first.
+- Reuse a shared lightweight form and the existing plugin launch contract,
+  including Codex's runtime telemetry arguments and plugin environment.
+  Do not edit global agent configuration or intercept manually typed commands.
+- Resolve and validate directories on the Host before creating tmux state.
+  Explicit agent launches fail clearly when the plugin is unavailable or
+  Auto-run is disabled, while existing Projects and New Terminal keep their
+  optional auto-run and bare-shell behavior.
+- Scope remote agent choices to each Host and preserve shell quoting and
+  simple command aliases. Add path, launch, Host-isolation and wire-compatibility
+  regressions alongside the existing Codex telemetry tests.
+- Update both the launching client and the Host for this workflow. The existing
+  Relay remains compatible and does not require redeployment.
+
 ## 3.0.33 — Expanded agent commands and iOS Shift shortcuts
 
 - Expand the shared Mac/iOS command panels to 24 Codex and 27 Claude Code

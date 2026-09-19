@@ -19,7 +19,8 @@ struct NewSessionContent: View {
     let projects: [AgentProject]
     let isLoadingProjects: Bool
     let creatingSelection: NewSessionCreatingState?
-    let onCreate: (AgentProject?) -> Void
+    let onCreate: (SessionLaunchRequest) -> Void
+    let launchAgents: [SessionLaunchAgent]
     /// Resolves a project's plugin id to its agent badge text — the presentation
     /// `short_name`, with the plugin id as fallback. Every project row carries a
     /// badge (issue #691), Claude Code included, so this always yields text.
@@ -33,6 +34,7 @@ struct NewSessionContent: View {
     @FocusState private var isSearchFocused: Bool
     @State private var searchText = ""
     @State private var selection: NewSessionSelection?
+    @State private var showsDirectoryForm = false
 
     private var isCreating: Bool {
         creatingSelection != nil
@@ -54,6 +56,27 @@ struct NewSessionContent: View {
     }
 
     var body: some View {
+        Group {
+            if showsDirectoryForm {
+                DirectorySessionForm(
+                    agents: launchAgents,
+                    isCreating: isCreating,
+                    onStart: { request in
+                        dismiss()
+                        onCreate(request)
+                    },
+                    onCancel: { showsDirectoryForm = false }
+                )
+                .padding()
+            } else {
+                projectPicker
+            }
+        }
+        .frame(maxWidth: popover ? 350 : 400)
+        .frame(width: popover ? 350 : nil)
+    }
+
+    private var projectPicker: some View {
         VStack(spacing: 0) {
             Text(title)
                 .font(.headline)
@@ -106,6 +129,17 @@ struct NewSessionContent: View {
 
             Divider()
 
+            Button {
+                showsDirectoryForm = true
+            } label: {
+                Label("Start in Directory…", symbol: .folderBadgePlus)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .padding(12)
+            .disabled(isCreating)
+            .accessibilityIdentifier("new-session-custom-directory")
+
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 8) {
@@ -119,7 +153,7 @@ struct NewSessionContent: View {
                                 isSelected: selection == .newTerminal
                             ) {
                                 dismiss()
-                                onCreate(nil)
+                                onCreate(.terminal)
                             }
                             .id(NewSessionSelection.newTerminal)
                         }
@@ -154,7 +188,7 @@ struct NewSessionContent: View {
                                     badge: pluginShortName(project.pluginID)
                                 ) {
                                     dismiss()
-                                    onCreate(project)
+                                    onCreate(.project(project))
                                 }
                                 .id(NewSessionSelection.project(project.id))
                             }
@@ -184,8 +218,6 @@ struct NewSessionContent: View {
                 }
             }
         }
-        .frame(maxWidth: popover ? 350 : 400)
-        .frame(width: popover ? 350 : nil)
     }
 
     private func moveSelection(by offset: Int) {
@@ -207,11 +239,11 @@ struct NewSessionContent: View {
         switch selection {
         case .newTerminal:
             dismiss()
-            onCreate(nil)
+            onCreate(.terminal)
         case let .project(id):
             guard let project = filteredProjects.first(where: { $0.id == id }) else { return }
             dismiss()
-            onCreate(project)
+            onCreate(.project(project))
         case nil:
             return
         }

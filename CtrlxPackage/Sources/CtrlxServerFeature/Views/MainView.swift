@@ -691,9 +691,9 @@ public struct MainView: View {
                         selectedRemoteWindowId = nil
                         selectedWindow = nil
                     },
-                    onCreate: { project in
+                    onCreate: { request in
                         Task {
-                            await createRemoteSession(on: host, inProject: project)
+                            await createRemoteSession(on: host, request: request)
                         }
                     },
                     onRename: { sessionName, newName in
@@ -1265,9 +1265,10 @@ public struct MainView: View {
                 projects: projects,
                 isLoadingProjects: isLoadingProjects,
                 creatingSelection: creatingSelection,
-                onCreate: { project in
-                    createNewSession(project: project)
+                onCreate: { request in
+                    createNewSession(request: request)
                 },
+                launchAgents: localLaunchAgents,
                 pluginShortName: { coordinator.pluginRegistry?.manifest($0)?.shortName ?? $0 },
                 popover: false
             )
@@ -4271,14 +4272,22 @@ public struct MainView: View {
             projects: projects,
             isLoadingProjects: isLoadingProjects,
             creatingSelection: creatingSelection,
-            onCreate: { project in
-                createNewSession(project: project)
+            onCreate: { request in
+                createNewSession(request: request)
             },
+            launchAgents: localLaunchAgents,
             pluginShortName: { coordinator.pluginRegistry?.manifest($0)?.shortName ?? $0 }
         )
     }
 
     // MARK: - New Session Actions
+
+    private var localLaunchAgents: [SessionLaunchAgent] {
+        guard let registry = coordinator.pluginRegistry else { return [] }
+        return registry.active.keys.compactMap { id in
+            registry.manifest(id).map { SessionLaunchAgent(id: id, name: $0.displayName) }
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
 
     private func loadProjects(showLoadingIndicator: Bool = true) async {
         if showLoadingIndicator {
@@ -4616,7 +4625,8 @@ public struct MainView: View {
         )
     }
 
-    private func createNewSession(project: AgentProject?) {
+    private func createNewSession(request: SessionLaunchRequest) {
+        let project = request.project
         guard creatingSelection == nil else { return }
         creatingSelection = project.map { .project($0.id) } ?? .newTerminal
 
@@ -4628,17 +4638,21 @@ public struct MainView: View {
             do {
                 // Determine session name and working directory
                 let sessionName = project?.name ?? "terminal"
-                let workingDirectory = project?.path ?? FileManager.default.homeDirectoryForCurrentUser.path()
 
                 // Resolve the launch command from the project's owning plugin core
                 // (`commandForLaunch`, gated on the plugin's auto-run setting). A
                 // nil runCommand means "open in a bare shell".
                 let launch = if let project {
-                    await coordinator.resolveLaunch(forPluginID: project.pluginID, projectPath: project.path)
+                    try await coordinator.resolveLaunch(
+                        forPluginID: project.pluginID,
+                        projectPath: project.path,
+                        requireAgentLaunch: request.requiresAgentLaunch
+                    )
                 } else {
-                    (runCommand: String?.none, extraEnvironment: [String]())
+                    SessionLaunchPreparation(workingDirectory: nil, launch: nil)
                 }
                 let runCommand = launch.runCommand
+                let workingDirectory = launch.workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path()
 
                 var extraEnvironment: [String] = []
                 if let configDir = project?.configDir {
@@ -4651,11 +4665,9 @@ public struct MainView: View {
 
                 // Create the session with calculated dimensions; name the first
                 // window after the launch command's binary (or "terminal 1" for a
-                // bare shell). Take the first token + its last path component so a
-                // full path with args ("/usr/bin/claude --foo") shows as "claude".
-                let firstWindowName: String = if let runCommand {
-                    URL(fileURLWithPath: runCommand.split(separator: " ").first.map(String.init) ?? runCommand)
-                        .lastPathComponent
+                // bare shell). Arguments are separate from the executable path.
+                let firstWindowName: String = if let command = launch.launch?.command {
+                    URL(fileURLWithPath: command).lastPathComponent
                 } else {
                     "terminal 1"
                 }
@@ -4785,8 +4797,10 @@ public struct MainView: View {
         }
     }
 
-    private func createRemoteSession(on host: PairedHost, inProject project: AgentProject?) async {
+    private func createRemoteSession(on host: PairedHost, request: SessionLaunchRequest) async {
         guard creatingSelection == nil else { return }
+
+        let project = request.project
 
         creatingSelection = project.map { .project($0.id) } ?? .newTerminal
 
@@ -4799,7 +4813,8 @@ public struct MainView: View {
             height: dimensions.rows,
             workingDirectory: project?.path,
             configDir: project?.configDir,
-            pluginID: project?.pluginID ?? "claude-code"
+            pluginID: project?.pluginID ?? "claude-code",
+            requireAgentLaunch: request.requiresAgentLaunch
         )
 
         guard let manager = coordinator.viewerConnectionManager else {

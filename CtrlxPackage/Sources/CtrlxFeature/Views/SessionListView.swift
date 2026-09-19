@@ -93,10 +93,11 @@
             .sheet(item: $selectedHostForNewSession) { host in
                 ProjectPickerSheet(
                     host: host,
-                    creatingSelection: creatingSelection
-                ) { selectedProject in
+                    creatingSelection: creatingSelection,
+                    creationError: creationError
+                ) { request in
                     Task {
-                        await createNewSession(on: host, inProject: selectedProject)
+                        await createNewSession(on: host, request: request)
                     }
                 }
             }
@@ -222,8 +223,11 @@
 
         // MARK: - New Session Creation
 
-        private func createNewSession(on host: PairedHost, inProject project: AgentProject?) async {
+        private func createNewSession(on host: PairedHost, request: SessionLaunchRequest) async {
             guard creatingSelection == nil else { return }
+
+            creationError = nil
+            let project = request.project
 
             // Track which item was selected for the spinner
             creatingSelection = project.map { .project($0.id) } ?? .newTerminal
@@ -237,7 +241,8 @@
                 height: settings.newSessionHeight,
                 workingDirectory: project?.path,
                 configDir: project?.configDir,
-                pluginID: project?.pluginID ?? "claude-code"
+                pluginID: project?.pluginID ?? "claude-code",
+                requireAgentLaunch: request.requiresAgentLaunch
             )
 
             // paneId is not used for session creation, pass empty string
@@ -797,11 +802,13 @@
         let host: PairedHost
         /// The currently selected item (shows spinner), nil if nothing selected yet
         let creatingSelection: ProjectPickerSelection?
-        let onSelect: (AgentProject?) -> Void
+        let creationError: String?
+        let onSelect: (SessionLaunchRequest) -> Void
 
         @Environment(\.dismiss) private var dismiss
         @Environment(SessionStore.self) private var sessionStore
         @State private var searchText = ""
+        @State private var showsDirectoryForm = false
 
         private var isCreating: Bool {
             creatingSelection != nil
@@ -826,77 +833,53 @@
         var body: some View {
             NavigationStack {
                 List {
-                    // Default option (no specific project)
-                    if searchText.isEmpty {
-                        Section {
+                    Section {
+                        if showsDirectoryForm {
+                            DirectorySessionForm(
+                                agents: sessionStore.launchAgents(for: host.id),
+                                isCreating: isCreating,
+                                onStart: onSelect,
+                                onCancel: { showsDirectoryForm = false }
+                            )
+                        } else {
                             Button {
-                                onSelect(nil)
+                                showsDirectoryForm = true
                             } label: {
-                                HStack {
-                                    Symbols.terminal.image
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 24)
-
-                                    VStack(alignment: .leading) {
-                                        Text("New Terminal")
-                                            .foregroundStyle(.primary)
-                                        Text("Start in home directory")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-
-                                    Spacer()
-
-                                    if creatingSelection == .newTerminal {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                    }
-                                }
+                                Label("Start in Directory…", symbol: .folderBadgePlus)
                             }
                             .disabled(isCreating)
+                            .accessibilityIdentifier("new-session-custom-directory")
+                        }
+                        if let creationError {
+                            Text(creationError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
                         }
                     }
 
-                    // Project list
-                    if !filteredProjects.isEmpty {
-                        Section("Projects") {
-                            ForEach(filteredProjects) { project in
+                    if !showsDirectoryForm {
+                        // Default option (no specific project)
+                        if searchText.isEmpty {
+                            Section {
                                 Button {
-                                    onSelect(project)
+                                    onSelect(.terminal)
                                 } label: {
                                     HStack {
-                                        Symbols.folder.image
-                                            .foregroundStyle(.blue)
+                                        Symbols.terminal.image
+                                            .foregroundStyle(.secondary)
                                             .frame(width: 24)
 
                                         VStack(alignment: .leading) {
-                                            HStack(spacing: 6) {
-                                                Text(project.name)
-                                                    .foregroundStyle(.primary)
-                                                    .lineLimit(1)
-
-                                                // Every project row carries an agent badge (issue #691):
-                                                // the presentation short_name, plugin id as fallback. No
-                                                // per-agent gate — Claude Code projects get a badge too.
-                                                Text(presentationShortName(for: project.pluginID))
-                                                    .font(.caption2.weight(.semibold))
-                                                    .padding(.horizontal, 6)
-                                                    .padding(.vertical, 2)
-                                                    .background(
-                                                        Capsule().fill(Color.accentColor.opacity(0.18))
-                                                    )
-                                                    .foregroundStyle(Color.accentColor)
-                                            }
-                                            Text(project.path)
+                                            Text("New Terminal")
+                                                .foregroundStyle(.primary)
+                                            Text("Start in home directory")
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
                                         }
 
                                         Spacer()
 
-                                        if creatingSelection == .project(project.id) {
+                                        if creatingSelection == .newTerminal {
                                             ProgressView()
                                                 .controlSize(.small)
                                         }
@@ -905,26 +888,76 @@
                                 .disabled(isCreating)
                             }
                         }
-                    } else if !searchText.isEmpty {
-                        Section {
-                            Text("No matching projects")
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if !sessionStore.hasReceivedState(for: host.id) {
-                        Section("Projects") {
-                            HStack {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text("Loading projects...")
+
+                        // Project list
+                        if !filteredProjects.isEmpty {
+                            Section("Projects") {
+                                ForEach(filteredProjects) { project in
+                                    Button {
+                                        onSelect(.project(project))
+                                    } label: {
+                                        HStack {
+                                            Symbols.folder.image
+                                                .foregroundStyle(.blue)
+                                                .frame(width: 24)
+
+                                            VStack(alignment: .leading) {
+                                                HStack(spacing: 6) {
+                                                    Text(project.name)
+                                                        .foregroundStyle(.primary)
+                                                        .lineLimit(1)
+
+                                                    // Every project row carries an agent badge (issue #691):
+                                                    // the presentation short_name, plugin id as fallback. No
+                                                    // per-agent gate — Claude Code projects get a badge too.
+                                                    Text(presentationShortName(for: project.pluginID))
+                                                        .font(.caption2.weight(.semibold))
+                                                        .padding(.horizontal, 6)
+                                                        .padding(.vertical, 2)
+                                                        .background(
+                                                            Capsule().fill(Color.accentColor.opacity(0.18))
+                                                        )
+                                                        .foregroundStyle(Color.accentColor)
+                                                }
+                                                Text(project.path)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
+                                                    .truncationMode(.middle)
+                                            }
+
+                                            Spacer()
+
+                                            if creatingSelection == .project(project.id) {
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                            }
+                                        }
+                                    }
+                                    .disabled(isCreating)
+                                }
+                            }
+                        } else if !searchText.isEmpty {
+                            Section {
+                                Text("No matching projects")
                                     .foregroundStyle(.secondary)
+                            }
+                        } else if !sessionStore.hasReceivedState(for: host.id) {
+                            Section("Projects") {
+                                HStack {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Loading projects...")
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
                 }
                 .searchable(text: $searchText, prompt: "Search projects")
                 .onSubmit(of: .search) {
-                    if filteredProjects.count == 1 {
-                        onSelect(filteredProjects[0])
+                    if !showsDirectoryForm && filteredProjects.count == 1 {
+                        onSelect(.project(filteredProjects[0]))
                     }
                 }
                 .navigationTitle("New Session on \(host.displayName)")

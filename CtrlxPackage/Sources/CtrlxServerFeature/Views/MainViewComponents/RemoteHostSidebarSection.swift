@@ -18,7 +18,7 @@ struct RemoteHostSidebarSection: View {
     let onHostDragChanged: (CGPoint) -> Void
     let onHostDragEnded: (CGPoint) -> Void
     let onSelect: (RemoteSessionSelection) -> Void
-    let onCreate: (AgentProject?) -> Void
+    let onCreate: (SessionLaunchRequest) -> Void
     let onRename: (String, String) -> Void
     let onSetDescription: (String, String?) -> Void
     let onSetColor: (String, SessionColor?) -> Void
@@ -146,6 +146,7 @@ struct RemoteHostSidebarSection: View {
                     isLoadingProjects: !sessionStore.hasReceivedState(for: host.id),
                     creatingSelection: creatingSelection,
                     onCreate: onCreate,
+                    launchAgents: sessionStore.launchAgents(for: host.id),
                     pluginShortName: { sessionStore.presentation(forPluginID: $0)?.shortName ?? $0 }
                 )
             }

@@ -318,6 +318,35 @@ Actor executing commands from iOS devices.
 - Writes hooks at the **global layer** (`~/.codex/hooks.json`) to avoid per-project trust prompts on every repo
 - Exposes `install` / `uninstall` / `isInstalled` closures; surfaced in Settings via `CodexPluginInstallerRow`
 
+### Start a session in an arbitrary directory
+
+Mac (local and Viewer) and iOS expose **New Session → Start in Directory…**.
+Enter an existing absolute directory or `~/…` **on the target Host**, then choose
+one of that Host's enabled agents. Project history is only a shortcut list, not
+an allowlist; a directory need not already appear there. No directories are
+created automatically. Do not add shell quotes around paths with spaces.
+
+`SessionLaunchRequest` and `DirectorySessionForm` are shared in `CtrlxCommon`.
+Remote choices use presentations cached **per Host**, so connecting to Home
+cannot overwrite Office's available-agent list. `SessionLaunchPreparation` is
+the common Host-side path for local/remote creation: `SessionDirectoryClient`
+expands `~`, validates directory access on an actor, and calls the selected
+plugin's existing `commandForLaunch` before any tmux mutation. Command, arguments
+and environment are preserved, including Codex's runtime OTEL overrides when
+Export Telemetry is enabled and the receiver is available. Nothing changes
+global Codex config or intercepts a manually typed `codex` command.
+
+Explicit directory requests set `CreateTmuxSession.requireAgentLaunch = true`.
+Unavailable plugins or disabled Auto-run produce an error instead of a
+successful bare-shell session. Existing Projects retain optional auto-run;
+New Terminal remains a shell in the Host's home. Missing wire flags decode as
+`false` for older viewers. Update both the launching client and the Host for
+the new flow/strict validation; the opaque Relay requires no update.
+
+Regression coverage: `SessionLaunchRequestTests`, `SessionLaunchAgentTests`,
+`DirectorySessionCommandTests`, `SessionLaunchPreparationTests`,
+`SessionDirectoryResolverTests`, and the existing Codex OTEL/launch tests.
+
 ### ClaudeProjectScanner (`CtrlxServerFeature/Services/ClaudeProjectScanner.swift`)
 
 Actor scanning for Claude Code projects.

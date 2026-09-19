@@ -42,6 +42,9 @@ final public class SessionStore {
     /// the icon/name/color for a session's `pluginID` from here.
     public private(set) var presentationsByPluginID: [String: PluginPresentation] = [:]
 
+    /// Launch choices must belong to the target Host, never the last Host to push.
+    private var launchAgentsByHost: [String: [SessionLaunchAgent]] = [:]
+
     /// Home directory path for each host, keyed by pairId
     public private(set) var homeDirectoryByHost: [String: String] = [:]
 
@@ -314,6 +317,7 @@ final public class SessionStore {
 
         // Clear stored projects
         agentProjectsByHost.removeValue(forKey: hostId)
+        launchAgentsByHost.removeValue(forKey: hostId)
         homeDirectoryByHost.removeValue(forKey: hostId)
         usageOverviewByHost.removeValue(forKey: hostId)
         sidebarSortModeByHost.removeValue(forKey: hostId)
@@ -395,11 +399,18 @@ final public class SessionStore {
             message.presentations.map { ($0.id, $0) },
             uniquingKeysWith: { _, last in last }
         )
+        launchAgentsByHost[message.pairId] = presentationsByPluginID.values
+            .map { SessionLaunchAgent(id: $0.id, name: $0.displayName) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     /// The presentation for a plugin id, if cached.
     public func presentation(forPluginID pluginID: String) -> PluginPresentation? {
         presentationsByPluginID[pluginID]
+    }
+
+    public func launchAgents(for hostId: String) -> [SessionLaunchAgent] {
+        launchAgentsByHost[hostId] ?? []
     }
 
     // MARK: - Response Storage (iOS only)

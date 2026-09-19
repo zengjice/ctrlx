@@ -2020,29 +2020,20 @@
             mergedPluginProjects()
         }
 
-        /// Resolve the auto-launch command for a project from its owning plugin
-        /// core (`commandForLaunch`, gated on the plugin's auto-run setting),
-        /// flattened to the shell command line + extra env strings the local
-        /// "create from project" flow needs. `runCommand == nil` means launch a
-        /// bare shell. Returned as primitives so `MainView` needn't import the
-        /// plugin protocol's `LaunchCommand` type.
-        public func resolveLaunch(
+        /// Validate the local Host directory and resolve the owning plugin's
+        /// launch, using the same preparation as incoming Viewer requests.
+        /// Explicit agent requests cannot silently fall back to a shell.
+        func resolveLaunch(
             forPluginID pluginID: String,
-            projectPath: String
-        ) async -> (runCommand: String?, extraEnvironment: [String]) {
-            guard let launch = await pluginRegistry?.core(pluginID)?.commandForLaunch(projectPath: projectPath) else {
-                return (nil, [])
-            }
-            // POSIX-quote the args (the command stays bare so the caller's first-
-            // token window-name derivation still reads "codex"/"claude"), matching
-            // the `handleCreateSession` / `onProjectStart` launch paths. Without
-            // this, a Codex `-c 'otel.…="…"'` override's embedded quotes would be
-            // eaten by the shell when the command is typed into the pane (#602).
-            let runCommand = launch.args.isEmpty
-                ? launch.command
-                : ([launch.command] + launch.args.map(\.posixSingleQuoted)).joined(separator: " ")
-            let env = launch.env.map { "\($0.key)=\($0.value)" }
-            return (runCommand, env)
+            projectPath: String,
+            requireAgentLaunch: Bool = false
+        ) async throws -> SessionLaunchPreparation {
+            try await SessionLaunchPreparation.prepare(
+                path: projectPath,
+                pluginID: pluginID,
+                requireAgentLaunch: requireAgentLaunch,
+                core: pluginRegistry?.core(pluginID)
+            )
         }
 
         // MARK: - Private Setup Methods
@@ -3116,30 +3107,23 @@
 
                 // Handle create session command
                 if case let .createTmuxSession(spec) = command.command {
-                    // Resolve the launch command from the owning plugin core when
-                    // this is a "create from project" request (a working dir is
-                    // supplied); `commandForLaunch` already gates on the plugin's
-                    // auto-run setting and returns nil to launch a bare shell.
-                    let launch: LaunchCommand?
-                    let defaultCommand: String?
-                    if spec.workingDirectory != nil {
-                        launch = await self?.pluginRegistry?.core(spec.pluginID)?
-                            .commandForLaunch(projectPath: spec.workingDirectory ?? "")
-                        // The plugin's CLI binary name (manifest `process_names`),
-                        // used to label the tab when auto-run is off and `launch`
-                        // is nil — e.g. "claude" rather than the "claude-code" id.
-                        defaultCommand = self?.pluginRegistry?.manifest(spec.pluginID)?.processNames.first
-                    } else {
-                        launch = nil
-                        defaultCommand = nil
+                    do {
+                        let preparation = try await SessionLaunchPreparation.prepare(
+                            path: spec.workingDirectory,
+                            pluginID: spec.pluginID,
+                            requireAgentLaunch: spec.requireAgentLaunch,
+                            core: self?.pluginRegistry?.core(spec.pluginID)
+                        )
+                        return await Self.handleCreateSession(
+                            command: command,
+                            spec: spec,
+                            preparation: preparation,
+                            defaultCommand: self?.pluginRegistry?.manifest(spec.pluginID)?.processNames.first,
+                            tmuxService: tmux
+                        )
+                    } catch {
+                        return .failure(for: command.id, error: error.localizedDescription)
                     }
-                    return await Self.handleCreateSession(
-                        command: command,
-                        spec: spec,
-                        launch: launch,
-                        defaultCommand: defaultCommand,
-                        tmuxService: tmux
-                    )
                 }
 
                 // Handle yolo mode toggle
@@ -3660,22 +3644,17 @@
         private static func handleCreateSession(
             command: CommandMessage,
             spec: CreateTmuxSession,
-            launch: LaunchCommand?,
+            preparation: SessionLaunchPreparation,
             defaultCommand: String?,
             tmuxService: TmuxService
         ) async -> CommandResponseMessage {
             do {
                 // The owning plugin core resolved `launch` (gated on its auto-run
                 // setting); a nil launch means "open in a bare shell".
-                let runCommand: String? = launch.map { command in
-                    if command.args.isEmpty {
-                        return command.command.posixSingleQuoted
-                    }
-                    let quoted = command.args.map(\.posixSingleQuoted).joined(separator: " ")
-                    return "\(command.command.posixSingleQuoted) \(quoted)"
-                }
+                let launch = preparation.launch
+                let runCommand = preparation.runCommand
 
-                let workingDirectory = spec.workingDirectory
+                let workingDirectory = preparation.workingDirectory
                     ?? FileManager.default.homeDirectoryForCurrentUser.path()
 
                 // Pass through any config-dir + plugin-provided env the launch
@@ -3689,8 +3668,7 @@
                 }
 
                 // A non-nil `spec.workingDirectory` means this was a
-                // "create from project" request — that's the only flow today
-                // that supplies a directory. Name the first window after the
+                // project or explicit directory request. Name the first window after the
                 // launch command so the tab matches what's running; when
                 // auto-run is off (`launch` is nil) fall back to the plugin's
                 // CLI binary name ("claude") rather than the dashed plugin id.

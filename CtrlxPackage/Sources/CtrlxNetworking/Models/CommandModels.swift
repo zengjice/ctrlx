@@ -557,13 +557,18 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
     /// for backward compatibility with viewers built before the plugin system.
     public let pluginID: String
 
+    /// Explicit directory launches must fail instead of silently opening a shell
+    /// when the selected agent is unavailable or auto-run is disabled.
+    public let requireAgentLaunch: Bool
+
     public init(
         sessionName: String,
         width: Int,
         height: Int,
         workingDirectory: String? = nil,
         configDir: String? = nil,
-        pluginID: String = "claude-code"
+        pluginID: String = "claude-code",
+        requireAgentLaunch: Bool = false
     ) {
         self.sessionName = sessionName
         self.width = width
@@ -571,6 +576,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         self.workingDirectory = workingDirectory
         self.configDir = configDir
         self.pluginID = pluginID
+        self.requireAgentLaunch = requireAgentLaunch
     }
 
     public var commandType: CommandType {
@@ -579,9 +585,8 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
 
     // MARK: - Codable
 
-    /// Custom decoder so this build can talk to an older host that predates the
-    /// `pluginID` field. Treat absence as "claude-code" — the only agent older
-    /// versions know about.
+    /// Older viewers omit the plugin/strict-launch fields. Preserve their
+    /// Claude default and optional auto-run behavior.
     private enum CodingKeys: String, CodingKey {
         case sessionName
         case width
@@ -589,6 +594,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         case workingDirectory
         case configDir
         case pluginID
+        case requireAgentLaunch
     }
 
     public init(from decoder: Decoder) throws {
@@ -599,6 +605,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         self.workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
         self.configDir = try container.decodeIfPresent(String.self, forKey: .configDir)
         self.pluginID = try container.decodeIfPresent(String.self, forKey: .pluginID) ?? "claude-code"
+        self.requireAgentLaunch = try container.decodeIfPresent(Bool.self, forKey: .requireAgentLaunch) ?? false
     }
 }
 
