@@ -4,20 +4,24 @@ import SwiftUI
 @MainActor
 public struct DirectorySessionForm: View {
     public let agents: [SessionLaunchAgent]
+    public let directorySource: SessionDirectorySource
     public let isCreating: Bool
     public let onStart: (SessionLaunchRequest) -> Void
     public let onCancel: () -> Void
 
-    @State private var path = ""
+    @State private var path = "~/"
     @State private var selectedAgentID: String?
+    @FocusState private var isPathFocused: Bool
 
     public init(
         agents: [SessionLaunchAgent],
+        directorySource: SessionDirectorySource,
         isCreating: Bool,
         onStart: @escaping (SessionLaunchRequest) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.agents = agents
+        self.directorySource = directorySource
         self.isCreating = isCreating
         self.onStart = onStart
         self.onCancel = onCancel
@@ -39,7 +43,7 @@ public struct DirectorySessionForm: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Start in Directory")
                 .font(.headline)
-            Text("Enter a directory on the Mac that will run this session. Use an absolute path or ~/… without shell quotes.")
+            Text("Choose a folder on the Host, or type a path to find it. Opening a folder does not start a session.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             TextField("Directory on Host", text: $path, prompt: Text("~/Projects/my-project"))
@@ -48,8 +52,11 @@ public struct DirectorySessionForm: View {
                 #if os(iOS)
                     .textInputAutocapitalization(.never)
                 #endif
-                .onSubmit(start)
+                .focused($isPathFocused)
+                .onSubmit { isPathFocused = false }
                 .accessibilityIdentifier("new-session-directory")
+
+            SessionDirectoryBrowser(path: $path, source: directorySource)
 
             if agents.isEmpty {
                 Text("No agents available from this Host. Check its connection and Settings → Agents.")
@@ -79,7 +86,7 @@ public struct DirectorySessionForm: View {
                     .disabled(isCreating)
                 Spacer()
                 if isCreating { ProgressView().controlSize(.small) }
-                Button("Start", action: start)
+                Button("Start in This Directory", action: start)
                     .buttonStyle(.borderedProminent)
                     .disabled(!canStart)
                     .accessibilityIdentifier("start-directory-session")

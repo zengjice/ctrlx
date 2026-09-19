@@ -147,6 +147,11 @@ struct RemoteHostSidebarSection: View {
                     creatingSelection: creatingSelection,
                     onCreate: onCreate,
                     launchAgents: sessionStore.launchAgents(for: host.id),
+                    directorySource: .remote(
+                        hostID: host.id,
+                        connection: connection,
+                        supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(host.id)
+                    ),
                     pluginShortName: { sessionStore.presentation(forPluginID: $0)?.shortName ?? $0 }
                 )
             }

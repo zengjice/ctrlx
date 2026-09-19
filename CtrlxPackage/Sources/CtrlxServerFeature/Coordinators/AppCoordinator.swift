@@ -3041,6 +3041,9 @@
             let tmux = tmuxService
             let editorManager = editorSessionManager
             connectionManager.onCommand = { [weak self, executor, streamService, tmux, winManager, editorManager, paneStreaming, weak connectionManager] viewerId, command in
+                if case let .listSessionDirectories(spec) = command.command {
+                    return await SessionDirectoryResolver.respond(to: command, request: spec)
+                }
                 // Handle stream commands
                 if case let .startTerminalStream(spec) = command.command {
                     return await Self.handleStartStream(
@@ -3399,7 +3402,8 @@
                     // Viewers without their own sort preference (iOS) order
                     // this host's sessions with the host's mode.
                     sidebarSortMode: await self?.settings.sidebarSortMode.rawValue,
-                    sharedTerminalLayouts: sharedTerminalLayouts
+                    sharedTerminalLayouts: sharedTerminalLayouts,
+                    supportsDirectoryBrowsing: true
                 )
             }
 

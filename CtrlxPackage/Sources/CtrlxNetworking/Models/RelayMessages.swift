@@ -53,6 +53,8 @@ public struct SessionStateMessage: Codable, Sendable {
     /// deliberately narrower than the app's workbench state: file/browser
     /// tabs, focus and scroll position remain private to each client.
     public let sharedTerminalLayouts: [String: SharedTerminalLayout]?
+    /// Absent on older hosts: viewers retain manual entry and send no lookup.
+    public let supportsDirectoryBrowsing: Bool?
 
     public init(
         pairId: String,
@@ -61,7 +63,8 @@ public struct SessionStateMessage: Codable, Sendable {
         homeDirectory: String = "",
         usageOverview: UsageOverview? = nil,
         sidebarSortMode: String? = nil,
-        sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil
+        sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil,
+        supportsDirectoryBrowsing: Bool? = nil
     ) {
         self.pairId = pairId
         self.paneStates = paneStates
@@ -70,6 +73,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.usageOverview = usageOverview
         self.sidebarSortMode = sidebarSortMode
         self.sharedTerminalLayouts = sharedTerminalLayouts
+        self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
     }
 
     /// Returns a copy with the `pairId` replaced. Centralises the per-connection
@@ -84,7 +88,8 @@ public struct SessionStateMessage: Codable, Sendable {
             homeDirectory: homeDirectory,
             usageOverview: usageOverview,
             sidebarSortMode: sidebarSortMode,
-            sharedTerminalLayouts: sharedTerminalLayouts
+            sharedTerminalLayouts: sharedTerminalLayouts,
+            supportsDirectoryBrowsing: supportsDirectoryBrowsing
         )
     }
 }

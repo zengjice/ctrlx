@@ -1031,6 +1031,8 @@ public enum CommandType: Codable, Sendable, Equatable {
     case stopTerminalStream(StopTerminalStream)
     /// Create a new tmux session
     case createTmuxSession(CreateTmuxSession)
+    /// Browse/complete directories without creating a session or reading files.
+    case listSessionDirectories(ListSessionDirectories)
     /// Resize a tmux pane
     case resizeTmuxPane(ResizeTmuxPane)
     /// Set the shared terminal-window layout for a tmux session
@@ -1297,19 +1299,22 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let paneId: String?
     /// Running processes returned by `checkRunningProcesses` command
     public let runningProcesses: [RunningProcessInfo]?
+    public let directoryListing: SessionDirectoryListing?
 
     public init(
         commandId: UUID,
         success: Bool,
         error: String? = nil,
         paneId: String? = nil,
-        runningProcesses: [RunningProcessInfo]? = nil
+        runningProcesses: [RunningProcessInfo]? = nil,
+        directoryListing: SessionDirectoryListing? = nil
     ) {
         self.commandId = commandId
         self.success = success
         self.error = error
         self.paneId = paneId
         self.runningProcesses = runningProcesses
+        self.directoryListing = directoryListing
     }
 
     public static func success(for commandId: UUID, paneId: String? = nil) -> CommandResponseMessage {

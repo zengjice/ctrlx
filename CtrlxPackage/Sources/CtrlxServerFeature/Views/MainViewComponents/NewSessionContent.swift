@@ -21,6 +21,7 @@ struct NewSessionContent: View {
     let creatingSelection: NewSessionCreatingState?
     let onCreate: (SessionLaunchRequest) -> Void
     let launchAgents: [SessionLaunchAgent]
+    let directorySource: SessionDirectorySource
     /// Resolves a project's plugin id to its agent badge text — the presentation
     /// `short_name`, with the plugin id as fallback. Every project row carries a
     /// badge (issue #691), Claude Code included, so this always yields text.
@@ -60,6 +61,7 @@ struct NewSessionContent: View {
             if showsDirectoryForm {
                 DirectorySessionForm(
                     agents: launchAgents,
+                    directorySource: directorySource,
                     isCreating: isCreating,
                     onStart: { request in
                         dismiss()
@@ -67,6 +69,7 @@ struct NewSessionContent: View {
                     },
                     onCancel: { showsDirectoryForm = false }
                 )
+                .id(directorySource.id)
                 .padding()
             } else {
                 projectPicker

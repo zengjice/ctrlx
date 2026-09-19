@@ -1269,6 +1269,7 @@ public struct MainView: View {
                     createNewSession(request: request)
                 },
                 launchAgents: localLaunchAgents,
+                directorySource: localDirectorySource,
                 pluginShortName: { coordinator.pluginRegistry?.manifest($0)?.shortName ?? $0 },
                 popover: false
             )
@@ -4276,11 +4277,19 @@ public struct MainView: View {
                 createNewSession(request: request)
             },
             launchAgents: localLaunchAgents,
+            directorySource: localDirectorySource,
             pluginShortName: { coordinator.pluginRegistry?.manifest($0)?.shortName ?? $0 }
         )
     }
 
     // MARK: - New Session Actions
+
+    private var localDirectorySource: SessionDirectorySource {
+        SessionDirectorySource(id: "local") { request in
+            @Dependency(SessionDirectoryClient.self) var client
+            return try await client.list(request)
+        }
+    }
 
     private var localLaunchAgents: [SessionLaunchAgent] {
         guard let registry = coordinator.pluginRegistry else { return [] }

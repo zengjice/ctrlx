@@ -807,6 +807,7 @@
 
         @Environment(\.dismiss) private var dismiss
         @Environment(SessionStore.self) private var sessionStore
+        @Environment(ViewerConnectionManager.self) private var connectionManager
         @State private var searchText = ""
         @State private var showsDirectoryForm = false
 
@@ -837,10 +838,16 @@
                         if showsDirectoryForm {
                             DirectorySessionForm(
                                 agents: sessionStore.launchAgents(for: host.id),
+                                directorySource: .remote(
+                                    hostID: host.id,
+                                    connection: connectionManager.connection(for: host.id),
+                                    supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(host.id)
+                                ),
                                 isCreating: isCreating,
                                 onStart: onSelect,
                                 onCancel: { showsDirectoryForm = false }
                             )
+                            .id(host.id)
                         } else {
                             Button {
                                 showsDirectoryForm = true

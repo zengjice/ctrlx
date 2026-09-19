@@ -72,6 +72,7 @@ public actor TmuxCommandExecutor {
                 try await tmuxService.selectWindow(command.paneId)
 
             case .startTerminalStream,
+                 .listSessionDirectories,
                  .stopTerminalStream,
                  .createTmuxSession,
                  .createTmuxWindow,

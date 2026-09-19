@@ -321,9 +321,14 @@ Actor executing commands from iOS devices.
 ### Start a session in an arbitrary directory
 
 Mac (local and Viewer) and iOS expose **New Session → Start in Directory…**.
-Enter an existing absolute directory or `~/…` **on the target Host**, then choose
-one of that Host's enabled agents. Project history is only a shortcut list, not
-an allowlist; a directory need not already appear there. No directories are
+The shared form starts at `~/` **on the target Host**. Click a folder to enter
+it, use Home/Up to navigate, or type/paste an absolute path or `~/…` to complete
+the final component. Existing directory paths list their children. Hidden
+folders are optional (typing a dot-prefixed component also reveals matches).
+Click **Start in This Directory** to launch the selected agent; browsing and
+pressing Return in the path field never create sessions. Project history is
+only a shortcut list, not an allowlist; a directory need not already appear
+there. No directories are
 created automatically. Do not add shell quotes around paths with spaces.
 
 `SessionLaunchRequest` and `DirectorySessionForm` are shared in `CtrlxCommon`.
@@ -343,9 +348,29 @@ New Terminal remains a shell in the Host's home. Missing wire flags decode as
 `false` for older viewers. Update both the launching client and the Host for
 the new flow/strict validation; the opaque Relay requires no update.
 
+Directory browsing uses `ListSessionDirectories` / the optional
+`CommandResponseMessage.directoryListing` over the existing encrypted command
+channel, not a shell command or a recursive filesystem scan. Both local and
+remote requests use `SessionDirectoryClient.list` on the Host's filesystem
+actor; only direct child directories and directory symlinks are returned, no
+file content. Replies are capped at 200 entries / 128 KiB of encoded entries;
+truncated results ask the user to refine the path. Permission and missing-path
+errors stay visible, with Refresh to retry and manual entry still available.
+
+`SessionStateMessage.supportsDirectoryBrowsing` is an optional per-Host
+capability, forwarded by `withPairId` and cleared on disconnect/downgrade.
+Older Hosts receive no new lookup command and retain manual entry. iOS and Mac
+Viewer bind each source to the selected Host connection. The SwiftUI browser
+uses `.task(id:)`, 250 ms input debounce, cancellation checks and unique request
+ownership, so a late reply (including A → B → A) cannot overwrite current
+results. No navigation container is added. Update Host and viewer apps for
+browsing; no Relay deployment, SwiftTerm change, or agent-launch change is needed.
+
 Regression coverage: `SessionLaunchRequestTests`, `SessionLaunchAgentTests`,
 `DirectorySessionCommandTests`, `SessionLaunchPreparationTests`,
-`SessionDirectoryResolverTests`, and the existing Codex OTEL/launch tests.
+`SessionDirectoryResolverTests`, `SessionDirectoryBrowsingTests`,
+`SessionDirectoryListingTests`, `SessionDirectoryBrowseStateTests`,
+`SessionDirectoryCapabilityTests`, and the existing Codex OTEL/launch tests.
 
 ### ClaudeProjectScanner (`CtrlxServerFeature/Services/ClaudeProjectScanner.swift`)
 

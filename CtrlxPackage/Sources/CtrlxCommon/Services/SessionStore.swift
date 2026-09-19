@@ -47,6 +47,7 @@ final public class SessionStore {
 
     /// Home directory path for each host, keyed by pairId
     public private(set) var homeDirectoryByHost: [String: String] = [:]
+    public private(set) var hostsSupportingDirectoryBrowsing: Set<String> = []
 
     /// Cross-session cost/usage rollup per host (issue #598), from each host's
     /// `SessionStateMessage.usageOverview`. Absent for hosts that don't send one
@@ -278,6 +279,11 @@ final public class SessionStore {
 
         agentProjectsByHost[hostId] = state.agentProjects ?? []
         homeDirectoryByHost[hostId] = state.homeDirectory
+        if state.supportsDirectoryBrowsing == true {
+            hostsSupportingDirectoryBrowsing.insert(hostId)
+        } else {
+            hostsSupportingDirectoryBrowsing.remove(hostId)
+        }
         if let usageOverview = state.usageOverview {
             usageOverviewByHost[hostId] = usageOverview
         } else {
@@ -319,6 +325,7 @@ final public class SessionStore {
         agentProjectsByHost.removeValue(forKey: hostId)
         launchAgentsByHost.removeValue(forKey: hostId)
         homeDirectoryByHost.removeValue(forKey: hostId)
+        hostsSupportingDirectoryBrowsing.remove(hostId)
         usageOverviewByHost.removeValue(forKey: hostId)
         sidebarSortModeByHost.removeValue(forKey: hostId)
         sharedTerminalLayoutsByHost.removeValue(forKey: hostId)

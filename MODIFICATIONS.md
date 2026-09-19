@@ -7,6 +7,22 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.35 — Host directory browsing and path completion
+
+- Browse folders when starting a session on Mac (local or Viewer) and iOS,
+  starting at the Host's home directory. Navigate into folders, go Home/Up,
+  show hidden folders, or type a path to complete its final component.
+- Keep browsing separate from launching: only Start in This Directory creates
+  the session, using the existing agent launch and telemetry configuration.
+- Perform read-only, one-level lookups on the selected Host over the existing
+  encrypted command channel. Bound results by count and bytes; debounce input
+  and discard late responses when the path or Host changes.
+- Preserve manual entry for older Hosts and show missing-path, permission and
+  connection errors without changing terminal state. Add filesystem, request
+  ownership, Host-isolation and wire-compatibility regression coverage.
+- Update both Host and client for directory browsing. No Relay redeployment
+  or SwiftTerm change is needed.
+
 ## 3.0.34 — Agent sessions in arbitrary Host directories
 
 - Add New Session → Start in Directory on Mac (local and Viewer) and iOS.
