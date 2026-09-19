@@ -62,12 +62,13 @@ It does not emit a JSON envelope even with `--json`.
 
 ```bash
 ctrlx list-projects --json
-ctrlx start-project /path/to/project -- --resume
+ctrlx start-project /path/to/project
+ctrlx start-project /path/to/project --agent claude-code -- --resume
 ```
 
 `list-projects` merges projects from enabled agent plugins; JSON includes
-`plugin_id`. The CLI's `start-project` defaults to **Claude Code** and has no
-agent selector. Nonempty arguments after `--` replace the plugin's default launch
-arguments. Other agents can be launched through the [socket API](api-reference.md)
-with `project.start`'s `plugin_id`. `new-session --path` follows the app's auto-run
+`plugin_id`. The CLI's `start-project` defaults to **Codex**; use `--agent <plugin-id>`
+to choose another agent. Nonempty arguments after `--` replace the plugin's default
+launch arguments. The [socket API](api-reference.md) accepts the same choice through
+`project.start`'s `plugin_id`. `new-session --path` follows the app's auto-run
 setting instead.

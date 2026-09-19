@@ -241,7 +241,7 @@
                 height: settings.newSessionHeight,
                 workingDirectory: project?.path,
                 configDir: project?.configDir,
-                pluginID: project?.pluginID ?? "claude-code",
+                pluginID: project?.pluginID ?? AgentLaunchDefaults.pluginID,
                 requireAgentLaunch: request.requiresAgentLaunch
             )
 

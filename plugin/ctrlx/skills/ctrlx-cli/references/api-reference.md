@@ -127,7 +127,7 @@ and blocks until the user finishes. Prefer an absolute file path.
 
 Projects come from enabled plugins. Each contains `id`, `name`, `path`,
 `plugin_id`, and ISO-8601 `last_used` (or null). `project.start` defaults to
-`plugin_id: "claude-code"`; the CLI has no flag to override it. Nonempty `args`
+`plugin_id: "codex"`; the CLI accepts `--agent <plugin-id>` to override it. Nonempty `args`
 replace the plugin's default launch arguments. Missing/non-directory project
 paths fail with `not_found`.
 

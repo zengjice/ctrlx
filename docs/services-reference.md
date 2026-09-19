@@ -331,6 +331,14 @@ only a shortcut list, not an allowlist; a directory need not already appear
 there. No directories are
 created automatically. Do not add shell quotes around paths with spaces.
 
+`AgentLaunchDefaults` makes Codex the initial choice on iOS, Mac local and Mac
+Viewer, and in Mac Agents settings. An explicit selection is preserved; when
+Codex is unavailable on that Host, the picker falls back to its first available
+agent (or has no selection if empty). Existing project identities are unchanged.
+New `CreateTmuxSession` requests and `project.start` also default to Codex;
+`ctrlx start-project --agent <plugin-id>` overrides it. Legacy wire payloads
+without an agent identity retain their historical Claude decoding behavior.
+
 `SessionLaunchRequest` and `DirectorySessionForm` are shared in `CtrlxCommon`.
 Remote choices use presentations cached **per Host**, so connecting to Home
 cannot overwrite Office's available-agent list. `SessionLaunchPreparation` is

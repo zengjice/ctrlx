@@ -4,7 +4,7 @@ import Foundation
 struct ListProjectsCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "list-projects",
-        abstract: "List all Claude Code projects discovered on the host"
+        abstract: "List projects discovered by enabled agents on the host"
     )
 
     @OptionGroup var options: GlobalOptions
@@ -34,20 +34,23 @@ struct ListProjectsCommand: ParsableCommand {
 struct StartProjectCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "start-project",
-        abstract: "Start a new tmux session for a Claude project and run claude in it"
+        abstract: "Start a new tmux session for a project and run an agent (default: Codex)"
     )
 
-    @Argument(help: "Project path (the directory to open Claude in)")
+    @Argument(help: "Project path (the directory to run the agent in)")
     var path: String
 
-    @Argument(parsing: .postTerminator, help: "Optional arguments appended to the claude command (pass after `--`)")
+    @Argument(parsing: .postTerminator, help: "Agent launch arguments replacing its defaults (pass after `--`)")
     var extraArgs: [String] = []
+
+    @Option(name: .customLong("agent"), help: "Agent plugin ID, e.g. codex or claude-code")
+    var pluginID: String = "codex"
 
     @OptionGroup var options: GlobalOptions
 
     func run() throws {
         let expandedPath = (path as NSString).expandingTildeInPath
-        var params: [String: JSONValue] = ["path": .string(expandedPath)]
+        var params: [String: JSONValue] = ["path": .string(expandedPath), "plugin_id": .string(pluginID)]
         if !extraArgs.isEmpty {
             params["args"] = .array(extraArgs.map { .string($0) })
         }

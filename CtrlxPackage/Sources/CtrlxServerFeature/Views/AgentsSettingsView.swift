@@ -2,6 +2,7 @@
     import AppKit
     import ClaudeCodePluginCore
     import CtrlxCommon
+    import CtrlxNetworking
     import CodexPluginCore
     import Dependencies
     import GallagerPluginProtocol
@@ -133,8 +134,8 @@
                 // a user change that races with the first render).
                 if
                     selectedAgentID.isEmpty,
-                    let first = coordinator.agentPluginList().first {
-                    selectedAgentID = first.id
+                    let defaultID = AgentLaunchDefaults.selectedID(availableIDs: coordinator.agentPluginList().map(\.id)) {
+                    selectedAgentID = defaultID
                 }
             }
             // Auto-select a freshly installed plugin in the picker.
@@ -178,9 +179,11 @@
         @MainActor
         private func performRemove(id: String) async {
             _ = await coordinator.removePlugin(id: id, deleteState: true)
-            // If the removed plugin was selected, switch to the first remaining one.
+            // If the removed plugin was selected, prefer Codex among the remaining agents.
             if selectedAgentID == id {
-                selectedAgentID = coordinator.agentPluginList().first { $0.id != id }?.id ?? ""
+                selectedAgentID = AgentLaunchDefaults.selectedID(
+                    availableIDs: coordinator.agentPluginList().map(\.id).filter { $0 != id }
+                ) ?? ""
             }
             pluginToRemove = nil
         }

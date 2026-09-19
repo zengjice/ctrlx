@@ -7,6 +7,17 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.36 — Codex as the default agent
+
+- Prefer Codex in the shared Mac/iOS directory-session form and Mac agent
+  settings. Preserve explicit choices and existing project identities; fall
+  back to an available Host agent when Codex is absent.
+- Default new session requests and the project-start API to Codex. Send the
+  CLI's choice explicitly and add `ctrlx start-project --agent` for overrides.
+- Preserve Claude attribution when decoding legacy session requests that
+  omitted the agent ID. Add default-selection and launch-API regressions.
+- No Relay redeployment or SwiftTerm update is required.
+
 ## 3.0.35 — Host directory browsing and path completion
 
 - Browse folders when starting a session on Mac (local or Viewer) and iOS,

@@ -553,8 +553,8 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
     public let configDir: String?
 
     /// Id of the plugin whose agent to launch when `workingDirectory` is supplied
-    /// (and the plugin's auto-run setting is enabled). Defaults to "claude-code"
-    /// for backward compatibility with viewers built before the plugin system.
+    /// (and the plugin's auto-run setting is enabled). New requests default to
+    /// Codex; decoding legacy viewers without a plugin ID still preserves Claude.
     public let pluginID: String
 
     /// Explicit directory launches must fail instead of silently opening a shell
@@ -567,7 +567,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         height: Int,
         workingDirectory: String? = nil,
         configDir: String? = nil,
-        pluginID: String = "claude-code",
+        pluginID: String = AgentLaunchDefaults.pluginID,
         requireAgentLaunch: Bool = false
     ) {
         self.sessionName = sessionName
@@ -1122,7 +1122,7 @@ public enum CommandType: Codable, Sendable, Equatable {
         height: Int,
         workingDirectory: String? = nil,
         configDir: String? = nil,
-        pluginID: String = "claude-code"
+        pluginID: String = AgentLaunchDefaults.pluginID
     ) -> CommandType {
         .createTmuxSession(CreateTmuxSession(
             sessionName: sessionName,

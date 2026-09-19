@@ -173,7 +173,7 @@
 
         let onProjectList: (@Sendable () async -> [[String: JSONValue]])?
         /// Parameters: (path, args, pluginID). `pluginID` defaults to
-        /// "claude-code" when callers don't specify one over the wire.
+        /// Codex when callers don't specify one over the wire.
         let onProjectStart: (@Sendable (String, [String], String) async throws -> [String: JSONValue])?
 
         /// Parameters: (sessionId, [name: optional value]). `nil` value unsets.
@@ -697,10 +697,10 @@
                         args = []
                     }
                     // Accept `plugin_id`; fall back to the legacy `agent` key for
-                    // older CLI callers, then default to "claude-code".
+                    // older CLI callers, then use the shared new-launch default.
                     let pluginID = params["plugin_id"]?.stringValue
                         ?? params["agent"]?.stringValue
-                        ?? "claude-code"
+                        ?? AgentLaunchDefaults.pluginID
                     if let result = try await onProjectStart?(path, args, pluginID) {
                         return JSONRPCResponse(id: id, result: result)
                     }

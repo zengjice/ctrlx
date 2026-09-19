@@ -1,3 +1,4 @@
+import CtrlxNetworking
 import SwiftUI
 
 /// Shared by the Mac popover and iOS picker; owns no navigation container.
@@ -28,10 +29,7 @@ public struct DirectorySessionForm: View {
     }
 
     private var agentID: String? {
-        if let selectedAgentID, agents.contains(where: { $0.id == selectedAgentID }) {
-            return selectedAgentID
-        }
-        return agents.first?.id
+        AgentLaunchDefaults.selectedID(availableIDs: agents.map(\.id), selection: selectedAgentID)
     }
 
     private var canStart: Bool {

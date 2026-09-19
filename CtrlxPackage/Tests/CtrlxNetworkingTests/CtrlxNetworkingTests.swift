@@ -700,8 +700,8 @@ struct CreateTmuxSessionTests {
         #expect(decoded.pluginID == "codex")
     }
 
-    @Test("Defaults pluginID to claude-code when omitted on init")
-    func defaultsPluginIDToClaude() {
+    @Test("Defaults pluginID to Codex when omitted on init")
+    func defaultsPluginIDToCodex() {
         let session = CreateTmuxSession(
             sessionName: "work",
             width: 80,
@@ -709,6 +709,6 @@ struct CreateTmuxSessionTests {
             workingDirectory: "/Users/test/work"
         )
 
-        #expect(session.pluginID == "claude-code")
+        #expect(session.pluginID == "codex")
     }
 }
