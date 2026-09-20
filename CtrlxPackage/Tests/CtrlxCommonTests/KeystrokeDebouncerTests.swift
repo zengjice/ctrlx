@@ -9,6 +9,26 @@ import Testing
 @Suite("KeystrokeDebouncer")
 @MainActor
 struct KeystrokeDebouncerTests {
+    @Test("Question expansion follows buffered typing in the same send queue")
+    func questionExpansionFIFO() async {
+        await withMainSerialExecutor {
+            let sent = LockIsolated<[KeystrokeDebouncer.SendOp]>([])
+            await withDependencies {
+                $0.continuousClock = TestClock()
+            } operation: {
+                let debouncer = KeystrokeDebouncer(paneId: "%7") { op in
+                    sent.withValue { $0.append(op) }
+                }
+                defer { debouncer.cancelAll() }
+                debouncer.enqueue([.text("draft")])
+                debouncer.enqueueCodexQuestionExpansion(expectedCount: 4)
+                debouncer.enqueueImmediately([.backspace])
+                await Task.megaYield()
+                #expect(sent.value == [.keys([.text("draft")]), .expandCodexQuestions(4), .keys([.backspace])])
+            }
+        }
+    }
+
     @Test("Native quote edits, toolbar navigation and subsequent typing share FIFO order")
     func quoteCaretThenToolbar() async {
         await withMainSerialExecutor {

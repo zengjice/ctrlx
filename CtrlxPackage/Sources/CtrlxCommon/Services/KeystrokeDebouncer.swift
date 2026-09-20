@@ -42,6 +42,7 @@ final public class KeystrokeDebouncer {
     enum SendOp: Equatable {
         case keys([TmuxKey])
         case rawInput(Data)
+        case expandCodexQuestions(Int)
     }
 
     public convenience init(paneId: String, relayClient: ViewerRelayClient) {
@@ -51,6 +52,8 @@ final public class KeystrokeDebouncer {
                 _ = await relayClient.sendCommand(SendKeystroke(keys), paneId: paneId)
             case let .rawInput(data):
                 _ = await relayClient.sendCommand(SendRawInput(data: data), paneId: paneId)
+            case let .expandCodexQuestions(count):
+                _ = await relayClient.sendCommand(ExpandCodexQuestions(expectedCount: count), paneId: paneId)
             }
         }
     }
@@ -115,6 +118,15 @@ final public class KeystrokeDebouncer {
         flushTask = nil
         flushBuffer()
         enqueueSendOp(.rawInput(data))
+    }
+
+    /// The guarded opener must follow already typed keys, not race them via a
+    /// second relay send task. Like keys, it does not wait for a round trip.
+    public func enqueueCodexQuestionExpansion(expectedCount: Int) {
+        flushTask?.cancel()
+        flushTask = nil
+        flushBuffer()
+        enqueueSendOp(.expandCodexQuestions(expectedCount))
     }
 
     /// Cancel any pending debounce and in-flight sends.

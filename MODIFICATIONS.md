@@ -7,6 +7,21 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.37 — Mac Codex question expansion and post-IME shortcuts
+
+- Restore Shift+arrow terminal shortcuts after committing or clearing IME
+  composition by pinning the tested SwiftTerm fix. Preserve candidate selection
+  during composition, ordinary navigation, paste and mouse selection.
+- Automatically expand Codex's recognized queued-question footer in the focused
+  Mac Host or Viewer pane, only at an empty live composer. Reuse Codex's native
+  form; never answer questions or send Return automatically.
+- Defer while typing, composing, selecting or browsing history. Serialize the
+  opener with keyboard input, validate the live screen on the Host and deduplicate
+  queue growth across viewers. Unknown layouts remain manual via Shift+Left.
+- Add footer, stale-input, multi-viewer, FIFO, post-IME and isolated tmux PTY
+  regression coverage. Update both Macs for remote auto-expansion; no Relay
+  redeployment is required, and this release adds no iOS auto-opener.
+
 ## 3.0.36 — Codex as the default agent
 
 - Prefer Codex in the shared Mac/iOS directory-session form and Mac agent

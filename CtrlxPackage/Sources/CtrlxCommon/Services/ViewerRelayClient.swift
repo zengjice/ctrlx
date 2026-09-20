@@ -557,6 +557,8 @@ final public class ViewerRelayClient {
         switch command {
         case let .sendKeystroke(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+        case let .expandCodexQuestions(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .cancelOperation(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .startTerminalStream(spec):

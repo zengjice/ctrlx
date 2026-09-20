@@ -34,6 +34,9 @@ public actor TmuxCommandExecutor {
             case let .sendKeystroke(spec):
                 try await executeSendKeystroke(paneId: command.paneId, keys: spec.keystrokes)
 
+            case let .expandCodexQuestions(spec):
+                try await tmuxService.expandCodexQuestions(paneID: command.paneId, expectedCount: spec.expectedCount)
+
             case let .sendRawInput(spec):
                 guard let data = spec.data, !data.isEmpty else {
                     throw CommandError.invalidPayload("Invalid base64 data in sendRawInput")

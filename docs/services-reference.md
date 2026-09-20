@@ -40,8 +40,38 @@ They use the existing wire format and literal tmux paths (`send-keys -H` in
 control mode, `send-keys -l --` in the process fallback), bypassing tmux root
 key bindings. Update the Mac where the keyboard input originates; an older
 host can already receive these literal bytes, and no Relay update is needed.
+Composition is determined by SwiftTerm's actual marked text (`hasMarkedText()`),
+not a separate keyboard-protocol flag: arrows remain IME-owned while choosing
+candidates, but committing or clearing the marked text restores terminal routing.
 Regression coverage: `MacTerminalInputTests`, `TmuxKeyCsiParsingTests`, and
-`LocalKeystrokeInputTests` (including isolated real-PTY checks).
+`LocalKeystrokeInputTests` (including post-IME-commit arrows and isolated real-PTY
+checks). The fork's `MacModifiedArrowTests` also covers composition cancellation,
+empty marked text, bracketed paste, and starting a new composition in both protocols.
+
+**Codex question auto-expansion (Mac Host and Mac Viewer):**
+`CodexQuestionPrompt` recognizes the live `Queued follow-up inputs / ? N questions /
+shift + ← to answer` footer immediately above Codex's known empty composer. The
+native wrapper checks a stable screen after 350 ms; only the key window's focused,
+visible terminal at the live bottom is eligible (no editor overlay, text selection,
+mouse drag or marked IME text). Typing postpones the check. It neither changes
+focus nor sends Enter/answers, and does not change the agent's working state.
+
+Local panes call `TmuxService.expandCodexQuestions`; viewers enqueue the additive
+`ExpandCodexQuestions(expectedCount:)` intent behind existing keyboard input.
+The Host checks the foreground command, cursor, copy mode and actual screen before
+sending `S-Left`. Host-wide queue-count deduplication prevents duplicate automatic
+opens from multiple viewers, tab remounts and Escape/redraws. Queue reductions
+do not auto-open; a verified empty normal composer resets the baseline. Closed
+panes discard their state. There is no polling timer or history/rollout scan.
+
+This is intentionally a conservative TUI convenience, not an App Server question
+API: unknown/localized layouts, custom empty placeholders and equal-count question
+replacements without an observed queue reduction stay manual. A missed/failed
+attempt is not retried against the same footer. Existing Shift+Left remains usable.
+For remote auto-expansion, update **both Macs**; an old Host safely rejects the new
+command (no raw-key fallback). Relay deployment is unnecessary. This change does
+not add an iOS auto-opener. Tests: `CodexQuestionExpansionTests` and
+`KeystrokeDebouncerTests.questionExpansionFIFO`.
 
 ### Editor Override (Ctrl-G)
 

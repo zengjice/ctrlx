@@ -310,6 +310,10 @@ final public class TmuxService {
     /// Current list of available panes (updated by refreshPanes)
     public private(set) var panes: [PaneInfo] = []
 
+    // Host-wide deduplication: local and remote Macs share the same opener.
+    @ObservationIgnored var codexQuestionStates: [String: CodexQuestionExpansionState] = [:]
+    @ObservationIgnored var codexQuestionChecks: Set<String> = []
+
     /// Panes grouped by tmux window (derived from panes)
     public var windows: [LocalTmuxWindow] {
         LocalTmuxWindow.groupPanes(panes)
@@ -508,6 +512,8 @@ final public class TmuxService {
     /// the snapshot contains the same pane metadata.
     private func publishPanesIfChanged(_ newPanes: [PaneInfo]) {
         guard Set(panes) != Set(newPanes) else { return }
+        let livePaneIDs = Set(newPanes.map(\.paneId))
+        codexQuestionStates = codexQuestionStates.filter { livePaneIDs.contains($0.key) }
         panes = newPanes
     }
 
@@ -3353,7 +3359,7 @@ final public class TmuxService {
         "=\(sessionName):\(windowIndex)"
     }
 
-    private func runTmuxCommand(_ arguments: [String]) async throws -> ProcessResult {
+    func runTmuxCommand(_ arguments: [String]) async throws -> ProcessResult {
         var args = arguments
 
         // Add socket path if configured

@@ -363,7 +363,10 @@
 
         override func mouseUp(with event: NSEvent) {
             let shouldActivateLink = linkGesture.mouseUp(clickCount: event.clickCount)
-            defer { lastDragPosition = nil }
+            defer {
+                lastDragPosition = nil
+                interactiveView?.scheduleQuestionCheck()
+            }
 
             if shouldActivateLink, let interactive = interactiveView {
                 let point = interactive.convert(event.locationInWindow, from: nil)
@@ -492,6 +495,13 @@
         /// Callback invoked for raw escape sequences (e.g., mouse events) that must be
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
+
+        /// Sends a guarded intent to the host, not a raw synthetic keypress.
+        var onExpandCodexQuestions: (@MainActor (Int) async -> Void)?
+        private var questionCheckTask: Task<Void, Never>?
+        private var questionCheckID: UUID?
+        private var lastQuestionCount: Int?
+        private var questionInputRevision: UInt64 = 0
 
         /// Callback invoked when the user pastes an image (Cmd+V with image clipboard
         /// contents). When set, the terminal hands the image off to the host instead
@@ -719,6 +729,7 @@
                 updateFocusBorders(in: contentView)
             }
             onBecomeFirstResponder?()
+            scheduleQuestionCheck()
             return true
         }
 
@@ -737,6 +748,17 @@
                 event.window === window,
                 window?.firstResponder === terminalView
             else { return false }
+
+            // Pause automation while the user types/composes. A manual opener
+            // consumes this queue too, so Escape won't immediately reopen it.
+            if event.keyCode == 123, event.modifierFlags.intersection([.shift, .control, .option, .command]) == .shift {
+                lastQuestionCount = currentQuestionPrompt?.count
+            }
+            questionInputRevision &+= 1
+            questionCheckTask?.cancel()
+            questionCheckTask = nil
+            questionCheckID = nil
+            scheduleQuestionCheck(delay: .seconds(1))
 
             if let controlKey = TerminalControlKeyMapper.key(
                 charactersIgnoringModifiers: event.charactersIgnoringModifiers,
@@ -786,7 +808,10 @@
                 self.keyEventMonitor = nil
             }
 
-            guard let window else { return }
+            guard let window else {
+                cancelQuestionCheck()
+                return
+            }
 
             keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
@@ -830,6 +855,7 @@
                     if window.firstResponder === self.terminalView {
                         self.terminalView.hasFocus = true
                         self.isFocused = true
+                        self.scheduleQuestionCheck()
                     }
                 }
             })
@@ -1870,6 +1896,7 @@
             terminalView.feed(byteArray: byteArray)
             extractAndClearPayloads(afterFeeding: byteArray)
             scheduleURLUnderlineUpdate(contentChanged: true)
+            scheduleQuestionCheck()
         }
 
         func feedPreservingScroll(_ bytes: ArraySlice<UInt8>) {
@@ -1884,6 +1911,68 @@
                 terminalView.scroll(toPosition: savedPosition)
             }
             scheduleURLUnderlineUpdate(contentChanged: true)
+            scheduleQuestionCheck()
+        }
+
+        // MARK: - Codex question auto-expansion
+
+        var canExpandCodexQuestions: Bool {
+            guard onExpandCodexQuestions != nil, NSApp.isActive,
+                  let window, window.isKeyWindow, window.firstResponder === terminalView,
+                  !isHiddenOrHasHiddenAncestor, !isEditorActive,
+                  !terminalView.hasMarkedText(), NSEvent.pressedMouseButtons == 0,
+                  terminalView.getSelection()?.isEmpty != false
+            else { return false }
+            return !terminalView.canScroll || terminalView.scrollPosition == 1
+        }
+
+        var currentQuestionPrompt: CodexQuestionPrompt? {
+            let terminal = getTerminal()
+            let row = terminal.buffer.y
+            guard row >= 0, row < terminal.rows else { return nil }
+            // Only the composer and its nearby footer, never scan scrollback.
+            let start = max(0, row - 8)
+            let lines = (start...row).map {
+                terminal.getLine(row: $0)?.translateToString(trimRight: true) ?? ""
+            }
+            return CodexQuestionPrompt(lines: lines, cursorRow: row - start, cursorColumn: terminal.buffer.x)
+        }
+
+        fileprivate func scheduleQuestionCheck(delay: Duration = .milliseconds(350)) {
+            guard questionCheckTask == nil, canExpandCodexQuestions,
+                  let candidate = currentQuestionPrompt,
+                  candidate.count != lastQuestionCount
+            else { return }
+            let revision = questionInputRevision
+            let checkID = UUID()
+            questionCheckID = checkID
+            questionCheckTask = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: delay) } catch { return }
+                guard let self else { return }
+                defer {
+                    if self.questionCheckID == checkID {
+                        self.questionCheckTask = nil
+                        self.questionCheckID = nil
+                        self.scheduleQuestionCheck()
+                    }
+                }
+                guard !Task.isCancelled, self.questionInputRevision == revision,
+                      self.canExpandCodexQuestions, self.currentQuestionPrompt == candidate
+                else { return }
+                self.lastQuestionCount = candidate.count
+                await self.onExpandCodexQuestions?(candidate.count)
+            }
+        }
+
+        func stopQuestionChecks() {
+            cancelQuestionCheck()
+            onExpandCodexQuestions = nil
+        }
+
+        private func cancelQuestionCheck() {
+            questionCheckTask?.cancel()
+            questionCheckTask = nil
+            questionCheckID = nil
         }
 
         func scroll(toPosition position: Double) {
@@ -1933,6 +2022,7 @@
 
         func scrolled(source: TerminalView, position: Double) {
             scheduleURLUnderlineUpdate()
+            scheduleQuestionCheck()
         }
 
         func setTerminalTitle(source: TerminalView, title: String) {

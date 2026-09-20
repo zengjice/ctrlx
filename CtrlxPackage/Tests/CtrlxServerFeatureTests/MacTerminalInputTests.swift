@@ -134,12 +134,25 @@
         }
 
         @Test("Shift+arrows reach the shared Host/Viewer input callback with modifiers",
-              arguments: ["A", "B", "C", "D"])
-        func shiftedArrowsReachPaneInput(direction: String) throws {
+              arguments: ["A", "B", "C", "D"], [false, true])
+        func shiftedArrowsReachPaneInput(direction: String, afterIMECommit: Bool) throws {
             let (window, view) = makeTerminalWindow()
             var input: [TmuxKey] = []
             view.onInput = { input.append(contentsOf: $0) }
             #expect(view.focusTerminal())
+
+            if afterIMECommit {
+                let replacement = NSRange(location: NSNotFound, length: 0)
+                view.terminalView.setMarkedText(
+                    "zhong",
+                    selectedRange: NSRange(location: 5, length: 0),
+                    replacementRange: replacement
+                )
+                view.terminalView.insertText("中", replacementRange: replacement)
+                #expect(!view.terminalView.hasMarkedText())
+                #expect(input == [.text("中")])
+                input.removeAll()
+            }
 
             let (scalar, code): (Int, UInt16)
             switch direction {

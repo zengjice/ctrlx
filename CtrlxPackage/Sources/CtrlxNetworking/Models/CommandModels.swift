@@ -425,6 +425,16 @@ public struct SendKeystroke: CommandSpec, Equatable {
     }
 }
 
+/// A guarded intent; the host rechecks Codex's live empty composer and queue.
+public struct ExpandCodexQuestions: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+    public let expectedCount: Int
+
+    public init(expectedCount: Int) { self.expectedCount = expectedCount }
+
+    public var commandType: CommandType { .expandCodexQuestions(self) }
+}
+
 /// Cancel the current operation (Ctrl+C). Returns success/failure.
 public struct CancelOperation: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
@@ -1023,6 +1033,8 @@ public struct CancelEditorSession: CommandSpec, Equatable {
 public enum CommandType: Codable, Sendable, Equatable {
     /// Send keystrokes to a tmux pane
     case sendKeystroke(SendKeystroke)
+    /// Automatically open a collapsed Codex question queue after host validation.
+    case expandCodexQuestions(ExpandCodexQuestions)
     /// Cancel current operation (Ctrl+C)
     case cancelOperation(CancelOperation)
     /// Start streaming terminal output
@@ -1244,6 +1256,7 @@ public extension CommandType {
     var requiresResponse: Bool {
         switch self {
         case .sendKeystroke,
+             .expandCodexQuestions,
              .sendRawInput,
              .stopTerminalStream:
             false

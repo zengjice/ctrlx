@@ -774,6 +774,20 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 keyCoalescer.enqueue(keys)
             }
 
+            terminalView.onExpandCodexQuestions = { [weak self] count in
+                guard let self, self.streamState == .streaming,
+                      let paneID = self.paneId, let connection = self.connection,
+                      connection.isHostConnected, connection.isRelayConnected
+                else { return }
+                // No raw-key fallback: an older host must reject this intent,
+                // rather than apply a Shift+Left to an unchecked/stale screen.
+                self.keyCoalescer.flushPending()
+                if self.keystrokeDebouncer == nil {
+                    self.keystrokeDebouncer = KeystrokeDebouncer(paneId: paneID, relayClient: connection.relayClient)
+                }
+                self.keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count)
+            }
+
             // Wire raw input (mouse escape sequences) forwarding via relay
             terminalView.onRawInput = { [weak self] data in
                 guard
@@ -825,6 +839,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         }
 
         func stop() {
+            terminalView.stopQuestionChecks()
             if let endpoint = quickActionEndpoint {
                 endpoint.invalidate()
                 let router = quickActionRouter

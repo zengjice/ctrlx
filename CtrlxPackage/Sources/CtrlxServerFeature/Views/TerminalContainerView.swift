@@ -1,6 +1,7 @@
 import AppKit
 import CtrlxCommon
 import CtrlxNetworking
+import Logging
 import SwiftTerm
 import SwiftUI
 
@@ -137,6 +138,7 @@ struct TerminalContainerView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: @unchecked Sendable {
+        private static let logger = Logger(label: "com.jicezeng.ctrlx.terminal")
         // MARK: Views
 
         let terminalView: InteractiveTerminalView
@@ -293,6 +295,26 @@ struct TerminalContainerView: NSViewRepresentable {
                 self?.keyCoalescer.enqueue(keys)
             }
 
+            terminalView.onExpandCodexQuestions = { [weak self] count in
+                guard let self else { return }
+                self.keyCoalescer.flushPending()
+                let generation = self.inputGeneration
+                await self.pendingKeyTask?.value
+                guard !Task.isCancelled, self.inputGeneration == generation,
+                      self.streamState == .connected,
+                      self.terminalView.canExpandCodexQuestions,
+                      self.terminalView.currentQuestionPrompt?.count == count,
+                      let paneID = self.paneState?.paneId, let tmux = self.tmuxService
+                else { return }
+                do {
+                    try await tmux.expandCodexQuestions(paneID: paneID, expectedCount: count)
+                } catch {
+                    // Optional convenience must not replace a healthy terminal
+                    // with an error view. The manual shortcut still works.
+                    Self.logger.debug("Codex question auto-expand skipped: \(error)")
+                }
+            }
+
             // Wire up raw input (mouse escape sequences) — same serialization chain.
             // The coalescer defers its `pendingKeyTask` chaining to the next runloop
             // turn, so flush any keys buffered earlier in *this* turn first; that
@@ -436,6 +458,7 @@ struct TerminalContainerView: NSViewRepresentable {
         }
 
         func stop() {
+            terminalView.stopQuestionChecks()
             if let endpoint = quickActionEndpoint {
                 endpoint.invalidate()
                 let router = quickActionRouter

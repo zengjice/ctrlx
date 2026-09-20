@@ -330,8 +330,8 @@
             }
         }
 
-        @Test("An isolated tmux PTY receives modified arrows verbatim", arguments: [false, true])
-        func modifiedArrowsReachRealPTY(useControlMode: Bool) async throws {
+        @Test("An isolated tmux PTY receives modified arrows verbatim", arguments: ["process", "control", "named"])
+        func modifiedArrowsReachRealPTY(transport: String) async throws {
             let tmuxPath = try #require(TmuxBinaryLocator.liveValue.find())
             let socketPath = "/tmp/ctrlx-arrows-\(UUID().uuidString.prefix(8)).sock"
             defer { killTmuxServer(tmuxPath: tmuxPath, socketPath: socketPath) }
@@ -362,7 +362,7 @@
                 )
                 #expect(bound.exitCode == 0)
                 let manager = TmuxControlClientManager(tmuxPath: tmuxPath, socketPath: socketPath)
-                if useControlMode {
+                if transport == "control" {
                     try await manager.registerPaneDimensions(
                         paneId: paneId, sessionName: "arrows", dimensions: (100, 24)
                     )
@@ -379,11 +379,15 @@
 
                 let sequence = ["D", "C", "A", "B"].map { "\u{1B}[1;2\($0)" }.joined()
                 let keys = TmuxKey.from(bytes: Data(sequence.utf8))
-                if useControlMode {
+                if transport == "control" {
                     let sent = try await manager.sendKeystrokesIfConnected(
                         paneId: paneId, sessionName: "arrows", keys: keys
                     )
                     #expect(sent)
+                } else if transport == "named" {
+                    // The guarded question opener uses tmux's named S-Left,
+                    // which must produce the same bytes as the keyboard path.
+                    try await tmux.sendBatchKeys(paneId, keys: ["S-Left", "S-Right", "S-Up", "S-Down"])
                 } else {
                     try await tmux.sendKeystrokes(paneId, keys: keys)
                 }
