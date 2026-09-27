@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CtrlX CEF Probe — local acceptance fixture</title>
+<style>
+  :root { color-scheme: dark; font: 17px system-ui; background: #161d27; color: #eaf2ff; }
+  body { max-width: 820px; margin: 48px auto; padding: 0 30px; }
+  h1 { font-size: 36px; } p { line-height: 1.6; }
+  section { padding: 24px; margin: 24px 0; border: 1px solid #536985; border-radius: 16px; }
+  button, input { font: inherit; padding: 12px; border-radius: 8px; }
+  button { background: #9aceff; color: #081c31; cursor: pointer; }
+  label { display: block; margin-bottom: 12px; }
+  #spacer { height: 650px; background: linear-gradient(#23364b, #161d27); border-radius: 16px; }
+  output { display: block; margin-top: 16px; color: #b5f4cf; }
+</style>
+<h1>CtrlX CEF Browser Probe</h1>
+<p>This is an isolated, local test page. Nothing here controls your real sessions.
+  Rendering this page is <strong>not</strong> proof that Codex or the ChatGPT extension is connected.</p>
+<section>
+  <h2>1. Read and type</h2>
+  <p>Readback marker: <strong>CTRLX-CEF-EMBEDDED-2026</strong></p>
+  <label for="message">Test message</label>
+  <input id="message" placeholder="Type a test message" autocomplete="off">
+  <button id="apply" type="button">Apply message</button>
+  <output id="result" aria-live="polite">No message applied</output>
+</section>
+<section>
+  <h2>2. Click</h2>
+  <button id="increment" type="button">Increment counter</button>
+  <output id="counter" aria-live="polite">Count: 0</output>
+  <output id="event-kind">Last click: none</output>
+</section>
+<p>3. Scroll down to the bottom marker and take a screenshot using the official browser tool.</p>
+<div id="spacer"></div>
+<section><h2>Bottom marker: EMBEDDED-BROWSER-END</h2>
+  <p>Passing requires the official tool to interact with this exact page in the embedded window,
+    not a copy opened in system Chrome. Restart persistence is a separate check.</p></section>
+<script>
+  let count = 0;
+  document.querySelector('#apply').onclick = () => {
+    document.querySelector('#result').textContent = 'Applied: ' + document.querySelector('#message').value;
+  };
+  document.querySelector('#increment').onclick = (event) => {
+    document.querySelector('#counter').textContent = 'Count: ' + (++count);
+    document.querySelector('#event-kind').textContent = 'Last click: ' + (event.isTrusted ? 'trusted' : 'synthetic');
+  };
+</script>
+</html>

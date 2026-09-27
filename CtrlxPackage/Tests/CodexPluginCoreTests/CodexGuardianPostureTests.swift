@@ -649,6 +649,26 @@ struct CodexGuardianPostureTests {
         }
     }
 
+    @Test("an inconclusive bounded scan must not suppress a prompt via an auto-review snapshot")
+    func boundedScanRetainsPermissionForm() async throws {
+        try await withCore(configTOML: autoReviewTOML) { core, _, codexHome in
+            let rollout = transcript(in: codexHome)
+            try writeRollout(at: rollout, reviewer: "auto_review")
+            _ = await core.handleIngress(frame(sessionStartJSON(transcriptPath: rollout)))
+
+            let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: rollout))
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            let response = #"{"type":"response_item","payload":{"text":"large tool output"}}"#
+            let count = CodexRolloutPostureReader.maximumScanBytes / (response.utf8.count + 1) + 1
+            try handle.write(contentsOf: Data(String(repeating: "\n" + response, count: count).utf8))
+
+            let event = try #require(await core.handleIngress(frame(permissionJSON(transcriptPath: rollout))))
+            #expect(event.state?.openForm != nil)
+            #expect(event.notification != nil)
+        }
+    }
+
     @Test("turn_context makes a mid-session guardian toggle attributable")
     func turnContextMakesMidSessionToggleAttributable() async throws {
         try await withCore(configTOML: userTOML) { core, _, codexHome in

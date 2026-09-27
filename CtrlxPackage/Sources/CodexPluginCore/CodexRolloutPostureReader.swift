@@ -13,12 +13,11 @@ import Foundation
 /// no SessionStart hook) and attributes mid-session "Approve for me"
 /// toggles to the toggling session.
 ///
-/// Reads are bounded: rollouts of multi-day threads — the exact sessions the
-/// turn_context path exists for — reach tens of MB, so the reader scans a
-/// fixed-size tail chunk first (turn contexts recur every turn, so the
-/// latest is almost always near EOF) and falls back to scanning the whole
-/// file only when a single turn appended more than the chunk after its
-/// turn_context (large tool results).
+/// Reads backward from a snapshot of EOF in fixed-size chunks, with limits
+/// on both record size and total I/O. Multi-day rollouts can exceed gigabytes;
+/// never read the whole file or follow concurrent appends. If the scan cannot
+/// finish within its limits, return `.user` (notify-anyway), NOT nil: falling
+/// back to a snapshot or an older record could suppress a real permission.
 ///
 /// Returns `nil` when the rollout carries no signal (missing file, no
 /// `turn_context` records, or a pre-0.146 record without
@@ -26,11 +25,9 @@ import Foundation
 /// heuristic. Any present-but-unrecognized value degrades toward `.user`
 /// (notify-anyway), the same fail-safe direction as `CodexConfigReader`.
 struct CodexRolloutPostureReader: Sendable {
-    /// Bytes scanned from the file tail before falling back to a full read.
-    /// turn_context records are ~300 bytes and recur at every turn spawn, so
-    /// the latest one sits within the tail unless the current turn has
-    /// appended more than this since it started.
-    private static let tailChunkBytes: UInt64 = 256 * 1024
+    static let readChunkBytes = 256 * 1024
+    static let maximumRecordBytes = 1024 * 1024
+    static let maximumScanBytes = 8 * 1024 * 1024
 
     /// What a scan of one region concluded — distinguishes "no turn_context
     /// here" (worth scanning further) from "found one, and its verdict is
@@ -47,61 +44,56 @@ struct CodexRolloutPostureReader: Sendable {
         defer { try? handle.close() }
         guard let size = try? handle.seekToEnd() else { return nil }
 
-        let tailStart = size > Self.tailChunkBytes ? size - Self.tailChunkBytes : 0
-        guard
-            (try? handle.seek(toOffset: tailStart)) != nil,
-            let tail = try? handle.readToEnd()
-        else { return nil }
+        var end = size
+        var bytesRead = 0
+        var suffix = Data()
+        while end > 0, bytesRead < Self.maximumScanBytes {
+            let count = Int(min(end, UInt64(min(Self.readChunkBytes, Self.maximumScanBytes - bytesRead))))
+            let start = end - UInt64(count)
+            guard
+                (try? handle.seek(toOffset: start)) != nil,
+                var chunk = try? handle.read(upToCount: count),
+                chunk.count == count
+            else { return .user } // Truncation/I/O failure makes this scan inconclusive.
+            bytesRead += count
+            chunk.append(suffix)
 
-        if case let .found(posture) = scan(tail, isCompleteFromStart: tailStart == 0) {
-            return posture
+            // Reassemble bytes before decoding: even a UTF-8 character or
+            // JSON record split exactly at a chunk boundary remains intact.
+            var lineEnd = chunk.endIndex
+            for index in chunk.indices.reversed() where chunk[index] == 0x0A {
+                let line = chunk[(index + 1)..<lineEnd]
+                if case let .found(posture) = scanLine(line) { return posture }
+                lineEnd = index
+            }
+            let prefix = chunk[..<lineEnd]
+            if start == 0 {
+                if case let .found(posture) = scanLine(prefix) { return posture }
+                return nil
+            }
+            // Do not skip an oversized record and accidentally use an older
+            // auto-review verdict. Bound memory even for newline-free files.
+            guard prefix.count <= Self.maximumRecordBytes else { return .user }
+            suffix = Data(prefix)
+            end = start
         }
-
-        // No turn_context in the tail. If the tail already covered the whole
-        // file there is nothing more to find; otherwise the latest record
-        // sits further back — scan the rest (rare, bounded by today's turn).
-        guard tailStart > 0 else { return nil }
-        guard
-            (try? handle.seek(toOffset: 0)) != nil,
-            let whole = try? handle.readToEnd()
-        else { return nil }
-        if case let .found(posture) = scan(whole, isCompleteFromStart: true) {
-            return posture
-        }
-        return nil
+        return end == 0 ? nil : .user
     }
 
-    /// Scans one contiguous region for the latest `turn_context` record.
-    /// `isCompleteFromStart` is false for a mid-file tail chunk, whose first
-    /// line is (in general) the torn remainder of a record and must be
-    /// dropped. The decode is deliberately lossy (`String(decoding:)`): a
-    /// concurrent append torn mid-multi-byte-character must corrupt only the
-    /// torn line (which then fails the JSON parse and is skipped), not fail
-    /// the whole region.
-    private func scan(_ data: Data, isCompleteFromStart: Bool) -> ScanResult {
-        // The lossy decode is the point: the failable initializer the rule
-        // prefers returns nil for the WHOLE region on one torn character.
+    private func scanLine(_ data: Data) -> ScanResult {
+        guard data.count <= Self.maximumRecordBytes else { return .found(.user) }
+        // A torn append only corrupts its own record, not preceding records.
         // swiftlint:disable:next optional_data_string_conversion
-        let text = String(decoding: data, as: UTF8.self)
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: true)[...]
-        if !isCompleteFromStart {
-            lines = lines.dropFirst()
+        let line = String(decoding: data, as: UTF8.self)
+        guard line.contains("\"turn_context\""), let payload = turnContextPayload(of: line) else {
+            return .noTurnContext
         }
-
-        // Newest wins: walk the candidate lines backward until one PARSES as
-        // a real turn_context. The cheap substring pre-filter also matches
-        // torn appends and records quoting "turn_context" as a value — those
-        // fail the parse and are simply scanned past.
-        for line in lines.reversed() where line.contains("\"turn_context\"") {
-            guard let payload = turnContextPayload(of: line) else { continue }
-            return .found(reviewer(of: payload))
-        }
-        return .noTurnContext
+        return .found(reviewer(of: payload))
     }
 
     /// Parses a candidate line, returning its `payload` only when the line
     /// really is a `turn_context` record.
-    private func turnContextPayload(of line: Substring) -> [String: Any]? {
+    private func turnContextPayload(of line: String) -> [String: Any]? {
         guard
             let record = try? JSONSerialization.jsonObject(with: Data(line.utf8))
                 as? [String: Any],

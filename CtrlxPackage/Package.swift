@@ -48,7 +48,7 @@ func macOnlyTargetDependencies(for target: String) -> [Target.Dependency] {
         case "CtrlxFeature":
             return [.swiftTerm]
         case "CtrlxServerFeature":
-            return [.swiftTerm, .sparkle, .textual, .projectNavigator, .files, .gitWorkbench, .gitWorkbenchGitKit]
+            return [.target(name: "CtrlxBrowserBridge", condition: .when(platforms: [.macOS])), .swiftTerm, .sparkle, .textual, .projectNavigator, .files, .gitWorkbench, .gitWorkbenchGitKit]
         case "CtrlxServerFeatureTests":
             return [.swiftTerm]
         case "CtrlxExternalServerTests":
@@ -56,7 +56,7 @@ func macOnlyTargetDependencies(for target: String) -> [Target.Dependency] {
         case "CtrlxE2E":
             return [.argumentParser]
         case "GallagerCLI":
-            return [.argumentParser, .yams]
+            return [.argumentParser, .yams, .dependencies, .dependenciesMacros]
         default:
             return []
         }
@@ -306,7 +306,7 @@ let packageDependencies: [Package.Dependency] = [
     .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.0.0"),
 ] + macOnlyDependencies()
 
-let targets: [Target] = [
+var targets: [Target] = [
     // Targets are the basic building blocks of a package, defining a module or a test suite.
     // Targets can depend on other targets in this package and products from dependencies.
 
@@ -600,6 +600,11 @@ let targets: [Target] = [
         ]
     ),
 ]
+
+#if os(macOS)
+    targets.append(.target(name: "CtrlxBrowserBridge"))
+    targets.append(.testTarget(name: "GallagerCLITests", dependencies: ["GallagerCLI", .dependenciesTestSupport]))
+#endif
 
 let package = Package(
     name: "CtrlxPackage",

@@ -307,6 +307,7 @@ final class SessionFileTabsState {
     /// so SwiftUI can compare tabs cheaply while WKWebView state survives
     /// switches between tabs/sessions.
     var browserStates: [UUID: BrowserTabState] = [:]
+    var agentBrowserStates: [UUID: AgentBrowserTabState] = [:]
 
     // MARK: - Split View State (issue #498)
 
@@ -441,6 +442,7 @@ final class SessionFileTabsState {
         for state in browserStates.values {
             state.cancelActiveDownloads()
         }
+        for state in agentBrowserStates.values { state.service.close(state) }
     }
 }
 

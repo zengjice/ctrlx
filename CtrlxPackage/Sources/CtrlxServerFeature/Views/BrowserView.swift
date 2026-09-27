@@ -26,6 +26,9 @@ struct BrowserTab: Identifiable, Equatable {
     var displayTitle: String?
     var originWindowId: String?
     var parentTabId: UUID?
+    /// Agent tabs use CEF and transient per-process grants. Never restore them
+    /// as WebKit pages or grant a new Codex control over an old process's tabs.
+    var isAgentBrowser: Bool = false
 
     init(
         id: UUID = UUID(),

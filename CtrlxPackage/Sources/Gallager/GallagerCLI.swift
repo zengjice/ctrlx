@@ -49,6 +49,7 @@ struct GallagerCLI: ParsableCommand {
             WaitReadyCommand.self,
             CapabilitiesCommand.self,
             IdentifyCommand.self,
+            BrowserCommand.self,
         ]
     )
 }

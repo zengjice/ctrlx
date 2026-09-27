@@ -358,6 +358,7 @@
 			buildPhases = (
 				815F9E592F09BFF8003791F7 /* Sources */,
 				81E2E2332F8576310057AA49 /* Copy CtrlX CLI to bundle */,
+				CBEF09220000000000000001 /* Embed Agent Browser */,
 				815F9E5A2F09BFF8003791F7 /* Frameworks */,
 				815F9E5B2F09BFF8003791F7 /* Resources */,
 				81B5E4A02F90000100000001 /* Sync Codex Skills */,
@@ -693,6 +694,18 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/scripts/sync-codex-skills.sh\"\n";
+		};
+		CBEF09220000000000000001 /* Embed Agent Browser */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			outputPaths = ();
+			name = "Embed Agent Browser";
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "bash \"${SRCROOT}/scripts/embed-agent-browser.sh\"\n";
 		};
 		81E2E2332F8576310057AA49 /* Copy CtrlX CLI to bundle */ = {
 			isa = PBXShellScriptBuildPhase;

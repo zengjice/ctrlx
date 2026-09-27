@@ -517,6 +517,12 @@ final public class TmuxService {
         panes = newPanes
     }
 
+    private static var paneListFormat: String {
+        // Keep live routing and UI parsing on the same field contract.
+        let sep = String(PaneInfo.fieldSeparator)
+        return "#{pane_id}\(sep)#{session_name}\(sep)#{window_index}\(sep)#{pane_index}\(sep)#{pane_current_command}\(sep)#{pane_current_path}\(sep)#{pane_width}\(sep)#{pane_height}\(sep)#{pane_active}\(sep)#{pane_title}\(sep)#{window_layout}\(sep)#{window_name}\(sep)#{window_active}\(sep)#{\(Self.colorOptionKey)}\(sep)#{\(Self.emojiOptionKey)}\(sep)#{\(Self.descriptionOptionKey)}\(sep)#{window_id}"
+    }
+
     /// Queries tmux and folds every signal into a single `RefreshOutcome`.
     ///
     /// Decision flow:
@@ -536,12 +542,9 @@ final public class TmuxService {
         // `PaneInfo.fieldSeparator`. Using `|` here used to break parsing as
         // soon as `pane_title` contained a `|` (Codex CLI does this when it
         // surfaces "Action Required | <session>" titles).
-        let sep = String(PaneInfo.fieldSeparator)
-        let format = "#{pane_id}\(sep)#{session_name}\(sep)#{window_index}\(sep)#{pane_index}\(sep)#{pane_current_command}\(sep)#{pane_current_path}\(sep)#{pane_width}\(sep)#{pane_height}\(sep)#{pane_active}\(sep)#{pane_title}\(sep)#{window_layout}\(sep)#{window_name}\(sep)#{window_active}\(sep)#{\(Self.colorOptionKey)}\(sep)#{\(Self.emojiOptionKey)}\(sep)#{\(Self.descriptionOptionKey)}\(sep)#{window_id}"
-
         let result: ProcessResult
         do {
-            result = try await runTmuxCommand(["list-panes", "-a", "-F", format])
+            result = try await runTmuxCommand(["list-panes", "-a", "-F", Self.paneListFormat])
         } catch {
             if isServerSocketMissing {
                 return .empty(reason: "list-panes threw + socket missing (\(error.localizedDescription))")
@@ -765,6 +768,40 @@ final public class TmuxService {
             paneInfo: paneInfo,
             processTree: tree
         )
+    }
+
+    /// Resolve the actual calling Codex, not TMUX_PANE inherited by a child or
+    /// the focused terminal. A fresh snapshot handles new/split/moved panes.
+    func agentBrowserPane(processID: Int32) async throws -> PaneInfo {
+        // UI refreshes coalesce and deduplicate linked panes. Neither behavior
+        // is valid for routing authority: an in-flight refresh can return stale
+        // (initially empty) state, and deduplication hides ambiguous sessions.
+        // Read metadata and shell PIDs together, without publishing UI state.
+        let sep = String(PaneInfo.fieldSeparator)
+        let result = try await runTmuxCommand([
+            "list-panes", "-a", "-F", "#{pane_pid}\(sep)\(Self.paneListFormat)",
+        ])
+        guard result.isSuccess else {
+            throw TmuxError.commandFailed(message: result.stderrString)
+        }
+        var current: [(pane: PaneInfo, shellPID: String)] = []
+        for line in result.stdoutString.split(separator: "\n") {
+            let fields = line.split(separator: PaneInfo.fieldSeparator, maxSplits: 1,
+                                    omittingEmptySubsequences: false)
+            guard fields.count == 2, Int32(fields[0]) != nil,
+                  let pane = PaneInfo(fromTmuxOutput: String(fields[1])) else {
+                throw TmuxError.commandFailed(message: "Invalid pane metadata while locating Agent Browser source.")
+            }
+            current.append((pane, String(fields[0])))
+        }
+        guard let tree = try await processTree() else {
+            throw AgentBrowserRoutingError.processNotInPane
+        }
+        let pid = String(processID)
+        let ids = Set(current.compactMap { info in
+            info.shellPID == pid || tree.descendants(of: info.shellPID).contains(pid) ? info.pane.paneId : nil
+        })
+        return try AgentBrowserRouting.resolve(panes: current.map(\.pane), matchingPaneIDs: ids)
     }
 
     /// Gets the names of sessions that have real terminal clients attached (excludes control-mode clients used by this app)

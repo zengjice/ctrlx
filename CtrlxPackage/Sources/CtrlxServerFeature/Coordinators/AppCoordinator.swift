@@ -44,6 +44,8 @@
         /// Tmux interaction service
         public let tmuxService: TmuxService
 
+        public let agentBrowser = AgentBrowserService()
+
         /// Pane state and session tracking manager
         public let windowManager: MirrorWindowManager
 
@@ -365,6 +367,9 @@
         public func setupAllServices() async {
             guard !isServiceSetupComplete else { return }
             isServiceSetupComplete = true
+            agentBrowser.start { [tmuxService] pid in
+                try await tmuxService.agentBrowserPane(processID: pid)
+            }
 
             // Pre-fill the editor list on first launch with whatever is installed
             // on the host. Done here rather than in `init` so the Launch Services
@@ -460,6 +465,7 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
+            await agentBrowser.shutdown()
             logger.info("App shutdown: disconnecting pane streams and control clients")
             windowManager.stopPeriodicSessionValidation()
             windowManager.stopPeriodicAgentReconciliation()

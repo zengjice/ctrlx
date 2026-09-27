@@ -6,6 +6,13 @@ import Dependencies
 import SwiftUI
 
 @main
+enum CtrlxAppEntry {
+    @MainActor static func main() {
+        AgentBrowserService.prepareApplication()
+        TmuxPaneMirrorApp.main()
+    }
+}
+
 struct TmuxPaneMirrorApp: App {
     @State private var coordinator: AppCoordinator
     @State private var showingTmuxInstallGuide: Bool

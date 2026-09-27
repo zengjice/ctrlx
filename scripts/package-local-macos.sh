@@ -33,6 +33,8 @@ SIGNING_IDENTITY="$(find_apple_development_identity "$DEVELOPMENT_TEAM")"
 
 mkdir -p "$DERIVED_DATA" "$SOURCE_PACKAGES" "$DIST_DIR"
 
+CTRLX_AGENT_BROWSER_SIGN_IDENTITY="$SIGNING_IDENTITY" bash "$SCRIPT_DIR/build-agent-browser.sh"
+
 log_info "Building CtrlX $VERSION from $PROJECT_ROOT"
 /usr/bin/xcodebuild \
     -workspace "$PROJECT_ROOT/Ctrlx.xcworkspace" \

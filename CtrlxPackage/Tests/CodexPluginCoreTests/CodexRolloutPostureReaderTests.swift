@@ -240,7 +240,7 @@ struct CodexRolloutPostureReaderTests {
         #expect(CodexRolloutPostureReader().posture(transcriptPath: rollout.path) == .autoReview)
     }
 
-    // MARK: - Large rollouts (bounded tail read + full-scan fallback)
+    // MARK: - Bounded backward scanning
 
     /// ~150 bytes per filler line; 3000 lines ≈ 450KB, comfortably past the
     /// reader's tail chunk.
@@ -258,10 +258,99 @@ struct CodexRolloutPostureReaderTests {
     @Test("a turn_context buried past the tail chunk is still found")
     func largeRolloutTurnContextBeyondTail() throws {
         // A single turn that appended more than the tail chunk after its
-        // turn_context (large tool results): the reader must fall back to
-        // scanning the rest of the file, not lose ground truth.
+        // turn_context (large tool results): continue into earlier chunks.
         try withRollout(lines: [turnContext(reviewer: "auto_review")] + filler) { reader, path in
             #expect(reader.posture(transcriptPath: path) == .autoReview)
+        }
+    }
+
+    @Test("records and newlines on either side of a chunk boundary are preserved", arguments: [0, 1, 64, 200, 400])
+    func chunkBoundaries(offset: Int) throws {
+        let tail = String(repeating: "x", count: CodexRolloutPostureReader.readChunkBytes - offset)
+        try withRollout(lines: [
+            turnContext(reviewer: "user"),
+            turnContext(reviewer: "auto_review"),
+            tail,
+        ]) { reader, path in
+            #expect(reader.posture(transcriptPath: path) == .autoReview)
+        }
+    }
+
+    @Test("a chunk boundary inside a UTF-8 character does not corrupt the record")
+    func chunkBoundaryInsideUTF8() throws {
+        let record = turnContext(reviewer: "auto_review", turnID: "你好")
+        let bytes = Array(record.utf8)
+        let characterIndex = try #require(bytes.firstIndex(of: 0xE4))
+        let bytesAfterBoundary = bytes.count - characterIndex - 1
+        let tail = String(repeating: "x", count: CodexRolloutPostureReader.readChunkBytes - bytesAfterBoundary - 1)
+        try withRollout(lines: [turnContext(reviewer: "user"), record, tail]) { reader, path in
+            #expect(reader.posture(transcriptPath: path) == .autoReview)
+        }
+    }
+
+    @Test("a newest pre-reviewer record beyond the first chunk still wins over older auto-review")
+    func latestNilBeyondTailWins() throws {
+        try withRollout(lines: [
+            turnContext(reviewer: "auto_review"),
+            turnContext(reviewer: nil),
+        ] + filler) { reader, path in
+            #expect(reader.posture(transcriptPath: path) == nil)
+        }
+    }
+
+    @Test("a valid record can span several chunks without losing its fields")
+    func recordSpansSeveralChunks() throws {
+        let record = turnContext(
+            reviewer: "auto_review",
+            turnID: String(repeating: "x", count: 2 * CodexRolloutPostureReader.readChunkBytes)
+        )
+        try withRollout(lines: [turnContext(reviewer: "user"), record, responseItem]) { reader, path in
+            #expect(reader.posture(transcriptPath: path) == .autoReview)
+        }
+    }
+
+    @Test("oversized records fail safe without accepting an older auto-review verdict", arguments: [false, true])
+    func oversizedRecordFailsSafe(trailingNewline: Bool) throws {
+        let largeRecord = "{\"type\":\"turn_context\",\"payload\":{\"approvals_reviewer\":\"user\",\"padding\":\""
+            + String(repeating: "x", count: CodexRolloutPostureReader.maximumRecordBytes) + "\"}}"
+        try withRollout(lines: [
+            turnContext(reviewer: "auto_review"),
+            largeRecord + (trailingNewline ? "\n" : ""),
+        ]) { reader, path in
+            #expect(reader.posture(transcriptPath: path) == .user)
+        }
+    }
+
+    @Test("exhausting the I/O budget returns user, not a fallback snapshot or an older record")
+    func scanBudgetFailsSafe() throws {
+        let count = CodexRolloutPostureReader.maximumScanBytes / (responseItem.utf8.count + 1) + 1
+        try withRollout(lines: [turnContext(reviewer: "auto_review")] + Array(repeating: responseItem, count: count)) { reader, path in
+            #expect(reader.posture(transcriptPath: path) == .user)
+        }
+    }
+
+    @Test("a three-GiB rollout is searched beyond its tail without reading its whole history")
+    func multiGigabyteSparseRollout() throws {
+        try withRollout(lines: []) { reader, path in
+            let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+            defer { try? handle.close() }
+            // A sparse hole exercises >32-bit offsets without consuming GiB
+            // of test disk space or allocating a huge in-memory fixture.
+            try handle.seek(toOffset: 3 * 1024 * 1024 * 1024)
+            let tail = (["", turnContext(reviewer: "auto_review")] + filler).joined(separator: "\n")
+            try handle.write(contentsOf: Data(tail.utf8))
+            #expect(reader.posture(transcriptPath: path) == .autoReview)
+        }
+    }
+
+    @Test("a multi-GiB newline-free rollout also stays bounded")
+    func multiGigabyteSparseRecord() throws {
+        try withRollout(lines: [turnContext(reviewer: "auto_review"), ""]) { reader, path in
+            let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+            defer { try? handle.close() }
+            try handle.seek(toOffset: 3 * 1024 * 1024 * 1024)
+            try handle.write(contentsOf: Data([0x78]))
+            #expect(reader.posture(transcriptPath: path) == .user)
         }
     }
 }

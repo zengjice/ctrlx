@@ -22,6 +22,7 @@ public struct MainView: View {
     /// Selection state: either a local window or a remote session (hostId + sessionName)
     @State private var selectedWindow: LocalTmuxWindow?
     @State private var terminalQuickActions = TerminalQuickActionRouter()
+    @State private var agentBrowserWorkspace = AgentBrowserWorkspace()
     @State private var selectedRemoteSession: RemoteSessionSelection?
     @State private var selectedRemoteWindowId: String?
     @State private var localSessionRenameRequest: String?
@@ -163,6 +164,9 @@ public struct MainView: View {
         .toolbar {
             toolbarContent
         }
+        .background(AgentBrowserWorkspaceAnchor(workspace: agentBrowserWorkspace))
+        .onAppear { registerAgentBrowserWorkspace() }
+        .onDisappear { coordinator.agentBrowser.unregister(agentBrowserWorkspace) }
         .task {
             // Initial load only - periodic refresh is handled by MirrorWindowManager
             await refreshPanes()
@@ -1554,7 +1558,10 @@ public struct MainView: View {
         sessionTabs: SessionFileTabsState?,
         selectedBrowserTab: BrowserTab?
     ) -> some View {
-        if
+        if let selectedBrowserTab, let state = sessionTabs?.agentBrowserStates[selectedBrowserTab.id] {
+            AgentBrowserTabContentView(state: state)
+                .id(selectedBrowserTab.id)
+        } else if
             let selectedBrowserTab,
             let session,
             let browserTabState = sessionFileTabsStates[session.sessionName]?.browserStates[selectedBrowserTab.id] {
@@ -1795,7 +1802,11 @@ public struct MainView: View {
                 .id("right-git")
                 .accessibilityIdentifier("split-right-pane")
         case let .browser(id):
-            if
+            if let state = sessionTabs.agentBrowserStates[id] {
+                AgentBrowserTabContentView(state: state)
+                    .id("right-\(id)")
+                    .accessibilityIdentifier("split-right-pane")
+            } else if
                 let tab = sessionTabs.openBrowserTabs.first(where: { $0.id == id }),
                 let tabState = sessionTabs.browserStates[id] {
                 BrowserTabContentView(
@@ -3500,6 +3511,7 @@ public struct MainView: View {
         // deallocated `BrowserTabState` can't clean up its partial files.
         tabs.browserStates[tabId]?.cancelActiveDownloads()
         tabs.browserStates.removeValue(forKey: tabId)
+        if let state = tabs.agentBrowserStates.removeValue(forKey: tabId) { state.service.close(state) }
         tabs.rightSide.remove(payload)
         if tabs.selectedRight == payload { tabs.selectedRight = nil }
         reconcileRightPaneSelection(sessionName: sessionName)
@@ -3537,6 +3549,57 @@ public struct MainView: View {
                 try? await tmuxService.selectWindow(originWindow.id)
             }
         }
+    }
+
+    // MARK: - Embedded Agent Browser
+
+    private func registerAgentBrowserWorkspace() {
+        agentBrowserWorkspace.acceptsPane = { pane in
+            tmuxService.windows.contains { $0.id == pane.windowId }
+        }
+        agentBrowserWorkspace.onCreate = { state, parent in
+            guard let window = tmuxService.windows.first(where: { $0.panes.contains { $0.paneId == state.paneID } }) else {
+                state.service.close(state); return
+            }
+            let tabs = sessionFileTabsStates[window.sessionName] ?? SessionFileTabsState()
+            sessionFileTabsStates[window.sessionName] = tabs
+            var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"),
+                originWindowId: window.id, parentTabId: parent)
+            tab.isAgentBrowser = true
+            tabs.openBrowserTabs.append(tab)
+            tabs.agentBrowserStates[state.id] = state
+            // Follow the source terminal's side, not the currently focused tab.
+            if tabs.rightSide.contains(.window(window.id)) || parent.map({ tabs.rightSide.contains(.browser($0)) }) == true {
+                tabs.rightSide.insert(.browser(state.id))
+            }
+        }
+        agentBrowserWorkspace.onChange = { state in
+            guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.agentBrowserStates[state.id] != nil }) else { return }
+            updateBrowserTabTitle(tabId: state.id, sessionName: session, title: state.title)
+            if let url = URL(string: state.url) { updateBrowserTabURL(tabId: state.id, sessionName: session, url: url) }
+        }
+        agentBrowserWorkspace.onSelect = { state in
+            guard let (session, tabs) = sessionFileTabsStates.first(where: { $0.value.agentBrowserStates[state.id] != nil }),
+                  let window = tmuxService.windows.first(where: { $0.sessionName == session && $0.panes.contains { $0.paneId == state.paneID } })
+                    ?? tmuxService.windows.first(where: { $0.sessionName == session }) else { return }
+            selectedRemoteSession = nil
+            selectedRemoteWindowId = nil
+            // A browser selection does not move terminal windows between sides.
+            // When coming from another session, select a LEFT-side terminal as
+            // the session anchor even if this agent is in the right-side one.
+            if selectedWindow?.sessionName != session {
+                selectedWindow = tmuxService.windows.first {
+                    $0.sessionName == session && !tabs.rightSide.contains(.window($0.id))
+                } ?? window
+            }
+            selectBrowserTab(state.id, sessionName: session, windowId: window.id)
+            agentBrowserWorkspace.window?.makeKeyAndOrderFront(nil)
+        }
+        agentBrowserWorkspace.onClose = { state in
+            guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.agentBrowserStates[state.id] != nil }) else { return }
+            closeBrowserTab(state.id, sessionName: session)
+        }
+        coordinator.agentBrowser.register(agentBrowserWorkspace)
     }
 
     // MARK: - Remote Browser Tab Helpers
