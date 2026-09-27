@@ -160,7 +160,7 @@ enum AgentBrowserTransport {
         return try operation(contextURL, &context)
     }
 
-    static func perform(_ arguments: [String: Any]) throws -> Any {
+    static func registeredContext() throws -> (URL, [String: Any]) {
         @Dependency(AgentBrowserProcessClient.self) var processes
         let owner = try processes.callingCodex(from: getppid(), uid: getuid())
         let context = try withRunContext(for: owner) { contextURL, context in
@@ -185,9 +185,18 @@ enum AgentBrowserTransport {
                 context["epoch"] = epoch
                 try writePrivateJSON(context, to: contextURL)
             }
-            return context
+            return (contextURL.deletingLastPathComponent(), context)
         }
         try processes.validate(owner)
+        return context
+    }
+
+    static func perform(_ arguments: [String: Any]) throws -> Any {
+        let (_, context) = try registeredContext()
+        return try perform(arguments, context: context)
+    }
+
+    static func perform(_ arguments: [String: Any], context: [String: Any]) throws -> Any {
         guard let socket = context["socket"] as? String else { throw Failure("Missing browser endpoint.") }
         // Identity cannot be overridden by a CLI command or target flag.
         var request = arguments

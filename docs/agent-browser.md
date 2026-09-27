@@ -3,7 +3,7 @@
 The existing WKWebView **New Browser** is unchanged. Agent Browser uses sandboxed
 CEF and an internal CDP adapter, embedded as native child views in CtrlX's same
 session tab strip and left/right split layout. No standalone browser window, no
-ChatGPT extension, MCP server, TCP debugging port or Relay browser control is
+ChatGPT extension, MCP server, browser-wide TCP debugging port or Relay browser control is
 involved. Apple Silicon only for this first implementation.
 
 ## Embedded routing
@@ -70,11 +70,18 @@ not a fixed sleep or disabled cookie encryption.
 
 ## Bounded page actions
 
-`browser action` now exposes 15 operations: tabs/open/read/click/type/fill/press/
-scroll/wait/select/check/screenshot/navigate/show/close. New actions reuse the
-existing exact-tab, live-runtime ownership check; there is still no arbitrary
-JavaScript or raw CDP command. Only whitelisted action arguments enter the page
-context; runtime secrets, epoch and process identity stay in the native bridge.
+The original engine remains explicitly selectable and retains this contract. The
+default managed Vercel backend adds a scoped local WebSocket transport and accessibility
+snapshots; see [dual engines](agent-browser-engines.md) for selection and limits.
+
+The original engine provides 15 operations: tabs/open/read/click/type/fill/press/
+scroll/wait/select/check/screenshot/navigate/show/close. The Vercel adapter adds
+`snapshot` (16 stable `action` operations). The separate `browser command --tab ID -- …`
+entry now exposes a bounded catalog of Vercel page capabilities including eval,
+files, network events and same-origin frames; see [dual engines](agent-browser-engines.md).
+Both entries reuse the exact-tab, live-runtime ownership check. Raw CDP and
+browser-wide control remain private; runtime secrets, epoch and process identity
+stay in the native bridge. The following details describe the original action contract.
 
 - `fill --selector … --text …` replaces a normal text input or textarea;
   an empty value clears it. `type` still inserts. Neither submits implicitly.
@@ -107,10 +114,15 @@ context; runtime secrets, epoch and process identity stay in the native bridge.
 
 Actions serialize per tab. Other tabs can operate while a wait is pending;
 closing a tab, exiting the owning agent or losing the renderer cancels the wait.
-Cross-origin frames, rich text editors, uploads/downloads and debugging remain
+For the original engine, cross-origin frames, rich text editors, uploads/downloads and debugging remain
 outside this increment. Use human interaction for unsupported widgets.
 
 ## Build and checks
+
+For the historical unmodified Vercel engine compatibility proof, see
+[upstream probe](agent-browser-upstream-probe.md). The subsequent
+[dual-engine integration](agent-browser-engines.md) uses CEF's native WebSocket
+server, not that test's Python proxy or test-only raw-CDP hook.
 
 `bash scripts/build-agent-browser.sh` builds and development-signs the native
 runtime/framework and sandboxed helpers;

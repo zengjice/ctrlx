@@ -54,7 +54,7 @@ static bool WebURL(const std::string& raw) {
 }
 
 class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
-    public CefDisplayHandler, public CefLoadHandler, public CefRequestHandler {
+    public CefDisplayHandler, public CefLoadHandler, public CefRequestHandler, public CefDownloadHandler, public CefJSDialogHandler {
  public:
   EmbeddedClient(std::string owner, NSView *container, NSDictionary *route, NSString *parent)
       : owner_(std::move(owner)), container_(container), route_(route), parent_(parent) {}
@@ -62,6 +62,19 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+  CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
+  CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
+  bool OnJSDialog(CefRefPtr<CefBrowser> browser, const CefString&, JSDialogType type,
+      const CefString& message, const CefString& defaultText, CefRefPtr<CefJSDialogCallback> callback, bool&) override {
+    return AgentBrowserDialog(browser, type, message, defaultText, callback);
+  }
+  void OnResetDialogState(CefRefPtr<CefBrowser> browser) override { AgentBrowserDialogReset(browser); }
+  bool OnBeforeDownload(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
+      const CefString&, CefRefPtr<CefBeforeDownloadCallback> callback) override {
+    return AgentBrowserDownloadBegin(browser, item, callback);
+  }
+  void OnDownloadUpdated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
+      CefRefPtr<CefDownloadItemCallback> callback) override { AgentBrowserDownloadUpdate(browser, item, callback); }
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
     browsers[browser->GetIdentifier()] = browser;
@@ -288,6 +301,7 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
 - (BOOL)finishShutdown {
   if (!self.started) return YES;
   if (!browsers.empty()) return NO;
+  if (!AgentBrowserTransportsStopped()) return NO;
   // Closing the native views does not guarantee Chromium's pending cookie
   // writes reached disk. Keep its pump alive until the cookie-store completion
   // callback, rather than shutting down the network service immediately.

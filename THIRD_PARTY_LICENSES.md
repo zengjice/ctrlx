@@ -36,6 +36,19 @@ Transitive dependencies from the Apple, Vapor, and Point-Free ecosystems are
 Apache-2.0 or MIT; the pinned set is in
 [`CtrlxPackage/Package.resolved`](CtrlxPackage/Package.resolved).
 
+## Agent Browser (macOS development runtime)
+
+| Project | License |
+|---|---|
+| [agent-browser 0.38.1](https://github.com/vercel-labs/agent-browser/tree/v0.38.1) | Apache-2.0 |
+| [Chromium Embedded Framework](https://github.com/chromiumembedded/cef) | BSD-3-Clause; Chromium third-party licenses |
+
+The pinned upstream executable is unmodified. Its full LICENSE is bundled in
+`Resources/AgentBrowserEngine/LICENSE.txt`; CEF's LICENSE and CREDITS are bundled
+alongside it. The native runtime's distribution archive gate remains in place;
+the upstream binary's complete transitive-license audit and hardened-runtime
+distribution checks are still required before enabling that gate.
+
 ## Website
 
 | Project | License |

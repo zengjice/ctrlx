@@ -3,6 +3,7 @@
 #include "Ownership.h"
 #include "PageActions.h"
 #include "PageKeys.h"
+#include "EngineServer.h"
 #include <libproc.h>
 #include <sys/proc.h>
 #include <cerrno>
@@ -25,6 +26,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 constexpr size_t kMaxRequest = 65536;
 constexpr size_t kMaxResponse = 8 * 1024 * 1024;
+int engineServers = 0; // CEF UI RunLoop only, including shutdown completion.
 
 std::string JSON(id value) {
   NSData* data = [NSJSONSerialization dataWithJSONObject:value
@@ -73,6 +75,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if (![data writeToFile:endpoint options:NSDataWritingAtomic error:nil] ||
         chmod(endpoint.fileSystemRepresentation, 0600)) { Stop(); return false; }
     fprintf(stderr, "[agent-browser] ready\n");
+    StartEngineServer();
     Tick();
     return true;
   }
@@ -101,8 +104,17 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Stop() {
     CEF_REQUIRE_UI_THREAD();
+    for (const auto& [connection, token] : engineConnections_) EngineDetach(token);
     if (listener_ >= 0) close(listener_);
     listener_ = -1;
+    if (engineServer_) engineServer_->Shutdown();
+    engineServer_ = nullptr;
+    engineConnections_.clear();
+    engineGrants_.clear();
+    enginePending_.clear();
+    engineDownloads_.clear();
+    engineDownloadPaths_.clear();
+    engineDialogs_.clear();
     for (auto& [id, client] : clients_) close(client.fd);
     clients_.clear();
     pending_.clear();
@@ -121,6 +133,7 @@ class Bridge final : public CefDevToolsMessageObserver {
   void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_id,
                              bool success, const void* result, size_t size) override {
     CEF_REQUIRE_UI_THREAD();
+    if (EngineResult(browser, message_id, success, result, size)) return;
     auto it = pending_.find({browser->GetIdentifier(), message_id});
     if (it == pending_.end()) return;
     auto pending = std::move(it->second);
@@ -170,6 +183,7 @@ class Bridge final : public CefDevToolsMessageObserver {
         url.host.length && !url.user && !url.password;
   }
   void Reap() {
+    ReapEngine();
     bool changed = false;
     for (auto& [id, run] : ownership_.runs) {
       if (run.active && !Alive(run)) { ownership_.Revoke(id); changed = true; }
@@ -195,6 +209,18 @@ class Bridge final : public CefDevToolsMessageObserver {
     }
     return true;
   }
+#include "EngineBridge.inc"
+ public:
+  void OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* data, size_t size) override {
+    EngineEvent(browser, method, data, size);
+#if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
+    ProbeDevToolsEvent(browser, method, data, size);
+#endif
+  }
+#if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
+  // Isolated compatibility fixture only; never enabled by product builds.
+#include "tests/UpstreamProbe.inc"
+#endif
  public:
   NSArray* Groups() {
     NSMutableArray* result = [NSMutableArray array];
@@ -219,6 +245,8 @@ class Bridge final : public CefDevToolsMessageObserver {
     return it == tabs_.end() ? nullptr : it->second.browser;
   }
   bool Busy(CefRefPtr<CefBrowser> browser) {
+    for (const auto& [key, pending] : enginePending_)
+      if (key.first == browser->GetIdentifier()) return true;
     for (auto& [id, client] : clients_)
       if (client.busy && client.browser && client.browser->IsSame(browser)) return true;
     return false;
@@ -446,6 +474,10 @@ class Bridge final : public CefDevToolsMessageObserver {
       Reply(id, nil, @"Instance not authorized or browser restarted. Launch a new Codex instance."); return;
     }
     client.run = run.UTF8String;
+    if (AttachEngine(id, request)) return;
+#if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
+    if (HandleUpstreamProbe(id, request)) return;
+#endif
     if ([command isEqual:@"tabs"]) {
       NSMutableArray* tabs = [NSMutableArray array];
       for (NSDictionary* tab in Tabs())
@@ -639,4 +671,16 @@ NSArray* AgentBrowserTabs() { return bridge ? bridge->Tabs() : @[]; }
 CefRefPtr<CefBrowser> AgentBrowserTarget(NSString* tab) { return bridge ? bridge->Target(tab) : nullptr; }
 bool AssignAgentBrowserTab(NSString* tab, NSString* run) { return bridge && bridge->Assign(tab, run); }
 bool AgentBrowserTabBusy(CefRefPtr<CefBrowser> browser) { return bridge && bridge->Busy(browser); }
+bool AgentBrowserDownloadBegin(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item, CefRefPtr<CefBeforeDownloadCallback> callback) {
+  return bridge ? bridge->DownloadBegin(browser, item, callback) : true;
+}
+void AgentBrowserDownloadUpdate(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item, CefRefPtr<CefDownloadItemCallback> callback) {
+  if (bridge) bridge->DownloadUpdate(browser, item, callback);
+}
+bool AgentBrowserDialog(CefRefPtr<CefBrowser> browser, cef_jsdialog_type_t type, const CefString& message,
+    const CefString& defaultText, CefRefPtr<CefJSDialogCallback> callback) {
+  return bridge && bridge->DialogBegin(browser, type, message, defaultText, callback);
+}
+void AgentBrowserDialogReset(CefRefPtr<CefBrowser> browser) { if (bridge) bridge->DialogReset(browser); }
 void StopAgentBrowser() { if (bridge) bridge->Stop(); bridge = nullptr; }
+bool AgentBrowserTransportsStopped() { return engineServers == 0; }

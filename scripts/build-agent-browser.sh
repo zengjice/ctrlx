@@ -39,4 +39,5 @@ for ab_component in "$AB_OUTPUT"/Frameworks/*; do
   codesign --force --deep --sign "$AB_IDENTITY" "$ab_component"
   codesign --verify --deep --strict "$ab_component"
 done
+bash "$AB_REPO/scripts/prepare-agent-browser-engine.sh"
 printf 'Built: %s\n' "$AB_OUTPUT"
