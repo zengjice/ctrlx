@@ -61,7 +61,8 @@ def json_examples(path):
 class SkillResources(unittest.TestCase):
     def test_entrypoints_stay_small(self):
         skills = list(SKILLS.glob("*/SKILL.md"))
-        self.assertEqual(len(skills), 2)
+        self.assertEqual({path.parent.name for path in skills},
+                         {"agent-browser", "ctrlx-cli", "create-agent-plugin"})
         for path in skills:
             with self.subTest(skill=path.parent.name):
                 text = path.read_text()

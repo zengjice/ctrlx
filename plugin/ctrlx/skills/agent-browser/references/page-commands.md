@@ -33,6 +33,34 @@ back/forward/reload/pushstate, highlight, diff snapshot, local/session storage,
 page-host cookies get/set, network route/unroute, headers/HTTP credentials/offline,
 device/media/geo settings. Use `ctrlx browser command --help` for the root catalog.
 
+## Running page JavaScript
+
+Pass the JavaScript expression as one quoted argument to `eval`; the command
+returns the evaluated result. For multiple statements, use an IIFE with an
+explicit return. For example, after reading the current page:
+
+```sh
+ctrlx browser command --tab <id> -- eval '(() => {
+  const headings = Array.from(document.querySelectorAll("h1, h2"), el => el.textContent);
+  return {title: document.title, headings};
+})()'
+```
+
+This is the webpage's JavaScript environment (`window`, `document`, page APIs),
+not a Node.js/Playwright/Puppeteer script runner. There is no injected `page` or
+`browser` object, Node `require` or local filesystem API. Page `fetch` uses the
+page's origin/permissions and may carry its login; it is not permission to send
+data elsewhere. For user-like input/clicks use action/page commands: DOM changes
+and events dispatched by JavaScript are not trusted user input.
+
+Code is passed inline, not via `--file` or `--stdin`; the public command input
+limit is 48,000 UTF-8 bytes. Keep execution short (native deadline 10 seconds,
+CLI deadline 30 seconds), return only needed data, and inspect state after a
+timeout instead of repeating a potentially completed mutation. This scoped
+`eval` does not expose raw CDP or other agents' tabs.
+
+## Adapter limits
+
 Limits that differ from standalone upstream:
 
 - Explicit tab required; command calls always use Vercel. No implicit focused-tab fallback.
