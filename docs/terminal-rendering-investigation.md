@@ -2,6 +2,43 @@
 
 > **Historical status (PR #179):** The first fix moved live terminal bytes to `pipe-pane`, resolving corruption in the original String-based `%output` parser. In September 2026, terminal content moved back to control mode. The September 8 findings below correct two holes in that transition: connection identity and capture atomicity. `pipe-pane` remains scan-only for OSC side effects. The older diagrams and hypotheses below are historical; see `streaming-architecture.md` for the current data flow.
 
+## Host resync subscription races (September 28, 2026)
+
+An intermittent report described input reaching tmux but not appearing in the
+Host mirror or remote viewers until reopening the session. A live test did not
+capture a persistent stall, but deterministic tests against a private tmux server
+reproduced two defects in the shared Host `PaneStreamManager`:
+
+1. `runResyncLoop` copied `ReaderContext` before awaiting a dimension query, then
+   wrote the entire old value back. A subscriber joining during that await could
+   receive its initial snapshot yet disappear from the live delivery set. The
+   same write resurrected removed subscriber IDs and reverted changed titles.
+2. Resync suppressed live output pane-wide but sent its replacement snapshot only
+   to the subscriber IDs present at the start. Even after fixing the stale write,
+   a newly ready subscriber missed output between its own snapshot and the shared
+   resync boundary.
+
+The fix rereads the current reader after the await, verifies its identity and
+cancellation/shutdown state, and updates only dimensions. The resync snapshot
+and its buffered tail go to all currently ready subscribers. Subscribers still
+bootstrapping continue buffering raw output against their own snapshot boundary;
+the pane-wide tail must not be appended to those private buffers a second time.
+Capture failure also notifies newly ready subscribers affected by suppression.
+
+`PaneStreamConsistencyTests` pauses one dimension response through the existing
+`ProcessRunner` dependency while retaining real tmux capture, manager subscription
+logic and headless SwiftTerm rendering. Coverage includes join/leave, title
+changes, resize- and backpressure-triggered resync, query failure, shutdown,
+output during the suspended resync, and repeated resyncs during concurrent joins
+and Chinese output. Tests compare final terminal cells with tmux, not just counts.
+
+Rollout is **Host Mac only**: rebuild/restart the Mac running the sessions and
+reconnect mirrors. No iOS/Viewer protocol, Relay, SwiftTerm, selection or resize
+policy changes are involved. This establishes the repaired race mechanisms, not
+proof that every historical display failure has the same cause. A separate
+mistaken GUI-as-CLI second process was observed but not established as causal;
+this fix does not stop or otherwise alter that process.
+
 ## 3.0.28 (September 11, 2026): Mac selection disappears during output
 
 The affected Mac's Codex panes reported zero for `mouse_standard_flag`,

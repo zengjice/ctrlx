@@ -157,6 +157,226 @@
             }
         }
 
+        @Test("Joining during resync retains live output", arguments: ResyncTrigger.allCases, [false, true])
+        func joiningDuringResync(trigger: ResyncTrigger, dimensionQueryFails: Bool) async throws {
+            let gate = DimensionQueryGate()
+            try await withPane(dimensionGate: gate) { fixture in
+                let existing = CapturedTerminal(cols: fixture.pane.width, rows: fixture.pane.height)
+                var resets = 0
+                let first = try await fixture.streams.subscribe(
+                    paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                    onData: { existing.feed($0) },
+                    onResync: { result in
+                        if case let .success(snapshot) = result {
+                            existing.replace(with: snapshot)
+                            resets += 1
+                        }
+                    }
+                )
+                existing.feed(first.initialContent)
+                await gate.arm(failOnResume: dimensionQueryFails)
+                trigger.request(fixture, subscriptionId: first.subscriptionId)
+                try await waitUntil { await gate.isPaused }
+
+                // Complete the new subscriber's own snapshot while the older
+                // resync still holds a pre-await copy of the reader context.
+                let joining = CapturedTerminal(cols: fixture.pane.width, rows: fixture.pane.height)
+                let second = try await fixture.streams.subscribe(
+                    paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                    onData: { joining.feed($0) },
+                    onResync: { result in
+                        if case let .success(snapshot) = result { joining.replace(with: snapshot) }
+                    }
+                )
+                joining.feed(second.initialContent)
+                #expect(joining.text == (try await fixture.visibleText()))
+                // Output after the newcomer's snapshot but before the shared
+                // resync boundary must not vanish when that boundary commits.
+                try await fixture.write("\r\nDURING_RESYNC\r\n")
+                await gate.release()
+                try await waitUntil { resets > 0 }
+
+                try await fixture.write("\r\nAFTER_RESYNC 中文输入\r\n")
+                try await waitUntil { existing.text.contains("AFTER_RESYNC") && joining.text.contains("AFTER_RESYNC") }
+                let expected = try await fixture.visibleText()
+                #expect(existing.text == expected)
+                #expect(joining.text == expected)
+                #expect(joining.text.components(separatedBy: "AFTER_RESYNC").count - 1 == 1)
+                await fixture.streams.unsubscribe(first.subscriptionId)
+                await fixture.streams.unsubscribe(second.subscriptionId)
+                #expect(!fixture.streams.hasActiveStream(paneId: fixture.pane.paneId))
+            }
+        }
+
+        @Test("Resync preserves unsubscribe and title changes across await", arguments: [false, true])
+        func leavingDuringResync(dimensionQueryFails: Bool) async throws {
+            let gate = DimensionQueryGate()
+            try await withPane(dimensionGate: gate) { fixture in
+                var resets = 0
+                var removedSubscriberCallbacks = 0
+                let first = try await fixture.streams.subscribe(
+                    paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                    onData: { _ in },
+                    onResync: { if case .success = $0 { resets += 1 } }
+                )
+                let leaving = try await fixture.streams.subscribe(
+                    paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                    onData: { _ in removedSubscriberCallbacks += 1 },
+                    onResync: { _ in removedSubscriberCallbacks += 1 }
+                )
+                await gate.arm(failOnResume: dimensionQueryFails)
+                fixture.streams.requestResync(subscriptionId: first.subscriptionId)
+                try await waitUntil { await gate.isPaused }
+                await fixture.streams.unsubscribe(leaving.subscriptionId)
+                removedSubscriberCallbacks = 0
+                fixture.streams.reportTitleChange(
+                    paneId: fixture.pane.paneId, title: "CHANGED_DURING_RESYNC",
+                    fromSubscription: first.subscriptionId
+                )
+                await gate.release()
+                try await waitUntil { resets == 1 }
+
+                #expect(fixture.streams.terminalTitle(for: fixture.pane.paneId) == "CHANGED_DURING_RESYNC")
+                #expect(removedSubscriberCallbacks == 0)
+                await fixture.streams.unsubscribe(first.subscriptionId)
+                // A removed ID resurrected only in ReaderContext otherwise
+                // leaves a ghost active stream with no callback or owner.
+                #expect(!fixture.streams.hasActiveStream(paneId: fixture.pane.paneId))
+                #expect(fixture.streams.activeStreamPaneIds.isEmpty)
+            }
+        }
+
+        @Test("Shutdown during a suspended resync cannot publish a stale snapshot")
+        func shutdownDuringResync() async throws {
+            let gate = DimensionQueryGate()
+            try await withPane(dimensionGate: gate) { fixture in
+                var resets = 0
+                let first = try await fixture.streams.subscribe(
+                    paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                    onData: { _ in }, onResync: { _ in resets += 1 }
+                )
+                await gate.arm()
+                fixture.streams.requestResync(subscriptionId: first.subscriptionId)
+                try await waitUntil { await gate.isPaused }
+                let shutdown = Task { await fixture.streams.disconnectAll() }
+                // Teardown cancels and drains the in-flight resync before
+                // removing its reader. Do not release until cancellation wins.
+                try await waitUntil { await gate.cancellationObserved }
+                await gate.release()
+                await shutdown.value
+                #expect(resets == 0)
+                #expect(fixture.streams.dimensions(for: fixture.pane.paneId) == nil)
+            }
+        }
+
+        enum ResyncTrigger: CaseIterable, Sendable {
+            case backpressure, resize
+
+            @MainActor fileprivate func request(_ fixture: Fixture, subscriptionId: UUID) {
+                switch self {
+                case .backpressure:
+                    fixture.streams.requestResync(subscriptionId: subscriptionId)
+                case .resize:
+                    fixture.streams.updateDimensions(
+                        paneId: fixture.pane.paneId, width: fixture.pane.width + 1, height: fixture.pane.height
+                    )
+                }
+            }
+        }
+
+        @Test("Continuous output survives overlapping bootstraps and repeated resyncs")
+        func outputAcrossRepeatedResyncs() async throws {
+            try await withPane { fixture in
+                let firstTerminal = CapturedTerminal(cols: fixture.pane.width, rows: fixture.pane.height)
+                let first = try await fixture.streams.subscribe(
+                    paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                    onData: { firstTerminal.feed($0) },
+                    onResync: { result in
+                        if case let .success(snapshot) = result { firstTerminal.replace(with: snapshot) }
+                    }
+                )
+                firstTerminal.feed(first.initialContent)
+                let writer = Task { @MainActor in
+                    for revision in 1...80 {
+                        try Task.checkCancellation()
+                        try await fixture.tmux.sendRawBytes(
+                            fixture.pane.paneId, data: Data("\r\nRESYNC_ROW_\(revision) 中文".utf8)
+                        )
+                        if revision.isMultiple(of: 4) {
+                            fixture.streams.requestResync(subscriptionId: first.subscriptionId)
+                        }
+                    }
+                }
+                do {
+                    var terminals = [firstTerminal]
+                    for _ in 0..<10 {
+                        let rendered = CapturedTerminal(cols: fixture.pane.width, rows: fixture.pane.height)
+                        let subscription = try await fixture.streams.subscribe(
+                            paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                            onData: { rendered.feed($0) },
+                            onResync: { result in
+                                if case let .success(snapshot) = result { rendered.replace(with: snapshot) }
+                            }
+                        )
+                        rendered.feed(subscription.initialContent)
+                        terminals.append(rendered)
+                    }
+                    try await writer.value
+                    try await fixture.write("\r\nCOMPOSER_READY\r\n")
+                    try await waitUntil { terminals.allSatisfy { $0.text.contains("COMPOSER_READY") } }
+                    let expected = try await fixture.visibleText()
+                    for rendered in terminals { #expect(rendered.text == expected) }
+                } catch {
+                    writer.cancel()
+                    _ = try? await writer.value
+                    throw error
+                }
+            }
+        }
+
+        /// Suspend exactly one dimension response using the existing process
+        /// dependency; snapshots, subscriptions and byte delivery remain real.
+        private actor DimensionQueryGate {
+            private var armed = false
+            private var failOnResume = false
+            private var continuation: CheckedContinuation<Void, Never>?
+            var isPaused: Bool { continuation != nil }
+            private(set) var cancellationObserved = false
+
+            func arm(failOnResume: Bool = false) {
+                armed = true
+                self.failOnResume = failOnResume
+            }
+
+            func pauseIfArmed() async throws {
+                guard armed else { return }
+                armed = false
+                await withTaskCancellationHandler {
+                    await withCheckedContinuation { continuation = $0 }
+                } onCancel: {
+                    Task { await self.recordCancellation() }
+                }
+                if failOnResume { throw FixtureError.dimensionQueryFailed }
+            }
+
+            private func recordCancellation() { cancellationObserved = true }
+
+            func release() {
+                armed = false
+                continuation?.resume()
+                continuation = nil
+            }
+        }
+
+        private func waitUntil(_ predicate: @MainActor () async throws -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            repeat {
+                if try await predicate() { return }
+                try await Task.sleep(for: .milliseconds(10))
+            } while ContinuousClock.now < deadline
+            throw FixtureError.outputTimeout
+        }
+
         @Test("A changing screen and its cursor are captured from the same instant", arguments: [0, 1_000])
         func captureDoesNotMixCursorAndScreenRevisions(scrollback: Int) async throws {
             try await withPane { fixture in
@@ -194,7 +414,10 @@
             }
         }
 
-        private func withPane(_ operation: @MainActor (Fixture) async throws -> Void) async throws {
+        private func withPane(
+            dimensionGate: DimensionQueryGate? = nil,
+            _ operation: @MainActor (Fixture) async throws -> Void
+        ) async throws {
             let tmuxPath = try #require(TmuxBinaryLocator.liveValue.find())
             let socketPath = "/tmp/ctrlx-consistency-\(UUID().uuidString.prefix(8)).sock"
             // tmux pane IDs restart at %0 on each server. A private socket
@@ -204,7 +427,14 @@
             try FileManager.default.createDirectory(at: fifoDirectory, withIntermediateDirectories: false)
             defer { try? FileManager.default.removeItem(at: fifoDirectory) }
             try await withDependencies {
-                $0[ProcessRunner.self] = .liveValue
+                let live = ProcessRunner.liveValue
+                $0[ProcessRunner.self] = ProcessRunner(run: { executable, arguments, environment, timeout in
+                    let result = try await live.run(executable, arguments, environment, timeout)
+                    if arguments.last == "#{pane_width} #{pane_height}" {
+                        try await dimensionGate?.pauseIfArmed()
+                    }
+                    return result
+                })
             } operation: {
                 let runner = ProcessRunner.liveValue
                 func run(_ arguments: [String]) async throws -> ProcessResult {
@@ -229,11 +459,13 @@
                     try await fixture.waitForText("CTRLX_READY")
                     try await operation(fixture)
                 } catch {
+                    await dimensionGate?.release()
                     await streams.disconnectAll()
                     await clients.disconnectAll()
                     _ = try? await run(["kill-server"])
                     throw error
                 }
+                await dimensionGate?.release()
                 await streams.disconnectAll()
                 await clients.disconnectAll()
                 _ = try await run(["kill-server"])
@@ -241,7 +473,7 @@
         }
 
         @MainActor
-        private struct Fixture {
+        fileprivate struct Fixture {
             let tmux: TmuxService
             let clients: TmuxControlClientManager
             let streams: PaneStreamManager
@@ -276,7 +508,7 @@
             }
         }
 
-        private enum FixtureError: Error { case outputTimeout }
+        private enum FixtureError: Error { case outputTimeout, dimensionQueryFailed }
 
         @MainActor
         private final class CapturedTerminal: TerminalDelegate {
@@ -287,6 +519,12 @@
             }
 
             func feed(_ data: Data) { terminal.feed(byteArray: Array(data)) }
+
+            func replace(with snapshot: PaneStreamManager.SubscriptionResult) {
+                terminal = Terminal(delegate: self)
+                terminal.resize(cols: snapshot.width, rows: snapshot.height)
+                feed(snapshot.initialContent)
+            }
 
             var cursorLine: String {
                 terminal.getLine(row: terminal.buffer.y)?.translateToString(trimRight: true, skipNullCellsFollowingWide: true)

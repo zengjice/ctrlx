@@ -1096,9 +1096,19 @@
 
         private func forwardData(paneId: String, data: Data) {
             if resyncingPaneIds.contains(paneId) {
-                guard var bootstrap = resyncBootstraps[paneId] else { return }
-                _ = bootstrap.route(data)
-                resyncBootstraps[paneId] = bootstrap
+                if var bootstrap = resyncBootstraps[paneId] {
+                    _ = bootstrap.route(data)
+                    resyncBootstraps[paneId] = bootstrap
+                }
+                // Pending subscriptions have their own snapshot boundaries.
+                // Keep feeding their private buffers, even while live mirrors
+                // are suppressed behind the pane-wide resync boundary.
+                for subscriberId in readers[paneId]?.subscriberIds ?? [] {
+                    guard var subscription = subscriptions[subscriberId],
+                          subscription.bootstrap.isCollecting else { continue }
+                    _ = subscription.bootstrap.route(data)
+                    subscriptions[subscriberId] = subscription
+                }
                 return
             }
             guard let context = readers[paneId] else { return }
@@ -1184,14 +1194,23 @@
             while !Task.isCancelled {
                 guard
                     pendingResyncRequests.hasRequests(paneId: paneId),
-                    var context = readers[paneId]
+                    let originalContext = readers[paneId]
                 else { return }
                 // Consume this round before suspending. A new request from the
                 // same subscriber must remain visible for a following capture.
                 let targets = pendingResyncRequests.take(paneId: paneId)
 
                 resyncBootstraps[paneId] = PaneSubscriptionBootstrap()
-                if let dimensions = try? await tmuxService.getPaneDimensions(context.target) {
+                let dimensions = try? await tmuxService.getPaneDimensions(originalContext.target)
+                // MainActor is reentrant across the query. Never write back the
+                // pre-await context: subscribers may have joined/left, or the
+                // title/session metadata may have changed while it was pending.
+                // Revalidate even on query failure and do not revive a reader
+                // whose resync was cancelled by teardown.
+                guard !Task.isCancelled, !isShuttingDown,
+                      var context = readers[paneId],
+                      context.reader === originalContext.reader else { return }
+                if let dimensions {
                     context.width = dimensions.width
                     context.height = dimensions.height
                     readers[paneId] = context
@@ -1223,7 +1242,9 @@
                     )
                 } catch {
                     if Task.isCancelled { return }
-                    let failureTargets = targets.union(pendingResyncRequests.take(paneId: paneId))
+                    let failureTargets = targets
+                        .union(readers[paneId]?.subscriberIds ?? [])
+                        .union(pendingResyncRequests.take(paneId: paneId))
                     for subscriptionId in failureTargets {
                         guard let subscription = subscriptions[subscriptionId],
                               !subscription.bootstrap.isCollecting else { continue }
@@ -1236,7 +1257,8 @@
                     return
                 }
 
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, !isShuttingDown,
+                      readers[paneId]?.reader === context.reader else { return }
                 guard var bootstrap = resyncBootstraps[paneId], bootstrap.hasSnapshotBoundary else {
                     logger.error("Missing ordered snapshot boundary", metadata: [
                         "paneId": "\(paneId)",
@@ -1245,7 +1267,11 @@
                 }
 
                 TerminalTransportMetrics.shared.recordResync()
-                for subscriptionId in targets {
+                // Output was suppressed pane-wide, including for subscribers
+                // that finished joining during capture. All currently live
+                // subscribers must receive this snapshot before the tail.
+                let currentSubscriberIds = readers[paneId]?.subscriberIds ?? []
+                for subscriptionId in currentSubscriberIds {
                     guard let subscription = subscriptions[subscriptionId],
                           !subscription.bootstrap.isCollecting else { continue }
                     subscription.onResync?(.success(SubscriptionResult(
@@ -1263,7 +1289,13 @@
                 resyncBootstraps.removeValue(forKey: paneId)
                 resyncingPaneIds.remove(paneId)
                 if !postSnapshotData.isEmpty {
-                    forwardData(paneId: paneId, data: postSnapshotData)
+                    for subscriptionId in currentSubscriberIds {
+                        guard let subscription = subscriptions[subscriptionId],
+                              !subscription.bootstrap.isCollecting else { continue }
+                        // Collecting subscriptions already buffered these bytes
+                        // against their private boundary; never append twice.
+                        subscription.onData(postSnapshotData)
+                    }
                 }
 
                 guard pendingResyncRequests.hasRequests(paneId: paneId) else { return }
