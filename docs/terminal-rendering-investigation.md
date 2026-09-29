@@ -2,6 +2,67 @@
 
 > **Historical status (PR #179):** The first fix moved live terminal bytes to `pipe-pane`, resolving corruption in the original String-based `%output` parser. In September 2026, terminal content moved back to control mode. The September 8 findings below correct two holes in that transition: connection identity and capture atomicity. `pipe-pane` remains scan-only for OSC side effects. The older diagrams and hypotheses below are historical; see `streaming-architecture.md` for the current data flow.
 
+## 3.0.38 Mac regression: black first frame and blurry text (September 29, 2026)
+
+A second Apple Silicon Mac on macOS 27 showed a black terminal until scrolling,
+then visibly blurry text. Ordinary shell tabs were affected too, so Codex's TUI,
+tmux mouse mode and the remote transport were not prerequisites. A standalone
+native-window probe reproduced both defects locally against SwiftTerm `e21a8f5`:
+
+- The new `TerminalDisplayLayer` replaced AppKit's default backing layer but
+  retained the default view redraw policy. AppKit consumed ordinary view
+  invalidations without drawing: the initial frame and a later plain text feed
+  both produced zero `draw` calls. Explicit layer invalidation (including a
+  DEC 2026 end) could mask the black frame.
+- The custom layer stayed at `contentsScale == 1` in a 2x Retina window. Once
+  drawn, it rasterized at 1x; scaling the result caused the blurry text.
+
+The previously installed local app was a `3.0.37 / 20260929-045206` development
+build, not the published `3.0.38 / 20260929-062024` artifact. Both included the
+custom-layer code. A working local view was therefore not evidence against this
+regression, and artifact/signature/hash checks did not exercise first paint.
+
+The minimal correction is pinned at SwiftTerm `a2fe20899518a9d66200065d124c62fa4cd6be15`
+and belongs in its **Mac** `TerminalView`: explicitly
+use `.onSetNeedsDisplay`, initialize the layer's pixel scale, and synchronize it
+on window attachment and backing-property changes. Invalidate after a scale
+change without resetting the font, terminal grid, cursor, selection or buffer.
+Keep the DEC 2026 display barrier and stable caret; do not add periodic refresh,
+forced scrolling, input replay, transport resubscription or a renderer switch.
+
+The earlier presentation tests explicitly called `layer.display()` or
+`displayIfNeeded()`, which bypassed the missing native invalidation path. New
+`MacBackingLayerLifecycleTests` use real windows (including a SwiftUI host),
+service the native run loop **and yield the main executor**, and never force a
+layer display to obtain the result. They cover ordinary first/next frames,
+Retina scale, 1x/2x changes, window reparenting, hidden-tab restoration, resize,
+sync-end and sync timeout without further output. Existing pixel/caret/Metal
+tests still guard against exposing incomplete synchronized frames.
+
+Validation checkpoint: the same nine lifecycle tests failed against `e21a8f5`
+and passed against `a2fe208` (the first-frame test also covers both AppKit and
+SwiftUI hosts). Full SwiftTerm regression passed: 515 Swift Testing tests and
+81 XCTest tests. CtrlX's focused rendering, input, selection, sizing and scroll
+regression passed: 208 tests. The workspace Mac Release build and
+`codesign --verify --deep --strict` passed using the remotely resolved fixed pin.
+Logs: `/tmp/ctrlx-mac-backing-{baseline,green,swiftterm-full,integration-tests,release-build}.log`.
+The SwiftTerm fix was committed and pushed; this validation did not install or
+publish CtrlX, deploy Relay, or commit the CtrlX worktree.
+
+Rollout is Mac display clients: update a Mac used locally or as a Viewer.
+There is no Relay change, iOS rendering change or protocol migration. Passing
+local native-window tests is not a substitute for acceptance on the affected Mac.
+
+Release preparation for **3.0.39**: boundary checks, all ten offline Mac
+publisher tests, the website build and the iOS device-target compile passed.
+The full CtrlX test invocation finished with 2,197 passing tests and the same
+two `StopFinalityEvaluations` failures as 3.0.38: Apple Intelligence reports
+`deviceNotEligible` on this Mac. This is an environment-limited eval run, not
+an all-green full suite; no other test failed. Mac-only publication does not
+require a local Docker engine, Linux lock regeneration or a Relay deployment.
+No iOS package/install is part of this patch release. Release preparation logs:
+`/tmp/ctrlx-3.0.39-{unit-tests,website-build,ios-compile}.log`.
+
 ## Fullscreen scroll feel, without disabling Codex's new TUI (September 29, 2026)
 
 The user confirmed smoother scrolling with `codex --no-alt-screen` but wants to

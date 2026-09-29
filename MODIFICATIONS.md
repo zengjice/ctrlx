@@ -7,6 +7,19 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.39 — Mac terminal first-frame and Retina correction
+
+- Correct the custom SwiftTerm backing layer's native redraw policy so local
+  and Viewer Mac terminals paint their first frame and ordinary output without
+  scrolling or waiting for a synchronized-output boundary.
+- Keep the backing layer's pixel scale aligned with its window on attachment
+  and screen changes; preserve terminal dimensions, selection, cursor and the
+  synchronized-presentation/stable-caret improvements.
+- Add native-window lifecycle regressions, including SwiftUI hosting and
+  Retina scaling, rather than relying only on forced offscreen layer drawing.
+- Mac display-client correction only; no Relay deployment or iOS reinstall
+  is required for this issue.
+
 ## 3.0.38 — Fullscreen terminal interaction and embedded Agent Browser
 
 - Keep Codex's fullscreen transcript and fixed composer. Correct precise
