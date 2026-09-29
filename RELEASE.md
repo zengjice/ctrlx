@@ -18,7 +18,27 @@ Sparkle stays disabled in the application until a CtrlX feed URL and EdDSA
 public key are supplied in ignored `Config/Local-macOS.xcconfig`. Gallager's
 feed, key and domains are never fallback values.
 
-## Publish the hosted Relay and macOS package
+## Publish only the macOS package
+
+For the existing Qcloud private-distribution channel, follow the sibling
+`CTRLX_QCLOUD_RELEASE_RUNBOOK.md` section 5 and use:
+
+```bash
+../publish-ctrlx-macos.py --check
+../publish-ctrlx-macos.py --yes
+```
+
+Prepare a tested, clean, pushed `main` commit and matching `v<version>` tag
+first. This path uses `scripts/package-local-macos.sh` (Apple Development
+signature, not notarized), verifies the DMG and atomically updates the Qcloud
+installer. It does not install locally or redeploy the Relay.
+
+Mac-only packaging does not require a local Docker engine or OrbStack. A change
+confined to Apple-only dependencies, such as the SwiftTerm revision, does not
+make Linux lock generation a prerequisite for this path. Refresh and validate
+the Linux lock before a later Relay build if its manifest hash is stale.
+
+## Publish the hosted Relay and macOS package together
 
 Production Relay and installer hosting run on Qcloud. Their host-specific
 automation, topology, and credentials stay outside this public repository. On a

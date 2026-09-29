@@ -606,6 +606,7 @@
             LiveTerminalView(
                 paneId: pane.paneId,
                 hostId: hostId,
+                scrollingAgentID: pane.agentSession?.pluginID,
                 responseState: .constant(nil),
                 terminalTitle: Binding(
                     get: { terminalTitles[pane.paneId] },

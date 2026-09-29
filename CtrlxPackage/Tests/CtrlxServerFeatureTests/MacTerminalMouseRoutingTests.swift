@@ -258,6 +258,73 @@
             #expect(rawInput.isEmpty)
         }
 
+        @Test("Codex fullscreen trackpad distance is compensated, physical wheel is unchanged", arguments: [false, true])
+        func codexWheelDistance(precise: Bool) throws {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[1]
+            view.scrollingAgentID = "codex"
+            view.feed(byteArray: Array("\u{1b}[?1049h".utf8)[...])
+            enableMouseMode(1002, in: view)
+            var raw = Data()
+            var keys: [TmuxKey] = []
+            view.onRawInput = { raw.append($0) }
+            view.onInput = { keys += $0 }
+            let recipient = try mouseRecipient(in: view)
+            recipient.scrollWheel(with: TerminalTestScrollEvent(
+                window: window, location: view.terminalView.convert(NSPoint(x: 20, y: 500), to: nil), modifiers: [],
+                delta: precise ? view.cellSize.height * 12 : 4, precise: precise
+            ))
+            #expect(view.isMouseModeActive)
+            #expect(String(decoding: raw, as: UTF8.self).components(separatedBy: "\u{1b}[<64;").count - 1 == 4)
+            #expect(keys.isEmpty)
+        }
+
+        @Test("Inline Codex and other fullscreen TUIs keep their sensitivity", arguments: ["codex", "claude-code"])
+        func uncompensatedModes(agent: String) throws {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[1]
+            view.scrollingAgentID = agent
+            if agent != "codex" { view.feed(byteArray: Array("\u{1b}[?1049h".utf8)[...]) }
+            enableMouseMode(1002, in: view)
+            var raw = Data()
+            view.onRawInput = { raw.append($0) }
+            try mouseRecipient(in: view).scrollWheel(with: TerminalTestScrollEvent(
+                window: window, location: view.terminalView.convert(NSPoint(x: 20, y: 500), to: nil), modifiers: [], delta: view.cellSize.height * 3, precise: true
+            ))
+            #expect(String(decoding: raw, as: UTF8.self).components(separatedBy: "\u{1b}[<64;").count - 1 == 3)
+        }
+
+        @Test("Trackpad start forgets the last gesture but native momentum retains its remainder")
+        func trackpadPhases() throws {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[1]
+            view.scrollingAgentID = "codex"
+            view.feed(byteArray: Array("\u{1b}[?1049h".utf8)[...])
+            enableMouseMode(1002, in: view)
+            var raw: [Data] = []
+            view.onRawInput = { raw.append($0) }
+            let recipient = try mouseRecipient(in: view)
+            func wheel(rows: CGFloat, phase: NSEvent.Phase = [], momentum: NSEvent.Phase = []) {
+                recipient.scrollWheel(with: TerminalTestScrollEvent(
+                    window: window, location: view.terminalView.convert(NSPoint(x: 20, y: 500), to: nil), modifiers: [], delta: view.cellSize.height * rows,
+                    precise: true, phase: phase, momentum: momentum
+                ))
+            }
+            wheel(rows: 2, phase: .began)
+            wheel(rows: 1, phase: .began)
+            #expect(raw.isEmpty)
+            wheel(rows: 0, phase: .ended)
+            wheel(rows: 2, momentum: .began)
+            #expect(raw.count == 1)
+            wheel(rows: 2, momentum: .changed)
+            wheel(rows: 0, momentum: .ended)
+            wheel(rows: 1, phase: .began)
+            #expect(raw.count == 1)
+        }
+
         private func makeTerminalWindow() -> (NSWindow, [InteractiveTerminalView]) {
             _ = NSApplication.shared
             let window = NSWindow(
@@ -350,13 +417,25 @@
         private let targetWindowNumber: Int
         private let point: NSPoint
         private let flags: NSEvent.ModifierFlags
+        private let delta: CGFloat
+        private let precise: Bool
+        private let eventPhase: NSEvent.Phase
+        private let momentum: NSEvent.Phase
 
         @MainActor
-        init(window: NSWindow, location: NSPoint, modifiers: NSEvent.ModifierFlags) {
+        init(
+            window: NSWindow, location: NSPoint, modifiers: NSEvent.ModifierFlags,
+            delta: CGFloat = 1, precise: Bool = false,
+            phase: NSEvent.Phase = [], momentum: NSEvent.Phase = []
+        ) {
             targetWindow = window
             targetWindowNumber = window.windowNumber
             point = location
             flags = modifiers
+            self.delta = delta
+            self.precise = precise
+            eventPhase = phase
+            self.momentum = momentum
             super.init()
         }
 
@@ -367,8 +446,10 @@
         override var windowNumber: Int { targetWindowNumber }
         override var locationInWindow: NSPoint { point }
         override var modifierFlags: NSEvent.ModifierFlags { flags }
-        override var scrollingDeltaY: CGFloat { 1 }
+        override var scrollingDeltaY: CGFloat { delta }
         override var scrollingDeltaX: CGFloat { 0 }
-        override var hasPreciseScrollingDeltas: Bool { false }
+        override var hasPreciseScrollingDeltas: Bool { precise }
+        override var phase: NSEvent.Phase { eventPhase }
+        override var momentumPhase: NSEvent.Phase { momentum }
     }
 #endif

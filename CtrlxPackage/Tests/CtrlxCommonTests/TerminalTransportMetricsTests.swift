@@ -72,6 +72,16 @@ struct TerminalTransportMetricsTests {
         #expect(snapshot.timings[.localInputToFeed]?.count == 1)
     }
 
+    @Test("Raw input queue and send timings are separately aggregated")
+    func rawInputTimings() {
+        let metrics = TerminalTransportMetrics(label: "raw-test")
+        metrics.recordDuration(.rawInputQueueWait, since: .now)
+        metrics.recordDuration(.rawInputSend, since: .now)
+        metrics.recordDuration(.rawInputSend, since: .now)
+        #expect(metrics.snapshot().timings[.rawInputQueueWait]?.count == 1)
+        #expect(metrics.snapshot().timings[.rawInputSend]?.count == 2)
+    }
+
     @Test("Duplicate input stages are ignored")
     func duplicateLocalInputStages() {
         let metrics = TerminalTransportMetrics(label: "test")

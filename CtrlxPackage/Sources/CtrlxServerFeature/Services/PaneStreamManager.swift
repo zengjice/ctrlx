@@ -317,6 +317,22 @@
             )
         }
 
+        /// Raw mouse input uses the same existing session connection as keys.
+        /// Only `false` permits the caller to use the process fallback.
+        func sendRawBytesIfConnected(
+            paneId: String,
+            data: Data,
+            onFirstCommandWritten: (@Sendable () -> Void)? = nil
+        ) async throws -> Bool {
+            guard let context = readers[paneId] else { return false }
+            return try await controlClientManager.sendRawBytesIfConnected(
+                paneId: paneId,
+                sessionName: context.sessionName,
+                data: data,
+                onFirstCommandWritten: onFirstCommandWritten
+            )
+        }
+
         /// Known default pane titles to filter out when seeding from tmux state.
         /// Tmux initializes `pane_title` to the system hostname, which may appear
         /// in various forms depending on the system configuration.

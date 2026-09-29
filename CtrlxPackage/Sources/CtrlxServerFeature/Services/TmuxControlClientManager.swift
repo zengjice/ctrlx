@@ -240,6 +240,33 @@
             guard let commands = TmuxControlInputEncoder.commands(paneId: paneId, keys: keys) else {
                 return false
             }
+            return try await sendInputCommandsIfConnected(
+                commands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten
+            )
+        }
+
+        /// Shares the keyboard transport without creating another control client
+        /// or spawning one tmux process per scroll event. A thrown error must NOT
+        /// trigger fallback: bytes may already have reached the pane.
+        func sendRawBytesIfConnected(
+            paneId: String,
+            sessionName: String,
+            data: Data,
+            onFirstCommandWritten: (@Sendable () -> Void)? = nil
+        ) async throws -> Bool {
+            guard let commands = TmuxControlInputEncoder.commands(paneId: paneId, rawBytes: data) else {
+                return false
+            }
+            return try await sendInputCommandsIfConnected(
+                commands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten
+            )
+        }
+
+        private func sendInputCommandsIfConnected(
+            _ commands: [String],
+            sessionName: String,
+            onFirstCommandWritten: (@Sendable () -> Void)?
+        ) async throws -> Bool {
             guard !commands.isEmpty else { return true }
             guard let client = clients[sessionName], await client.isConnected else { return false }
 

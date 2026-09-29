@@ -171,10 +171,11 @@
 
         private var trackingArea: NSTrackingArea?
 
-        /// Accumulated scroll delta for smooth mouse-wheel event generation.
-        /// Trackpad events deliver fractional deltas; we accumulate them and
-        /// emit one scroll event per line crossed.
-        private var scrollAccumulator: CGFloat = 0
+        private var scrollAccumulator = TerminalMouseScrollAccumulator()
+
+        func resetScrollGesture() {
+            scrollAccumulator.reset()
+        }
 
         /// Last terminal cell that generated a drag SGR sequence.
         /// Used to suppress redundant events when the cursor stays in the same cell.
@@ -225,10 +226,14 @@
         }
 
         override func scrollWheel(with event: NSEvent) {
+            if event.phase.contains(.began) || event.phase.contains(.cancelled)
+                || event.momentumPhase.contains(.ended) {
+                scrollAccumulator.reset()
+            }
             // When mouse mode is active, synthesize SGR mouse wheel escape sequences
-            // and batch them into a single onRawInput call. This is critical because
-            // each onRawInput spawns one tmux subprocess — batching N scroll lines
-            // into one call avoids N separate process forks.
+            // and batch them into a single onRawInput call. The Host reuses its
+            // existing control connection; batching preserves event order while
+            // avoiding one command (or fallback process) per crossed line.
             if
                 let interactive = interactiveView,
                 interactive.shouldReportMouseEvent(event),
@@ -236,39 +241,24 @@
                 let deltaY = event.scrollingDeltaY
                 guard deltaY != 0 else { return }
 
-                // Reset accumulator on direction change for responsive reversal.
-                if (scrollAccumulator > 0) != (deltaY > 0) {
-                    scrollAccumulator = 0
-                }
-
-                scrollAccumulator += deltaY
-
                 let point = tv.convert(event.locationInWindow, from: nil)
                 let terminal = tv.getTerminal()
+                guard interactive.cellSize.width > 0, interactive.cellSize.height > 0,
+                      terminal.cols > 0, terminal.rows > 0 else { return }
                 let col = min(max(0, Int(point.x / interactive.cellSize.width)), terminal.cols - 1)
                 let row = min(max(0, Int((tv.frame.height - point.y) / interactive.cellSize.height)), terminal.rows - 1)
 
-                // Build batched SGR mouse scroll sequences. Each line crossed
-                // produces one ESC[<button;col;rowM sequence. They're concatenated
-                // into a single Data and sent as one tmux send-keys -H call.
-                //
-                // NSEvent.scrollingDeltaY semantics depend on the device:
-                // - Mouse wheel (hasPreciseScrollingDeltas == false): delta is
-                //   already in *lines*, so the threshold is 1.
-                // - Trackpad (hasPreciseScrollingDeltas == true): delta is in
-                //   *points* (pixels). We divide by the terminal cell height so
-                //   one cell-row of pixel scroll becomes one line event — the
-                //   scroll rate then matches what the user sees visually. Without
-                //   this, a modest swipe of ~40pt would emit ~40 line events and
-                //   the terminal would leap dozens of lines at once.
-                let lineThreshold: CGFloat = event.hasPreciseScrollingDeltas
-                    ? max(interactive.cellSize.height, 1)
+                // Trackpads report points, including AppKit's native momentum.
+                // Compensate for Codex's three-row wheel step; do not amplify
+                // motion threefold or add a second momentum implementation.
+                // Discrete mouse wheels still send one packet per notch.
+                let threshold = event.hasPreciseScrollingDeltas
+                    ? max(Double(interactive.cellSize.height), 1) * TerminalMouseScroll.rowsPerEvent(
+                        agentID: interactive.scrollingAgentID,
+                        alternateScreen: terminal.isCurrentBufferAlternate
+                    )
                     : 1
-                var lines = 0
-                while abs(scrollAccumulator) >= lineThreshold {
-                    lines += 1
-                    scrollAccumulator -= scrollAccumulator > 0 ? lineThreshold : -lineThreshold
-                }
+                let lines = abs(scrollAccumulator.consume(delta: Double(deltaY), pointsPerEvent: threshold))
                 guard lines > 0 else { return }
 
                 // Preserve modifiers, including Shift when explicitly captured by the app.
@@ -284,7 +274,7 @@
                 interactive.onRawInput?(Data(batch.utf8))
                 return
             }
-            scrollAccumulator = 0
+            scrollAccumulator.reset()
             if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
                 onHorizontalScroll?(-event.scrollingDeltaX)
             } else {
@@ -495,6 +485,14 @@
         /// Callback invoked for raw escape sequences (e.g., mouse events) that must be
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
+
+        /// Pane metadata, not text/title matching. Used only for precise wheel
+        /// sensitivity while the terminal is in the alternate screen.
+        var scrollingAgentID: String? {
+            didSet {
+                if oldValue != scrollingAgentID { scrollOverlay?.resetScrollGesture() }
+            }
+        }
 
         /// Sends a guarded intent to the host, not a raw synthetic keypress.
         var onExpandCodexQuestions: (@MainActor (Int) async -> Void)?

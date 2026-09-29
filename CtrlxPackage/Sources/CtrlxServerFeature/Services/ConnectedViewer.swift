@@ -775,6 +775,7 @@ final public class ConnectedViewer: Identifiable {
                     let handler = onCommand
                     let previous = pendingFireAndForget
                     let generation = connectionGeneration.current
+                    let queuedAt = ContinuousClock.now
                     pendingFireAndForget = Task { [weak self] in
                         _ = await previous?.value
                         guard
@@ -783,6 +784,9 @@ final public class ConnectedViewer: Identifiable {
                             self.connectionGeneration.isCurrent(generation),
                             self.isViewerConnected
                         else { return }
+                        if case .sendRawInput = command.command {
+                            TerminalTransportMetrics.shared.recordDuration(.rawInputQueueWait, since: queuedAt)
+                        }
                         _ = await handler(command)
                     }
                 }

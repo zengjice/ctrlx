@@ -3039,7 +3039,10 @@
             }
 
             // Create command executor
-            let executor = TmuxCommandExecutor(tmuxService: tmuxService)
+            let executor = TmuxCommandExecutor(tmuxService: tmuxService) { [weak paneStreamManager] paneId, data in
+                guard let paneStreamManager else { return false }
+                return try await paneStreamManager.sendRawBytesIfConnected(paneId: paneId, data: data)
+            }
             commandExecutor = executor
 
             // Set up command handler - called when any viewer sends a command

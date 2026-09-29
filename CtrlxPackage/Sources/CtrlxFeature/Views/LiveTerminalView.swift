@@ -15,6 +15,7 @@
     struct LiveTerminalView: View {
         let paneId: String
         let hostId: String
+        let scrollingAgentID: String?
 
         /// Binding to the response state for displaying response options above the terminal
         @Binding var responseState: ResponseState?
@@ -109,6 +110,7 @@
         init(
             paneId: String,
             hostId: String,
+            scrollingAgentID: String? = nil,
             responseState: Binding<ResponseState?>,
             terminalTitle: Binding<String?>,
             clipboardContent: Binding<String?> = .constant(nil),
@@ -133,6 +135,7 @@
         ) {
             self.paneId = paneId
             self.hostId = hostId
+            self.scrollingAgentID = scrollingAgentID
             self._responseState = responseState
             self._terminalTitle = terminalTitle
             self._clipboardContent = clipboardContent
@@ -423,6 +426,7 @@
                     )
                     TerminalStreamContainerView(
                         terminalState: state,
+                        scrollingAgentID: scrollingAgentID,
                         inputEnabled: inputPresentation.inputEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
                         onInput: { keys in
@@ -1219,6 +1223,7 @@
     /// independently from the software keyboard.
     private struct TerminalStreamContainerView: UIViewRepresentable {
         let terminalState: TerminalState
+        let scrollingAgentID: String?
 
         /// Whether this terminal owns the input accessory and accepts input.
         let inputEnabled: Bool
@@ -1262,6 +1267,7 @@
             // Wire up input callback
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
+            terminalView.scrollingAgentID = scrollingAgentID
 
             // Create an outer scroll view and a passive canvas. The canvas may
             // grow to fill the phone, but the SwiftTerm view itself must always
@@ -1402,6 +1408,7 @@
             // first render.
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
+            terminalView.scrollingAgentID = scrollingAgentID
 
             context.coordinator.updateInteraction(
                 inputEnabled: inputEnabled,

@@ -259,6 +259,7 @@ struct TerminalContainerView: NSViewRepresentable {
             onTitleChange: TerminalTitleChangeHandler?
         ) {
             self.paneState = paneState
+            terminalView.scrollingAgentID = paneState.agentSession?.pluginID
             self.paneStreamManager = paneStreamManager
             self.tmuxService = tmuxService
             self.onStateChange = onStateChange
@@ -323,15 +324,24 @@ struct TerminalContainerView: NSViewRepresentable {
                 guard let self, let paneState = self.paneState else { return }
                 self.quickActionEndpoint?.recordInput()
                 self.keyCoalescer.flushPending()
+                let token = self.transportMetrics.beginLocalInput(
+                    paneId: paneState.paneId, acceptedAt: .now
+                )
                 let generation = self.inputGeneration
                 let byteCount = data.count
                 self.addPendingInput(byteCount: byteCount, paneId: paneState.paneId)
                 let previous = self.pendingKeyTask
                 self.pendingKeyTask = Task { @MainActor [weak self] in
                     _ = await previous?.value
-                    guard let self, !Task.isCancelled, self.inputGeneration == generation else { return }
+                    guard let self, !Task.isCancelled, self.inputGeneration == generation else {
+                        self?.transportMetrics.discardLocalInput(token)
+                        return
+                    }
                     defer { self.removePendingInput(byteCount: byteCount, paneId: paneState.paneId) }
-                    await self.sendRawBytesToTmux(data, target: paneState.target)
+                    self.transportMetrics.recordLocalInput(token, stage: .sendStarted)
+                    await self.sendRawBytesToTmux(
+                        data, paneId: paneState.paneId, target: paneState.target, metricsToken: token
+                    )
                 }
             }
 
@@ -401,13 +411,39 @@ struct TerminalContainerView: NSViewRepresentable {
             }
         }
 
-        private func sendRawBytesToTmux(_ data: Data, target: String) async {
-            guard let tmuxService else { return }
+        private func sendRawBytesToTmux(
+            _ data: Data,
+            paneId: String,
+            target: String,
+            metricsToken: TerminalTransportMetrics.LocalInputToken
+        ) async {
+            guard let tmuxService else {
+                transportMetrics.failLocalInput(metricsToken)
+                return
+            }
 
+            let started = ContinuousClock.now
+            defer { transportMetrics.recordDuration(.rawInputSend, since: started) }
             do {
-                try await tmuxService.sendRawBytes(target, data: data)
+                let sentThroughControlMode = if let paneStreamManager {
+                    try await paneStreamManager.sendRawBytesIfConnected(
+                        paneId: paneId,
+                        data: data,
+                        onFirstCommandWritten: { [metrics = transportMetrics] in
+                            metrics.recordLocalInput(metricsToken, stage: .tmuxWrite)
+                        }
+                    )
+                } else {
+                    false
+                }
+                if !sentThroughControlMode {
+                    transportMetrics.recordLocalInput(metricsToken, stage: .tmuxWrite)
+                    try await tmuxService.sendRawBytes(target, data: data)
+                }
+                transportMetrics.recordLocalInput(metricsToken, stage: .tmuxAcknowledged)
                 consecutiveKeyFailures = 0
             } catch {
+                transportMetrics.failLocalInput(metricsToken)
                 consecutiveKeyFailures += 1
                 print("Failed to send raw bytes to tmux: \(error)")
 
@@ -445,6 +481,7 @@ struct TerminalContainerView: NSViewRepresentable {
         /// so updating the stored state is sufficient — no closure re-wiring needed.
         func updatePaneState(_ newState: PaneState) {
             paneState = newState
+            terminalView.scrollingAgentID = newState.agentSession?.pluginID
         }
 
         func bindQuickActions(_ router: TerminalQuickActionRouter?, onFocus: (@MainActor () -> Void)?) {

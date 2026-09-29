@@ -20,6 +20,8 @@ final public class TerminalTransportMetrics: Sendable {
         case encryption
         case webSocketSend
         case terminalFeed
+        case rawInputSend
+        case rawInputQueueWait
         case localInputToFlush
         case localInputToSend
         case localInputToWrite
@@ -34,7 +36,7 @@ final public class TerminalTransportMetrics: Sendable {
         case tmuxAcknowledged = 2
     }
 
-    /// Opaque identifier for one coalesced local keyboard-input batch.
+    /// Opaque identifier for one local keyboard or raw-input batch.
     public struct LocalInputToken: Hashable, Sendable {
         fileprivate let id: UInt64
         fileprivate let paneId: String

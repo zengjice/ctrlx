@@ -37,6 +37,35 @@ iOS-only regression suite. The sections below retain historical implementation
 examples; old minimum-terminal-height constraints, scroll-blocking flags and
 fixed-delay presentation snippets are **not** the current implementation.
 
+## Application-owned fullscreen scrolling (September 29, 2026)
+
+Mouse-mode pans send SGR wheel input to the Host app instead of scrolling the
+inner terminal's local history. For known Codex panes in the alternate screen,
+each wheel event moves three transcript rows in Codex 0.158.0, so a precise drag
+crosses three cell heights per event. This shares `TerminalMouseScroll` with
+both Mac display paths; ordinary terminals and other agents are unchanged.
+The source is pane `agentSession.pluginID`, not displayed text or a launch flag.
+
+Codex pans keep the initial touch coordinates while the finger moves, preventing
+the fixed composer from swallowing later wheel input. The `.ended` translation
+is consumed as well. Release starts short, capped momentum via a weak-target
+`CADisplayLink` in common run-loop modes. `TerminalScrollDeceleration` integrates
+the native fast decay rate by elapsed time and cancels after a stalled clock;
+there is no backlog of synthetic intermediate images or terminal frames.
+Mac keeps AppKit's existing momentum, without adding another coast.
+
+New touches stop momentum before gesture recognition. Keyboard/toolbar input,
+selection, inactive input, changed agent/mouse/alternate modes, view detach and
+teardown cancel it; background ticks do not send events. Horizontal scrolling,
+native single-tap cursor routing, multi-tap copy/selection, and inline scrollback
+retain their owners. The existing input FIFO is still the only send queue.
+
+This improves distance and fling handling, but SGR has no fractional-distance
+field and Codex still steps three rows. No claim of pixel-smooth or measured
+60-fps remote scrolling follows from these changes. iPhone subjective acceptance
+is required in addition to the pure motion tests, Mac native tests and iOS test
+compilation. See `terminal-rendering-investigation.md` for evidence and rollout.
+
 ## Deferred input focus (multi-pane hang)
 
 Four iPhone Air watchdog reports on September 13, 2026 showed the same cycle:
@@ -239,6 +268,48 @@ quotes, Chinese text inside, then Right/tap outside and type more; repeat after
 a wrapped-line tap, paste, voice input and switching panes.
 
 ## Cursor placement by single tap
+
+### Mouse-reporting TUIs (September 29, 2026)
+
+Codex 0.158.0 was observed enabling mouse reporting on the Host. Previously,
+iOS disabled both automatic SwiftTerm mouse clicks and arrow-based cursor
+placement in this mode: a single tap produced neither kind of input. The
+same iOS client could therefore work against older Codex and fail after a
+Host-side Codex upgrade. This is independent of the Host raw-input fast path.
+
+Completed single taps now have exactly one owner:
+
+- Existing selection consumes the tap; it cannot click through. Links still
+  open locally, without also sending a terminal click.
+- In mouse mode, an active, focused, mounted input view on the live screen
+  sends a primary-button press/release. SwiftTerm encodes the negotiated mouse
+  protocol; CtrlX collects its synchronous writes into **one raw-input batch**
+  through the existing ordered input queue. X10 tracking sends press only.
+  Coordinates are relative to the terminal's live screen, not the outer phone
+  viewport or scrollback. Off-grid/history taps and marked-text composition
+  cannot send clicks. The remote TUI owns hit testing, including multiline and
+  wide-character cursor placement; CtrlX sends no speculative arrow fallback.
+- With mouse reporting off, the existing arrow-based navigation below remains
+  unchanged. No agent-name/version heuristic is used.
+
+SwiftTerm's automatic mouse reporting remains disabled for gestures: only the
+shared single-tap handler opts into the new path. Double/triple tap selection,
+long press, URL handling and mouse-wheel pans retain their existing arbitration.
+A native click starts a fresh keyboard shadow context without deleting remote
+draft text. No global mouse preference, scrolling/inertia, layout, Host, Relay,
+wire protocol or SwiftTerm fork change is needed. Rollout is **iOS only**.
+
+`TerminalContentTapRoutingTests` covers all selection/link/input/mode/live-screen
+combinations. `TerminalMouseClickTests` parses real mode sequences in SwiftTerm
+and checks exact press/release bytes, protocol changes, alternate-screen redraw,
+history offsets, grid bounds and pixel reporting. iOS-only
+`TerminalSelectionRoutingTests` additionally checks the real view's raw batch,
+IME/focus/history gates, unchanged multi-tap selection and the legacy arrow path.
+An isolated real Codex 0.158.0/tmux probe verified insertion at clicked positions
+in unsent single-line, explicit-multiline, Chinese and soft-wrapped drafts;
+this verifies Codex's mouse handling, not end-to-end iPhone gesture delivery.
+
+### Mouse-off cursor navigation
 
 - The original same-row shortcut is retained. Cross-row taps additionally need
   a recognizable live input surface: a prompt (`›`, `❯`, or `>`) with a shaded

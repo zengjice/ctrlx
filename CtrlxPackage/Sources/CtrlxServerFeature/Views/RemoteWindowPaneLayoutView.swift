@@ -121,6 +121,7 @@ struct RemoteWindowPaneLayoutView: View {
             hostName: connection.hostName,
             connection: connection,
             settings: settings,
+            scrollingAgentID: pane.agentSession?.pluginID,
             showStatusBar: false,
             isEditorActive: pane.editorSession != nil,
             onOpenURL: onOpenURL
@@ -162,6 +163,7 @@ struct RemoteWindowPaneLayoutView: View {
                 hostName: connection.hostName,
                 connection: connection,
                 settings: settings,
+                scrollingAgentID: paneState.agentSession?.pluginID,
                 showStatusBar: false,
                 isEditorActive: paneState.editorSession != nil,
                 autoFocus: isSingle || isActiveInTmux,

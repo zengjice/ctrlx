@@ -2,6 +2,175 @@
 
 > **Historical status (PR #179):** The first fix moved live terminal bytes to `pipe-pane`, resolving corruption in the original String-based `%output` parser. In September 2026, terminal content moved back to control mode. The September 8 findings below correct two holes in that transition: connection identity and capture atomicity. `pipe-pane` remains scan-only for OSC side effects. The older diagrams and hypotheses below are historical; see `streaming-architecture.md` for the current data flow.
 
+## Fullscreen scroll feel, without disabling Codex's new TUI (September 29, 2026)
+
+The user confirmed smoother scrolling with `codex --no-alt-screen` but wants to
+keep the new fullscreen transcript/fixed composer. Do **not** change the launch
+default or persist a Codex TUI setting. A private 0.158.0 A/B probe confirmed
+the difference in ownership: fullscreen used the alternate screen with zero
+tmux history; inline accumulated 203 history lines. Eight fullscreen wheel
+inputs produced 27,318 output bytes (first output 1.35–10.77 ms locally), whereas
+inline did not redraw its transcript in response. These timings are not remote
+latency or displayed-frame measurements.
+
+[Codex 0.158.0's transcript mouse handler](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/tui/src/transcript_view/input.rs)
+hard-codes three rows per wheel event and ignores events outside the transcript
+unless selecting. CtrlX's previous touch/trackpad conversion assumed one row per
+event; a 30-cell-height drag therefore requested 90 rows, not 30. iOS additionally
+discarded the pan's final translation, stopped immediately on release, and sent
+wheel coordinates following the finger into the fixed composer.
+
+Current client-side correction:
+
+- Shared `TerminalMouseScrollAccumulator` conserves fractional motion and resets
+  on direction/profile/gesture changes. Known Codex + alternate screen uses a
+  three-cell-height threshold for precise gestures. Other agents, inline mode
+  and discrete Mac mouse-wheel notches keep their existing sensitivity. Agent
+  identity comes from existing pane metadata, never terminal text matching.
+- Host Mac and Viewer Mac use the same native view. AppKit continues to own
+  momentum; its gesture-end to momentum-start transition retains the remainder,
+  while a new gesture or cancelled/finished momentum resets it.
+- iOS keeps fullscreen Codex's wheel coordinates at the initial touch area,
+  consumes the final pan delta and adds a short, capped coast. The deceleration
+  math is elapsed-time based, using the native fast decay rate. A common-mode
+  display link generates ordinary wheel events, not animated screenshots.
+- Touch-down, input, selection, inactive panes, teardown, changed agents/modes
+  and background/stalled clocks stop coasting. The display-link target owns only
+  a weak reference; no native view/run-loop retain cycle is introduced.
+
+There is no output dropping, speculative cursor/arrow input, snapshot replay,
+new queue/relay protocol, or SwiftTerm dependency change in this correction.
+The three-row Codex step and remote network latency still exist: this fixes
+over-amplification, interruption and touch coasting, **not pixel-smooth scrolling**.
+Do not equate fewer wheel packets or passing tests with measured frame-rate gains.
+Update each display client (local Host Mac, Viewer Mac, iOS) to receive its fix;
+Relay needs no deployment.
+
+Regression coverage: common motion/distance tests, Mac native wheel/selection/
+modifier tests, existing native click encoding and input FIFO/transport tests.
+iOS native gesture tests cover anchored coordinates, gesture-end motion and
+cancellation; device execution and subjective acceptance remain separate checks.
+
+Validation checkpoint: 60 targeted Swift tests passed (30 Mac input/mouse/raw
+transport, 8 shared click/routing, 22 motion/input-queue tests). Mac Release and
+iOS device-target Debug builds passed; iOS `build-for-testing` also compiled the
+native scroll and selection fixtures. No simulator runtime or installed app was
+changed. The native iOS fixtures have **not** been executed on an iPhone in this
+pass. Logs: `/tmp/ctrlx-fullscreen-scroll-{tests,mac-build,ios-test-build}.log`.
+
+Release preparation checkpoint for 3.0.38: the full Swift test invocation
+completed with 2,197 passing tests. Two `StopFinalityEvaluations` tests failed
+because this Mac reports Apple Intelligence `deviceNotEligible`; this is not
+an all-green full suite. Brand/technical boundaries, the website build and ten
+offline publisher tests passed. The signed iOS package was unpacked and its
+signature and SHA-256 verified, then copied to `Documents/Inbox`. Mac-only
+publication uses the maintainer's Mac publisher, without local Docker or a
+Relay redeployment; it does not validate the Linux build/lock in this pass.
+
+## Synchronized presentation and stable caret (September 29, 2026)
+
+The input-path change below did not restore pre-upgrade scrolling smoothness.
+A private Codex 0.158.0 fixture moved **three rows per SGR wheel event**. That
+application-owned step is separate from a shared SwiftTerm presentation defect;
+this fix does not remap/drop wheel input or promise pixel-smooth TUI scrolling.
+
+At SwiftTerm `42611d3`, `updateDisplay` and `queuePendingDisplay` respected DEC
+2026, but AppKit/UIKit draw callbacks and Metal's delegate did not. A native
+pixel probe drew `INCOMPLETE` before sync-end. Cursor visibility commands also
+removed/added the caret subview inside the frame. A 120-frame probe measured
+120 removals and 120 additions; a live Mac stack sample showed that path reaching
+SwiftUI platform-view layout invalidation. These identify mechanisms, not a
+measured three-device FPS improvement.
+
+The shared Apple renderer now:
+
+- Defers `CALayer.display` before the native backing store is cleared/replaced,
+  retaining the last completed image. Both platform `draw` entries and the
+  shared CoreGraphics routine also guard against painting an incomplete frame.
+  No scrollback snapshot, per-frame screenshot or extra debounce is introduced.
+- Re-arms native invalidation at sync-end, including the existing timeout,
+  reset and resize paths. First presentation must recover without another byte.
+- Stops Metal before acquiring a drawable during sync; the last presented
+  drawable remains on screen. Test-runner resource-bundle lookup also checks
+  the package's code bundle/products directory rather than only the runner.
+- Keeps the caret attached, updates visibility in place, and defers position,
+  visibility and style until frame completion. Switching back from Metal must
+  preserve a hidden caret. Gesture routing, selection/IME, terminal dimensions,
+  byte transport and input ordering are unchanged.
+
+`SynchronizedPresentationTests` exercises native backing-store pixels, direct
+draw guards, first frame, 120 cursor cycles with zero subview additions/removals,
+scrollback, timeout, reset/resize, style and the Metal drawable boundary. The
+Mac selection and modified-arrow/IME regressions remain part of the fork suite.
+
+This is a **display-client change**: update the Host Mac for its local view,
+the Viewer Mac for its view, and iOS for its view. Relay needs no deployment.
+The earlier input-path optimization remains Host-only. Native iOS execution and
+three-device subjective scrolling acceptance are separate from compilation and
+Mac regression tests; do not infer them from a successful build.
+
+Validation and dependency checkpoint:
+
+- The implementation and 10 new presentation regressions were committed and
+  pushed to the SwiftTerm fork as `e21a8f566e5bb2593a5bb57a6fdb8f8becb555ad`.
+  Its full Mac suite passed (506 Swift Testing tests plus 81 XCTest tests);
+  the new suite also passed with Swift Build's test runner.
+- CtrlX's 39 targeted input/mouse/metrics/routing tests passed using that local
+  dependency and again using the published fixed revision. Full concurrent
+  CtrlX runs terminated with SIGPIPE twice. A serial server run completed 969
+  tests with one tmux working-directory assertion failure; both pane-split tests
+  passed when rerun independently. This is **not** an all-green full CtrlX suite.
+- Mac Release and iOS device-target Debug builds passed with the local fork.
+  The new presentation tests also type-checked against the iOS SDK; they were
+  not executed on a phone. A separate Mac Debug build failed linking GallagerCLI
+  against IssueReporting; no unrelated dependency-source changes were made.
+- Temporary workspace/SwiftPM local overrides were removed. CtrlX's manifest
+  and both lockfiles now pin `e21a8f5`; SwiftPM and Xcode resolution independently
+  checked out that published revision. All other locked dependencies are
+  unchanged. The CtrlX changes remain uncommitted; no installed app was replaced.
+
+## Application-managed scrolling input (September 29, 2026)
+
+Codex CLI 0.158.0 was observed using the alternate screen and mouse reporting.
+Its transcript scrolling therefore needs an input event to reach Codex before
+the resulting output can be drawn; it is not just local terminal scrollback.
+The fixed composer is expected. It does not establish the cause of every stall.
+
+The local Mac raw-input path and both remote viewers' Host command executor
+were spawning `tmux send-keys -H` for each mouse batch. They now reuse the
+pane's existing control connection through `PaneStreamManager`, just as local
+keyboard input does. The byte encoder validates the pane ID and the entire
+4096-byte budget, then hex-encodes the bytes without UTF-8 conversion. Larger
+payloads and unavailable connections retain the original process fallback.
+There is no new connection, debounce delay, input dropping, gesture change,
+resize or snapshot policy. The local key/raw FIFO and remote connection FIFO
+remain the ordering owners.
+
+Only an explicit **no-write** result permits fallback. Pending commands at
+disconnect now fail with `processTerminated`, not `notConnected`: they may
+already have executed, so replaying them could duplicate clicks or keys. The
+pre-write missing-stdin guard still reports `notConnected`. This also closes
+the same ambiguity in the existing local keyboard fast path.
+
+`RawTerminalInputTests` checks encoding, bounds, no-connection behavior,
+fallback and ambiguous failures. A private tmux/PTY fixture receives 120 wheel
+batches with direction/coordinate changes, a click/release and interleaved
+keyboard batches through local, viewer-command and legacy process routes.
+It checks the received byte digest, zero input subprocesses on the fast paths,
+and one shared control client. Timings printed by this fixture measure input
+delivery/acknowledgement, **not Codex frame rate or remote network latency**.
+
+Diagnostics reuse bounded aggregate metrics: local raw input now participates
+in `localInputToSend/Write/Acknowledgement/Output/Feed` and the existing input
+queue gauge; `rawInputQueueWait` measures remote Host FIFO wait, and
+`rawInputSend` measures Host send duration. Output/feed correlation is
+best-effort against the first later pane output, not a causal frame marker.
+
+Rollout is **Host Mac only** (the Mac running the Codex sessions). Existing Mac
+Viewer/iOS clients and Relay protocol are unchanged. Actual three-device
+scrolling smoothness still needs user acceptance after installing the Host;
+whole-line mouse scrolling and iOS inertia are separate follow-ups if needed.
+
 ## Host resync subscription races (September 28, 2026)
 
 An intermittent report described input reaching tmux but not appearing in the

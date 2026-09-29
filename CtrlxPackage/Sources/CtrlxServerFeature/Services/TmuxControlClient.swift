@@ -340,9 +340,11 @@ actor TmuxControlClient {
         consumerTask?.cancel()
         consumerTask = nil
 
-        // Cancel all pending commands
+        // Pending commands may already have executed. `notConnected` is reserved
+        // for the pre-write guard; returning it here would allow input callers
+        // to replay the same bytes through their process fallback.
         for entry in pendingCommandQueue {
-            entry.continuation?.resume(throwing: TmuxControlError.notConnected)
+            entry.continuation?.resume(throwing: TmuxControlError.processTerminated(reason: "Disconnected with command pending"))
         }
         pendingCommandQueue.removeAll()
         receivedInitialResponse = false

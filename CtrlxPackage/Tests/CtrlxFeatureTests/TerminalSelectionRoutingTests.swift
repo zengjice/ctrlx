@@ -441,6 +441,87 @@
             #expect(sent.isEmpty)
         }
 
+        @Test("Mouse-mode single tap sends one raw press/release batch, not arrow keys", arguments: [false, true])
+        func mouseSingleTap(scrollback: Bool) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            if scrollback {
+                for _ in 0..<100 { feed(view, "history\r\n") }
+            }
+            paintMultilineDraft(view)
+            feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+            let proxy = try inputProxy(in: window)
+            proxy.insertText("old keyboard context")
+            var keys: [[TmuxKey]] = []
+            var raw: [Data] = []
+            view.onInput = { keys.append($0) }
+            view.onRawInput = { raw.append($0) }
+            let row = view.getTerminal().buffer.yDisp + 1
+            view.handleContentTap(at: CGPoint(x: 5.5 * view.cellDimension.width,
+                                             y: (CGFloat(row) + 0.5) * view.cellDimension.height))
+            #expect(raw == [Data("\u{1b}[<0;6;2M\u{1b}[<0;6;2m".utf8)])
+            #expect(keys.isEmpty)
+            // Starting a fresh keyboard context must not delete the old draft.
+            proxy.insertText("new")
+            #expect(keys == [[.text("new")]])
+        }
+
+        @Test("Mouse-mode double/triple taps still select locally without clicking", arguments: [2, 3])
+        func mouseMultiTap(count: Int) async {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "hello world\r\n> draft\u{1b}[?1003h\u{1b}[?1006h")
+            var raw: [Data] = []
+            var keys: [TmuxKey] = []
+            view.onRawInput = { raw.append($0) }
+            view.onInput = { keys += $0 }
+            tap(view, count: count, column: 1, row: 0)
+            #expect(view.selectionActive)
+            // A tap that leaves selection must not click through to the TUI.
+            view.handleContentTap(at: CGPoint(x: 30, y: 20))
+            #expect(raw.isEmpty)
+            #expect(keys.isEmpty)
+        }
+
+        @Test("Mouse clicks cannot bypass IME, focus, inactive-pane or history gates")
+        func mouseClickGates() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            for _ in 0..<100 { feed(view, "history\r\n") }
+            paintMultilineDraft(view)
+            feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+            let proxy = try inputProxy(in: window)
+            var raw: [Data] = []
+            view.onRawInput = { raw.append($0) }
+            let point = CGPoint(x: 30, y: CGFloat(view.getTerminal().buffer.yDisp + 1) * view.cellDimension.height)
+            proxy.setMarkedText("zhong", selectedRange: .init(location: 5, length: 0))
+            view.handleContentTap(at: point)
+            proxy.unmarkText()
+            view.scroll(toPosition: 0)
+            view.handleContentTap(at: point)
+            view.scroll(toPosition: 1)
+            _ = proxy.resignFirstResponder()
+            view.handleContentTap(at: point)
+            view.updateInput(isEnabled: false, keyboardRequested: false)
+            view.handleContentTap(at: point)
+            #expect(raw.isEmpty)
+        }
+
+        @Test("Mouse-off single taps keep the existing arrow navigation path")
+        func plainSingleTap() async {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            paintMultilineDraft(view)
+            var keys: [[TmuxKey]] = []
+            var raw: [Data] = []
+            view.onInput = { keys.append($0) }
+            view.onRawInput = { raw.append($0) }
+            view.handleContentTap(at: CGPoint(x: 7.5 * view.cellDimension.width,
+                                             y: 2.5 * view.cellDimension.height))
+            #expect(keys == [[.right, .right, .right]])
+            #expect(raw.isEmpty)
+        }
+
         private func feed(_ view: InteractiveTerminalView, _ text: String) {
             view.feedTerminalData(Array(text.utf8)[...])
         }

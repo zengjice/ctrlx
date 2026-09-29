@@ -16,6 +16,7 @@ struct RemoteTerminalContainerView: View {
     let hostName: String
     let connection: ViewerConnection
     let settings: AppSettings
+    var scrollingAgentID: String?
     /// The stable window key used by MirrorWindowManager to track this window
     var windowKey: String?
     var onStreamEnd: (() -> Void)?
@@ -60,6 +61,7 @@ struct RemoteTerminalContainerView: View {
                 isHostConnected: connection.isHostConnected,
                 retryGeneration: streamRetryGeneration,
                 settings: settings,
+                scrollingAgentID: scrollingAgentID,
                 isEditorActive: isEditorActive,
                 autoFocus: autoFocus,
                 showsFocusIndicator: showsFocusIndicator,
@@ -586,6 +588,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
     let isHostConnected: Bool
     let retryGeneration: Int
     let settings: AppSettings
+    let scrollingAgentID: String?
     let isEditorActive: Bool
     let autoFocus: Bool
     let showsFocusIndicator: Bool
@@ -606,6 +609,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         // Configure auto-focus before starting (must be set before viewDidMoveToWindow fires).
         coordinator.terminalView.autoFocusEnabled = autoFocus
         coordinator.terminalView.showsFocusIndicator = showsFocusIndicator
+        coordinator.terminalView.scrollingAgentID = scrollingAgentID
 
         coordinator.start(
             paneId: paneId,
@@ -642,6 +646,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
     func updateNSView(_ nsView: InteractiveTerminalView, context: Context) {
         let coordinator = context.coordinator
         nsView.showsFocusIndicator = showsFocusIndicator
+        nsView.scrollingAgentID = scrollingAgentID
         context.coordinator.updateSettings(settings)
         context.coordinator.updateContainerSize(nsView.frame.size)
         context.coordinator.synchronizeStream(

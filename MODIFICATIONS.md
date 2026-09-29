@@ -7,6 +7,28 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.38 — Fullscreen terminal interaction and embedded Agent Browser
+
+- Keep Codex's fullscreen transcript and fixed composer. Correct precise
+  trackpad/touch distance for its three-row wheel step; preserve Mac native
+  momentum and add bounded, interruptible iOS touch momentum. This does not
+  claim pixel-smooth scrolling or remove remote network latency.
+- Reuse the Host's existing tmux control connection for ordered raw mouse
+  input. Never replay ambiguous writes through the process fallback. Preserve
+  live subscribers across Host resynchronization and overlapping subscriptions.
+- Pin SwiftTerm's synchronized-presentation and stable-caret fixes on both
+  Apple platforms. Restore iOS single-tap cursor placement in mouse-reporting
+  TUIs while retaining link, selection, IME and inactive-pane protections.
+- Include session-routed embedded Chromium tabs for local Codex instances,
+  a shared persistent browser profile, the default bounded Vercel engine and
+  the retained CtrlX engine. Include scoped page capabilities and native
+  DevTools lifecycle fixes; the existing WebKit browser remains available.
+- Add regression coverage and document per-client rollout and remaining
+  browser/scrolling limits. Update the Host and display clients for the full
+  terminal changes; no Relay redeployment or protocol migration is required.
+- This Qcloud package uses the existing Apple Development/private-distribution
+  path. Developer ID notarization and distribution archives remain gated.
+
 ## 3.0.37 — Mac Codex question expansion and post-IME shortcuts
 
 - Restore Shift+arrow terminal shortcuts after committing or clearing IME

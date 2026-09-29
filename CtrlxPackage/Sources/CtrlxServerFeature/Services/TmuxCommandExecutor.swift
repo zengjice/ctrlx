@@ -11,11 +11,16 @@ public actor TmuxCommandExecutor {
 
     private let logger = Logger(label: "com.jicezeng.ctrlx.commandexecutor")
     private let tmuxService: TmuxService
+    private let sendRawInputIfConnected: @Sendable (String, Data) async throws -> Bool
 
     // MARK: - Initialization
 
-    public init(tmuxService: TmuxService) {
+    public init(
+        tmuxService: TmuxService,
+        sendRawInputIfConnected: @escaping @Sendable (String, Data) async throws -> Bool = { _, _ in false }
+    ) {
         self.tmuxService = tmuxService
+        self.sendRawInputIfConnected = sendRawInputIfConnected
     }
 
     // MARK: - Command Execution
@@ -41,7 +46,13 @@ public actor TmuxCommandExecutor {
                 guard let data = spec.data, !data.isEmpty else {
                     throw CommandError.invalidPayload("Invalid base64 data in sendRawInput")
                 }
-                try await tmuxService.sendRawBytes(command.paneId, data: data)
+                // The viewer's FIFO remains the owner of ordering. Fall back
+                // only when no control-mode bytes were written, never on error.
+                let started = ContinuousClock.now
+                defer { TerminalTransportMetrics.shared.recordDuration(.rawInputSend, since: started) }
+                if try await !sendRawInputIfConnected(command.paneId, data) {
+                    try await tmuxService.sendRawBytes(command.paneId, data: data)
+                }
 
             case .cancelOperation:
                 try await tmuxService.sendInterrupt(command.paneId)

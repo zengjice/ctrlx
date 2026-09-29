@@ -1,5 +1,5 @@
 {
-  "originHash" : "c958f2206cf5bdf88778afcc22d86aab042d20f56296038d4f966f8d80a980e1",
+  "originHash" : "b9aeaac90fbcd749206f964b6ff838f1b3f1055d30e3f5dabf07e712493e2498",
   "pins" : [
     {
       "identity" : "apns",
@@ -348,7 +348,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/jicezeng/SwiftTerm.git",
       "state" : {
-        "revision" : "42611d3f3e3ca491b9bedf111fff3f43e87b05ec"
+        "revision" : "e21a8f566e5bb2593a5bb57a6fdb8f8becb555ad"
       }
     },
     {

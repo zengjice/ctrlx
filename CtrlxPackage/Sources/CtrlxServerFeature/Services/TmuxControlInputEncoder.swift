@@ -16,6 +16,15 @@
             case named([String])
         }
 
+        /// Mouse reports and other raw input must stay byte-exact, including
+        /// non-UTF8 bytes. Validate the entire batch before allowing any write.
+        static func commands(paneId: String, rawBytes: Data) -> [String]? {
+            guard isPaneId(paneId), rawBytes.count <= maximumHexBytes else { return nil }
+            guard !rawBytes.isEmpty else { return [] }
+            let encoded = rawBytes.map { String(format: "%02x", $0) }.joined(separator: " ")
+            return ["send-keys -t \(paneId) -H \(encoded)"]
+        }
+
         static func commands(paneId: String, keys: [TmuxKey]) -> [String]? {
             guard isPaneId(paneId), keys.count <= maximumHexBytes else { return nil }
 
