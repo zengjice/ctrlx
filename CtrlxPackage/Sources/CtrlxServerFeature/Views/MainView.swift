@@ -1352,7 +1352,10 @@ public struct MainView: View {
         selectedBrowserTab: BrowserTab?
     ) -> some View {
         let tabsKey = remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)
-        if
+        if let selectedBrowserTab, let state = remoteSessionTabsStates[tabsKey]?.agentBrowserStates[selectedBrowserTab.id] {
+            AgentBrowserTabContentView(state: state)
+                .id(selectedBrowserTab.id)
+        } else if
             let selectedBrowserTab,
             let browserTabState = remoteSessionTabsStates[tabsKey]?.browserStates[selectedBrowserTab.id] {
             BrowserTabContentView(
@@ -1441,7 +1444,11 @@ public struct MainView: View {
                 rightPanePlaceholder
             }
         case let .browser(id):
-            if
+            if let state = sessionTabs.agentBrowserStates[id] {
+                AgentBrowserTabContentView(state: state)
+                    .id(id)
+                    .accessibilityIdentifier("split-right-pane")
+            } else if
                 let tab = sessionTabs.openBrowserTabs.first(where: { $0.id == id }),
                 let tabState = sessionTabs.browserStates[id] {
                 BrowserTabContentView(
@@ -2370,6 +2377,9 @@ public struct MainView: View {
     private func migrateLocalSessionState(_ rename: SessionRenameMapping) {
         let oldName = rename.oldName
         let newName = rename.newName
+
+        coordinator.agentBrowser.renameManualTabs(in: agentBrowserWorkspace,
+            from: ManualBrowserTarget(sessionName: oldName), to: ManualBrowserTarget(sessionName: newName))
 
         if let state = fileBrowserStates.removeValue(forKey: oldName) {
             fileBrowserStates[newName] = state
@@ -3389,6 +3399,10 @@ public struct MainView: View {
             sessionFileTabsStates[sessionName] = SessionFileTabsState()
         }
         guard let tabs = sessionFileTabsStates[sessionName] else { return }
+        if settings.newBrowserEngine == .chromium {
+            openManualChromiumTab(target: ManualBrowserTarget(sessionName: sessionName))
+            return
+        }
         // about:blank gives WKWebView a deterministic, offline starting page
         // so the new tab doesn't briefly flash a network error before the
         // user types a real URL.
@@ -3553,11 +3567,64 @@ public struct MainView: View {
 
     // MARK: - Embedded Agent Browser
 
+    private func openManualChromiumTab(target: ManualBrowserTarget) {
+        Task {
+            do {
+                try await coordinator.agentBrowser.openManualTab(in: agentBrowserWorkspace, target: target)
+            } catch {
+                attachError = "Failed to open New Browser: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func manualBrowserTabs(for target: ManualBrowserTarget) -> SessionFileTabsState? {
+        if let hostID = target.hostID {
+            return remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: target.sessionName)]
+        }
+        return sessionFileTabsStates[target.sessionName]
+    }
+
+    private func selectManualBrowserTab(_ state: AgentBrowserTabState, target: ManualBrowserTarget) {
+        guard manualBrowserTabs(for: target)?.agentBrowserStates[state.id] === state else { return }
+        if let hostID = target.hostID {
+            guard let host = settings.pairedHosts.first(where: { $0.id == hostID }) else { return }
+            if selectedRemoteSession?.hostId != hostID || selectedRemoteSession?.sessionName != target.sessionName {
+                selectedRemoteWindowId = nil
+            }
+            selectedWindow = nil
+            selectedRemoteSession = RemoteSessionSelection(
+                hostId: hostID, hostName: host.displayName, sessionName: target.sessionName
+            )
+            selectRemoteBrowserTab(state.id, hostId: hostID, sessionName: target.sessionName)
+        } else {
+            guard let window = tmuxService.windows.first(where: { $0.sessionName == target.sessionName }) else { return }
+            selectedRemoteSession = nil
+            selectedRemoteWindowId = nil
+            if selectedWindow?.sessionName != target.sessionName { selectedWindow = window }
+            selectBrowserTab(state.id, sessionName: target.sessionName, windowId: selectedWindow?.id ?? window.id)
+        }
+        agentBrowserWorkspace.window?.makeKeyAndOrderFront(nil)
+    }
+
     private func registerAgentBrowserWorkspace() {
         agentBrowserWorkspace.acceptsPane = { pane in
             tmuxService.windows.contains { $0.id == pane.windowId }
         }
         agentBrowserWorkspace.onCreate = { state, parent in
+            if let target = state.manualTarget {
+                guard let tabs = manualBrowserTabs(for: target) else { state.service.close(state); return }
+                var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), parentTabId: parent)
+                // All native Chromium pages are transient; never restore them as
+                // WebKit or implicitly give a future agent control of a page.
+                tab.isAgentBrowser = true
+                tabs.openBrowserTabs.append(tab)
+                tabs.agentBrowserStates[state.id] = state
+                state.requestsInitialAddressFocus = parent == nil
+                if parent.map({ tabs.rightSide.contains(.browser($0)) }) == true {
+                    tabs.rightSide.insert(.browser(state.id))
+                }
+                return
+            }
             guard let window = tmuxService.windows.first(where: { $0.panes.contains { $0.paneId == state.paneID } }) else {
                 state.service.close(state); return
             }
@@ -3574,11 +3641,22 @@ public struct MainView: View {
             }
         }
         agentBrowserWorkspace.onChange = { state in
+            if let target = state.manualTarget {
+                guard let tabs = manualBrowserTabs(for: target),
+                      let index = tabs.openBrowserTabs.firstIndex(where: { $0.id == state.id }) else { return }
+                if tabs.openBrowserTabs[index].displayTitle != state.title { tabs.openBrowserTabs[index].displayTitle = state.title }
+                if let url = URL(string: state.url), tabs.openBrowserTabs[index].url != url { tabs.openBrowserTabs[index].url = url }
+                return
+            }
             guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.agentBrowserStates[state.id] != nil }) else { return }
             updateBrowserTabTitle(tabId: state.id, sessionName: session, title: state.title)
             if let url = URL(string: state.url) { updateBrowserTabURL(tabId: state.id, sessionName: session, url: url) }
         }
         agentBrowserWorkspace.onSelect = { state in
+            if let target = state.manualTarget {
+                selectManualBrowserTab(state, target: target)
+                return
+            }
             guard let (session, tabs) = sessionFileTabsStates.first(where: { $0.value.agentBrowserStates[state.id] != nil }),
                   let window = tmuxService.windows.first(where: { $0.sessionName == session && $0.panes.contains { $0.paneId == state.paneID } })
                     ?? tmuxService.windows.first(where: { $0.sessionName == session }) else { return }
@@ -3596,6 +3674,14 @@ public struct MainView: View {
             agentBrowserWorkspace.window?.makeKeyAndOrderFront(nil)
         }
         agentBrowserWorkspace.onClose = { state in
+            if let target = state.manualTarget {
+                if let hostID = target.hostID {
+                    closeRemoteBrowserTab(state.id, hostId: hostID, sessionName: target.sessionName)
+                } else {
+                    closeBrowserTab(state.id, sessionName: target.sessionName)
+                }
+                return
+            }
             guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.agentBrowserStates[state.id] != nil }) else { return }
             closeBrowserTab(state.id, sessionName: session)
         }
@@ -3741,6 +3827,7 @@ public struct MainView: View {
         // deallocated `BrowserTabState` can't clean up its partial files.
         tabs.browserStates[tabId]?.cancelActiveDownloads()
         tabs.browserStates.removeValue(forKey: tabId)
+        if let state = tabs.agentBrowserStates.removeValue(forKey: tabId) { state.service.close(state) }
         tabs.rightSide.remove(payload)
         if tabs.selectedRight == payload { tabs.selectedRight = nil }
         reconcileRemoteRightPaneSelection(
@@ -3794,6 +3881,10 @@ public struct MainView: View {
         } else {
             tabs = SessionFileTabsState()
             remoteSessionTabsStates[key] = tabs
+        }
+        if settings.newBrowserEngine == .chromium {
+            openManualChromiumTab(target: ManualBrowserTarget(hostID: hostId, sessionName: sessionName))
+            return
         }
         let blank = URL(staticString: "about:blank")
         let newTab = BrowserTab(url: blank)
@@ -4835,6 +4926,9 @@ public struct MainView: View {
     ) {
         let oldKey = remoteTabsKey(hostId: hostId, sessionName: oldName)
         let newKey = remoteTabsKey(hostId: hostId, sessionName: newName)
+        coordinator.agentBrowser.renameManualTabs(in: agentBrowserWorkspace,
+            from: ManualBrowserTarget(hostID: hostId, sessionName: oldName),
+            to: ManualBrowserTarget(hostID: hostId, sessionName: newName))
 
         if let tabs = remoteSessionTabsStates.removeValue(forKey: oldKey) {
             tabs.remapWindowIDs(windowIDs)

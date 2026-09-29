@@ -15,6 +15,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @protocol CXBrowserRuntime <NSObject>
 - (BOOL)startWithDelegate:(id<CXBrowserHostDelegate>)delegate profile:(NSString *)profile state:(NSString *)state error:(NSError **)error;
+// Human-created tab: explicit local UI route and no agent control grant.
+- (void)openManualTabWithRoute:(NSDictionary<NSString *, NSString *> *)route url:(NSString *)url completion:(void (^)(NSString * _Nullable error))completion NS_SWIFT_NAME(openManualTab(route:url:completion:));
 - (void)navigateTab:(NSString *)identifier url:(NSString *)url;
 - (void)goBack:(NSString *)identifier;
 - (void)goForward:(NSString *)identifier;

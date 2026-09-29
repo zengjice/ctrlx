@@ -18,17 +18,19 @@ struct AgentBrowserTabContentView: View {
                 Button { state.service.reload(state) } label: { Label("Reload", symbol: .arrowClockwise) }
                 TextField("https://…", text: $address)
                     .focused($editingAddress)
-                    .onSubmit { state.service.navigate(state, url: address) }
+                    .onSubmit(navigate)
                     .accessibilityIdentifier("agent-browser-address")
-                Text("Codex · \(state.owner.prefix(6))")
+                Text(state.manualTarget == nil ? "Codex · \(state.owner.prefix(6))" : "Chromium")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .help("Shared Agent Browser logins; only this Codex instance controls this tab")
+                    .help(state.manualTarget == nil
+                          ? "Shared Agent Browser logins; only this Codex instance controls this tab"
+                          : "Shared CtrlX Chromium logins; this tab is not controlled by an agent")
                 if state.isLoading { ProgressView().controlSize(.small) }
                 Button {
                     state.service.showDevTools(state)
                 } label: { Label("Developer Tools", symbol: .wrenchAndScrewdriver) }
-                .help("Open Developer Tools for this Agent Browser tab")
+                .help("Open Developer Tools for this Chromium tab")
                 .accessibilityIdentifier("agent-browser-developer-tools")
                 .disabled(state.isClosed)
             }
@@ -39,9 +41,22 @@ struct AgentBrowserTabContentView: View {
             EmbeddedAgentBrowserView(view: state.view)
         }
         .onChange(of: state.url, initial: true) { _, url in
-            if !editingAddress { address = url }
+            if !editingAddress { address = url == "about:blank" ? "" : url }
+        }
+        .task {
+            if state.requestsInitialAddressFocus {
+                state.requestsInitialAddressFocus = false
+                editingAddress = true
+            }
         }
         .accessibilityIdentifier("agent-browser-tab-content")
+    }
+
+    private func navigate() {
+        guard let url = BrowserTabState.normalizedURL(from: address) else { return }
+        address = url.absoluteString
+        state.service.navigate(state, url: address)
+        editingAddress = false
     }
 }
 

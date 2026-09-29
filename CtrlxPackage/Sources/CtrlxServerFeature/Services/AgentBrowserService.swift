@@ -5,6 +5,29 @@ import Foundation
 import Logging
 import Observation
 
+/// Display routing for human tabs, independent of local tmux pane/process IDs.
+/// Remote sessions still create pages on THIS Mac; hostID only identifies UI.
+struct ManualBrowserTarget: Equatable, Sendable {
+    let hostID: String?
+    let sessionName: String
+
+    init(hostID: String? = nil, sessionName: String) {
+        self.hostID = hostID
+        self.sessionName = sessionName
+    }
+
+    init?(route: [String: String]) {
+        guard route["manual"] == "true", let session = route["session"], !session.isEmpty else { return nil }
+        self.init(hostID: route["host"], sessionName: session)
+    }
+
+    func route(workspaceID: UUID) -> [String: String] {
+        var route = ["workspace": workspaceID.uuidString, "manual": "true", "session": sessionName]
+        route["host"] = hostID
+        return route
+    }
+}
+
 /// One Chromium runtime per CtrlX process. Page state outlives SwiftUI tab
 /// representations; authority (Codex run) is distinct from UI routing (pane).
 @MainActor
@@ -14,6 +37,9 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     private var runtime: (any CXBrowserRuntime)?
     private var workspaces: [UUID: AgentBrowserWorkspace] = [:]
     private var tabs: [String: AgentBrowserTabState] = [:]
+    // Stable display-route identity survives session renames and is not an
+    // agent credential. Native popup callbacks inherit it from the parent.
+    private var manualRoutes: [String: (workspaceID: UUID, target: ManualBrowserTarget)] = [:]
     private var resolvePane: (@MainActor (Int32) async throws -> PaneInfo)?
     private var closing = false
     private let logger = Logger(label: "com.ctrlx.agent-browser")
@@ -62,8 +88,44 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }
 
     func register(_ workspace: AgentBrowserWorkspace) { workspaces[workspace.id] = workspace }
+
+    func openManualTab(in workspace: AgentBrowserWorkspace, target: ManualBrowserTarget) async throws {
+        guard !closing, let runtime, workspaces[workspace.id] === workspace else {
+            throw ManualBrowserError.unavailable
+        }
+        // Older optional native runtimes must fail visibly, never crash on a
+        // missing selector or silently open a WebKit tab under this preference.
+        guard runtime.responds(to: #selector(CXBrowserRuntime.openManualTab(route:url:completion:))) else {
+            throw ManualBrowserError.unavailable
+        }
+        let routeID = UUID().uuidString
+        manualRoutes[routeID] = (workspace.id, target)
+        var route = target.route(workspaceID: workspace.id)
+        route["manualRoute"] = routeID
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                runtime.openManualTab(route: route, url: "about:blank") { error in
+                    if let error { continuation.resume(throwing: ManualBrowserError.creation(error)) }
+                    else { continuation.resume() }
+                }
+            }
+        } catch {
+            manualRoutes.removeValue(forKey: routeID)
+            throw error
+        }
+    }
+
+    func renameManualTabs(in workspace: AgentBrowserWorkspace, from old: ManualBrowserTarget, to new: ManualBrowserTarget) {
+        for (id, route) in manualRoutes where route.workspaceID == workspace.id && route.target == old {
+            manualRoutes[id] = (workspace.id, new)
+        }
+        for tab in tabs.values where tab.workspaceID == workspace.id && tab.manualTarget == old {
+            tab.manualTarget = new
+        }
+    }
     func unregister(_ workspace: AgentBrowserWorkspace) {
         guard workspaces.removeValue(forKey: workspace.id) === workspace else { return }
+        manualRoutes = manualRoutes.filter { $0.value.workspaceID != workspace.id }
         let ownedTabs = tabs.values.filter { $0.workspaceID == workspace.id }
         for tab in ownedTabs {
             // Native close callbacks arrive later, after this workspace is no
@@ -109,12 +171,21 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
 
     public func browserTabCreated(_ identifier: String, view: NSView, route: [String: String], owner: String, parent: String?) {
         guard let workspaceID = route["workspace"].flatMap(UUID.init(uuidString:)),
-              let paneID = route["pane"], let workspace = workspaces[workspaceID],
+              let workspace = workspaces[workspaceID],
               let id = UUID(uuidString: identifier) else {
             runtime?.closeTab(identifier); return
         }
+        let manualRouteID = route["manualRoute"]
+        let registeredRoute = manualRouteID.flatMap { manualRoutes[$0] }
+        let manualTarget = owner.isEmpty && registeredRoute?.workspaceID == workspaceID
+            ? registeredRoute?.target : nil
+        guard !closing, manualTarget != nil || (!owner.isEmpty && route["pane"] != nil) else {
+            runtime?.closeTab(identifier); return
+        }
+        let paneID = route["pane"] ?? ""
         let state = AgentBrowserTabState(id: id, identifier: identifier, view: view,
-            workspaceID: workspaceID, paneID: paneID, owner: owner, service: self)
+            workspaceID: workspaceID, paneID: paneID, owner: owner, service: self,
+            manualTarget: manualTarget, manualRouteID: manualRouteID)
         tabs[identifier] = state
         workspace.onCreate(state, parent.flatMap(UUID.init(uuidString:)))
     }
@@ -132,6 +203,9 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }
     public func browserTabClosed(_ identifier: String) {
         guard let tab = tabs.removeValue(forKey: identifier) else { return }
+        if let routeID = tab.manualRouteID, !tabs.values.contains(where: { $0.manualRouteID == routeID }) {
+            manualRoutes.removeValue(forKey: routeID)
+        }
         tab.isClosed = true
         workspaces[tab.workspaceID]?.onClose(tab)
     }
@@ -162,6 +236,19 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         }
         self.runtime = nil
         tabs.removeAll()
+        manualRoutes.removeAll()
+    }
+}
+
+private enum ManualBrowserError: LocalizedError {
+    case unavailable
+    case creation(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: "Chromium is unavailable. Restart the updated CtrlX app or choose WebKit in Settings > Browser."
+        case let .creation(message): message
+        }
     }
 }
 
@@ -185,14 +272,20 @@ final class AgentBrowserTabState {
     let paneID: String
     let owner: String
     let service: AgentBrowserService
+    var manualTarget: ManualBrowserTarget?
+    let manualRouteID: String?
+    var requestsInitialAddressFocus: Bool
     var title = "Agent Browser"
     var url = "about:blank"
     var isLoading = false
     var isClosed = false
 
     init(id: UUID, identifier: String, view: NSView, workspaceID: UUID, paneID: String,
-         owner: String, service: AgentBrowserService) {
+         owner: String, service: AgentBrowserService, manualTarget: ManualBrowserTarget? = nil, manualRouteID: String? = nil) {
         self.id = id; self.identifier = identifier; self.view = view
         self.workspaceID = workspaceID; self.paneID = paneID; self.owner = owner; self.service = service
+        self.manualTarget = manualTarget
+        self.manualRouteID = manualRouteID
+        self.requestsInitialAddressFocus = manualTarget != nil
     }
 }

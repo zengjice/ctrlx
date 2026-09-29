@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.41 — Configurable Mac New Browser and Codex compatibility
+
+- Add Mac Settings → Browser → New Browser → Engine, defaulting to Chromium
+  with WebKit as an option. Apply the device-local choice to explicit New
+  Browser actions in both local and Viewer workbenches, without converting
+  existing tabs or changing terminal-link routing and agent automation.
+- Embed human-created Chromium tabs in the existing session/split layout.
+  Share CtrlX's dedicated Chromium profile without granting agent control;
+  preserve child-tab routing across session renames and workspace cleanup.
+  Chromium tabs remain transient; existing WebKit restoration is unchanged.
+- Recognize both legacy and compact Codex queued-question shortcut hints,
+  retaining live-composer, input-queue and multi-viewer safeguards.
+- Keep agent identity when a Host process probe is temporarily unavailable,
+  rather than falsely reporting an agent exit. Include the source changes for
+  an always-openable iOS command panel with explicit unavailable-state guidance.
+- Add preference, routing, lifecycle, ownership and compatibility regressions.
+  This publication packages Mac only; iOS needs a separate package/install.
+  No Relay deployment or SwiftTerm update is required.
+
 ## 3.0.40 — Avoid redundant terminal drawing during fullscreen scrolling
 
 - Commit completed synchronized frames once, avoiding a second delayed redraw

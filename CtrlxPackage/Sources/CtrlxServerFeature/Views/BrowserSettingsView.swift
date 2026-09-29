@@ -19,6 +19,21 @@ struct BrowserSettingsView: View {
         @Bindable var settings = settings
 
         Form {
+            Section("New Browser") {
+                Picker("Engine", selection: $settings.newBrowserEngine) {
+                    ForEach(NewBrowserEngine.allCases) { engine in
+                        Text(engine.displayName).tag(engine)
+                    }
+                }
+                .accessibilityIdentifier("new-browser-engine")
+                Text("Applies to new tabs created with New Browser on this Mac, including in remote sessions. Existing tabs and Agent Browser automation are unchanged.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Chromium shares CtrlX Agent Browser logins, not WebKit or system Chrome logins. Chromium tabs are not restored after restarting CtrlX.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Default Behavior") {
                 Picker("When clicking web links in terminal", selection: $settings.browserLinkBehavior) {
                     ForEach(BrowserLinkBehavior.allCases) { behavior in

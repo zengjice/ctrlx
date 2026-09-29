@@ -74,6 +74,33 @@
 
         // MARK: - Restore
 
+        @Test("Transient Chromium tabs never replace or restore as existing WebKit tabs")
+        func chromiumTabsAreNotRestoredAsWebKit() {
+            let webKit = BrowserTab(url: URL(string: "https://example.com")!)
+            var chromium = BrowserTab(url: URL(string: "https://swift.org")!)
+            chromium.isAgentBrowser = true
+            let tabs = SessionFileTabsState()
+            tabs.openBrowserTabs = [webKit, chromium]
+            tabs.tabOrder = [.browser(webKit.id), .browser(chromium.id)]
+            tabs.selectedBrowserTabId = chromium.id
+            tabs.rightSide = [.browser(chromium.id)]
+            tabs.selectedRight = .browser(chromium.id)
+
+            let layout = LayoutSnapshotMapper.snapshot(from: tabs, fileBrowser: nil, windowIndexForId: { _ in nil })
+            #expect(layout.browserTabs.map(\.id) == [webKit.id])
+            #expect(layout.tabOrder == [.browser(id: webKit.id)])
+            #expect(layout.selectedLeft == nil)
+            #expect(layout.selectedRight == nil)
+            #expect(layout.rightSide.isEmpty)
+
+            let restored = SessionFileTabsState()
+            LayoutSnapshotMapper.apply(layout, to: restored, fileBrowser: nil,
+                windowIdForIndex: { _ in nil }, makeBrowserState: { BrowserTabState(initialURL: $0.url) })
+            #expect(restored.openBrowserTabs.map(\.id) == [webKit.id])
+            #expect(restored.browserStates[webKit.id] != nil)
+            #expect(restored.agentBrowserStates.isEmpty)
+        }
+
         @Test("Apply preserves file tabs and re-maps window indices to live ids, dropping absent ones")
         func applyRemapsWindows() {
             let fileId = UUID()

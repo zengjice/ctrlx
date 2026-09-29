@@ -62,11 +62,21 @@ public enum SettingsTab: String, Sendable {
     case about
 }
 
-/// Where a clicked http/https/ftp link in the terminal should open.
-///
-/// Drives the dialog presented to the user on a terminal link click and the
-/// "remember my choice" outcome — picking a non-`.ask` value here suppresses
-/// the prompt for subsequent clicks.
+/// Device-local engine for the Mac's explicit New Browser action.
+public enum NewBrowserEngine: String, CaseIterable, Identifiable, Sendable {
+    case chromium
+    case webkit
+
+    public var id: String { rawValue }
+    public var displayName: String {
+        switch self {
+        case .chromium: "Chromium"
+        case .webkit: "WebKit"
+        }
+    }
+}
+
+/// Where terminal links open; independent of the New Browser engine choice.
 public enum BrowserLinkBehavior: String, CaseIterable, Codable, Identifiable, Sendable {
     /// Show a confirmation dialog with an "Always do this" checkbox.
     case ask
@@ -294,6 +304,12 @@ final public class AppSettings {
         didSet { preferences.setString(browserLinkBehavior.rawValue, Keys.browserLinkBehavior) }
     }
 
+    /// Engine captured when the user chooses New Browser, never applied to
+    /// existing tabs or agent-owned pages. Local to this Mac, including Viewer UI.
+    public var newBrowserEngine: NewBrowserEngine = .chromium {
+        didSet { preferences.setString(newBrowserEngine.rawValue, Keys.newBrowserEngine) }
+    }
+
     /// Per-domain overrides for ``browserLinkBehavior``.
     ///
     /// Looked up case-insensitively by URL host before the global setting is
@@ -472,6 +488,7 @@ final public class AppSettings {
             rawValue: preferences.string(Keys.browserLinkBehavior) ?? ""
         ) ?? Defaults.browserLinkBehavior
         self.browserDomainRules = Self.loadCodable(from: preferences, key: Keys.browserDomainRules)
+        self.newBrowserEngine = NewBrowserEngine(rawValue: preferences.string(Keys.newBrowserEngine) ?? "") ?? .chromium
         self.alwaysOpenLinksInSplit = preferences.optionalBool(Keys.alwaysOpenLinksInSplit) ?? Defaults.alwaysOpenLinksInSplit
         self.reconnectDelay = preferences.optionalInt(Keys.reconnectDelay) ?? Defaults.reconnectDelay
         self.tmuxPath = preferences.string(Keys.tmuxPath) ?? Defaults.tmuxPath
@@ -577,6 +594,7 @@ final public class AppSettings {
         case openClickedFileInNewTab
         case alwaysOpenFilesInSplit
         case browserLinkBehavior
+        case newBrowserEngine
         case browserDomainRules
         case alwaysOpenLinksInSplit
         case reconnectDelay

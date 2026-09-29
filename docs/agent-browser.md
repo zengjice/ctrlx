@@ -1,10 +1,37 @@
 # Agent Browser (development integration — not release-ready)
 
-The existing WKWebView **New Browser** is unchanged. Agent Browser uses sandboxed
-CEF and an internal CDP adapter, embedded as native child views in CtrlX's same
+Mac **Settings → Browser → New Browser → Engine** selects **Chromium** (default)
+or **WebKit** for explicit New Browser actions. Chromium uses the same sandboxed
+CEF runtime as Agent Browser, embedded as native child views in CtrlX's same
 session tab strip and left/right split layout. No standalone browser window, no
 ChatGPT extension, MCP server, browser-wide TCP debugging port or Relay browser control is
 involved. Apple Silicon only for this first implementation.
+
+This device-local setting affects new human-created tabs only, including New
+Browser in a Mac Viewer session (the page still runs on the viewing Mac). Existing
+tabs, restored WebKit tabs, terminal-link rules and Codex automation are unchanged;
+it is unrelated to the `vercel` / `ctrlx` automation-backend selection. iOS has no
+corresponding setting. Chromium tabs share CtrlX's dedicated Chromium profile and
+logins, not WebKit's or system Chrome's. Chromium tabs remain transient and are
+not restored after restarting CtrlX; WebKit layout restoration is unchanged.
+If the native runtime is unavailable, creation reports an error instead of
+silently substituting WebKit.
+
+Regression coverage: `NewBrowserEngineTests` checks preferences, explicit local /
+Viewer destinations, rename-safe child routing, errors and workspace cleanup;
+`LayoutSnapshotMapperTests` protects existing WebKit restoration. Native
+`tests/ownership.cc` rejects empty-owner human tabs. The isolated signed Mac UI
+check also covers Chromium navigation/input, popup creation and shared test
+cookies, switching the setting to WebKit, both engines side by side without
+reloading existing pages, right-side popup inheritance and normal shutdown.
+
+Release preparation for 3.0.41 also passed brand/technical boundary checks,
+10 publisher regressions, the website build and the unsigned iOS device-target
+compile check (no simulator or device installation). The full Swift run completed
+2,217 passing tests; the same two `StopFinalityEvaluations` tests as 3.0.40 failed
+because Apple Intelligence reports `deviceNotEligible` on this Mac. This is not
+an all-green full-suite result. Logs: `/tmp/ctrlx-3.0.41-unit-tests.log`,
+`/tmp/ctrlx-3.0.41-ios-compile.log`, `/tmp/ctrlx-3.0.41-website-build.log`.
 
 Future product features, capability expansion/testing and optional external-browser
 access are tracked in the [Agent Browser TODO](agent-browser-todo.md), with per-item
@@ -78,9 +105,12 @@ already mapped by an older process.
   isolation, not a security sandbox against malicious software under that UID.
 - Login cookies/site storage are shared across groups. Account changes and
   logout therefore affect other groups. System Chrome's profile is never used.
-- Ordinary human-created New Browser tabs remain WebKit and are not exposed to
-  this protocol. The embedded UI does not offer cross-agent ownership transfers.
-  Child tabs inherit their parent's current owner.
+- Human-created Chromium tabs carry an explicit workspace/session/viewer-host
+  route and an empty control owner. They are not exposed to agents through this
+  protocol, even when opened in an agent's session; neither focus nor a shared
+  profile grants control. WebKit tabs remain outside the protocol as well. The
+  embedded UI does not offer ownership transfers. Child tabs inherit their
+  parent's owner and exact display route (including human-only ownership).
 - Page input actions reveal and focus their explicitly authorized native tab before
   dispatching real input. They never use the currently selected tab as a target.
 - Agent exit revokes its authority but retains pages. Browser restart invalidates
@@ -148,7 +178,8 @@ This is an explicit local, human debugging entry point (DOM/CSS, Console,
 Network), not an expansion of agent authority. DevTools use a dedicated CEF
 client and are never added to the agent tab registry or restored as ordinary
 tabs. Creation runs on CEF's native loop; shutdown waits for tools and pending
-creation as well as page browsers. The original WebKit **New Browser** is unchanged.
+creation as well as page browsers. Human-created Chromium tabs use the same
+inspector; WebKit's existing inspector behavior is unchanged.
 
 There is no new HTTP/WebSocket debugging listener and no system-browser launch.
 The upstream CLI `inspect`, `stream`, and `dashboard` commands remain unavailable;

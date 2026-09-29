@@ -218,6 +218,25 @@ class BrowserUITask final : public CefTask {
 
 // Own strings across the asynchronous Swift lookup; references supplied by the
 // socket request handler expire as soon as that handler returns.
+static void CreateRoutedTab(const std::string& owner, NSDictionary *route, const std::string& url,
+    std::function<void(CefRefPtr<CefBrowser>, NSString*)> done) {
+  CEF_REQUIRE_UI_THREAD();
+  if (runtime.closing) { done(nullptr, @"CtrlX is shutting down. No page was opened."); return; }
+  if (browsers.size() >= 64) { done(nullptr, @"Chromium tab limit reached."); return; }
+  if (!WebURL(url)) { done(nullptr, @"Invalid page URL. No page was opened."); return; }
+  NSView *container = [runtime.delegate browserContainerForRoute:route];
+  if (!container) { done(nullptr, @"The source CtrlX workspace was closed. No page was opened."); return; }
+  CefWindowInfo info;
+  info.SetAsChild((__bridge void *)container, CefRect(0, 0, 1000, 700));
+  info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+  CefBrowserSettings settings;
+  // Human and agent tabs share ONE profile, never an agent control grant.
+  auto browser = CefBrowserHost::CreateBrowserSync(info,
+      new EmbeddedClient(owner, container, route, nil), url, settings, nullptr, nullptr);
+  if (!browser) [container removeFromSuperview];
+  done(browser, browser ? nil : @"Chromium could not create the embedded page.");
+}
+
 static void OpenTab(std::string owner, int pid, std::string url,
     std::function<bool()> current, std::function<void(CefRefPtr<CefBrowser>, NSString*)> done) {
   [runtime.delegate resolveBrowserProcess:pid completion:^(NSDictionary *route, NSString *error) {
@@ -227,19 +246,7 @@ static void OpenTab(std::string owner, int pid, std::string url,
     CEF_REQUIRE_UI_THREAD();
     if (!current()) { done(nullptr, @"Open request expired. No page was opened."); return; }
     if (!route) { done(nullptr, error ?: @"Source session unavailable. No page was opened."); return; }
-    if (runtime.closing) { done(nullptr, @"CtrlX is shutting down. No page was opened."); return; }
-    if (browsers.size() >= 64) { done(nullptr, @"Agent Browser tab limit reached."); return; }
-    if (!WebURL(url)) { done(nullptr, @"Invalid page URL. No page was opened."); return; }
-    NSView *container = [runtime.delegate browserContainerForRoute:route];
-    if (!container) { done(nullptr, @"The source CtrlX workspace was closed. No page was opened."); return; }
-    CefWindowInfo info;
-    info.SetAsChild((__bridge void *)container, CefRect(0, 0, 1000, 700));
-    info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-    CefBrowserSettings settings;
-    // All instances share ONE profile, not one profile per tab/session.
-    auto browser = CefBrowserHost::CreateBrowserSync(info,
-        new EmbeddedClient(owner, container, route, nil), url, settings, nullptr, nullptr);
-    done(browser, browser ? nil : @"Chromium could not create the embedded page.");
+    CreateRoutedTab(owner, route, url, done);
     }));
   }];
 }
@@ -330,6 +337,18 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
   CefShutdown();
   self.started = NO;
   self.delegate = nil;
+}
+- (void)openManualTabWithRoute:(NSDictionary<NSString *, NSString *> *)route url:(NSString *)url completion:(void (^)(NSString *))completion {
+  if (!self.started || !self.endpointReady || self.closing) {
+    completion(@"Chromium is not ready. Try again, or choose WebKit in Settings > Browser."); return;
+  }
+  NSDictionary *destination = [route copy];
+  std::string page = url.UTF8String ?: "";
+  void (^reply)(NSString *) = [completion copy];
+  if (!CefPostTask(TID_UI, new BrowserUITask([destination, page, reply] {
+    // Creation runs on CEF's native loop, never reenters a Swift executor job.
+    CreateRoutedTab("", destination, page, [reply](auto browser, NSString *error) { reply(error); });
+  }))) completion(@"Chromium could not schedule the new tab.");
 }
 - (void)navigateTab:(NSString *)identifier url:(NSString *)url {
   auto browser = AgentBrowserTarget(identifier);
