@@ -7,35 +7,131 @@ struct BrowserCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "browser",
         abstract: "Control this instance's Chromium tabs embedded in its local CtrlX session (ordinary WebKit tabs are separate)",
-        subcommands: [BrowserRunCommand.self, BrowserIdentityCommand.self, BrowserActionCommand.self, BrowserPageCommand.self, BrowserEngineCommand.self, BrowserEngineProviderCommand.self]
+        subcommands: [BrowserRunCommand.self, BrowserIdentityCommand.self, BrowserActionCommand.self, BrowserPageCommand.self, BrowserBatchCommand.self, BrowserSetupCommand.self, BrowserRecordCommand.self, BrowserEngineCommand.self, BrowserEngineProviderCommand.self]
     )
 }
 
 struct BrowserPageCommand: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "command", abstract: "Vercel page capabilities in an owned embedded tab; options precede --, e.g. --tab ID -- get title",
-        discussion: "Page commands: " + AgentBrowserPageCommand.commands.sorted().joined(separator: ", ") + ". Use action open/tabs/navigate/show/close for tab lifecycle. screenshot/pdf/download/network har stop require --output before --. No browser-wide or external-runtime commands.")
+        discussion: "Page commands: " + AgentBrowserPageCommand.commands.sorted().joined(separator: ", ") + ". Use action open/tabs/navigate/show/close for tab lifecycle. screenshot/diff screenshot/diff url --screenshot/pdf/download/network har stop require --output before --. See browser batch/setup/record for managed workflows. No browser-wide or external-runtime commands.")
     @Option var tab: String
     @Option(help: "New artifact path; never overwrites an existing file") var output: String?
+    @Option(help: "UTF-8 JavaScript for eval/init add, or a JSON object for webmcp invoke; max 48 KB") var inputFile: String?
+    @Flag(help: "Read eval/init/WebMCP input from a pipe instead of a file or inline argument; max 48 KB") var inputStdin = false
     @Argument(parsing: .captureForPassthrough) var arguments: [String]
 
     func run() throws {
-        let words = arguments.first == "--" ? Array(arguments.dropFirst()) : arguments
+        var words = arguments.first == "--" ? Array(arguments.dropFirst()) : arguments
+        guard inputFile == nil || !inputStdin else { throw ValidationError("Choose --input-file or --input-stdin, not both.") }
+        if let inputFile {
+            words = try AgentBrowserPageCommand.withInput(words, data: ManagedAgentBrowser.readBaseline(inputFile, image: false))
+        } else if inputStdin {
+            guard isatty(STDIN_FILENO) == 0 else { throw ValidationError("--input-stdin requires piped input, not an interactive terminal.") }
+            var data = Data()
+            while data.count <= 48000 {
+                let chunk = try FileHandle.standardInput.read(upToCount: 48001 - data.count) ?? Data()
+                if chunk.isEmpty { break }
+                data.append(chunk)
+            }
+            words = try AgentBrowserPageCommand.withInput(words, data: data)
+        }
         try AgentBrowserPageCommand.validate(words)
         let artifact = AgentBrowserPageCommand.artifactExtension(words)
-        guard (artifact != nil) == (output != nil) else { throw ValidationError("Only screenshot/pdf/download/network har stop require --output before --.") }
+        guard (artifact != nil) == (output != nil) else { throw ValidationError("screenshot/diff screenshot/diff url --screenshot/pdf/download/network har stop require --output before --; other commands do not accept it.") }
         if let output, FileManager.default.fileExists(atPath: output) { throw ValidationError("Output already exists; no page action sent.") }
-        var result = try AgentBrowserEngine.perform(["command": "upstream", "tab": tab, "words": words], explicit: "vercel")
-        if let output {
-            guard let body = result as? [String: Any], let encoded = body["data"] as? String,
-                  let data = Data(base64Encoded: encoded) else { throw ValidationError("Invalid engine artifact.") }
-            let fd = Darwin.open(output, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
-            guard fd >= 0 else { throw ValidationError("Output exists or cannot be created.") }
-            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-            try handle.write(contentsOf: data)
-            try handle.close()
-            result = ["path": output, "bytes": data.count]
-        }
+        let raw = try AgentBrowserEngine.perform(["command": "upstream", "tab": tab, "words": words], explicit: "vercel")
+        let result = try AgentBrowserBatch.export(raw, to: output)
         print(String(decoding: try JSONSerialization.data(withJSONObject: ["ok": true, "result": result], options: [.sortedKeys]), as: UTF8.self))
+    }
+}
+
+struct BrowserBatchCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "batch", abstract: "Run 1...32 page commands under one tab lock; stop on first failure by default, never retry")
+    @Option var tab: String
+    @Option(help: "JSON array of argv arrays, or objects with command (argv) and optional output (new artifact path)") var commandsJSON: String
+    @Flag(help: "Continue after failures without retrying them; inspect per-step success. Exit status remains failure if any step fails.") var continueOnError = false
+
+    func run() throws {
+        let steps = try AgentBrowserBatch.decode(Data(commandsJSON.utf8))
+        let rows = try JSONSerialization.jsonObject(with: JSONEncoder().encode(steps))
+        let result = try AgentBrowserEngine.perform(["command": "batch", "tab": tab, "steps": rows, "continueOnError": continueOnError], explicit: "vercel")
+        let success = (result as? [[String: Any]])?.allSatisfy { $0["success"] as? Bool == true } == true
+        print(String(decoding: try JSONSerialization.data(withJSONObject: ["ok": success, "result": result], options: [.sortedKeys]), as: UTF8.self))
+        if !success { throw ExitCode.failure }
+    }
+}
+
+struct BrowserSetupCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "setup", abstract: "Replace this tab's init setup; reload explicitly afterwards to instrument a fresh document")
+    @Option var tab: String
+    @Flag(help: "Install upstream React DevTools hook before subsequent page scripts") var react = false
+    @Option(parsing: .singleValue, help: "UTF-8 init script, up to four files; omitting all options clears future injection") var initScript: [String] = []
+
+    func run() throws {
+        guard initScript.count <= 4 else { throw ValidationError("At most four init scripts.") }
+        let sources = try initScript.map { path -> String in
+            let data = try ManagedAgentBrowser.readBaseline(path, image: false)
+            guard data.count <= 48000, let source = String(data: data, encoding: .utf8) else { throw ValidationError("Init script must be UTF-8 and at most 48 KB.") }
+            return source
+        }
+        let result = try AgentBrowserEngine.perform(["command": "setup", "tab": tab, "react": react, "sources": sources], explicit: "vercel")
+        print(String(decoding: try JSONSerialization.data(withJSONObject: ["ok": true, "result": result], options: [.sortedKeys]), as: UTF8.self))
+    }
+}
+
+struct BrowserRecordCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "record", abstract: "Record a bounded 1...10 second WebM/MP4 clip of the owned page (requires local Homebrew ffmpeg)")
+    @Option var tab: String
+    @Option var output: String
+    @Option var seconds: Int = 3
+    @Option(help: "webm (default) or mp4") var format: String = "webm"
+    @Option(help: "Capture frame rate, 1...60") var fps: Int = 10
+    @Flag(help: "Include upstream cursor feedback in the recording") var cursor = false
+    @Option(help: "Optional new PNG path for an upstream contact sheet") var contactSheet: String?
+    @Option(help: "Changed-pixel ratio for contact-sheet selection, 0...1") var contactSheetThreshold: Double = 0.05
+    @Option(help: "Optional JSON argv-array batch to execute while recording; stop on first failure") var commandsJSON: String?
+
+    func run() throws {
+        guard (1...10).contains(seconds), !FileManager.default.fileExists(atPath: output) else { throw ValidationError("Use 1...10 seconds and a new output path.") }
+        try AgentBrowserPageCommand.validateRecording(format: format, fps: fps)
+        guard contactSheetThreshold.isFinite, (0...1).contains(contactSheetThreshold) else { throw ValidationError("Contact sheet threshold must be 0...1.") }
+        if let contactSheet {
+            guard !FileManager.default.fileExists(atPath: contactSheet),
+                  URL(fileURLWithPath: contactSheet).standardizedFileURL != URL(fileURLWithPath: output).standardizedFileURL else {
+                throw ValidationError("Contact sheet must use a separate new path.")
+            }
+        }
+        var steps: [[String]] = []
+        if let commandsJSON {
+            guard commandsJSON.utf8.count <= 65536, let parsed = try JSONSerialization.jsonObject(with: Data(commandsJSON.utf8)) as? [[String]] else { throw ValidationError("Invalid command batch.") }
+            try AgentBrowserPageCommand.validateBatch(parsed)
+            steps = parsed
+        }
+        let result = try AgentBrowserEngine.perform(["command": "record", "tab": tab, "seconds": seconds, "steps": steps,
+            "format": format, "fps": fps, "cursor": cursor, "contactSheet": contactSheet != nil,
+            "contactSheetThreshold": contactSheetThreshold], explicit: "vercel")
+        guard let body = result as? [String: Any], let encoded = body["data"] as? String,
+              let data = Data(base64Encoded: encoded), AgentBrowserPageCommand.isRecording(data, format: format) else { throw ValidationError("Invalid recording artifact.") }
+        var sheet: Data?
+        if contactSheet != nil {
+            guard let encoded = body["contactSheetData"] as? String, let png = Data(base64Encoded: encoded),
+                  png.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else { throw ValidationError("Invalid contact sheet artifact.") }
+            sheet = png
+        }
+        let fd = Darwin.open(output, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw ValidationError("Output exists or cannot be created.") }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        try handle.write(contentsOf: data); try handle.close()
+        var summary: [String: Any] = ["path": output, "bytes": data.count, "format": format, "fps": fps, "cursor": cursor]
+        if let contactSheet, let sheet {
+            let sheetFD = Darwin.open(contactSheet, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
+            guard sheetFD >= 0 else { throw ValidationError("Video saved at \(output), but contact-sheet output exists or cannot be created. No retry performed.") }
+            let sheetHandle = FileHandle(fileDescriptor: sheetFD, closeOnDealloc: true)
+            try sheetHandle.write(contentsOf: sheet); try sheetHandle.close()
+            summary["contactSheetPath"] = contactSheet
+            summary["contactSheetFrames"] = body["contactSheetFrames"]
+        }
+        print(String(decoding: try JSONSerialization.data(withJSONObject: ["ok": true, "result": summary], options: [.sortedKeys]), as: UTF8.self))
     }
 }
 

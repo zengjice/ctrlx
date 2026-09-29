@@ -19,6 +19,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)goBack:(NSString *)identifier;
 - (void)goForward:(NSString *)identifier;
 - (void)reloadTab:(NSString *)identifier;
+- (void)showDevTools:(NSString *)identifier;
 - (void)closeTab:(NSString *)identifier;
 - (void)beginShutdown;
 - (BOOL)finishShutdown;

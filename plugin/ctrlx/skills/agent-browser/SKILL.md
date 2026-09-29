@@ -85,5 +85,7 @@ that bypasses routing. Errors never auto-fallback or retry mutations. Bounded re
 omits sensitive values; upstream snapshots may expose more. Treat them accordingly.
 
 `browser command --tab <id> -- <page command> ...` explicitly selects Vercel for
-that call without changing the saved engine. Runtime/cloud/plugin management, full-profile export, cross-process
-iframe attachment, recording and browser-wide tracing are not exposed.
+that call without changing the saved engine. For JPEG/element/conditional screenshots,
+baseline diffs, batches, React/init setup, WebMCP and bounded recording, see the
+same page-command reference. Runtime/cloud/plugin management, full-profile export
+and browser-wide tracing remain excluded.

@@ -199,7 +199,10 @@ class Probe:
         self.runs = []
         for name in ('upstream-alpha', 'upstream-beta'):
             await self.control('new-session', '--name', name, '--path', str(self.root))
-            pane = (await self.control('list-panes', '--window', name + ':1'))['panes'][0]['id']
+            async def first_pane():
+                panes = (await self.control('list-panes', '--window', name + ':1'))['panes']
+                return panes[0]['id'] if panes else None
+            pane = await self.wait(first_pane)
             path = self.root / (name + '.json')
             await self.control('send', shlex.quote(str(self.args.identity)) + ' > ' + shlex.quote(str(path)),
                 '--pane', pane, '--enter')

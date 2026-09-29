@@ -30,10 +30,17 @@
     client.tab = token.UTF8String;
     client.browser = tabs_.at(client.tab).browser;
     client.generation = tabs_.at(client.tab).generation;
+    int browserID = client.browser->GetIdentifier();
+    if ([command isEqual:@"probe.devtools"]) {
+      NSString *action = request[@"action"];
+      if (![@[@"show", @"close", @"status"] containsObject:action]) {
+        Reply(id, nil, @"Invalid DevTools fixture action."); return true;
+      }
+      Reply(id, ProbeAgentBrowserDevTools(client.browser, action)); return true;
+    }
     if (!ValidURL(String(client.browser->GetMainFrame()->GetURL().ToString()))) {
       Reply(id, nil, @"Probe requires HTTP(S) fixture."); return true;
     }
-    int browserID = client.browser->GetIdentifier();
     if ([command isEqual:@"probe.events"]) {
       if (probeOverflow_.contains(browserID)) {
         Reply(id, nil, @"Probe event queue overflow; fixture invalid."); return true;

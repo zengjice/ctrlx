@@ -18,6 +18,14 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     private var closing = false
     private let logger = Logger(label: "com.ctrlx.agent-browser")
 
+    public override init() { super.init() }
+
+    // Tests inject the native boundary without starting Chromium or touching a profile.
+    init(runtime: any CXBrowserRuntime) {
+        self.runtime = runtime
+        super.init()
+    }
+
     func start(resolvePane: @escaping @MainActor (Int32) async throws -> PaneInfo) {
         guard runtime == nil, !closing else { return }
         self.resolvePane = resolvePane
@@ -55,9 +63,17 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
 
     func register(_ workspace: AgentBrowserWorkspace) { workspaces[workspace.id] = workspace }
     func unregister(_ workspace: AgentBrowserWorkspace) {
-        workspaces.removeValue(forKey: workspace.id)
+        guard workspaces.removeValue(forKey: workspace.id) === workspace else { return }
         let ownedTabs = tabs.values.filter { $0.workspaceID == workspace.id }
-        for tab in ownedTabs { close(tab) }
+        for tab in ownedTabs {
+            // Native close callbacks arrive later, after this workspace is no
+            // longer registered. Retire the UI state now, otherwise a reused
+            // SwiftUI workspace retains blank, already-closed browser tabs.
+            tabs.removeValue(forKey: tab.identifier)
+            tab.isClosed = true
+            workspace.onClose(tab)
+            runtime?.closeTab(tab.identifier)
+        }
     }
 
     public func resolveBrowserProcess(_ pid: Int32, completion: @escaping ([String: String]?, String?) -> Void) {
@@ -123,6 +139,10 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     func back(_ tab: AgentBrowserTabState) { runtime?.goBack(tab.identifier) }
     func forward(_ tab: AgentBrowserTabState) { runtime?.goForward(tab.identifier) }
     func reload(_ tab: AgentBrowserTabState) { runtime?.reloadTab(tab.identifier) }
+    func showDevTools(_ tab: AgentBrowserTabState) {
+        guard !closing, !tab.isClosed, tabs[tab.identifier] === tab else { return }
+        runtime?.showDevTools(tab.identifier)
+    }
     func close(_ tab: AgentBrowserTabState) {
         guard !tab.isClosed else { return }
         runtime?.closeTab(tab.identifier)

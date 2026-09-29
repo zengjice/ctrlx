@@ -6,6 +6,11 @@ session tab strip and left/right split layout. No standalone browser window, no
 ChatGPT extension, MCP server, browser-wide TCP debugging port or Relay browser control is
 involved. Apple Silicon only for this first implementation.
 
+Future product features, capability expansion/testing and optional external-browser
+access are tracked in the [Agent Browser TODO](agent-browser-todo.md), with per-item
+implementation status. Verified public capabilities and remaining limits are in
+the [capability audit](agent-browser-capability-audit.md).
+
 ## Embedded routing
 
 Open CtrlX on the **same Mac** as the terminal agent. Start `codex` normally;
@@ -26,14 +31,27 @@ Switching tabs reparents the existing native view; it does not reload Chromium.
 Transient Chromium tabs are excluded from WKWebView layout persistence. Browser
 tabs are not mirrored to iOS/remote viewers in this increment.
 
-The host initializes CEF before use and pumps it on the AppKit RunLoop (CEF's
-external-pump model), not inside Swift's serial main-actor jobs. Browser creation
-resumes on CEF's loop after async process discovery. Closing a tab detaches only
-that native child; it must never close CtrlX's parent NSWindow. Shutdown waits
-for browser close callbacks and the cookie store's asynchronous flush completion
-before shutting down CEF from the native RunLoop. This uses CEF's
+The host initializes CEF before use, then enters `CefRunMessageLoop` from a
+deferred AppKit RunLoop callback, never a Swift serial main-actor job. CEF's
+native macOS loop continues to dispatch AppKit events and RunLoop sources and
+holds Chromium's application keep-alive. The old external timer pump missed that
+keep-alive: closing the last Chrome-style DevTools window could start global
+renderer fast shutdown even though Alloy page tabs were still open.
+Browser creation resumes on CEF's loop after async process discovery. Closing a
+tab detaches only that native child, never CtrlX's parent NSWindow. Shutdown waits
+for page/tools close callbacks, transports and the cookie store's asynchronous
+flush completion, then calls `CefQuitMessageLoop`. Only after the loop returns
+does it call `CefShutdown`. This uses CEF's
 [FlushStore completion contract](https://cef-builds.spotifycdn.com/docs/125.0/classCefCookieManager.html),
 not a fixed sleep or disabled cookie encryption.
+
+Workspace unregistration retires its UI tab state synchronously before requesting
+native close. Delayed CEF close callbacks must not leave dead tabs in a reused
+SwiftUI workspace, repeat cleanup, or affect another workspace. Native tab state
+is not restored by making a workspace visible again. For local installation
+acceptance, verify the running process's loaded executable and dylib paths/inodes
+as well as bundle hashes; replacing the App on disk does not replace a library
+already mapped by an older process.
 
 ## Ownership and data
 
@@ -116,6 +134,37 @@ Actions serialize per tab. Other tabs can operate while a wait is pending;
 closing a tab, exiting the owning agent or losing the renderer cancels the wait.
 For the original engine, cross-origin frames, rich text editors, uploads/downloads and debugging remain
 outside this increment. Use human interaction for unsupported widgets.
+
+## Human developer tools
+
+The wrench button at the right of an **Agent Browser** tab's address bar opens
+CEF's native Developer Tools for that exact page. It is a separate tools window
+inside the same CtrlX application, not another browser app or a WebKit tab.
+Repeated clicks focus the existing tools window. Closing the tools preserves
+the page; closing the page/workspace or quitting CtrlX also disposes its tools.
+Navigation keeps the inspector attached to the same page tab.
+
+This is an explicit local, human debugging entry point (DOM/CSS, Console,
+Network), not an expansion of agent authority. DevTools use a dedicated CEF
+client and are never added to the agent tab registry or restored as ordinary
+tabs. Creation runs on CEF's native loop; shutdown waits for tools and pending
+creation as well as page browsers. The original WebKit **New Browser** is unchanged.
+
+There is no new HTTP/WebSocket debugging listener and no system-browser launch.
+The upstream CLI `inspect`, `stream`, and `dashboard` commands remain unavailable;
+managed-engine streaming remains disabled. Remote browser viewing/control and
+operation-history UI are deferred, not implied by this local inspector.
+
+Regression entry points: `AgentBrowserDevToolsTests` (injected native boundary),
+`tests/devtools.py <isolated-signed-app> <pinned-engine> <identity-fixture>`, and
+`tests/background_tabs.py <isolated-signed-app> <pinned-engine> <identity-fixture>`.
+The background regression keeps two tabs in the **same workspace**, checks the
+original document/unsaved DOM after closing the last inspector, then exercises
+both public engines, repeated closes, other workspaces and normal host shutdown.
+Its default background idle is 120 seconds (`--idle 0` for a quick run).
+Both native tests require the acceptance-only `CTRLX_UPSTREAM_BROWSER_PROBE`
+runtime and exercise the same native method as the button; they are not
+toolbar-click or real-Codex tests. No automatic reload/replay recovery is used.
 
 ## Build and checks
 

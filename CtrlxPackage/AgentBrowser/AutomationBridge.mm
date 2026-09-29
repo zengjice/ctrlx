@@ -90,6 +90,7 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Remove(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
+    EngineForget(browser);
     std::vector<int> lost;
     for (const auto& [id, client] : clients_)
       if (client.browser && client.browser->IsSame(browser)) lost.push_back(id);
@@ -112,6 +113,11 @@ class Bridge final : public CefDevToolsMessageObserver {
     engineConnections_.clear();
     engineGrants_.clear();
     enginePending_.clear();
+    engineFrames_.clear();
+    engineScripts_.clear();
+    enginePageTargets_.clear(); engineCaptureAttaching_.clear(); engineCaptures_.clear();
+    engineMobilePages_.clear();
+    engineTrees_.clear();
     engineDownloads_.clear();
     engineDownloadPaths_.clear();
     engineDialogs_.clear();
@@ -164,6 +170,7 @@ class Bridge final : public CefDevToolsMessageObserver {
   }
 
   void OnDevToolsAgentDetached(CefRefPtr<CefBrowser> browser) override {
+    EngineForget(browser);
     std::vector<int> lost;
     for (auto& [id, client] : clients_)
       if (client.busy && client.browser && client.browser->IsSame(browser)) lost.push_back(id);

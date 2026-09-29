@@ -63,8 +63,8 @@ struct AgentBrowserEngineTests {
         #expect(plugins[0]["args"] as? [String] == ["browser", "engine-provider"])
     }
 
-    @Test func everyInvocationPinsTheSameProviderAndLaunchFlags() {
-        let base = ManagedAgentBrowser.baseArguments(root: URL(fileURLWithPath: "/fixture"))
+    @Test func everyInvocationPinsTheSameProviderAndLaunchFlags() throws {
+        let base = try ManagedAgentBrowser.baseArguments(root: URL(fileURLWithPath: "/fixture"))
         #expect(base == ["--config", "/fixture/config.json", "--session", "page", "--json",
                          "--provider", "ctrlx", "--no-webmcp"])
     }
@@ -94,11 +94,141 @@ struct AgentBrowserEngineTests {
         }
         for words in [["connect", "9222"], ["get", "cdp-url"], ["cookies", "clear"], ["state", "save"],
                       ["plugin", "run"], ["batch", "close"], ["record", "start"], ["trace", "start"],
+                      ["inspect"], ["stream", "enable"], ["dashboard", "start"],
                       ["network", "har", "stop", "/existing"], ["pdf", "/existing"], ["screenshot", "/existing"],
-                      ["diff", "url"], ["diff", "snapshot", "--baseline", "/file"],
+                      ["diff", "url"], ["diff", "snapshot", "--baseline"],
                       ["keydown", "Control+v"], ["keydown", "Meta"], ["press", "Meta+C"]] {
             #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.validate(words) }
         }
+    }
+
+    @Test func screenshotOptionsAreParsedWithoutUpstreamPathHeuristics() throws {
+        let plan = try AgentBrowserPageCommand.screenshotPlan(["screenshot", "--selector", "div[data-x='/']", "--format", "jpeg", "--quality", "80", "--if-changed"])
+        #expect(plan.arguments == ["screenshot", "div[data-x='/']", "--if-changed"])
+        #expect(plan.flags == ["--screenshot-format", "jpeg", "--screenshot-quality", "80"])
+        #expect(AgentBrowserPageCommand.artifactExtension(["screenshot", "--selector", "jpeg"]) == "png")
+        for words in [["screenshot", "--format", "gif"], ["screenshot", "--threshold", "nan"],
+                      ["screenshot", "--quality", "101"], ["screenshot", "--quality", "10"],
+                      ["screenshot", "--selector"], ["screenshot", "--format", "--provider"],
+                      ["screenshot", "--format", "png", "--format", "jpeg"]] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.validate(words) }
+        }
+    }
+
+    @Test func boundedBatchAndNewCapabilities() throws {
+        try AgentBrowserPageCommand.validateBatch([["fill", "#text", "--provider"], ["get", "title"]])
+        for steps in [[], [["get", "title"], ["close"]], [["screenshot"]], Array(repeating: ["get", "title"], count: 33)] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.validateBatch(steps) }
+        }
+        for words in [["diff", "snapshot", "--baseline", "/tmp/fixture"], ["diff", "screenshot", "--baseline", "/tmp/b.png"],
+                      ["diff", "url", "https://a.test", "https://b.test"], ["react", "inspect", "1"],
+                      ["react", "renders", "start"], ["webmcp", "invoke", "tool", "--params", "{}"]] {
+            try AgentBrowserPageCommand.validate(words)
+        }
+        for words in [["diff", "url", "file:///private", "https://b.test"], ["diff", "screenshot"],
+                      ["diff", "snapshot", "--output", "/file"], ["webmcp", "invoke", "tool", "--params", "@/file"]] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.validate(words) }
+        }
+    }
+
+    @Test func baselineReadsAreBoundedRegularFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("text")
+        try Data("baseline".utf8).write(to: file)
+        #expect(try ManagedAgentBrowser.readBaseline(file.path, image: false) == Data("baseline".utf8))
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        for path in [root.path, link.path] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try ManagedAgentBrowser.readBaseline(path, image: false) }
+        }
+        #expect(throws: AgentBrowserTransport.Failure.self) { try ManagedAgentBrowser.readBaseline(file.path, image: true) }
+        try Data().write(to: file)
+        #expect(try ManagedAgentBrowser.readBaseline(file.path, image: false).isEmpty)
+        var header = Data([137, 80, 78, 71, 13, 10, 26, 10] + Array(repeating: UInt8(0), count: 8))
+        header.append(contentsOf: [0, 1, 0, 0, 0, 1, 0, 0])
+        try header.write(to: file)
+        #expect(throws: AgentBrowserTransport.Failure.self) { try ManagedAgentBrowser.readBaseline(file.path, image: true) }
+    }
+
+    @Test func requestDetailAndHARContentModes() throws {
+        try AgentBrowserPageCommand.validate(["network", "request", "123.4"])
+        for mode in ["all", "text", "none"] {
+            let words = ["network", "har", "start", "--content", mode]
+            try AgentBrowserPageCommand.validate(words)
+            #expect(AgentBrowserPageCommand.artifactExtension(words) == nil)
+        }
+        for words in [["network", "request"], ["network", "request", ""],
+                      ["network", "request", "123", "extra"],
+                      ["network", "har", "start", "--content"],
+                      ["network", "har", "start", "--content", "bad"],
+                      ["network", "har", "stop", "--content", "all"],
+                      ["network", "har", "start", "--content", "all", "--content", "none"]] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.validate(words) }
+        }
+    }
+
+    @Test func boundedLiteralCommandInput() throws {
+        let script = "window.proof = '中文';\n'--provider'"
+        #expect(try AgentBrowserPageCommand.withInput(["eval"], data: Data(script.utf8)) == ["eval", script])
+        let params = #"{"message":"--provider"}"#
+        #expect(try AgentBrowserPageCommand.withInput(["webmcp", "invoke", "tool", "--detach"], data: Data(params.utf8)) == ["webmcp", "invoke", "tool", "--detach", "--params", params])
+        for words in [["eval", "1"], ["get", "title"], ["webmcp", "invoke", "tool", "--params", "{}"]] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.withInput(words, data: Data("{}".utf8)) }
+        }
+        for data in [Data([0xff]), Data(repeating: 65, count: 48001), Data([0])] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.withInput(["eval"], data: data) }
+        }
+        for params in ["[]", "null", "not json"] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.withInput(["webmcp", "invoke", "tool"], data: Data(params.utf8)) }
+        }
+    }
+
+    @Test func urlScreenshotDiffOptionsAndArtifactContract() throws {
+        let words = ["diff", "url", "https://a.test", "https://b.test", "--screenshot", "--selector", "#box", "--full", "--depth", "3", "--wait-until", "domcontentloaded"]
+        try AgentBrowserPageCommand.validate(words)
+        let plan = try AgentBrowserPageCommand.urlScreenshotPlan(words)
+        #expect(plan.wait == "domcontentloaded")
+        #expect(plan.snapshot == ["snapshot", "--selector", "#box", "--depth", "3"])
+        #expect(plan.screenshot == ["screenshot", "--selector", "#box", "--full"])
+        #expect(AgentBrowserPageCommand.artifactExtension(words) == "png")
+        for suffix in [["--wait-until", "invalid"], ["--selector"], ["--depth", "-1"], ["--provider", "other"], ["--screenshot"]] {
+            #expect(throws: AgentBrowserTransport.Failure.self) {
+                try AgentBrowserPageCommand.validate(Array(words.prefix(5)) + suffix)
+            }
+        }
+        #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.validateBatch([words]) }
+    }
+
+    @Test func recordingFormatsAndRatesAreValidatedBeforeEngineUse() throws {
+        for format in ["webm", "mp4"] {
+            for fps in [1, 10, 60] { try AgentBrowserPageCommand.validateRecording(format: format, fps: fps) }
+        }
+        for fps in [0, -1, 61] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.validateRecording(format: "mp4", fps: fps) }
+        }
+        #expect(throws: AgentBrowserTransport.Failure.self) { try AgentBrowserPageCommand.validateRecording(format: "../escape", fps: 10) }
+        let webm = Data([0x1A, 0x45, 0xDF, 0xA3])
+        let mp4 = Data([0, 0, 0, 24]) + Data("ftypisom".utf8)
+        #expect(AgentBrowserPageCommand.isRecording(webm, format: "webm"))
+        #expect(AgentBrowserPageCommand.isRecording(mp4, format: "mp4"))
+        #expect(!AgentBrowserPageCommand.isRecording(webm, format: "mp4"))
+        #expect(!AgentBrowserPageCommand.isRecording(mp4, format: "webm"))
+        #expect(!AgentBrowserPageCommand.isRecording(Data(), format: "mp4"))
+    }
+
+    @Test func setupFlagsAreExplicitAndPathsStayInsidePrivateRoot() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let script = UUID().uuidString + ".js"
+        let setup = root.appendingPathComponent("setup.json")
+        try AgentBrowserTransport.writePrivateJSON(["react": true, "scripts": [script]], to: setup)
+        let arguments = try ManagedAgentBrowser.baseArguments(root: root)
+        #expect(arguments.suffix(4) == ["--enable", "react-devtools", "--init-script", root.appendingPathComponent(script).path])
+        try AgentBrowserTransport.writePrivateJSON(["scripts": ["../escape.js"]], to: setup)
+        #expect(throws: AgentBrowserTransport.Failure.self) { try ManagedAgentBrowser.baseArguments(root: root) }
     }
 
     @Test func batchResultAndLiteralArguments() throws {

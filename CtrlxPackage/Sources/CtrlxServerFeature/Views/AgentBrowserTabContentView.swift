@@ -25,6 +25,12 @@ struct AgentBrowserTabContentView: View {
                     .foregroundStyle(.secondary)
                     .help("Shared Agent Browser logins; only this Codex instance controls this tab")
                 if state.isLoading { ProgressView().controlSize(.small) }
+                Button {
+                    state.service.showDevTools(state)
+                } label: { Label("Developer Tools", symbol: .wrenchAndScrewdriver) }
+                .help("Open Developer Tools for this Agent Browser tab")
+                .accessibilityIdentifier("agent-browser-developer-tools")
+                .disabled(state.isClosed)
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)

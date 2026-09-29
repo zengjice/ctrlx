@@ -2,7 +2,7 @@
 // sandboxed subprocesses; no separate visible browser application is created.
 #import "../Sources/CtrlxBrowserBridge/include/CtrlxBrowserBridge.h"
 #include "AgentBrowser.h"
-#include <algorithm>
+#include <atomic>
 #include <map>
 #include "include/cef_app.h"
 #include "include/cef_application_mac.h"
@@ -20,21 +20,66 @@
 @property(nonatomic) BOOL endpointReady;
 @property(nonatomic) BOOL shutdownScheduled;
 @property(nonatomic) BOOL shuttingDown;
-@property(nonatomic) BOOL pumping;
+@property(nonatomic) BOOL loopRunning;
 @property(nonatomic) BOOL cookieFlushRequested;
 @property(nonatomic) BOOL cookiesFlushed;
-@property(nonatomic, strong) NSTimer *pumpTimer;
 @property(nonatomic, copy) NSString *state;
 - (void)contextReady;
+- (void)runBrowserLoop;
 - (void)shutdownOnRunLoop;
-- (void)schedulePump:(NSNumber *)delay;
-- (void)pump;
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+- (void)probeCloseDevTools:(NSWindow *)window;
+#endif
 @end
 
 static CXEmbeddedBrowserRuntime *runtime;
 static std::unique_ptr<CefScopedLibraryLoader> library;
 static std::map<int, CefRefPtr<CefBrowser>> browsers;
 static std::map<int, NSString *> identifiers;
+// DevTools are human-only native windows, never agent-controlled page tabs.
+static std::map<int, CefRefPtr<CefBrowser>> devToolsBrowsers;
+static std::atomic_size_t pendingDevTools{0};
+
+class DevToolsClient final : public CefClient, public CefLifeSpanHandler {
+ public:
+  explicit DevToolsClient(int source) : source_(source) { ++pendingDevTools; }
+  ~DevToolsClient() override { if (pending_) --pendingDevTools; }
+  CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+    CEF_REQUIRE_UI_THREAD();
+    pending_ = false;
+    --pendingDevTools;
+    devToolsBrowsers[browser->GetIdentifier()] = browser;
+    // The source may have closed while CEF was creating the tools window.
+    if (runtime.closing || !browsers.contains(source_)) browser->GetHost()->CloseBrowser(true);
+  }
+  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+    CEF_REQUIRE_UI_THREAD();
+    devToolsBrowsers.erase(browser->GetIdentifier());
+  }
+  bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int,
+      const CefString&, const CefString&, WindowOpenDisposition, bool,
+      const CefPopupFeatures&, CefWindowInfo&, CefRefPtr<CefClient>&,
+      CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
+    // DevTools must not create unmanaged pages or another automation target.
+    return true;
+  }
+  int Source() const { return source_; }
+ private:
+  int source_;
+  bool pending_ = true;
+  IMPLEMENT_REFCOUNTING(DevToolsClient);
+};
+
+static void CloseDevToolsFor(CefRefPtr<CefBrowser> browser) {
+  browser->GetHost()->CloseDevTools();
+  // Also cover a tool whose association CEF already detached during closing.
+  auto copy = devToolsBrowsers;
+  for (const auto& [id, tools] : copy) {
+    auto client = static_cast<DevToolsClient*>(tools->GetHost()->GetClient().get());
+    if (client->Source() == browser->GetIdentifier()) tools->GetHost()->CloseBrowser(true);
+  }
+}
 
 class CookieFlushCompletion final : public CefCompletionCallback {
  public:
@@ -99,6 +144,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   }
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
+    CloseDevToolsFor(browser);
     RemoveAgentBrowserTab(browser);
     browsers.erase(browser->GetIdentifier());
     identifiers.erase(browser->GetIdentifier());
@@ -117,6 +163,12 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     info.SetAsChild((__bridge void *)container, CefRect(0, 0, container.bounds.size.width, container.bounds.size.height));
     info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
     return false;
+  }
+  void OnBeforeDevToolsPopup(CefRefPtr<CefBrowser> browser, CefWindowInfo&,
+      CefRefPtr<CefClient>& client, CefBrowserSettings&,
+      CefRefPtr<CefDictionaryValue>&, bool*) override {
+    // Also isolate any CEF-provided entry point from the page's lifecycle client.
+    client = new DevToolsClient(browser->GetIdentifier());
   }
   bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
       CefRefPtr<CefRequest> request, bool, bool) override {
@@ -194,13 +246,13 @@ static void OpenTab(std::string owner, int pid, std::string url,
 
 class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
  public:
+  void OnBeforeCommandLineProcessing(const CefString& process, CefRefPtr<CefCommandLine> command) override {
+    // Page-provided tools are opt-in through the bounded CLI, not an MCP server.
+    // Match the pinned engine's Chromium launch prerequisites.
+    command->AppendSwitchWithValue("enable-features", "WebMCPTesting,DevToolsWebMCPSupport");
+  }
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
   void OnContextInitialized() override { [runtime contextReady]; }
-  void OnScheduleMessagePumpWork(int64_t delay) override {
-    // CEF may call on any thread. Its nested native loop must not run inside
-    // a Swift main-actor/serial-dispatch job (which is not reentrant).
-    [runtime performSelectorOnMainThread:@selector(schedulePump:) withObject:@(delay) waitUntilDone:NO];
-  }
  private:
   IMPLEMENT_REFCOUNTING(EmbeddedApp);
 };
@@ -233,7 +285,10 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
     return NO;
   }
   CefSettings settings;
-  settings.external_message_pump = true;
+  // CefRunMessageLoop owns Chromium's application keep-alive. With the external
+  // pump that keep-alive is absent: closing the last Chrome-style DevTools
+  // window starts global fast shutdown, even while Alloy pages are still open.
+  settings.external_message_pump = false;
   NSString *bundle = NSBundle.mainBundle.bundlePath;
   CefString(&settings.main_bundle_path) = bundle.UTF8String;
   CefString(&settings.framework_dir_path) = [bundle stringByAppendingPathComponent:@"Contents/Frameworks/Chromium Embedded Framework.framework"].UTF8String;
@@ -251,7 +306,8 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
     return NO;
   }
   self.started = YES;
-  [self schedulePump:@0];
+  // Enter from AppKit, never from the Swift main-actor job that initialized us.
+  [self performSelector:@selector(runBrowserLoop) withObject:nil afterDelay:0];
   return YES;
 }
 - (void)contextReady {
@@ -263,26 +319,17 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
   }});
   if (!self.endpointReady) NSLog(@"CtrlX embedded browser control endpoint could not start.");
 }
-- (void)schedulePump:(NSNumber *)delay {
+- (void)runBrowserLoop {
   if (!self.started || self.shuttingDown) return;
-  NSTimeInterval seconds = std::clamp(delay.doubleValue / 1000.0, 0.0, 0.033);
-  NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:seconds];
-  if (self.pumpTimer && [self.pumpTimer.fireDate compare:deadline] != NSOrderedDescending) return;
-  [self.pumpTimer invalidate];
-  self.pumpTimer = [NSTimer timerWithTimeInterval:seconds target:self selector:@selector(pump) userInfo:nil repeats:NO];
-  [[NSRunLoop mainRunLoop] addTimer:self.pumpTimer forMode:NSRunLoopCommonModes];
-}
-- (void)pump {
-  [self.pumpTimer invalidate];
-  self.pumpTimer = nil;
-  if (!self.started || self.shuttingDown) return;
-  if (self.pumping) { [self schedulePump:@0]; return; }
-  self.pumping = YES;
-  CefDoMessageLoopWork();
-  self.pumping = NO;
-  // CEF's external-pump sample keeps an idle timer as well as wakeups; relying
-  // solely on OnScheduleMessagePumpWork can strand delayed Chromium tasks.
-  [self schedulePump:@33];
+  self.loopRunning = YES;
+  // CEF's macOS pump dispatches AppKit events and RunLoop sources while NSApp
+  // is already running. Swift UI/I/O jobs remain free to execute in this loop.
+  CefRunMessageLoop();
+  self.loopRunning = NO;
+  // Shutdown only after the native loop has unwound, not from one of its jobs.
+  CefShutdown();
+  self.started = NO;
+  self.delegate = nil;
 }
 - (void)navigateTab:(NSString *)identifier url:(NSString *)url {
   auto browser = AgentBrowserTarget(identifier);
@@ -291,16 +338,38 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
 - (void)goBack:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->GoBack(); }
 - (void)goForward:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->GoForward(); }
 - (void)reloadTab:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->Reload(); }
-- (void)closeTab:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->GetHost()->CloseBrowser(true); }
+- (void)showDevTools:(NSString *)identifier {
+  if (!self.started || self.closing) return;
+  // Creating native Chromium windows must not reenter a Swift main-actor job.
+  NSString *target = [identifier copy];
+  CefPostTask(TID_UI, new BrowserUITask([target] {
+    CEF_REQUIRE_UI_THREAD();
+    auto browser = AgentBrowserTarget(target);
+    if (runtime.closing || !browser || !browser->IsValid() ||
+        !browsers.contains(browser->GetIdentifier())) return;
+    CefWindowInfo info;
+    CefString(&info.window_name) = "CtrlX Agent Browser — Developer Tools";
+    info.bounds = CefRect(0, 0, 1000, 700);
+    // CEF focuses the existing tools window if it is already open.
+    browser->GetHost()->ShowDevTools(info, new DevToolsClient(browser->GetIdentifier()),
+                                   CefBrowserSettings(), CefPoint());
+  }));
+}
+- (void)closeTab:(NSString *)identifier {
+  auto browser = AgentBrowserTarget(identifier);
+  if (browser) { CloseDevToolsFor(browser); browser->GetHost()->CloseBrowser(true); }
+}
 - (void)beginShutdown {
   self.closing = YES;
   auto copy = browsers;
   StopAgentBrowser();
-  for (auto& [id, browser] : copy) browser->GetHost()->CloseBrowser(true);
+  for (auto& [id, browser] : copy) { CloseDevToolsFor(browser); browser->GetHost()->CloseBrowser(true); }
+  auto tools = devToolsBrowsers;
+  for (auto& [id, browser] : tools) browser->GetHost()->CloseBrowser(true);
 }
 - (BOOL)finishShutdown {
   if (!self.started) return YES;
-  if (!browsers.empty()) return NO;
+  if (!browsers.empty() || !devToolsBrowsers.empty() || pendingDevTools.load() != 0) return NO;
   if (!AgentBrowserTransportsStopped()) return NO;
   // Closing the native views does not guarantee Chromium's pending cookie
   // writes reached disk. Keep its pump alive until the cookie-store completion
@@ -325,13 +394,46 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
 }
 - (void)shutdownOnRunLoop {
   self.shuttingDown = YES;
-  [self.pumpTimer invalidate];
-  self.pumpTimer = nil;
-  CefShutdown();
-  self.started = NO;
-  self.delegate = nil;
+  if (self.loopRunning) {
+    CefQuitMessageLoop();
+  } else {
+    // Shutdown may race the deferred first entry into the native loop.
+    CefShutdown();
+    self.started = NO;
+    self.delegate = nil;
+  }
 }
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+- (void)probeCloseDevTools:(NSWindow *)window {
+  if (!self.started || self.closing) return;
+  // Match CXBrowserApplication's real AppKit event boundary, not a nested
+  // performClose from inside the automation socket/CEF message-pump callback.
+  CefScopedSendingEvent scope;
+  [window performClose:nil];
+}
+#endif
 @end
+
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+NSDictionary *ProbeAgentBrowserDevTools(CefRefPtr<CefBrowser> source, NSString *action) {
+  CEF_REQUIRE_UI_THREAD();
+  const int sourceID = source->GetIdentifier();
+  if ([action isEqual:@"show"]) [runtime showDevTools:identifiers.at(sourceID)];
+  auto copy = devToolsBrowsers;
+  NSMutableArray *tools = [NSMutableArray array];
+  for (const auto& [id, browser] : copy) {
+    auto client = static_cast<DevToolsClient*>(browser->GetHost()->GetClient().get());
+    if (client->Source() != sourceID) continue;
+    NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
+    auto frame = browser->GetMainFrame();
+    [tools addObject:@{@"id": @(id), @"url": frame ? @(frame->GetURL().ToString().c_str()) : @"",
+                      @"loading": @(browser->IsLoading()), @"visible": @(view.window.visible)}];
+    if ([action isEqual:@"close"])
+      [runtime performSelector:@selector(probeCloseDevTools:) withObject:view.window afterDelay:0];
+  }
+  return @{@"tools": tools, @"total": @(devToolsBrowsers.size()), @"pending": @(pendingDevTools.load())};
+}
+#endif
 
 extern "C" __attribute__((visibility("default"))) BOOL CXEmbeddedBrowserPrepareApplication() {
   if (NSApp && ![NSApp isKindOfClass:CXBrowserApplication.class]) return NO;

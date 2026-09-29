@@ -56,6 +56,40 @@ for operation, flags, error in (
     invalid = run(['browser', 'action', operation, '--tab', 'test', *flags], env=clean_env)
     assert invalid.returncode != 0 and error in invalid.stderr, invalid.stderr
 
+for arguments, message in (
+    (['command', '--tab', 'test', '--', 'frame', '--url'], 'Use frame'),
+    (['command', '--tab', 'test', '--', 'screenshot', '--format', 'gif'], 'format'),
+    (['batch', '--tab', 'test', '--commands-json', '[["get","title"],["close"]]'], 'Unsupported'),
+    (['batch', '--tab', 'test', '--commands-json', '[["screenshot"]]'], 'Artifact'),
+    (['command', '--tab', 'test', '--', 'init', 'remove', 'init-script-1'], 'returned-id'),
+    (['record', '--tab', 'test', '--output', '/tmp/not-created.webm', '--seconds', '99'], '1...10'),
+    (['record', '--tab', 'test', '--output', '/tmp/not-created.mp4', '--fps', '0'], 'fps'),
+    (['record', '--tab', 'test', '--output', '/tmp/not-created.mp4', '--format', 'invalid'], 'format'),
+    (['record', '--tab', 'test', '--output', '/tmp/not-created.mp4', '--contact-sheet-threshold', 'nan'], 'threshold'),
+    (['command', '--tab', 'test', '--input-file', '/not-read', '--input-stdin', '--', 'eval'], 'not both'),
+    (['command', '--tab', 'test', '--', 'network', 'har', 'start', '--content', 'bad'], 'content'),
+    (['command', '--tab', 'test', '--', 'network', 'request'], 'request'),
+):
+    invalid = run(['browser', *arguments], env=clean_env)
+    assert invalid.returncode != 0 and message in invalid.stderr, invalid.stderr
+
+for arguments in (
+    ['command', '--tab', 'test', '--', 'frame', '--name', 'nested'],
+    ['batch', '--tab', 'test', '--commands-json', '[["get","title"]]'],
+    ['batch', '--tab', 'test', '--continue-on-error', '--commands-json', '[["get","title"]]'],
+    ['command', '--tab', 'test', '--', 'init', 'list'],
+    ['setup', '--tab', 'test', '--react'],
+    ['command', '--tab', 'test', '--', 'network', 'request', '123.4'],
+    ['command', '--tab', 'test', '--', 'network', 'har', 'start', '--content', 'none'],
+):
+    parsed = run(['browser', *arguments], env=clean_env)
+    assert parsed.returncode != 0 and 'Cannot identify a calling Codex' in parsed.stderr, parsed.stderr
+
+parsed = run(['browser', 'command', '--tab', 'test', '--input-stdin', '--', 'eval'], env=clean_env, input='1 + 1')
+assert parsed.returncode != 0 and 'Cannot identify a calling Codex' in parsed.stderr, parsed.stderr
+invalid = run(['browser', 'command', '--tab', 'test', '--input-stdin', '--', 'eval'], env=clean_env, input='x' * 48001)
+assert invalid.returncode != 0 and '48 KB' in invalid.stderr, invalid.stderr
+
 # The optional launcher preserves quoting/functions, but creates no credentials.
 script = 'import os,json,sys; print(json.dumps([os.environ.get("CTRLX_BROWSER_CONTEXT"),sys.argv[1:]]))'
 values = ['space here', "single'quote", 'double"quote', '中文', '$literal']
@@ -64,4 +98,4 @@ assert child.returncode == 0 and json.loads(child.stdout) == [None, values], chi
 function = 'codex() { ' + shlex.join([sys.executable, '-c', script]) + ' "$@"; }; codex ' + shlex.join(values)
 shell = run(['browser', 'run', '--', '/bin/zsh', '-fc', function], env=clean_env)
 assert shell.returncode == 0 and json.loads(shell.stdout) == [None, values], shell
-print('PASS: no-ancestor refusal, inherited-token refusal, optional launcher, quoting, shell functions, bounded actions')
+print('PASS: no-ancestor/token refusal, launcher/quoting, bounded actions, expanded command/batch/setup/record parsing')

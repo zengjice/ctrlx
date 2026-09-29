@@ -28,13 +28,21 @@ enum AgentBrowserTransport {
         }
     }
 
-    static func request(_ object: [String: Any], socketPath: String) throws -> Any {
+    static func request(_ object: [String: Any], socketPath: String, upstream: Bool = false, timeoutSeconds: Int = 15) throws -> Any {
         try privatePath((socketPath as NSString).deletingLastPathComponent, type: S_IFDIR)
-        try privatePath(socketPath, type: S_IFSOCK)
+        if upstream {
+            // Upstream creates its socket with the process umask. The enclosing
+            // directory is private 0700; still reject symlinks/wrong UID/type,
+            // and verify the connected peer's UID below.
+            var info = stat()
+            guard lstat(socketPath, &info) == 0, info.st_uid == getuid(), info.st_mode & S_IFMT == S_IFSOCK else {
+                throw Failure("Invalid managed engine socket.")
+            }
+        } else { try privatePath(socketPath, type: S_IFSOCK) }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw Failure("Cannot create browser socket.") }
         defer { close(fd) }
-        var timeout = timeval(tv_sec: 15, tv_usec: 0)
+        var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
         var yes: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
@@ -79,6 +87,14 @@ enum AgentBrowserTransport {
         }
         guard let json = try JSONSerialization.jsonObject(with: response) as? [String: Any] else {
             throw Failure("Invalid browser response.")
+        }
+        if upstream {
+            // Private managed-daemon protocol only; never surface arbitrary
+            // upstream errors containing page URLs or provider credentials.
+            guard json["success"] as? Bool == true else {
+                throw Failure("Managed page operation failed; inspect the page. Not retried.")
+            }
+            return json["data"] ?? [:]
         }
         guard json["ok"] as? Bool == true else { throw Failure(json["error"] as? String ?? "Browser operation failed.") }
         return json["result"] ?? [:]

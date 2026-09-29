@@ -40,7 +40,7 @@ class Managed(Probe):
         os.environ['CTRLX_BROWSER_TEST_STATE_ROOT'] = str(self.root)
         await super().setup()
 
-    async def cli_action(self, number, *args, ok=True):
+    async def cli_action(self, number, *args, ok=True, failure_json=False):
         prefix = self.root / str(uuid.uuid4())
         command = shlex.join([self.cli, 'browser', *args])
         if '\n' in command:
@@ -59,7 +59,7 @@ class Managed(Probe):
         code = int(await self.wait(done, 100))
         error = Path(str(prefix) + '.err').read_text()
         assert (code == 0) == ok, (args, error)
-        if not ok:
+        if not ok and not failure_json:
             return error
         return json.loads(Path(str(prefix) + '.out').read_text())
 
@@ -178,8 +178,20 @@ class Managed(Probe):
                 '--session', 'page', 'close', env=env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             await asyncio.wait_for(process.wait(), 15)
             async with connect(url) as ws:
-                for index, method in enumerate(('Target.getTargets', 'Target.attachToTarget', 'Storage.getCookies', 'Browser.close', 'Page.navigate', 'Network.clearBrowserCookies')):
+                for index, method in enumerate(('Target.getTargets', 'Target.attachToTarget', 'Storage.getCookies', 'Browser.close', 'Page.navigate', 'Network.clearBrowserCookies', 'Tracing.start', 'Profiler.enable')):
                     await ws.send(json.dumps({'id': index, 'method': method, 'params': {}}))
+                    while True:
+                        reply = json.loads(await asyncio.wait_for(ws.recv(), 10))
+                        if reply.get('id') == index:
+                            break
+                    assert 'error' in reply
+                for index, message in enumerate((
+                    {'method': 'Runtime.evaluate', 'sessionId': 'unowned-session', 'params': {'expression': '1'}},
+                    {'method': 'Target.getTargetInfo', 'params': {'targetId': 'foreign-target'}},
+                    {'method': 'Page.startScreencast', 'params': {}},
+                    {'method': 'Emulation.setDeviceMetricsOverride', 'params': {'width': 900, 'height': 700, 'deviceScaleFactor': 1, 'mobile': {}}},
+                ), start=50):
+                    await ws.send(json.dumps(dict(message, id=index)))
                     while True:
                         reply = json.loads(await asyncio.wait_for(ws.recv(), 10))
                         if reply.get('id') == index:
@@ -191,6 +203,32 @@ class Managed(Probe):
             except Exception as error:
                 assert not isinstance(error, AssertionError)
         self.passed('browser-wide control and web-origin connections denied; disconnect preserves native views')
+        assert parent_url
+        async with connect(parent_url) as ws:
+            counter = 100
+            async def cdp(method, params=None, session=None):
+                nonlocal counter
+                counter += 1
+                message = {'id': counter, 'method': method, 'params': params or {}}
+                if session:
+                    message['sessionId'] = session
+                await ws.send(json.dumps(message))
+                while True:
+                    reply = json.loads(await asyncio.wait_for(ws.recv(), 20))
+                    if reply.get('id') == counter:
+                        return reply
+            target = (await cdp('Target.getTargetInfo'))['result']['targetInfo']['targetId']
+            assert 'error' in await cdp('Target.attachToTarget', {'targetId': 'foreign-target'})
+            capture = (await cdp('Target.attachToTarget', {'targetId': target, 'flatten': True}))['result']['sessionId']
+            assert 'error' in await cdp('Target.attachToTarget', {'targetId': target})
+            assert 'result' in await cdp('Page.startScreencast', {'format': 'jpeg', 'quality': 30}, capture)
+            async with asyncio.timeout(19):
+                while True:
+                    event = json.loads(await ws.recv())
+                    if event.get('method') == 'Target.detachedFromTarget' and event['params']['sessionId'] == capture:
+                        break
+            assert 'error' in await cdp('Runtime.evaluate', {'expression': '1'}, capture)
+        self.passed('capture attaches only exact owned page, refuses duplicates, expires natively and rejects stale session')
         error = await self.cli_action(0, 'action', 'fill', '--tab', a, '--selector', '@e1', '--text', 'must not insert', ok=False)
         assert 'reference state expired' in error
         self.passed('expired refs cannot silently bind to a newly bootstrapped snapshot')

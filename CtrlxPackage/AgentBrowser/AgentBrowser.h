@@ -27,3 +27,8 @@ bool AgentBrowserDownloadBegin(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem>
 void AgentBrowserDownloadUpdate(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem>, CefRefPtr<CefDownloadItemCallback>);
 bool AgentBrowserDialog(CefRefPtr<CefBrowser>, cef_jsdialog_type_t, const CefString&, const CefString&, CefRefPtr<CefJSDialogCallback>);
 void AgentBrowserDialogReset(CefRefPtr<CefBrowser>);
+
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+// Isolated acceptance only. Never exported by a production runtime.
+NSDictionary *ProbeAgentBrowserDevTools(CefRefPtr<CefBrowser> source, NSString *action);
+#endif
