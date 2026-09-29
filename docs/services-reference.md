@@ -50,7 +50,10 @@ empty marked text, bracketed paste, and starting a new composition in both proto
 
 **Codex question auto-expansion (Mac Host and Mac Viewer):**
 `CodexQuestionPrompt` recognizes the live `Queued follow-up inputs / ? N questions /
-shift + ← to answer` footer immediately above Codex's known empty composer. The
+shift + ← to answer` footer immediately above Codex's known empty composer. It
+also accepts the compact `shift+← to answer` hint observed in Codex 0.158.0;
+other shortcuts, incomplete hints and drafts still fail closed. Both Mac-side
+recognition and the Host's screen recheck use the same parser. The
 native wrapper checks a stable screen after 350 ms; only the key window's focused,
 visible terminal at the live bottom is eligible (no editor overlay, text selection,
 mouse drag or marked IME text). Typing postpones the check. It neither changes

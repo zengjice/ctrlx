@@ -23,7 +23,9 @@ struct CodexQuestionPrompt: Equatable, Sendable {
         let tail = Array(footer.suffix(3))
         if tail.count == 3,
            ["• Queued follow-up inputs", "Queued follow-up inputs"].contains(tail[0]),
-           tail[2] == "shift + ← to answer" {
+           // Codex 0.158 renders the chord without spaces. Accept both known
+           // layouts, but keep other shortcuts and partial hints fail-closed.
+           ["shift + ← to answer", "shift+← to answer"].contains(tail[2]) {
             let words = tail[1].split(separator: " ")
             guard words.count == 3, words[0] == "?",
                   let count = Int(words[1]), (1...999).contains(count),

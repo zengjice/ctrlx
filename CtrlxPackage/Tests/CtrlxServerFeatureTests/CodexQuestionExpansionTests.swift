@@ -11,20 +11,26 @@
     @Suite("Codex question expansion")
     @MainActor
     struct CodexQuestionExpansionTests {
-        nonisolated private static func screen(count: Int = 4, composer: String = "› Ask Codex to do anything") -> [String] {
+        nonisolated private static let supportedHints = ["shift + ← to answer", "shift+← to answer"]
+
+        nonisolated private static func screen(
+            count: Int = 4,
+            composer: String = "› Ask Codex to do anything",
+            hint: String = "shift + ← to answer"
+        ) -> [String] {
             ["output", "• Queued follow-up inputs", "  ? \(count) \(count == 1 ? "question" : "questions")",
-             "    shift + ← to answer", "", composer, "  gpt-6-astra · project"]
+             "    \(hint)", "", composer, "  gpt-6-astra · project"]
         }
 
-        @Test("Recognizes only the collapsed footer at the empty live composer", arguments: [1, 2, 4, 999])
-        func recognizesFooter(count: Int) {
-            #expect(CodexQuestionPrompt(lines: Self.screen(count: count), cursorRow: 5, cursorColumn: 2)?.count == count)
-            #expect(CodexQuestionPrompt(lines: Self.screen(count: count, composer: "› "), cursorRow: 5, cursorColumn: 2)?.count == count)
+        @Test("Recognizes old and new Codex footers at the empty live composer", arguments: [1, 2, 4, 999], supportedHints)
+        func recognizesFooter(count: Int, hint: String) {
+            #expect(CodexQuestionPrompt(lines: Self.screen(count: count, hint: hint), cursorRow: 5, cursorColumn: 2)?.count == count)
+            #expect(CodexQuestionPrompt(lines: Self.screen(count: count, composer: "› ", hint: hint), cursorRow: 5, cursorColumn: 2)?.count == count)
         }
 
-        @Test("Real Codex particle decoration does not hide the empty placeholder")
-        func particles() {
-            var lines = Self.screen()
+        @Test("Real Codex particle decoration does not hide the empty placeholder", arguments: supportedHints)
+        func particles(hint: String) {
+            var lines = Self.screen(hint: hint)
             lines[4] = "  ⠐       ⠐  ⠄    ⢀    ⠈ "
             lines[5] = "›⠁Ask Codex to do anything   ⠈       ⠂    ⠁"
             #expect(CodexQuestionPrompt(lines: lines, cursorRow: 5, cursorColumn: 2)?.count == 4)
@@ -32,19 +38,20 @@
 
         @Test("Drafts including braille, shell prompts and unknown placeholders are untouched", arguments: [
             "› hello", "› 中", "› ⠐", "› Ask Codex to do anything else", "> ", "$ ", "› Find a bug in @file",
-        ])
-        func drafts(composer: String) {
-            #expect(CodexQuestionPrompt(lines: Self.screen(composer: composer), cursorRow: 5, cursorColumn: 2) == nil)
+        ], supportedHints)
+        func drafts(composer: String, hint: String) {
+            #expect(CodexQuestionPrompt(lines: Self.screen(composer: composer, hint: hint), cursorRow: 5, cursorColumn: 2) == nil)
         }
 
-        @Test("Rejects a cursor in output or a moved draft cursor", arguments: [0, 1, 3, 40])
-        func cursor(column: Int) {
-            #expect(CodexQuestionPrompt(lines: Self.screen(), cursorRow: 5, cursorColumn: column) == nil)
-            #expect(CodexQuestionPrompt(lines: Self.screen(), cursorRow: 0, cursorColumn: 2) == nil)
+        @Test("Rejects a cursor in output or a moved draft cursor", arguments: [0, 1, 3, 40], supportedHints)
+        func cursor(column: Int, hint: String) {
+            #expect(CodexQuestionPrompt(lines: Self.screen(hint: hint), cursorRow: 5, cursorColumn: column) == nil)
+            #expect(CodexQuestionPrompt(lines: Self.screen(hint: hint), cursorRow: 0, cursorColumn: 2) == nil)
         }
 
         @Test("Partial, changed or malformed footer is not an empty queue", arguments: [
-            "shift + → to answer", "", "shift + ← to answer later",
+            "shift + → to answer", "shift+→ to answer", "", "shift + ← to answer later",
+            "shift+← to answer later", "ctrl+← to answer", "shift+←",
         ])
         func partialFooter(hint: String) {
             var lines = Self.screen()
@@ -71,6 +78,33 @@
             #expect(opened == [true, false, false, true, false, true])
         }
 
+        @Test("A hint formatting change cannot reopen a dismissed queue")
+        func hintFormattingDeduplication() throws {
+            var state = CodexQuestionExpansionState()
+            for (index, hint) in (Self.supportedHints + Self.supportedHints).enumerated() {
+                let prompt = try #require(CodexQuestionPrompt(lines: Self.screen(hint: hint), cursorRow: 5, cursorColumn: 2))
+                #expect(state.observe(prompt.count) == (index == 0))
+            }
+        }
+
+        @Test("Codex 0.158 live footer spacing is recognized in the alternate screen")
+        func currentCodexSnapshot() {
+            let view = InteractiveTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+            view.getTerminal().resize(cols: 239, rows: 66)
+            // Only the footer from the observed live screen; no transcript or
+            // private question text is needed to reproduce the parser failure.
+            let lines = [
+                "• Working (2m 11s • esc to interrupt)", "",
+                "• Queued follow-up inputs", "  ? 1 question", "    shift+← to answer",
+                "", "", "› Ask Codex to do anything", "",
+                "  GPT-6-Astra xhigh fast", "  ← for agents · ? for shortcuts",
+            ]
+            let bytes = Array(("\u{1b}[?1049h\u{1b}[56;1H" + lines.joined(separator: "\r\n") + "\u{1b}[63;3H").utf8)
+            view.feed(byteArray: bytes[...])
+            #expect(view.currentQuestionPrompt?.count == 1)
+            #expect(!view.canExpandCodexQuestions)
+        }
+
         @Test("Guarded intent has its own wire command, not unconditional keystrokes")
         func wireRoundTrip() throws {
             let command = CommandMessage(paneId: "%7", command: ExpandCodexQuestions(expectedCount: 4).commandType)
@@ -79,14 +113,14 @@
             #expect(!decoded.command.requiresResponse)
         }
 
-        @Test("Host and multiple viewers share one deduplicated opener")
-        func hostDeduplicates() async throws {
+        @Test("Host and multiple viewers share one deduplicated opener", arguments: supportedHints)
+        func hostDeduplicates(hint: String) async throws {
             let commands = LockIsolated<[[String]]>([])
             try await withDependencies {
                 $0[ProcessRunner.self].run = { _, arguments, _, _ in
                     commands.withValue { $0.append(arguments) }
                     let output = arguments.contains("capture-pane")
-                        ? "codex\t2\t5\t0\n" + Self.screen().joined(separator: "\n") : ""
+                        ? "codex\t2\t5\t0\n" + Self.screen(hint: hint).joined(separator: "\n") : ""
                     return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
                 }
             } operation: {
@@ -102,13 +136,13 @@
 
         @Test("Host rejects stale viewer count, drafts, other agents and copy mode", arguments: [
             "codex\t2\t5\t1", "zsh\t2\t5\t0", "claude\t2\t5\t0", "codex\t8\t5\t0", "malformed",
-        ])
-        func hostGuards(metadata: String) async throws {
+        ], supportedHints)
+        func hostGuards(metadata: String, hint: String) async throws {
             let commands = LockIsolated<[[String]]>([])
             try await withDependencies {
                 $0[ProcessRunner.self].run = { _, arguments, _, _ in
                     commands.withValue { $0.append(arguments) }
-                    return ProcessResult(exitCode: 0, stdout: Data((metadata + "\n" + Self.screen().joined(separator: "\n")).utf8), stderr: Data())
+                    return ProcessResult(exitCode: 0, stdout: Data((metadata + "\n" + Self.screen(hint: hint).joined(separator: "\n")).utf8), stderr: Data())
                 }
             } operation: {
                 let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
@@ -119,13 +153,13 @@
             #expect(!commands.value.contains { $0.contains("send-keys") })
         }
 
-        @Test("A stale count and a newly typed host draft cannot open a question", arguments: [false, true])
-        func staleViewer(draft: Bool) async throws {
+        @Test("A stale count and a newly typed host draft cannot open a question", arguments: [false, true], supportedHints)
+        func staleViewer(draft: Bool, hint: String) async throws {
             let commands = LockIsolated<[[String]]>([])
             try await withDependencies {
                 $0[ProcessRunner.self].run = { _, arguments, _, _ in
                     commands.withValue { $0.append(arguments) }
-                    let screen = Self.screen(composer: draft ? "› draft" : "› Ask Codex to do anything")
+                    let screen = Self.screen(composer: draft ? "› draft" : "› Ask Codex to do anything", hint: hint)
                     return ProcessResult(exitCode: 0, stdout: Data(("codex\t2\t5\t0\n" + screen.joined(separator: "\n")).utf8), stderr: Data())
                 }
             } operation: {
@@ -155,11 +189,11 @@
             #expect(commands.value.filter { $0.contains("send-keys") }.count == 1)
         }
 
-        @Test("Native wrapper observes the rendered footer, not raw chunk boundaries")
-        func nativeSnapshot() {
+        @Test("Native wrapper observes the rendered footer, not raw chunk boundaries", arguments: supportedHints)
+        func nativeSnapshot(hint: String) {
             let view = InteractiveTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
             view.getTerminal().resize(cols: 80, rows: 24)
-            let bytes = Array((Self.screen().joined(separator: "\r\n") + "\u{1b}[6;3H").utf8)
+            let bytes = Array((Self.screen(hint: hint).joined(separator: "\r\n") + "\u{1b}[6;3H").utf8)
             view.feed(byteArray: bytes.prefix(bytes.count / 2))
             #expect(view.currentQuestionPrompt?.count != 4)
             view.feed(byteArray: bytes.suffix(bytes.count - bytes.count / 2))
