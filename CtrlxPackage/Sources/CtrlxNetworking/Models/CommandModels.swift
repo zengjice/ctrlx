@@ -933,9 +933,14 @@ public struct CreateTmuxWindow: CommandSpec, Equatable {
     /// Optional working directory for the new window
     public let workingDirectory: String?
 
-    public init(sessionName: String, workingDirectory: String? = nil) {
+    /// Explicit agent launch, resolved by the Host's plugin registry. Never send
+    /// this to a Host that has not advertised supportsAgentWindowLaunch.
+    public let pluginID: String?
+
+    public init(sessionName: String, workingDirectory: String? = nil, pluginID: String? = nil) {
         self.sessionName = sessionName
         self.workingDirectory = workingDirectory
+        self.pluginID = pluginID
     }
 
     public var commandType: CommandType {

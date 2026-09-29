@@ -119,4 +119,46 @@
             }
         }
     }
+
+    struct TmuxWindowCreationTests {
+        @Test("Terminal windows keep their original directory and never invoke a plugin")
+        func terminal() async throws {
+            let core = SessionLaunchTestCore(launch: .init(command: "codex"))
+            let prepared = try await TmuxWindowCreation.prepare(.init(sessionName: "existing", workingDirectory: "/repo"), core: core)
+            #expect(prepared.workingDirectory == "/repo")
+            #expect(prepared.launch == nil)
+            #expect(await core.paths.isEmpty)
+        }
+
+        @Test("Agent windows use the same Host-resolved telemetry, quoting and environment as sessions")
+        func agent() async throws {
+            let launch = LaunchCommand(command: "codex", args: ["-c", "otel.log_user_prompt=false", "a'b"], env: ["CODEX_HOME": "/Host/config"])
+            let core = SessionLaunchTestCore(launch: launch)
+            let prepared = try await withDependencies {
+                $0[SessionDirectoryClient.self].resolve = { _ in "/Host/new repo" }
+            } operation: {
+                try await TmuxWindowCreation.prepare(.init(sessionName: "existing", workingDirectory: "~/new repo", pluginID: "codex"), core: core)
+            }
+            #expect(prepared.workingDirectory == "/Host/new repo")
+            #expect(prepared.runCommand == SessionLaunchPreparation(workingDirectory: nil, launch: launch).runCommand)
+            #expect(prepared.extraEnvironment == ["CODEX_HOME=/Host/config"])
+            #expect(await core.paths == ["/Host/new repo"])
+        }
+
+        @Test("Missing/disabled agents and invalid paths fail before window creation")
+        func rejected() async throws {
+            await withDependencies {
+                $0[SessionDirectoryClient.self].resolve = { $0 }
+            } operation: {
+                for core: SessionLaunchTestCore? in [nil, SessionLaunchTestCore()] {
+                    await #expect(throws: SessionLaunchPreparation.LaunchError.self) {
+                        try await TmuxWindowCreation.prepare(.init(sessionName: "existing", workingDirectory: "/repo", pluginID: "codex"), core: core)
+                    }
+                }
+            }
+            await #expect(throws: SessionLaunchPreparation.LaunchError.self) {
+                try await TmuxWindowCreation.prepare(.init(sessionName: "existing", pluginID: "codex"), core: nil)
+            }
+        }
+    }
 #endif

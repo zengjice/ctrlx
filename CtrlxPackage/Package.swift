@@ -574,6 +574,8 @@ var targets: [Target] = [
         dependencies: [
             "CtrlxFeature",
             .dependenciesTestSupport,
+            .clocks,
+            .concurrencyExtras,
         ]
     ),
     .testTarget(

@@ -3,6 +3,31 @@ import Testing
 
 @Suite("Window selection reconciliation")
 struct WindowSelectionReconciliationTests {
+    @Test("New window selection follows its pane even when the state arrives late")
+    func createdWindow() {
+        let original = candidate("@1", paneId: "%1", isActive: true)
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "@1", candidates: [original], createdPaneId: "%2"
+        ) == .unchanged)
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "@1", candidates: [original, candidate("@2", paneId: "%2")], createdPaneId: "%2"
+        ) == .select(windowId: "@2", paneId: "%2"))
+    }
+
+    @Test("Creation selection can find a non-active pane; a manual choice stays selected once pending creation clears")
+    func createdPaneMembership() {
+        let candidates = [
+            candidate("@1", paneId: "%1"),
+            WindowSelectionCandidate(windowId: "@2", paneId: "%3", isActive: true, paneIDs: ["%2", "%3"]),
+        ]
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "@1", candidates: candidates, createdPaneId: "%2"
+        ) == .select(windowId: "@2", paneId: "%2"))
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "@1", candidates: candidates, createdPaneId: nil
+        ) == .unchanged)
+    }
+
     @Test("Keeps an existing selection")
     func existingSelection() {
         let candidates = [

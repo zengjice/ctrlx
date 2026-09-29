@@ -55,6 +55,9 @@ public struct SessionStateMessage: Codable, Sendable {
     public let sharedTerminalLayouts: [String: SharedTerminalLayout]?
     /// Absent on older hosts: viewers retain manual entry and send no lookup.
     public let supportsDirectoryBrowsing: Bool?
+    /// Older hosts only create shells; viewers must not send an agent request
+    /// until this capability is explicitly advertised.
+    public let supportsAgentWindowLaunch: Bool?
 
     public init(
         pairId: String,
@@ -64,7 +67,8 @@ public struct SessionStateMessage: Codable, Sendable {
         usageOverview: UsageOverview? = nil,
         sidebarSortMode: String? = nil,
         sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil,
-        supportsDirectoryBrowsing: Bool? = nil
+        supportsDirectoryBrowsing: Bool? = nil,
+        supportsAgentWindowLaunch: Bool? = nil
     ) {
         self.pairId = pairId
         self.paneStates = paneStates
@@ -74,6 +78,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.sidebarSortMode = sidebarSortMode
         self.sharedTerminalLayouts = sharedTerminalLayouts
         self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
+        self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
     }
 
     /// Returns a copy with the `pairId` replaced. Centralises the per-connection
@@ -89,7 +94,8 @@ public struct SessionStateMessage: Codable, Sendable {
             usageOverview: usageOverview,
             sidebarSortMode: sidebarSortMode,
             sharedTerminalLayouts: sharedTerminalLayouts,
-            supportsDirectoryBrowsing: supportsDirectoryBrowsing
+            supportsDirectoryBrowsing: supportsDirectoryBrowsing,
+            supportsAgentWindowLaunch: supportsAgentWindowLaunch
         )
     }
 }

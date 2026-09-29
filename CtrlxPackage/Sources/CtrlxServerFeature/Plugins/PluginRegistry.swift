@@ -210,6 +210,13 @@
             await core.shutdown()
         }
 
+        /// Keep concrete-agent knowledge at the registry boundary. A disabled
+        /// plugin never instruments newly created interactive shells.
+        func terminalCodexTelemetryArguments() async -> [String] {
+            guard let codex = active[CodexPluginCore.pluginID] as? CodexPluginCore else { return [] }
+            return await codex.terminalTelemetryArguments()
+        }
+
         /// The core for `id`, if enabled (used by the ingress router).
         public func core(_ id: String) -> (any PluginCore)? {
             active[id]

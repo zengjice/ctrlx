@@ -3,10 +3,10 @@ import Foundation
 /// Builds the Codex CLI `-c key=value` launch overrides that point Codex's
 /// OpenTelemetry export at the Mac-local OTLP/JSON receiver (issue #602).
 ///
-/// **Why `-c` and not env vars or the config file.** Codex does *not* read
-/// `OTEL_*` env vars — OTEL is configured only through its own `config.toml`
-/// schema — so the `TmuxService` env injection that serves Claude Code never
-/// reaches Codex. And `otel` is on Codex's project-local config denylist, so a
+/// **Why `-c` and not env vars or the config file.** Codex's supported OTEL
+/// opt-in is its `[otel]` configuration, not Claude's environment-only setup.
+/// `TmuxService`'s Claude env injection therefore isn't enough to enable Codex
+/// export. Also, `otel` is on Codex's project-local config denylist, so a
 /// repo-local `.codex/config.toml` is ignored for OTEL. The remaining surfaces
 /// are the user's global `~/.codex/config.toml` (persistent, risks corrupting
 /// the user's own config) and the CLI runtime-override layer (`-c`). We use
@@ -16,8 +16,8 @@ import Foundation
 /// still supported from user, system, managed, and runtime config layers"), and
 /// it is ephemeral — nothing is written to the user's global config, so a
 /// Gallager launch can never corrupt or persist changes to the user's Codex
-/// setup. This matches Claude's posture: only app-launched panes are
-/// instrumented; a manually-typed `codex` is untouched.
+/// setup. UI launches and the new-terminal zsh integration use this SAME
+/// argument generator. Ordinary shells outside CtrlX remain untouched.
 ///
 /// The emitted settings mirror the `[otel]` schema Codex deserializes (verified
 /// against codex-rs `config/src/types.rs` `OtelConfigToml` / `OtelExporterKind`,

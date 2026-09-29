@@ -31,6 +31,7 @@ public struct MainView: View {
     @State private var projects: [AgentProject] = []
     @State private var isLoadingProjects = false
     @State private var creatingSelection: NewSessionCreatingState?
+    @State private var isCreatingAgentTab = false
     /// Bumped by the ⌘N menu command to open the Local section's new-session popover.
     @State private var localNewSessionTrigger = 0
     @State private var detailPaneSize: CGSize = .zero
@@ -1001,6 +1002,11 @@ public struct MainView: View {
                             }
                         }
                     },
+                    agentConfiguration: agentTabConfiguration(
+                        sessionName: remote.sessionName,
+                        hostID: remote.hostId,
+                        fallbackDirectory: window.activePane?.currentPath
+                    ),
                     onNewBrowser: {
                         openEmptyRemoteBrowserTab(hostId: remote.hostId, sessionName: remote.sessionName)
                     },
@@ -1135,6 +1141,11 @@ public struct MainView: View {
                                 }
                             }
                         },
+                        agentConfiguration: agentTabConfiguration(
+                            sessionName: session.sessionName,
+                            hostID: nil,
+                            fallbackDirectory: window.activePane?.currentPath
+                        ),
                         onNewBrowser: {
                             openEmptyBrowserTab(sessionName: session.sessionName, windowId: window.id)
                         },
@@ -4450,6 +4461,114 @@ public struct MainView: View {
         return registry.active.keys.compactMap { id in
             registry.manifest(id).map { SessionLaunchAgent(id: id, name: $0.displayName) }
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    private func agentTabConfiguration(
+        sessionName: String, hostID: String?, fallbackDirectory: String?
+    ) -> NewAgentTabConfiguration {
+        let store = coordinator.remoteSessionStore
+        let connection = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0) }
+        let source: SessionDirectorySource
+        let agents: [SessionLaunchAgent]
+        let reason: String?
+        if let hostID {
+            agents = store?.launchAgents(for: hostID) ?? []
+            source = .remote(hostID: hostID, connection: connection,
+                             supportsBrowsing: store?.hostsSupportingDirectoryBrowsing.contains(hostID) == true)
+            reason = agentTabUnavailableReason(hostID: hostID)
+        } else {
+            agents = localLaunchAgents
+            source = localDirectorySource
+            reason = nil
+        }
+
+        // A right-hand tab or non-active pane may own native keyboard focus.
+        // Scope that focus to this Host/session before inheriting its cwd.
+        var directory = fallbackDirectory
+        if let focused = terminalQuickActions.active, focused.isAvailable, focused.hostID == hostID {
+            if let hostID,
+               let pane = store?.paneStates[PaneKey(pairId: hostID, paneId: focused.paneID)],
+               pane.sessionName == sessionName {
+                directory = pane.currentPath
+            } else if hostID == nil,
+                      let pane = tmuxService.panes.first(where: { $0.paneId == focused.paneID && $0.sessionName == sessionName }) {
+                directory = pane.currentPath
+            }
+        }
+        let initialDirectory = directory.flatMap { SessionDirectoryPath.isValid($0) ? $0 : nil } ?? "~/"
+        return NewAgentTabConfiguration(
+            id: .init(hostID: hostID, sessionName: sessionName),
+            initialDirectory: initialDirectory,
+            agents: agents,
+            directorySource: source,
+            unavailableReason: reason,
+            start: { request in try await createAgentTab(request, hostID: hostID) }
+        )
+    }
+
+    private func agentTabUnavailableReason(hostID: String) -> String? {
+        guard let store = coordinator.remoteSessionStore else {
+            return "Host is offline. Reconnect before starting an agent."
+        }
+        return store.agentWindowLaunchUnavailableReason(
+            hostID: hostID,
+            isConnected: coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true
+        )
+    }
+
+    private func createAgentTab(_ request: CreateTmuxWindow, hostID: String?) async throws {
+        guard !isCreatingAgentTab else {
+            throw NewAgentTabConfiguration.LaunchError("An Agent tab is already being created. Please wait.")
+        }
+        guard let pluginID = request.pluginID else {
+            throw NewAgentTabConfiguration.LaunchError("Choose an Agent before starting.")
+        }
+        isCreatingAgentTab = true
+        defer { isCreatingAgentTab = false }
+
+        if let hostID {
+            // Recheck after the popover opened: a disconnect/downgrade must not
+            // turn the optional plugin field into an ordinary shell request.
+            if let reason = agentTabUnavailableReason(hostID: hostID) {
+                throw NewAgentTabConfiguration.LaunchError(reason)
+            }
+            guard let connection = coordinator.viewerConnectionManager?.connection(for: hostID) else {
+                throw NewAgentTabConfiguration.LaunchError("Viewer connection is unavailable.")
+            }
+            let response = try await connection.sendCommand(request, paneId: "").get()
+            guard let paneID = response.paneId else {
+                throw NewAgentTabConfiguration.LaunchError("Host returned no new pane. Check its tabs before retrying.")
+            }
+            await connection.relayClient.requestSessionState()
+            for _ in 0..<PaneSurfaceRetry.attempts {
+                let windows = coordinator.remoteSessionStore?.windows(for: hostID) ?? []
+                if let window = windows.first(where: { $0.sessionName == request.sessionName && $0.panes.contains(where: { $0.paneId == paneID }) }) {
+                    if selectedRemoteSession?.hostId == hostID && selectedRemoteSession?.sessionName == request.sessionName {
+                        selectTerminalWindow(stableId: window.stableId)
+                    }
+                    return
+                }
+                try await Task.sleep(for: PaneSurfaceRetry.delay)
+            }
+        } else {
+            let paneID = try await TmuxWindowCreation.create(
+                request, core: coordinator.pluginRegistry?.core(pluginID), tmux: tmuxService
+            )
+            let window = await PaneSurfaceRetry.localWindow(
+                containing: paneID,
+                windows: { tmuxService.windows },
+                refresh: { _ = await tmuxService.refreshPanes() }
+            )
+            if let window {
+                if selectedRemoteSession == nil && selectedWindow?.sessionName == request.sessionName {
+                    selectTerminalWindow(stableId: window.stableId)
+                }
+                return
+            }
+        }
+        // Creation already succeeded. Dismiss rather than offering a retry that
+        // would launch a second agent just because the state push was delayed.
+        attachError = "Agent tab created but not visible yet. Select it from the tab bar when it appears; do not launch it again."
     }
 
     private func loadProjects(showLoadingIndicator: Bool = true) async {

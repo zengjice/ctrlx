@@ -52,12 +52,12 @@ Regression coverage: `MacTerminalInputTests`, `TmuxKeyCsiParsingTests`, and
 checks). The fork's `MacModifiedArrowTests` also covers composition cancellation,
 empty marked text, bracketed paste, and starting a new composition in both protocols.
 
-**Codex question auto-expansion (Mac Host and Mac Viewer):**
+**Codex question auto-expansion (Mac Host, Mac Viewer and iOS):**
 `CodexQuestionPrompt` recognizes the live `Queued follow-up inputs / ? N questions /
 shift + ← to answer` footer immediately above Codex's known empty composer. It
 also accepts the compact `shift+← to answer` hint observed in Codex 0.158.0;
-other shortcuts, incomplete hints and drafts still fail closed. Both Mac-side
-recognition and the Host's screen recheck use the same parser. The
+other shortcuts, incomplete hints and drafts still fail closed. Mac/iOS-side
+recognition and the Host's screen recheck use the same `CtrlxCommon` parser. The
 native wrapper checks a stable screen after 350 ms; only the key window's focused,
 visible terminal at the live bottom is eligible (no editor overlay, text selection,
 mouse drag or marked IME text). Typing postpones the check. It neither changes
@@ -76,9 +76,22 @@ API: unknown/localized layouts, custom empty placeholders and equal-count questi
 replacements without an observed queue reduction stay manual. A missed/failed
 attempt is not retried against the same footer. Existing Shift+Left remains usable.
 For remote auto-expansion, update **both Macs**; an old Host safely rejects the new
-command (no raw-key fallback). Relay deployment is unnecessary. This change does
-not add an iOS auto-opener. Tests: `CodexQuestionExpansionTests` and
-`KeystrokeDebouncerTests.questionExpansionFIFO`.
+command (no raw-key fallback). iOS reuses that existing Host command, so an
+already-compatible Host needs no further update; Relay deployment is unnecessary.
+
+On iOS, `TerminalCodexQuestionExpansion` runs outside SwiftUI observable state.
+The selected pane's native wrapper reads at most nine live rows, after parsing
+terminal output, and checks again after 350 ms. Unrelated output does not extend
+the deadline; a changed/partial footer does. It requires the input proxy's focus,
+an active scene, a ready stream, both native viewports at the bottom, no copy/menu,
+IME, cursor-navigation operation, drag or mouse-scroll momentum, and no blocking
+response form/quick-action overlay. Typing, stream reset, resize, focus loss and
+view teardown cancel pending checks. It never moves focus or scrolls the viewport
+to force eligibility. Counts enter the same `KeystrokeDebouncer` FIFO as text and
+mouse input; Host-wide dedup also covers an iPhone and Mac viewing the same pane.
+Tests: `CodexQuestionExpansionTests`, `TerminalCodexQuestionExpansionTests` and
+`KeystrokeDebouncerTests.questionExpansionFIFO`. The UIKit focus/scroll/menu gates
+still need on-device acceptance; the scheduler and Host guards run in unit tests.
 
 ### Editor Override (Ctrl-G)
 
@@ -259,6 +272,15 @@ Codex contributes additional events (`PreCompact`/`PostCompact`, `SubagentStart`
 - **Injection differs by agent.** Claude reads `OTEL_*` env vars, injected via `TmuxService.baseEnvironmentVars` (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_*`). Codex does *not* read `OTEL_*` — OTEL is configured only through its `config.toml` schema, and `otel` is denylisted from project-local config — so app-launched Codex panes instead get `-c otel.…` runtime overrides (`CodexOtelConfig.launchOverrides`, gated on the per-agent `export_telemetry` setting), which point `otel.exporter` at `http://127.0.0.1:<port>/v1/logs` (`protocol = "json"`), set `otel.metrics_exporter = "none"`, and leave `log_user_prompt = false`. The runtime-override layer is exempt from the `otel` denylist, and nothing is written to the user's global `~/.codex/config.toml` (so a launch can't corrupt the user's own config). No content gates are enabled for either agent, so no prompt/tool/body content leaves the process.
 - `AppCoordinator` wires the receiver's callbacks: telemetry → `MirrorWindowManager.applyTelemetry` (joined to a pane by `claudeSessionID`, then a throttled ~1/sec viewer push); milestones → one notification each via the existing `handlePluginNotification` path; mode changes → `MirrorWindowManager.applyPermissionMode`. The accumulated state is evicted on session end. See `MirrorWindowManager` and `PaneState.telemetry` / `.permissionMode`.
 
+**Manual Codex in New Terminal:** `TerminalAgentShellIntegration` adds a shell-local
+function to newly created zsh panes only, using the same core-generated OTEL
+arguments as UI launches. User aliases/functions and explicit OTEL overrides win;
+no global dotfiles/config changes or input injection into existing panes. The
+registry supplies the enabled core's current arguments, independently of Auto-run.
+Settings take effect in new terminals. Unsupported shells and explicit custom
+split commands retain their original startup behavior. See
+[Codex manual-launch boundaries](plugins/codex.md#manual-launch-in-a-ctrlx-terminal).
+
 ### Retrospective telemetry consumers (issue #598)
 
 Two **aggregate** consumers built on the same OTEL stream, surfacing data that outlives a live session.
@@ -355,6 +377,41 @@ Actor executing commands from iOS devices.
 - Writes hooks at the **global layer** (`~/.codex/hooks.json`) to avoid per-project trust prompts on every repo
 - Exposes `install` / `uninstall` / `isInstalled` closures; surfaced in Settings via `CodexPluginInstallerRow`
 
+### Start an agent window in an existing session (Mac and iOS)
+
+Mac session tab strips (local and Viewer) also expose **+ → New Agent…**.
+iOS exposes **New Agent…** in the title's window-switcher menu, alongside
+**New Terminal** (formerly "New Window"). Both use `CtrlxCommon.NewAgentTabPanel`;
+Mac presents a popover, iOS an adaptive-width sheet without a nested navigation
+container. The iOS path inherits its selected pane's cwd, not a stale Host focus.
+Each enabled Host agent has its own card, editable directory and Start button;
+there is no agent picker or separate hard-coded list. Codex is placed first
+when available. The directory starts from the last focused terminal in this
+Host/session (falling back to the selected window's active pane, then `~/`).
+**Choose Directory…** reuses the directory browser below. Merely opening the
+panel does no directory I/O. Cards capture their Host/session when opened;
+editing a path never expands it using the Viewer's home.
+
+Starting a card creates a **window/tab in the existing tmux session**, not a
+new session or split pane. `TmuxWindowCreation` shares Host-side
+`SessionLaunchPreparation` and the same tmux startup-command helper as session
+creation, retaining telemetry arguments, plugin environment and the opted-in
+editor override. Disabled Auto-run/unavailable agents/invalid directories fail
+before creation; errors are shown rather than silently falling back to a shell.
+Pending creation disables all cards. A delayed state push does not repeat the
+launch or switch away from a different session the user navigated to.
+
+The additive `CreateTmuxWindow.pluginID` is sent only after the Host advertises
+`SessionStateMessage.supportsAgentWindowLaunch == true`, rechecked on Start.
+Older Hosts get an upgrade message, not an agent request they would ignore.
+Old requests without `pluginID` keep ordinary Terminal behavior. Both Host and
+the Viewer (Mac/iOS) need this update; the opaque Relay needs no changes.
+iOS follows the returned pane as state arrives, without a fixed sleep or retrying
+creation. Manually changing windows or leaving the screen cancels that pending
+selection. Ordinary Terminal requests still omit `pluginID`, and the Host creates
+them through `TmuxService`, including its manual Codex shell integration and
+Claude telemetry environment. No agent command/config is constructed by iOS.
+
 ### Start a session in an arbitrary directory
 
 Mac (local and Viewer) and iOS expose **New Session → Start in Directory…**.
@@ -383,8 +440,9 @@ the common Host-side path for local/remote creation: `SessionDirectoryClient`
 expands `~`, validates directory access on an actor, and calls the selected
 plugin's existing `commandForLaunch` before any tmux mutation. Command, arguments
 and environment are preserved, including Codex's runtime OTEL overrides when
-Export Telemetry is enabled and the receiver is available. Nothing changes
-global Codex config or intercepts a manually typed `codex` command.
+Export Telemetry is enabled and the receiver is available. This directory-launch
+flow does not change global Codex config; manual commands are handled separately
+by the shell-local integration described above.
 
 Explicit directory requests set `CreateTmuxSession.requireAgentLaunch = true`.
 Unavailable plugins or disabled Auto-run produce an error instead of a

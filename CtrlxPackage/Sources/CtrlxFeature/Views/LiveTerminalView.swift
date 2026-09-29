@@ -295,6 +295,7 @@
                 onExternalInputSenderChange(nil)
                 onTerminalInputReadinessChange(nil)
                 coordinator.terminalState?.cancelCursorNavigation?()
+                coordinator.terminalState?.cancelQuestionCheck?()
                 Task { await stopStreaming() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
@@ -429,6 +430,12 @@
                         scrollingAgentID: scrollingAgentID,
                         inputEnabled: inputPresentation.inputEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
+                        questionExpansionEnabled: scenePhase == .active && isConnected
+                            && coordinator.isReadyForToolbarInput && responseState?.request.isBlocking != true,
+                        onExpandCodexQuestions: { count in
+                            guard isConnected, relayClient.isHostConnected else { return false }
+                            return coordinator.enqueueCodexQuestionExpansion(count: count, relayClient: relayClient)
+                        },
                         onInput: { keys in
                             enqueueTerminalKeys(keys)
                         },
@@ -712,6 +719,7 @@
         /// Cancel any in-flight key-send chain.
         func cancelPendingKeys() {
             terminalState?.cancelCursorNavigation?()
+            terminalState?.cancelQuestionCheck?()
             keystrokeDebouncer?.cancelAll()
         }
 
@@ -817,6 +825,7 @@
         /// Accumulates rapid keystrokes and flushes them as a single command after a short delay.
         func enqueueKeySend(keys: [TmuxKey], relayClient: ViewerRelayClient, immediately: Bool = false) {
             terminalState?.cancelCursorNavigation?()
+            terminalState?.cancelQuestionCheck?()
             if keystrokeDebouncer == nil {
                 keystrokeDebouncer = KeystrokeDebouncer(paneId: paneId, relayClient: relayClient)
             }
@@ -832,10 +841,20 @@
         /// any in-flight typed input.
         func enqueueRawInput(data: Data, relayClient: ViewerRelayClient) {
             terminalState?.cancelCursorNavigation?()
+            terminalState?.cancelQuestionCheck?()
             if keystrokeDebouncer == nil {
                 keystrokeDebouncer = KeystrokeDebouncer(paneId: paneId, relayClient: relayClient)
             }
             keystrokeDebouncer?.enqueueRawInput(data)
+        }
+
+        func enqueueCodexQuestionExpansion(count: Int, relayClient: ViewerRelayClient) -> Bool {
+            guard isReadyForToolbarInput else { return false }
+            if keystrokeDebouncer == nil {
+                keystrokeDebouncer = KeystrokeDebouncer(paneId: paneId, relayClient: relayClient)
+            }
+            keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count)
+            return true
         }
 
         func handleStreamMessage(_ message: TerminalStreamMessage) {
@@ -1150,6 +1169,7 @@
         var makeTextSnapshot: (() -> TerminalTextSnapshot?)?
 
         var cancelCursorNavigation: (() -> Void)?
+        var cancelQuestionCheck: (() -> Void)?
         var prepareForExternalInput: (() -> Void)?
 
         init(
@@ -1231,6 +1251,9 @@
         /// Whether the software keyboard should be visible below the accessory.
         let keyboardRequested: Bool
 
+        let questionExpansionEnabled: Bool
+        let onExpandCodexQuestions: @MainActor (Int) -> Bool
+
         /// Callback when user types (keys are ready for relay transmission)
         let onInput: @MainActor ([TmuxKey]) -> Void
 
@@ -1267,6 +1290,8 @@
             // Wire up input callback
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
+            terminalView.onExpandCodexQuestions = onExpandCodexQuestions
+            terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
 
             // Create an outer scroll view and a passive canvas. The canvas may
@@ -1384,6 +1409,9 @@
             terminalState.cancelCursorNavigation = { [weak terminalView] in
                 terminalView?.cancelCursorNavigation()
             }
+            terminalState.cancelQuestionCheck = { [weak terminalView] in
+                terminalView?.cancelQuestionCheck()
+            }
             terminalState.prepareForExternalInput = { [weak terminalView] in
                 terminalView?.prepareForExternalInput()
             }
@@ -1408,6 +1436,8 @@
             // first render.
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
+            terminalView.onExpandCodexQuestions = onExpandCodexQuestions
+            terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
 
             context.coordinator.updateInteraction(
@@ -1459,6 +1489,7 @@
 
             func replace(width: Int, height: Int, scrollbackLineLimit: Int, content: Data) {
                 terminalView?.cancelCursorNavigation()
+                terminalView?.cancelQuestionCheck()
                 terminalView?.changeScrollback(scrollbackLineLimit)
                 handleResize(width: width, height: height)
                 feedCoalescer.replace(with: content) { [weak self] in
@@ -1475,6 +1506,7 @@
             func handleResize(width: Int, height: Int) {
                 guard let terminalView else { return }
                 terminalView.cancelCursorNavigation()
+                terminalView.cancelQuestionCheck()
 
                 // Constraints update the outer geometry on the next layout
                 // pass. Resize SwiftTerm now so following bootstrap bytes are
@@ -1524,6 +1556,7 @@
             }
 
             func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+                terminalView?.cancelQuestionCheck()
                 dragInitialOffsetY = scrollView.contentOffset.y
                 (scrollView as? BottomAnchoredTerminalScrollView)?.userWillBeginScrolling()
             }
@@ -1541,12 +1574,14 @@
             func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
                 dragInitialOffsetY = nil
                 (scrollView as? BottomAnchoredTerminalScrollView)?.userDidEndScrolling()
+                terminalView?.scheduleQuestionCheck()
             }
 
             func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
                 if !decelerate {
                     dragInitialOffsetY = nil
                     (scrollView as? BottomAnchoredTerminalScrollView)?.userDidEndScrolling()
+                    terminalView?.scheduleQuestionCheck()
                 }
             }
         }

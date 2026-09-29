@@ -14,6 +14,42 @@ Code core; only the agent-specific differences are called out here. See
 | `command_path` | String | `codex` |
 | `auto_run` | Bool | `true` |
 | `log_level` | enum | `info` |
+| `export_telemetry` | Bool | `true` |
+
+## Manual launch in a CtrlX terminal
+
+In a newly created **zsh** terminal, type `codex` normally. The Host installs a
+shell-local function after user startup configuration and adds the same ephemeral
+OTEL arguments as New Agent / project launch (`terminalTelemetryArguments`).
+`auto_run` only governs UI auto-launch, not an explicit manual command.
+
+- Applies to new sessions, New Terminal and ordinary split panes, including those
+  created from a Mac Viewer or iOS. This requires updating the **target Host Mac**
+  and creating a new terminal there; an iOS-only update cannot retrofit an old
+  Host or existing shell. No initialization keystrokes are sent to existing panes.
+- Only active when the Host's Codex plugin is enabled, telemetry is opted in, and
+  its receiver endpoint is available. Settings/endpoint are snapshotted at shell
+  creation; open a new terminal after changing them or restarting the Host on a
+  different port. Existing shells and running agents are not rewritten.
+- Preserves the user's original `ZDOTDIR`, login startup files, PATH, command
+  arguments and exit status. No user shell files or `config.toml` are edited;
+  authentication/session/skill locations are unchanged.
+- Existing `codex` aliases/functions win. `command codex` or an absolute executable
+  path explicitly bypasses the function. Such launches must supply their own
+  telemetry config if desired. The manual command uses the shell's normal Codex
+  executable; Settings' command-path override still governs UI launches.
+- An explicit `-c`/`--config` for `otel` or `otel.*` bypasses **all** injected
+  defaults, avoiding duplicate UI overrides or mixing a user's exporter with the
+  local endpoint. Arguments after `--` are treated as positional text.
+- Unsupported shells (bash/fish/etc.) and explicit custom split commands retain
+  their original startup behavior. Use New Agent for instrumented Codex launches
+  in those shells. Claude retains its existing environment-variable integration.
+- Startup files are tiny content-addressed files under the per-user temporary
+  `ctrlx-shell-integration` directory, created off the UI actor with private
+  permissions. Failure to prepare them falls back to an ordinary terminal.
+
+Tests use real zsh plus an argv-printing fake Codex, and an isolated tmux server;
+they do not call a model or alter the user's running sessions.
 
 ## Project discovery
 Scans `~/.codex/sessions/` (or `$CODEX_HOME/sessions/`) date-partitioned rollout

@@ -669,6 +669,9 @@
             // Registry + per-plugin enable.
             let registry = PluginRegistry()
             pluginRegistry = registry
+            tmuxService.terminalCodexArguments = { [weak registry] in
+                await registry?.terminalCodexTelemetryArguments() ?? []
+            }
 
             // Provide paths to the registry before enabling any sidecar (needed to
             // build PluginRootLayout for SidecarPluginCore construction).
@@ -3311,6 +3314,7 @@
                     return await Self.handleCreateWindow(
                         command: command,
                         spec: spec,
+                        core: spec.pluginID.flatMap { self?.pluginRegistry?.core($0) },
                         tmuxService: tmux,
                         windowManager: winManager,
                         connectionManager: connectionManager
@@ -3414,7 +3418,8 @@
                     // this host's sessions with the host's mode.
                     sidebarSortMode: await self?.settings.sidebarSortMode.rawValue,
                     sharedTerminalLayouts: sharedTerminalLayouts,
-                    supportsDirectoryBrowsing: true
+                    supportsDirectoryBrowsing: true,
+                    supportsAgentWindowLaunch: true
                 )
             }
 
@@ -3711,15 +3716,13 @@
         private static func handleCreateWindow(
             command: CommandMessage,
             spec: CreateTmuxWindow,
+            core: (any PluginCore)?,
             tmuxService: TmuxService,
             windowManager: MirrorWindowManager,
             connectionManager: ConnectedViewerManager?
         ) async -> CommandResponseMessage {
             do {
-                let paneId = try await tmuxService.newWindow(
-                    sessionName: spec.sessionName,
-                    workingDirectory: spec.workingDirectory
-                )
+                let paneId = try await TmuxWindowCreation.create(spec, core: core, tmux: tmuxService)
 
                 // `refreshPanes()` early-returns the stale cached list when a
                 // periodic refresh is already in flight, so the freshly-created

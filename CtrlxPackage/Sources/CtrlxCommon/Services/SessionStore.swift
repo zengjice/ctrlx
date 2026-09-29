@@ -48,6 +48,7 @@ final public class SessionStore {
     /// Home directory path for each host, keyed by pairId
     public private(set) var homeDirectoryByHost: [String: String] = [:]
     public private(set) var hostsSupportingDirectoryBrowsing: Set<String> = []
+    public private(set) var hostsSupportingAgentWindowLaunch: Set<String> = []
 
     /// Cross-session cost/usage rollup per host (issue #598), from each host's
     /// `SessionStateMessage.usageOverview`. Absent for hosts that don't send one
@@ -278,6 +279,11 @@ final public class SessionStore {
         }
 
         agentProjectsByHost[hostId] = state.agentProjects ?? []
+        if state.supportsAgentWindowLaunch == true {
+            hostsSupportingAgentWindowLaunch.insert(hostId)
+        } else {
+            hostsSupportingAgentWindowLaunch.remove(hostId)
+        }
         homeDirectoryByHost[hostId] = state.homeDirectory
         if state.supportsDirectoryBrowsing == true {
             hostsSupportingDirectoryBrowsing.insert(hostId)
@@ -326,6 +332,7 @@ final public class SessionStore {
         launchAgentsByHost.removeValue(forKey: hostId)
         homeDirectoryByHost.removeValue(forKey: hostId)
         hostsSupportingDirectoryBrowsing.remove(hostId)
+        hostsSupportingAgentWindowLaunch.remove(hostId)
         usageOverviewByHost.removeValue(forKey: hostId)
         sidebarSortModeByHost.removeValue(forKey: hostId)
         sharedTerminalLayoutsByHost.removeValue(forKey: hostId)
@@ -418,6 +425,18 @@ final public class SessionStore {
 
     public func launchAgents(for hostId: String) -> [SessionLaunchAgent] {
         launchAgentsByHost[hostId] ?? []
+    }
+
+    /// Both Viewer platforms must gate the optional plugin field; old Hosts
+    /// would otherwise silently create an ordinary shell instead of an agent.
+    public func agentWindowLaunchUnavailableReason(hostID: String, isConnected: Bool) -> String? {
+        guard isConnected else {
+            return "Host is offline. Reconnect before starting an agent."
+        }
+        guard hostsSupportingAgentWindowLaunch.contains(hostID) else {
+            return "Update this Host to create Agent tabs. New Terminal is still available."
+        }
+        return nil
     }
 
     // MARK: - Response Storage (iOS only)

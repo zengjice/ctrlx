@@ -248,6 +248,28 @@ final public class TmuxService {
     /// Socket path for the API server. The CLI reads this from `$CTRLX_SOCKET`.
     public var apiSocketPath: String?
 
+    /// Snapshotted only when creating a new shell. Never inject initialization
+    /// keystrokes into an existing pane or override the user's dotfiles.
+    @ObservationIgnored var terminalCodexArguments: @MainActor () async -> [String] = { [] }
+
+    @ObservationIgnored
+    @Dependency(TerminalAgentShellFiles.self) private var terminalAgentShellFiles
+
+    private func instrumentedShellCommand() async -> String? {
+        guard TerminalAgentShellIntegration.supports(shell: Self.userShellPath) else { return nil }
+        let arguments = await terminalCodexArguments()
+        guard !arguments.isEmpty else { return nil }
+        do {
+            let directory = try await terminalAgentShellFiles.prepare(arguments)
+            return TerminalAgentShellIntegration.launchPrefix(directory: directory) + defaultCommandWrapper
+        } catch {
+            // Telemetry is optional; a disk-full or unwritable temp directory
+            // must not prevent the user from opening a normal terminal.
+            logger.warning("Could not prepare terminal telemetry integration: \(error)")
+            return nil
+        }
+    }
+
     /// When set, spawned shells get `ZDOTDIR=<path>` so zsh reads its startup
     /// files from that directory instead of `$HOME`. Set by the composition
     /// root from the `--zdotdir` launch argument the E2E orchestrator passes:
@@ -2188,6 +2210,8 @@ final public class TmuxService {
         // window flash, no follow-up `exec` round trip.
         if let shellCommand, !shellCommand.isEmpty {
             args.append(shellCommand)
+        } else if let command = await instrumentedShellCommand() {
+            args.append(command)
         }
 
         let result = try await runTmuxCommand(args)
@@ -2241,7 +2265,9 @@ final public class TmuxService {
         sessionName: String,
         workingDirectory: String? = nil,
         windowName: String? = nil,
-        windowIndex: Int? = nil
+        windowIndex: Int? = nil,
+        runCommand: String? = nil,
+        extraEnvironment: [String] = []
     ) async throws -> String {
         // Trailing colon tells tmux "target session with window unspecified" so it auto-picks
         // the next free index. Without it, tmux fills the target from the best-attached
@@ -2265,7 +2291,7 @@ final public class TmuxService {
             "new-window",
             "-t", target,
             "-P", "-F", "#{pane_id}:#{window_index}",
-        ] + terminalEnvironmentVars.flatMap { ["-e", $0] }
+        ] + (terminalEnvironmentVars + extraEnvironment).flatMap { ["-e", $0] }
 
         if let workingDirectory {
             args += ["-c", workingDirectory]
@@ -2275,6 +2301,10 @@ final public class TmuxService {
             // Set the name at creation so the tab label is correct from the
             // first frame, before any `rename-window` round trip.
             args += ["-n", windowName]
+        }
+
+        if let command = await instrumentedShellCommand() {
+            args.append(command)
         }
 
         let result = try await runTmuxCommand(args)
@@ -2301,6 +2331,14 @@ final public class TmuxService {
                 target: Self.windowTarget(in: sessionName, windowIndex: windowIndex),
                 name: nextName
             )
+        }
+
+        // Launch only in the newly returned pane, using the same login-shell,
+        // telemetry and editor-override path as project/session creation.
+        do {
+            try await runInitialCommand(runCommand, in: paneId)
+        } catch {
+            throw TmuxError.commandFailed(message: "Window created (\(paneId)), but agent launch failed: \(error.localizedDescription). Check that tab before retrying.")
         }
 
         // Refresh to pick up the new window
@@ -3135,6 +3173,10 @@ final public class TmuxService {
             args.append(contentsOf: ["-c", workingDirectory])
         }
 
+        if let command = await instrumentedShellCommand() {
+            args.append(command)
+        }
+
         // Create the session with specified dimensions
         let result = try await runTmuxCommand(args)
 
@@ -3167,7 +3209,17 @@ final public class TmuxService {
 
         let paneId = paneIdResult.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Run initial command if specified
+        try await runInitialCommand(runCommand, in: paneId)
+
+        // Refresh panes to include the new session
+        await refreshPanes()
+
+        return (sessionName: sessionName, paneId: paneId)
+    }
+
+    /// Both new sessions and agent windows must retain plugin arguments/env,
+    /// shell aliases and the explicit VISUAL override without duplicating it.
+    private func runInitialCommand(_ runCommand: String?, in paneId: String) async throws {
         if let runCommand, !runCommand.isEmpty {
             // App-launched agents are typed into a login shell that has already
             // sourced the user's rc files — so when the override is active we
@@ -3177,23 +3229,21 @@ final public class TmuxService {
             // chained form runs the command through the shell, so aliases /
             // functions for the agent still resolve.
             let line = overrideCommandPrefix().map { "\($0); \(runCommand)" } ?? runCommand
-            _ = try await runTmuxCommand([
+            let result = try await runTmuxCommand([
                 "send-keys",
                 "-t", paneId,
                 line,
                 "Enter",
             ])
+            guard result.isSuccess else {
+                throw TmuxError.commandFailed(message: result.stderrString)
+            }
             // The override is now asserted on this pane's command line; mark it so
             // the new-pane injector never also types into it.
             if overrideVisualInShellPanes {
                 injectedOverridePaneIds.insert(paneId)
             }
         }
-
-        // Refresh panes to include the new session
-        await refreshPanes()
-
-        return (sessionName: sessionName, paneId: paneId)
     }
 
     /// The `export VISUAL=…` statement to chain ahead of an app-launched command

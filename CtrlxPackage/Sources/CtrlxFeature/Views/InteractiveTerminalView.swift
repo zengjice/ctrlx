@@ -72,6 +72,24 @@ enum TerminalCursorTapNavigation {
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
 
+        /// Sends a guarded intent through the pane's ordered input queue, never
+        /// raw Shift+Left. False means the stream is not currently ready.
+        var onExpandCodexQuestions: (@MainActor (Int) -> Bool)?
+        var questionExpansionEnabled = false {
+            didSet {
+                guard oldValue != questionExpansionEnabled else { return }
+                scheduleQuestionCheck()
+            }
+        }
+
+        private lazy var questionExpansion = TerminalCodexQuestionExpansion(
+            readPrompt: { [weak self] in
+                guard let self, canExpandCodexQuestions else { return nil }
+                return currentQuestionPrompt
+            },
+            enqueue: { [weak self] count in self?.onExpandCodexQuestions?(count) ?? false }
+        )
+
         var scrollingAgentID: String? {
             didSet {
                 if oldValue != scrollingAgentID { cancelMouseScroll() }
@@ -134,12 +152,15 @@ enum TerminalCursorTapNavigation {
                 if !focused {
                     self?.cancelCursorNavigation()
                     self?.cancelMouseScroll()
+                    self?.cancelQuestionCheck()
                 }
                 self?.getTerminal().setTerminalFocus(focused)
+                if focused { self?.scheduleQuestionCheck() }
             }
             proxy.onCompositionStart = { [weak self] in
                 self?.cancelCursorNavigation()
                 self?.cancelMouseScroll()
+                self?.cancelQuestionCheck()
             }
             proxy.inputAccessoryViewProvider = { [weak self] in
                 self?.inputAccessoryView
@@ -238,6 +259,7 @@ enum TerminalCursorTapNavigation {
             if window == nil {
                 cancelCursorNavigation()
                 cancelMouseScroll()
+                cancelQuestionCheck()
             }
             inputFocusUpdates.setAttached(window != nil)
         }
@@ -263,11 +285,13 @@ enum TerminalCursorTapNavigation {
             finishCursorNavigationIfReady()
 
             setNeedsLayout()
+            scheduleQuestionCheck()
         }
 
         override func layoutSubviews() {
             super.layoutSubviews()
             updateURLUnderlines()
+            scheduleQuestionCheck()
         }
 
         /// Returns the cached cell size, recalculating only on first access or after invalidation.
@@ -283,6 +307,7 @@ enum TerminalCursorTapNavigation {
         /// Scrolls the inner terminal (SwiftTerm's scrollback) to the bottom.
         func scrollToBottom() {
             scroll(toPosition: 1)
+            scheduleQuestionCheck()
         }
 
         /// Presents the current terminal tail only after the native hierarchy
@@ -313,6 +338,7 @@ enum TerminalCursorTapNavigation {
             if !isEnabled {
                 cancelCursorNavigation()
                 cancelMouseScroll()
+                cancelQuestionCheck()
             }
             inputEnabled = isEnabled
             inputProxy.inputEnabled = isEnabled
@@ -325,6 +351,8 @@ enum TerminalCursorTapNavigation {
         func invalidateInput() {
             cancelCursorNavigation()
             cancelMouseScroll()
+            questionExpansion.invalidate()
+            onExpandCodexQuestions = nil
             inputEnabled = false
             inputProxy.inputEnabled = false
             inputFocusUpdates.invalidate()
@@ -344,10 +372,56 @@ enum TerminalCursorTapNavigation {
                 if keyboardRequestChanged {
                     inputProxy.reloadInputViews()
                 }
+                scheduleQuestionCheck()
                 return true
             } else {
                 return inputProxy.becomeFirstResponder()
             }
+        }
+
+        // MARK: - Codex Questions
+
+        var canExpandCodexQuestions: Bool {
+            // SwiftTerm still presents its copy menu with UIMenuController;
+            // observe that menu, not a separate UIEditMenuInteraction.
+            guard didFinishInit, questionExpansionEnabled, onExpandCodexQuestions != nil,
+                  inputEnabled, !inputFocusUpdates.isInvalidated,
+                  window?.isKeyWindow == true, window?.windowScene?.activationState == .foregroundActive,
+                  !isHidden, inputProxy.isFirstResponder, inputProxy.markedTextRange == nil,
+                  !selectionActive, !UIMenuController.shared.isMenuVisible,
+                  !cursorNavigation.isPending, !isMouseScrollDecelerating,
+                  !isTracking, !isDragging, !isDecelerating,
+                  !(gestureRecognizers ?? []).contains(where: { $0.state == .began || $0.state == .changed }),
+                  let viewport = outerScrollPanGesture?.view as? UIScrollView,
+                  !viewport.isTracking, !viewport.isDragging, !viewport.isDecelerating
+            else { return false }
+            let bottom = max(-viewport.adjustedContentInset.top,
+                             viewport.contentSize.height - viewport.bounds.height + viewport.adjustedContentInset.bottom)
+            let terminal = getTerminal()
+            return abs(viewport.contentOffset.y - bottom) <= 1
+                && (!canScroll || scrollPosition == 1)
+                && !terminal.synchronizedOutputActive
+        }
+
+        var currentQuestionPrompt: CodexQuestionPrompt? {
+            let terminal = getTerminal()
+            let row = terminal.buffer.y
+            guard row >= 0, row < terminal.rows else { return nil }
+            let firstRow = max(0, row - 8)
+            let lines = (firstRow...row).map {
+                terminal.getLine(row: $0)?.translateToString(trimRight: true) ?? ""
+            }
+            return CodexQuestionPrompt(lines: lines, cursorRow: row - firstRow, cursorColumn: terminal.buffer.x)
+        }
+
+        func scheduleQuestionCheck() {
+            guard didFinishInit else { return }
+            questionExpansion.schedule()
+        }
+
+        func cancelQuestionCheck() {
+            guard didFinishInit else { return }
+            questionExpansion.cancelPending()
         }
 
         // MARK: - Tap Routing
@@ -357,6 +431,7 @@ enum TerminalCursorTapNavigation {
         /// its recognizer would let single-tap cursor/link actions run instead.
         /// Explicit selection and all other rows remain SwiftTerm-owned.
         override func shouldBeginSelection(at position: Position) -> Bool {
+            cancelQuestionCheck()
             cancelCursorNavigation()
             cancelMouseScroll()
             return activeInputLine(atRow: position.row) == nil
@@ -420,7 +495,10 @@ enum TerminalCursorTapNavigation {
         /// when the host isn't in mouse mode.
         private func setupMouseModePan() {
             let pan = TerminalMousePanGestureRecognizer(target: self, action: #selector(handleMouseModePan))
-            pan.onTouchDown = { [weak self] in self?.cancelMouseScroll() }
+            pan.onTouchDown = { [weak self] in
+                self?.cancelMouseScroll()
+                self?.cancelQuestionCheck()
+            }
             pan.maximumNumberOfTouches = 1
             pan.cancelsTouchesInView = false
             pan.delegate = self
@@ -483,6 +561,7 @@ enum TerminalCursorTapNavigation {
 
         @objc
         private func handleShiftReturn(_: UIKeyCommand) {
+            cancelQuestionCheck()
             cancelCursorNavigation()
             cancelMouseScroll()
             onInput?([.shiftEnter])
@@ -495,6 +574,7 @@ enum TerminalCursorTapNavigation {
         /// because `UIScrollView` already implements this method and Swift forbids
         /// extension overrides.
         override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            cancelQuestionCheck()
             if gestureRecognizer is UIPanGestureRecognizer || gestureRecognizer is UILongPressGestureRecognizer
                 || ((gestureRecognizer as? UITapGestureRecognizer)?.numberOfTapsRequired ?? 0) > 1 {
                 cancelCursorNavigation()
@@ -754,6 +834,7 @@ enum TerminalCursorTapNavigation {
         /// Toolbar, paste and accessory input bypass the native document. End
         /// its context before those keys, but never during its own edit callbacks.
         func prepareForExternalInput() {
+            cancelQuestionCheck()
             guard !isForwardingProxyInput, !isSendingCursorNavigation else { return }
             cancelMouseScroll()
             cancelCursorNavigation()
@@ -762,6 +843,7 @@ enum TerminalCursorTapNavigation {
 
         private func forwardProxyInput(_ input: () -> Void) {
             guard inputEnabled else { return }
+            cancelQuestionCheck()
             cancelMouseScroll()
             let wasForwarding = isForwardingProxyInput
             isForwardingProxyInput = true
@@ -772,8 +854,12 @@ enum TerminalCursorTapNavigation {
 
         @objc private func cancelNavigationForPan(_ gesture: UIPanGestureRecognizer) {
             if gesture.state == .began {
+                cancelQuestionCheck()
                 cancelCursorNavigation()
                 cancelMouseScroll()
+            }
+            if gesture.state == .ended || gesture.state == .cancelled {
+                scheduleQuestionCheck()
             }
         }
 
@@ -1058,6 +1144,7 @@ enum TerminalCursorTapNavigation {
             if let displayRow = cursorNavigation.displayRow, getTerminal().buffer.yDisp != displayRow {
                 cancelCursorNavigation()
             }
+            scheduleQuestionCheck()
             // No-op - URL underlines scroll naturally with content via absolute positioning
         }
 

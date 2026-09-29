@@ -415,13 +415,18 @@ public actor CodexPluginCore: PluginCore {
 
     public func commandForLaunch(projectPath _: String) async -> LaunchCommand? {
         guard settings.autoRun else { return nil }
+        return LaunchCommand(command: settings.commandPath, args: terminalTelemetryArguments())
+    }
+
+    /// Manual launches opt into the same telemetry as UI launches, independently
+    /// of Auto-run (typing `codex` is already an explicit launch request).
+    public func terminalTelemetryArguments() -> [String] {
         // Point Codex's OTLP log export at the Mac-local receiver via `-c`
         // overrides (issue #602). Gated on the per-agent `exportTelemetry`
         // setting; empty (no overrides) when off or when no receiver is running.
-        let otelArgs = settings.exportTelemetry
+        settings.exportTelemetry
             ? CodexOtelConfig.launchOverrides(otlpEndpoint: otlpReceiverEndpoint)
             : []
-        return LaunchCommand(command: settings.commandPath, args: otelArgs)
     }
 
     // MARK: - CLI-based plugin install

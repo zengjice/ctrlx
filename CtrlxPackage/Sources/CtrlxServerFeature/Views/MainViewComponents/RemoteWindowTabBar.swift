@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 /// (remote sessions don't expose the host's filesystem).
 ///
 /// Supports the same affordances as the local bar:
-/// - Leading "+" Menu with "New Terminal" and "New Browser" entries.
+/// - Leading "+" Menu with "New Agent…", "New Terminal" and "New Browser".
 /// - Drag-to-reorder for tmux windows (pushed to the host via
 ///   `MoveTmuxWindows`) and in-app browser tabs.
 /// - Cross-divider drag/split toggle so any window or browser tab can be sent
@@ -34,6 +34,7 @@ struct RemoteWindowTabBar: View {
     let onSelectWindow: (TmuxWindow) -> Void
     let onCloseWindow: (TmuxWindow) -> Void
     let onNewWindow: () -> Void
+    let agentConfiguration: NewAgentTabConfiguration
     /// Creates a new in-app browser tab (selected, address bar focused). Called
     /// from the "+" menu's "New Browser" option.
     let onNewBrowser: () -> Void
@@ -268,7 +269,8 @@ struct RemoteWindowTabBar: View {
 
     private var newWindowButton: some View {
         NewTabMenuButton(
-            helpText: "New terminal or browser tab",
+            helpText: "New agent, terminal or browser tab",
+            agentConfiguration: agentConfiguration,
             isTerminalDisabled: !isHostConnected,
             onNewTerminal: onNewWindow,
             onNewBrowser: onNewBrowser

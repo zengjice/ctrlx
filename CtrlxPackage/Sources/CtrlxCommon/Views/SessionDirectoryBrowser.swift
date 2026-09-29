@@ -4,13 +4,18 @@ import SwiftUI
 /// Embedded in the existing form: no sheet or NavigationStack, and no launch
 /// callback. Clicking a folder can only change the selected path.
 @MainActor
-struct SessionDirectoryBrowser: View {
+public struct SessionDirectoryBrowser: View {
     @Binding var path: String
     let source: SessionDirectorySource
 
     @State private var includeHidden = false
     @State private var retry = 0
     @State private var state = SessionDirectoryBrowseState()
+
+    public init(path: Binding<String>, source: SessionDirectorySource) {
+        _path = path
+        self.source = source
+    }
 
     private var query: SessionDirectoryBrowseState.Query {
         .init(hostID: source.id, path: path, includeHidden: includeHidden, unavailableReason: source.unavailableReason, retry: retry)
@@ -20,7 +25,7 @@ struct SessionDirectoryBrowser: View {
         state.query == query ? state.listing : nil
     }
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Button { navigate(to: "~/") } label: {

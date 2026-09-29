@@ -3,10 +3,10 @@ import Foundation
 /// A deliberately narrow recognizer for Codex's collapsed question footer.
 /// Read the live screen, never scrollback or raw output chunks. Unknown layouts
 /// are left alone; Shift+Left remains available manually.
-struct CodexQuestionPrompt: Equatable, Sendable {
-    let count: Int
+public struct CodexQuestionPrompt: Equatable, Sendable {
+    public let count: Int
 
-    init?(lines: [String], cursorRow: Int, cursorColumn: Int) {
+    public init?(lines: [String], cursorRow: Int, cursorColumn: Int) {
         guard lines.indices.contains(cursorRow), cursorColumn == 2 else { return nil }
         let rawComposer = lines[cursorRow]
         // Codex can animate braille particles over its empty placeholder. Do
@@ -53,10 +53,12 @@ struct CodexQuestionPrompt: Equatable, Sendable {
 /// redraw; reductions update the baseline without opening the next question.
 /// With no request IDs in the TUI, equal-size replacements deliberately fail
 /// closed instead of guessing whether a question is new.
-struct CodexQuestionExpansionState {
-    private(set) var count = 0
+public struct CodexQuestionExpansionState: Sendable {
+    public private(set) var count = 0
 
-    mutating func observe(_ newCount: Int) -> Bool {
+    public init() {}
+
+    public mutating func observe(_ newCount: Int) -> Bool {
         defer { count = newCount }
         return newCount > count
     }

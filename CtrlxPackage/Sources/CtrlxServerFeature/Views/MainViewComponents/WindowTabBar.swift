@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 
 /// Horizontal tab bar showing windows in a tmux session.
 /// Always visible, even for single-window sessions. The leading "+" button
-/// pops up a menu to create either a new terminal window (issued through
-/// `onNewWindow`) or a new browser tab (issued through `onNewBrowser`).
+/// pops up a menu for Agent cards, a terminal window (`onNewWindow`), or a
+/// browser tab (`onNewBrowser`). Agents create windows in this same session.
 struct WindowTabBar: View {
     let session: LocalTmuxSession
     let selectedWindow: LocalTmuxWindow
@@ -30,6 +30,7 @@ struct WindowTabBar: View {
     let onSelectWindow: (LocalTmuxWindow) -> Void
     let onCloseWindow: (LocalTmuxWindow) -> Void
     let onNewWindow: () -> Void
+    let agentConfiguration: NewAgentTabConfiguration
     /// Creates a new in-app browser tab (selected, address bar focused). Called
     /// from the "+" menu's "New Browser" option.
     let onNewBrowser: () -> Void
@@ -332,7 +333,8 @@ struct WindowTabBar: View {
 
     private var newWindowButton: some View {
         NewTabMenuButton(
-            helpText: "New terminal or browser in \(session.sessionName)",
+            helpText: "New agent, terminal or browser in \(session.sessionName)",
+            agentConfiguration: agentConfiguration,
             onNewTerminal: onNewWindow,
             onNewBrowser: onNewBrowser
         )

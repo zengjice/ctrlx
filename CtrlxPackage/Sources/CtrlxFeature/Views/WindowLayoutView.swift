@@ -16,6 +16,7 @@
         let settings: IOSSettings
 
         @Environment(SessionStore.self) private var sessionStore
+        @Environment(ViewerConnectionManager.self) private var connectionManager
         @Environment(AgentBackgroundMonitoringService.self) private var backgroundMonitoring
         @Environment(\.dismiss) private var dismiss
 
@@ -45,6 +46,12 @@
 
         /// Guards against double-splits from rapid taps
         @State private var isSplitting = false
+
+        @State private var newAgentConfiguration: NewAgentTabConfiguration?
+        @State private var isCreatingWindow = false
+        /// Follow the returned pane when its state arrives, not after a fixed delay.
+        @State private var createdPaneId: String?
+        @State private var windowSelectionRevision = 0
 
         /// Width of the navigation bar (measured from the full-width content
         /// area). Used to cap the centered title so it doesn't bleed behind the
@@ -106,7 +113,8 @@
                 WindowSelectionCandidate(
                     windowId: window.id,
                     paneId: window.activePane?.paneId ?? window.panes.first?.paneId,
-                    isActive: window.isWindowActive
+                    isActive: window.isWindowActive,
+                    paneIDs: window.panes.map(\.paneId)
                 )
             }
         }
@@ -192,6 +200,8 @@
                         let windows = sessionWindows
                         ForEach(windows) { win in
                             Button {
+                                createdPaneId = nil
+                                windowSelectionRevision += 1
                                 selectedWindowId = win.id
                                 activePaneId = win.activePane?.paneId ?? win.panes.first?.paneId
                                 Task {
@@ -208,24 +218,18 @@
 
                         Divider()
 
-                        Button {
-                            Task {
-                                let workingDir = window?.activePane?.currentPath
-                                let spec = CreateTmuxWindow(sessionName: sessionName, workingDirectory: workingDir)
-                                let result = await relayClient.sendCommand(spec, paneId: "")
-                                if case let .success(response) = result, let paneId = response.paneId {
-                                    await relayClient.requestSessionState()
-                                    try? await Task.sleep(for: .milliseconds(500))
-                                    if let newWindow = sessionWindows.first(where: { $0.panes.contains(where: { $0.paneId == paneId }) }) {
-                                        selectedWindowId = newWindow.id
-                                        activePaneId = paneId
-                                    }
-                                }
-                            }
-                        } label: {
-                            Label("New Window", symbol: .plus)
+                        Button(action: createTerminalWindow) {
+                            Label("New Terminal", symbol: .terminal)
                         }
-                        .disabled(!relayClient.isHostConnected)
+                        .disabled(!relayClient.isHostConnected || isCreatingWindow)
+
+                        Button {
+                            newAgentConfiguration = agentTabConfiguration()
+                        } label: {
+                            Label("New Agent…", symbol: .sparkles)
+                        }
+                        .disabled(!relayClient.isHostConnected || isCreatingWindow)
+                        .accessibilityIdentifier("new-agent-window")
 
                         if let window {
                             Button {
@@ -332,6 +336,10 @@
                     }
                 }
             }
+            .sheet(item: $newAgentConfiguration) { configuration in
+                NewAgentTabPanel(configuration: configuration)
+                    .presentationDetents([.large])
+            }
             .alert(
                 closeConfirmation?.title ?? "Close?",
                 isPresented: .init(
@@ -399,6 +407,11 @@
             .task(id: windowSelectionCandidates) {
                 reconcileWindowSelection(candidates: windowSelectionCandidates)
             }
+            .onDisappear {
+                // A delayed creation reply must not redirect a later visit.
+                windowSelectionRevision += 1
+                createdPaneId = nil
+            }
             .onChange(of: activeService?.session?.state) {
                 if activeSessionHasBlockingForm {
                     isKeyboardActive = false
@@ -432,10 +445,72 @@
             }
         }
 
+        /// Inherit the pane the iPhone is actually controlling, which may not
+        /// yet match the Host's active-pane flag during a state round trip.
+        private var newWindowDirectory: String {
+            let pane = window?.panes.first(where: { $0.paneId == activePaneId }) ?? window?.activePane
+            return pane?.currentPath.flatMap { SessionDirectoryPath.isValid($0) ? $0 : nil } ?? "~/"
+        }
+
+        private func agentTabConfiguration() -> NewAgentTabConfiguration {
+            NewAgentTabConfiguration(
+                id: .init(hostID: hostId, sessionName: sessionName),
+                initialDirectory: newWindowDirectory,
+                agents: sessionStore.launchAgents(for: hostId),
+                directorySource: .remote(
+                    hostID: hostId, connection: connectionManager.connection(for: hostId),
+                    supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(hostId)
+                ),
+                unavailableReason: sessionStore.agentWindowLaunchUnavailableReason(
+                    hostID: hostId, isConnected: relayClient.isHostConnected
+                ),
+                start: { request in try await createWindow(request) }
+            )
+        }
+
+        private func createTerminalWindow() {
+            let request = CreateTmuxWindow(sessionName: sessionName, workingDirectory: newWindowDirectory)
+            Task {
+                do {
+                    try await createWindow(request)
+                } catch {
+                    commandError = error.localizedDescription
+                }
+            }
+        }
+
+        private func createWindow(_ request: CreateTmuxWindow) async throws {
+            guard !isCreatingWindow else {
+                throw NewAgentTabConfiguration.LaunchError("A window is already being created. Please wait.")
+            }
+            // Recheck on Start: the Host can disconnect/downgrade while the
+            // sheet is open. The Host still validates the plugin and directory.
+            if request.pluginID != nil,
+               let reason = sessionStore.agentWindowLaunchUnavailableReason(
+                   hostID: hostId, isConnected: relayClient.isHostConnected
+               ) {
+                throw NewAgentTabConfiguration.LaunchError(reason)
+            }
+            isCreatingWindow = true
+            defer { isCreatingWindow = false }
+            let selectionRevision = windowSelectionRevision
+            let response = try await relayClient.sendCommand(request, paneId: "").get()
+            guard let paneId = response.paneId else {
+                throw NewAgentTabConfiguration.LaunchError("Host returned no new pane. Check its windows before retrying.")
+            }
+            if windowSelectionRevision == selectionRevision {
+                createdPaneId = paneId
+                // State may arrive before or after the command response.
+                reconcileWindowSelection(candidates: windowSelectionCandidates)
+            }
+            await relayClient.requestSessionState()
+        }
+
         private func reconcileWindowSelection(candidates: [WindowSelectionCandidate]) {
             let decision = WindowSelectionReconciliation.resolve(
                 selectedWindowId: selectedWindowId,
-                candidates: candidates
+                candidates: candidates,
+                createdPaneId: createdPaneId
             )
 
             switch decision {
@@ -445,6 +520,7 @@
             case let .select(windowId, paneId):
                 selectedWindowId = windowId
                 activePaneId = paneId
+                if paneId == createdPaneId { createdPaneId = nil }
             }
         }
 

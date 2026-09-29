@@ -2,6 +2,7 @@ struct WindowSelectionCandidate: Equatable, Hashable, Sendable {
     let windowId: String
     let paneId: String?
     let isActive: Bool
+    var paneIDs: [String] = []
 }
 
 enum WindowSelectionReconciliation: Equatable, Sendable {
@@ -10,8 +11,13 @@ enum WindowSelectionReconciliation: Equatable, Sendable {
 
     static func resolve(
         selectedWindowId: String?,
-        candidates: [WindowSelectionCandidate]
+        candidates: [WindowSelectionCandidate],
+        createdPaneId: String? = nil
     ) -> Self {
+        if let createdPaneId,
+           let candidate = candidates.first(where: { $0.paneId == createdPaneId || $0.paneIDs.contains(createdPaneId) }) {
+            return .select(windowId: candidate.windowId, paneId: createdPaneId)
+        }
         guard let selectedWindowId else {
             guard let candidate = preferredCandidate(in: candidates) else {
                 return .unchanged
