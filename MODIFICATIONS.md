@@ -7,6 +7,21 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.40 — Avoid redundant terminal drawing during fullscreen scrolling
+
+- Commit completed synchronized frames once, avoiding a second delayed redraw
+  of the same content. Preserve first-frame/timeout recovery, stable caret,
+  ordinary output, and the Mac Retina correction from 3.0.39.
+- Reuse Mac CoreGraphics layout for unchanged lines that move during scrolling.
+  Bound the cache to visible lines, validate mutations/columns, and rebuild
+  row-dependent image placeholders; retain selection and link safeguards.
+- Pin the tested SwiftTerm revision and add native-window/cache regressions.
+  Isolated Release measurements show reduced drawing work, not guaranteed
+  three-device frame rates or elimination of every downward-scroll stall.
+- Update each display client for its rendering fix: local/Viewer Mac and iOS.
+  This publication packages Mac only; iOS requires a separate package/install.
+  No Relay deployment, transport change or Codex setting change is required.
+
 ## 3.0.39 — Mac terminal first-frame and Retina correction
 
 - Correct the custom SwiftTerm backing layer's native redraw policy so local

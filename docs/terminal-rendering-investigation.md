@@ -2,6 +2,75 @@
 
 > **Historical status (PR #179):** The first fix moved live terminal bytes to `pipe-pane`, resolving corruption in the original String-based `%output` parser. In September 2026, terminal content moved back to control mode. The September 8 findings below correct two holes in that transition: connection identity and capture atomicity. `pipe-pane` remains scan-only for OSC side effects. The older diagrams and hypotheses below are historical; see `streaming-architecture.md` for the current data flow.
 
+## 3.0.40: remaining scroll cost after 3.0.39 (September 29, 2026)
+
+The user confirmed the black/blurred first-frame regression was fixed, but still
+reported stutter on all three display clients, especially scrolling down toward
+the latest content. A Release-optimized native-window probe at `a2fe208` found
+two independently avoidable costs:
+
+- DEC 2026 completion invalidated the native layer without consuming the dirty
+  range. The delayed `updateDisplay` then invalidated that same frame again:
+  45 synthetic updates produced 90 draws. Commit the dirty range and final caret
+  state before re-arming native display. Keep the re-arm for first-frame/timeout
+  recovery, the sync barrier, and the 3.0.39 backing-scale/redraw-policy fix.
+  Ordinary output and bytes following sync-end still use the existing scheduler.
+- The Mac CoreGraphics cache was keyed by buffer row. DECSTBM moves intact line
+  objects to different rows, losing almost every cache hit. Key by line identity
+  plus generation and columns, retaining only visible line objects. Rebuild
+  row-dependent Kitty placeholder data when its row changes; selection and
+  dynamic link highlighting still bypass the cache. Existing font/color/mode
+  invalidation remains intact.
+
+SwiftTerm fix: `4abe9a486d80ec0d9e820dbd6c6a48f112b0fe7e`. No transport,
+wheel sensitivity, Codex launch settings, or Relay protocol change is included.
+The shared presentation fix applies to Mac and iOS; moved-line caching is Mac
+only. Each display client needs its updated binary; Relay needs no deployment.
+
+For the same synthetic 197-column/61-row Retina fixture, Release measurements
+were: 45 updates → **45 draws** rather than 90; region-scroll first-draw medians
+about **7–8 ms**, rather than 15.4 ms plus a second 14.9 ms draw; cache hits
+**58/61** rather than 4/61. Full content rewrites still took about 15.3 ms per
+draw and do not receive the moved-line benefit. These are isolated CPU drawing
+measurements, **not real three-device FPS or subjective smoothness acceptance**.
+
+A private Codex `/status` fixture (no requested model work) was rerun after
+rejecting an initial attempt that sent commands before startup was ready. The
+valid run used 16 up and 16 down wheel events in fullscreen mode, returned to
+the original latest screen, and preserved the composer. Replaying its captured
+byte stream through the fixed Release renderer produced one draw per wheel
+group, no repeat draws, a visible final input prompt and no pending dirty range.
+Downward replay p95 was still about 18 ms versus 9 ms upward; contents differ,
+so neither the directional cause nor perfectly smooth scrolling is established.
+The isolated tmux server was stopped; existing user sessions were untouched.
+
+Validation: new dirty-range/native-window tests failed before the fix and passed
+after it. Full SwiftTerm regression passed: **518 Swift Testing + 85 XCTest**
+tests, including black-first-frame, scale changes, sync timeout, cursor, Metal,
+selection, and cache lifetime/mutation/row-dependency coverage. Test logs:
+`/tmp/ctrlx-scroll-{commit-red,commit-green,swiftterm-full,release-fixed-verified,real-replay}.log`.
+CtrlX resolved the published pin independently through SwiftPM and Xcode, with
+no other dependency revision changes. Its 144 focused rendering/input/feed/
+scroll regressions passed; the workspace Mac Release and iOS device-target
+Debug compile checks passed (unsigned, not installable release artifacts).
+Logs: `/tmp/ctrlx-scroll-{integration-tests,mac-build,ios-build}.log`.
+The shared presentation test source also type-checked against the iOS SDK and
+the newly built SwiftTerm module (`/tmp/ctrlx-scroll-ios-test-typecheck.log`);
+the standalone check requires Xcode's TestingMacros plugin search path.
+Native iOS execution and affected-device hand-feel acceptance remain separate
+from Mac tests and compilation. No app installation or publication is part of
+this implementation step.
+
+Release preparation for **3.0.40**: brand/technical boundaries, ten offline Mac
+publisher tests, website build and the versioned iOS device-target compile
+passed. The full CtrlX run completed with 2,197 passing tests and only the same
+two `StopFinalityEvaluations` failures as 3.0.39: this Mac reports Apple
+Intelligence `deviceNotEligible`. This is not an all-green full test run.
+Logs: `/tmp/ctrlx-3.0.40-{unit-tests,website-build,ios-compile}.log`.
+The Qcloud Mac-only publisher verifies the signed artifact and public download;
+local Mac/iPhone installation and real-device scrolling acceptance are not part
+of this publication. Relay and the Linux lock are unchanged.
+
 ## 3.0.38 Mac regression: black first frame and blurry text (September 29, 2026)
 
 A second Apple Silicon Mac on macOS 27 showed a black terminal until scrolling,
