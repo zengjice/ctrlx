@@ -14,13 +14,17 @@ actor MockPluginHost: PluginHost {
 
     /// Panes the mock reports as running the agent process — drives the Codex
     /// session-end monitor in tests. Settable via `setAgentPanes`.
-    private var agentPanesValue: [String] = []
+    private var agentPanesValue: [String]? = []
 
-    func setAgentPanes(_ panes: [String]) {
+    func setAgentPanes(_ panes: [String]?) {
         agentPanesValue = panes
     }
 
     func agentPanes() async -> [String] {
+        agentPanesValue ?? []
+    }
+
+    func agentPanesIfAvailable() async -> [String]? {
         agentPanesValue
     }
 

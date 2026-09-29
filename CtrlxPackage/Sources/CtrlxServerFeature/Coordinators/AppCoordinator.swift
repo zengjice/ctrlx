@@ -916,19 +916,21 @@
                     await self?.handlePluginSendKeys(sessionID: sessionID, keys: keys)
                 },
                 onAgentPanes: { [weak self] pluginID in
-                    await self?.handlePluginAgentPanes(pluginID: pluginID) ?? []
+                    await self?.handlePluginAgentPanes(pluginID: pluginID)
                 }
             )
         }
 
-        /// Backs `PluginHost.agentPanes()` — the tmux panes currently running
+        /// Backs `PluginHost.agentPanesIfAvailable()` — the tmux panes currently running
         /// `pluginID`'s agent process (manifest `process_names`). A core uses this
         /// to detect its agent exiting a pane without a lifecycle hook (Codex has
         /// no `SessionEnd`). Reuses the same detection the SessionEnd kill-poll
         /// trusts, scoped to the calling plugin so it stays agent-blind.
-        private func handlePluginAgentPanes(pluginID: String) async -> [String] {
-            guard let names = pluginRegistry?.processNamesByPlugin[pluginID] else { return [] }
-            let detected = await tmuxService.detectAgentPanes(processNamesByPlugin: [pluginID: names])
+        private func handlePluginAgentPanes(pluginID: String) async -> [String]? {
+            guard let names = pluginRegistry?.processNamesByPlugin[pluginID] else { return nil }
+            guard let detected = await tmuxService.detectAgentPanesIfAvailable(
+                processNamesByPlugin: [pluginID: names]
+            ) else { return nil }
             return Array(detected.keys)
         }
 

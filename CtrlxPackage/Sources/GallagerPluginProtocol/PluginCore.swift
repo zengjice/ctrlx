@@ -81,11 +81,15 @@ public protocol PluginHost: Sendable {
     func sendKeys(sessionID: String, _ keys: [PluginTmuxKey]) async
 
     /// The tmux pane ids currently running THIS plugin's agent process (matched
-    /// against the manifest's `process_names`). Lets a core detect when its agent
-    /// has exited a pane without a lifecycle hook — e.g. Codex CLI emits no
-    /// `SessionEnd`, so its core polls this to synthesize one. Empty when the host
-    /// can't introspect panes (non-macOS / tests).
+    /// against the manifest's `process_names`). Legacy listing API: empty when
+    /// introspection is unavailable. Lifecycle decisions must use
+    /// `agentPanesIfAvailable()` instead of treating this empty list as an exit.
     func agentPanes() async -> [String]
+
+    /// A reliable snapshot for lifecycle decisions: nil means the host cannot
+    /// currently inspect processes; an empty list confirms no matching agents.
+    /// Callers must preserve their previous state on nil.
+    func agentPanesIfAvailable() async -> [String]?
 
     /// Structured log line, appended to the plugin's log file and surfaced in
     /// Settings → View Logs.
@@ -96,4 +100,7 @@ public extension PluginHost {
     /// Default: the host exposes no pane introspection (non-macOS, or a test
     /// double that doesn't model panes). The live macOS host overrides this.
     func agentPanes() async -> [String] { [] }
+
+    /// Unsupported introspection is unknown, never evidence that an agent exited.
+    func agentPanesIfAvailable() async -> [String]? { nil }
 }

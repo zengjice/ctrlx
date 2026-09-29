@@ -479,7 +479,7 @@ public actor CodexPluginCore: PluginCore {
         /// hook when a session ends. Instead poll which panes still run a `codex`
         /// process and synthesize a `.sessionEnded` (via `host.emit`) for any
         /// recorded session whose process has exited — reusing the app's existing
-        /// yolo-reset + pane-close handling. The `ps`-walking `host.agentPanes()`
+        /// yolo-reset + pane-close handling. `host.agentPanesIfAvailable()`
         /// is only called while there are recorded sessions to watch.
         private func startSessionEndMonitor() {
             guard sessionEndMonitor == nil else { return }
@@ -505,7 +505,10 @@ public actor CodexPluginCore: PluginCore {
             // Nothing recorded and nothing was live → skip the ps walk entirely.
             guard !known.isEmpty || !previouslyAlivePanes.isEmpty else { return }
 
-            let alive = Set(await host.agentPanes()).intersection(known)
+            // Failed/unsupported introspection is not a process exit. Preserve
+            // both the live baseline and first-successful-tick reconciliation.
+            guard let panes = await host.agentPanesIfAvailable() else { return }
+            let alive = Set(panes).intersection(known)
 
             // First tick after launch: a recorded pane whose process is already
             // gone is an orphan from a previous run (its session ended while we

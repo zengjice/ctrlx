@@ -98,6 +98,7 @@
 
                 TerminalAgentCommandButton(
                     context: agentCommandContext,
+                    terminalContext: phraseContext,
                     presentation: $quickActionPresentation
                 )
 

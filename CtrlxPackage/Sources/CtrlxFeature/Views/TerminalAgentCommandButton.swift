@@ -5,6 +5,7 @@
     @MainActor
     struct TerminalAgentCommandButton: View {
         let context: AgentCommandContext?
+        let terminalContext: TerminalPhraseContext
         @Binding var presentation: TerminalQuickActionPresentation
 
         var body: some View {
@@ -15,18 +16,38 @@
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(context == nil)
-            .opacity(context == nil ? 0.4 : 1)
             .accessibilityLabel("Agent Commands")
             .accessibilityHint(context == nil
-                ? "No supported agent in this pane."
+                ? "Show why agent commands are unavailable"
                 : "Choose a command for the current agent")
             .accessibilityIdentifier("terminal-agent-command-control")
         }
 
         private func togglePanel() {
-            guard let context else { return }
-            presentation.toggle(.commands(context))
+            presentation.toggleCommands(context: context, terminal: terminalContext)
+        }
+    }
+
+    @MainActor
+    struct TerminalAgentCommandUnavailablePanel: View {
+        let hasSelectedPane: Bool
+        let close: () -> Void
+
+        var body: some View {
+            VStack(spacing: 0) {
+                TerminalQuickActionPanelHeader(title: "Commands", close: close)
+                Divider()
+                ScrollView {
+                    Text(hasSelectedPane
+                         ? "No supported agent is currently identified in this pane. Commands will appear when the host identifies Codex or Claude Code."
+                         : "Select a terminal pane to view agent commands.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .accessibilityIdentifier("terminal-agent-command-unavailable")
+                }
+            }
         }
     }
 

@@ -72,6 +72,11 @@
                     sendCommand: sendCommand,
                     close: close
                 )
+            case let .commandsUnavailable(captured):
+                TerminalAgentCommandUnavailablePanel(
+                    hasSelectedPane: captured.target.paneID != nil,
+                    close: close
+                )
             case let .phrases(captured):
                 TerminalQuickPhrasePanel(
                     store: store,

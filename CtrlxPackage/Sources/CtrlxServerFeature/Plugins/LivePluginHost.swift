@@ -23,7 +23,8 @@
         /// Send a key sequence to the pane backing a session.
         public typealias SendKeysSink = @Sendable (_ pluginID: String, _ sessionID: String, _ keys: [PluginTmuxKey]) async -> Void
         /// Resolve the panes currently running this plugin's agent process.
-        public typealias AgentPanesSink = @Sendable (_ pluginID: String) async -> [String]
+        /// nil preserves an unavailable probe instead of reporting a false exit.
+        public typealias AgentPanesSink = @Sendable (_ pluginID: String) async -> [String]?
 
         private let dispatcher: PluginEventDispatcher
         private let logSink: PluginLogSink
@@ -39,7 +40,7 @@
             onSetProjects: @escaping SetProjectsSink = { _, _ in },
             onSendText: @escaping SendTextSink = { _, _, _ in },
             onSendKeys: @escaping SendKeysSink = { _, _, _ in },
-            onAgentPanes: @escaping AgentPanesSink = { _ in [] }
+            onAgentPanes: @escaping AgentPanesSink = { _ in nil }
         ) {
             self.pluginID = pluginID
             self.dispatcher = dispatcher
@@ -69,6 +70,10 @@
         }
 
         public func agentPanes() async -> [String] {
+            await onAgentPanes(pluginID) ?? []
+        }
+
+        public func agentPanesIfAvailable() async -> [String]? {
             await onAgentPanes(pluginID)
         }
 

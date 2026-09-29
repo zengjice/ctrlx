@@ -5,7 +5,7 @@ import Testing
 @testable import CodexPluginCore
 
 /// Drives the Codex session-end monitor (`pollSessionEnds`) directly. Codex CLI
-/// emits no `SessionEnd` hook, so the core polls `host.agentPanes()` and
+/// emits no `SessionEnd` hook, so the core polls `host.agentPanesIfAvailable()` and
 /// synthesizes a `.sessionEnded` when a recorded session's `codex` process exits
 /// — reusing the app's existing yolo-reset + pane-close handling.
 @Suite("CodexSessionEndMonitor")
@@ -113,10 +113,55 @@ struct CodexSessionEndMonitorTests {
 
         await core.shutdown()
     }
+
+    @Test("unavailable probes preserve live sessions until a confirmed exit", arguments: [false, true])
+    func unavailableProbePreservesLiveSession(closePaneOnSessionEnd: Bool) async throws {
+        let (core, host, store, root) = try await makeCore(closePaneOnSessionEnd: closePaneOnSessionEnd)
+        defer { try? fileManager.removeItem(at: root) }
+
+        store.record(sessionID: "sess-1", tmuxPane: "%1", cwd: nil)
+        await host.setAgentPanes(["%1"])
+        await core.pollSessionEnds()
+
+        await host.setAgentPanes(nil)
+        await core.pollSessionEnds()
+        await core.pollSessionEnds()
+        #expect(await host.emittedEvents.isEmpty)
+        #expect(store.allPanes() == ["%1"])
+
+        await host.setAgentPanes([])
+        await core.pollSessionEnds()
+        await core.pollSessionEnds()
+        let events = await host.emittedEvents
+        #expect(events.count == 1)
+        #expect(events.first?.appActions == [
+            .sessionEnded(sessionID: "%1", closePaneEligible: closePaneOnSessionEnd)
+        ])
+        #expect(store.allPanes().isEmpty)
+        await core.shutdown()
+    }
+
+    @Test("an unavailable first probe does not consume orphan reconciliation")
+    func unavailableFirstProbePreservesOrphans() async throws {
+        let (core, host, store, root) = try await makeCore()
+        defer { try? fileManager.removeItem(at: root) }
+
+        store.record(sessionID: "sess-old", tmuxPane: "%2", cwd: nil)
+        await host.setAgentPanes(nil)
+        await core.pollSessionEnds()
+        #expect(store.allPanes() == ["%2"])
+        #expect(await host.emittedEvents.isEmpty)
+
+        await host.setAgentPanes([])
+        await core.pollSessionEnds()
+        #expect(store.allPanes().isEmpty)
+        #expect(await host.emittedEvents.isEmpty)
+        await core.shutdown()
+    }
 }
 
 /// A `PluginHost` that implements only the required methods, to verify the
-/// `agentPanes()` protocol-extension default.
+/// pane introspection protocol-extension defaults.
 private struct BarePluginHost: PluginHost {
     func setProjects(_: [AgentProject]) async { }
     func emit(_: PluginEvent) async { }
@@ -131,5 +176,11 @@ struct PluginHostDefaultTests {
     func agentPanesDefaultsEmpty() async {
         let host = BarePluginHost()
         #expect(await host.agentPanes().isEmpty)
+    }
+
+    @Test("lifecycle introspection defaults to unavailable, not a confirmed exit")
+    func lifecycleIntrospectionDefaultsUnavailable() async {
+        let host: any PluginHost = BarePluginHost()
+        #expect(await host.agentPanesIfAvailable() == nil)
     }
 }

@@ -42,6 +42,25 @@ editor hides its Form background so it does not obscure the shared material.
 
 ## Implementation boundaries
 
+### Agent identity and command-panel availability
+
+The iOS `/` button always opens its overlay. If the current pane has no supported
+agent identity, the panel explains why no catalog is available; it never guesses
+Codex from a window title or reuses another pane's agent. Host metadata arriving
+while that explanation is open restores the matching catalog only for the same
+host, pane and local input revision. Connection/readiness/editor/blocking-form
+checks still apply when sending; opening the panel grants no send permission.
+Changing targets or editing terminal input invalidates the captured panel.
+
+On the Mac Host, Codex's session-end monitor uses
+`PluginHost.agentPanesIfAvailable()`. A failed, cancelled or unsupported process
+probe is `nil`, not an empty list: it preserves identity, correlation and the
+previous live baseline until a successful probe. Only a confirmed absence can
+end a session. This prevents a temporary probe failure from clearing the agent
+on all viewers (or requesting pane closure). The legacy sidecar listing API is
+unchanged. This fix requires updating the Host Mac for identity stability and
+iOS for the always-openable explanation; no Relay deployment is needed.
+
 ### Curated command catalogs
 
 Both clients use `AgentQuickCommand.commands(for:)` as the display order and

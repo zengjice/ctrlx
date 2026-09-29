@@ -22,6 +22,10 @@ Detailed documentation for Ctrlx services. Reference when modifying specific com
 **Methods:**
 - `refreshPanes()` - discovers all panes across sessions
 - `validatePane()` - checks if pane target exists
+- `detectAgentPanesIfAvailable()` - reliable process snapshot for lifecycle checks;
+  nil means unavailable, not an agent exit. `LivePluginHost` preserves that
+  distinction through `PluginHost.agentPanesIfAvailable()` for Codex's exit
+  monitor. A failed probe must not clear identity or trigger automatic pane close.
 - `capturePane()` - captures scrollback with ANSI sequences
 - `capturePaneWithScrollbackForStreaming()` - captures with cursor positioning for streaming init
 - `getPaneDimensions()` / `getPaneId()` - dimension tracking
