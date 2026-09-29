@@ -7,6 +7,31 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.42 — Agent windows, terminal telemetry and Codex question expansion
+
+- Add New Agent window panels on Mac and iOS with one launch card per enabled
+  Host agent. Reuse the Host's launch configuration and working directory;
+  capability checks preserve compatibility with older Hosts.
+- Add Codex telemetry defaults to manual launches in newly created zsh
+  terminals, including resume commands. Preserve explicit telemetry settings,
+  user shell configuration and argument forwarding; retain Claude telemetry
+  environment support. Existing terminals are not retroactively rewritten.
+- Automatically expand recognized Codex queued questions on iOS through the
+  existing input queue and Host-side guards. Accept legacy and compact shortcuts
+  plus optional elapsed-time suffixes on Mac/iOS; timer ticks do not reopen
+  dismissed questions or postpone the stable-screen check.
+- Preserve draft, IME, selection, scrolling and multi-viewer safeguards. Add
+  shared parser, launch, shell integration, scheduler and Host regressions.
+  iPhone Air opening and answering passed manual acceptance with the updated Host.
+- Update Host Mac and viewing clients for elapsed-footer compatibility. This
+  publication packages Mac only; iOS requires its separate signed package/install.
+  No Relay deployment or SwiftTerm dependency update is required.
+- Release validation: 1,256 tests passed in the full run; all 1,006 Mac tests
+  passed on serial rerun after parallel test-process SIGPIPE interruptions.
+  Two existing Apple Intelligence evaluations remain unavailable on this Mac
+  (`deviceNotEligible`); this is not an all-green full-suite result. Brand and
+  technical boundaries, website/iOS builds and 10 publisher regressions passed.
+
 ## 3.0.41 — Configurable Mac New Browser and Codex compatibility
 
 - Add Mac Settings → Browser → New Browser → Engine, defaulting to Chromium
