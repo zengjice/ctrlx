@@ -8,12 +8,40 @@ import Testing
 @Suite("iOS Codex question auto-expansion")
 @MainActor
 struct TerminalCodexQuestionExpansionTests {
-    private static func prompt(_ count: Int, compact: Bool = false) -> CodexQuestionPrompt? {
+    private static func prompt(_ count: Int, compact: Bool = false, suffix: String = "") -> CodexQuestionPrompt? {
         let lines = count == 0 ? ["› Ask Codex to do anything"] : [
-            "Queued follow-up inputs", "? \(count) \(count == 1 ? "question" : "questions")",
+            "Queued follow-up inputs", "? \(count) \(count == 1 ? "question" : "questions")\(suffix)",
             compact ? "shift+← to answer" : "shift + ← to answer", "› Ask Codex to do anything",
         ]
         return CodexQuestionPrompt(lines: lines, cursorRow: lines.count - 1, cursorColumn: 2)
+    }
+
+    @Test("Question age ticks neither postpone expansion nor reopen a dismissed queue")
+    func timerTicks() async throws {
+        try await withMainSerialExecutor {
+            let clock = TestClock()
+            try await withDependencies { $0.continuousClock = clock } operation: {
+                var current = try #require(Self.prompt(1, compact: true, suffix: " · 14s"))
+                var sent: [Int] = []
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { sent.append($0); return true })
+                defer { opener.invalidate() }
+                opener.schedule()
+                for age in [15, 16, 17] {
+                    await clock.advance(by: .milliseconds(100))
+                    current = try #require(Self.prompt(1, compact: true, suffix: " · \(age)s"))
+                    opener.schedule()
+                }
+                #expect(sent.isEmpty)
+                await clock.advance(by: .milliseconds(50))
+                await Task.megaYield()
+                #expect(sent == [1])
+                // A later minute-format tick must not send another intent.
+                current = try #require(Self.prompt(1, compact: true, suffix: " · 1m 02s"))
+                opener.schedule()
+                await clock.advance(by: .seconds(1))
+                #expect(sent == [1])
+            }
+        }
     }
 
     @Test("Both footer formats wait for 350 ms, not every output chunk", arguments: [false, true])

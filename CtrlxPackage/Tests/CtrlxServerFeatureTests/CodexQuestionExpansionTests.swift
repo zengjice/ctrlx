@@ -12,13 +12,15 @@
     @MainActor
     struct CodexQuestionExpansionTests {
         nonisolated private static let supportedHints = ["shift + ← to answer", "shift+← to answer"]
+        nonisolated private static let supportedSuffixes = ["", " · 14s", " · 1m 02s"]
 
         nonisolated private static func screen(
             count: Int = 4,
             composer: String = "› Ask Codex to do anything",
-            hint: String = "shift + ← to answer"
+            hint: String = "shift + ← to answer",
+            suffix: String = ""
         ) -> [String] {
-            ["output", "• Queued follow-up inputs", "  ? \(count) \(count == 1 ? "question" : "questions")",
+            ["output", "• Queued follow-up inputs", "  ? \(count) \(count == 1 ? "question" : "questions")\(suffix)",
              "    \(hint)", "", composer, "  gpt-6-astra · project"]
         }
 
@@ -87,15 +89,15 @@
             }
         }
 
-        @Test("Codex 0.158 live footer spacing is recognized in the alternate screen")
-        func currentCodexSnapshot() {
+        @Test("Current Codex footer spacing and age are recognized in the alternate screen", arguments: supportedSuffixes)
+        func currentCodexSnapshot(suffix: String) {
             let view = InteractiveTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
             view.getTerminal().resize(cols: 239, rows: 66)
             // Only the footer from the observed live screen; no transcript or
             // private question text is needed to reproduce the parser failure.
             let lines = [
                 "• Working (2m 11s • esc to interrupt)", "",
-                "• Queued follow-up inputs", "  ? 1 question", "    shift+← to answer",
+                "• Queued follow-up inputs", "  ? 1 question\(suffix)", "    shift+← to answer",
                 "", "", "› Ask Codex to do anything", "",
                 "  GPT-6-Astra xhigh fast", "  ← for agents · ? for shortcuts",
             ]
@@ -134,6 +136,30 @@
             #expect(keys == [["send-keys", "-t", "%7", "S-Left"]])
         }
 
+        @Test("Host accepts elapsed footers but age changes cannot trigger duplicate opens", arguments: supportedHints)
+        func hostTimerTicks(hint: String) async throws {
+            let commands = LockIsolated<[[String]]>([])
+            let suffix = LockIsolated(" · 14s")
+            try await withDependencies {
+                $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                    commands.withValue { $0.append(arguments) }
+                    let output = arguments.contains("capture-pane")
+                        ? "codex\t2\t5\t0\n" + Self.screen(hint: hint, suffix: suffix.value).joined(separator: "\n") : ""
+                    return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
+                }
+            } operation: {
+                let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
+                // A stale viewer count must not consume the valid opener.
+                try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 3)
+                #expect(!commands.value.contains { $0.contains("send-keys") })
+                for tick in [" · 14s", " · 15s", " · 1m 02s"] {
+                    suffix.setValue(tick)
+                    try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 4)
+                }
+            }
+            #expect(commands.value.filter { $0.contains("send-keys") } == [["send-keys", "-t", "%7", "S-Left"]])
+        }
+
         @Test("Host rejects stale viewer count, drafts, other agents and copy mode", arguments: [
             "codex\t2\t5\t1", "zsh\t2\t5\t0", "claude\t2\t5\t0", "codex\t8\t5\t0", "malformed",
         ], supportedHints)
@@ -142,7 +168,7 @@
             try await withDependencies {
                 $0[ProcessRunner.self].run = { _, arguments, _, _ in
                     commands.withValue { $0.append(arguments) }
-                    return ProcessResult(exitCode: 0, stdout: Data((metadata + "\n" + Self.screen(hint: hint).joined(separator: "\n")).utf8), stderr: Data())
+                    return ProcessResult(exitCode: 0, stdout: Data((metadata + "\n" + Self.screen(hint: hint, suffix: " · 14s").joined(separator: "\n")).utf8), stderr: Data())
                 }
             } operation: {
                 let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
@@ -159,7 +185,7 @@
             try await withDependencies {
                 $0[ProcessRunner.self].run = { _, arguments, _, _ in
                     commands.withValue { $0.append(arguments) }
-                    let screen = Self.screen(composer: draft ? "› draft" : "› Ask Codex to do anything", hint: hint)
+                    let screen = Self.screen(composer: draft ? "› draft" : "› Ask Codex to do anything", hint: hint, suffix: " · 14s")
                     return ProcessResult(exitCode: 0, stdout: Data(("codex\t2\t5\t0\n" + screen.joined(separator: "\n")).utf8), stderr: Data())
                 }
             } operation: {
@@ -189,11 +215,11 @@
             #expect(commands.value.filter { $0.contains("send-keys") }.count == 1)
         }
 
-        @Test("Native wrapper observes the rendered footer, not raw chunk boundaries", arguments: supportedHints)
-        func nativeSnapshot(hint: String) {
+        @Test("Native wrapper observes the rendered footer, not raw chunk boundaries", arguments: supportedHints, supportedSuffixes)
+        func nativeSnapshot(hint: String, suffix: String) {
             let view = InteractiveTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
             view.getTerminal().resize(cols: 80, rows: 24)
-            let bytes = Array((Self.screen(hint: hint).joined(separator: "\r\n") + "\u{1b}[6;3H").utf8)
+            let bytes = Array((Self.screen(hint: hint, suffix: suffix).joined(separator: "\r\n") + "\u{1b}[6;3H").utf8)
             view.feed(byteArray: bytes.prefix(bytes.count / 2))
             #expect(view.currentQuestionPrompt?.count != 4)
             view.feed(byteArray: bytes.suffix(bytes.count - bytes.count / 2))

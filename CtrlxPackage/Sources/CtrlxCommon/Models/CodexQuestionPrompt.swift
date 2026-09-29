@@ -4,6 +4,8 @@ import Foundation
 /// Read the live screen, never scrollback or raw output chunks. Unknown layouts
 /// are left alone; Shift+Left remains available manually.
 public struct CodexQuestionPrompt: Equatable, Sendable {
+    // Presentation-only timer ticks must not restart the stability check or
+    // re-arm a queue the user dismissed with Escape.
     public let count: Int
 
     public init?(lines: [String], cursorRow: Int, cursorColumn: Int) {
@@ -27,9 +29,10 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
            // layouts, but keep other shortcuts and partial hints fail-closed.
            ["shift + ← to answer", "shift+← to answer"].contains(tail[2]) {
             let words = tail[1].split(separator: " ")
-            guard words.count == 3, words[0] == "?",
+            guard words.count >= 3, words[0] == "?",
                   let count = Int(words[1]), (1...999).contains(count),
-                  words[2] == (count == 1 ? "question" : "questions")
+                  words[2] == (count == 1 ? "question" : "questions"),
+                  Self.isElapsedSuffix(words.dropFirst(3))
             else { return nil }
             self.count = count
         } else {
@@ -40,6 +43,29 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
             }) else { return nil }
             self.count = 0
         }
+    }
+
+    /// Optional question age, e.g. `· 14s` or `· 1m 02s`. Do not accept
+    /// arbitrary text after the count: partial/unknown footers stay manual.
+    private static func isElapsedSuffix(_ words: ArraySlice<Substring>) -> Bool {
+        guard !words.isEmpty else { return true }
+        guard (2...4).contains(words.count), words.first == "·" else { return false }
+        var previousRank = 3
+        for component in words.dropFirst() {
+            let rank: Int
+            switch component.last {
+            case "h": rank = 2
+            case "m": rank = 1
+            case "s": rank = 0
+            default: return false
+            }
+            let digits = component.dropLast().utf8
+            guard rank < previousRank, !digits.isEmpty,
+                  digits.allSatisfy({ (48...57).contains($0) })
+            else { return false }
+            previousRank = rank
+        }
+        return true
     }
 
     private static func withoutParticles(_ text: String) -> String {

@@ -55,8 +55,11 @@ empty marked text, bracketed paste, and starting a new composition in both proto
 **Codex question auto-expansion (Mac Host, Mac Viewer and iOS):**
 `CodexQuestionPrompt` recognizes the live `Queued follow-up inputs / ? N questions /
 shift + ← to answer` footer immediately above Codex's known empty composer. It
-also accepts the compact `shift+← to answer` hint observed in Codex 0.158.0;
-other shortcuts, incomplete hints and drafts still fail closed. Mac/iOS-side
+also accepts the compact `shift+← to answer` hint observed in Codex 0.158.0 and
+the optional question age (`? 1 question · 14s`, including h/m/s duration parts).
+Age is presentation-only: ticks neither restart the 350 ms stability check nor
+re-arm a dismissed queue. Other shortcuts, arbitrary suffixes, incomplete hints
+and drafts still fail closed. Mac/iOS-side
 recognition and the Host's screen recheck use the same `CtrlxCommon` parser. The
 native wrapper checks a stable screen after 350 ms; only the key window's focused,
 visible terminal at the live bottom is eligible (no editor overlay, text selection,
@@ -76,8 +79,11 @@ API: unknown/localized layouts, custom empty placeholders and equal-count questi
 replacements without an observed queue reduction stay manual. A missed/failed
 attempt is not retried against the same footer. Existing Shift+Left remains usable.
 For remote auto-expansion, update **both Macs**; an old Host safely rejects the new
-command (no raw-key fallback). iOS reuses that existing Host command, so an
-already-compatible Host needs no further update; Relay deployment is unnecessary.
+command (no raw-key fallback). The elapsed-footer compatibility fix also requires
+an updated **Host Mac and viewing client (Mac/iOS)**: supporting the wire command
+alone is not enough, because the Host independently parses the footer. For example,
+Host 3.0.40 rejects both the compact shortcut and elapsed suffix. Relay deployment
+is unnecessary; the command and wire format are unchanged.
 
 On iOS, `TerminalCodexQuestionExpansion` runs outside SwiftUI observable state.
 The selected pane's native wrapper reads at most nine live rows, after parsing
@@ -89,9 +95,12 @@ response form/quick-action overlay. Typing, stream reset, resize, focus loss and
 view teardown cancel pending checks. It never moves focus or scrolls the viewport
 to force eligibility. Counts enter the same `KeystrokeDebouncer` FIFO as text and
 mouse input; Host-wide dedup also covers an iPhone and Mac viewing the same pane.
-Tests: `CodexQuestionExpansionTests`, `TerminalCodexQuestionExpansionTests` and
-`KeystrokeDebouncerTests.questionExpansionFIFO`. The UIKit focus/scroll/menu gates
-still need on-device acceptance; the scheduler and Host guards run in unit tests.
+Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionExpansionTests`,
+`TerminalCodexQuestionExpansionTests` and
+`KeystrokeDebouncerTests.questionExpansionFIFO`. Opening and answering the elapsed
+footer passed manual acceptance on iPhone Air with the updated Host (2026-09-30).
+The complete UIKit focus/scroll/menu matrix still needs on-device acceptance;
+the scheduler and Host guards run in unit tests.
 
 ### Editor Override (Ctrl-G)
 
