@@ -20,13 +20,22 @@ SOURCE_REVISION="$(get_source_revision)"
 LOCAL_BUILD_ROOT="$PROJECT_ROOT/.build-local"
 DERIVED_DATA="$LOCAL_BUILD_ROOT/DerivedData/iOS"
 SOURCE_PACKAGES="$LOCAL_BUILD_ROOT/SourcePackages"
-PACKAGE_ROOT="$LOCAL_BUILD_ROOT/package-ios"
 DIST_DIR="$PROJECT_ROOT/dist"
 APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphoneos/CtrlX.app"
 EXTENSION_PATH="$APP_PATH/PlugIns/CtrlxNotificationExtension.appex"
 IPA_PATH="$DIST_DIR/CtrlX-$VERSION.ipa"
 
 mkdir -p "$DERIVED_DATA" "$SOURCE_PACKAGES" "$DIST_DIR"
+PACKAGE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/package-ios.XXXXXX")"
+PROFILE_ROOT=""
+
+cleanup_ios_workspace() {
+    /bin/rm -rf -- "$PACKAGE_ROOT"
+    if [ -n "$PROFILE_ROOT" ]; then
+        /bin/rm -rf -- "$PROFILE_ROOT"
+    fi
+}
+trap cleanup_ios_workspace EXIT
 
 log_info "Building CtrlX $VERSION from $PROJECT_ROOT"
 /usr/bin/xcodebuild \
@@ -51,13 +60,6 @@ log_info "Building CtrlX $VERSION from $PROJECT_ROOT"
 APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
 EXTENSION_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EXTENSION_PATH/Info.plist")"
 PROFILE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/profiles.XXXXXX")"
-
-cleanup_profiles() {
-    if [ -d "$PROFILE_ROOT" ]; then
-        /bin/rm -rf -- "$PROFILE_ROOT"
-    fi
-}
-trap cleanup_profiles EXIT
 
 find_profile() {
     local bundle_id="$1"
@@ -120,9 +122,6 @@ done < <(/usr/bin/find "$APP_PATH" -type d -name '*.framework' -print)
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CtrlXSourceRevision' "$APP_PATH/Info.plist")" = "$SOURCE_REVISION" ] \
     || log_error 'Signed app is missing the expected source revision.'
 
-if [ -e "$PACKAGE_ROOT" ]; then
-    /bin/rm -rf -- "$PACKAGE_ROOT"
-fi
 mkdir -p "$PACKAGE_ROOT/Payload"
 /usr/bin/ditto "$APP_PATH" "$PACKAGE_ROOT/Payload/CtrlX.app"
 if [ -e "$IPA_PATH" ]; then
@@ -133,6 +132,7 @@ fi
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload "$IPA_PATH"
 )
 write_artifact_metadata "$IPA_PATH"
+prune_local_artifacts "$IPA_PATH"
 
 log_success "IPA: $IPA_PATH"
 log_success "Build: $VERSION ($(get_build_number)) · $BUILD_STAMP · $SOURCE_REVISION"

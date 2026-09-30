@@ -50,6 +50,29 @@ worktree's ignored local signing config before building. Local development
 packaging keeps its existing uncommitted-build workflow; formal releases and
 the Qcloud publisher still require clean, exactly tagged source.
 
+### Local build storage
+
+Mac and iOS packaging delete their temporary App copies on exit, including
+failed builds. Installable apps in DerivedData remain available for device
+installation. After successful packaging, each platform retains the just-built
+package and the most recently modified other package in `dist/`; older packages
+and their `.sha256`, `.manifest.json`, and `.previous` files are deleted.
+This also applies to formal Mac releases, but never prunes Qcloud or Inbox files.
+
+Incremental build caches, downloaded dependencies and Chromium SDKs are kept
+to avoid repeated downloads and full rebuilds. For manual deep cleanup:
+
+```bash
+python3 scripts/clean-build.py deep        # Preview only
+python3 scripts/clean-build.py deep --yes  # Delete worktree-local build caches
+```
+
+Stop builds, packaging and device installs in that worktree first. Deep cleanup
+also removes built installable apps and legacy `package-ios`/`package-macos`
+copies, but preserves `dist/`, signing configuration, installed apps and browser
+profiles. It does not touch other worktrees, Xcode's global caches or simulators.
+The next build must download dependencies/SDKs and compile again.
+
 Mac-only packaging does not require a local Docker engine or OrbStack. A change
 confined to Apple-only dependencies, such as the SwiftTerm revision, does not
 make Linux lock generation a prerequisite for this path. Refresh and validate
