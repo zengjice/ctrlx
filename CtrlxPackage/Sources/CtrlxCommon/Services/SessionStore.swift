@@ -49,6 +49,7 @@ final public class SessionStore {
     public private(set) var homeDirectoryByHost: [String: String] = [:]
     public private(set) var hostsSupportingDirectoryBrowsing: Set<String> = []
     public private(set) var hostsSupportingAgentWindowLaunch: Set<String> = []
+    public private(set) var hostsSupportingAgentFork: Set<String> = []
 
     /// Cross-session cost/usage rollup per host (issue #598), from each host's
     /// `SessionStateMessage.usageOverview`. Absent for hosts that don't send one
@@ -279,6 +280,11 @@ final public class SessionStore {
         }
 
         agentProjectsByHost[hostId] = state.agentProjects ?? []
+        if state.supportsAgentFork == true {
+            hostsSupportingAgentFork.insert(hostId)
+        } else {
+            hostsSupportingAgentFork.remove(hostId)
+        }
         if state.supportsAgentWindowLaunch == true {
             hostsSupportingAgentWindowLaunch.insert(hostId)
         } else {
@@ -333,6 +339,7 @@ final public class SessionStore {
         homeDirectoryByHost.removeValue(forKey: hostId)
         hostsSupportingDirectoryBrowsing.remove(hostId)
         hostsSupportingAgentWindowLaunch.remove(hostId)
+        hostsSupportingAgentFork.remove(hostId)
         usageOverviewByHost.removeValue(forKey: hostId)
         sidebarSortModeByHost.removeValue(forKey: hostId)
         sharedTerminalLayoutsByHost.removeValue(forKey: hostId)

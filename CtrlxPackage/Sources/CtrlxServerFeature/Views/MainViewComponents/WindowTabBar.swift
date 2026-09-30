@@ -31,6 +31,7 @@ struct WindowTabBar: View {
     let onCloseWindow: (LocalTmuxWindow) -> Void
     let onNewWindow: () -> Void
     let agentConfiguration: NewAgentTabConfiguration
+    let onForkWindow: (LocalTmuxWindow, Bool) -> Void
     /// Creates a new in-app browser tab (selected, address bar focused). Called
     /// from the "+" menu's "New Browser" option.
     let onNewBrowser: () -> Void
@@ -495,6 +496,13 @@ struct WindowTabBar: View {
                 currentName: window.windowName,
                 onRename: { newName in
                     onRenameWindow(window, newName)
+                },
+                additionalMenu: {
+                    AgentForkMenu(
+                        sources: window.panes.compactMap { windowManager.paneStates[$0.paneId].flatMap(AgentForkSource.init(pane:)) },
+                        unavailableReason: nil,
+                        choose: { onForkWindow(window, $0) }
+                    )
                 }
             ))
 

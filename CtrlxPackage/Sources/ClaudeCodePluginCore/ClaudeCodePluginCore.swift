@@ -16,7 +16,7 @@ import GallagerPluginProtocol
 /// (`~/.claude.json`, transcripts) and hook payloads, so it must never trap —
 /// `do/try/catch` around every decode, no force-unwraps, skip-and-log malformed
 /// entries.
-public actor ClaudeCodePluginCore: PluginCore {
+public actor ClaudeCodePluginCore: AgentSessionForking {
     public static let pluginID = "claude-code"
 
     private var host: (any PluginHost)?
@@ -241,6 +241,24 @@ public actor ClaudeCodePluginCore: PluginCore {
     public func commandForLaunch(projectPath _: String) async -> LaunchCommand? {
         guard settings.autoRun else { return nil }
         return LaunchCommand(command: settings.commandPath)
+    }
+
+    public func commandForFork(sessionID: String, projectPath _: String) async throws -> AgentForkLaunch {
+        guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Claude Code conversation ID.") }
+        @Dependency(AgentForkHistoryClient.self) var history
+        let defaultRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path
+        let roots = [defaultRoot] + [ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]].compactMap { $0 } + settings.additionalConfigFolders
+        let root = try await history.root(sessionID, roots, .claude)
+        let usesDefaultRoot = root == URL(fileURLWithPath: defaultRoot).resolvingSymlinksInPath().path
+        return AgentForkLaunch(
+            command: LaunchCommand(
+                command: settings.commandPath,
+                args: ["--resume", sessionID, "--fork-session"],
+                // Setting even the default root changes where Claude stores .claude.json.
+                env: usesDefaultRoot ? [:] : ["CLAUDE_CONFIG_DIR": root]
+            ),
+            unsetEnvironment: usesDefaultRoot ? ["CLAUDE_CONFIG_DIR"] : []
+        )
     }
 
     // MARK: - CLI-based plugin install

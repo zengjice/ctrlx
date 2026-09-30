@@ -8,6 +8,19 @@ import GallagerPluginProtocol
 struct SessionLaunchPreparation: Sendable {
     let workingDirectory: String?
     let launch: LaunchCommand?
+    private let forkEnvironmentToUnset: [String]?
+
+    init(workingDirectory: String?, launch: LaunchCommand?) {
+        self.workingDirectory = workingDirectory
+        self.launch = launch
+        forkEnvironmentToUnset = nil
+    }
+
+    init(workingDirectory: String, fork: AgentForkLaunch) {
+        self.workingDirectory = workingDirectory
+        launch = fork.command
+        forkEnvironmentToUnset = fork.unsetEnvironment
+    }
 
     var runCommand: String? {
         launch.map { command in
@@ -20,7 +33,25 @@ struct SessionLaunchPreparation: Sendable {
     }
 
     var extraEnvironment: [String] {
-        launch?.env.map { "\($0.key)=\($0.value)" } ?? []
+        // Fork overrides belong only to the scoped invocation, not its parent shell.
+        guard forkEnvironmentToUnset == nil else { return [] }
+        return launch?.env.map { "\($0.key)=\($0.value)" } ?? []
+    }
+
+    func forkRunCommand(shell: String) throws -> String? {
+        guard let runCommand, let forkEnvironmentToUnset, let launch else { return runCommand }
+        let statements: [String]
+        switch (shell as NSString).lastPathComponent {
+        case "zsh", "bash", "sh", "dash", "ksh":
+            statements = forkEnvironmentToUnset.map { "unset \($0.posixSingleQuoted)" }
+                + launch.env.keys.sorted().map { "export \("\($0)=\(launch.env[$0, default: ""])".posixSingleQuoted)" }
+            guard !statements.isEmpty else { return runCommand }
+            // Keep aliases/telemetry functions in the same shell, with overrides
+            // scoped to this Agent invocation rather than its eventual prompt.
+            return "( " + (statements + [runCommand]).joined(separator: " && ") + " )"
+        default:
+            throw AgentForkError("Fork cannot preserve the configuration root in shell '\(shell)'. Use zsh or bash.")
+        }
     }
 
     static func prepare(

@@ -35,6 +35,8 @@ struct RemoteWindowTabBar: View {
     let onCloseWindow: (TmuxWindow) -> Void
     let onNewWindow: () -> Void
     let agentConfiguration: NewAgentTabConfiguration
+    let forkUnavailableReason: String?
+    let onForkWindow: (TmuxWindow, Bool) -> Void
     /// Creates a new in-app browser tab (selected, address bar focused). Called
     /// from the "+" menu's "New Browser" option.
     let onNewBrowser: () -> Void
@@ -319,6 +321,13 @@ struct RemoteWindowTabBar: View {
                 isDisabled: !isHostConnected,
                 onRename: { newName in
                     onRenameWindow(window, newName)
+                },
+                additionalMenu: {
+                    AgentForkMenu(
+                        sources: window.panes.compactMap(AgentForkSource.init(pane:)),
+                        unavailableReason: forkUnavailableReason,
+                        choose: { onForkWindow(window, $0) }
+                    )
                 }
             ))
 

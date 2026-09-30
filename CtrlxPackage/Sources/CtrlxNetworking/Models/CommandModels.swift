@@ -1080,6 +1080,8 @@ public enum CommandType: Codable, Sendable, Equatable {
     case selectTmuxWindow(SelectTmuxWindow)
     /// Create a new tmux window in a session
     case createTmuxWindow(CreateTmuxWindow)
+    case prepareAgentFork(PrepareAgentFork)
+    case forkAgentSession(ForkAgentSession)
     /// Submit edited prompt content from a viewer
     case submitEditorContent(SubmitEditorContent)
     /// Cancel an active editor session from a viewer
@@ -1318,6 +1320,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     /// Running processes returned by `checkRunningProcesses` command
     public let runningProcesses: [RunningProcessInfo]?
     public let directoryListing: SessionDirectoryListing?
+    public let forkPreparation: AgentForkPreparation?
 
     public init(
         commandId: UUID,
@@ -1325,7 +1328,8 @@ public struct CommandResponseMessage: Codable, Sendable {
         error: String? = nil,
         paneId: String? = nil,
         runningProcesses: [RunningProcessInfo]? = nil,
-        directoryListing: SessionDirectoryListing? = nil
+        directoryListing: SessionDirectoryListing? = nil,
+        forkPreparation: AgentForkPreparation? = nil
     ) {
         self.commandId = commandId
         self.success = success
@@ -1333,6 +1337,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.paneId = paneId
         self.runningProcesses = runningProcesses
         self.directoryListing = directoryListing
+        self.forkPreparation = forkPreparation
     }
 
     public static func success(for commandId: UUID, paneId: String? = nil) -> CommandResponseMessage {

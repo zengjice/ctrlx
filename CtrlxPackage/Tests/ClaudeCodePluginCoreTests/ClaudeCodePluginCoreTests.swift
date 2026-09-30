@@ -1,4 +1,6 @@
+import CtrlxCommon
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import GallagerPluginProtocol
 import Testing
@@ -8,6 +10,36 @@ import Testing
 /// by the translator / keystroke / scanner / installer suites).
 @Suite("ClaudeCodePluginCore")
 struct ClaudeCodePluginCoreTests {
+    @Test("Native Fork resumes the exact ID into a new conversation, preserving custom config root with Auto-run off")
+    func nativeFork() async throws {
+        let id = UUID().uuidString
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { sessionID, roots, layout in
+                #expect(sessionID == id)
+                #expect(roots.contains("/Host/custom claude"))
+                #expect(layout == .claude)
+                return "/Host/custom claude"
+            }
+        } operation: {
+            let core = ClaudeCodePluginCore()
+            try await core.initialize(makeEnv(settings: JSONEncoder().encode(ClaudeCodeSettings(commandPath: "/tools/my claude", autoRun: false, additionalConfigFolders: ["/Host/custom claude"]))), host: MockPluginHost())
+            let fork = try await core.commandForFork(sessionID: id, projectPath: "/Host/new repo")
+            let command = fork.command
+            #expect(command.command == "/tools/my claude")
+            #expect(command.args == ["--resume", id, "--fork-session"])
+            #expect(command.env == ["CLAUDE_CONFIG_DIR": "/Host/custom claude"])
+            #expect(fork.unsetEnvironment.isEmpty)
+            let defaultRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").resolvingSymlinksInPath().path
+            let defaultCommand = try await withDependencies {
+                $0[AgentForkHistoryClient.self].root = { _, _, _ in defaultRoot }
+            } operation: { try await core.commandForFork(sessionID: id, projectPath: "/Host/new repo") }
+            #expect(defaultCommand.command.env.isEmpty)
+            #expect(defaultCommand.unsetEnvironment == ["CLAUDE_CONFIG_DIR"])
+            await #expect(throws: AgentForkError.self) { try await core.commandForFork(sessionID: "--continue", projectPath: "/repo") }
+            await core.shutdown()
+        }
+    }
+
     private func makeEnv(settings: Data = Data()) -> PluginEnv {
         PluginEnv(
             pluginRoot: URL(fileURLWithPath: NSTemporaryDirectory()),

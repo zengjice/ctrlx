@@ -1,4 +1,6 @@
+import CtrlxCommon
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import GallagerPluginProtocol
 import Testing
@@ -7,6 +9,33 @@ import Testing
 /// Lifecycle + auto-launch behavior of the core itself (the pieces not covered
 /// by the translator / keystroke / scanner / installer / correlation suites).
 struct CodexPluginCoreTests {
+    @Test("Native Fork uses the exact ID and target cwd, preserves config root and telemetry, independent of Auto-run")
+    func nativeFork() async throws {
+        let id = UUID().uuidString
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { sessionID, _, layout in
+                #expect(sessionID == id)
+                #expect(layout == .codex)
+                return "/Host/custom codex"
+            }
+        } operation: {
+            let core = makeCore()
+            try await core.initialize(makeEnv(settings: JSONEncoder().encode(CodexSettings(commandPath: "/tools/my codex", autoRun: false)), otlpEndpoint: URL(string: "http://127.0.0.1:4318")), host: MockPluginHost())
+            let fork = try await core.commandForFork(sessionID: id, projectPath: "/Host/new repo")
+            let command = fork.command
+            #expect(command.command == "/tools/my codex")
+            #expect(Array(command.args.prefix(4)) == ["fork", id, "-C", "/Host/new repo"])
+            #expect(command.args.contains("otel.log_user_prompt=false"))
+            #expect(command.env == ["CODEX_HOME": "/Host/custom codex"])
+            #expect(fork.unsetEnvironment.isEmpty)
+            _ = await core.applySettings(try JSONEncoder().encode(CodexSettings(autoRun: false, exportTelemetry: false)))
+            let withoutTelemetry = try await core.commandForFork(sessionID: id, projectPath: "/Host/new repo")
+            #expect(withoutTelemetry.command.args == ["fork", id, "-C", "/Host/new repo"])
+            await #expect(throws: AgentForkError.self) { try await core.commandForFork(sessionID: "--last", projectPath: "/repo") }
+            await core.shutdown()
+        }
+    }
+
     private func makeEnv(settings: Data = Data(), otlpEndpoint: URL? = nil) -> PluginEnv {
         PluginEnv(
             pluginRoot: URL(fileURLWithPath: NSTemporaryDirectory()),

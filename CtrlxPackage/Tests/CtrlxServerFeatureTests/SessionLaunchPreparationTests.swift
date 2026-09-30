@@ -33,6 +33,47 @@
             #expect(preparation.runCommand == "codex '-c' 'otel.log_user_prompt=false'")
         }
 
+        @Test("Only Fork reasserts config after rc; unsupported shells fail before creation")
+        func forkEnvironment() throws {
+            let launch = LaunchCommand(command: "codex", args: ["fork", "exact-session"], env: ["CODEX_HOME": "/selected root"])
+            let ordinary = SessionLaunchPreparation(workingDirectory: "/repo", launch: launch)
+            #expect(try ordinary.forkRunCommand(shell: "/bin/zsh") == ordinary.runCommand)
+            #expect(ordinary.extraEnvironment == ["CODEX_HOME=/selected root"])
+            let fork = SessionLaunchPreparation(workingDirectory: "/repo", fork: AgentForkLaunch(command: launch))
+            #expect(fork.extraEnvironment.isEmpty)
+            #expect(try fork.forkRunCommand(shell: "/bin/bash") == "( export 'CODEX_HOME=/selected root' && codex 'fork' 'exact-session' )")
+            #expect(throws: AgentForkError.self) { try fork.forkRunCommand(shell: "/bin/nu") }
+        }
+
+        @Test("Fork environment is scoped and exit status is preserved in zsh and bash", arguments: ["/bin/zsh", "/bin/bash"])
+        func forkShellScope(shell: String) async throws {
+            let root = "/selected 'quoted' root"
+            let prepared = SessionLaunchPreparation(workingDirectory: "/repo", fork: AgentForkLaunch(
+                command: LaunchCommand(command: "fork_probe", env: ["CODEX_HOME": root]),
+                unsetEnvironment: ["CLAUDE_CONFIG_DIR"]
+            ))
+            let invocation = try #require(try prepared.forkRunCommand(shell: shell))
+            let script = """
+            export CODEX_HOME='/old codex root'
+            export CLAUDE_CONFIG_DIR='/old claude root'
+            fork_probe() {
+                printf 'ROOT[%s]CLAUDE_SET[%s]\\n' "$CODEX_HOME" "${CLAUDE_CONFIG_DIR+x}"
+                return 37
+            }
+            \(invocation)
+            printf 'EXIT[%s]AFTER[%s][%s]\\n' "$?" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"
+            """
+            let args = shell == "/bin/zsh" ? ["-fc", script] : ["--noprofile", "--norc", "-c", script]
+            let result = try await withDependencies {
+                $0.continuousClock = ContinuousClock()
+            } operation: {
+                try await ProcessRunner.liveValue.run(shell, args, nil, 10)
+            }
+            #expect(result.isSuccess)
+            #expect(result.stdoutString.contains("ROOT[\(root)]CLAUDE_SET[]"))
+            #expect(result.stdoutString.contains("EXIT[37]AFTER[/old codex root][/old claude root]"))
+        }
+
         @Test("An ordinary Terminal never resolves a path or launches an agent")
         func terminal() async throws {
             let core = SessionLaunchTestCore(launch: .init(command: "codex"))

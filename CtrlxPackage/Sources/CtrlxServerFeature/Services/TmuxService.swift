@@ -2260,6 +2260,7 @@ final public class TmuxService {
     /// - Parameters:
     ///   - sessionName: The session to create the window in
     ///   - workingDirectory: Optional working directory for the new window
+    ///   - forceLoginShell: Use the Host login shell even if the session has custom shell defaults.
     /// - Returns: The pane ID of the new window's first pane
     public func newWindow(
         sessionName: String,
@@ -2267,7 +2268,8 @@ final public class TmuxService {
         windowName: String? = nil,
         windowIndex: Int? = nil,
         runCommand: String? = nil,
-        extraEnvironment: [String] = []
+        extraEnvironment: [String] = [],
+        forceLoginShell: Bool = false
     ) async throws -> String {
         // Trailing colon tells tmux "target session with window unspecified" so it auto-picks
         // the next free index. Without it, tmux fills the target from the best-attached
@@ -2303,7 +2305,12 @@ final public class TmuxService {
             args += ["-n", windowName]
         }
 
-        if let command = await instrumentedShellCommand() {
+        let command = await instrumentedShellCommand()
+        if forceLoginShell {
+            // Multi-argument tmux commands exec directly: the wrapper's POSIX
+            // syntax must not be interpreted by a custom default-shell (e.g. tcsh).
+            args += ["/bin/sh", "-c", command ?? defaultCommandWrapper]
+        } else if let command {
             args.append(command)
         }
 

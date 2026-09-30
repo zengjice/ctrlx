@@ -1,0 +1,101 @@
+import Foundation
+
+/// Captured when the menu opens; the Host must still match this identity before launch.
+public struct AgentForkSource: Codable, Sendable, Equatable, Identifiable {
+    public let paneID: String
+    public let sessionID: String
+    public let pluginID: String
+    public let sessionName: String
+    public let windowID: String
+    public let workingDirectory: String
+    public var id: String { paneID }
+
+    public init?(pane: PaneState) {
+        guard let agent = pane.agentSession,
+              agent.pluginID == "codex" || agent.pluginID == "claude-code",
+              let sessionID = pane.claudeSessionID, UUID(uuidString: sessionID) != nil,
+              let directory = pane.currentPath, directory.hasPrefix("/"),
+              !directory.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        else { return nil }
+        self.paneID = pane.paneId
+        self.sessionID = sessionID
+        self.pluginID = agent.pluginID
+        self.sessionName = pane.sessionName
+        self.windowID = pane.stableWindowId
+        self.workingDirectory = directory
+    }
+}
+
+public struct AgentForkWorktree: Codable, Sendable, Equatable {
+    public let repositoryRoot: String
+    public let primaryRoot: String
+    public let head: String
+    public let relativeDirectory: String
+    public let hasUncommittedChanges: Bool
+
+    public init(repositoryRoot: String, primaryRoot: String, head: String, relativeDirectory: String, hasUncommittedChanges: Bool) {
+        self.repositoryRoot = repositoryRoot
+        self.primaryRoot = primaryRoot
+        self.head = head
+        self.relativeDirectory = relativeDirectory
+        self.hasUncommittedChanges = hasUncommittedChanges
+    }
+
+    public func directory(name: String) -> String {
+        (primaryRoot as NSString).appendingPathComponent(".worktrees/\(name)")
+    }
+
+    public static func isValidName(_ name: String) -> Bool {
+        name.utf8.count <= 80 && name.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]*$"#, options: .regularExpression) != nil
+    }
+}
+
+public struct AgentForkPreparation: Codable, Sendable, Equatable {
+    public let source: AgentForkSource
+    public let worktree: AgentForkWorktree?
+    public let worktreeUnavailableReason: String?
+
+    public init(source: AgentForkSource, worktree: AgentForkWorktree?, worktreeUnavailableReason: String? = nil) {
+        self.source = source
+        self.worktree = worktree
+        self.worktreeUnavailableReason = worktreeUnavailableReason
+    }
+}
+
+public struct PrepareAgentFork: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+    public let source: AgentForkSource
+    public init(source: AgentForkSource) { self.source = source }
+    public var commandType: CommandType { .prepareAgentFork(self) }
+}
+
+public struct ForkAgentSession: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+    public struct Worktree: Codable, Sendable, Equatable {
+        public let name: String
+        public let expectedHead: String
+        public let allowUncommittedChanges: Bool
+        public init(name: String, expectedHead: String, allowUncommittedChanges: Bool = false) {
+            self.name = name
+            self.expectedHead = expectedHead
+            self.allowUncommittedChanges = allowUncommittedChanges
+        }
+    }
+
+    /// Kept across a transport retry so a delayed reply cannot create a second fork.
+    public let requestID: UUID
+    public let source: AgentForkSource
+    public let worktree: Worktree?
+    public init(requestID: UUID = UUID(), source: AgentForkSource, worktree: Worktree? = nil) {
+        self.requestID = requestID
+        self.source = source
+        self.worktree = worktree
+    }
+    public var commandType: CommandType { .forkAgentSession(self) }
+}
+
+public struct AgentForkError: Error, LocalizedError, Sendable {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+    public var errorDescription: String? { message }
+}

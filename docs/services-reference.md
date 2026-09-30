@@ -421,6 +421,48 @@ selection. Ordinary Terminal requests still omit `pluginID`, and the Host create
 them through `TmuxService`, including its manual Codex shell integration and
 Claude telemetry environment. No agent command/config is constructed by iOS.
 
+### Fork a native Agent conversation (Mac)
+
+Right-click a local or Viewer terminal-window tab → **Fork → In Current
+Directory / In New Worktree…**. Codex and Claude Code implement the optional
+`AgentSessionForking` capability; sidecars retain their existing wire contract.
+One recognized Agent forks directly in the current directory. Multiple Agent
+panes require a source choice, defaulting to native focus or the active pane.
+Detection without a native conversation UUID is not enough to enable Fork.
+
+`AgentForkService` rechecks the captured pane/window/session/Agent UUID/cwd on
+the Host before launching in a new window of the same tmux session. It uses
+`codex fork <UUID> -C <cwd>` or `claude --resume <UUID> --fork-session`, preserving
+the source's config root and existing telemetry shell integration. Configuration
+overrides are applied to the Agent invocation after login startup files, scoped
+to that invocation and never passed to the parent shell through tmux `-e`; the
+default Claude root explicitly unsets `CLAUDE_CONFIG_DIR`. After the Agent exits,
+ordinary launches retain the shell's normal configuration root.
+Fork explicitly starts the same Host login shell used to validate its command,
+independently of Codex telemetry or the tmux session's custom shell defaults.
+POSIX-style login shells (including zsh and bash) are supported; unsupported
+shells fail before creating the new pane rather than restoring from a wrong root.
+Ordinary Terminal windows keep their existing tmux startup behavior.
+Fork is an explicit action, independent of Auto-run. It does not send `/fork`,
+use the last session, send a continuation prompt, or copy source telemetry/approval
+state.
+
+Worktrees start from the source workspace's HEAD, with branch `fork/<name>` at
+the primary repository's `.worktrees/<name>`. Linked source worktrees and source
+subdirectories are supported. A local `info/exclude` rule is added when needed,
+then Git's effective ignore status is verified before checkout. If `.gitignore`
+negation overrides the rule, Fork fails with an actionable message rather than
+editing tracked ignore rules or creating a worktree that `git add .` can stage.
+Dirty/untracked files require acknowledgement and are never copied; ignored
+files are not copied either. Tab close never removes a worktree. Partial checkout
+or Agent-launch errors report retained paths/panes rather than deleting them.
+
+Viewer commands require `supportsAgentFork == true`. Preparation is read-only;
+the Host creates Git/tmux state. A request UUID deduplicates concurrent/repeated
+delivery (including partial failures; last 128 completed requests per Host
+process). Both Macs need the feature; the opaque Relay needs no update. iOS has
+no new Fork UI.
+
 ### Start a session in an arbitrary directory
 
 Mac (local and Viewer) and iOS expose **New Session → Start in Directory…**.

@@ -599,6 +599,10 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .createTmuxWindow(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
+        case let .prepareAgentFork(spec):
+            return (try? await sendCommand(spec, paneId: "").get()) != nil
+        case let .forkAgentSession(spec):
+            return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .submitEditorContent(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .cancelEditorSession(spec):

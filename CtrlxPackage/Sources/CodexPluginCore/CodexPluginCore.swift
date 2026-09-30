@@ -16,7 +16,7 @@ import GallagerPluginProtocol
 /// `docs/plugins/codex.md`.
 ///
 /// Defensive by mandate (spec §13): never trap on hostile on-disk data.
-public actor CodexPluginCore: PluginCore {
+public actor CodexPluginCore: AgentSessionForking {
     public static let pluginID = "codex"
 
     private var host: (any PluginHost)?
@@ -416,6 +416,17 @@ public actor CodexPluginCore: PluginCore {
     public func commandForLaunch(projectPath _: String) async -> LaunchCommand? {
         guard settings.autoRun else { return nil }
         return LaunchCommand(command: settings.commandPath, args: terminalTelemetryArguments())
+    }
+
+    public func commandForFork(sessionID: String, projectPath: String) async throws -> AgentForkLaunch {
+        guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Codex conversation ID.") }
+        @Dependency(AgentForkHistoryClient.self) var history
+        let root = try await history.root(sessionID, codexHomeRoots().map(\.path), .codex)
+        return AgentForkLaunch(command: LaunchCommand(
+            command: settings.commandPath,
+            args: ["fork", sessionID, "-C", projectPath] + terminalTelemetryArguments(),
+            env: ["CODEX_HOME": root]
+        ))
     }
 
     /// Manual launches opt into the same telemetry as UI launches, independently

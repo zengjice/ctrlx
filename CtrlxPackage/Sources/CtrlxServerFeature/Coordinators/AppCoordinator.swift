@@ -121,6 +121,41 @@
         @ObservationIgnored
         var pluginRegistry: PluginRegistry?
 
+        @ObservationIgnored
+        private lazy var agentForkService = AgentForkService(
+            source: { [weak self] paneID in self?.windowManager.paneStates[paneID].flatMap(AgentForkSource.init(pane:)) },
+            core: { [weak self] pluginID in self?.pluginRegistry?.core(pluginID) as? any AgentSessionForking },
+            refresh: { [weak self] in
+                guard let self else { return }
+                windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
+            },
+            launch: { [weak self] sessionName, prepared in
+                guard let self else { throw AgentForkError("Host is shutting down.") }
+                let paneID = try await tmuxService.newWindow(
+                    sessionName: sessionName, workingDirectory: prepared.workingDirectory,
+                    windowName: (prepared.launch?.command as NSString?)?.lastPathComponent.appending(" fork"),
+                    runCommand: try prepared.forkRunCommand(shell: tmuxService.loginShellPath),
+                    extraEnvironment: prepared.extraEnvironment, forceLoginShell: true
+                )
+                for attempt in 0..<PaneSurfaceRetry.attempts {
+                    let panes = await tmuxService.refreshPanes()
+                    windowManager.updatePaneStates(from: panes)
+                    if panes.contains(where: { $0.paneId == paneID }) { break }
+                    if attempt < PaneSurfaceRetry.attempts - 1 { try await Task.sleep(for: PaneSurfaceRetry.delay) }
+                }
+                await connectedViewerManager?.pushSessionStateToAll()
+                return paneID
+            }
+        )
+
+        func prepareAgentFork(_ source: AgentForkSource) async throws -> AgentForkPreparation {
+            try await agentForkService.prepare(source)
+        }
+
+        func forkAgentSession(_ request: ForkAgentSession) async throws -> String {
+            try await agentForkService.fork(request)
+        }
+
         /// Bumped whenever the *set* of registered plugins changes (install /
         /// remove). `PluginRegistry` is `@ObservationIgnored` and not itself
         /// `@Observable`, so mutating it can't invalidate SwiftUI. Views that show
@@ -3310,6 +3345,18 @@
                 }
 
                 // Handle create window (new window in existing session)
+                if case let .prepareAgentFork(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host is shutting down.") }
+                    do {
+                        let preparation = try await prepareAgentFork(spec.source)
+                        return CommandResponseMessage(commandId: command.id, success: true, forkPreparation: preparation)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
+                if case let .forkAgentSession(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host is shutting down.") }
+                    do { return .success(for: command.id, paneId: try await forkAgentSession(spec)) }
+                    catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .createTmuxWindow(spec) = command.command {
                     return await Self.handleCreateWindow(
                         command: command,
@@ -3419,7 +3466,8 @@
                     sidebarSortMode: await self?.settings.sidebarSortMode.rawValue,
                     sharedTerminalLayouts: sharedTerminalLayouts,
                     supportsDirectoryBrowsing: true,
-                    supportsAgentWindowLaunch: true
+                    supportsAgentWindowLaunch: true,
+                    supportsAgentFork: true
                 )
             }
 

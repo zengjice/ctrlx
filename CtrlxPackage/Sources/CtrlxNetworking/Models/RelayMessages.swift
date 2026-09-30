@@ -58,6 +58,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// Older hosts only create shells; viewers must not send an agent request
     /// until this capability is explicitly advertised.
     public let supportsAgentWindowLaunch: Bool?
+    public let supportsAgentFork: Bool?
 
     public init(
         pairId: String,
@@ -68,7 +69,8 @@ public struct SessionStateMessage: Codable, Sendable {
         sidebarSortMode: String? = nil,
         sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil,
         supportsDirectoryBrowsing: Bool? = nil,
-        supportsAgentWindowLaunch: Bool? = nil
+        supportsAgentWindowLaunch: Bool? = nil,
+        supportsAgentFork: Bool? = nil
     ) {
         self.pairId = pairId
         self.paneStates = paneStates
@@ -79,6 +81,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.sharedTerminalLayouts = sharedTerminalLayouts
         self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
         self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
+        self.supportsAgentFork = supportsAgentFork
     }
 
     /// Returns a copy with the `pairId` replaced. Centralises the per-connection
@@ -95,7 +98,8 @@ public struct SessionStateMessage: Codable, Sendable {
             sidebarSortMode: sidebarSortMode,
             sharedTerminalLayouts: sharedTerminalLayouts,
             supportsDirectoryBrowsing: supportsDirectoryBrowsing,
-            supportsAgentWindowLaunch: supportsAgentWindowLaunch
+            supportsAgentWindowLaunch: supportsAgentWindowLaunch,
+            supportsAgentFork: supportsAgentFork
         )
     }
 }
@@ -241,7 +245,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// The Claude Code `session.id` (identical to the hook `session_id`) running
     /// in this pane, used to join the OTEL telemetry channel to this pane. Set
     /// from `applyState`; reset when a new session starts (e.g. `/clear`). This
-    /// is the host-side join key — viewers don't read it.
+    /// is also the native conversation ID used for Mac local/Viewer Fork.
     public var claudeSessionID: String?
 
     /// The current permission mode reported by the OTEL

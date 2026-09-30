@@ -90,6 +90,8 @@ public actor TmuxCommandExecutor {
                  .stopTerminalStream,
                  .createTmuxSession,
                  .createTmuxWindow,
+                 .prepareAgentFork,
+                 .forkAgentSession,
                  .setSharedTerminalLayout,
                  .setYoloMode,
                  .markHandled,

@@ -3,6 +3,7 @@ import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
 import Foundation
+import GallagerPluginProtocol
 import Testing
 @testable import CtrlxServerFeature
 
@@ -72,6 +73,55 @@ struct TerminalAgentShellIntegrationTests {
         #expect(result.isSuccess)
         #expect(result.stdoutString.components(separatedBy: "54321").count == 2)
         #expect(result.stdoutString.components(separatedBy: "<-c>").count == 3)
+    }
+
+    @Test("Fork config overrides survive rc, preserve shell commands/telemetry and do not leak into the prompt", arguments: [
+        "",
+        "alias codex='command codex'",
+        "function codex() { command codex \"$@\"; }",
+    ])
+    func forkEnvironment(rc: String) async throws {
+        let fixture = try Fixture(extraRC: "export CODEX_HOME='/wrong root'\n\(rc)")
+        defer { fixture.cleanup() }
+        let root = #"/chosen 'root'; $(touch SHOULD_NOT_EXIST)"#
+        let prepared = SessionLaunchPreparation(workingDirectory: fixture.root.path, fork: AgentForkLaunch(
+            command: LaunchCommand(command: "codex", args: ["fork", "exact-session"], env: ["CODEX_HOME": root, "CODEX_FIXTURE_EXIT": "37"])
+        ))
+        let line = try #require(try prepared.forkRunCommand(shell: "/bin/zsh"))
+        let result = try await fixture.run(defaults: defaults, command: """
+        __ctrlx_install_codex_telemetry
+        \(line)
+        print -r -- "FORK_EXIT=$?"
+        print -r -- "AFTER_ROOT=$CODEX_HOME"
+        """)
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.contains("CONFIG_ROOT[\(root)]"))
+        #expect(result.stdoutString.contains("<fork>\n<exact-session>"))
+        #expect(result.stdoutString.contains("FORK_EXIT=37"))
+        #expect(result.stdoutString.contains("AFTER_ROOT=/wrong root"))
+        #expect(result.stdoutString.components(separatedBy: "54321").count == (rc.isEmpty ? 2 : 1))
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("SHOULD_NOT_EXIST").path))
+    }
+
+    @Test("Default Claude Fork unsets inherited config only for the Agent")
+    func forkDefaultClaudeEnvironment() async throws {
+        let fixture = try Fixture(extraRC: """
+        export CLAUDE_CONFIG_DIR='/wrong claude root'
+        function claude() { print -r -- "CLAUDE_CONFIG_SET=${+CLAUDE_CONFIG_DIR}"; }
+        """)
+        defer { fixture.cleanup() }
+        let prepared = SessionLaunchPreparation(workingDirectory: fixture.root.path, fork: AgentForkLaunch(
+            command: LaunchCommand(command: "claude", args: ["--resume", "exact-session", "--fork-session"]),
+            unsetEnvironment: ["CLAUDE_CONFIG_DIR"]
+        ))
+        let line = try #require(try prepared.forkRunCommand(shell: "/bin/zsh"))
+        let result = try await fixture.run(defaults: defaults, command: """
+        \(line)
+        print -r -- "AFTER_CLAUDE_ROOT=$CLAUDE_CONFIG_DIR"
+        """)
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.contains("CLAUDE_CONFIG_SET=0"))
+        #expect(result.stdoutString.contains("AFTER_CLAUDE_ROOT=/wrong claude root"))
     }
 
     @Test("Prompt text after -- is not parsed as config")
@@ -253,6 +303,41 @@ struct TerminalAgentShellIntegrationTests {
         #expect(!calls.value.contains { $0.contains("send-keys") || $0.last?.contains("CTRLX_SHELL_ORIGINAL_ZDOTDIR") == true })
     }
 
+    @Test("Fork explicitly execs the validated shell with telemetry on, off or unavailable", arguments: ["enabled", "disabled", "unavailable"])
+    @MainActor
+    func forkShellWiring(telemetry: String) async throws {
+        let calls = LockIsolated<[[String]]>([])
+        try await withDependencies {
+            $0[TerminalAgentShellFiles.self].prepare = { _ in
+                if telemetry == "unavailable" { throw CocoaError(.fileWriteOutOfSpace) }
+                return "/temporary/init dir"
+            }
+            $0[ProcessRunner.self].run = { _, args, _, _ in
+                calls.withValue { $0.append(args) }
+                return ProcessResult(exitCode: 0, stdout: Data("%42:9\n".utf8), stderr: Data())
+            }
+        } operation: {
+            let tmux = TmuxService(tmuxPath: "/fixture/tmux")
+            tmux.terminalCodexArguments = { telemetry == "disabled" ? [] : defaults }
+            let prepared = SessionLaunchPreparation(workingDirectory: "/repo", fork: AgentForkLaunch(
+                command: LaunchCommand(command: "codex", args: ["fork", "exact-session"], env: ["CODEX_HOME": "/fork root"])
+            ))
+            _ = try await tmux.newWindow(
+                sessionName: "fixture", windowName: "fork", runCommand: prepared.forkRunCommand(shell: tmux.loginShellPath),
+                extraEnvironment: prepared.extraEnvironment, forceLoginShell: true
+            )
+            let creation = try #require(calls.value.first { $0.contains("new-window") })
+            #expect(Array(creation.suffix(3).prefix(2)) == ["/bin/sh", "-c"])
+            let startup = try #require(creation.last)
+            #expect(startup.contains("exec \(tmux.loginShellPath.posixSingleQuoted) -l"))
+            #expect(startup.contains("TERM_PROGRAM=iTerm.app"))
+            #expect(startup.contains("CTRLX_SHELL_ORIGINAL_ZDOTDIR") == (telemetry == "enabled"))
+            #expect(!creation.contains { $0.hasPrefix("CODEX_HOME=") })
+            let input = try #require(calls.value.first { $0.contains("send-keys") })
+            #expect(input.contains("( export 'CODEX_HOME=/fork root' && codex 'fork' 'exact-session' )"))
+        }
+    }
+
     /// Real zsh and a harmless fake Codex executable; no agent/network calls or
     /// writes to the user's rc/config/history. A custom ZDOTDIR also proves we
     /// preserve the repository E2E harness's history-isolation directory.
@@ -287,7 +372,7 @@ struct TerminalAgentShellIntegrationTests {
                 }
                 try Data(script.utf8).write(to: dotfiles.appendingPathComponent(name))
             }
-            try Data("#!/bin/sh\nprintf '<%s>\\n' \"$@\"\nexit \"${CODEX_FIXTURE_EXIT:-0}\"\n".utf8).write(to: executable)
+            try Data("#!/bin/sh\nprintf 'CONFIG_ROOT[%s]\\n' \"$CODEX_HOME\"\nprintf '<%s>\\n' \"$@\"\nexit \"${CODEX_FIXTURE_EXIT:-0}\"\n".utf8).write(to: executable)
             try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         }
 

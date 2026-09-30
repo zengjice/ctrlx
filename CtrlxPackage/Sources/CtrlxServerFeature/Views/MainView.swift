@@ -32,6 +32,7 @@ public struct MainView: View {
     @State private var isLoadingProjects = false
     @State private var creatingSelection: NewSessionCreatingState?
     @State private var isCreatingAgentTab = false
+    @State private var pendingAgentFork: AgentForkConfiguration?
     /// Bumped by the ⌘N menu command to open the Local section's new-session popover.
     @State private var localNewSessionTrigger = 0
     @State private var detailPaneSize: CGSize = .zero
@@ -229,6 +230,9 @@ public struct MainView: View {
                     pendingBrowserURLPrompt = nil
                 }
             )
+        }
+        .sheet(item: $pendingAgentFork) { configuration in
+            AgentForkPanel(configuration: configuration)
         }
         // Consent dialog for the editor-override conflict (issue #591). Deferred
         // to the first session so "Ctrl-G" has context; fires on whichever of
@@ -1007,6 +1011,10 @@ public struct MainView: View {
                         hostID: remote.hostId,
                         fallbackDirectory: window.activePane?.currentPath
                     ),
+                    forkUnavailableReason: agentForkUnavailableReason(hostID: remote.hostId),
+                    onForkWindow: { sourceWindow, usingWorktree in
+                        pendingAgentFork = agentForkConfiguration(panes: sourceWindow.panes, hostID: remote.hostId, usingWorktree: usingWorktree)
+                    },
                     onNewBrowser: {
                         openEmptyRemoteBrowserTab(hostId: remote.hostId, sessionName: remote.sessionName)
                     },
@@ -1146,6 +1154,10 @@ public struct MainView: View {
                             hostID: nil,
                             fallbackDirectory: window.activePane?.currentPath
                         ),
+                        onForkWindow: { sourceWindow, usingWorktree in
+                            let panes = sourceWindow.panes.compactMap { coordinator.windowManager.paneStates[$0.paneId] }
+                            pendingAgentFork = agentForkConfiguration(panes: panes, hostID: nil, usingWorktree: usingWorktree)
+                        },
                         onNewBrowser: {
                             openEmptyBrowserTab(sessionName: session.sessionName, windowId: window.id)
                         },
@@ -4514,6 +4526,78 @@ public struct MainView: View {
             hostID: hostID,
             isConnected: coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true
         )
+    }
+
+    private func agentForkUnavailableReason(hostID: String) -> String? {
+        guard coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true else {
+            return "Host is offline. Reconnect before forking an Agent."
+        }
+        guard coordinator.remoteSessionStore?.hostsSupportingAgentFork.contains(hostID) == true else {
+            return "Update this Host to fork Agent conversations."
+        }
+        return nil
+    }
+
+    private func agentForkConfiguration(panes: [PaneState], hostID: String?, usingWorktree: Bool) -> AgentForkConfiguration {
+        let focused = terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
+        let sources = panes.sorted {
+            let leftRank = $0.paneId == focused ? 0 : ($0.isActive ? 1 : 2)
+            let rightRank = $1.paneId == focused ? 0 : ($1.isActive ? 1 : 2)
+            return leftRank == rightRank ? $0.paneIndex < $1.paneIndex : leftRank < rightRank
+        }.compactMap(AgentForkSource.init(pane:))
+        return AgentForkConfiguration(
+            sources: sources, usingWorktree: usingWorktree,
+            prepare: { source in
+                if let hostID {
+                    if let reason = agentForkUnavailableReason(hostID: hostID) { throw AgentForkError(reason) }
+                    guard let connection = coordinator.viewerConnectionManager?.connection(for: hostID) else {
+                        throw AgentForkError("Viewer connection is unavailable.")
+                    }
+                    let response = try await connection.sendCommand(PrepareAgentFork(source: source), paneId: "", timeout: 30).get()
+                    guard let preparation = response.forkPreparation else { throw AgentForkError("Host returned no Fork preparation.") }
+                    return preparation
+                }
+                return try await coordinator.prepareAgentFork(source)
+            },
+            fork: { request in try await createAgentFork(request, hostID: hostID) }
+        )
+    }
+
+    private func createAgentFork(_ request: ForkAgentSession, hostID: String?) async throws {
+        guard !isCreatingAgentTab else { throw AgentForkError("An Agent tab is already being created. Please wait.") }
+        isCreatingAgentTab = true
+        defer { isCreatingAgentTab = false }
+        let paneID: String
+        if let hostID {
+            if let reason = agentForkUnavailableReason(hostID: hostID) { throw AgentForkError(reason) }
+            guard let connection = coordinator.viewerConnectionManager?.connection(for: hostID) else {
+                throw AgentForkError("Viewer connection is unavailable.")
+            }
+            let response = try await connection.sendCommand(request, paneId: "", timeout: 180).get()
+            guard let newPane = response.paneId else { throw AgentForkError("Host returned no new pane. Check its tabs before retrying.") }
+            paneID = newPane
+            await connection.relayClient.requestSessionState()
+            for _ in 0..<PaneSurfaceRetry.attempts {
+                if let window = coordinator.remoteSessionStore?.windows(for: hostID).first(where: {
+                    $0.sessionName == request.source.sessionName && $0.panes.contains(where: { $0.paneId == paneID })
+                }) {
+                    if selectedRemoteSession?.hostId == hostID && selectedRemoteSession?.sessionName == request.source.sessionName {
+                        selectTerminalWindow(stableId: window.stableId)
+                    }
+                    return
+                }
+                try await Task.sleep(for: PaneSurfaceRetry.delay)
+            }
+        } else {
+            paneID = try await coordinator.forkAgentSession(request)
+            if let window = await PaneSurfaceRetry.localWindow(containing: paneID, windows: { tmuxService.windows }, refresh: { _ = await tmuxService.refreshPanes() }) {
+                if selectedRemoteSession == nil && selectedWindow?.sessionName == request.source.sessionName {
+                    selectTerminalWindow(stableId: window.stableId)
+                }
+                return
+            }
+        }
+        attachError = "Fork created but not visible yet. Select its tab when it appears; do not create another Fork."
     }
 
     private func createAgentTab(_ request: CreateTmuxWindow, hostID: String?) async throws {
