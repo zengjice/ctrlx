@@ -4529,22 +4529,19 @@ public struct MainView: View {
     }
 
     private func agentForkUnavailableReason(hostID: String) -> String? {
-        guard coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true else {
+        let isConnected = coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true
+        guard isConnected else {
             return "Host is offline. Reconnect before forking an Agent."
         }
-        guard coordinator.remoteSessionStore?.hostsSupportingAgentFork.contains(hostID) == true else {
+        guard let store = coordinator.remoteSessionStore else {
             return "Update this Host to fork Agent conversations."
         }
-        return nil
+        return store.agentForkUnavailableReason(hostID: hostID, isConnected: isConnected)
     }
 
     private func agentForkConfiguration(panes: [PaneState], hostID: String?, usingWorktree: Bool) -> AgentForkConfiguration {
         let focused = terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
-        let sources = panes.sorted {
-            let leftRank = $0.paneId == focused ? 0 : ($0.isActive ? 1 : 2)
-            let rightRank = $1.paneId == focused ? 0 : ($1.isActive ? 1 : 2)
-            return leftRank == rightRank ? $0.paneIndex < $1.paneIndex : leftRank < rightRank
-        }.compactMap(AgentForkSource.init(pane:))
+        let sources = AgentForkConfiguration.orderedSources(panes: panes, focusedPaneID: focused)
         return AgentForkConfiguration(
             sources: sources, usingWorktree: usingWorktree,
             prepare: { source in

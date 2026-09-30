@@ -421,7 +421,7 @@ selection. Ordinary Terminal requests still omit `pluginID`, and the Host create
 them through `TmuxService`, including its manual Codex shell integration and
 Claude telemetry environment. No agent command/config is constructed by iOS.
 
-### Fork a native Agent conversation (Mac)
+### Fork a native Agent conversation (Mac/iOS)
 
 Right-click a local or Viewer terminal-window tab → **Fork → In Current
 Directory / In New Worktree…**. Codex and Claude Code implement the optional
@@ -429,6 +429,15 @@ Directory / In New Worktree…**. Codex and Claude Code implement the optional
 One recognized Agent forks directly in the current directory. Multiple Agent
 panes require a source choice, defaulting to native focus or the active pane.
 Detection without a native conversation UUID is not enough to enable Fork.
+
+On iOS, open the window-title menu → **Fork → In Current Directory / In New
+Worktree…**. The selected pane is the default source when there are multiple
+recognized Agents. Mac and iOS share `AgentForkPanel`, including worktree review,
+dirty-file acknowledgement and retrying the same request UUID. The iPhone sends
+the captured source to its specific Host; it never constructs an Agent command
+or touches local Git. Creation is serialized with New Terminal/New Agent. The
+returned pane is selected when state arrives, unless the user has manually
+changed windows or left the screen while creation was pending.
 
 `AgentForkService` rechecks the captured pane/window/session/Agent UUID/cwd on
 the Host before launching in a new window of the same tmux session. It uses
@@ -460,8 +469,8 @@ or Agent-launch errors report retained paths/panes rather than deleting them.
 Viewer commands require `supportsAgentFork == true`. Preparation is read-only;
 the Host creates Git/tmux state. A request UUID deduplicates concurrent/repeated
 delivery (including partial failures; last 128 completed requests per Host
-process). Both Macs need the feature; the opaque Relay needs no update. iOS has
-no new Fork UI.
+process). The Host and Viewer (Mac/iOS) need the feature; the opaque Relay needs
+no update.
 
 ### Start a session in an arbitrary directory
 

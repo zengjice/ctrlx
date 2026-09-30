@@ -446,6 +446,12 @@ final public class SessionStore {
         return nil
     }
 
+    public func agentForkUnavailableReason(hostID: String, isConnected: Bool) -> String? {
+        guard isConnected else { return "Host is offline. Reconnect before forking an Agent." }
+        guard hostsSupportingAgentFork.contains(hostID) else { return "Update this Host to fork Agent conversations." }
+        return nil
+    }
+
     // MARK: - Response Storage (iOS only)
 
     #if os(iOS)

@@ -48,6 +48,7 @@
         @State private var isSplitting = false
 
         @State private var newAgentConfiguration: NewAgentTabConfiguration?
+        @State private var agentForkConfiguration: AgentForkConfiguration?
         @State private var isCreatingWindow = false
         /// Follow the returned pane when its state arrives, not after a fixed delay.
         @State private var createdPaneId: String?
@@ -232,6 +233,14 @@
                         .accessibilityIdentifier("new-agent-window")
 
                         if let window {
+                            AgentForkMenu(
+                                sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
+                                unavailableReason: agentForkUnavailableReason
+                            ) { usingWorktree in
+                                agentForkConfiguration = forkConfiguration(window: window, usingWorktree: usingWorktree)
+                            }
+                            .disabled(isCreatingWindow)
+
                             Button {
                                 renameWindowText = window.windowName
                                 renamingWindow = window
@@ -338,6 +347,10 @@
             }
             .sheet(item: $newAgentConfiguration) { configuration in
                 NewAgentTabPanel(configuration: configuration)
+                    .presentationDetents([.large])
+            }
+            .sheet(item: $agentForkConfiguration) { configuration in
+                AgentForkPanel(configuration: configuration)
                     .presentationDetents([.large])
             }
             .alert(
@@ -477,6 +490,46 @@
                     commandError = error.localizedDescription
                 }
             }
+        }
+
+        private var agentForkUnavailableReason: String? {
+            sessionStore.agentForkUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected)
+        }
+
+        private func forkConfiguration(window: TmuxWindow, usingWorktree: Bool) -> AgentForkConfiguration {
+            AgentForkConfiguration(
+                sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
+                usingWorktree: usingWorktree,
+                prepare: { source in
+                    if let reason = agentForkUnavailableReason { throw AgentForkError(reason) }
+                    let response = try await connectionManager.sendCommand(
+                        PrepareAgentFork(source: source), paneId: "", hostId: hostId, timeout: 30
+                    ).get()
+                    guard let preparation = response.forkPreparation else {
+                        throw AgentForkError("Host returned no Fork preparation.")
+                    }
+                    return preparation
+                },
+                fork: { request in try await createAgentFork(request) }
+            )
+        }
+
+        private func createAgentFork(_ request: ForkAgentSession) async throws {
+            guard !isCreatingWindow else { throw AgentForkError("A window is already being created. Please wait.") }
+            if let reason = agentForkUnavailableReason { throw AgentForkError(reason) }
+            guard request.source.sessionName == sessionName else { throw AgentForkError("Reopen Fork in the source session.") }
+            isCreatingWindow = true
+            defer { isCreatingWindow = false }
+            let selectionRevision = windowSelectionRevision
+            let response = try await connectionManager.sendCommand(request, paneId: "", hostId: hostId, timeout: 180).get()
+            guard let paneId = response.paneId else {
+                throw AgentForkError("Host returned no new pane. Check its windows before retrying.")
+            }
+            if windowSelectionRevision == selectionRevision {
+                createdPaneId = paneId
+                reconcileWindowSelection(candidates: windowSelectionCandidates)
+            }
+            await connectionManager.requestSessionState(for: hostId)
         }
 
         private func createWindow(_ request: CreateTmuxWindow) async throws {
