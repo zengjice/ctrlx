@@ -653,6 +653,7 @@ final public class TmuxService {
         public let path: String
         /// Id of the plugin whose `process_names` matched (spec §6).
         public let pluginID: String
+        public let processIDs: Set<String>
     }
 
     private struct AgentProcessSnapshot: Sendable {
@@ -683,7 +684,8 @@ final public class TmuxService {
     /// `ps` could not produce a trustworthy snapshot, which must not be treated
     /// as proof that every previously detected agent exited.
     func detectAgentPanesIfAvailable(
-        processNamesByPlugin: [String: [String]]
+        processNamesByPlugin: [String: [String]],
+        refreshSnapshot: Bool = false
     ) async -> [String: DetectedAgentPane]? {
         guard !processNamesByPlugin.isEmpty else { return [:] }
 
@@ -699,7 +701,11 @@ final public class TmuxService {
         guard !pluginByProcessName.isEmpty else { return [:] }
 
         do {
-            guard let snapshot = try await agentProcessSnapshot() else { return nil }
+            let generation = agentProcessSnapshotGeneration
+            let captured = try await (refreshSnapshot ? captureAgentProcessSnapshot() : agentProcessSnapshot())
+            guard generation == agentProcessSnapshotGeneration, !Task.isCancelled,
+                  let snapshot = cacheLatestAgentProcessSnapshot(captured)
+            else { return nil }
             let paneInfo = snapshot.paneInfo
             guard !paneInfo.isEmpty else { return [:] }
             guard let tree = snapshot.processTree else { return nil }
@@ -714,16 +720,17 @@ final public class TmuxService {
             // over "codex", matching the previous behavior).
             var detected: [String: DetectedAgentPane] = [:]
             for (paneId, info) in paneInfo {
-                let descendants = tree.descendants(of: info.pid)
-                var matchedPluginIDs: Set<String> = []
-                for pid in descendants {
+                // An `exec codex resume` can replace the pane shell itself.
+                let processIDs = [info.pid] + tree.descendants(of: info.pid)
+                var matches: [String: Set<String>] = [:]
+                for pid in processIDs {
                     guard let name = tree.processName(for: pid) else { continue }
                     if let pluginID = pluginByProcessName[name] {
-                        matchedPluginIDs.insert(pluginID)
+                        matches[pluginID, default: []].insert(pid)
                     }
                 }
-                if let winner = matchedPluginIDs.min() {
-                    detected[paneId] = DetectedAgentPane(path: info.path, pluginID: winner)
+                if let winner = matches.keys.min(), let matchedProcesses = matches[winner] {
+                    detected[paneId] = DetectedAgentPane(path: info.path, pluginID: winner, processIDs: matchedProcesses)
                 }
             }
 
@@ -743,7 +750,10 @@ final public class TmuxService {
             return cachedAgentProcessSnapshot
         }
         if let agentProcessSnapshotTask {
-            return try await agentProcessSnapshotTask.value
+            let generation = agentProcessSnapshotGeneration
+            let snapshot = try await agentProcessSnapshotTask.value
+            guard generation == agentProcessSnapshotGeneration else { throw CancellationError() }
+            return cacheLatestAgentProcessSnapshot(snapshot)
         }
 
         let generation = agentProcessSnapshotGeneration
@@ -757,8 +767,7 @@ final public class TmuxService {
                 throw CancellationError()
             }
             agentProcessSnapshotTask = nil
-            cachedAgentProcessSnapshot = snapshot
-            return snapshot
+            return cacheLatestAgentProcessSnapshot(snapshot)
         } catch {
             if agentProcessSnapshotGeneration == generation {
                 agentProcessSnapshotTask = nil
@@ -767,7 +776,18 @@ final public class TmuxService {
         }
     }
 
+    private func cacheLatestAgentProcessSnapshot(_ snapshot: AgentProcessSnapshot?) -> AgentProcessSnapshot? {
+        guard let snapshot else { return nil }
+        // A slow background scan must not replace a newer on-demand result.
+        if let cachedAgentProcessSnapshot, cachedAgentProcessSnapshot.capturedAt > snapshot.capturedAt {
+            return cachedAgentProcessSnapshot
+        }
+        cachedAgentProcessSnapshot = snapshot
+        return snapshot
+    }
+
     private func captureAgentProcessSnapshot() async throws -> AgentProcessSnapshot? {
+        let capturedAt = ContinuousClock.now
         // Get pane IDs, shell PIDs, and current paths in one tmux call. Joined
         // with U+001F so a `|` in a path cannot shift fields.
         let sep = String(PaneInfo.fieldSeparator)
@@ -786,7 +806,7 @@ final public class TmuxService {
         let tree = paneInfo.isEmpty ? nil : try await processTree()
         guard paneInfo.isEmpty || tree != nil else { return nil }
         return AgentProcessSnapshot(
-            capturedAt: .now,
+            capturedAt: capturedAt,
             paneInfo: paneInfo,
             processTree: tree
         )
@@ -2102,17 +2122,17 @@ final public class TmuxService {
 
     /// Loads `content` into a named tmux buffer and pastes it into `target`,
     /// preserving bracketed-paste markers so apps that have enabled DEC mode
-    /// 2004 see it as a single paste event. Used by the file-drop flow:
-    /// `content` is the shell-escaped, space-separated path string from
-    /// `DroppedPathFormatter`.
+    /// 2004 see it as a single paste event. Clipboard callers preserve LF bytes;
+    /// file drops retain tmux's normal newline conversion.
     ///
-    /// `bufferName` is fixed per-call so concurrent drops don't trample tmux's
+    /// `bufferName` is unique per-call so concurrent pastes don't trample tmux's
     /// global anonymous buffer. `paste-buffer -d` deletes the named buffer
     /// after pasting so it doesn't accumulate across drops.
     public func loadAndPasteBuffer(
         target: String,
         content: String,
-        bufferName: String
+        bufferName: String,
+        preserveLineFeeds: Bool = false
     ) async throws {
         // Tmux's `-` form reads from stdin, but our ProcessRunner doesn't
         // expose stdin — write to a tmp file and pass the path instead.
@@ -2134,13 +2154,15 @@ final public class TmuxService {
             throw TmuxError.commandFailed(message: load.stderrString)
         }
 
-        let paste = try await runTmuxCommand([
+        var pasteArguments = [
             "paste-buffer",
             "-p", // honor bracketed-paste mode
             "-d", // delete the named buffer afterwards
             "-b", bufferName,
             "-t", target,
-        ])
+        ]
+        if preserveLineFeeds { pasteArguments.append("-r") }
+        let paste = try await runTmuxCommand(pasteArguments)
         guard paste.isSuccess else {
             throw TmuxError.commandFailed(message: paste.stderrString)
         }
@@ -2169,6 +2191,26 @@ final public class TmuxService {
         // Publish the authoritative dimensions immediately. This drives both
         // the Host UI and SessionState broadcast after a remote Viewer requests
         // a fit, instead of waiting for the next periodic pane refresh.
+        await refreshPanes()
+    }
+
+    /// Explicit Viewer fit keeps the current split tree and relative sizes.
+    public func fitWindow(_ target: String, width: Int, height: Int) async throws {
+        let snapshot = try await runTmuxCommand([
+            "display-message", "-p", "-t", target, "#{window_id}\t#{window_layout}",
+        ])
+        guard snapshot.isSuccess else { throw TmuxError.commandFailed(message: snapshot.stderrString) }
+        let fields = snapshot.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\t")
+        guard fields.count == 2, let layout = TmuxLayoutParser.parse(fields[1]),
+              let fitted = TmuxWindowFitLayout.layoutString(layout, width: width, height: height) else {
+            throw TmuxError.commandFailed(message: "Terminal size cannot fit the current pane layout")
+        }
+        // One tmux command queue: no intermediate layout is published by us.
+        let result = try await runTmuxCommand([
+            "resize-window", "-t", fields[0], "-x", String(width), "-y", String(height),
+            ";", "select-layout", "-t", fields[0], fitted,
+        ])
+        guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
         await refreshPanes()
     }
 

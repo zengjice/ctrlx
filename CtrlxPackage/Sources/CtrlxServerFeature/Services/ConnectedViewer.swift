@@ -150,9 +150,9 @@ final public class ConnectedViewer: Identifiable {
     /// Task for retrying registration if the first attempt is dropped
     private var registrationRetryTask: Task<Void, Never>?
 
-    /// Serial chain for fire-and-forget commands (keystrokes, raw input).
+    /// Serial chain for input commands (keystrokes, raw input, clipboard paste).
     /// Each new command awaits the previous one to preserve WebSocket ordering.
-    private var pendingFireAndForget: Task<Void, Never>?
+    private var pendingInputCommand: Task<Void, Never>?
 
     /// Serial chain for outbound encrypted messages. Encrypted sends have multiple
     /// suspension points (E2EE check, encrypt, WebSocket send), so concurrent
@@ -761,22 +761,28 @@ final public class ConnectedViewer: Identifiable {
             }
 
         case let .command(command):
-            logger.info("Received command from viewer", metadata: ["type": "\(command.command)"])
+            let logType = if case .pasteTerminalText = command.command { "pasteTerminalText" }
+                else { String(describing: command.command) }
+            logger.info("Received command from viewer", metadata: ["type": "\(logType)"])
             if let onCommand {
-                if command.command.requiresResponse {
+                // Clipboard pastes acknowledge completion, but must share the
+                // keyboard FIFO rather than overtake pending typed input.
+                let isPaste: Bool
+                if case .pasteTerminalText = command.command { isPaste = true } else { isPaste = false }
+                if command.command.requiresResponse, !isPaste {
                     if let response = await onCommand(command) {
                         await sendEncrypted(.commandResponse(response))
                     }
                 } else {
-                    // Fire-and-forget: chain on the previous task so commands
+                    // Ordered input: chain on the previous task so commands
                     // execute in the order they arrive on the WebSocket.
                     // Without this, concurrent unstructured Tasks can reach the
                     // TmuxCommandExecutor actor out of order, reordering keystrokes.
                     let handler = onCommand
-                    let previous = pendingFireAndForget
+                    let previous = pendingInputCommand
                     let generation = connectionGeneration.current
                     let queuedAt = ContinuousClock.now
-                    pendingFireAndForget = Task { [weak self] in
+                    pendingInputCommand = Task { [weak self] in
                         _ = await previous?.value
                         guard
                             !Task.isCancelled,
@@ -787,7 +793,9 @@ final public class ConnectedViewer: Identifiable {
                         if case .sendRawInput = command.command {
                             TerminalTransportMetrics.shared.recordDuration(.rawInputQueueWait, since: queuedAt)
                         }
-                        _ = await handler(command)
+                        if let response = await handler(command), command.command.requiresResponse {
+                            await self.sendEncrypted(.commandResponse(response))
+                        }
                     }
                 }
             }
@@ -1158,8 +1166,8 @@ final public class ConnectedViewer: Identifiable {
     private func invalidateConnectionWork() {
         quickPhraseSync?.reset()
         connectionGeneration.invalidate()
-        pendingFireAndForget?.cancel()
-        pendingFireAndForget = nil
+        pendingInputCommand?.cancel()
+        pendingInputCommand = nil
         pendingSend?.cancel()
         pendingSend = nil
         pendingSendEnqueuedAt.removeAll(keepingCapacity: true)

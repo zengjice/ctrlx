@@ -161,6 +161,11 @@ public struct AgentPromptInputAccumulator: Sendable, Equatable {
 
     public init() { }
 
+    public mutating func recordPaste(_ value: String) {
+        // Newlines in a clipboard paste edit the draft; only Send submits it.
+        text.append(value)
+    }
+
     public mutating func consume(_ keys: [TmuxKey]) -> Bool {
         var submittedPrompt = false
 

@@ -55,7 +55,7 @@ package final class QuickPhraseSyncSession {
         updateStatus()
         if enabled, message.enabled, let records = message.records {
             do {
-                try store.merge(records)
+                try store.merge(records, ordering: message.ordering)
                 store.syncErrors[pairID] = nil
             } catch {
                 store.syncErrors[pairID] = error.localizedDescription
@@ -93,7 +93,8 @@ package final class QuickPhraseSyncSession {
                 guard let peer = self.peer else { break }
                 let message = QuickPhraseSyncMessage(
                     senderEpoch: generation, recipientEpoch: peer.epoch, enabled: self.enabled,
-                    records: self.enabled && peer.enabled ? self.store.records : nil
+                    records: self.enabled && peer.enabled ? self.store.records : nil,
+                    ordering: self.enabled && peer.enabled ? self.store.ordering : nil
                 )
                 guard message != self.lastSent else { continue }
                 self.lastSent = message

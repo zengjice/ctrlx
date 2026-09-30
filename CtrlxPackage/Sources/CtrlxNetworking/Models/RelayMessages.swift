@@ -59,6 +59,10 @@ public struct SessionStateMessage: Codable, Sendable {
     /// until this capability is explicitly advertised.
     public let supportsAgentWindowLaunch: Bool?
     public let supportsAgentFork: Bool?
+    /// Clipboard paste is acknowledged and serialized with keyboard input.
+    public let supportsTerminalPaste: Bool?
+    /// Explicit fit preserves the Host window's pane topology and proportions.
+    public let supportsTerminalFit: Bool?
 
     public init(
         pairId: String,
@@ -70,7 +74,9 @@ public struct SessionStateMessage: Codable, Sendable {
         sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil,
         supportsDirectoryBrowsing: Bool? = nil,
         supportsAgentWindowLaunch: Bool? = nil,
-        supportsAgentFork: Bool? = nil
+        supportsAgentFork: Bool? = nil,
+        supportsTerminalPaste: Bool? = nil,
+        supportsTerminalFit: Bool? = nil
     ) {
         self.pairId = pairId
         self.paneStates = paneStates
@@ -82,6 +88,8 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
         self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
         self.supportsAgentFork = supportsAgentFork
+        self.supportsTerminalPaste = supportsTerminalPaste
+        self.supportsTerminalFit = supportsTerminalFit
     }
 
     /// Returns a copy with the `pairId` replaced. Centralises the per-connection
@@ -99,7 +107,9 @@ public struct SessionStateMessage: Codable, Sendable {
             sharedTerminalLayouts: sharedTerminalLayouts,
             supportsDirectoryBrowsing: supportsDirectoryBrowsing,
             supportsAgentWindowLaunch: supportsAgentWindowLaunch,
-            supportsAgentFork: supportsAgentFork
+            supportsAgentFork: supportsAgentFork,
+            supportsTerminalPaste: supportsTerminalPaste,
+            supportsTerminalFit: supportsTerminalFit
         )
     }
 }

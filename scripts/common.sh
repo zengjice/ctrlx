@@ -6,8 +6,7 @@
 #
 #   source "$SCRIPT_DIR/common.sh"
 #
-# It only defines colors, logging, version lookups, the notes editor, and the
-# iOS changelog generator — it does not set shell options or run anything at
+# It only defines helpers — it does not set shell options or run anything at
 # source time, so it is safe to source early.
 
 # =====================================================
@@ -116,16 +115,20 @@ print(json.dumps({
 PY
 }
 
-assert_primary_worktree() {
-    local primary_worktree project_root
-    primary_worktree=$(git -C "$PROJECT_ROOT" worktree list --porcelain \
-        | sed -n 's/^worktree //p' \
-        | head -1)
+assert_git_worktree() {
+    local git_root project_root
+    git_root=$(git -C "$PROJECT_ROOT" rev-parse --show-toplevel 2>/dev/null) \
+        || log_error 'Packaging requires a Git worktree.'
     project_root=$(cd "$PROJECT_ROOT" && pwd -P)
+    git_root=$(cd "$git_root" && pwd -P)
 
-    if [ -z "$primary_worktree" ] || [ "$project_root" != "$primary_worktree" ]; then
-        log_error "Packaging must run from the primary worktree: ${primary_worktree:-unknown}"
+    if [ "$project_root" != "$git_root" ]; then
+        log_error "Packaging must run from the Git worktree root: $git_root"
     fi
+}
+
+prune_local_artifacts() {
+    python3 "$SCRIPT_DIR/clean-build.py" prune --artifact "$1" --yes
 }
 
 find_apple_development_identity() {

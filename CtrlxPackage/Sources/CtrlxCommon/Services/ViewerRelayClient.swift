@@ -97,6 +97,9 @@ final public class ViewerRelayClient {
     /// Whether the host is currently connected to the relay
     public private(set) var isHostConnected = false
 
+    public private(set) var hostSupportsTerminalPaste = false
+    public private(set) var hostSupportsTerminalFit = false
+
     /// Name of the connected host device (if known)
     public private(set) var connectedHostName: String?
 
@@ -486,6 +489,15 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.notConnected)
         }
 
+        switch command.commandType {
+        case .pasteTerminalText where !hostSupportsTerminalPaste:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to paste clipboard text"))
+        case let .resizeTmuxPane(spec) where spec.userInitiated == true && !hostSupportsTerminalFit:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to fit terminal panes"))
+        default:
+            break
+        }
+
         let commandMessage = CommandMessage(paneId: paneId, command: command.commandType)
 
         // Fire-and-forget: just write to the WebSocket and return a synthetic success.
@@ -556,6 +568,8 @@ final public class ViewerRelayClient {
     public func send(_ command: CommandType, paneId: String) async -> Bool {
         switch command {
         case let .sendKeystroke(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+        case let .pasteTerminalText(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .expandCodexQuestions(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
@@ -956,6 +970,8 @@ final public class ViewerRelayClient {
 
         case let .sessionState(sessionState):
             logger.info("Received session state from host")
+            hostSupportsTerminalPaste = sessionState.supportsTerminalPaste == true
+            hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             onSessionState?(sessionState)
 
         case let .commandResponse(response):
@@ -975,6 +991,8 @@ final public class ViewerRelayClient {
             terminalStreamHandlers.deliver(streamMessage)
 
         case let .hostConnected(connectedMessage):
+            hostSupportsTerminalPaste = false
+            hostSupportsTerminalFit = false
             logger.info("Host device connected")
             hostSubscriptionInactive = false
 
@@ -1016,6 +1034,8 @@ final public class ViewerRelayClient {
             }
 
         case let .peerHello(peerHello):
+            hostSupportsTerminalPaste = false
+            hostSupportsTerminalFit = false
             logger.info(
                 "Received peerHello from host",
                 metadata: ["appVersion": "\(peerHello.appVersion)"]
@@ -1039,6 +1059,8 @@ final public class ViewerRelayClient {
             quickPhraseSync?.receive(payload)
 
         case .hostDisconnected:
+            hostSupportsTerminalPaste = false
+            hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
             logger.info("Host device disconnected")
             isHostConnected = false
@@ -1046,6 +1068,8 @@ final public class ViewerRelayClient {
             await onHostDisconnected?()
 
         case .hostSubscriptionInactive:
+            hostSupportsTerminalPaste = false
+            hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
             logger.info("Host blocked: subscription inactive")
             hostSubscriptionInactive = true
@@ -1340,6 +1364,8 @@ final public class ViewerRelayClient {
     }
 
     private func cleanupConnection() async {
+        hostSupportsTerminalPaste = false
+        hostSupportsTerminalFit = false
         quickPhraseSync?.reset()
         connectionGeneration.invalidate()
         awaitingPong = false

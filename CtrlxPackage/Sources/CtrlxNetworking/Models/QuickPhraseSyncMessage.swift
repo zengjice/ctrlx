@@ -27,17 +27,38 @@ public struct QuickPhraseSyncOffer: Codable, Equatable, Sendable {
     }
 }
 
+/// A library-wide order, separate from immutable additions and tombstones.
+/// Logical revisions and a UUID tie-breaker converge without synchronized clocks.
+public struct QuickPhraseOrdering: Codable, Equatable, Sendable {
+    public let revision: Int
+    public let id: UUID
+    public let phraseIDs: [UUID]
+
+    public init(revision: Int, id: UUID = UUID(), phraseIDs: [UUID]) {
+        self.revision = revision
+        self.id = id
+        self.phraseIDs = phraseIDs
+    }
+
+    public func isNewer(than other: Self) -> Bool {
+        revision == other.revision ? id.uuidString > other.id.uuidString : revision > other.revision
+    }
+}
+
 public struct QuickPhraseSyncMessage: Codable, Equatable, Sendable {
     public let senderEpoch: UUID
     public let recipientEpoch: UUID
     public let enabled: Bool
     /// nil is consent-only and contains no library data.
     public let records: [QuickPhraseRecord]?
+    public let ordering: QuickPhraseOrdering?
 
-    public init(senderEpoch: UUID, recipientEpoch: UUID, enabled: Bool, records: [QuickPhraseRecord]? = nil) {
+    public init(senderEpoch: UUID, recipientEpoch: UUID, enabled: Bool, records: [QuickPhraseRecord]? = nil,
+                ordering: QuickPhraseOrdering? = nil) {
         self.senderEpoch = senderEpoch
         self.recipientEpoch = recipientEpoch
         self.enabled = enabled
         self.records = records
+        self.ordering = ordering
     }
 }

@@ -36,11 +36,13 @@ final public class MirrorWindowManager {
     @ObservationIgnored
     private var processDetectedPaneIds: Set<String> = []
 
-    /// A plugin SessionEnd can arrive while the process is still exiting. Keep
-    /// those panes suppressed until a scan observes the old process is gone,
-    /// otherwise the next scan would immediately resurrect the ended session.
+    /// SessionEnd can arrive before process exit. Suppress only observed old
+    /// processes, never a new agent started in the same pane between scans.
     @ObservationIgnored
-    private var processDetectionSuppressedPaneIds: Set<String> = []
+    private var suppressedAgentProcessIDs: [String: Set<String>] = [:]
+
+    @ObservationIgnored
+    private var lastDetectedAgentProcesses: [String: TmuxService.DetectedAgentPane] = [:]
 
     /// Called when session metadata (description, color, or emoji) changes,
     /// to push updated state to viewers.
@@ -154,7 +156,8 @@ final public class MirrorWindowManager {
         }
         for paneId in stalePaneIds {
             processDetectedPaneIds.remove(paneId)
-            processDetectionSuppressedPaneIds.remove(paneId)
+            suppressedAgentProcessIDs.removeValue(forKey: paneId)
+            lastDetectedAgentProcesses.removeValue(forKey: paneId)
             updatedStates.removeValue(forKey: paneId)
             changed = true
         }
@@ -404,17 +407,7 @@ final public class MirrorWindowManager {
                 try? await Task.sleep(for: Self.agentReconciliationInterval)
 
                 guard !Task.isCancelled, let self else { break }
-                let processNames = processNamesProvider()
-                guard
-                    let panes = await self.tmuxService.detectAgentPanesIfAvailable(
-                        processNamesByPlugin: processNames
-                    )
-                else { continue }
-                guard !Task.isCancelled else { break }
-
-                if self.reconcileDetectedAgentSessions(panes) {
-                    await self.onAgentProcessReconciliationChanged?()
-                }
+                await self.refreshDetectedAgentSessions(processNamesByPlugin: processNamesProvider())
             }
         }
     }
@@ -423,6 +416,18 @@ final public class MirrorWindowManager {
     public func stopPeriodicAgentReconciliation() {
         agentReconciliationTask?.cancel()
         agentReconciliationTask = nil
+    }
+
+    func refreshDetectedAgentSessions(
+        processNamesByPlugin: [String: [String]],
+        refreshSnapshot: Bool = false
+    ) async {
+        guard let panes = await tmuxService.detectAgentPanesIfAvailable(
+            processNamesByPlugin: processNamesByPlugin, refreshSnapshot: refreshSnapshot
+        ), !Task.isCancelled else { return }
+        if reconcileDetectedAgentSessions(panes) {
+            await onAgentProcessReconciliationChanged?()
+        }
     }
 
     // MARK: - Session Management
@@ -456,9 +461,11 @@ final public class MirrorWindowManager {
         let detectedPaneIds = Set(panes.keys)
         var changed = false
 
-        // A suppression only needs to survive while the ended process remains
-        // visible. Once absent, a future process in the same pane is a new agent.
-        processDetectionSuppressedPaneIds.formIntersection(detectedPaneIds)
+        for (paneId, processIDs) in suppressedAgentProcessIDs {
+            let remaining = processIDs.intersection(panes[paneId]?.processIDs ?? [])
+            suppressedAgentProcessIDs[paneId] = remaining.isEmpty ? nil : remaining
+        }
+        lastDetectedAgentProcesses = panes
 
         // Clear only sessions created by this fallback. A transient `ps` miss
         // must never erase a plugin-owned working/waiting state.
@@ -470,7 +477,7 @@ final public class MirrorWindowManager {
         for (paneId, info) in panes {
             guard
                 paneStates[paneId] != nil,
-                !processDetectionSuppressedPaneIds.contains(paneId)
+                !info.processIDs.isSubset(of: suppressedAgentProcessIDs[paneId] ?? [])
             else { continue }
 
             if processDetectedPaneIds.contains(paneId) {
@@ -512,9 +519,11 @@ final public class MirrorWindowManager {
     ///   updated state to viewers only when something changed).
     @discardableResult
     public func endAgentSession(forPane paneId: String) -> Bool {
-        guard paneStates[paneId]?.agentSession != nil else { return false }
+        guard let session = paneStates[paneId]?.agentSession else { return false }
         processDetectedPaneIds.remove(paneId)
-        processDetectionSuppressedPaneIds.insert(paneId)
+        if let detected = lastDetectedAgentProcesses[paneId], detected.pluginID == session.pluginID {
+            suppressedAgentProcessIDs[paneId] = detected.processIDs
+        }
         return clearAgentSessionState(forPane: paneId)
     }
 
@@ -637,7 +646,7 @@ final public class MirrorWindowManager {
         // A plugin state is authoritative. It upgrades a process-detected
         // session to plugin ownership and proves any prior end suppression stale.
         processDetectedPaneIds.remove(paneId)
-        processDetectionSuppressedPaneIds.remove(paneId)
+        suppressedAgentProcessIDs.removeValue(forKey: paneId)
 
         // Ensure a session exists for this pane and set the state directly. Record
         // the project path so the sidebar has a name before the next tmux refresh

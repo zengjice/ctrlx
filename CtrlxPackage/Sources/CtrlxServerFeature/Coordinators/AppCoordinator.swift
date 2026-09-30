@@ -972,6 +972,13 @@
             return Array(detected.keys)
         }
 
+        func refreshAgentCommandIdentity() async {
+            guard let processNames = pluginRegistry?.processNamesByPlugin else { return }
+            await windowManager.refreshDetectedAgentSessions(
+                processNamesByPlugin: processNames, refreshSnapshot: true
+            )
+        }
+
         /// Builds the `PluginEnv` for `id`. `pluginRoot` is the bundled
         /// `plugins/<id>` directory; falls back to the state dir when a plugin
         /// (e.g. echo) ships no manifest so `enable` can still construct the core
@@ -3144,7 +3151,7 @@
 
                 // A Viewer may resize only through its explicit toolbar action.
                 // The executor rejects unmarked legacy automatic requests. On
-                // success, publish the dimensions refreshed by `resizePane` so
+                // success, publish the layout refreshed by `fitWindow` so
                 // the Host and every Viewer converge on the new shared grid.
                 if case .resizeTmuxPane = command.command {
                     let response = await executor.execute(command)
@@ -3467,7 +3474,9 @@
                     sharedTerminalLayouts: sharedTerminalLayouts,
                     supportsDirectoryBrowsing: true,
                     supportsAgentWindowLaunch: true,
-                    supportsAgentFork: true
+                    supportsAgentFork: true,
+                    supportsTerminalPaste: true,
+                    supportsTerminalFit: true
                 )
             }
 

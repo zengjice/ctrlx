@@ -247,6 +247,9 @@ struct QuickPhraseSyncTests {
         for _ in 0..<4 { for link in links { await link.settle() } }
         #expect(libraries.allSatisfy { $0.records == office.records && $0.phrases.count == 4 })
         office.setSyncEnabled(false, for: ids[0])
+        try office.move(office.phrases[0].id, to: office.phrases[3].id)
+        for _ in 0..<4 { for link in links { await link.settle() } }
+        #expect(libraries.allSatisfy { $0.phrases == office.phrases && $0.ordering == office.ordering })
         try office.remove(office.phrases[0].id)
         for _ in 0..<4 { for link in links { await link.settle() } }
         #expect(libraries.allSatisfy { $0.records == office.records && $0.phrases.count == 3 })
@@ -415,5 +418,48 @@ struct QuickPhraseSyncTests {
         else { Issue.record("Wrong decoded message"); return }
         #expect(decoded == payload)
         #expect(message.messageType == "quickPhraseSync")
+    }
+
+    @Test("Drag ordering propagates live and after offline reconnect without an echo loop")
+    func reordering() async throws {
+        let a = store(), b = store()
+        for text in ["one", "two", "three"] { try a.add(text) }
+        a.setSyncEnabled(true, for: "pair")
+        b.setSyncEnabled(true, for: "pair")
+        let link = Link(a, b)
+        defer { link.disconnect() }
+        await link.connect()
+        try b.move(b.phrases[0].id, to: b.phrases[2].id)
+        await link.settle()
+        #expect(a.phrases.map(\.text) == ["two", "three", "one"])
+        #expect(a.phrases == b.phrases)
+        #expect(a.ordering == b.ordering)
+        link.disconnect()
+        try a.move(a.phrases[2].id, to: a.phrases[0].id)
+        try b.add("four")
+        await link.connect()
+        #expect(a.phrases.map(\.text) == ["one", "two", "three", "four"])
+        #expect(a.phrases == b.phrases)
+        #expect(a.ordering == b.ordering)
+        let sent = link.sentA.count + link.sentB.count
+        await link.settle()
+        #expect(link.sentA.count + link.sentB.count == sent)
+    }
+
+    @Test("Sort order follows bilateral consent; consent-only frames contain no ordering IDs")
+    func privateOrdering() async throws {
+        let a = store(), b = store()
+        for text in ["one", "two"] { try a.add(text) }
+        try a.move(a.phrases[0].id, to: a.phrases[1].id)
+        a.setSyncEnabled(true, for: "pair")
+        let link = Link(a, b)
+        defer { link.disconnect() }
+        await link.connect()
+        #expect((link.sentA + link.sentB).allSatisfy { $0.records == nil && $0.ordering == nil })
+        #expect(b.phrases.isEmpty)
+        b.setSyncEnabled(true, for: "pair")
+        await link.settle()
+        #expect(a.phrases == b.phrases)
+        #expect(a.ordering == b.ordering)
     }
 }

@@ -14,7 +14,7 @@ source "$SCRIPT_DIR/common.sh"
 load_project_environment "$PROJECT_ROOT"
 
 [ "$#" -eq 0 ] || log_error "CtrlX release is zero-parameter; edit the selected .env file instead."
-assert_primary_worktree
+assert_git_worktree
 
 require_config() {
     local name="$1"
@@ -159,6 +159,7 @@ Path(os.environ["CTRLX_APPCAST_PATH"]).write_text(xml, encoding="utf-8")
 PY
 
 write_artifact_metadata "$DMG_PATH"
+prune_local_artifacts "$DMG_PATH"
 log_success "Release artifact: $DMG_PATH"
 log_success "Appcast: $APPCAST_PATH"
 log_success "Corresponding source: https://github.com/jicezeng/CtrlX/tree/$SOURCE_REVISION"

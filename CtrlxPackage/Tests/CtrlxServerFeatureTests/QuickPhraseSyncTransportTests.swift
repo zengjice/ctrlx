@@ -60,13 +60,19 @@ struct QuickPhraseSyncTransportTests {
                 #expect(viewerStore.syncStatus(for: viewerStore.syncDevices[0].id) == .ready)
                 try viewerStore.add("live addition")
                 try await waitUntil { hostStore.phrases.count == 3 }
+                try viewerStore.move(viewerStore.phrases[0].id, to: viewerStore.phrases[2].id)
+                try await waitUntil { hostStore.ordering != nil && hostStore.phrases == viewerStore.phrases }
+                #expect(hostStore.ordering == viewerStore.ordering)
                 await viewer.disconnect()
                 try await waitUntil { !host.isViewerConnected }
                 #expect(hostStore.syncStatus(for: hostStore.syncDevices[0].id) == .offline)
                 try hostStore.remove(hostStore.phrases[0].id)
                 try viewerStore.add("offline addition")
                 await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
-                try await waitUntil { hostStore.records == viewerStore.records && hostStore.phrases.count == 3 }
+                try await waitUntil {
+                    hostStore.records == viewerStore.records && hostStore.phrases.count == 3
+                        && hostStore.phrases == viewerStore.phrases
+                }
                 #expect(await relay.encryptedFrames > 0)
                 #expect(await relay.unexpectedTypes.isEmpty)
                 #expect(await relay.errors.isEmpty)
@@ -110,7 +116,7 @@ struct QuickPhraseSyncTransportTests {
 
 /// A deliberately content-blind relay: only registration and encrypted envelopes
 /// are understood. It cannot decode a quickPhraseSync payload or execute input.
-private actor PhraseTestRelay {
+actor PhraseTestRelay {
     var host: WebSocket?
     var viewer: WebSocket?
     var hostKey: ViewerConnectedMessage?
@@ -139,7 +145,9 @@ private actor PhraseTestRelay {
                     try await target.send(raw: data, opcode: .binary)
                 }
             case .requestSessionState:
-                break
+                if ws === viewer, let host {
+                    try await host.send(raw: data, opcode: .binary)
+                }
             case .ping:
                 try await send(.pong, to: ws)
             default:

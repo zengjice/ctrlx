@@ -29,8 +29,10 @@ public actor TmuxCommandExecutor {
     /// - Parameter command: The command to execute
     /// - Returns: Response indicating success or failure
     public func execute(_ command: CommandMessage) async -> CommandResponseMessage {
+        let logType = if case .pasteTerminalText = command.command { "pasteTerminalText" }
+            else { String(describing: command.command) }
         logger.info("Executing command", metadata: [
-            "command": "\(command.command)",
+            "command": "\(logType)",
             "paneId": "\(command.paneId)",
         ])
 
@@ -38,6 +40,21 @@ public actor TmuxCommandExecutor {
             switch command.command {
             case let .sendKeystroke(spec):
                 try await executeSendKeystroke(paneId: command.paneId, keys: spec.keystrokes)
+
+            case let .pasteTerminalText(spec):
+                guard spec.text.utf8.count <= PasteTerminalText.maximumUTF8Bytes else {
+                    throw CommandError.invalidPayload("Clipboard text exceeds 64 KiB")
+                }
+                guard !spec.text.contains(DroppedPathFormatter.bracketedPasteEnd) else {
+                    throw CommandError.invalidPayload("Clipboard text contains a paste-end control sequence")
+                }
+                guard !spec.text.isEmpty else { return .success(for: command.id) }
+                try await tmuxService.loadAndPasteBuffer(
+                    target: command.paneId,
+                    content: spec.text,
+                    bufferName: "ctrlx-paste-\(command.id.uuidString)",
+                    preserveLineFeeds: true
+                )
 
             case let .expandCodexQuestions(spec):
                 try await tmuxService.expandCodexQuestions(paneID: command.paneId, expectedCount: spec.expectedCount)
@@ -66,7 +83,7 @@ public actor TmuxCommandExecutor {
                         error: "Terminal resize requires explicit user action"
                     )
                 }
-                try await tmuxService.resizePane(
+                try await tmuxService.fitWindow(
                     command.paneId,
                     width: spec.width,
                     height: spec.height

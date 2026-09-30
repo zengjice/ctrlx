@@ -17,10 +17,7 @@
 	<key>SUPublicEDKey</key>
 	<string>$(CTRLX_SPARKLE_PUBLIC_KEY)</string>
 
-	<!-- Custom UTI used for in-process tab-strip drag-and-drop. Declaring it
-	     here lets UTType(exportedAs:) resolve the identifier without a
-	     runtime warning, and makes .dropDestination(for:) accept the payload
-	     reliably. -->
+	<!-- Custom drag types must be registered for native drop destinations. -->
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -28,6 +25,18 @@
 			<string>com.jicezeng.ctrlx.tab-drag</string>
 			<key>UTTypeDescription</key>
 			<string>CtrlX Tab Drag</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict/>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.jicezeng.ctrlx.quick-phrase</string>
+			<key>UTTypeDescription</key>
+			<string>CtrlX Quick Phrase Drag</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

@@ -10,10 +10,13 @@ or extra Send step, and existing terminal input is never cleared automatically.
   window name and pane ID. It never infers the target from the left selected tab
   or from a remote tmux client's active pane.
 - Commands use the same curated agent catalog as iOS; this is not live capability
-  discovery. Unsupported agents have no command panel. Working agents are not
+  discovery. Unsupported agents have no command catalog. Working agents are not
   disabled just because a turn is running.
 - Phrases work in ordinary shells too. **Add Phrase** saves without sending;
-  right-click a phrase to delete it. The library is local-first and shared across
+  right-click a phrase to delete it. Drag a phrase onto another tile to move it
+  to that tile's position on both Mac and iOS. Reordering saves immediately, even
+  offline, without sending terminal input or closing the panel. VoiceOver offers
+  **Move Earlier** and **Move Later** actions. The library is local-first and shared across
   windows and hosts. Optional, explicitly enabled pairing sync merges libraries
   between Macs and iPhones (see below).
 - Disconnection, stream bootstrap, external editors and blocking agent forms
@@ -44,13 +47,29 @@ editor hides its Form background so it does not obscure the shared material.
 
 ### Agent identity and command-panel availability
 
-The iOS `/` button always opens its overlay. If the current pane has no supported
+The Mac and iOS `/` buttons always open their panels. If the current pane has no supported
 agent identity, the panel explains why no catalog is available; it never guesses
 Codex from a window title or reuses another pane's agent. Host metadata arriving
 while that explanation is open restores the matching catalog only for the same
 host, pane and local input revision. Connection/readiness/editor/blocking-form
 checks still apply when sending; opening the panel grants no send permission.
 Changing targets or editing terminal input invalidates the captured panel.
+
+Opening an unidentified **local Mac** command panel also requests one fresh,
+manifest-driven process snapshot, bypassing the one-second snapshot cache. This
+reuses the Host's reconciliation and viewer updates; it does not send terminal
+input, guess an agent from the command line or window title, or add a polling
+loop. Remote panels wait for Host metadata as before. The ten-second background
+scan remains a fallback for manual launches and resumes whose hooks are absent,
+disabled, or late. Detection includes an agent that replaces the pane's shell
+with `exec`.
+
+Session-end suppression is tied to the observed old agent process IDs, not the
+pane ID alone. A different process in the same pane can be identified without
+waiting for a scan to observe an empty shell. If no process was observed before
+the end event, the Host does not create a blanket suppression for unknown future
+processes. Failed probes leave both identity and suppression unchanged. Hook
+states remain authoritative; opening a panel grants no send permission.
 
 On the Mac Host, Codex's session-end monitor uses
 `PluginHost.agentPanesIfAvailable()`. A failed, cancelled or unsupported process
@@ -190,13 +209,23 @@ displayed once; deletion marks all currently known aliases. Explicitly saving
 the same text again creates a new addition. This is an observed-remove merge,
 not wall-clock last-writer-wins, and requires no device clock synchronization.
 
+User-defined order is a separate optional snapshot, not a mutation of an
+addition's original `order`. It is stored in the same v2 library and encrypted
+sync frame. Higher logical revisions win; a UUID deterministically breaks ties
+between concurrent offline reorders. The next local reorder increments the
+accepted revision. New, unranked phrases append; known duplicate-text aliases
+move together, and tombstones still prevent resurrection. A stale or record-only
+snapshot never resets an accepted order. Both devices must be updated to sync
+ordering; older clients ignore the additive field and continue syncing additions
+and deletions. Reordering neither changes consent nor needs a Relay deployment.
+
 Snapshots are atomic and bounded: at most 4,096 records including tombstones and
-512 KB of encoded JSON, leaving room for encryption/base64 within the relay's
+512 KB of encoded library JSON including ordering, leaving room for encryption/base64 within the relay's
 1 MB limit. Unsupported/corrupt or over-limit data reports an error instead of
 overwriting local data. Tombstones are not automatically pruned (offline peers
 may still carry the deleted addition). At capacity, save/merge fails visibly.
 
-Regression coverage: `AgentCommandMenuTests`, `QuickPhraseTests`, `QuickPhraseDeviceSyncTests`,
+Regression coverage: `AgentCommandMenuTests`, `QuickPhraseTests`, `QuickPhraseReorderingTests`, `QuickPhraseDeviceSyncTests`,
 `QuickPhraseDeviceSettingsTests` (real Mac settings load/pair/unpair), `QuickPhraseSyncTests`
 (including all 16 reciprocal legacy combinations and a four-device cycle),
 `QuickPhraseSyncTransportTests` (real local WebSockets with both production clients/E2EE),

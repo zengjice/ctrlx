@@ -140,6 +140,18 @@
                 .opacity(terminalInputEnabled ? 1 : 0.4)
                 .accessibilityLabel("Escape")
                 .accessibilityIdentifier("terminal-escape-control")
+
+                Button(action: sendDollar) {
+                    Text("$")
+                        .frame(minWidth: 20)
+                        .terminalInputControlStyle()
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!terminalInputEnabled)
+                .opacity(terminalInputEnabled ? 1 : 0.4)
+                .accessibilityLabel("Dollar Sign")
+                .accessibilityIdentifier("terminal-dollar-control")
             }
         }
 
@@ -149,6 +161,10 @@
 
         private func sendEscape() {
             sendKeys([.escape])
+        }
+
+        private func sendDollar() {
+            sendKeys([.text("$")])
         }
     }
 
