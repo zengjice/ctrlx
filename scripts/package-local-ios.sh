@@ -10,7 +10,7 @@ LOCAL_CONFIG="$PROJECT_ROOT/Config/Local.xcconfig"
 # shellcheck source=scripts/common.sh
 source "$SCRIPT_DIR/common.sh"
 
-assert_primary_worktree
+assert_git_worktree
 [ -f "$LOCAL_CONFIG" ] \
     || log_error 'Missing Config/Local.xcconfig. Copy Config/Local.xcconfig.example and configure your personal team and bundle ID.'
 

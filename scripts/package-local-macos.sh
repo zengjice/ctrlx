@@ -10,7 +10,7 @@ LOCAL_MAC_CONFIG="$PROJECT_ROOT/Config/Local-macOS.xcconfig"
 # shellcheck source=scripts/common.sh
 source "$SCRIPT_DIR/common.sh"
 
-assert_primary_worktree
+assert_git_worktree
 [ -f "$LOCAL_MAC_CONFIG" ] \
     || log_error 'Missing Config/Local-macOS.xcconfig. Copy Config/Local-macOS.xcconfig.example and configure your personal team.'
 

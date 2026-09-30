@@ -4,7 +4,7 @@ CtrlX releases bind each binary to an immutable source commit.
 
 1. Update `Config/Shared-Base.xcconfig`, version docs and `MODIFICATIONS.md`.
 2. Run all boundary checks, Swift tests, website build and Mac/iOS build checks.
-3. Commit from the primary worktree and create `v<version>` at that exact commit.
+3. Commit from the selected worktree and create `v<version>` at that exact commit.
 4. Copy `.env.example` to the selected root environment file and configure the
    signing identity, notary profile and owned download URL.
 5. Run the zero-parameter `./scripts/release.sh`.
@@ -28,10 +28,27 @@ For the existing Qcloud private-distribution channel, follow the sibling
 ../publish-ctrlx-macos.py --yes
 ```
 
-Prepare a tested, clean, pushed `main` commit and matching `v<version>` tag
-first. This path uses `scripts/package-local-macos.sh` (Apple Development
+Prepare a tested, clean commit published as remote `main` and matching
+`v<version>` tag first. A linked worktree and its local branch are supported;
+the exact commit must still match both remote release refs. Select it explicitly:
+
+```bash
+python3 /path/to/publish-ctrlx-macos.py --root "$PWD" --check
+python3 /path/to/publish-ctrlx-macos.py --root "$PWD" --yes
+```
+
+`CTRLX_ROOT` remains supported; without either option, the maintainer's usual
+primary checkout remains the default. This path uses
+`scripts/package-local-macos.sh` (Apple Development
 signature, not notarized), verifies the DMG and atomically updates the Qcloud
 installer. It does not install locally or redeploy the Relay.
+
+Mac/iOS local packaging and the formal release script accept any Git worktree
+root. Build caches and artifacts stay in that worktree's `.build-local/` and
+`dist/`; they never write into another worktree. Provision the selected
+worktree's ignored local signing config before building. Local development
+packaging keeps its existing uncommitted-build workflow; formal releases and
+the Qcloud publisher still require clean, exactly tagged source.
 
 Mac-only packaging does not require a local Docker engine or OrbStack. A change
 confined to Apple-only dependencies, such as the SwiftTerm revision, does not
