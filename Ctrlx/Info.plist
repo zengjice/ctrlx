@@ -25,5 +25,20 @@
 		<string>fetch</string>
 		<string>processing</string>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.jicezeng.ctrlx.quick-phrase</string>
+			<key>UTTypeDescription</key>
+			<string>CtrlX Quick Phrase Drag</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict/>
+		</dict>
+	</array>
 </dict>
 </plist>

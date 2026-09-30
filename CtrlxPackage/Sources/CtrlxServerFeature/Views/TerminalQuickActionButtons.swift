@@ -281,10 +281,14 @@ private struct MacQuickPhrasePanel: View {
                                     Label("Delete", symbol: .trash)
                                 }
                             }
+                            .quickPhraseReordering(phrase, store: store) { error = $0 }
                         }
                     }
                 }
                 .frame(maxHeight: 280)
+                Text("Drag phrases to reorder. Right-click for Delete.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(16)

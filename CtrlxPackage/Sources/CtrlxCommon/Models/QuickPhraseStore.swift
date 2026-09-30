@@ -54,12 +54,14 @@ package final class QuickPhraseStore {
     private var syncDeviceByPair: [String: String]?
     private var syncConnections: [String: (epoch: UUID, status: QuickPhraseSyncStatus)] = [:]
     package private(set) var records: [QuickPhraseRecord] = []
+    package private(set) var ordering: QuickPhraseOrdering?
     private var consentRevision = 0
     @ObservationIgnored private var observers: [UUID: @MainActor () -> Void] = [:]
 
     private struct Library: Codable {
         let version: Int
         let records: [QuickPhraseRecord]
+        let ordering: QuickPhraseOrdering?
     }
 
     package enum SyncError: LocalizedError {
@@ -80,8 +82,8 @@ package final class QuickPhraseStore {
             if let data = preferences.data(Self.syncStorageKey) {
                 let library = try JSONDecoder().decode(Library.self, from: data)
                 guard library.version == 2 else { throw SyncError.invalidLibrary }
-                try validate(library.records)
-                apply(library.records)
+                try validate(library.records, ordering: library.ordering)
+                apply(library.records, ordering: library.ordering)
                 return
             }
             guard let data = preferences.data(Self.storageKey) else { return }
@@ -118,8 +120,28 @@ package final class QuickPhraseStore {
         })
     }
 
-    package func merge(_ incoming: [QuickPhraseRecord]) throws {
-        try validate(incoming)
+    /// Drop onto a phrase's current position; unknown/stale IDs are not moves.
+    @discardableResult
+    package func move(_ id: QuickPhrase.ID, to targetID: QuickPhrase.ID) throws -> Bool {
+        guard id != targetID,
+              let source = phrases.firstIndex(where: { $0.id == id }),
+              let destination = phrases.firstIndex(where: { $0.id == targetID }) else { return false }
+        var moved = phrases
+        moved.insert(moved.remove(at: source), at: destination)
+        var aliases: [String: [UUID]] = [:]
+        for record in records {
+            if let text = record.text { aliases[text, default: []].append(record.id) }
+        }
+        let next = QuickPhraseOrdering(
+            revision: (ordering?.revision ?? 0) + 1,
+            phraseIDs: moved.flatMap { aliases[$0.text] ?? [] }
+        )
+        try save(records, ordering: next)
+        return true
+    }
+
+    package func merge(_ incoming: [QuickPhraseRecord], ordering incomingOrder: QuickPhraseOrdering? = nil) throws {
+        try validate(incoming, ordering: incomingOrder)
         var merged = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
         for record in incoming {
             if let old = merged[record.id] {
@@ -131,7 +153,17 @@ package final class QuickPhraseStore {
                 merged[record.id] = record
             }
         }
-        try save(Array(merged.values))
+        var nextOrder = ordering
+        if let incomingOrder {
+            if let old = ordering {
+                guard old.revision != incomingOrder.revision || old.id != incomingOrder.id || old == incomingOrder
+                else { throw SyncError.invalidLibrary }
+                if incomingOrder.isNewer(than: old) { nextOrder = incomingOrder }
+            } else {
+                nextOrder = incomingOrder
+            }
+        }
+        try save(Array(merged.values), ordering: nextOrder)
     }
 
     package func isSyncEnabled(for pairID: String) -> Bool {
@@ -253,10 +285,11 @@ package final class QuickPhraseStore {
         for action in Array(observers.values) { action() }
     }
 
-    private func validate(_ values: [QuickPhraseRecord]) throws {
+    private func validate(_ values: [QuickPhraseRecord], ordering: QuickPhraseOrdering?) throws {
         // Bound the actual JSON (including escapes), leaving room for the E2EE
         // envelope/base64 inside the relay's 1 MB frame limit.
-        guard values.count <= 4096, try JSONEncoder().encode(values).count <= 512 * 1024
+        guard values.count <= 4096,
+              try JSONEncoder().encode(Library(version: 2, records: values, ordering: ordering)).count <= 512 * 1024
         else { throw SyncError.capacity }
         guard Set(values.map(\.id)).count == values.count else { throw SyncError.invalidLibrary }
         for record in values {
@@ -265,25 +298,42 @@ package final class QuickPhraseStore {
                 guard try QuickPhrase.validatedText(text) == text else { throw SyncError.invalidLibrary }
             }
         }
+        if let ordering {
+            let ids = Set(ordering.phraseIDs)
+            guard (1..<Int.max - 1).contains(ordering.revision),
+                  ids.count == ordering.phraseIDs.count,
+                  ids.isSubset(of: Set(values.map(\.id))) else { throw SyncError.invalidLibrary }
+        }
     }
 
-    private func apply(_ updated: [QuickPhraseRecord]) {
+    private func apply(_ updated: [QuickPhraseRecord], ordering: QuickPhraseOrdering?) {
+        self.ordering = ordering
         records = updated.sorted { $0.order == $1.order ? $0.id.uuidString < $1.id.uuidString : $0.order < $1.order }
+        let positions = Dictionary(uniqueKeysWithValues: (ordering?.phraseIDs ?? []).enumerated().map { ($0.element, $0.offset) })
+        let displayed = positions.isEmpty ? records : records.sorted {
+            let left = positions[$0.id] ?? Int.max, right = positions[$1.id] ?? Int.max
+            if left != right { return left < right }
+            return $0.order == $1.order ? $0.id.uuidString < $1.id.uuidString : $0.order < $1.order
+        }
         var texts = Set<String>()
-        phrases = records.compactMap { record in
+        phrases = displayed.compactMap { record in
             guard let text = record.text, texts.insert(text).inserted else { return nil }
             return QuickPhrase(id: record.id, text: text)
         }
     }
 
     private func save(_ updated: [QuickPhraseRecord]) throws {
+        try save(updated, ordering: ordering)
+    }
+
+    private func save(_ updated: [QuickPhraseRecord], ordering: QuickPhraseOrdering?) throws {
         guard loadError == nil else { throw CocoaError(.coderReadCorrupt) }
-        try validate(updated)
+        try validate(updated, ordering: ordering)
         let sorted = updated.sorted { $0.order == $1.order ? $0.id.uuidString < $1.id.uuidString : $0.order < $1.order }
-        guard sorted != records else { return }
-        let data = try JSONEncoder().encode(Library(version: 2, records: sorted))
+        guard sorted != records || ordering != self.ordering else { return }
+        let data = try JSONEncoder().encode(Library(version: 2, records: sorted, ordering: ordering))
         preferences.setData(data, Self.syncStorageKey)
-        apply(sorted)
+        apply(sorted, ordering: ordering)
         notify()
     }
 }

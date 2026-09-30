@@ -13,7 +13,10 @@ or extra Send step, and existing terminal input is never cleared automatically.
   discovery. Unsupported agents have no command catalog. Working agents are not
   disabled just because a turn is running.
 - Phrases work in ordinary shells too. **Add Phrase** saves without sending;
-  right-click a phrase to delete it. The library is local-first and shared across
+  right-click a phrase to delete it. Drag a phrase onto another tile to move it
+  to that tile's position on both Mac and iOS. Reordering saves immediately, even
+  offline, without sending terminal input or closing the panel. VoiceOver offers
+  **Move Earlier** and **Move Later** actions. The library is local-first and shared across
   windows and hosts. Optional, explicitly enabled pairing sync merges libraries
   between Macs and iPhones (see below).
 - Disconnection, stream bootstrap, external editors and blocking agent forms
@@ -206,13 +209,23 @@ displayed once; deletion marks all currently known aliases. Explicitly saving
 the same text again creates a new addition. This is an observed-remove merge,
 not wall-clock last-writer-wins, and requires no device clock synchronization.
 
+User-defined order is a separate optional snapshot, not a mutation of an
+addition's original `order`. It is stored in the same v2 library and encrypted
+sync frame. Higher logical revisions win; a UUID deterministically breaks ties
+between concurrent offline reorders. The next local reorder increments the
+accepted revision. New, unranked phrases append; known duplicate-text aliases
+move together, and tombstones still prevent resurrection. A stale or record-only
+snapshot never resets an accepted order. Both devices must be updated to sync
+ordering; older clients ignore the additive field and continue syncing additions
+and deletions. Reordering neither changes consent nor needs a Relay deployment.
+
 Snapshots are atomic and bounded: at most 4,096 records including tombstones and
-512 KB of encoded JSON, leaving room for encryption/base64 within the relay's
+512 KB of encoded library JSON including ordering, leaving room for encryption/base64 within the relay's
 1 MB limit. Unsupported/corrupt or over-limit data reports an error instead of
 overwriting local data. Tombstones are not automatically pruned (offline peers
 may still carry the deleted addition). At capacity, save/merge fails visibly.
 
-Regression coverage: `AgentCommandMenuTests`, `QuickPhraseTests`, `QuickPhraseDeviceSyncTests`,
+Regression coverage: `AgentCommandMenuTests`, `QuickPhraseTests`, `QuickPhraseReorderingTests`, `QuickPhraseDeviceSyncTests`,
 `QuickPhraseDeviceSettingsTests` (real Mac settings load/pair/unpair), `QuickPhraseSyncTests`
 (including all 16 reciprocal legacy combinations and a four-device cycle),
 `QuickPhraseSyncTransportTests` (real local WebSockets with both production clients/E2EE),

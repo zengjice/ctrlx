@@ -78,7 +78,9 @@
                                         .fixedSize(horizontal: false, vertical: true)
                                         .frame(maxWidth: .infinity, minHeight: 36)
                                 }
-                                .disabled(hasSubmitted || unavailableReason != nil)
+                                // Offline phrases remain manageable; send() checks availability.
+                                .disabled(hasSubmitted || store.loadError != nil)
+                                .foregroundStyle(unavailableReason == nil ? Color.primary : .secondary)
                                 .accessibilityIdentifier("terminal-quick-phrase-\(phrase.id)")
                                 .contextMenu {
                                     Button(role: .destructive) {
@@ -87,6 +89,7 @@
                                         Label("Delete", symbol: .trash)
                                     }
                                 }
+                                .quickPhraseReordering(phrase, store: store) { errorMessage = $0 }
                             }
                             Button { showsAddPhrase = true } label: {
                                 Label("Add Phrase", symbol: .plus)
@@ -99,7 +102,7 @@
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.roundedRectangle(radius: 12))
                         .tint(.primary)
-                        Text("Tap a phrase to send it and Return. Existing terminal input is kept. Long-press to delete.")
+                        Text("Tap to send and Return. Drag phrases to reorder. Long-press for Delete. Existing terminal input is kept.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         if let errorMessage {
