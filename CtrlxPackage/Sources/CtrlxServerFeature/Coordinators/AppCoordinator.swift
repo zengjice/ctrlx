@@ -937,6 +937,13 @@
             return Array(detected.keys)
         }
 
+        func refreshAgentCommandIdentity() async {
+            guard let processNames = pluginRegistry?.processNamesByPlugin else { return }
+            await windowManager.refreshDetectedAgentSessions(
+                processNamesByPlugin: processNames, refreshSnapshot: true
+            )
+        }
+
         /// Builds the `PluginEnv` for `id`. `pluginRoot` is the bundled
         /// `plugins/<id>` directory; falls back to the state dir when a plugin
         /// (e.g. echo) ships no manifest so `enable` can still construct the core

@@ -653,6 +653,7 @@ final public class TmuxService {
         public let path: String
         /// Id of the plugin whose `process_names` matched (spec §6).
         public let pluginID: String
+        public let processIDs: Set<String>
     }
 
     private struct AgentProcessSnapshot: Sendable {
@@ -683,7 +684,8 @@ final public class TmuxService {
     /// `ps` could not produce a trustworthy snapshot, which must not be treated
     /// as proof that every previously detected agent exited.
     func detectAgentPanesIfAvailable(
-        processNamesByPlugin: [String: [String]]
+        processNamesByPlugin: [String: [String]],
+        refreshSnapshot: Bool = false
     ) async -> [String: DetectedAgentPane]? {
         guard !processNamesByPlugin.isEmpty else { return [:] }
 
@@ -699,7 +701,11 @@ final public class TmuxService {
         guard !pluginByProcessName.isEmpty else { return [:] }
 
         do {
-            guard let snapshot = try await agentProcessSnapshot() else { return nil }
+            let generation = agentProcessSnapshotGeneration
+            let captured = try await (refreshSnapshot ? captureAgentProcessSnapshot() : agentProcessSnapshot())
+            guard generation == agentProcessSnapshotGeneration, !Task.isCancelled,
+                  let snapshot = cacheLatestAgentProcessSnapshot(captured)
+            else { return nil }
             let paneInfo = snapshot.paneInfo
             guard !paneInfo.isEmpty else { return [:] }
             guard let tree = snapshot.processTree else { return nil }
@@ -714,16 +720,17 @@ final public class TmuxService {
             // over "codex", matching the previous behavior).
             var detected: [String: DetectedAgentPane] = [:]
             for (paneId, info) in paneInfo {
-                let descendants = tree.descendants(of: info.pid)
-                var matchedPluginIDs: Set<String> = []
-                for pid in descendants {
+                // An `exec codex resume` can replace the pane shell itself.
+                let processIDs = [info.pid] + tree.descendants(of: info.pid)
+                var matches: [String: Set<String>] = [:]
+                for pid in processIDs {
                     guard let name = tree.processName(for: pid) else { continue }
                     if let pluginID = pluginByProcessName[name] {
-                        matchedPluginIDs.insert(pluginID)
+                        matches[pluginID, default: []].insert(pid)
                     }
                 }
-                if let winner = matchedPluginIDs.min() {
-                    detected[paneId] = DetectedAgentPane(path: info.path, pluginID: winner)
+                if let winner = matches.keys.min(), let matchedProcesses = matches[winner] {
+                    detected[paneId] = DetectedAgentPane(path: info.path, pluginID: winner, processIDs: matchedProcesses)
                 }
             }
 
@@ -743,7 +750,10 @@ final public class TmuxService {
             return cachedAgentProcessSnapshot
         }
         if let agentProcessSnapshotTask {
-            return try await agentProcessSnapshotTask.value
+            let generation = agentProcessSnapshotGeneration
+            let snapshot = try await agentProcessSnapshotTask.value
+            guard generation == agentProcessSnapshotGeneration else { throw CancellationError() }
+            return cacheLatestAgentProcessSnapshot(snapshot)
         }
 
         let generation = agentProcessSnapshotGeneration
@@ -757,8 +767,7 @@ final public class TmuxService {
                 throw CancellationError()
             }
             agentProcessSnapshotTask = nil
-            cachedAgentProcessSnapshot = snapshot
-            return snapshot
+            return cacheLatestAgentProcessSnapshot(snapshot)
         } catch {
             if agentProcessSnapshotGeneration == generation {
                 agentProcessSnapshotTask = nil
@@ -767,7 +776,18 @@ final public class TmuxService {
         }
     }
 
+    private func cacheLatestAgentProcessSnapshot(_ snapshot: AgentProcessSnapshot?) -> AgentProcessSnapshot? {
+        guard let snapshot else { return nil }
+        // A slow background scan must not replace a newer on-demand result.
+        if let cachedAgentProcessSnapshot, cachedAgentProcessSnapshot.capturedAt > snapshot.capturedAt {
+            return cachedAgentProcessSnapshot
+        }
+        cachedAgentProcessSnapshot = snapshot
+        return snapshot
+    }
+
     private func captureAgentProcessSnapshot() async throws -> AgentProcessSnapshot? {
+        let capturedAt = ContinuousClock.now
         // Get pane IDs, shell PIDs, and current paths in one tmux call. Joined
         // with U+001F so a `|` in a path cannot shift fields.
         let sep = String(PaneInfo.fieldSeparator)
@@ -786,7 +806,7 @@ final public class TmuxService {
         let tree = paneInfo.isEmpty ? nil : try await processTree()
         guard paneInfo.isEmpty || tree != nil else { return nil }
         return AgentProcessSnapshot(
-            capturedAt: .now,
+            capturedAt: capturedAt,
             paneInfo: paneInfo,
             processTree: tree
         )

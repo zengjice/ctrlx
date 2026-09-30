@@ -14,12 +14,24 @@ struct TerminalQuickActionButtons: View {
     @State private var commandPanel: Presentation?
     @State private var phrasePanel: Presentation?
 
-    private struct Presentation: Identifiable {
+    struct Presentation: Identifiable {
         let id = UUID()
         let token: TerminalQuickActionRouter.Token?
-        let command: AgentCommandContext?
+        var command: AgentCommandContext?
         let phrase: TerminalPhraseContext
         let label: String
+
+        mutating func updateCommand(_ current: AgentCommandContext?, terminal: TerminalPhraseContext) -> Bool {
+            guard phrase.hasSameInput(as: terminal) else { return false }
+            if let command { return command.hasSameInput(as: current) }
+            guard let current else { return true }
+            guard current.target.hostID == phrase.target.hostID,
+                  current.target.paneID == phrase.target.paneID,
+                  current.inputRevision == phrase.inputRevision
+            else { return false }
+            command = current
+            return true
+        }
     }
 
     var body: some View {
@@ -29,7 +41,6 @@ struct TerminalQuickActionButtons: View {
         } label: {
             Text("/").font(.system(.body, design: .monospaced).bold())
         }
-        .disabled(commandContext == nil)
         .help("Agent commands for the focused terminal")
         .accessibilityLabel("Agent Commands")
         .accessibilityIdentifier("terminal-agent-command-control")
@@ -37,7 +48,7 @@ struct TerminalQuickActionButtons: View {
             MacAgentCommandPanel(
                 commands: captured.command?.commands ?? [],
                 targetLabel: captured.label,
-                unavailableReason: commandContext?.unavailableReason,
+                unavailableReason: commandUnavailableReason,
                 send: { command in
                     guard let token = captured.token,
                           let request = AgentCommandRequest(command, in: captured.command),
@@ -46,6 +57,12 @@ struct TerminalQuickActionButtons: View {
                     return router.send(command.keys, to: token)
                 }
             )
+            .task(id: captured.id) {
+                guard captured.command == nil, captured.phrase.target.hostID == "local",
+                      router.matches(captured.token)
+                else { return }
+                await coordinator.refreshAgentCommandIdentity()
+            }
         }
 
         Button {
@@ -78,7 +95,8 @@ struct TerminalQuickActionButtons: View {
             phrasePanel = nil
         }
         .onChange(of: commandContext?.target) {
-            commandPanel = nil
+            guard var captured = commandPanel else { return }
+            commandPanel = captured.updateCommand(commandContext, terminal: phraseContext) ? captured : nil
         }
     }
 
@@ -111,6 +129,13 @@ struct TerminalQuickActionButtons: View {
             hasExternalEditor: hasExternalEditor,
             inputRevision: router.active?.inputRevision ?? 0
         )
+    }
+
+    private var commandUnavailableReason: String? {
+        if let context = commandContext { return context.unavailableReason }
+        return pane == nil
+            ? "Select a terminal pane to view agent commands."
+            : "No supported agent is currently identified in this pane. Commands will appear when Codex or Claude Code is identified."
     }
 
     private var phraseContext: TerminalPhraseContext {

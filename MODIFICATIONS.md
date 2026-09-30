@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.43 — Manual resume identity and Mac command-panel recovery
+
+- Keep the Mac agent-command button openable while pane identity is unavailable.
+  Opening an unidentified local panel requests one fresh process snapshot and
+  restores its catalog only for the same Host, pane and input revision.
+- Suppress ended sessions by their observed old process IDs rather than the
+  entire pane, allowing a new agent launched or resumed between scans to be
+  recognized. Include agents that replace the pane shell with `exec`.
+- Preserve hook authority, failed-probe state, stable panel identity and stale
+  send protections. Background reconciliation remains at ten-second intervals;
+  unchanged results do not publish observable state or Viewer snapshots.
+- Add process-cache ordering, quick-resume, probe-failure and panel-target
+  regressions. All 90 focused checks and 2,271 tests in the full run passed;
+  two existing Apple Intelligence evaluations remain unavailable on this Mac
+  (`deviceNotEligible`), so the full-suite result is not all green.
+- This publication packages Mac only and excludes the separate window-Fork
+  feature under development. No Relay deployment, iOS reinstall or SwiftTerm
+  dependency update is required.
+
 ## 3.0.42 — Agent windows, terminal telemetry and Codex question expansion
 
 - Add New Agent window panels on Mac and iOS with one launch card per enabled

@@ -10,7 +10,7 @@ or extra Send step, and existing terminal input is never cleared automatically.
   window name and pane ID. It never infers the target from the left selected tab
   or from a remote tmux client's active pane.
 - Commands use the same curated agent catalog as iOS; this is not live capability
-  discovery. Unsupported agents have no command panel. Working agents are not
+  discovery. Unsupported agents have no command catalog. Working agents are not
   disabled just because a turn is running.
 - Phrases work in ordinary shells too. **Add Phrase** saves without sending;
   right-click a phrase to delete it. The library is local-first and shared across
@@ -44,13 +44,29 @@ editor hides its Form background so it does not obscure the shared material.
 
 ### Agent identity and command-panel availability
 
-The iOS `/` button always opens its overlay. If the current pane has no supported
+The Mac and iOS `/` buttons always open their panels. If the current pane has no supported
 agent identity, the panel explains why no catalog is available; it never guesses
 Codex from a window title or reuses another pane's agent. Host metadata arriving
 while that explanation is open restores the matching catalog only for the same
 host, pane and local input revision. Connection/readiness/editor/blocking-form
 checks still apply when sending; opening the panel grants no send permission.
 Changing targets or editing terminal input invalidates the captured panel.
+
+Opening an unidentified **local Mac** command panel also requests one fresh,
+manifest-driven process snapshot, bypassing the one-second snapshot cache. This
+reuses the Host's reconciliation and viewer updates; it does not send terminal
+input, guess an agent from the command line or window title, or add a polling
+loop. Remote panels wait for Host metadata as before. The ten-second background
+scan remains a fallback for manual launches and resumes whose hooks are absent,
+disabled, or late. Detection includes an agent that replaces the pane's shell
+with `exec`.
+
+Session-end suppression is tied to the observed old agent process IDs, not the
+pane ID alone. A different process in the same pane can be identified without
+waiting for a scan to observe an empty shell. If no process was observed before
+the end event, the Host does not create a blanket suppression for unknown future
+processes. Failed probes leave both identity and suppression unchanged. Hook
+states remain authoritative; opening a panel grants no send permission.
 
 On the Mac Host, Codex's session-end monitor uses
 `PluginHost.agentPanesIfAvailable()`. A failed, cancelled or unsupported process
