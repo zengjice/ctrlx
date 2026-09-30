@@ -1032,12 +1032,29 @@ public struct CancelEditorSession: CommandSpec, Equatable {
 
 // MARK: - Command Types
 
+/// A clipboard paste, not a sequence of typed keys. The Host owns paste-mode
+/// detection so late-joining Viewers need not have seen DECSET 2004.
+public struct PasteTerminalText: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+
+    public static let maximumUTF8Bytes = 64 * 1_024
+    public let text: String
+
+    public init(text: String) {
+        self.text = text
+    }
+
+    public var commandType: CommandType { .pasteTerminalText(self) }
+}
+
 /// Commands that can be sent from viewer to host, with their associated data.
 /// This enum is the wire format - it's what gets encoded and sent over the network.
 /// Each case holds its corresponding CommandSpec struct.
 public enum CommandType: Codable, Sendable, Equatable {
     /// Send keystrokes to a tmux pane
     case sendKeystroke(SendKeystroke)
+    /// Paste one complete clipboard payload without synthesizing Enter keys.
+    case pasteTerminalText(PasteTerminalText)
     /// Automatically open a collapsed Codex question queue after host validation.
     case expandCodexQuestions(ExpandCodexQuestions)
     /// Cancel current operation (Ctrl+C)

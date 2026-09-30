@@ -218,6 +218,13 @@
             refreshCard()
         }
 
+        public func handleTerminalPaste(_ text: String, hostId: String, paneId: String) {
+            let key = PaneKey(pairId: hostId, paneId: paneId)
+            var input = terminalInputs[key] ?? AgentPromptInputAccumulator()
+            input.recordPaste(text)
+            terminalInputs[key] = input
+        }
+
         public func resetTerminalInput(hostId: String, paneId: String) {
             terminalInputs.removeValue(
                 forKey: PaneKey(pairId: hostId, paneId: paneId)

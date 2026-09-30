@@ -110,7 +110,7 @@ struct QuickPhraseSyncTransportTests {
 
 /// A deliberately content-blind relay: only registration and encrypted envelopes
 /// are understood. It cannot decode a quickPhraseSync payload or execute input.
-private actor PhraseTestRelay {
+actor PhraseTestRelay {
     var host: WebSocket?
     var viewer: WebSocket?
     var hostKey: ViewerConnectedMessage?
@@ -139,7 +139,9 @@ private actor PhraseTestRelay {
                     try await target.send(raw: data, opcode: .binary)
                 }
             case .requestSessionState:
-                break
+                if ws === viewer, let host {
+                    try await host.send(raw: data, opcode: .binary)
+                }
             case .ping:
                 try await send(.pong, to: ws)
             default:

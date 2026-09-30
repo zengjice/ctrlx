@@ -60,9 +60,10 @@
         /// Submits a structured `AgentResponse` for the open response form.
         let submitResponse: ResponseSender
 
-        /// Observes keyboard input after it has entered the terminal send queue.
+        /// Observes keyboard input after it has been sent in FIFO order.
         /// The parent uses this only to detect user-submitted Agent turns.
         let onTerminalInput: @MainActor ([TmuxKey]) -> Void
+        let onTerminalInputQueued: @MainActor () -> Void
 
         /// Lets a parent-owned input bar capture this pane's terminal text only
         /// when dictation starts, without continuously mirroring terminal output.
@@ -74,11 +75,13 @@
 
         /// Parent controls use this pane's existing FIFO, not a second queue
         /// that could overtake a native keyboard edit or caret movement.
-        let onExternalInputSenderChange: @MainActor ((@MainActor ([TmuxKey], Bool) -> Bool)?) -> Void
+        let onExternalInputSenderChange: @MainActor ((@MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool)?) -> Void
 
         /// Lets a parent-owned command menu fail closed while this pane is
         /// bootstrapping or reconnecting, without reading terminal pixels.
         let onTerminalInputReadinessChange: @MainActor ((@MainActor () -> Bool)?) -> Void
+        let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
+        let onTerminalPaste: @MainActor (String) -> Void
 
         /// Live OTEL telemetry for this pane's session (issue #597), shown as a
         /// thin meter strip above the terminal (surface C).
@@ -126,12 +129,15 @@
             telemetry: SessionTelemetry? = nil,
             submitResponse: @escaping ResponseSender,
             onTerminalInput: @escaping @MainActor ([TmuxKey]) -> Void = { _ in },
+            onTerminalInputQueued: @escaping @MainActor () -> Void = { },
+            onTerminalPaste: @escaping @MainActor (String) -> Void = { _ in },
             onVoiceInputContextProviderChange: @escaping @MainActor (
                 TerminalVoiceInputContextProvider?
             ) -> Void = { _ in },
             onCursorNavigationCancellationChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
-            onExternalInputSenderChange: @escaping @MainActor ((@MainActor ([TmuxKey], Bool) -> Bool)?) -> Void = { _ in },
-            onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in }
+            onExternalInputSenderChange: @escaping @MainActor ((@MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool)?) -> Void = { _ in },
+            onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in },
+            onViewportGridChange: @escaping @MainActor (TerminalViewportSizing.Grid?) -> Void = { _ in }
         ) {
             self.paneId = paneId
             self.hostId = hostId
@@ -151,10 +157,13 @@
             self.telemetry = telemetry
             self.submitResponse = submitResponse
             self.onTerminalInput = onTerminalInput
+            self.onTerminalInputQueued = onTerminalInputQueued
             self.onVoiceInputContextProviderChange = onVoiceInputContextProviderChange
             self.onCursorNavigationCancellationChange = onCursorNavigationCancellationChange
             self.onExternalInputSenderChange = onExternalInputSenderChange
             self.onTerminalInputReadinessChange = onTerminalInputReadinessChange
+            self.onViewportGridChange = onViewportGridChange
+            self.onTerminalPaste = onTerminalPaste
             self.coordinator = StreamCoordinator(
                 paneId: paneId,
                 fontName: settings.terminalFontName,
@@ -267,6 +276,14 @@
             } message: {
                 Text("The terminal buffer does not contain any text to copy.")
             }
+            .alert("Paste Failed", isPresented: .init(
+                get: { coordinator.pasteError != nil },
+                set: { if !$0 { coordinator.pasteError = nil } }
+            )) {
+                Button("OK") { coordinator.pasteError = nil }
+            } message: {
+                Text(coordinator.pasteError ?? "")
+            }
             .task(id: StreamTaskID(isConnected: isConnected, retryGeneration: streamRetryGeneration)) {
                 await synchronizeStreamingWithConnection()
             }
@@ -278,11 +295,11 @@
                 onCursorNavigationCancellationChange { [weak coordinator] in
                     coordinator?.terminalState?.cancelCursorNavigation?()
                 }
-                onExternalInputSenderChange { [weak coordinator, relayClient] keys, immediately in
+                onExternalInputSenderChange { [weak coordinator, relayClient] keys, immediately, onSent in
                     guard let coordinator, coordinator.isReadyForToolbarInput,
                           relayClient.isHostConnected, !keys.isEmpty else { return false }
                     coordinator.terminalState?.prepareForExternalInput?()
-                    coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: immediately)
+                    coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: immediately, onSent: onSent)
                     return true
                 }
                 onTerminalInputReadinessChange { [weak coordinator] in
@@ -290,12 +307,12 @@
                 }
             }
             .onDisappear {
+                onViewportGridChange(nil)
                 onVoiceInputContextProviderChange(nil)
                 onCursorNavigationCancellationChange(nil)
                 onExternalInputSenderChange(nil)
                 onTerminalInputReadinessChange(nil)
-                coordinator.terminalState?.cancelCursorNavigation?()
-                coordinator.terminalState?.cancelQuestionCheck?()
+                coordinator.cancelPendingKeys()
                 Task { await stopStreaming() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
@@ -425,6 +442,7 @@
                     let inputPresentation = terminalInputPresentation(
                         isCopyPresented: textSnapshot != nil
                     )
+                    let cellSize = coordinator.cellSize
                     TerminalStreamContainerView(
                         terminalState: state,
                         scrollingAgentID: scrollingAgentID,
@@ -442,8 +460,25 @@
                         onRawInput: { data in
                             phraseInputRevision &+= 1
                             coordinator.enqueueRawInput(data: data, relayClient: relayClient)
+                        },
+                        onPasteText: { text in
+                            guard canSendTerminalInput, coordinator.isReadyForToolbarInput else { return }
+                            guard text.utf8.count <= PasteTerminalText.maximumUTF8Bytes else {
+                                coordinator.pasteError = "Clipboard text exceeds 64 KiB."
+                                return
+                            }
+                            phraseInputRevision &+= 1
+                            onTerminalInputQueued()
+                            coordinator.enqueuePasteText(text, relayClient: relayClient) {
+                                onTerminalPaste(text)
+                            }
                         }
                     )
+                    .onGeometryChange(for: TerminalViewportSizing.Grid?.self) { geometry in
+                        TerminalViewportSizing.grid(viewport: geometry.size, cellSize: cellSize)
+                    } action: { grid in
+                        onViewportGridChange(grid)
+                    }
                 } else {
                     ProgressView("Initializing terminal...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -505,8 +540,10 @@
         private func enqueueTerminalKeys(_ keys: [TmuxKey]) {
             guard canSendTerminalInput, !keys.isEmpty else { return }
             phraseInputRevision &+= 1
-            coordinator.enqueueKeySend(keys: keys, relayClient: relayClient)
-            onTerminalInput(keys)
+            onTerminalInputQueued()
+            coordinator.enqueueKeySend(keys: keys, relayClient: relayClient) {
+                onTerminalInput(keys)
+            }
         }
 
         private var phraseContext: TerminalPhraseContext {
@@ -522,8 +559,10 @@
             guard request.isValid(in: phraseContext, savedPhrases: settings.quickPhrases.phrases) else { return false }
             coordinator.terminalState?.prepareForExternalInput?()
             phraseInputRevision &+= 1
-            coordinator.enqueueKeySend(keys: request.phrase.keys, relayClient: relayClient, immediately: true)
-            onTerminalInput(request.phrase.keys)
+            onTerminalInputQueued()
+            coordinator.enqueueKeySend(keys: request.phrase.keys, relayClient: relayClient, immediately: true) {
+                onTerminalInput(request.phrase.keys)
+            }
             return true
         }
 
@@ -671,11 +710,13 @@
         let paneId: String
         let fontName: String
         let fontSize: CGFloat
+        let cellSize: CGSize
 
         var streamState: StreamState = .idle
         var terminalState: TerminalState?
         var terminalTitle: String?
         var error: String?
+        var pasteError: String?
 
         /// Latest clipboard content received from the host via OSC 52.
         /// The parent view checks focus state before applying to UIPasteboard.
@@ -714,6 +755,7 @@
             self.paneId = paneId
             self.fontName = fontName
             self.fontSize = fontSize
+            self.cellSize = FontMetrics.calculateCellSize(fontName: fontName, fontSize: fontSize)
         }
 
         /// Cancel any in-flight key-send chain.
@@ -823,16 +865,19 @@
         }
 
         /// Accumulates rapid keystrokes and flushes them as a single command after a short delay.
-        func enqueueKeySend(keys: [TmuxKey], relayClient: ViewerRelayClient, immediately: Bool = false) {
+        func enqueueKeySend(
+            keys: [TmuxKey], relayClient: ViewerRelayClient, immediately: Bool = false,
+            onSent: @escaping @MainActor () -> Void
+        ) {
             terminalState?.cancelCursorNavigation?()
             terminalState?.cancelQuestionCheck?()
             if keystrokeDebouncer == nil {
-                keystrokeDebouncer = KeystrokeDebouncer(paneId: paneId, relayClient: relayClient)
+                keystrokeDebouncer = makeInputQueue(relayClient: relayClient)
             }
             if immediately {
-                keystrokeDebouncer?.enqueueImmediately(keys)
+                keystrokeDebouncer?.enqueueImmediately(keys, onSent: onSent)
             } else {
-                keystrokeDebouncer?.enqueue(keys)
+                keystrokeDebouncer?.enqueue(keys, onSent: onSent)
             }
         }
 
@@ -843,7 +888,7 @@
             terminalState?.cancelCursorNavigation?()
             terminalState?.cancelQuestionCheck?()
             if keystrokeDebouncer == nil {
-                keystrokeDebouncer = KeystrokeDebouncer(paneId: paneId, relayClient: relayClient)
+                keystrokeDebouncer = makeInputQueue(relayClient: relayClient)
             }
             keystrokeDebouncer?.enqueueRawInput(data)
         }
@@ -851,10 +896,25 @@
         func enqueueCodexQuestionExpansion(count: Int, relayClient: ViewerRelayClient) -> Bool {
             guard isReadyForToolbarInput else { return false }
             if keystrokeDebouncer == nil {
-                keystrokeDebouncer = KeystrokeDebouncer(paneId: paneId, relayClient: relayClient)
+                keystrokeDebouncer = makeInputQueue(relayClient: relayClient)
             }
             keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count)
             return true
+        }
+
+        func enqueuePasteText(_ text: String, relayClient: ViewerRelayClient, onSent: @escaping @MainActor () -> Void) {
+            terminalState?.cancelCursorNavigation?()
+            terminalState?.cancelQuestionCheck?()
+            if keystrokeDebouncer == nil {
+                keystrokeDebouncer = makeInputQueue(relayClient: relayClient)
+            }
+            keystrokeDebouncer?.enqueuePasteText(text, onSent: onSent)
+        }
+
+        private func makeInputQueue(relayClient: ViewerRelayClient) -> KeystrokeDebouncer {
+            KeystrokeDebouncer(paneId: paneId, relayClient: relayClient) { [weak self] error in
+                self?.pasteError = error
+            }
         }
 
         func handleStreamMessage(_ message: TerminalStreamMessage) {
@@ -1259,6 +1319,7 @@
 
         /// Callback for raw escape sequences (e.g., SGR mouse events) ready for relay transmission
         let onRawInput: @MainActor (Data) -> Void
+        let onPasteText: @MainActor (String) -> Void
 
         func makeUIView(context: Context) -> UIScrollView {
             // Calculate cell size using FontMetrics (matches SwiftTerm's computeFontDimensions)
@@ -1290,6 +1351,7 @@
             // Wire up input callback
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
+            terminalView.onPasteText = onPasteText
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
@@ -1436,6 +1498,7 @@
             // first render.
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
+            terminalView.onPasteText = onPasteText
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID

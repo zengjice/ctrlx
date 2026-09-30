@@ -9,6 +9,65 @@ import Testing
 @Suite("KeystrokeDebouncer")
 @MainActor
 struct KeystrokeDebouncerTests {
+    @Test("Multiline paste follows typing and precedes navigation and Send")
+    func pasteFIFO() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            let sent = LockIsolated<[KeystrokeDebouncer.SendOp]>([])
+            await withDependencies {
+                $0.continuousClock = clock
+            } operation: {
+                let queue = KeystrokeDebouncer(paneId: "%7") { op in
+                    sent.withValue { $0.append(op) }
+                    return true
+                }
+                defer { queue.cancelAll() }
+                queue.enqueue([.text("before")])
+                queue.enqueuePasteText("中🙂\r\nsecond\n")
+                queue.enqueueRawInput(Data("\u{1b}[C".utf8))
+                queue.enqueue([.text("after")])
+                queue.enqueueImmediately([.enter])
+                await Task.megaYield()
+                #expect(sent.value == [
+                    .keys([.text("before")]), .pasteText("中🙂\r\nsecond\n"),
+                    .rawInput(Data("\u{1b}[C".utf8)), .keys([.text("after")]), .keys([.enter]),
+                ])
+                await clock.advance(by: .seconds(1))
+                await Task.megaYield()
+                #expect(sent.value.count == 5)
+            }
+        }
+    }
+
+    @Test("Typing and consecutive pastes wait for the current paste to finish")
+    func pasteDoesNotInterleave() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            let sent = LockIsolated<[KeystrokeDebouncer.SendOp]>([])
+            await withDependencies {
+                $0.continuousClock = clock
+            } operation: {
+                let queue = KeystrokeDebouncer(paneId: "%7") { op in
+                    sent.withValue { $0.append(op) }
+                    if case .pasteText("first\n") = op {
+                        try? await clock.sleep(for: .seconds(1))
+                    }
+                    return true
+                }
+                defer { queue.cancelAll() }
+                queue.enqueuePasteText("")
+                queue.enqueuePasteText("first\n")
+                queue.enqueuePasteText("second\n")
+                queue.enqueueImmediately([.enter])
+                await Task.megaYield()
+                #expect(sent.value == [.pasteText("first\n")])
+                await clock.advance(by: .seconds(1))
+                await Task.megaYield()
+                #expect(sent.value == [.pasteText("first\n"), .pasteText("second\n"), .keys([.enter])])
+            }
+        }
+    }
+
     @Test("Question expansion follows buffered typing in the same send queue")
     func questionExpansionFIFO() async {
         await withMainSerialExecutor {
@@ -18,6 +77,7 @@ struct KeystrokeDebouncerTests {
             } operation: {
                 let debouncer = KeystrokeDebouncer(paneId: "%7") { op in
                     sent.withValue { $0.append(op) }
+                    return true
                 }
                 defer { debouncer.cancelAll() }
                 debouncer.enqueue([.text("draft")])
@@ -39,6 +99,7 @@ struct KeystrokeDebouncerTests {
             } operation: { @MainActor in
                 let debouncer = KeystrokeDebouncer(paneId: "%0") { op in
                     sentOps.withValue { $0.append(op) }
+                    return true
                 }
                 defer { debouncer.cancelAll() }
                 debouncer.enqueue([.text("“”"), .left, .text("你好")])
@@ -67,6 +128,7 @@ struct KeystrokeDebouncerTests {
                     debounceInterval: .milliseconds(30)
                 ) { op in
                     sentOps.withValue { $0.append(op) }
+                    return true
                 }
                 debouncer.enqueue([.text("a")])
                 // A second key joins the existing batch without moving the
@@ -101,6 +163,7 @@ struct KeystrokeDebouncerTests {
                     debounceInterval: .milliseconds(30)
                 ) { op in
                     sentOps.withValue { $0.append(op) }
+                    return true
                 }
 
                 debouncer.enqueue([.text("a")])
@@ -137,6 +200,7 @@ struct KeystrokeDebouncerTests {
                     debounceInterval: .milliseconds(30)
                 ) { op in
                     sentOps.withValue { $0.append(op) }
+                    return true
                 }
                 debouncer.enqueue([.text("a")])
                 // First batch flushes after the window.
@@ -170,6 +234,7 @@ struct KeystrokeDebouncerTests {
                     debounceInterval: .milliseconds(30)
                 ) { op in
                     sentOps.withValue { $0.append(op) }
+                    return true
                 }
                 debouncer.enqueue([.text("x")])
                 // Raw input arrives before the debounce window expires —
@@ -202,6 +267,7 @@ struct KeystrokeDebouncerTests {
                     debounceInterval: .seconds(1)
                 ) { op in
                     sentOps.withValue { $0.append(op) }
+                    return true
                 }
 
                 debouncer.enqueue([.text("pending")])
@@ -234,6 +300,7 @@ struct KeystrokeDebouncerTests {
                     debounceInterval: .seconds(1)
                 ) { op in
                     sentOps.withValue { $0.append(op) }
+                    return true
                 }
                 let command: [TmuxKey] = [.text("/model"), .delay(200), .enter]
                 debouncer.enqueue([.left])
@@ -259,6 +326,7 @@ struct KeystrokeDebouncerTests {
             let sentOps = LockIsolated<[KeystrokeDebouncer.SendOp]>([])
             let debouncer = KeystrokeDebouncer(paneId: "%0") { op in
                 sentOps.withValue { $0.append(op) }
+                return true
             }
 
             debouncer.cancelAll()
@@ -282,6 +350,7 @@ struct KeystrokeDebouncerTests {
                     debounceInterval: .milliseconds(30)
                 ) { op in
                     sentOps.withValue { $0.append(op) }
+                    return true
                 }
                 debouncer.enqueue([.text("a")])
                 debouncer.cancelAll()

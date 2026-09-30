@@ -31,7 +31,7 @@
         @State private var isKeyboardActive: Bool
 
         /// Ordered sender for partial speech-recognition edits to the selected pane.
-        @State private var externalInputSenders: [String: @MainActor ([TmuxKey], Bool) -> Bool] = [:]
+        @State private var externalInputSenders: [String: @MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool] = [:]
         @State private var voiceInputContextProviders: [String: TerminalVoiceInputContextProvider] = [:]
         @State private var cursorNavigationCancellations: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
@@ -46,6 +46,8 @@
 
         /// Guards against double-splits from rapid taps
         @State private var isSplitting = false
+        @State private var isResizing = false
+        @State private var viewportGrids: [String: TerminalViewportSizing.Grid] = [:]
 
         @State private var newAgentConfiguration: NewAgentTabConfiguration?
         @State private var isCreatingWindow = false
@@ -230,6 +232,12 @@
                         }
                         .disabled(!relayClient.isHostConnected || isCreatingWindow)
                         .accessibilityIdentifier("new-agent-window")
+
+                        Button(action: resizeWindowToFit) {
+                            Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
+                        }
+                        .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
+                        .accessibilityHint("Changes the window size on the Host and all Viewers")
 
                         if let window {
                             Button {
@@ -711,6 +719,11 @@
                         windowName: windowName
                     )
                 },
+                onTerminalInputQueued: { terminalInputRevision &+= 1 },
+                onTerminalPaste: { text in
+                    guard settings.agentBackgroundMonitoringEnabled, relayClient.isHostConnected else { return }
+                    backgroundMonitoring.handleTerminalPaste(text, hostId: hostId, paneId: pane.paneId)
+                },
                 onVoiceInputContextProviderChange: { provider in
                     if let provider {
                         voiceInputContextProviders[pane.paneId] = provider
@@ -726,6 +739,11 @@
                 },
                 onTerminalInputReadinessChange: { readiness in
                     terminalInputReadiness[pane.paneId] = readiness
+                },
+                onViewportGridChange: { grid in
+                    if viewportGrids[pane.paneId] != grid {
+                        viewportGrids[pane.paneId] = grid
+                    }
                 }
             )
             .environment(relayClient)
@@ -736,7 +754,6 @@
             paneId: String,
             windowName: String
         ) {
-            terminalInputRevision &+= 1
             guard
                 settings.agentBackgroundMonitoringEnabled,
                 relayClient.isHostConnected
@@ -784,6 +801,25 @@
         }
 
         // MARK: - Tmux Controls
+
+        private var resizeToFitRequest: ResizeTmuxPane? {
+            guard relayClient.hostSupportsTerminalFit,
+                  let window, let layout = TmuxLayoutParser.parse(window.windowLayout) else { return nil }
+            return TerminalViewportSizing.request(layout: layout, paneGrids: viewportGrids)
+        }
+
+        private func resizeWindowToFit() {
+            guard relayClient.isHostConnected, !isResizing,
+                  let windowID = window?.stableId, let request = resizeToFitRequest else { return }
+            isResizing = true
+            Task {
+                defer { isResizing = false }
+                let result = await relayClient.sendCommand(request, paneId: windowID)
+                if case let .failure(error) = result {
+                    commandError = "Failed to resize: \(error.localizedDescription)"
+                }
+            }
+        }
 
         private var tmuxControls: some View {
             HStack(spacing: 12) {
@@ -901,9 +937,11 @@
             guard request.isValid(in: activePhraseContext, savedPhrases: settings.quickPhrases.phrases),
                   let paneId = request.context.target.paneID
             else { return false }
-            guard enqueueToolbarKeys(request.phrase.keys, paneId: paneId, immediately: true) else { return false }
-            // Phrases are ordinary user input; retain normal prompt monitoring.
-            observeTerminalInput(request.phrase.keys, paneId: paneId, windowName: window?.windowName ?? "")
+            let windowName = window?.windowName ?? ""
+            guard enqueueToolbarKeys(request.phrase.keys, paneId: paneId, immediately: true, onSent: {
+                // Phrases are ordinary user input; retain normal prompt monitoring.
+                observeTerminalInput(request.phrase.keys, paneId: paneId, windowName: windowName)
+            }) else { return false }
             return true
         }
 
@@ -926,10 +964,10 @@
 
             // Same queue as the other toolbar controls. Do not treat a slash
             // command as a new prompt or arm the background-turn monitor.
-            guard enqueueToolbarKeys(request.command.keys, paneId: request.context.target.paneID, immediately: true)
+            guard enqueueToolbarKeys(request.command.keys, paneId: request.context.target.paneID, immediately: true, onSent: {
+                backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
+            })
             else { return false }
-            terminalInputRevision &+= 1
-            backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
             return true
         }
 
@@ -945,17 +983,20 @@
                 let activePaneId
             else { return }
 
-            guard enqueueToolbarKeys(keys, paneId: activePaneId) else { return }
-            observeTerminalInput(
-                keys,
-                paneId: activePaneId,
-                windowName: window?.windowName ?? ""
-            )
+            let windowName = window?.windowName ?? ""
+            enqueueToolbarKeys(keys, paneId: activePaneId, onSent: {
+                observeTerminalInput(keys, paneId: activePaneId, windowName: windowName)
+            })
         }
 
         @discardableResult
-        private func enqueueToolbarKeys(_ keys: [TmuxKey], paneId: String, immediately: Bool = false) -> Bool {
-            externalInputSenders[paneId]?(keys, immediately) == true
+        private func enqueueToolbarKeys(
+            _ keys: [TmuxKey], paneId: String, immediately: Bool = false,
+            onSent: @escaping @MainActor () -> Void = { }
+        ) -> Bool {
+            guard externalInputSenders[paneId]?(keys, immediately, onSent) == true else { return false }
+            terminalInputRevision &+= 1
+            return true
         }
 
         private func activeVoiceInputContext() -> String? {

@@ -71,6 +71,7 @@ enum TerminalCursorTapNavigation {
         /// Callback invoked for raw escape sequences (e.g., SGR mouse events) that must be
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
+        var onPasteText: (@MainActor (String) -> Void)?
 
         /// Sends a guarded intent through the pane's ordered input queue, never
         /// raw Shift+Left. False means the stream is not currently ready.
@@ -353,6 +354,7 @@ enum TerminalCursorTapNavigation {
             cancelMouseScroll()
             questionExpansion.invalidate()
             onExpandCodexQuestions = nil
+            onPasteText = nil
             inputEnabled = false
             inputProxy.inputEnabled = false
             inputFocusUpdates.invalidate()
@@ -839,6 +841,13 @@ enum TerminalCursorTapNavigation {
             cancelMouseScroll()
             cancelCursorNavigation()
             inputProxy.prepareForExternalInput()
+        }
+
+        override func paste(_ sender: Any?) {
+            guard inputEnabled, let text = UIPasteboard.general.string, !text.isEmpty else { return }
+            prepareForExternalInput()
+            clearSelection()
+            onPasteText?(text)
         }
 
         private func forwardProxyInput(_ input: () -> Void) {

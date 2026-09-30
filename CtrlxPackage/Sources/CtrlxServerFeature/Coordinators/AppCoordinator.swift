@@ -3116,7 +3116,7 @@
 
                 // A Viewer may resize only through its explicit toolbar action.
                 // The executor rejects unmarked legacy automatic requests. On
-                // success, publish the dimensions refreshed by `resizePane` so
+                // success, publish the layout refreshed by `fitWindow` so
                 // the Host and every Viewer converge on the new shared grid.
                 if case .resizeTmuxPane = command.command {
                     let response = await executor.execute(command)
@@ -3426,7 +3426,9 @@
                     sidebarSortMode: await self?.settings.sidebarSortMode.rawValue,
                     sharedTerminalLayouts: sharedTerminalLayouts,
                     supportsDirectoryBrowsing: true,
-                    supportsAgentWindowLaunch: true
+                    supportsAgentWindowLaunch: true,
+                    supportsTerminalPaste: true,
+                    supportsTerminalFit: true
                 )
             }
 

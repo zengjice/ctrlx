@@ -2122,17 +2122,17 @@ final public class TmuxService {
 
     /// Loads `content` into a named tmux buffer and pastes it into `target`,
     /// preserving bracketed-paste markers so apps that have enabled DEC mode
-    /// 2004 see it as a single paste event. Used by the file-drop flow:
-    /// `content` is the shell-escaped, space-separated path string from
-    /// `DroppedPathFormatter`.
+    /// 2004 see it as a single paste event. Clipboard callers preserve LF bytes;
+    /// file drops retain tmux's normal newline conversion.
     ///
-    /// `bufferName` is fixed per-call so concurrent drops don't trample tmux's
+    /// `bufferName` is unique per-call so concurrent pastes don't trample tmux's
     /// global anonymous buffer. `paste-buffer -d` deletes the named buffer
     /// after pasting so it doesn't accumulate across drops.
     public func loadAndPasteBuffer(
         target: String,
         content: String,
-        bufferName: String
+        bufferName: String,
+        preserveLineFeeds: Bool = false
     ) async throws {
         // Tmux's `-` form reads from stdin, but our ProcessRunner doesn't
         // expose stdin — write to a tmp file and pass the path instead.
@@ -2154,13 +2154,15 @@ final public class TmuxService {
             throw TmuxError.commandFailed(message: load.stderrString)
         }
 
-        let paste = try await runTmuxCommand([
+        var pasteArguments = [
             "paste-buffer",
             "-p", // honor bracketed-paste mode
             "-d", // delete the named buffer afterwards
             "-b", bufferName,
             "-t", target,
-        ])
+        ]
+        if preserveLineFeeds { pasteArguments.append("-r") }
+        let paste = try await runTmuxCommand(pasteArguments)
         guard paste.isSuccess else {
             throw TmuxError.commandFailed(message: paste.stderrString)
         }
@@ -2189,6 +2191,26 @@ final public class TmuxService {
         // Publish the authoritative dimensions immediately. This drives both
         // the Host UI and SessionState broadcast after a remote Viewer requests
         // a fit, instead of waiting for the next periodic pane refresh.
+        await refreshPanes()
+    }
+
+    /// Explicit Viewer fit keeps the current split tree and relative sizes.
+    public func fitWindow(_ target: String, width: Int, height: Int) async throws {
+        let snapshot = try await runTmuxCommand([
+            "display-message", "-p", "-t", target, "#{window_id}\t#{window_layout}",
+        ])
+        guard snapshot.isSuccess else { throw TmuxError.commandFailed(message: snapshot.stderrString) }
+        let fields = snapshot.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\t")
+        guard fields.count == 2, let layout = TmuxLayoutParser.parse(fields[1]),
+              let fitted = TmuxWindowFitLayout.layoutString(layout, width: width, height: height) else {
+            throw TmuxError.commandFailed(message: "Terminal size cannot fit the current pane layout")
+        }
+        // One tmux command queue: no intermediate layout is published by us.
+        let result = try await runTmuxCommand([
+            "resize-window", "-t", fields[0], "-x", String(width), "-y", String(height),
+            ";", "select-layout", "-t", fields[0], fitted,
+        ])
+        guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
         await refreshPanes()
     }
 

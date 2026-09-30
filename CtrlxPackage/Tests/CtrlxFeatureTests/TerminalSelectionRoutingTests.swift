@@ -106,6 +106,34 @@
             #expect(sentBytes == 0)
         }
 
+        @Test("System paste stays one semantic operation regardless of mirrored bracketed mode", arguments: [false, true])
+        func systemPaste(bracketed: Bool) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            view.feed(text: bracketed ? "\u{1b}[?2004h> input" : "\u{1b}[?2004l> input")
+            var pastes: [String] = []
+            var keys: [TmuxKey] = []
+            var raw: [Data] = []
+            view.onPasteText = { pastes.append($0) }
+            view.onInput = { keys += $0 }
+            view.onRawInput = { raw.append($0) }
+            let text = "first\r\n中🙂\nlast\n"
+            UIPasteboard.general.string = text
+            try sendMenuAction(#selector(view.paste(_:)), from: proxy)
+            #expect(pastes == [text])
+            #expect(keys.isEmpty)
+            #expect(raw.isEmpty)
+            #expect(proxy.isFirstResponder)
+            #expect(!view.selectionActive)
+            view.updateInput(isEnabled: false, keyboardRequested: false)
+            view.paste(nil)
+            #expect(pastes.count == 1)
+            view.invalidateInput()
+            view.paste(nil)
+            #expect(pastes.count == 1)
+        }
+
         @Test("Body double-tap Copy ignores the native shadow editor")
         func bodyCopyAction() async throws {
             let (window, view) = await makeView()
@@ -611,7 +639,9 @@
                 let shadowText = proxy.text
                 let shadowSelection = proxy.selectedRange
                 var sentKeys: [TmuxKey] = []
+                var pastedText: [String] = []
                 view.onInput = { sentKeys += $0 }
+                view.onPasteText = { pastedText.append($0) }
                 fixture.tap(view, count: tapCount, column: 3, row: 1)
                 try await Task.sleep(for: .milliseconds(300))
 
@@ -639,7 +669,8 @@
                 try await Task.sleep(for: .milliseconds(300))
                 XCTAssertTrue(menu.isMenuVisible)
                 XCTAssertTrue(UIApplication.shared.sendAction(#selector(view.paste(_:)), to: nil, from: menu, for: nil))
-                XCTAssertEqual(sentKeys, [.text("paste"), .space, .text("once")])
+                XCTAssertEqual(pastedText, ["paste once"])
+                XCTAssertTrue(sentKeys.isEmpty)
                 XCTAssertTrue(proxy.isFirstResponder)
             }
         }

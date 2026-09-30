@@ -84,6 +84,24 @@ struct AgentBackgroundMonitoringPolicyTests {
         #expect(!cancelledRecall)
     }
 
+    @Test("Clipboard newlines do not submit a prompt or consume the later Send")
+    func pasteOnlyEditsDraft() {
+        var input = AgentPromptInputAccumulator()
+        input.recordPaste("first\r\nsecond\n")
+        let navigation = input.consume([.left])
+        let submitted = input.consume([.enter])
+        let repeated = input.consume([.enter])
+        #expect(!navigation)
+        #expect(submitted)
+        #expect(!repeated)
+        input.recordPaste("discard\n")
+        let cancelled = input.consume([.ctrl("u"), .enter])
+        #expect(!cancelled)
+        input.recordPaste(" \n\r\n")
+        let whitespace = input.consume([.enter])
+        #expect(!whitespace)
+    }
+
     @Test("Non-blocking Agent states accept terminal prompts")
     func terminalPromptStates() {
         #expect(AgentBackgroundMonitoringPolicy.canSubmitPrompt(from: .idle))

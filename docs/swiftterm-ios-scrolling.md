@@ -37,6 +37,58 @@ iOS-only regression suite. The sections below retain historical implementation
 examples; old minimum-terminal-height constraints, scroll-blocking flags and
 fixed-delay presentation snippets are **not** the current implementation.
 
+## Explicit fit and clipboard paste (September 30, 2026)
+
+The window-title menu provides **Fit Terminal to Screen**. It measures each
+terminal's available viewport using its actual font cell size, excluding
+telemetry and controls, then combines the pane layout into one window grid.
+Each split is constrained by its smallest proportional child capacity, not a
+sum that assumes tmux will distribute those measured sizes automatically.
+`ResizeTmuxPane(userInitiated: true)` targets the stable tmux window ID. This
+changes the Host and every Viewer; rotation, keyboard presentation and layout
+changes only update the available capacity and never automatically resize.
+The inner terminal continues to use the Host's authoritative dimensions.
+The Host snapshots the current layout, scales each split proportionally (with
+at least two rows/columns per leaf), and applies the resized grid and layout in
+one tmux command queue. An impossible target fails before changing the window.
+The Viewer enables Fit only when the Host advertises `supportsTerminalFit`.
+
+The iOS system Paste action sends one `PasteTerminalText` operation, not
+`TmuxKey.from(bytes:)`. Both Viewer and Host serialize it with keyboard input.
+The Host loads a unique tmux buffer and uses `paste-buffer -p -r -d`: tmux checks
+the receiving app's bracketed-paste flag; LF, CRLF, Unicode and trailing line
+breaks remain intact. No extra Enter is appended. Background monitoring records
+a draft only after successful paste acknowledgement, not at enqueue time and
+not as a submitted turn. Typing, Send and slash-command draft resets follow the
+same FIFO completion callbacks; failed/cancelled operations do not update the
+draft or discard legitimate earlier typing. Input-revision guards still update
+immediately when input is queued. Ordinary typing, Send, selection and file-drop
+pastes retain their existing paths.
+
+Clipboard text is limited to 64 KiB of UTF-8 to fit the encrypted relay frame.
+The Host rejects embedded bracketed-paste terminators, reports errors without
+retrying as keystrokes, and does not log clipboard contents. A receiving app
+without bracketed-paste support keeps its own normal multiline input semantics;
+CtrlX does not flatten its text. Both iOS and the Host Mac need this command
+support; the content-blind Relay needs no deployment.
+`supportsTerminalPaste` is an optional Host snapshot capability. Missing or
+false means paste fails immediately with a Host-update hint, before creating
+a response waiter or sending the unknown command. Later keys continue normally;
+there is no multiline-keystroke fallback. Ordinary viewing/typing still works
+with older Hosts. Both capabilities reset on disconnect or a new handshake.
+
+Regression coverage includes whole-window sizing, wire round trips, Viewer and
+Host input FIFO (real encrypted WebSockets), and byte-exact isolated tmux probes
+with bracketed mode on/off. UIKit menu and keyboard behavior still require
+iPhone acceptance after installation.
+Real tmux Fit tests cover unequal horizontal/vertical and nested splits,
+reordered pane identities, shrink/grow/repeat operations and rejected tiny grids.
+Encrypted transport tests cover absent/false capabilities, input after a rejected
+paste, later capability offers and clearing them on disconnect.
+Prompt-accumulator regressions cover delayed paste acknowledgement followed by
+Enter, rejected paste with/without an existing draft, coalesced edit ordering,
+slash-command resets and cancelled sends.
+
 ## Application-owned fullscreen scrolling (September 29, 2026)
 
 Mouse-mode pans send SGR wheel input to the Host app instead of scrolling the
