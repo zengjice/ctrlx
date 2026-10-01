@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.45 — Packaging disk checks and worktree-local storage management
+
+- Check available build-volume space before packaging and warn below 20 GiB.
+  Add opt-in `--save-space` to local Mac/iOS packaging, removing only the selected
+  platform's compiler intermediates and module/SDK caches after success while
+  preserving installable apps, packages and downloaded dependencies.
+- Keep incremental compilation by default. Remove packaging indexes, duplicate
+  dependency copies and verified public-download copies from completed releases;
+  retain publication evidence and preserve failed or active publication downloads.
+- Add offline regressions for cleanup boundaries, successful/failed packaging,
+  argument handling, disk warnings and primary/linked-worktree isolation.
+- Include Relay source changes that bound WebSocket memory, close replaced/stale
+  connections, add heartbeat/close deadlines and break the pairing/APNs retain cycle.
+  These require a separate Relay deployment to take effect in production.
+- Release validation: brand/technical boundaries and 143 offline script tests
+  passed; 2,351 Swift tests passed. Two existing Apple Intelligence evaluations
+  remain unavailable on this Mac (`deviceNotEligible`), so the full-suite result
+  is not all green.
+- This publication packages Mac only. No Relay deployment, iOS package/install
+  or local Mac replacement is performed.
+
 ## 3.0.44 — Native conversation forks, terminal updates and internal naming cleanup
 
 - Add native Codex and Claude Code conversation forks on Mac and iOS, using
