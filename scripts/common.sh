@@ -128,7 +128,11 @@ assert_git_worktree() {
 }
 
 prune_local_artifacts() {
-    python3 "$SCRIPT_DIR/clean-build.py" prune --artifact "$1" --yes
+    local arguments=(prune --artifact "$1" --yes)
+    if [ "$#" -eq 2 ]; then
+        arguments+=(--platform "$2")
+    fi
+    python3 "$SCRIPT_DIR/clean-build.py" "${arguments[@]}"
 }
 
 find_apple_development_identity() {

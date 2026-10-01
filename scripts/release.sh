@@ -77,6 +77,8 @@ xcodebuild archive \
     -onlyUsePackageVersionsFromResolvedFile \
     -skipMacroValidation \
     -skipPackagePluginValidation \
+    COMPILER_INDEX_STORE_ENABLE=NO \
+    INDEX_ENABLE_DATA_STORE=NO \
     CTRLX_BUILD_STAMP="$BUILD_STAMP" \
     CTRLX_SOURCE_REVISION="$SOURCE_REVISION" \
     DEVELOPMENT_TEAM="$CTRLX_MAC_DEVELOPMENT_TEAM" \

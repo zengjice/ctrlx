@@ -52,6 +52,8 @@ log_info "Building CtrlX $VERSION from $PROJECT_ROOT"
     -onlyUsePackageVersionsFromResolvedFile \
     -skipMacroValidation \
     -skipPackagePluginValidation \
+    COMPILER_INDEX_STORE_ENABLE=NO \
+    INDEX_ENABLE_DATA_STORE=NO \
     CTRLX_BUILD_STAMP="$BUILD_STAMP" \
     CTRLX_SOURCE_REVISION="$SOURCE_REVISION" \
     CODE_SIGN_STYLE=Manual \
@@ -83,7 +85,7 @@ fi
     "$DMG_PATH"
 /usr/bin/hdiutil verify "$DMG_PATH" >/dev/null
 write_artifact_metadata "$DMG_PATH"
-prune_local_artifacts "$DMG_PATH"
+prune_local_artifacts "$DMG_PATH" macOS
 
 log_success "DMG: $DMG_PATH"
 log_success "Build: $VERSION ($(get_build_number)) · $BUILD_STAMP · $SOURCE_REVISION"

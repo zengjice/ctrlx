@@ -57,9 +57,28 @@ failed builds. Installable apps in DerivedData remain available for device
 installation. After successful packaging, each platform retains the just-built
 package and the most recently modified other package in `dist/`; older packages
 and their `.sha256`, `.manifest.json`, and `.previous` files are deleted.
-This also applies to formal Mac releases, but never prunes Qcloud or Inbox files.
+Release and Debug packages are retained independently. This also applies to
+formal Mac releases, but never prunes Qcloud or Inbox files.
 
-Incremental build caches, downloaded dependencies and Chromium SDKs are kept
+Command-line packaging disables index generation. After success, local Mac/iOS
+packaging removes only that platform's old `Index.noindex` and duplicate DerivedData
+`SourcePackages` directory (when the shared dependency directory exists).
+Build intermediates, compilation/module caches and installable apps are kept.
+Do not run concurrent builds or installs against the same DerivedData directory.
+
+Packaging also removes `dist/qcloud-release/<version>/public-CtrlX-<version>.dmg`
+copies whose latest publication report records success and whose SHA-256 still
+matches. The maintainer's Mac publisher performs the same cleanup immediately
+after saving a successful report and releasing its lock. Reports, hashes, logs,
+installer backups and actual distribution packages remain; failed, active,
+unreported or mismatched downloads are preserved for investigation.
+To preview cleanup of these verified copies without building:
+
+```bash
+python3 scripts/clean-build.py receipts
+```
+
+Incremental build caches, shared downloaded dependencies and Chromium SDKs are kept
 to avoid repeated downloads and full rebuilds. For manual deep cleanup:
 
 ```bash

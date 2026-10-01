@@ -73,6 +73,8 @@ log_info "Building CtrlX $VERSION ($CONFIGURATION) from $PROJECT_ROOT"
     -onlyUsePackageVersionsFromResolvedFile \
     -skipMacroValidation \
     -skipPackagePluginValidation \
+    COMPILER_INDEX_STORE_ENABLE=NO \
+    INDEX_ENABLE_DATA_STORE=NO \
     CTRLX_BUILD_STAMP="$BUILD_STAMP" \
     CTRLX_SOURCE_REVISION="$SOURCE_REVISION" \
     CODE_SIGNING_ALLOWED=NO \
@@ -156,7 +158,7 @@ fi
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload "$IPA_PATH"
 )
 write_artifact_metadata "$IPA_PATH"
-prune_local_artifacts "$IPA_PATH"
+prune_local_artifacts "$IPA_PATH" iOS
 
 log_success "IPA: $IPA_PATH"
 log_success "App: $APP_PATH"

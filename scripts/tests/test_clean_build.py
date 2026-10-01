@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Cleanup regressions using disposable fixtures, never real build caches."""
 import contextlib
+import fcntl
+import hashlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -21,9 +24,9 @@ class BuildCleanupTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="ctrlx-clean-build-test-")
         self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name) / "worktree with spaces"
+        self.root = Path(directory.name).resolve() / "worktree with spaces"
         self.root.mkdir()
-        self.other = Path(directory.name) / "other-worktree"
+        self.other = Path(directory.name).resolve() / "other-worktree"
         self.other.mkdir()
 
     def file(self, relative, root=None):
@@ -43,6 +46,21 @@ class BuildCleanupTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             storage.clean(self.root, targets, apply)
         return output.getvalue()
+
+    def publication(self, version="3.0.3", status="published"):
+        stage = f"dist/qcloud-release/{version}"
+        self.file(f"{stage}/publish.lock")
+        public = self.file(f"{stage}/public-CtrlX-{version}.dmg")
+        report = self.file(f"{stage}/publish-report.json")
+        report.write_text(json.dumps({
+            "version": version, "artifact": f"CtrlX-{version}.dmg", "status": status,
+            "sha256": hashlib.sha256(public.read_bytes()).hexdigest(),
+        }))
+        return public, report
+
+    def clean_receipts(self, apply=True):
+        with contextlib.ExitStack() as locks:
+            return self.clean(storage.receipt_targets(self.root, locks), apply)
 
     def test_keeps_current_and_newest_other_package_with_metadata(self):
         for extension in ("ipa", "dmg"):
@@ -76,6 +94,151 @@ class BuildCleanupTests(unittest.TestCase):
         current = self.artifact("3.0.3")
         self.clean(storage.artifact_targets(self.root, current))
         self.assertTrue(all(path.exists() for path in packages))
+
+    def test_debug_and_release_packages_are_pruned_independently(self):
+        release = [self.artifact(f"3.0.{i}", timestamp=i) for i in range(4)]
+        old = self.artifact("3.0.1-Debug", timestamp=1)
+        recent = self.artifact("3.0.2-Debug", timestamp=2)
+        current = self.artifact("3.0.3-Debug", timestamp=3)
+        self.clean(storage.artifact_targets(self.root, current))
+        self.assertFalse(old.exists())
+        self.assertTrue(recent.exists())
+        self.assertTrue(current.exists())
+        self.assertTrue(all(path.exists() for path in release))
+        self.clean(storage.artifact_targets(self.root, release[-1]))
+        self.assertEqual(sum(path.exists() for path in release), 2)
+        self.assertTrue(recent.exists())
+        self.assertTrue(current.exists())
+
+    def test_packaging_cleans_only_own_platform_index_and_duplicate_dependencies(self):
+        current = self.artifact("3.0.3")
+        removed = [self.file(f".build-local/DerivedData/iOS/{name}/fixture")
+                   for name in ("Index.noindex", "SourcePackages")]
+        kept = [self.file(name) for name in (
+            ".build-local/SourcePackages/checkouts/dependency.swift",
+            ".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o",
+            ".build-local/DerivedData/iOS/Build/Products/Release-iphoneos/CtrlX.app/executable",
+            ".build-local/DerivedData/iOS/CompilationCache.noindex/cached.bin",
+            ".build-local/DerivedData/iOS/ModuleCache.noindex/module.pcm",
+            ".build-local/DerivedData/macOS/Index.noindex/fixture",
+            ".build-local/DerivedData/macOS/SourcePackages/checkouts/dependency.swift",
+            "Config/Local.xcconfig", "browser-profile/Cookies",
+        )]
+        self.clean(storage.packaging_cache_targets(self.root, current))
+        self.assertTrue(all(not path.exists() for path in removed))
+        self.assertTrue(all(path.exists() for path in kept))
+
+    def test_macos_packaging_cleans_macos_index_not_ios(self):
+        current = self.artifact("3.0.3", "dmg")
+        removed = self.file(".build-local/DerivedData/macOS/Index.noindex/fixture")
+        kept = self.file(".build-local/DerivedData/iOS/Index.noindex/fixture")
+        self.clean(storage.packaging_cache_targets(self.root, current))
+        self.assertFalse(removed.exists())
+        self.assertTrue(kept.exists())
+
+    def test_derived_dependencies_preserved_without_shared_cache(self):
+        current = self.artifact("3.0.3")
+        kept = self.file(".build-local/DerivedData/iOS/SourcePackages/fixture")
+        self.clean(storage.packaging_cache_targets(self.root, current))
+        self.assertTrue(kept.exists())
+
+    def test_packaging_cache_symlink_rejected(self):
+        current = self.artifact("3.0.3")
+        outside = self.file("index/fixture", self.other)
+        derived = self.root / ".build-local/DerivedData/iOS"
+        derived.mkdir(parents=True)
+        (derived / "Index.noindex").symlink_to(outside.parent, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            storage.packaging_cache_targets(self.root, current)
+        self.assertTrue(outside.exists())
+
+    def test_successful_public_copy_removed_but_all_release_evidence_preserved(self):
+        public, report = self.publication()
+        artifact = self.artifact("3.0.3", "dmg")
+        kept = [report, artifact, *[self.file(f"dist/qcloud-release/3.0.3/{name}") for name in (
+            "package.log", "install-mac.sh.before", "README.md", "public-install-mac.sh",
+        )]]
+        self.clean_receipts()
+        self.assertFalse(public.exists())
+        self.assertTrue(all(path.exists() for path in kept))
+
+    def test_receipt_preview_and_repeated_cleanup(self):
+        public, report = self.publication()
+        self.assertIn("Preview only", self.clean_receipts(apply=False))
+        self.assertTrue(public.exists())
+        self.clean_receipts()
+        self.assertIn("Nothing to clean", self.clean_receipts())
+        self.assertTrue(report.exists())
+
+    def test_failed_or_started_publications_preserved(self):
+        for version, status in (("3.0.1", "failed"), ("3.0.2", "started")):
+            public, _ = self.publication(version, status)
+            self.clean_receipts()
+            self.assertTrue(public.exists())
+
+    def test_latest_failed_retry_preserves_download_despite_prior_success(self):
+        public, report = self.publication()
+        os.utime(report, (1, 1))
+        self.file("dist/qcloud-release/3.0.3/publish-report-2.json").write_text(
+            json.dumps({"status": "failed"}))
+        self.clean_receipts()
+        self.assertTrue(public.exists())
+
+    def test_latest_successful_retry_is_cleaned(self):
+        public, report = self.publication(status="already published; verified")
+        newer = self.file("dist/qcloud-release/3.0.3/publish-report-2.json")
+        newer.write_text(report.read_text())
+        report.write_text(json.dumps({"status": "failed"}))
+        os.utime(report, (1, 1))
+        self.clean_receipts()
+        self.assertFalse(public.exists())
+        self.assertTrue(newer.exists())
+
+    def test_mismatched_and_unreported_downloads_preserved(self):
+        public, _ = self.publication()
+        public.write_bytes(b"different bytes")
+        unreported = self.file("dist/qcloud-release/3.0.1/public-CtrlX-3.0.1.dmg")
+        unknown = self.file("dist/qcloud-release/custom/public-CtrlX-3.0.3.dmg")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.clean_receipts()
+        self.assertTrue(all(path.exists() for path in (public, unreported, unknown)))
+
+    def test_malformed_or_wrong_identity_report_preserves_download(self):
+        public, report = self.publication()
+        valid = json.loads(report.read_text())
+        for contents in ("invalid json", "[]", json.dumps({**valid, "version": "3.0.2"}),
+                         json.dumps({**valid, "artifact": "../../outside"}),
+                         json.dumps({**valid, "sha256": None})):
+            with self.subTest(contents=contents), contextlib.redirect_stderr(io.StringIO()):
+                report.write_text(contents)
+                self.clean_receipts()
+                self.assertTrue(public.exists())
+
+    def test_active_publication_skipped_and_lock_released_after_cleanup(self):
+        public, _ = self.publication()
+        with (public.parent / "publish.lock").open("r") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.clean_receipts()
+            self.assertIn("Skipping active publication", output.getvalue())
+            self.assertTrue(public.exists())
+        self.clean_receipts()
+        self.assertFalse(public.exists())
+        with (public.parent / "publish.lock").open("r") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_symlinked_receipt_or_report_rejected(self):
+        public, report = self.publication()
+        outside = self.file("sentinel", self.other)
+        for path in (public, report):
+            contents = path.read_bytes()
+            path.unlink()
+            path.symlink_to(outside)
+            with self.assertRaises(ValueError):
+                self.clean_receipts()
+            self.assertTrue(outside.exists())
+            path.unlink()
+            path.write_bytes(contents)
 
     def test_two_packages_require_no_cleanup(self):
         self.artifact("3.0.1")
@@ -201,12 +364,54 @@ class BuildCleanupTests(unittest.TestCase):
         self.assertIn("Preview only", result.stdout)
         self.assertTrue(cache.exists())
 
+    def test_prune_cli_combines_cleanup_without_touching_other_worktree(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        script = scripts / "clean-build.py"
+        shutil.copy2(SCRIPTS / "clean-build.py", script)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        old = self.artifact("3.0.1", timestamp=1)
+        self.artifact("3.0.2", timestamp=2)
+        current = self.artifact("3.0.3", timestamp=3)
+        public, report = self.publication()
+        index = self.file(".build-local/DerivedData/iOS/Index.noindex/fixture")
+        app = self.file(".build-local/DerivedData/iOS/Build/Products/CtrlX.app/executable")
+        outside = self.file("dist/qcloud-release/3.0.3/public-CtrlX-3.0.3.dmg", self.other)
+        arguments = ["python3", str(script), "prune", "--artifact", str(current), "--platform", "iOS"]
+        result = subprocess.run(arguments, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(path.exists() for path in (old, public, index)))
+        # The formal release uses temporary DerivedData, not the local packaging cache.
+        result = subprocess.run(arguments[:-2], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(str(index.parent), result.stdout)
+        result = subprocess.run([*arguments[:-1], "macOS", "--yes"], text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(all(path.exists() for path in (old, public, index)))
+        result = subprocess.run([
+            "bash", "-c", 'SCRIPT_DIR="$1/scripts"; source "$2"; prune_local_artifacts "$3" iOS',
+            "cleanup-test", str(self.root), str(SCRIPTS / "common.sh"), str(current),
+        ], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(not path.exists() for path in (old, public, index)))
+        self.assertTrue(all(path.exists() for path in (current, report, app, outside)))
+
+    def test_packaging_disables_indexing_without_disabling_incremental_compilation(self):
+        for name in ("package-local-ios.sh", "package-local-macos.sh", "release.sh"):
+            with self.subTest(script=name):
+                source = (SCRIPTS / name).read_text()
+                self.assertIn("COMPILER_INDEX_STORE_ENABLE=NO", source)
+                self.assertIn("INDEX_ENABLE_DATA_STORE=NO", source)
+                self.assertNotIn("COMPILATION_CACHE_ENABLE_CACHING=NO", source)
+                self.assertNotIn("clean-build.py\" deep", source)
+
     def test_packaging_prunes_only_after_metadata_is_written(self):
-        for name, variable in (("package-local-ios.sh", "IPA_PATH"),
-                               ("package-local-macos.sh", "DMG_PATH"), ("release.sh", "DMG_PATH")):
+        for name, variable, platform in (("package-local-ios.sh", "IPA_PATH", " iOS"),
+                                         ("package-local-macos.sh", "DMG_PATH", " macOS"),
+                                         ("release.sh", "DMG_PATH", "")):
             with self.subTest(script=name):
                 script = (SCRIPTS / name).read_text()
-                self.assertIn(f'write_artifact_metadata "${variable}"\nprune_local_artifacts "${variable}"', script)
+                self.assertIn(f'write_artifact_metadata "${variable}"\nprune_local_artifacts "${variable}"{platform}\n', script)
 
     def test_packaging_traps_clean_temporary_copies_on_success_and_failure(self):
         for platform in ("ios", "macos"):

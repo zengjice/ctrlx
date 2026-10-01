@@ -139,7 +139,9 @@ signs and verifies the result, and defaults to an optimized Release build:
 - Integrity metadata: adjacent `.sha256` and `.manifest.json` files
 
 Packaging deletes temporary App copies on exit and keeps two local IPA/DMG
-packages per platform. Build/download caches remain worktree-local and reusable.
+packages per platform/configuration. Successful packaging removes old platform
+indexes, duplicate dependency copies and completed public-download verification
+copies; reusable build/download caches and installable apps remain worktree-local.
 Use `python3 scripts/clean-build.py deep` to preview deep cleanup; add `--yes`
 only when builds and device installs in that worktree are stopped. See `RELEASE.md`.
 
