@@ -217,12 +217,12 @@ private struct SidebarPreview: View {
                     SessionFieldsView(
                         fields: fields,
                         customDescription: "My Feature Branch",
-                        projectName: isTerminal ? nil : "Gallager",
+                        projectName: isTerminal ? nil : "CtrlX",
                         sessionName: "dev",
                         windowName: "terminal 1",
                         terminalTitle: isTerminal ? nil : "claude",
                         command: isTerminal ? "zsh" : "claude",
-                        currentPath: "~/Development/Gallager",
+                        currentPath: "~/Development/CtrlX",
                         gitBranch: "feature/sidebar-git-branch",
                         latestEvent: isTerminal ? nil : "Reading file Package.swift"
                     )

@@ -254,7 +254,7 @@ private let previewOverview = UsageOverview(
     todayCommits: 2,
     todayPullRequests: 1,
     projects: [
-        ProjectUsage(projectPath: "/work/Gallager", projectName: "Gallager", costUSD: 2, tokens: 28_000, commits: 2, pullRequests: 1, sessionCount: 2),
+        ProjectUsage(projectPath: "/work/CtrlX", projectName: "CtrlX", costUSD: 2, tokens: 28_000, commits: 2, pullRequests: 1, sessionCount: 2),
         ProjectUsage(projectPath: "/work/relay", projectName: "relay", costUSD: 1.20, tokens: 14_100, commits: 0, pullRequests: 0, sessionCount: 2),
     ],
     days: [

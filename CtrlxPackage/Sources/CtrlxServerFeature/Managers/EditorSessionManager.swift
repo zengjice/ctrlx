@@ -17,7 +17,7 @@
 
     /// Manages active prompt editor sessions across all panes.
     ///
-    /// When the Gallager CLI sends an `editor.open` request via the API socket,
+    /// When the CtrlX CLI sends an `editor.open` request via the API socket,
     /// this manager:
     /// 1. Reads the file content
     /// 2. Creates an EditorSession

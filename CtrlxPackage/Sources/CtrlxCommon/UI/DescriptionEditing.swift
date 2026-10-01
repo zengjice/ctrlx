@@ -51,7 +51,7 @@ public struct DescriptionContextMenuButtons: View {
 /// correctly on macOS and the emoji popover anchors to the right-clicked /
 /// long-pressed row.
 ///
-/// "Set/Edit Emoji" presents a ``GallagerEmojiPicker`` — anchored to the row as
+/// "Set/Edit Emoji" presents a ``CtrlxEmojiPicker`` — anchored to the row as
 /// a popover on macOS, as a half/large detent sheet on iOS (an anchored popover
 /// is too cramped to be usable at iPhone screen widths).
 ///
@@ -201,7 +201,7 @@ public extension DescriptionEditingModifier where AdditionalMenu == EmptyView {
     }
 }
 
-/// Presents the ``GallagerEmojiPicker`` view: an anchored popover on macOS
+/// Presents the ``CtrlxEmojiPicker`` view: an anchored popover on macOS
 /// where it sits next to the right-clicked row at a fixed size, and a
 /// half-height detent sheet on iOS where a tiny anchored popover would crop
 /// the grid.
@@ -214,12 +214,12 @@ private struct EmojiEntryPresentation: ViewModifier {
     func body(content: Content) -> some View {
         #if os(macOS)
             content.popover(isPresented: $isPresented, arrowEdge: .leading) {
-                GallagerEmojiPicker(selectedEmoji: pickerBinding)
+                CtrlxEmojiPicker(selectedEmoji: pickerBinding)
                     .frame(width: 360, height: 380)
             }
         #else
             content.sheet(isPresented: $isPresented) {
-                GallagerEmojiPicker(selectedEmoji: pickerBinding)
+                CtrlxEmojiPicker(selectedEmoji: pickerBinding)
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }

@@ -682,7 +682,7 @@ public enum FileBrowserScenario {
         TestStep.log("Phase 30: HTML viewer preserves scroll (window 1)")
 
         TestStep.macWaitForElement(titled: "page.html", timeout: 5)
-        // Bring Gallager frontmost so the WKWebView isn't render-throttled while
+        // Bring CtrlX frontmost so the WKWebView isn't render-throttled while
         // it loads and scrolls. On a CI box that doesn't keep the app active the
         // web content process pauses when the window is occluded, leaving a blank
         // pane; `macActivate` un-occludes it before each render-dependent wait.

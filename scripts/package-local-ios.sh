@@ -10,6 +10,27 @@ LOCAL_CONFIG="$PROJECT_ROOT/Config/Local.xcconfig"
 # shellcheck source=scripts/common.sh
 source "$SCRIPT_DIR/common.sh"
 
+CONFIGURATION=Release
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --configuration)
+            [ "$#" -ge 2 ] || log_error '--configuration requires Release or Debug.'
+            CONFIGURATION="$2"
+            shift 2
+            ;;
+        --help|-h)
+            printf '%s\n' 'Usage: package-local-ios.sh [--configuration Release|Debug]' \
+                'Default: Release. Debug writes a separate -Debug.ipa for comparison.'
+            exit 0
+            ;;
+        *) log_error "Unknown argument: $1" ;;
+    esac
+done
+case "$CONFIGURATION" in
+    Release|Debug) ;;
+    *) log_error 'Configuration must be Release or Debug.' ;;
+esac
+
 assert_git_worktree
 [ -f "$LOCAL_CONFIG" ] \
     || log_error 'Missing Config/Local.xcconfig. Copy Config/Local.xcconfig.example and configure your personal team and bundle ID.'
@@ -21,9 +42,12 @@ LOCAL_BUILD_ROOT="$PROJECT_ROOT/.build-local"
 DERIVED_DATA="$LOCAL_BUILD_ROOT/DerivedData/iOS"
 SOURCE_PACKAGES="$LOCAL_BUILD_ROOT/SourcePackages"
 DIST_DIR="$PROJECT_ROOT/dist"
-APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphoneos/CtrlX.app"
+APP_PATH="$DERIVED_DATA/Build/Products/$CONFIGURATION-iphoneos/CtrlX.app"
 EXTENSION_PATH="$APP_PATH/PlugIns/CtrlxNotificationExtension.appex"
 IPA_PATH="$DIST_DIR/CtrlX-$VERSION.ipa"
+if [ "$CONFIGURATION" = Debug ]; then
+    IPA_PATH="$DIST_DIR/CtrlX-$VERSION-Debug.ipa"
+fi
 
 mkdir -p "$DERIVED_DATA" "$SOURCE_PACKAGES" "$DIST_DIR"
 PACKAGE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/package-ios.XXXXXX")"
@@ -37,11 +61,11 @@ cleanup_ios_workspace() {
 }
 trap cleanup_ios_workspace EXIT
 
-log_info "Building CtrlX $VERSION from $PROJECT_ROOT"
+log_info "Building CtrlX $VERSION ($CONFIGURATION) from $PROJECT_ROOT"
 /usr/bin/xcodebuild \
     -workspace "$PROJECT_ROOT/Ctrlx.xcworkspace" \
     -scheme Ctrlx \
-    -configuration Debug \
+    -configuration "$CONFIGURATION" \
     -destination 'generic/platform=iOS' \
     -derivedDataPath "$DERIVED_DATA" \
     -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
@@ -135,4 +159,5 @@ write_artifact_metadata "$IPA_PATH"
 prune_local_artifacts "$IPA_PATH"
 
 log_success "IPA: $IPA_PATH"
-log_success "Build: $VERSION ($(get_build_number)) · $BUILD_STAMP · $SOURCE_REVISION"
+log_success "App: $APP_PATH"
+log_success "Build: $VERSION ($(get_build_number)) · $CONFIGURATION · $BUILD_STAMP · $SOURCE_REVISION"

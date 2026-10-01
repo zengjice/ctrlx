@@ -1,7 +1,7 @@
 #if os(macOS)
     import CtrlxNetworking
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Logging
 
     /// Marshals every `PluginCore` method to a JSON-RPC request over the sidecar

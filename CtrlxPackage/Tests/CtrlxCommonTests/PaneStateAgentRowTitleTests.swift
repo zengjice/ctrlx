@@ -11,7 +11,7 @@ struct PaneStateAgentRowTitleTests {
             paneId: "%1",
             sessionName: "work",
             customDescription: "My feature work",
-            agentSession: AgentSession(paneId: "%1", detectedProjectPath: "/Users/me/Dev/Gallager")
+            agentSession: AgentSession(paneId: "%1", detectedProjectPath: "/Users/me/Dev/CtrlX")
         )
         #expect(pane.agentRowTitle == "work — My feature work")
     }
@@ -22,9 +22,9 @@ struct PaneStateAgentRowTitleTests {
             paneId: "%1",
             sessionName: "work",
             customDescription: "",
-            agentSession: AgentSession(paneId: "%1", detectedProjectPath: "/Users/me/Dev/Gallager")
+            agentSession: AgentSession(paneId: "%1", detectedProjectPath: "/Users/me/Dev/CtrlX")
         )
-        #expect(project.agentRowTitle == "work — Gallager")
+        #expect(project.agentRowTitle == "work — CtrlX")
 
         let bare = PaneState(paneId: "%2", sessionName: "scratch", agentSession: AgentSession(paneId: "%2"))
         #expect(bare.agentRowTitle == "scratch — %2")
@@ -35,9 +35,9 @@ struct PaneStateAgentRowTitleTests {
         let pane = PaneState(
             paneId: "%1",
             customDescription: "Description",
-            agentSession: AgentSession(paneId: "%1", detectedProjectPath: "/Users/me/Dev/Gallager")
+            agentSession: AgentSession(paneId: "%1", detectedProjectPath: "/Users/me/Dev/CtrlX")
         )
-        #expect(pane.agentRowTitle == "Gallager")
+        #expect(pane.agentRowTitle == "CtrlX")
     }
 
     @Test("A pane without an agent session has no agent row title")

@@ -100,7 +100,7 @@ Clear the iOS simulator's general pasteboard (pipes `/dev/null` into `simctl pbc
 Update the iOS app's `VersionCompatibility` overrides at runtime and kick a reconnect. `nil` clears the override; a non-nil value replaces it. Used by version-mismatch scenarios to simulate an in-place "app update" without relaunching.
 
 ### `iosNotificationAction(actionIdentifier: String, userText: String? = nil, reuseLast: Bool = false)`
-Simulate tapping an action button on the last actionable agent notification the iOS app received (issue #710) — e.g. `"gallager.permission.allow"` / `"gallager.permission.always"` / `"gallager.permission.deny"`, question options via `"gallager.question.option.<optionId>"`, free text via `"gallager.question.other"` + `userText`. Drives the real `NotificationActionService.performAction` submission path; the notification banner itself lives in SpringBoard, out of the harness's reach. The app waits up to ~5s for an actionable notification to arrive, so no fixed sleep is needed between the triggering `macSendHookEvent` and this step. Each tap CONSUMES the notification (a later tap waits for a fresh one); `reuseLast: true` re-taps the previously consumed notification without waiting — modeling a stale lock-screen tap on a form the agent already moved past. Fails when the app reports the action unhandled (no notification arrived, or the identifier doesn't apply to the form).
+Simulate tapping an action button on the last actionable agent notification the iOS app received (issue #710) — e.g. `"ctrlx.permission.allow"` / `"ctrlx.permission.always"` / `"ctrlx.permission.deny"`, question options via `"ctrlx.question.option.<optionId>"`, free text via `"ctrlx.question.other"` + `userText`. Drives the real `NotificationActionService.performAction` submission path; the notification banner itself lives in SpringBoard, out of the harness's reach. The app waits up to ~5s for an actionable notification to arrive, so no fixed sleep is needed between the triggering `macSendHookEvent` and this step. Each tap CONSUMES the notification (a later tap waits for a fresh one); `reuseLast: true` re-taps the previously consumed notification without waiting — modeling a stale lock-screen tap on a form the agent already moved past. Fails when the app reports the action unhandled (no notification arrived, or the identifier doesn't apply to the form).
 
 ## macOS App Steps
 
@@ -112,7 +112,7 @@ Launch the macOS app with `--e2e-test --server-url ws://127.0.0.1:8765 --tmux-so
 `appVersion`/`minRequiredPartnerVersion` work the same as on `launchIOSApp`.
 
 ### `terminateMacApp`
-Terminate the macOS app using `osascript -e 'quit app "Gallager"'`. Use at scenario start for clean state, or rely on orchestrator cleanup at the end.
+Terminate the macOS app using `osascript -e 'quit app "CtrlX"'`. Use at scenario start for clean state, or rely on orchestrator cleanup at the end.
 
 ### `macActivate`
 Bring the macOS app instance frontmost with its key window. Use before steps that depend on `NSApp.isActive` or `window.isKeyWindow` (e.g. when a previous step on a different instance stole focus).
@@ -300,7 +300,7 @@ Read a file's contents and store them in the execution context. Path supports `$
 Browser-download scenarios read saved files from `${downloadsDirPath}` — instance 0's `--downloads-dir`, a temp directory the app wipes on launch. Downloads are redirected there in E2E runs because writing to the real `~/Downloads` triggers a TCC consent prompt the unattended app can't answer (see `BrowserDownloadsAndErrorsScenario`).
 
 ### `writeFile(path: String, content: String)`
-Write a file (creating intermediate directories), replacing any existing content. Both `path` and `content` support `${var}` interpolation. Use to seed on-disk fixtures the app reads — e.g. a plugin `settings.json` under `${gallagerStateRoot}/plugins/<id>/` *before* `launchMacApp`, or a fixture file the app re-reads on demand (`CodexGuardianSuppressionScenario` rewrites a codex `config.toml` mid-scenario to flip the guardian posture). `${gallagerStateRoot}` resolves to instance 0's `--gallager-state-root`, which the orchestrator cleans up after each scenario.
+Write a file (creating intermediate directories), replacing any existing content. Both `path` and `content` support `${var}` interpolation. Use to seed on-disk fixtures the app reads — e.g. a plugin `settings.json` under `${ctrlxStateRoot}/plugins/<id>/` *before* `launchMacApp`, or a fixture file the app re-reads on demand (`CodexGuardianSuppressionScenario` rewrites a codex `config.toml` mid-scenario to flip the guardian posture). `${ctrlxStateRoot}` resolves to instance 0's `--ctrlx-state-root`, which the orchestrator cleans up after each scenario.
 
 ### `waitForFileContains(path: String, substring: String, storeAs: String, timeout: TimeInterval = 20, pollInterval: TimeInterval = 1)`
 Poll a file until it contains the given substring, then store its contents. Useful for waiting on side-effects written by the app (e.g. log files, generated artifacts) without racing.

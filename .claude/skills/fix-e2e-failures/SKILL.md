@@ -5,7 +5,7 @@ description: Investigate and fix E2E test failures from the latest test report. 
 allowed-tools:
   - AskUserQuestion
   - Read
-  - Read(/../ClaudeSpyTestResults/**)
+  - Read(/../CtrlxTestResults/**)
   - Write
   - Bash(git *)
   - Bash(${CLAUDE_SKILL_DIR}/scripts/find_failures.py *)
@@ -13,7 +13,7 @@ allowed-tools:
 
 # Fix E2E Test Failures
 
-This skill handles E2E test failures reported in the ClaudeSpyTestResults repository. It finds the latest failing report, identifies what broke, and guides the fix.
+This skill handles E2E test failures reported in the CtrlxTestResults repository. It finds the latest failing report, identifies what broke, and guides the fix.
 
 ## How failures are reported
 
@@ -30,16 +30,16 @@ Handle every failed step — don't stop at the first one.
 Run the bundled script to pull latest results and extract failures in one step:
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/find_failures.py --results-dir ../ClaudeSpyTestResults
+${CLAUDE_SKILL_DIR}/scripts/find_failures.py --results-dir ../CtrlxTestResults
 ```
 
 **Optional PR-number argument:** If the user invoked the skill with a PR number (e.g. `/fix-e2e-failures 444`), pass it through with `--pr` so the **newest run associated with that PR** is analyzed instead of the most recent failing run across all PRs:
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/find_failures.py --results-dir ../ClaudeSpyTestResults --pr 444
+${CLAUDE_SKILL_DIR}/scripts/find_failures.py --results-dir ../CtrlxTestResults --pr 444
 ```
 
-The number matches the `prNumber` field on entries in `ClaudeSpyTestResults/results/index.json`. If no argument is provided, the script defaults to the latest failing run across all PRs.
+The number matches the `prNumber` field on entries in `CtrlxTestResults/results/index.json`. If no argument is provided, the script defaults to the latest failing run across all PRs.
 
 The script outputs JSON with one of these statuses:
 - `"all_passed"` — No failures found (or the specified PR's latest run passed). Tell the user and stop.

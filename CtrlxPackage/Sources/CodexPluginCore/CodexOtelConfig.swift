@@ -15,7 +15,7 @@ import Foundation
 /// `PROJECT_LOCAL_CONFIG_DENYLIST`, whose comment notes these settings "are
 /// still supported from user, system, managed, and runtime config layers"), and
 /// it is ephemeral — nothing is written to the user's global config, so a
-/// Gallager launch can never corrupt or persist changes to the user's Codex
+/// CtrlX launch can never corrupt or persist changes to the user's Codex
 /// setup. UI launches and the new-terminal zsh integration use this SAME
 /// argument generator. Ordinary shells outside CtrlX remain untouched.
 ///

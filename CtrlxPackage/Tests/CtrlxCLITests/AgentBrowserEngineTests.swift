@@ -1,7 +1,7 @@
 import Dependencies
 import Foundation
 import Testing
-@testable import GallagerCLI
+@testable import CtrlxCLI
 
 struct AgentBrowserEngineTests {
     @Test func defaultsToVercelAndPreservesSavedAndExplicitChoices() throws {

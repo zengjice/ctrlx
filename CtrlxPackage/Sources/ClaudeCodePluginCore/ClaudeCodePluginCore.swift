@@ -2,7 +2,7 @@ import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// The Claude Code agent, behind the agent-blind `PluginCore` contract (spec §4).
 /// An in-process actor constructed from the compile-time registry.

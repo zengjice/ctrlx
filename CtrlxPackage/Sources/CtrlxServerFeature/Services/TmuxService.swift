@@ -241,8 +241,8 @@ final public class TmuxService {
         return (palette.foreground.oscValue, palette.background.oscValue)
     }
 
-    /// Path to the Gallager CLI for the `$VISUAL` environment variable.
-    /// When set, Ctrl-G in Claude Code opens the in-app prompt editor via `Gallager edit`.
+    /// Path to the CtrlX CLI for the `$VISUAL` environment variable.
+    /// When set, Ctrl-G in Claude Code opens the in-app prompt editor via `ctrlx edit`.
     public var editorCLIPath: String?
 
     /// Socket path for the API server. The CLI reads this from `$CTRLX_SOCKET`.
@@ -280,7 +280,7 @@ final public class TmuxService {
 
     /// When true, the user opted into the editor override (issue #591 §5):
     /// `export VISUAL='<editor> edit'` is typed into newly-created shell panes
-    /// (and chained onto app-launched agent commands) so Gallager's in-app
+    /// (and chained onto app-launched agent commands) so CtrlX's in-app
     /// editor wins even when the user's rc files clobber `$VISUAL`. Mirrored from
     /// `AppSettings.editorOverrideMode` by `AppCoordinator`; off by default so
     /// non-consenting users are never typed into.
@@ -301,7 +301,7 @@ final public class TmuxService {
         Self.userShellPath
     }
 
-    /// The `$VISUAL` value Gallager wants agents to see: the bundled CLI invoked
+    /// The `$VISUAL` value CtrlX wants agents to see: the bundled CLI invoked
     /// with `edit`. Nil when the CLI isn't in the bundle.
     private var ctrlxVisualValue: String? {
         guard let editorCLIPath else { return nil }
@@ -2715,16 +2715,16 @@ final public class TmuxService {
 
     // MARK: - Custom Descriptions and Colors
 
-    /// The tmux user option key used to persist Gallager custom descriptions.
+    /// The tmux user option key used to persist CtrlX custom descriptions.
     /// User options must be prefixed with `@`; tmux stores them on the session
     /// and any pane resolves the lookup via the session→window→pane chain.
     private static let descriptionOptionKey = "@ctrlx-description"
 
-    /// The tmux user option key used to persist Gallager session colors.
+    /// The tmux user option key used to persist CtrlX session colors.
     /// Stored at session scope just like `descriptionOptionKey`.
     private static let colorOptionKey = "@ctrlx-color"
 
-    /// The tmux user option key used to persist Gallager session emoji icons.
+    /// The tmux user option key used to persist CtrlX session emoji icons.
     /// Stored at session scope just like `descriptionOptionKey`.
     private static let emojiOptionKey = "@ctrlx-emoji"
 
@@ -2734,7 +2734,7 @@ final public class TmuxService {
     /// (the tmux server keeps the option for the session's lifetime). Any existing
     /// window-level overrides inside the session are cleared first so the new value
     /// applies uniformly across every window — defensive against stray overrides
-    /// from older versions of Gallager or manual `tmux set-option -w` tweaks.
+    /// from older versions of CtrlX or manual `tmux set-option -w` tweaks.
     /// - Parameters:
     ///   - description: The description text, or `nil` to clear the option.
     ///   - sessionName: The tmux session name.
@@ -2897,7 +2897,7 @@ final public class TmuxService {
     ///   - name: The option name.
     ///   - value: The option value.
     ///   - scope: The option scope (`session` or `window`). Global scope is
-    ///     unsupported — Gallager owns the tmux server.
+    ///     unsupported — CtrlX owns the tmux server.
     public enum TmuxOptionScope: Sendable {
         case session
         case window
@@ -3305,7 +3305,7 @@ final public class TmuxService {
 
     // MARK: - Editor Override (issue #591)
 
-    /// Probes whether Gallager's `$VISUAL` survives the user's rc files
+    /// Probes whether CtrlX's `$VISUAL` survives the user's rc files
     /// (issue #591 §1). Creates a detached probe session on the app-owned tmux
     /// server with `-e VISUAL=<sentinel>` and the normal `default-command`
     /// wrapper (real pty, real env, real startup), types a `printf` that echoes

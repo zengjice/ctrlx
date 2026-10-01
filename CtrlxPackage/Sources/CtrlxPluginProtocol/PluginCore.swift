@@ -33,7 +33,7 @@ public protocol PluginCore: Actor {
     /// `host.setProjects`; it MAY no-op if its data is already fresh.
     func refreshProjects() async
 
-    /// Gallager is about to auto-launch the agent in a tmux pane for a project.
+    /// CtrlX is about to auto-launch the agent in a tmux pane for a project.
     /// Return the command/env/args, or `nil` to decline. Gated upstream by the
     /// plugin's `autoRun` setting.
     func commandForLaunch(projectPath: String) async -> LaunchCommand?

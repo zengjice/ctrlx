@@ -4,7 +4,7 @@ import Foundation
 // MARK: - plugin (parent verb group, spec §14)
 
 /// `ctrlx plugin <subcommand>` — inspect and drive the in-process plugin
-/// runtime (spec §14). All state lives in the running Gallager app; these verbs
+/// runtime (spec §14). All state lives in the running CtrlX app; these verbs
 /// are thin JSON-RPC clients over the existing Unix socket.
 struct PluginCommand: ParsableCommand {
     static let configuration = CommandConfiguration(

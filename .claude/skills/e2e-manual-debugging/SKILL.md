@@ -125,14 +125,14 @@ macOS doesn't have an HTTP tree-dump endpoint (the in-app `TestAccessibilityServ
 open "/Applications/Xcode.app/Contents/Applications/Accessibility Inspector.app"
 ```
 
-In the Inspector, set the target to the running e2e Gallager process (find its PID with `pgrep -f "Gallager.*--e2e-test"`), enable "Inspection Pointer", then hover any element to see its full attribute set in real time: `AXRole`, `AXTitle`, `AXLabel` (`accessibilityLabel`), `AXValue`, `AXHelp` (`.help()`), `AXIdentifier`, `AXFrame`. This is by far the fastest way to discover what to put in `macClickButton(titled:)` or `.help(...)`.
+In the Inspector, set the target to the running e2e CtrlX process (find its PID with `pgrep -f "CtrlX.*--e2e-test"`), enable "Inspection Pointer", then hover any element to see its full attribute set in real time: `AXRole`, `AXTitle`, `AXLabel` (`accessibilityLabel`), `AXValue`, `AXHelp` (`.help()`), `AXIdentifier`, `AXFrame`. This is by far the fastest way to discover what to put in `macClickButton(titled:)` or `.help(...)`.
 
 The Inspector also shows whether the element responds to `AXPress` — if it doesn't, that's why `macClickButton` isn't working and you need `macCGClick` instead.
 
 ### B. AppleScript "entire contents" dump (scriptable, flat list)
 
 ```bash
-APP_PID=$(pgrep -f "Gallager.*--e2e-test" | head -1)
+APP_PID=$(pgrep -f "CtrlX.*--e2e-test" | head -1)
 
 osascript -e "
 tell application \"System Events\"
@@ -149,7 +149,7 @@ Produces a flat list of every AX element. Useful for grepping (`| grep -i "pairi
 osascript -e "
 tell application \"System Events\"
     tell (first process whose unix id is $APP_PID)
-        properties of every UI element of window \"Gallager\"
+        properties of every UI element of window \"CtrlX\"
     end tell
 end tell
 "
@@ -160,7 +160,7 @@ end tell
 When you need to confirm visually which window/control you're targeting:
 
 ```bash
-APP_PID=$(pgrep -f "Gallager.*--e2e-test" | head -1)
+APP_PID=$(pgrep -f "CtrlX.*--e2e-test" | head -1)
 WINDOW_ID=$(python3 -c "
 import Quartz, sys
 for w in Quartz.CGWindowListCopyWindowInfo(3, 0):
@@ -171,7 +171,7 @@ sys.exit(1)
 screencapture -x -l "$WINDOW_ID" /tmp/mac-debug.png && open /tmp/mac-debug.png
 ```
 
-This targets the e2e Gallager window specifically (not your normal one). The full snippet is in `references/utility-snippets.md`.
+This targets the e2e CtrlX window specifically (not your normal one). The full snippet is in `references/utility-snippets.md`.
 
 ### Map macOS attributes to scenario steps
 
@@ -204,10 +204,10 @@ Press Enter in the terminal where `./scripts/e2e-test.sh --interactive` is runni
 If something hung, kill leftover e2e instances explicitly (this matches what the script does on its next run):
 
 ```bash
-pkill -f "Gallager.*--e2e-test" || true
+pkill -f "CtrlX.*--e2e-test" || true
 ```
 
-`pkill -f` is safe here because it only matches processes launched with `--e2e-test`, never your real Gallager instance.
+`pkill -f` is safe here because it only matches processes launched with `--e2e-test`, never your real CtrlX instance.
 
 ## Driving the UI yourself (when --interactive isn't enough)
 
@@ -232,7 +232,7 @@ curl -s -X POST http://127.0.0.1:22087/swipe -H "Content-Type: application/json"
 **macOS click / type via AppleScript** (PID-scoped to the e2e instance):
 
 ```bash
-APP_PID=$(pgrep -f "Gallager.*--e2e-test" | head -1)
+APP_PID=$(pgrep -f "CtrlX.*--e2e-test" | head -1)
 osascript -e "
 tell application \"System Events\"
     tell (first process whose unix id is $APP_PID)
@@ -254,7 +254,7 @@ tmux -S "$SOCK" capture-pane -t "session:0.0" -p
 
 ## Coexistence with the production app
 
-The e2e instance runs alongside your real Gallager without interference: it has its own tmux socket (`/tmp/ctrlx-e2e/ctrlx-e2e.sock`), its own hook port file (`~/.ctrlx-port-test`), in-memory PreferencesService and SecretsService (no UserDefaults/Keychain pollution), and a separate process you target by `--e2e-test` PID. Your normal Gallager is safe; AppleScript/`pkill -f "Gallager.*--e2e-test"` never touches it.
+The e2e instance runs alongside your real CtrlX without interference: it has its own tmux socket (`/tmp/ctrlx-e2e/ctrlx-e2e.sock`), its own hook port file (`~/.ctrlx-port-test`), in-memory PreferencesService and SecretsService (no UserDefaults/Keychain pollution), and a separate process you target by `--e2e-test` PID. Your normal CtrlX is safe; AppleScript/`pkill -f "CtrlX.*--e2e-test"` never touches it.
 
 ## Reference
 

@@ -1,7 +1,7 @@
 #if os(macOS)
     import CryptoKit
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
 
     // MARK: - InstallError
 
@@ -685,7 +685,7 @@
             manifestURL: URL,
             trustConfirmed: Bool,
             registry: PluginRegistry,
-            paths: GallagerPaths,
+            paths: CtrlxPaths,
             session: any URLSessionProtocol,
             makeHost: @MainActor (String) -> any PluginHost,
             makeEnv: @MainActor (String) -> PluginEnv
@@ -899,7 +899,7 @@
             zip: URL,
             trustConfirmed: Bool,
             registry: PluginRegistry,
-            paths: GallagerPaths,
+            paths: CtrlxPaths,
             makeHost: @MainActor (String) -> any PluginHost,
             makeEnv: @MainActor (String) -> PluginEnv
         ) async -> Result<InstallOutcome, InstallError> {
@@ -983,7 +983,7 @@
             id: String,
             deleteState: Bool,
             registry: PluginRegistry,
-            paths: GallagerPaths
+            paths: CtrlxPaths
         ) async -> Result<Void, InstallError> {
             // Check registration and source on the MainActor.
             let checkResult: Result<Void, InstallError> = await MainActor.run {
@@ -1039,7 +1039,7 @@
 
         /// Persist the current registry state to disk. Best-effort; never traps.
         @MainActor
-        static func persistRegistry(registry: PluginRegistry, paths: GallagerPaths) {
+        static func persistRegistry(registry: PluginRegistry, paths: CtrlxPaths) {
             let prior = PluginRegistryStore.load(paths.registryPath)
             let entries = registry.listEntries().compactMap { cliEntry -> PluginRegistryEntry? in
                 guard let manifest = registry.manifest(cliEntry.id) else { return nil }
@@ -1055,7 +1055,7 @@
 
         /// Persist the registry to disk, omitting the entry for `id`. Best-effort.
         @MainActor
-        static func persistRegistryExcluding(id: String, registry: PluginRegistry, paths: GallagerPaths) {
+        static func persistRegistryExcluding(id: String, registry: PluginRegistry, paths: CtrlxPaths) {
             let prior = PluginRegistryStore.load(paths.registryPath)
             let entries = registry.listEntries().filter { $0.id != id }.compactMap { cliEntry -> PluginRegistryEntry? in
                 guard let manifest = registry.manifest(cliEntry.id) else { return nil }

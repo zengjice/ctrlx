@@ -163,7 +163,7 @@ struct EditorsSettingsView: View {
 }
 
 /// Settings for the in-app prompt editor (Ctrl-G) override (issue #591). Lets
-/// the user pick how Gallager handles a shell config that clobbers `$VISUAL`,
+/// the user pick how CtrlX handles a shell config that clobbers `$VISUAL`,
 /// and re-run the conflict probe on demand (e.g. after editing their rc files).
 struct PromptEditorOverrideSection: View {
     @Environment(AppSettings.self) private var settings
@@ -229,7 +229,7 @@ struct PromptEditorOverrideSection: View {
                     .foregroundStyle(.green)
             case .skipped:
                 // Not green: a skipped probe means we *don't know* whether
-                // Gallager's editor survives (e.g. unknown shell), so don't
+                // CtrlX's editor survives (e.g. unknown shell), so don't
                 // claim it's active.
                 Label("Probe unavailable (unknown shell or CLI not found)", symbol: .questionmarkCircle)
                     .font(.caption)

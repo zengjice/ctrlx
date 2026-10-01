@@ -1,7 +1,7 @@
 #if os(macOS)
     import CryptoKit
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 

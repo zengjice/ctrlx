@@ -1,6 +1,6 @@
 # Third-party licenses
 
-Gallager is built on these open-source projects. Each is used under its own
+CtrlX is built on these open-source projects. Each is used under its own
 license; full texts live in the linked repositories. Thank you to all of their
 authors and contributors.
 

@@ -2,12 +2,12 @@
     import CtrlxNetworking
     import Darwin
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Logging
 
     /// The one app-owned ingress socket (spec §8). A POSIX `AF_UNIX`/`SOCK_STREAM`
     /// accept-loop server (mirrors `APISocketServer`) listening at
-    /// `GallagerPaths.ingressSocketPath`.
+    /// `CtrlxPaths.ingressSocketPath`.
     ///
     /// Each connection carries one (or more) length-prefixed frames:
     /// `4-byte big-endian UInt32 length + JSON body`. The server reads a frame,
@@ -44,7 +44,7 @@
 
         /// - Parameters:
         ///   - socketPath: where to bind the ingress socket (typically
-        ///     `GallagerPaths.ingressSocketPath.path`).
+        ///     `CtrlxPaths.ingressSocketPath.path`).
         ///   - coreLookup: resolves an enabled core by `pluginID`.
         ///   - dispatcher: receives every `PluginEvent` a core returns.
         public init(

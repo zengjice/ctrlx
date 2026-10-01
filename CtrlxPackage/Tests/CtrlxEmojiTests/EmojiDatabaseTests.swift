@@ -1,5 +1,5 @@
 import Testing
-@testable import GallagerEmoji
+@testable import CtrlxEmoji
 
 /// Covers the keyword search that issue #630 is about: emoji have to be
 /// findable by their common synonyms, not just their formal Unicode name.

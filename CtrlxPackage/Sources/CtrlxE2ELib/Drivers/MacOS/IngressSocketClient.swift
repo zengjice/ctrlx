@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 import Logging
 
 /// Writes one self-identifying, length-prefixed `IngressFrame` to the app's

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find and summarize E2E test failures from the ClaudeSpyTestResults repository.
+"""Find and summarize E2E test failures from the CtrlxTestResults repository.
 
 Pulls latest results, finds the most recent failing run (or the most recent
 run for a given PR number if `--pr` is given), and outputs a structured JSON
@@ -208,8 +208,8 @@ def main():
     parser = argparse.ArgumentParser(description="Find E2E test failures")
     parser.add_argument(
         "--results-dir",
-        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "ClaudeSpyTestResults"),
-        help="Path to ClaudeSpyTestResults repository",
+        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "..", "CtrlxTestResults"),
+        help="Path to CtrlxTestResults repository",
     )
     parser.add_argument(
         "--pr",

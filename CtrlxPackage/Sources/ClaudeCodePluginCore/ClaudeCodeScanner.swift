@@ -1,6 +1,6 @@
 import CtrlxNetworking
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// Discovers Claude Code projects by scanning `~/.claude.json` +
 /// `~/.claude/projects/` (plus any extra `.claude` config folders from

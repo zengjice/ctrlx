@@ -3,11 +3,11 @@
     import Testing
     @testable import CtrlxServerFeature
 
-    @Suite("GallagerPaths")
-    struct GallagerPathsTests {
+    @Suite("CtrlxPaths")
+    struct CtrlxPathsTests {
         @Test("default layout derives from ~/.ctrlx")
         func defaultLayout() {
-            let paths = GallagerPaths()
+            let paths = CtrlxPaths()
             let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
 
             // Compare `.path` so a directory URL's trailing-slash representation
@@ -30,7 +30,7 @@
         @Test("override root redirects the whole tree and keeps registry adjacent")
         func overrideLayout() {
             let override = URL(fileURLWithPath: "/tmp/ctrlx-test-xyz/state")
-            let paths = GallagerPaths(stateRootOverride: override)
+            let paths = CtrlxPaths(stateRootOverride: override)
 
             #expect(paths.stateRoot.path == "/tmp/ctrlx-test-xyz/state")
             // registry.json stays adjacent to the redirected state/ directory.
@@ -46,7 +46,7 @@
                 .appendingPathComponent("ctrlx-paths-\(UUID().uuidString)/state")
             defer { try? FileManager.default.removeItem(at: tmp.deletingLastPathComponent()) }
 
-            let paths = GallagerPaths(stateRootOverride: tmp)
+            let paths = CtrlxPaths(stateRootOverride: tmp)
             let dir = paths.ensurePluginStateDir("echo")
 
             #expect(FileManager.default.fileExists(atPath: dir.path))

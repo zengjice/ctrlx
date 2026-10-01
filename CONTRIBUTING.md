@@ -1,10 +1,10 @@
-# Contributing to Gallager
+# Contributing to CtrlX
 
 Thanks for your interest! Issues and pull requests are welcome.
 
 ## Before you start
 
-- **Bugs / features** — open a [GitHub issue](https://github.com/gpambrozio/Gallager/issues)
+- **Bugs / features** — open a [GitHub issue](https://github.com/zengjice/ctrlx/issues)
   first for anything non-trivial so we can agree on the approach.
 - **Security issues** — never open a public issue; see [SECURITY.md](SECURITY.md).
 
@@ -21,8 +21,7 @@ Almost all code lives in the Swift package, not the Xcode project:
 | Relay server | `CtrlxPackage/Sources/CtrlxExternalServer/` |
 | Sidecar plugins | `plugins/` (Python; see [docs/plugins/sidecar-authoring.md](docs/plugins/sidecar-authoring.md)) |
 
-Internal target names still say "Ctrlx" — that's the project's pre-rename
-name, same codebase.
+Internal Swift modules use the `Ctrlx` prefix; user-facing branding is `CtrlX`.
 
 ## Building and testing
 

@@ -1,5 +1,5 @@
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// Typed, Codable settings for the Codex plugin core. Persisted to
 /// `~/.ctrlx/state/plugins/codex/settings.json` with snake_case keys (spec §11).
@@ -22,7 +22,7 @@ public struct CodexSettings: Codable, Sendable, Equatable {
     /// (issue #602), so the session's token/latency/model surface in the UI.
     /// One-way push; no prompt/tool content leaves the process
     /// (`log_user_prompt = false`). Opt-out for users who manage their own
-    /// `[otel]` config or want zero telemetry from Gallager-launched panes.
+    /// `[otel]` config or want zero telemetry from CtrlX-launched panes.
     public var exportTelemetry: Bool
 
     public init(

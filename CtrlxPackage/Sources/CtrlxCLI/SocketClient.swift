@@ -1,6 +1,6 @@
 import Foundation
 
-/// Connects to the Gallager app's Unix domain socket and sends JSON-RPC requests.
+/// Connects to the CtrlX app's Unix domain socket and sends JSON-RPC requests.
 enum SocketClient {
     /// Resolves the socket path from environment or default.
     static var socketPath: String {

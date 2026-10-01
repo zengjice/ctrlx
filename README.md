@@ -81,7 +81,8 @@ See [Self-hosting CtrlX Relay](docs/self-hosting.md) and the
 
 Building requires a recent Xcode, Swift 6.3 or later, and macOS 15 or later.
 Open `Ctrlx.xcworkspace` and use scheme `CtrlxServer` for macOS or
-`Ctrlx` for iOS. Internal targets retain their historical `Ctrlx*` names.
+`Ctrlx` for iOS. Internal Swift modules use the `Ctrlx*` prefix; product branding
+is `CtrlX`.
 
 ```bash
 swift test --package-path CtrlxPackage

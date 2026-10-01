@@ -2,7 +2,7 @@
     import CtrlxCommon
     import Dependencies
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Logging
     import Observation
 
@@ -25,7 +25,7 @@
         public let displayName: String
         public let newVersion: String
         /// true when the sidecar could not be hot-swapped (plugin had active
-        /// sessions), so restarting Gallager is required too.
+        /// sessions), so restarting CtrlX is required too.
         public let needsAppRestart: Bool
         public var id: String { pluginID }
     }

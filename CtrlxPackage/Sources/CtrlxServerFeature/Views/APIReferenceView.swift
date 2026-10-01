@@ -2,7 +2,7 @@
     import SwiftUI
     import Textual
 
-    /// Renders the Gallager CLI API reference markdown in a scrollable window.
+    /// Renders the CtrlX CLI API reference markdown in a scrollable window.
     public struct APIReferenceView: View {
         private let markdown: String
 

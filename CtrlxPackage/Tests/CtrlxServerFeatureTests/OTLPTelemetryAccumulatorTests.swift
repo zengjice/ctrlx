@@ -1,7 +1,7 @@
 #if os(macOS)
     import CtrlxNetworking
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 

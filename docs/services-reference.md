@@ -31,7 +31,7 @@ Detailed documentation for Ctrlx services. Reference when modifying specific com
 - `getPaneDimensions()` / `getPaneId()` - dimension tracking
 - `sendKeys()` / `sendInterrupt()` - send input to panes
 - `createSession()` - creates new tmux session with dimensions
-- `probeVisualConflict()` - detects whether the user's rc files clobber the `$VISUAL` Gallager sets (see [Editor Override](#editor-override-ctrl-g) below)
+- `probeVisualConflict()` - detects whether the user's rc files clobber the `$VISUAL` CtrlX sets (see [Editor Override](#editor-override-ctrl-g) below)
 - `injectVisualOverrideIntoExistingShellPanes()` / `clearInjectedOverrideTracking()` - manage the opt-in `export VISUAL` injection
 
 **Config:** `tmuxPath` (default: `/opt/homebrew/bin/tmux`), optional `socketPath`, `overrideVisualInShellPanes` (mirrors `AppSettings.editorOverrideMode`)
@@ -104,27 +104,27 @@ the scheduler and Host guards run in unit tests.
 
 ### Editor Override (Ctrl-G)
 
-Gallager points `$VISUAL` at the bundled `gallager edit` CLI (via tmux `-e` on every session) so Ctrl-G in Claude Code / Codex opens the in-app prompt editor. Spawned panes run a login shell that sources the user's rc files **after** the session env is applied, so a user with `export VISUAL=<their editor>` in `~/.zshrc`/`~/.bashrc` clobbers Gallager's value and Ctrl-G opens *their* editor instead. The override is **consent-based** (issue #591) — Gallager's env is a default, never a silent override.
+CtrlX points `$VISUAL` at the bundled `ctrlx edit` CLI (via tmux `-e` on every session) so Ctrl-G in Claude Code / Codex opens the in-app prompt editor. Spawned panes run a login shell that sources the user's rc files **after** the session env is applied, so a user with `export VISUAL=<their editor>` in `~/.zshrc`/`~/.bashrc` clobbers CtrlX's value and Ctrl-G opens *their* editor instead. The override is **consent-based** (issue #591) — CtrlX's env is a default, never a silent override.
 
 Key files: `EditorOverride.swift` (pure helpers + `EditorOverrideMode`/`VisualProbeResult`), `TmuxService` (probe + injection), `AppCoordinator` (coordination), `EditorOverrideDialog.swift` (the dialog), `EditorsSettingsView.swift` (`PromptEditorOverrideSection`).
 
-**1. Conflict probe.** At startup (only when `GallagerCLI` is bundled, and in either `ask` or `overrideInGallagerSessions` mode), `TmuxService.probeVisualConflict()` creates a detached probe session named `__gallager_probe` with `-e VISUAL=__gallager_probe__` and the normal `default-command` wrapper (real pty / env / startup), types `printf 'CTRLX_PROBE=%s\n' "$VISUAL"`, and polls `capture-pane` (~10s) for the marker. Sentinel intact → no conflict; a different value or empty → conflict (the user's value is remembered for the dialog copy). No CLI / unknown shell (nushell) / timeout → treated as no-conflict. The probe session is filtered out of every user-facing list by its name prefix (so injection never touches it — the probe stays honest even while override is active). Re-run on demand from Settings ("Re-check now").
+**1. Conflict probe.** At startup (only when `CtrlxCLI` is bundled, and in either `ask` or `overrideInCtrlxSessions` mode), `TmuxService.probeVisualConflict()` creates a detached probe session named `__ctrlx_probe` with `-e VISUAL=__ctrlx_probe__` and the normal `default-command` wrapper (real pty / env / startup), types `printf 'CTRLX_PROBE=%s\n' "$VISUAL"`, and polls `capture-pane` (~10s) for the marker. Sentinel intact → no conflict; a different value or empty → conflict (the user's value is remembered for the dialog copy). No CLI / unknown shell (nushell) / timeout → treated as no-conflict. The probe session is filtered out of every user-facing list by its name prefix (so injection never touches it — the probe stays honest even while override is active). Re-run on demand from Settings ("Re-check now").
 
 **2. Dialog.** Deferred from launch to the **first session creation** (when "Ctrl-G" has context). Shows the conflicting value and three choices:
-- **Fix it in your shell config (recommended)** — keeps the setting at *Ask*; shows a copyable guarded line `[ -n "$CTRLX_SOCKET" ] || export VISUAL='<their value>'` (Gallager exports `CTRLX_SOCKET` before rc files run, so the rc can detect a Gallager pane). The next launch's probe verifies; if fixed, the dialog never returns.
-- **Override in Gallager sessions** — enables keystroke injection (below).
+- **Fix it in your shell config (recommended)** — keeps the setting at *Ask*; shows a copyable guarded line `[ -n "$CTRLX_SOCKET" ] || export VISUAL='<their value>'` (CtrlX exports `CTRLX_SOCKET` before rc files run, so the rc can detect a CtrlX pane). The next launch's probe verifies; if fixed, the dialog never returns.
+- **Override in CtrlX sessions** — enables keystroke injection (below).
 - **Keep my editor, stop asking** — never override, never ask.
 - Dismissing ("Decide later") leaves it at *Ask* — re-prompts on a later conflict probe.
 
-**3. Injection (override mode).** Instead of tampering with shell startup, Gallager types the export into shell panes:
-- **New panes:** `refreshPanes()` injects a leading-space `export VISUAL='<gallager> edit'` (POSIX) / `set -gx VISUAL …` (fish) into each new known-shell pane. The bytes buffer until the first prompt, so they run *after* all rc files. The leading space keeps it out of history under `HISTCONTROL=ignorespace` / `HIST_IGNORE_SPACE`.
+**3. Injection (override mode).** Instead of tampering with shell startup, CtrlX types the export into shell panes:
+- **New panes:** `refreshPanes()` injects a leading-space `export VISUAL='<ctrlx> edit'` (POSIX) / `set -gx VISUAL …` (fish) into each new known-shell pane. The bytes buffer until the first prompt, so they run *after* all rc files. The leading space keeps it out of history under `HISTCONTROL=ignorespace` / `HIST_IGNORE_SPACE`.
 - **Existing panes** are injected when the setting is turned on.
 - **App-launched agents** chain the export onto the agent command line in `createSession` (a direct-command pane never ran rc files, so the new-pane injector skips it).
 - Per-pane dedup keeps it to one line per shell pane.
 
-**4. Startup reconciliation.** A user who opted into the override only needs it while their rc actually clobbers `$VISUAL`. If they later remove their `export VISUAL` and Gallager's `-e VISUAL` wins on its own, the per-pane injection becomes pure redundancy. So on launch in `overrideInGallagerSessions` mode, `AppCoordinator` re-probes and, if the probe **positively** reports `.intact`, falls back to `.ask` (stops injecting) via `EditorOverride.shouldDropRedundantOverride(mode:probe:)`. A `.skipped` / not-yet-run probe is *not* treated as proof the conflict is gone, so the override is left in place. The same reconciliation runs on Settings → "Re-check now". If the conflict later returns, `.ask` re-prompts.
+**4. Startup reconciliation.** A user who opted into the override only needs it while their rc actually clobbers `$VISUAL`. If they later remove their `export VISUAL` and CtrlX's `-e VISUAL` wins on its own, the per-pane injection becomes pure redundancy. So on launch in `overrideInCtrlxSessions` mode, `AppCoordinator` re-probes and, if the probe **positively** reports `.intact`, falls back to `.ask` (stops injecting) via `EditorOverride.shouldDropRedundantOverride(mode:probe:)`. A `.skipped` / not-yet-run probe is *not* treated as proof the conflict is gone, so the override is left in place. The same reconciliation runs on Settings → "Re-check now". If the conflict later returns, `.ask` re-prompts.
 
-**Settings:** `AppSettings.editorOverrideMode` (`ask` / `overrideInGallagerSessions` / `useMyEditor`). `AppCoordinator.setEditorOverrideMode(_:)` is the single mutation point — it persists the choice and mirrors it onto `TmuxService.overrideVisualInShellPanes`.
+**Settings:** `AppSettings.editorOverrideMode` (`ask` / `overrideInCtrlxSessions` / `useMyEditor`). The pre-rename persisted override value is migrated on load without changing the user's choice. `AppCoordinator.setEditorOverrideMode(_:)` is the single mutation point — it persists the choice and mirrors it onto `TmuxService.overrideVisualInShellPanes`.
 
 **Limitations:** the injected line is visible in scrollback; a nested shell (`exec zsh`) re-sources rc with no re-injection; changing the setting doesn't affect already-running agents; the override also affects `git commit`/`crontab` in those panes; typing within the first ~second of a pane opening (or an rc ending in `exec`) can interleave with / swallow the injected line. All are accepted trade-offs for users who explicitly opted in.
 
@@ -379,10 +379,10 @@ Actor executing commands from iOS devices.
 
 ### CodexPluginInstaller (`CtrlxServerFeature/Services/CodexPluginInstaller.swift`)
 
-`Sendable struct` (Point-Free `@DependencyClient`) that installs the bundled `gallager` Codex plugin so Codex forwards hook events to the local hook server.
+`Sendable struct` (Point-Free `@DependencyClient`) that installs the bundled `ctrlx` Codex plugin so Codex forwards hook events to the local hook server.
 
-- Locates the bundled marketplace under `~/.ctrlx/marketplaces/gallager/` (copied out of the app resources at install time so Codex can re-discover it)
-- Registers the marketplace via `codex plugin marketplace add` and installs the plugin via `codex plugin install gallager`
+- Locates the bundled marketplace under `~/.ctrlx/marketplaces/ctrlx/` (copied out of the app resources at install time so Codex can re-discover it)
+- Registers the marketplace via `codex plugin marketplace add` and installs the plugin via `codex plugin install ctrlx`
 - Writes hooks at the **global layer** (`~/.codex/hooks.json`) to avoid per-project trust prompts on every repo
 - Exposes `install` / `uninstall` / `isInstalled` closures; surfaced in Settings via `CodexPluginInstallerRow`
 
@@ -672,7 +672,7 @@ exposed as `coordinator.pluginUpdateManager`.
   drive the Agents settings banner and Updates section.
 - `finishReinstall(id)` is the out-of-band reinstall hook: any install that
   replaces an already-installed plugin outside the manager's own apply flow
-  (the source-changed Review… trust sheet, CLI `gallager plugin install`, the
+  (the source-changed Review… trust sheet, CLI `ctrlx plugin install`, the
   Add Plugin sheet, zip installs) triggers the same post-install steps via
   `AppCoordinator.installPluginFromURL`/`installPluginFromZip` — hot-restart
   if idle + bridge refresh, else the deferred flag. The manager's own install
@@ -680,7 +680,7 @@ exposed as `coordinator.pluginUpdateManager`.
 - Notice wording: `needsAppRestart == false` means the sidecar was hot-swapped
   while nothing was running, so banner/inline/notification show a plain
   "updated to X" with no restart advice; only the busy/deferred path says
-  "restart Gallager and your <agent> sessions".
+  "restart CtrlX and your <agent> sessions".
 
 ### LayoutStore (`CtrlxServerFeature/Services/LayoutPersistence/LayoutStore.swift`)
 
@@ -695,7 +695,7 @@ last-known layout. See `docs/folder-layout-persistence-plan.md`.
   session name picks up the folder's current layout, not a dead session's stale
   one. Two sessions on a folder share the record (most-recent write wins).
 - `save` / `remove` / `prune`; `liveValue` writes a single JSON file under the
-  Gallager state root (`~/.ctrlx/state/Layouts/`, or `--gallager-state-root`
+  CtrlX state root (`~/.ctrlx/state/Layouts/`, or `--ctrlx-state-root`
   under E2E), `inMemory()` for previews/tests.
 - `MainView` drives it: `seedLayoutIfNeeded()` restores once-while-empty on
   session selection/launch; a 2s `.task` auto-saves changed layouts via
@@ -767,7 +767,7 @@ command, currentPath, width, height, isActive
 - **Tmux:** tmuxPath, tmuxSocket
 - **Remote Access:** externalServerURL, deviceId, pairedDevices
 - **Coding agents:** autoRunClaudeInProjects, claudeCommandPath, codexCommandPath. `commandPath(for: CodingAgent)` returns the right binary path for an agent
-- **Prompt editor (Ctrl-G):** editorOverrideMode (`ask` / `overrideInGallagerSessions` / `useMyEditor`) — see [Editor Override](#editor-override-ctrl-g)
+- **Prompt editor (Ctrl-G):** editorOverrideMode (`ask` / `overrideInCtrlxSessions` / `useMyEditor`) — see [Editor Override](#editor-override-ctrl-g)
 - **Plugin:** hasCompletedPluginSetup
 
 ### PairedDevice (`CtrlxServerFeature/Models/Settings.swift`)

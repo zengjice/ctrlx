@@ -9,12 +9,12 @@ import Testing
 @MainActor
 @Suite("PluginSettingsMigration")
 struct PluginSettingsMigrationTests {
-    /// A fresh temp state root + `GallagerPaths` override, auto-cleaned.
-    private func makePaths() -> (GallagerPaths, URL) {
+    /// A fresh temp state root + `CtrlxPaths` override, auto-cleaned.
+    private func makePaths() -> (CtrlxPaths, URL) {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("ctrlx-migration-test-\(UUID().uuidString)")
             .appendingPathComponent("state")
-        return (GallagerPaths(stateRootOverride: root), root)
+        return (CtrlxPaths(stateRootOverride: root), root)
     }
 
     @Test("writes legacy command paths + auto-run into each plugin's settings.json")

@@ -235,7 +235,7 @@ clang++ -std=c++20 -fno-exceptions CtrlxPackage/AgentBrowser/tests/helper_paths.
 clang++ -std=c++20 -fobjc-arc -framework Foundation \
   CtrlxPackage/AgentBrowser/tests/page_keys.mm -o /tmp/ctrlx-browser-keys-test
 /tmp/ctrlx-browser-keys-test
-python3 CtrlxPackage/AgentBrowser/tests/cli.py CtrlxPackage/.build/debug/GallagerCLI
+python3 CtrlxPackage/AgentBrowser/tests/cli.py CtrlxPackage/.build/debug/CtrlxCLI
 clang++ CtrlxPackage/AgentBrowser/tests/identity.cc -o /tmp/ctrlx-browser-test-identity
 python3 CtrlxPackage/AgentBrowser/tests/embedded.py \
   '<signed copy with bundle ID com.ctrlx.embedded-acceptance>/CtrlX.app' \

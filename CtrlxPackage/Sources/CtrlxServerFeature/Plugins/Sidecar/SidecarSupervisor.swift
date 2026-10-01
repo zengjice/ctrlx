@@ -1,5 +1,5 @@
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 import Logging
 
 public actor SidecarSupervisor {

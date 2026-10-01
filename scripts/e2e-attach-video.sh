@@ -8,7 +8,7 @@
 # Assets live on a rolling prerelease (default: e2e-videos) of the results
 # repo, named pr<N>-<scenario-dir>.mp4, and can be deleted any time after
 # review:
-#   gh release delete-asset e2e-videos <asset>.mp4 --repo gpambrozio/ClaudeSpyTestResults
+#   gh release delete-asset e2e-videos <asset>.mp4 --repo "$RESULTS_REPO"
 # The e2e-video-cleanup.yml workflow deletes them automatically (and marks the
 # PR comment) 3 days after the PR merges or closes.
 #
@@ -26,7 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 E2E_TMPDIR="${TMPDIR:-/tmp}/ctrlx-e2e"
 SCREENSHOTS_DIR="$E2E_TMPDIR/e2e-screenshots"
-RESULTS_REPO="gpambrozio/ClaudeSpyTestResults"
+RESULTS_REPO="${RESULTS_REPO:-}"
 RELEASE_TAG="e2e-videos"
 PR_NUMBER=""
 NO_COMMENT=false
@@ -48,7 +48,7 @@ usage() {
     echo "  --pr N              PR number to comment on (default: PR for current branch)"
     echo "  --screenshots DIR   Screenshots dir the videos live under"
     echo "                      (default: $SCREENSHOTS_DIR)"
-    echo "  --results-repo SLUG owner/repo hosting the release (default: $RESULTS_REPO)"
+    echo "  --results-repo SLUG owner/repo hosting the release (or set RESULTS_REPO)"
     echo "  --release-tag TAG   Rolling release tag for assets (default: $RELEASE_TAG)"
     echo "  --no-comment        Upload only; print the markdown snippet instead of"
     echo "                      posting a PR comment"
@@ -110,6 +110,11 @@ done
 if [ ${#SCENARIOS[@]} -eq 0 ]; then
     echo "ERROR: no scenario given."
     usage
+    exit 1
+fi
+
+if [ -z "$RESULTS_REPO" ]; then
+    echo "ERROR: set RESULTS_REPO or pass --results-repo owner/repo; no upstream default is used."
     exit 1
 fi
 
@@ -234,7 +239,9 @@ for scenario in "${SCENARIOS[@]}"; do
     url="https://github.com/$RESULTS_REPO/releases/download/$RELEASE_TAG/$asset_name"
     title="$(pretty_name "$video_dir" "$scenario")${LABEL:+ ($LABEL)}"
     MARKDOWN_LINES+=("- **▶ [$title]($url)**$(metadata_suffix "$video_dir")")
-    MARKDOWN_LINES+=("  - watch: \`./scripts/e2e-watch-video.sh $asset_name\`")
+    printf -v watch_command './scripts/e2e-watch-video.sh --results-repo %q --release-tag %q %q' \
+        "$RESULTS_REPO" "$RELEASE_TAG" "$asset_name"
+    MARKDOWN_LINES+=("  - watch: \`$watch_command\`")
 done
 
 # =====================================================

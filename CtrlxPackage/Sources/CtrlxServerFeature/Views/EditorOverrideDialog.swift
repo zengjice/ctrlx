@@ -3,14 +3,14 @@ import Dependencies
 import SwiftUI
 
 /// Consent dialog shown on the first session creation when the startup probe
-/// found that the user's shell config clobbers the `$VISUAL` Gallager sets on
+/// found that the user's shell config clobbers the `$VISUAL` CtrlX sets on
 /// tmux panes (issue #591 §2–§3).
 ///
 /// Redesign: a single decision presented as three radio choice cards
 /// (recommended pre-selected). The "Fix in shell config" card expands to
 /// reveal the guarded rc line; one "Continue" button commits the choice.
 /// The override is never applied without the user picking it here (or in
-/// Settings) — Gallager's env is a default, not a silent override.
+/// Settings) — CtrlX's env is a default, not a silent override.
 struct EditorOverrideDialog: View {
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(TmuxService.self) private var tmuxService
@@ -18,7 +18,7 @@ struct EditorOverrideDialog: View {
     /// The resolution the user has selected but not yet committed.
     private enum Choice: Hashable {
         case fixInConfig
-        case overrideInGallagerSessions
+        case overrideInCtrlxSessions
         case useMyEditor
     }
 
@@ -51,7 +51,7 @@ struct EditorOverrideDialog: View {
             VStack(spacing: 8) {
                 fixCard
                 choiceCard(
-                    .overrideInGallagerSessions,
+                    .overrideInCtrlxSessions,
                     title: "Let CtrlX override in its own sessions",
                     summary: "CtrlX exports VISUAL into its sessions — visible in scrollback."
                 )
@@ -216,8 +216,8 @@ struct EditorOverrideDialog: View {
         switch selection {
         case .fixInConfig:
             break
-        case .overrideInGallagerSessions:
-            coordinator.setEditorOverrideMode(.overrideInGallagerSessions)
+        case .overrideInCtrlxSessions:
+            coordinator.setEditorOverrideMode(.overrideInCtrlxSessions)
         case .useMyEditor:
             coordinator.setEditorOverrideMode(.useMyEditor)
         }

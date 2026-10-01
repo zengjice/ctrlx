@@ -109,7 +109,7 @@ public enum TerminalLinksScenario {
         // share dimensions. We can't reuse `Shortcut.openPanesWindow()` here
         // because once `links-test` is selected, MainView's navigationTitle
         // becomes the session's primary label (e.g. "~") instead of
-        // "Gallager", and the shortcut's `macWaitForWindow(titled: "CtrlX")`
+        // "CtrlX", and the shortcut's `macWaitForWindow(titled: "CtrlX")`
         // would time out. The window is already open from the earlier call,
         // so we just reapply the geometry directly.
         TestStep.macMoveWindow(x: 10, y: 10)

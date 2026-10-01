@@ -1,6 +1,6 @@
 import CtrlxCommon
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// Installs the CtrlX Claude Code plugin through Claude's own CLI
 /// (`claude plugin …`), scoped to a `CLAUDE_CONFIG_DIR`. The app never edits

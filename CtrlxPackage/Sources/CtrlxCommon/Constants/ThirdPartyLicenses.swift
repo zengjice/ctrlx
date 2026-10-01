@@ -44,7 +44,7 @@ public extension ThirdPartyLicense {
     // swiftlint:disable custom_no_number_decimals
     // (License identifiers below are version-like SPDX strings such as
     // "Apache-2.0", not decimal literals the numeric rule should flag.)
-    /// Every third-party project Gallager uses — in the apps and relay, as
+    /// Every third-party project CtrlX uses — in the apps and relay, as
     /// build tooling, or on the website — credited regardless of whether it
     /// ships in a binary.
     ///

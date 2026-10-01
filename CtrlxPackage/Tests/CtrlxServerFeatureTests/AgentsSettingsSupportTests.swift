@@ -3,7 +3,7 @@
     import CtrlxEncryption
     import Dependencies
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 
@@ -12,13 +12,13 @@
     struct AgentsSettingsSupportTests {
         // MARK: - Helpers
 
-        /// Builds a fresh temp-dir `GallagerPaths` and injects it into a new
+        /// Builds a fresh temp-dir `CtrlxPaths` and injects it into a new
         /// `AppCoordinator` so settings read/write goes to an isolated directory.
         private func makeCoordinator() -> (coordinator: AppCoordinator, root: URL) {
             let root = URL(fileURLWithPath: NSTemporaryDirectory())
                 .appendingPathComponent("ctrlx-agents-settings-\(UUID().uuidString)")
                 .appendingPathComponent("state")
-            let paths = GallagerPaths(stateRootOverride: root)
+            let paths = CtrlxPaths(stateRootOverride: root)
             paths.ensureBaseDirectories()
 
             let coordinator = withDependencies {

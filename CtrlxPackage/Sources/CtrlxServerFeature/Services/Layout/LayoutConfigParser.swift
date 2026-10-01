@@ -26,7 +26,7 @@
         /// a lenient warning.
         ///
         /// `global_options`, `socket_name`, `tmux_options`, `tmux_command`
-        /// are part of tmuxp's surface but Gallager owns the tmux server, so
+        /// are part of tmuxp's surface but CtrlX owns the tmux server, so
         /// we accept-and-ignore them in both modes (with a warning).
         static let supportedTopLevelKeys: Set = [
             "session_name",
@@ -53,7 +53,7 @@
         ]
 
         /// Keys that are explicitly rejected because they require behavior
-        /// (templating engines) that Gallager will not implement.
+        /// (templating engines) that CtrlX will not implement.
         static let rejectedTopLevelKeys: Set = [
             "@args",
             "@settings",
@@ -364,7 +364,7 @@
                 warnings: &warnings
             )
             // tmuxp distinguishes options applied before/after pane creation;
-            // Gallager applies them all once after the window exists, so we
+            // CtrlX applies them all once after the window exists, so we
             // merge the two maps (options_after wins on conflict, matching
             // tmuxp's "applied later" semantics).
             let mergedOptions = options.merging(optionsAfter) { _, after in after }

@@ -1,6 +1,6 @@
 import CtrlxCommon
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 import Testing
 @testable import CodexPluginCore
 
@@ -398,7 +398,7 @@ struct CodexCLIInstallerTests {
         try Data(
             """
             [marketplaces.gallager]
-            source = "/Applications/Gallager.app/Contents/Resources/plugin/codex"
+            source = "/Applications/CtrlX.app/Contents/Resources/plugin/codex"
 
             [plugins."ctrlx@ctrlx"]
             enabled = true

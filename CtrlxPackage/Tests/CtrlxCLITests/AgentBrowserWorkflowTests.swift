@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import GallagerCLI
+@testable import CtrlxCLI
 
 struct AgentBrowserWorkflowTests {
     @Test func batchKeepsLegacyArraysAndRejectsInvalidPlans() throws {

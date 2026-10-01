@@ -1,6 +1,6 @@
 #if os(macOS)
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
 
     // MARK: - PluginUpdate
 

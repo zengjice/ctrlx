@@ -1,5 +1,5 @@
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// Generic, Codable settings for a folder-dropped / URL-installed sidecar plugin
 /// that doesn't ship its own typed settings struct (unlike the bundled

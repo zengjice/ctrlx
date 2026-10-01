@@ -2,7 +2,7 @@ import Darwin
 import Dependencies
 import Foundation
 import Testing
-@testable import GallagerCLI
+@testable import CtrlxCLI
 
 struct AgentBrowserIdentityTests {
     private func process(_ pid: Int32, parent: Int32 = 1, name: String = "codex", start: UInt64 = 100, uid: uid_t = 501) -> AgentBrowserProcess {

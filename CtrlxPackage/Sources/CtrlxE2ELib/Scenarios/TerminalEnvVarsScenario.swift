@@ -3,7 +3,7 @@ import Foundation
 /// E2E scenario: Verify env vars set on shells spawned via the macOS app's
 /// "New Terminal" button.
 ///
-/// Exercises every var Gallager injects into app-created panes:
+/// Exercises every var CtrlX injects into app-created panes:
 /// 1. `TERM_PROGRAM=iTerm.app` / `TERM_PROGRAM_VERSION=3.6.6` — installed via
 ///    tmux's `default-command` wrapper to spoof iTerm so Claude Code emits
 ///    OSC 9;4 progress sequences (#477). tmux 3.2+ overrides `-e TERM_PROGRAM`

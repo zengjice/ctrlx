@@ -3,7 +3,7 @@ Use the Task tool to work through these items before stopping:
 1. Document Updates: Determine if any documentation needs to be updated and update them
 2. AGENTS.md File Updates: Check if `/AGENTS.md` or any related files require updates and update them.
 3. New Feature cli addition:
-   * For new features consider if adding a new command to the cli would add value to users. If it does then add the command and make sure to update both the cli documents and the `gallager` skill that ships with claude and codex plugins.
+   * For new features consider if adding a new command to the cli would add value to users. If it does then add the command and make sure to update both the cli documents and the `ctrlx` skill that ships with claude and codex plugins.
 4. New Feature End-to-End Scenario:
     * If a new feature is introduced, an end-to-end scenario **must** be created and run to prove the feature's functionality.
     * The scenario must contain screenshots that clearly show the feature working as intended.

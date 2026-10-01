@@ -29,7 +29,7 @@ it across Claude's hook events in `~/.claude/settings.json`, baking in
 `plugin_id=claude-code` and the well-known socket `~/.ctrlx/state/ingress.sock`.
 The bridge reads stdin + `TMUX_PANE` + `CLAUDE_PROJECT_DIR`, connects, writes one
 length-prefixed `{plugin_id, context, payload}` frame, exits. Fires for any Claude
-session (Gallager-launched or manual). `isInstalled`/`uninstall` manage that entry.
+session (CtrlX-launched or manual). `isInstalled`/`uninstall` manage that entry.
 
 ## Raw hook → `PluginEvent` (the 30→5 mapping)
 Parsing reuses `HookAction.from(jsonData:)`. `sessionID` = the hook `session_id`;

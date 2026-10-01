@@ -53,7 +53,7 @@ public struct LocalTmuxSession: Identifiable, Sendable, Hashable {
 
 extension LocalTmuxSession {
     /// Window- and pane-scoped values for the active local terminal. Structural
-    /// tmux values live on `PaneInfo`; Gallager's live title and git state live
+    /// tmux values live on `PaneInfo`; CtrlX's live title and git state live
     /// on the matching `PaneState`.
     func activeWindowMetadata(paneStates: [String: PaneState]) -> ActiveWindowMetadata {
         let window = activeWindow

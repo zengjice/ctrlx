@@ -1,13 +1,13 @@
 import Foundation
 
-/// Drives the Gallager sidebar progress bar and session color on the calling
+/// Drives the CtrlX sidebar progress bar and session color on the calling
 /// pane via `ctrlx set-progress` / `ctrlx set-color`. The bar advances
 /// by `(completed / total)` percent as scenarios finish; the session is
 /// painted green at run start and switches to red on the first failure.
 ///
-/// Silently no-ops when not launched from a Gallager-managed tmux pane
+/// Silently no-ops when not launched from a CtrlX-managed tmux pane
 /// (i.e. `$TMUX_PANE` is unset) or when the `ctrlx` CLI is not on PATH.
-final public class GallagerProgressReporter: TestProgressReporter, @unchecked Sendable {
+final public class CtrlxProgressReporter: TestProgressReporter, @unchecked Sendable {
     private let totalScenarios: Int
     private let ctrlxPath: String?
     private let hasPane: Bool
@@ -18,7 +18,7 @@ final public class GallagerProgressReporter: TestProgressReporter, @unchecked Se
         self.totalScenarios = totalScenarios
         let env = ProcessInfo.processInfo.environment
         self.hasPane = env["TMUX_PANE"]?.isEmpty == false
-        self.ctrlxPath = Self.resolveGallager()
+        self.ctrlxPath = Self.resolveCtrlx()
     }
 
     // MARK: - TestProgressReporter
@@ -57,14 +57,14 @@ final public class GallagerProgressReporter: TestProgressReporter, @unchecked Se
     // MARK: - Private
 
     private func setProgress(_ value: String) {
-        runGallager(["set-progress", value])
+        runCtrlx(["set-progress", value])
     }
 
     private func setColor(_ value: String) {
-        runGallager(["set-color", value])
+        runCtrlx(["set-color", value])
     }
 
-    private func runGallager(_ arguments: [String]) {
+    private func runCtrlx(_ arguments: [String]) {
         guard hasPane, let path = ctrlxPath else { return }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
@@ -79,7 +79,7 @@ final public class GallagerProgressReporter: TestProgressReporter, @unchecked Se
         }
     }
 
-    private static func resolveGallager() -> String? {
+    private static func resolveCtrlx() -> String? {
         let candidates = ["/usr/local/bin/ctrlx", "/opt/homebrew/bin/ctrlx"]
         for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
             return path

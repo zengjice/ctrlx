@@ -1,3 +1,5 @@
+import CtrlxCommon
+import Dependencies
 import Foundation
 import Testing
 @testable import CtrlxServerFeature
@@ -159,11 +161,59 @@ struct EditorOverrideResultTests {
     }
 }
 
+@MainActor
+struct EditorOverrideSettingsMigrationTests {
+    @Test("Legacy editor override is retained and rewritten using the current name")
+    func legacyOverride() {
+        let preferences = PreferencesService.inMemory()
+        preferences.setString("overrideInGallagerSessions", AppSettings.Keys.editorOverrideMode.rawValue)
+        withDependencies {
+            $0[PreferencesService.self] = preferences
+            $0[LoginItemService.self] = .previewValue
+        } operation: {
+            let settings = AppSettings()
+            #expect(settings.editorOverrideMode == .overrideInCtrlxSessions)
+            #expect(preferences.string(AppSettings.Keys.editorOverrideMode.rawValue) == "overrideInCtrlxSessions")
+            #expect(AppSettings().editorOverrideMode == .overrideInCtrlxSessions)
+            settings.editorOverrideMode = .useMyEditor
+            #expect(AppSettings().editorOverrideMode == .useMyEditor)
+        }
+    }
+
+    @Test("Current modes keep their choices through reload", arguments: EditorOverrideMode.allCases)
+    func currentMode(_ mode: EditorOverrideMode) {
+        let preferences = PreferencesService.inMemory()
+        preferences.setString(mode.rawValue, AppSettings.Keys.editorOverrideMode.rawValue)
+        withDependencies {
+            $0[PreferencesService.self] = preferences
+            $0[LoginItemService.self] = .previewValue
+        } operation: {
+            #expect(AppSettings().editorOverrideMode == mode)
+            #expect(preferences.string(AppSettings.Keys.editorOverrideMode.rawValue) == mode.rawValue)
+        }
+    }
+
+    @Test("Missing and unknown settings retain the Ask default")
+    func invalidMode() {
+        let preferences = PreferencesService.inMemory()
+        withDependencies {
+            $0[PreferencesService.self] = preferences
+            $0[LoginItemService.self] = .previewValue
+        } operation: {
+            #expect(AppSettings().editorOverrideMode == .ask)
+            #expect(preferences.string(AppSettings.Keys.editorOverrideMode.rawValue) == "ask")
+            preferences.setString("unknown", AppSettings.Keys.editorOverrideMode.rawValue)
+            #expect(AppSettings().editorOverrideMode == .ask)
+            #expect(preferences.string(AppSettings.Keys.editorOverrideMode.rawValue) == "ask")
+        }
+    }
+}
+
 struct EditorOverrideReconcileTests {
     @Test("Override + intact probe → drop the now-redundant override")
     func dropsWhenConflictGone() {
         #expect(EditorOverride.shouldDropRedundantOverride(
-            mode: .overrideInGallagerSessions,
+            mode: .overrideInCtrlxSessions,
             probe: .intact
         ))
     }
@@ -171,11 +221,11 @@ struct EditorOverrideReconcileTests {
     @Test("Override + still-conflicting probe → keep overriding")
     func keepsWhenStillConflicting() {
         #expect(!EditorOverride.shouldDropRedundantOverride(
-            mode: .overrideInGallagerSessions,
+            mode: .overrideInCtrlxSessions,
             probe: .conflict(effectiveValue: "vim")
         ))
         #expect(!EditorOverride.shouldDropRedundantOverride(
-            mode: .overrideInGallagerSessions,
+            mode: .overrideInCtrlxSessions,
             probe: .conflict(effectiveValue: nil)
         ))
     }
@@ -185,11 +235,11 @@ struct EditorOverrideReconcileTests {
         // A skipped probe (no CLI, unknown shell, timeout) or a probe that hasn't
         // finished is not proof the conflict is gone — don't disable the override.
         #expect(!EditorOverride.shouldDropRedundantOverride(
-            mode: .overrideInGallagerSessions,
+            mode: .overrideInCtrlxSessions,
             probe: .skipped
         ))
         #expect(!EditorOverride.shouldDropRedundantOverride(
-            mode: .overrideInGallagerSessions,
+            mode: .overrideInCtrlxSessions,
             probe: nil
         ))
     }

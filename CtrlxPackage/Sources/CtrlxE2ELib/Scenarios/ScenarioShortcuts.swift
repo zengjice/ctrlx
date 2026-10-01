@@ -195,7 +195,7 @@ public enum Shortcut {
     /// competing `ZDOTDIR` here: the app forces `ZDOTDIR=<shim>` per-pane
     /// (`-e ZDOTDIR=…`), which overrides the tmux global environment. A separate
     /// global env var the shim voluntarily sources survives that override and is
-    /// still inherited into every session Gallager creates afterwards.
+    /// still inherited into every session CtrlX creates afterwards.
     ///
     /// Run against an idle pane *before* opening a Claude project, and call
     /// `uninstallClaudeStub` afterwards so later plain terminals are unaffected.

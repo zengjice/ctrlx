@@ -149,10 +149,10 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
         }
 
         // Resolve scenarios up front for the non-interactive run so the
-        // Gallager progress reporter knows the total count.
+        // CtrlX progress reporter knows the total count.
         let scenariosToRun: [TestScenario] = interactive ? [] : resolveScenarios()
         if !interactive {
-            reporters.append(GallagerProgressReporter(totalScenarios: scenariosToRun.count))
+            reporters.append(CtrlxProgressReporter(totalScenarios: scenariosToRun.count))
         }
 
         let reporter = CompositeReporter(reporters)
@@ -310,7 +310,7 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
         PromptEditorScenario.scenario,
         PromptEditorRemoteScenario.scenario,
         CloseWindowTabScenario.scenario,
-        GallagerCLIScenario.scenario,
+        CtrlxCLIScenario.scenario,
         CloseRemoteWindowIOSScenario.scenario,
         CloseRemoteWindowMacScenario.scenario,
         ClipboardSyncScenario.scenario,

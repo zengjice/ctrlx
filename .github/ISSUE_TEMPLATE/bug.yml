@@ -12,7 +12,7 @@ body:
         - iOS app
         - Relay server (hosted)
         - Relay server (self-hosted)
-        - CLI (gallager)
+        - CLI (ctrlx)
         - Plugin (opencode / pi / custom sidecar)
         - Website / docs
     validations:
@@ -31,9 +31,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: Gallager version
+      label: CtrlX version
       description: Mac app — menu bar icon → About. iOS — Settings screen.
-      placeholder: "2.6"
+      placeholder: "3.0.43"
     validations:
       required: true
   - type: input

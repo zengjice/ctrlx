@@ -18,7 +18,7 @@
     ///       logs/sidecar.log           ← rotated 5 MB max (the core's log() sink)
     ///       cache/  db/                ← per-plugin scratch
     /// ```
-    public struct GallagerPaths: Sendable {
+    public struct CtrlxPaths: Sendable {
         /// The `~/.ctrlx` root. `registry.json` lives directly under it; the
         /// writable plugin state lives under `state/`.
         public let ctrlxRoot: URL

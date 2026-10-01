@@ -1,6 +1,6 @@
 import CtrlxNetworking
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// Discovers Codex CLI projects by scanning `~/.codex/sessions/` (or
 /// `$CODEX_HOME/sessions/`) for date-partitioned rollout `.jsonl` files,

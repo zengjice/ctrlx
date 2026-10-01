@@ -2,7 +2,7 @@
     import CtrlxNetworking
     import CryptoKit
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 
@@ -48,7 +48,7 @@
 
     // MARK: - Helpers
 
-    private func makeTempPaths() throws -> (GallagerPaths, URL) {
+    private func makeTempPaths() throws -> (CtrlxPaths, URL) {
         // Use a two-level structure so each test gets its own isolated ctrlxRoot:
         //   NSTemporaryDirectory()/PluginInstallFlowTests-<UUID>/state/
         // ctrlxRoot → NSTemporaryDirectory()/PluginInstallFlowTests-<UUID>/
@@ -58,7 +58,7 @@
             .appendingPathComponent("PluginInstallFlowTests-\(UUID().uuidString)")
         let stateRoot = testRoot.appendingPathComponent("state")
         try FileManager.default.createDirectory(at: stateRoot, withIntermediateDirectories: true)
-        let paths = GallagerPaths(stateRootOverride: stateRoot)
+        let paths = CtrlxPaths(stateRootOverride: stateRoot)
         return (paths, testRoot)
     }
 

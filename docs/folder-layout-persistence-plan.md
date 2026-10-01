@@ -37,9 +37,9 @@ pending. Last updated: 2026-06-19
 >   refresh) seeds only while the workbench is empty (`openFileTabs` /
 >   `openBrowserTabs` / `rightSide` all empty — `tabOrder` is ignored since the
 >   strip auto-populates window entries). No 40-site creation-funnel refactor.
-> - **Storage backend:** a single JSON file under the Gallager **state root**
+> - **Storage backend:** a single JSON file under the CtrlX **state root**
 >   (`~/.ctrlx/state/Layouts/layouts.json`, or the per-instance
->   `--gallager-state-root` under E2E) — consistent with the rest of the app's
+>   `--ctrlx-state-root` under E2E) — consistent with the rest of the app's
 >   state and isolated/auto-cleaned in tests. (The first cut used Application
 >   Support; moved so E2E runs don't touch the real user library.)
 > - **Same-folder cloning is intentional (decided 2026-06-18):** on the E2E tmux
@@ -326,7 +326,7 @@ spot if iOS ever needs them — v1 keeps them macOS-side):
 | `SavedFolderRecord` | Codable record: host, folder, lastActive, layout — keyed by `(host, folder)` |
 | `SavedTabRef` | Logical tab reference (path / url / window index / explorer / git) |
 | `LayoutSnapshotMapper` | `SessionFileTabsState` (+ `FileBrowserState`) ⇄ `SavedFolderLayout`, with id re-mapping |
-| `LayoutStore` | `@DependencyClient`: `record(forFolder)` / `save` / `remove` / `prune`; `liveValue` (single JSON under the Gallager state root) + `inMemory()` |
+| `LayoutStore` | `@DependencyClient`: `record(forFolder)` / `save` / `remove` / `prune`; `liveValue` (single JSON under the CtrlX state root) + `inMemory()` |
 | MainView wiring | folder resolution, seed-on-birth, debounced write, flush-on-terminate |
 
 `LayoutStore` follows the project DI convention (`@DependencyClient struct`,
@@ -339,7 +339,7 @@ A single combined JSON file holding every folder record, rewritten atomically on
 each (debounced) change — the write is rare enough that one blob is fine:
 
 ```
-~/.ctrlx/state/Layouts/layouts.json   (or <--gallager-state-root>/Layouts/ under E2E)
+~/.ctrlx/state/Layouts/layouts.json   (or <--ctrlx-state-root>/Layouts/ under E2E)
 ```
 
 ## 6. Implementation plan

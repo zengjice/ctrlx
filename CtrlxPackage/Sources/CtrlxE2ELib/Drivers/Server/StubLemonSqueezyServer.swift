@@ -131,7 +131,7 @@ public actor StubLemonSqueezyServer {
                     activated: nil,
                     valid: true,
                     licenseKey: .active,
-                    instance: Instance(id: request.instanceId ?? instanceId, name: "Gallager"),
+                    instance: Instance(id: request.instanceId ?? instanceId, name: "CtrlX"),
                     meta: Meta()
                 ),
                 status: .ok

@@ -6,7 +6,7 @@
     import CtrlxNetworking
     import Dependencies
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Logging
 
     /// A pending selection set by the menu bar to be consumed by MainView.
@@ -110,9 +110,9 @@
         /// the default `~/.ctrlx` tree.
         ///
         /// `internal` (not `private`) so `@testable import` tests can inject a
-        /// temp-dir `GallagerPaths` without calling `setupAllServices()`.
+        /// temp-dir `CtrlxPaths` without calling `setupAllServices()`.
         @ObservationIgnored
-        var ctrlxPaths: GallagerPaths?
+        var ctrlxPaths: CtrlxPaths?
 
         /// Owns the plugin factory table + enabled-core lifecycle.
         ///
@@ -309,7 +309,7 @@
             // Mirror the persisted editor-override choice onto the tmux service so
             // injection is active from the first pane if the user already opted in
             // on a prior launch (issue #591).
-            tmuxService.overrideVisualInShellPanes = settings.editorOverrideMode == .overrideInGallagerSessions
+            tmuxService.overrideVisualInShellPanes = settings.editorOverrideMode == .overrideInCtrlxSessions
 
             // E2E: the orchestrator passes a `--zdotdir` shim so shells spawned
             // in test panes never write to the user's real ~/.zsh_history.
@@ -445,7 +445,7 @@
             await setupViewerConnectionManager()
             await autoConnectIfConfigured()
 
-            // Probe whether the user's rc files clobber Gallager's `$VISUAL`
+            // Probe whether the user's rc files clobber CtrlX's `$VISUAL`
             // (issue #591). Detached so the ~1–10s probe never blocks launch; any
             // dialog it triggers is deferred to the first session anyway.
             switch settings.editorOverrideMode {
@@ -453,7 +453,7 @@
                 // Decision still pending: probe so the dialog can offer on a
                 // detected conflict at the first session.
                 Task { await runEditorConflictProbe() }
-            case .overrideInGallagerSessions:
+            case .overrideInCtrlxSessions:
                 // Already injecting. Re-check whether the conflict that justified
                 // it still exists — if the user has since removed `export VISUAL`
                 // from their rc, the injection is now redundant and is dropped.
@@ -560,7 +560,7 @@
 
         /// If we're injecting `export VISUAL=…` (override mode) but the probe
         /// positively confirmed the rc conflict is gone (`.intact`), the
-        /// injection is redundant — Gallager's `-e VISUAL` already wins — so fall
+        /// injection is redundant — CtrlX's `-e VISUAL` already wins — so fall
         /// back to `.ask` and stop typing it into every pane. A `.skipped` probe
         /// isn't proof the conflict is gone, so the override is left untouched
         /// (issue #591).
@@ -598,7 +598,7 @@
         /// existing shell panes when turning the override on.
         public func setEditorOverrideMode(_ mode: EditorOverrideMode) {
             settings.editorOverrideMode = mode
-            let active = mode == .overrideInGallagerSessions
+            let active = mode == .overrideInCtrlxSessions
             tmuxService.overrideVisualInShellPanes = active
             if active {
                 Task { await tmuxService.injectVisualOverrideIntoExistingShellPanes() }
@@ -636,7 +636,7 @@
         /// `deliverResponse` (wired in `setupConnectedViewerManager`). State forwards
         /// as `agent_session_status` and notifications forward to the iOS push path.
         private func setupPluginRuntime() async {
-            let paths = GallagerPaths(stateRootOverride: Self.parseGallagerStateRoot())
+            let paths = CtrlxPaths(stateRootOverride: Self.parseCtrlxStateRoot())
             paths.ensureBaseDirectories()
             ctrlxPaths = paths
 
@@ -936,7 +936,7 @@
         private func makePluginHost(
             id: String,
             dispatcher: PluginEventDispatcher,
-            paths: GallagerPaths
+            paths: CtrlxPaths
         ) -> LivePluginHost {
             let logSink = PluginLogSink(logFileURL: paths.pluginLogPath(id))
             pluginLogSinks[id] = logSink
@@ -986,7 +986,7 @@
         private func makePluginEnv(
             id: String,
             registry: PluginRegistry,
-            paths: GallagerPaths
+            paths: CtrlxPaths
         ) -> PluginEnv {
             let pluginRoot = registry.pluginRoot(id) ?? paths.pluginStateDir(id)
             let settingsData = (try? Data(contentsOf: paths.pluginSettingsPath(id))) ?? Data()
@@ -1365,7 +1365,7 @@
         /// Parses the optional `--ctrlx-state-root <path>` launch argument
         /// (E2E state isolation). Returns the override URL, or `nil` for the
         /// default `~/.ctrlx` layout.
-        private static func parseGallagerStateRoot() -> URL? {
+        private static func parseCtrlxStateRoot() -> URL? {
             let args = CommandLine.arguments
             guard
                 let flagIndex = args.firstIndex(of: "--ctrlx-state-root"),
@@ -1711,7 +1711,7 @@
         private func setupOTLPReceiver() async {
             // Durable cross-session usage store (issue #598). Lives in the ctrlx
             // state tree so it shares the E2E redirect and survives restarts.
-            let stateRoot = (ctrlxPaths ?? GallagerPaths()).stateRoot
+            let stateRoot = (ctrlxPaths ?? CtrlxPaths()).stateRoot
             let store = UsageAggregationStore(
                 fileURL: stateRoot.appendingPathComponent("usage-aggregates.json")
             )

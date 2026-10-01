@@ -1,4 +1,4 @@
-import GallagerEmoji
+import CtrlxEmoji
 import SwiftUI
 
 /// A self-contained emoji picker with keyword-aware search.
@@ -6,13 +6,13 @@ import SwiftUI
 /// Replaces the third-party `SwiftEmojiPicker`, whose search only matched an
 /// emoji's single primary shortcode — so "trash" found nothing even though 🗑️
 /// exists (issue #630). This one searches the CLDR synonym set baked into
-/// ``GallagerEmoji``, so "trash", "bin", and "garbage" all surface the
+/// ``CtrlxEmoji``, so "trash", "bin", and "garbage" all surface the
 /// wastebasket, and the same index powers the `ctrlx` CLI.
 ///
 /// The API mirrors the view it replaced: pick a glyph and it is written through
 /// `selectedEmoji`. The host presentation (macOS popover / iOS detent sheet)
 /// observes that binding to commit and dismiss.
-public struct GallagerEmojiPicker: View {
+public struct CtrlxEmojiPicker: View {
     @Binding private var selectedEmoji: String
     @State private var searchText = ""
     /// Emoji per browse row, derived from the scroll view's width. The browse
@@ -260,7 +260,7 @@ public struct GallagerEmojiPicker: View {
 }
 
 private extension EmojiCategory {
-    /// Category-bar glyph. Kept here (not in the UI-free ``GallagerEmoji``
+    /// Category-bar glyph. Kept here (not in the UI-free ``CtrlxEmoji``
     /// module) so the emoji data stays platform-agnostic.
     var symbol: Symbols {
         switch self {
@@ -278,6 +278,6 @@ private extension EmojiCategory {
 
 #Preview("Emoji picker") {
     @Previewable @State var emoji = ""
-    GallagerEmojiPicker(selectedEmoji: $emoji)
+    CtrlxEmojiPicker(selectedEmoji: $emoji)
         .frame(width: 360, height: 380)
 }

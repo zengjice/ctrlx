@@ -2,7 +2,7 @@
 
 # E2E Test Report Generator for Ctrlx
 # Runs all e2e scenarios via e2e-test.sh, collects results + screenshots,
-# and pushes a report to the ClaudeSpyTestResults repository.
+# and pushes a report to the explicitly configured results repository.
 
 set -eo pipefail
 
@@ -11,12 +11,11 @@ set -eo pipefail
 # =====================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-RESULTS_REPO="git@github.com:gpambrozio/ClaudeSpyTestResults.git"
+RESULTS_REPO="${RESULTS_REPO_URL:-${RESULTS_REPO:+https://github.com/${RESULTS_REPO}.git}}"
 # Anchor to the main worktree's parent so all worktrees share one results clone.
 MAIN_WORKTREE_ROOT="$(cd "$(git -C "$PROJECT_ROOT" rev-parse --git-common-dir)/.." && pwd)"
-RESULTS_DIR="$(dirname "$MAIN_WORKTREE_ROOT")/ClaudeSpyTestResults"
+RESULTS_DIR="$(dirname "$MAIN_WORKTREE_ROOT")/CtrlxTestResults"
 E2E_TMPDIR="${TMPDIR:-/tmp}/ctrlx-e2e"
-mkdir -p "$E2E_TMPDIR"
 JSON_OUTPUT="$E2E_TMPDIR/e2e-results.json"
 SCREENSHOTS_DIR="$E2E_TMPDIR/e2e-screenshots"
 BASELINES_DIR="$PROJECT_ROOT/E2ETests"
@@ -30,8 +29,6 @@ E2E_ARGS=()
 # PR's build) can't carry into this run. e2e-test.sh already honors
 # SANDBOX_DERIVED_DATA as its DerivedData override.
 REPORT_DERIVED_DATA="${TMPDIR:-/tmp}/ctrlx-e2e-report-derived-data"
-export REPORT_DERIVED_DATA
-trap 'rm -rf "$REPORT_DERIVED_DATA"' EXIT
 
 # =====================================================
 # PARSE ARGUMENTS
@@ -65,7 +62,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --results-repo URL  Git URL of the results repository"
-            echo "                      (default: $RESULTS_REPO)"
+            echo "                      (or set RESULTS_REPO_URL / RESULTS_REPO)"
             echo "  --results-dir DIR   Local path for the results repo clone"
             echo "                      (default: $RESULTS_DIR)"
             echo "  -h, --help          Show this help"
@@ -88,6 +85,15 @@ done
 # =====================================================
 # HELPERS
 # =====================================================
+if [ -z "$RESULTS_REPO" ]; then
+    echo "ERROR: set RESULTS_REPO_URL / RESULTS_REPO or pass --results-repo; no upstream default is used."
+    exit 1
+fi
+
+mkdir -p "$E2E_TMPDIR"
+export REPORT_DERIVED_DATA
+trap 'rm -rf "$REPORT_DERIVED_DATA"' EXIT
+
 step() {
     echo ""
     echo "======================================"

@@ -1,9 +1,9 @@
-# Emoji search (`GallagerEmoji`)
+# Emoji search (`CtrlxEmoji`)
 
 The per-session emoji icon can be set from the Mac/iOS UI (a picker) or the CLI
-(`gallager set-emoji` / `find-emoji`). Both resolve free-form text — `rocket`,
+(`ctrlx set-emoji` / `find-emoji`). Both resolve free-form text — `rocket`,
 `trash`, `smiling face` — to a glyph through one shared, keyword-aware index:
-the `GallagerEmoji` target.
+the `CtrlxEmoji` target.
 
 ## Why it exists
 
@@ -11,29 +11,29 @@ Search used to fail for anything but an emoji's single canonical name. The
 Mac/iOS app used the third-party `SwiftEmojiPicker`, whose filter matched only a
 one-word `searchKey`, and the CLI matched `Unicode.Scalar.Properties.name`.
 Neither exposes synonyms, so searching **trash** found nothing even though 🗑️
-exists — its Unicode name is `WASTEBASKET` (issue #630). `GallagerEmoji` replaces
+exists — its Unicode name is `WASTEBASKET` (issue #630). `CtrlxEmoji` replaces
 both with a CLDR-derived keyword table, so "trash", "bin", "garbage", and "can"
 all surface the wastebasket.
 
 ## Layout
 
 ```
-CtrlxPackage/Sources/GallagerEmoji/   # Foundation-only, no resources
+CtrlxPackage/Sources/CtrlxEmoji/   # Foundation-only, no resources
 ├── Emoji.swift          # value type: glyph, label, keywords, group, version
 ├── EmojiCategory.swift  # the 8 picker sections (emojibase groups → categories)
 ├── EmojiDatabase.swift  # parse + version-cap + categorized() + search()
 └── EmojiData.swift      # GENERATED tab-separated table (do not hand-edit)
 ```
 
-- **`CtrlxCommon/UI/GallagerEmojiPicker.swift`** — the SwiftUI picker
+- **`CtrlxCommon/UI/CtrlxEmojiPicker.swift`** — the SwiftUI picker
   (search field + category-jump grid) that replaced `SwiftEmojiPicker`. Presented
   by `DescriptionEditing.swift` as a macOS popover / iOS detent sheet.
-- **`Gallager/EmojiNameLookup.swift`** — thin CLI adapter over `EmojiDatabase`.
+- **`CtrlxCLI/EmojiNameLookup.swift`** — thin CLI adapter over `EmojiDatabase`.
 
 The data is baked into Swift source (a `"""` string literal parsed at load),
-**not** a resource bundle, because the `GallagerCLI` binary copied into
-`Gallager.app/Contents/MacOS/` carries no `Bundle.module` alongside it.
-(Xcode still links the shared `GallagerEmoji` target as a dynamic framework the
+**not** a resource bundle, because the `CtrlxCLI` binary copied into
+`CtrlX.app/Contents/MacOS/` carries no `Bundle.module` alongside it.
+(Xcode still links the shared `CtrlxEmoji` target as a dynamic framework the
 CLI reaches via an rpath added in the copy phase; don't swap the string literal
 for `.embedInCode` or a bundle — both are dead ends, see
 `docs/superpowers/specs/2026-07-03-emoji-data-shipping-design.md`.)

@@ -5,7 +5,7 @@ import Foundation
 /// `PluginEvent` fields a test wants produced.
 ///
 /// Lives outside `#if DEBUG` so the Release-built `EchoPluginSidecar` executable
-/// can import it directly from `GallagerPluginProtocol`.
+/// can import it directly from `CtrlxPluginProtocol`.
 public struct EchoDirective: Codable, Sendable, Equatable {
     public let sessionID: String
     /// The session state the produced `PluginEvent` carries (`nil` = no opinion).

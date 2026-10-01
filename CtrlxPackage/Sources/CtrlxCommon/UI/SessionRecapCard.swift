@@ -55,7 +55,7 @@ public struct SessionRecapCard: View {
 
 #Preview("End-of-turn recap") {
     SessionRecapCard(recap: SessionRecap(
-        projectName: "Gallager",
+        projectName: "CtrlX",
         model: "claude-opus-4-8",
         tokensUsed: 45_000,
         costUSD: 1.20,

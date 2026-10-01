@@ -370,7 +370,7 @@ struct TerminalInputCursorSynchronizer {
 
         private func trace(_ message: @autoclosure () -> String) {
             guard Self.debugEnabled else { return }
-            print("[GallagerTextInput] \(message())")
+            print("[CtrlxTextInput] \(message())")
         }
     }
 #endif

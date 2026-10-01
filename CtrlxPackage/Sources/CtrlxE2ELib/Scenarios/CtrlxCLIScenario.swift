@@ -1,6 +1,6 @@
 import Foundation
 
-/// E2E scenario: Gallager CLI API
+/// E2E scenario: CtrlX CLI API
 ///
 /// Verifies the ctrlx CLI can control the app via Unix socket by
 /// exercising commands that produce visible UI changes:
@@ -27,7 +27,7 @@ import Foundation
 /// Strategy: all CLI commands typed into `cli-test:0` via tmuxSendKeys.
 /// Commands that need to target e2e-api use explicit pane IDs from list-panes.
 /// Sidebar stays on e2e-api for screenshots.
-public enum GallagerCLIScenario {
+public enum CtrlxCLIScenario {
     public static let scenario = CtrlxE2ELib.scenario(
         "CtrlX CLI API",
         tags: ["macos-only", "cli-api"]

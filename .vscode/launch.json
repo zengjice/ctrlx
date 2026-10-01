@@ -45,20 +45,20 @@
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:Ctrlx}/CtrlxPackage",
-            "name": "Debug GallagerCLI (CtrlxPackage)",
-            "target": "GallagerCLI",
+            "name": "Debug CtrlxCLI (CtrlxPackage)",
+            "target": "CtrlxCLI",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug GallagerCLI (CtrlxPackage)"
+            "preLaunchTask": "swift: Build Debug CtrlxCLI (CtrlxPackage)"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:Ctrlx}/CtrlxPackage",
-            "name": "Release GallagerCLI (CtrlxPackage)",
-            "target": "GallagerCLI",
+            "name": "Release CtrlxCLI (CtrlxPackage)",
+            "target": "CtrlxCLI",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release GallagerCLI (CtrlxPackage)"
+            "preLaunchTask": "swift: Build Release CtrlxCLI (CtrlxPackage)"
         }
     ]
 }

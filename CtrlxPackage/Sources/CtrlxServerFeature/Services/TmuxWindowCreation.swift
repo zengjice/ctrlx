@@ -1,6 +1,6 @@
 import CtrlxNetworking
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// One Host-side entry point for local UI and Viewer requests. Plugin commands
 /// and environment never come from the Viewer. Validate before creating a pane.

@@ -69,7 +69,7 @@ curl -s -X POST http://127.0.0.1:22087/touch \
 Find the CGWindowID for the E2E test app, then capture it:
 
 ```bash
-APP_PID=$(pgrep -f "Gallager.*--e2e-test" | head -1)
+APP_PID=$(pgrep -f "CtrlX.*--e2e-test" | head -1)
 WINDOW_ID=$(python3 -c "
 import Quartz, sys
 windows = Quartz.CGWindowListCopyWindowInfo(
@@ -96,7 +96,7 @@ ID — it changes when windows move between displays or get recreated.
 Dump the macOS app's accessibility tree structure:
 
 ```bash
-APP_PID=$(pgrep -f "Gallager.*--e2e-test" | head -1)
+APP_PID=$(pgrep -f "CtrlX.*--e2e-test" | head -1)
 
 osascript -e "
 tell application \"System Events\"

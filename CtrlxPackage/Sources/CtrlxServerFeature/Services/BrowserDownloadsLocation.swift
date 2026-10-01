@@ -6,7 +6,7 @@ import Foundation
 /// The live value is the user's `~/Downloads`. E2E runs override it via the
 /// `--downloads-dir` launch argument so downloads land in a TCC-free temp
 /// directory — writing to the real `~/Downloads` triggers a macOS consent
-/// prompt ("Gallager would like to access files in your Downloads folder")
+/// prompt ("CtrlX would like to access files in your Downloads folder")
 /// that an unattended test app can never answer, wedging the download and
 /// the navigation that spawned it.
 public struct BrowserDownloadsLocation: Sendable {

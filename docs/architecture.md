@@ -50,7 +50,7 @@ Coding-agent integration is gated by a `CodingAgent` enum (`.claudeCode` / `.cod
 | Component | Type | Responsibility |
 |-----------|------|----------------|
 | **PluginService** | `@Observable @MainActor` | Manages the Claude Code plugin (detection + bundled install) |
-| **CodexPluginInstaller** | `struct` (Dependency) | Installs/uninstalls the bundled `gallager` Codex plugin via `codex plugin` commands so Codex forwards hooks to the local hook server |
+| **CodexPluginInstaller** | `struct` (Dependency) | Installs/uninstalls the bundled `ctrlx` Codex plugin via `codex plugin` commands so Codex forwards hooks to the local hook server |
 | **ClaudeProjectScanner** | `actor` | Scans `~/.claude.json` to discover Claude Code projects |
 | **CodexProjectScanner** | `struct` (Dependency) | Walks `~/.codex/sessions/**/rollout-*.jsonl` (honoring `CODEX_HOME`), reads each rollout's session-meta header to recover `cwd`, and groups by working directory |
 | **ClaudePathDetector** | `enum` (static) | Detects the `claude` CLI path for auto-running in new sessions |
@@ -166,7 +166,7 @@ AppCoordinator event handler
     └──→ SleepPreventionManager.updateForSessionCount()
 ```
 
-The same bridge script (`plugin/gallager/scripts/hook.py`) backs both agents. Claude Code calls it from `~/.claude/plugins/.../hooks.json` (the bundled Claude plugin); Codex calls it from `~/.codex/plugins/.../hooks.json` after `CodexPluginInstaller` registers the bundled `gallager` marketplace and installs the plugin via `codex plugin install`. The script appends `?agent=codex` to the POST when invoked by Codex so the server can tag the event correctly. Notification copy is rendered against `agent.displayName` / `shortName` so toasts read "Claude" or "Codex" as appropriate.
+The same bridge script (`plugin/ctrlx/scripts/hook.py`) backs both agents. Claude Code calls it from `~/.claude/plugins/.../hooks.json` (the bundled Claude plugin); Codex calls it from `~/.codex/plugins/.../hooks.json` after `CodexPluginInstaller` registers the bundled `ctrlx` marketplace and installs the plugin via `codex plugin install`. The script appends `?agent=codex` to the POST when invoked by Codex so the server can tag the event correctly. Notification copy is rendered against `agent.displayName` / `shortName` so toasts read "Claude" or "Codex" as appropriate.
 
 ## Multi-Device Terminal Streaming
 
@@ -234,7 +234,7 @@ CtrlxPackage/Sources/CtrlxServerFeature/
 │   ├── ClaudePathDetector.swift       # Claude CLI path detection
 │   ├── ClaudeProjectScanner.swift     # Project discovery from ~/.claude.json
 │   ├── CodexProjectScanner.swift      # Project discovery from ~/.codex/sessions/**/rollout-*.jsonl
-│   ├── CodexPluginInstaller.swift     # Bundled `gallager` Codex plugin install/uninstall via `codex plugin`
+│   ├── CodexPluginInstaller.swift     # Bundled `ctrlx` Codex plugin install/uninstall via `codex plugin`
 │   ├── DeviceConnection.swift         # Single iOS device WebSocket
 │   ├── ConnectedViewerManager.swift   # Multi-Viewer coordinator
 │   ├── ExternalServerClient.swift     # Legacy single-device client

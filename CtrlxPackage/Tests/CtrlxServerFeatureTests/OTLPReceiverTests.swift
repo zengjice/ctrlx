@@ -2,7 +2,7 @@
     import CtrlxNetworking
     import Darwin
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 

@@ -10,7 +10,7 @@ merged or closed more than --grace-days ago, then edits the linking comments
 Run daily by .github/workflows/e2e-video-cleanup.yml; also runnable locally
 (your gh auth must reach both repos):
 
-    ./scripts/e2e_video_cleanup.py --dry-run
+    ./scripts/e2e_video_cleanup.py --repo OWNER/ctrlx --results-repo OWNER/results --dry-run
 
 Tokens: results-repo calls use $RESULTS_REPO_TOKEN when set (CI), otherwise
 ambient gh auth; PR-repo calls always use ambient auth ($GH_TOKEN in CI).
@@ -176,12 +176,12 @@ def mark_pr_comments(repo, number, deleted_urls, dry_run):
     return ok
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--results-repo",
-        default="gpambrozio/ClaudeSpyTestResults",
-        help="owner/repo hosting the release (default: %(default)s)",
+        default=os.environ.get("RESULTS_REPO", "").strip(),
+        help="owner/repo hosting the release (or set RESULTS_REPO)",
     )
     parser.add_argument(
         "--release-tag",
@@ -196,15 +196,18 @@ def main():
     )
     parser.add_argument(
         "--repo",
-        default="gpambrozio/Gallager",
-        help="owner/repo the PRs live on (default: %(default)s)",
+        default=os.environ.get("GITHUB_REPOSITORY", "").strip(),
+        help="owner/repo the PRs live on (or set GITHUB_REPOSITORY)",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="print what would be deleted/edited without mutating anything",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    for name in ("repo", "results_repo"):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", getattr(args, name)):
+            parser.error(f"--{name.replace('_', '-')} must specify an owner/repo; no upstream default is used")
 
     # strip(): stray whitespace pasted into the secret would ride into the
     # Authorization header and 401 (or be rejected client-side for \n).

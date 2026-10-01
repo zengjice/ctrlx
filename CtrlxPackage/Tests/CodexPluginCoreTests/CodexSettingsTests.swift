@@ -1,6 +1,6 @@
 import CodexPluginCore
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 import Testing
 
 struct CodexSettingsTests {

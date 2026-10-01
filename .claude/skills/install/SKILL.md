@@ -36,10 +36,10 @@ Only needed when deploying the server.
 ### 2. Kill the macOS app (mac only)
 
 ```bash
-osascript -e 'quit app "Gallager"'
+osascript -e 'quit app "CtrlX"'
 ```
 
-The app's process name is "Gallager" — `pkill`/`killall` don't work reliably for this app, so always use `osascript`. After quitting, wait a few seconds to ensure the process has exited before proceeding and double-check as even `osascript` can sometimes fail silently.
+The app's process name is "CtrlX" — `pkill`/`killall` don't work reliably for this app, so always use `osascript`. After quitting, wait a few seconds to ensure the process has exited before proceeding and double-check as even `osascript` can sometimes fail silently.
 
 ### 3. Deploy the server (server only)
 

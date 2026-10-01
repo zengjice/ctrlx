@@ -245,7 +245,7 @@ Tests:
 
 ```sh
 swift test --package-path CtrlxPackage --filter 'AgentBrowserEngineTests|AgentBrowserIdentityTests'
-python3 CtrlxPackage/AgentBrowser/tests/cli.py CtrlxPackage/.build/debug/GallagerCLI
+python3 CtrlxPackage/AgentBrowser/tests/cli.py CtrlxPackage/.build/debug/CtrlxCLI
 clang++ -std=c++20 CtrlxPackage/AgentBrowser/tests/engine_identity.cc -o /tmp/codex
 python3 CtrlxPackage/AgentBrowser/tests/managed_engine.py \
   '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \

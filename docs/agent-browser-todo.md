@@ -180,4 +180,4 @@ Shadow DOM 的未测场景单列未验证；`frame` 后 eval 顶层执行是上�
 
 - [Kimi Browser Extension 产品功能](https://www.kimi.ai/resources/kimi-browser-extension)：侧栏、页面上下文和录制生成 Skill 的产品参考，不作为 CtrlX 已实现的证明。
 - [Chrome 扩展 debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)：CDP 传输、可用协议域及子会话；实现时复核当前版本。
-- 本地核对入口：[公共命令与参数限制](../CtrlxPackage/Sources/Gallager/AgentBrowserPageCommand.swift)、[引擎参数/产物适配](../CtrlxPackage/Sources/Gallager/AgentBrowserEngine.swift)、[原生 CDP 方法/事件及子会话过滤](../CtrlxPackage/AgentBrowser/EngineBridge.inc)。
+- 本地核对入口：[公共命令与参数限制](../CtrlxPackage/Sources/CtrlxCLI/AgentBrowserPageCommand.swift)、[引擎参数/产物适配](../CtrlxPackage/Sources/CtrlxCLI/AgentBrowserEngine.swift)、[原生 CDP 方法/事件及子会话过滤](../CtrlxPackage/AgentBrowser/EngineBridge.inc)。

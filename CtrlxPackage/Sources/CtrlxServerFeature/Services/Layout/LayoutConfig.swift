@@ -5,7 +5,7 @@
     /// Declarative description of a tmux session built by `ctrlx apply`.
     ///
     /// The shape is a strict superset of [tmuxp](https://tmuxp.git-pull.com)'s YAML
-    /// schema with a small set of Gallager-only extensions (`description`,
+    /// schema with a small set of CtrlX-only extensions (`description`,
     /// `color`, `claude:` pane shorthand, `on_create:`/`on_apply:` hooks).
     public struct LayoutConfig: Sendable, Equatable {
         public var sessionName: String

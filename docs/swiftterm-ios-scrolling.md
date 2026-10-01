@@ -12,6 +12,43 @@ This document details how SwiftTerm's `TerminalView` handles scrolling on iOS, t
 
 SwiftTerm's iOS `TerminalView` is a `UIScrollView` subclass that handles terminal rendering and scrollback navigation. Ctrlx wraps it in an additional scroll view to support wide terminals (horizontal scrolling), creating a nested scroll view architecture.
 
+## CoreGraphics layout reuse and device build configuration (September 30, 2026)
+
+iOS now shares the Mac CoreGraphics line-layout cache. Unchanged lines reuse
+their attributed segments, `CTLine`s and glyph runs, including lines moved by
+a restricted scroll region. Identity, mutation generation and column count
+validate each entry; row-dependent Kitty placeholders are rebuilt after moving.
+UIKit retains only the rows covered by its actual `contentOffset`/bounds,
+including a partially visible last row, rather than all scrollback history.
+
+Font, palette, foreground/background, bright-color, block-glyph and link-mode
+changes invalidate layout. Selection and dynamic link highlighting bypass it.
+DEC 2026 presentation, backing scale, caret, input/IME, scroll distances,
+Host-owned grid geometry, feed batching and transport are unchanged.
+
+`scripts/package-local-ios.sh` now defaults to **Release**, matching the
+optimized Mac build instead of installing a Debug/`-Onone` terminal renderer.
+For a same-source comparison, use `--configuration Debug`; its app lives under
+`Debug-iphoneos` and its `CtrlX-<version>-Debug.ipa` does not overwrite Release.
+Both configurations retain the same local-device signing and verification.
+
+Native cache/pixel regression tests prove reuse and correct invalidation, not
+iPhone FPS. Device acceptance should compare the same Host/session, font/grid,
+network and scroll gestures in Release and Debug. Profile the Release app's
+main-thread/CoreText work before changing dirty rectangles or feed budgets.
+No pixel-smooth or measured 60-fps claim is implied.
+
+Validation: SwiftTerm `157d01c185a82b0df7dec97123fbe3bded1bde4c` was
+published and resolved by both CtrlX dependency managers, with no other pin
+changes or local workspace override. All 524 Swift Testing and 85 XCTest
+tests passed, including native cache/pixel, synchronized-presentation and Mac
+first-frame/scale regressions. The UIKit library and shared/iOS-only cache test
+sources compiled against the device SDK; this does not execute UIKit tests.
+Eight offline packaging tests, shell syntax and brand/technical boundaries
+passed. The workspace iOS Release app build passed and its SwiftTerm invocation
+used `-O`. Logs: `/tmp/ctrlx-ios-cache-{swiftterm-full,swiftterm-ios-build,test-typecheck,release-build}.log`.
+No app installation, signed IPA verification or iPhone profiling was performed.
+
 ## Current viewport contract (September 2026)
 
 - The inner terminal has the Host's exact row/column pixel dimensions. A passive
@@ -660,7 +697,7 @@ Called on:
 ### Text Selection Across the Outer Viewport
 
 SwiftTerm owns its selection gesture and only auto-scrolls when the drag leaves the
-`TerminalView` bounds. Gallager's `TerminalView` bounds cover the complete host-sized
+`TerminalView` bounds. CtrlX's `TerminalView` bounds cover the complete host-sized
 terminal, while the iPhone shows only a smaller rectangle through the outer scroll view.
 Reaching the phone edge therefore does not leave the terminal bounds, so SwiftTerm never
 scrolls and the selection cannot extend into content outside the outer viewport. The same

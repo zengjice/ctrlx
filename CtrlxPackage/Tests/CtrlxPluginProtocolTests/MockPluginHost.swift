@@ -1,6 +1,6 @@
 import CtrlxNetworking
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// Records every `PluginHost` callback so contract tests can assert on what a
 /// core drove (spec §17.2). An `actor`, so it is `Sendable` and safe to hand to

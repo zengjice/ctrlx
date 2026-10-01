@@ -2,7 +2,7 @@ import ArgumentParser
 import Foundation
 
 @main
-struct GallagerCLI: ParsableCommand {
+struct CtrlxCLI: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ctrlx",
         abstract: "Control CtrlX from the command line",

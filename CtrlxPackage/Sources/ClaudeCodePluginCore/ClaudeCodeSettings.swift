@@ -1,5 +1,5 @@
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// Typed, Codable settings for the Claude Code plugin core. Persisted to
 /// `~/.ctrlx/state/plugins/claude-code/settings.json` with snake_case keys

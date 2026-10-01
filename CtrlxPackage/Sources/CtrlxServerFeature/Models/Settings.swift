@@ -437,12 +437,12 @@ final public class AppSettings {
 
     // MARK: - In-App Prompt Editor (Ctrl-G)
 
-    /// How Gallager handles the in-app prompt editor (Ctrl-G) when the user's
-    /// shell config clobbers the `$VISUAL` Gallager sets on tmux panes.
+    /// How CtrlX handles the in-app prompt editor (Ctrl-G) when the user's
+    /// shell config clobbers the `$VISUAL` CtrlX sets on tmux panes.
     ///
     /// `.ask` re-probes each launch and surfaces a consent dialog on the first
-    /// detected conflict; `.overrideInGallagerSessions` types `export VISUAL=…`
-    /// into Gallager's shell panes; `.useMyEditor` leaves the user's editor
+    /// detected conflict; `.overrideInCtrlxSessions` types `export VISUAL=…`
+    /// into CtrlX's shell panes; `.useMyEditor` leaves the user's editor
     /// alone and stops asking. Source of truth — `AppCoordinator` mirrors it onto
     /// `TmuxService.overrideVisualInShellPanes`. See issue #591.
     public var editorOverrideMode: EditorOverrideMode = Defaults.editorOverrideMode {
@@ -546,7 +546,7 @@ final public class AppSettings {
 
         // In-App Prompt Editor (Ctrl-G)
         self.editorOverrideMode = EditorOverrideMode(
-            rawValue: preferences.string(Keys.editorOverrideMode) ?? ""
+            persistedValue: preferences.string(Keys.editorOverrideMode) ?? ""
         ) ?? Defaults.editorOverrideMode
 
         // Launch at Login

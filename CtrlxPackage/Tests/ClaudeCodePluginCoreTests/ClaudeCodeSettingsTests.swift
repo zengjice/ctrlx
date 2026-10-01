@@ -1,6 +1,6 @@
 import ClaudeCodePluginCore
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 import Testing
 
 @Suite("ClaudeCodeSettings")

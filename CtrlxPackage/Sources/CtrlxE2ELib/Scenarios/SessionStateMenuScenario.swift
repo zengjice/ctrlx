@@ -30,7 +30,7 @@ import Foundation
 ///
 /// The complementary guarantee — that a later plugin state update *clears* the
 /// override so a live agent always wins — is the existing `applyState` behavior
-/// already e2e-proven by `GallagerCLIScenario` ("hook events override CLI
+/// already e2e-proven by `CtrlxCLIScenario` ("hook events override CLI
 /// state"): the menu writes the very same `cliSessionState` field the CLI does,
 /// so both are cleared by the same code. It isn't re-driven here because
 /// reliably re-triggering a *definite* plugin state onto an already-running

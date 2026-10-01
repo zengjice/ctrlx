@@ -1,10 +1,10 @@
 import Foundation
-import GallagerEmoji
+import CtrlxEmoji
 
 /// Resolves emoji from a free-form name or description for the CLI's
 /// `set-emoji` and `find-emoji` commands.
 ///
-/// Thin adapter over ``GallagerEmoji/EmojiDatabase``, the same keyword-aware
+/// Thin adapter over ``CtrlxEmoji/EmojiDatabase``, the same keyword-aware
 /// index the Mac/iOS picker uses. Delegating here (rather than walking Unicode
 /// scalar names as this used to) is what lets `find-emoji trash` resolve 🗑️:
 /// Foundation only exposes the formal name `WASTEBASKET`, but the shared table

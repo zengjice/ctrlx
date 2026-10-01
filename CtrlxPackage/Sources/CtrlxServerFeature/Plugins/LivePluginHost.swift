@@ -1,7 +1,7 @@
 #if os(macOS)
     import CtrlxNetworking
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
 
     /// The live `PluginHost` the runtime hands each core at `initialize` (spec §4).
     /// One instance per active plugin (it carries its own `pluginID`).

@@ -31,7 +31,7 @@ public enum LicensesScenario {
 
         TestStep.macSelectSettingsTab("About")
 
-        // The Licenses sections sit below the (tall) "Why Gallager" and
+        // The Licenses sections sit below the (tall) "Why CtrlX" and
         // "Links" sections, so their rows start off-screen. They're still in
         // the AX tree, so assert the header plus the first row of the first
         // section and the last row of the last section ("Website") exist

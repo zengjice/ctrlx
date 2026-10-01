@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import GallagerPluginProtocol
+@testable import CtrlxPluginProtocol
 
 @Suite("PluginManifest v2 fields")
 struct ManifestV2Tests {

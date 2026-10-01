@@ -1,7 +1,7 @@
 import CtrlxNetworking
 import Foundation
 import Testing
-@testable import GallagerPluginProtocol
+@testable import CtrlxPluginProtocol
 
 @Suite("StdioFramer")
 struct StdioFramerTests {

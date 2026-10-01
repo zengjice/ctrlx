@@ -1,11 +1,11 @@
 #if os(macOS)
     import CtrlxNetworking
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 
-    // MARK: - MockPluginHost (local mirror; cannot import GallagerPluginProtocolTests)
+    // MARK: - MockPluginHost (local mirror; cannot import CtrlxPluginProtocolTests)
 
     /// Records every `PluginHost` callback for assertion.
     actor MockPluginHost: PluginHost {

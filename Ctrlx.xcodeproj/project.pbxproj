@@ -13,7 +13,7 @@
 		817BF9BA2F09C7CC00BD1D53 /* CtrlxServerFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 817BF9B92F09C7CC00BD1D53 /* CtrlxServerFeature */; };
 		819180922F467B82001A43BE /* CtrlxFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 819180912F467B82001A43BE /* CtrlxFeature */; };
 		819180962F467EEF001A43BE /* CtrlxNetworking in Frameworks */ = {isa = PBXBuildFile; productRef = 819180952F467EEF001A43BE /* CtrlxNetworking */; };
-		81E2E1D52F8573260057AA49 /* GallagerCLI in Frameworks */ = {isa = PBXBuildFile; productRef = 81E2E1D42F8573260057AA49 /* GallagerCLI */; };
+		81E2E1D52F8573260057AA49 /* CtrlxCLI in Frameworks */ = {isa = PBXBuildFile; productRef = 81E2E1D42F8573260057AA49 /* CtrlxCLI */; };
 		8B41F6832DEDD23B001A66F9 /* CtrlxFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 8B41F6822DEDD23B001A66F9 /* CtrlxFeature */; };
 		8B41F6852DEDD25C001A66F9 /* CtrlxFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 8B41F6842DEDD25C001A66F9 /* CtrlxFeature */; };
 		8E90F1AF303D271400E38928 /* CtrlxServerFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 819180932F467B82001A43BE /* CtrlxServerFeature */; };
@@ -209,7 +209,7 @@
 			files = (
 				8E90F1AF303D271400E38928 /* CtrlxServerFeature in Frameworks */,
 				817BF9BA2F09C7CC00BD1D53 /* CtrlxServerFeature in Frameworks */,
-				81E2E1D52F8573260057AA49 /* GallagerCLI in Frameworks */,
+				81E2E1D52F8573260057AA49 /* CtrlxCLI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -376,7 +376,7 @@
 			packageProductDependencies = (
 				817BF9B92F09C7CC00BD1D53 /* CtrlxServerFeature */,
 				819180932F467B82001A43BE /* CtrlxServerFeature */,
-				81E2E1D42F8573260057AA49 /* GallagerCLI */,
+				81E2E1D42F8573260057AA49 /* CtrlxCLI */,
 			);
 			productName = CtrlxServer;
 			productReference = 815F9E5D2F09BFF8003791F7 /* CtrlX.app */;
@@ -715,7 +715,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"${BUILD_DIR}/${CONFIGURATION}/GallagerCLI",
+				"${BUILD_DIR}/${CONFIGURATION}/CtrlxCLI",
 			);
 			name = "Copy CtrlX CLI to bundle";
 			outputFileListPaths = (
@@ -725,7 +725,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Build the internal GallagerCLI target and install it as CtrlXCLI\nset -e\nEDITOR_PATH=\"${BUILD_DIR}/${CONFIGURATION}/GallagerCLI\"\nDEST=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/CtrlXCLI\"\n\nif [ -f \"$EDITOR_PATH\" ]; then\n    cp \"$EDITOR_PATH\" \"$DEST\"\n    # GallagerEmoji is shared by the app and the CLI, so Xcode links it as a\n    # dynamic framework embedded in Contents/Frameworks. The bare copied CLI's\n    # rpaths don't cover that (Release has only /usr/lib/swift), so add it here\n    # or every CLI invocation dies in dyld before main().\n    install_name_tool -add_rpath \"@loader_path/../Frameworks\" \"$DEST\"\n    if [ \"${CODE_SIGNING_ALLOWED:-YES}\" = YES ] && [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n        codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"$DEST\"\n    fi\nelse\n    echo \"warning: GallagerCLI build product not found at $EDITOR_PATH — build the CtrlxPackage scheme first\"\nfi\n";
+			shellScript = "# Build the internal CtrlxCLI target and install it as CtrlXCLI\nset -e\nEDITOR_PATH=\"${BUILD_DIR}/${CONFIGURATION}/CtrlxCLI\"\nDEST=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/CtrlXCLI\"\n\nif [ -f \"$EDITOR_PATH\" ]; then\n    cp \"$EDITOR_PATH\" \"$DEST\"\n    # CtrlxEmoji is shared by the app and the CLI, so Xcode links it as a\n    # dynamic framework embedded in Contents/Frameworks. The bare copied CLI's\n    # rpaths don't cover that (Release has only /usr/lib/swift), so add it here\n    # or every CLI invocation dies in dyld before main().\n    install_name_tool -add_rpath \"@loader_path/../Frameworks\" \"$DEST\"\n    if [ \"${CODE_SIGNING_ALLOWED:-YES}\" = YES ] && [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n        codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"$DEST\"\n    fi\nelse\n    echo \"warning: CtrlxCLI build product not found at $EDITOR_PATH — build the CtrlxPackage scheme first\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -806,7 +806,7 @@
 		};
 		81E2E2322F8574740057AA49 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = 81E2E2312F8574740057AA49 /* GallagerCLI */;
+			productRef = 81E2E2312F8574740057AA49 /* CtrlxCLI */;
 		};
 		8B41F65E2DEDD0D6001A66F9 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1515,15 +1515,15 @@
 			package = 819180902F467B82001A43BE /* XCLocalSwiftPackageReference "CtrlxPackage" */;
 			productName = CtrlxNetworking;
 		};
-		81E2E1D42F8573260057AA49 /* GallagerCLI */ = {
+		81E2E1D42F8573260057AA49 /* CtrlxCLI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 819180902F467B82001A43BE /* XCLocalSwiftPackageReference "CtrlxPackage" */;
-			productName = GallagerCLI;
+			productName = CtrlxCLI;
 		};
-		81E2E2312F8574740057AA49 /* GallagerCLI */ = {
+		81E2E2312F8574740057AA49 /* CtrlxCLI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 819180902F467B82001A43BE /* XCLocalSwiftPackageReference "CtrlxPackage" */;
-			productName = GallagerCLI;
+			productName = CtrlxCLI;
 		};
 		8B41F6822DEDD23B001A66F9 /* CtrlxFeature */ = {
 			isa = XCSwiftPackageProductDependency;

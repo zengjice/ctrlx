@@ -113,18 +113,18 @@
             self.loaded = true
         }
 
-        /// Stored under the Gallager state root (`~/.ctrlx/state/Layouts`, or
+        /// Stored under the CtrlX state root (`~/.ctrlx/state/Layouts`, or
         /// the per-instance `--ctrlx-state-root` under E2E) so test runs stay
         /// isolated and auto-cleaned rather than touching the real user library.
         static var defaultDirectory: URL? {
-            GallagerPaths(stateRootOverride: parseStateRootOverride())
+            CtrlxPaths(stateRootOverride: parseStateRootOverride())
                 .stateRoot
                 .appendingPathComponent("Layouts", isDirectory: true)
         }
 
         /// Mirror of `AppCoordinator`'s `--ctrlx-state-root` parse so the
         /// static live store lands in the same isolated tree the rest of the app
-        /// uses, without threading `GallagerPaths` through a `@Dependency`.
+        /// uses, without threading `CtrlxPaths` through a `@Dependency`.
         private static func parseStateRootOverride() -> URL? {
             let args = CommandLine.arguments
             guard

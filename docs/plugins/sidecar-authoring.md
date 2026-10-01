@@ -1,20 +1,23 @@
 # Sidecar Plugin Authoring Guide
 
-This is the durable external contract for building a v2 sidecar plugin for Gallager
-(Ctrlx Mac app). A sidecar plugin is a standalone executable that Gallager spawns
+This is the durable external contract for building a v2 sidecar plugin for CtrlX
+(Ctrlx Mac app). A sidecar plugin is a standalone executable that CtrlX spawns
 as a child process and communicates with over stdio using JSON-RPC.
 
-> **Authoring shortcut:** the `gallager` Claude Code plugin bundles a
+Swift integrations import `CtrlxPluginProtocol`; the module rename does not change
+the JSON-RPC vocabulary, wire keys, or plugin storage paths.
+
+> **Authoring shortcut:** the `ctrlx` Claude Code plugin bundles a
 > `create-agent-plugin` skill (`plugin/ctrlx/skills/create-agent-plugin/`) that
 > scaffolds a working sidecar from a runnable Python template and a self-contained
 > copy of this contract. This document remains the source of truth; the skill is the
 > guided path.
 
 **Key source files** (read these if you need more detail):
-- `CtrlxPackage/Sources/GallagerPluginProtocol/Manifest.swift` — manifest schema
-- `CtrlxPackage/Sources/GallagerPluginProtocol/SidecarWire.swift` — RPC vocabulary + framing
+- `CtrlxPackage/Sources/CtrlxPluginProtocol/Manifest.swift` — manifest schema
+- `CtrlxPackage/Sources/CtrlxPluginProtocol/SidecarWire.swift` — RPC vocabulary + framing
 - `CtrlxPackage/Sources/CtrlxServerFeature/Plugins/Sidecar/SidecarSupervisor.swift` — spawn, crash policy
-- `CtrlxPackage/Sources/GallagerPluginProtocol/IngressFrame.swift` — hook ingress frame
+- `CtrlxPackage/Sources/CtrlxPluginProtocol/IngressFrame.swift` — hook ingress frame
 - `plugin/ctrlx/scripts/hook.py` — reference hook bridge implementation
 
 ---
@@ -22,7 +25,7 @@ as a child process and communicates with over stdio using JSON-RPC.
 ## 1. Manifest Schema
 
 A sidecar plugin is a directory under `~/.ctrlx/plugins/<id>/` containing a
-`plugin.json` manifest and an executable. Gallager reads `plugin.json` at startup.
+`plugin.json` manifest and an executable. CtrlX reads `plugin.json` at startup.
 
 ### JSON keys (snake_case)
 
@@ -81,14 +84,14 @@ The `id` field is used as a filesystem path component. It must pass all of:
 - Does not contain `..` (no directory traversal)
 - Length ≤ 128 characters
 
-The directory name under `~/.ctrlx/plugins/` must exactly equal `id`. Gallager rejects
+The directory name under `~/.ctrlx/plugins/` must exactly equal `id`. CtrlX rejects
 any folder where `sanitize(id)` does not match the directory name.
 
 ---
 
 ## 2. Stdio JSON-RPC Transport
 
-Gallager communicates with the sidecar over the process's `stdin`/`stdout` using
+CtrlX communicates with the sidecar over the process's `stdin`/`stdout` using
 LSP-style Content-Length framing.
 
 > **Key casing — read this first.** The stdio transport serializes its Swift wire
@@ -112,7 +115,7 @@ Content-Length: <byte-count>\r\n
 
 - The header is ASCII, terminated by `\r\n\r\n`.
 - `Content-Length` is the byte count of the JSON body only (not including the header).
-- Gallager enforces a maximum header size of 16 KiB and a maximum body size of 32 MiB.
+- CtrlX enforces a maximum header size of 16 KiB and a maximum body size of 32 MiB.
 
 **This framing is only for the stdio transport.** The hook ingress socket uses a
 different format (4-byte big-endian length prefix — see Section 4).
@@ -135,7 +138,7 @@ Rules:
 - **Response**: `id` present, `method` absent. Must echo the exact `id` of the request it answers.
 
 **Responses MUST echo the request `id`.** A response whose `id` does not match any
-pending request is silently discarded by Gallager.
+pending request is silently discarded by CtrlX.
 
 An error response looks like:
 
@@ -148,11 +151,11 @@ An error response looks like:
 
 ### App → Sidecar methods (App sends, Sidecar responds)
 
-These are all **requests** (Gallager expects a response for each):
+These are all **requests** (CtrlX expects a response for each):
 
 | Method | Description |
 |--------|-------------|
-| `initialize` | Sent once at startup. `params` is a serialized `PluginEnvWire` object (see below). The sidecar must respond before Gallager considers it ready. |
+| `initialize` | Sent once at startup. `params` is a serialized `PluginEnvWire` object (see below). The sidecar must respond before CtrlX considers it ready. |
 | `translate_event` | Deliver a hook event. `params` is an `IngressFrameWire` object: `{pluginID, context, payload}` (camelCase `pluginID` — note this differs from the snake_case `plugin_id` your hook writes to the ingress socket in Section 4). |
 | `deliver_response` | Deliver the result of a `prompt_user` request (when `capabilities.modal_prompts` is true). |
 | `refresh_projects` | Ask the sidecar to rescan and re-emit its project list. |
@@ -161,7 +164,7 @@ These are all **requests** (Gallager expects a response for each):
 | `uninstall` | Ask the sidecar to remove the agent's plugin from the config. |
 | `install_status` | Ask whether the agent's plugin is installed. |
 | `apply_settings` | Deliver updated settings JSON. `params` contains the new settings value. |
-| `shutdown` | Graceful shutdown signal. The sidecar should flush state and exit. Gallager follows with SIGTERM after 5 seconds, then SIGKILL. |
+| `shutdown` | Graceful shutdown signal. The sidecar should flush state and exit. CtrlX follows with SIGTERM after 5 seconds, then SIGKILL. |
 | `detect_pane` | Only sent when `capabilities.rich_pane_detection` is true. `params` is a `SidecarPaneInfo` object: `{paneID, processNames, command, cwd}`. Returns a `SidecarPaneMatch`: `{matches, projectPath, sessionID}`. |
 
 #### `PluginEnvWire` (params for `initialize`)
@@ -195,7 +198,7 @@ of this section.)
 | `send_text` | Ask the app to type text into the currently focused pane. |
 | `send_keys` | Ask the app to send key sequences to the currently focused pane. |
 | `log` | Write a log line to the plugin's sidecar log. `params`: `{level, message}` where `level` is one of `"debug"`, `"info"`, `"warn"`, `"error"`. |
-| `prompt_user` | Only valid when `capabilities.modal_prompts` is true. Asks Gallager to show a modal dialog. `params`: `{title, message?}`. Gallager responds via a `deliver_response` request. |
+| `prompt_user` | Only valid when `capabilities.modal_prompts` is true. Asks CtrlX to show a modal dialog. `params`: `{title, message?}`. CtrlX responds via a `deliver_response` request. |
 
 #### Requests (Sidecar sends, App responds)
 
@@ -205,7 +208,7 @@ of this section.)
 
 ### Unrecognized methods
 
-Gallager responds to any unrecognized request with:
+CtrlX responds to any unrecognized request with:
 
 ```json
 {
@@ -220,7 +223,7 @@ The sidecar should do the same for unrecognized methods it receives.
 
 ## 3. Spawn Environment
 
-When Gallager spawns the sidecar executable it inherits the full parent process
+When CtrlX spawns the sidecar executable it inherits the full parent process
 environment and adds these five plugin-specific variables:
 
 | Variable | Example | Description |
@@ -238,7 +241,7 @@ The sidecar's current working directory is set to `CTRLX_PLUGIN_ROOT`.
 ## 4. Hook Ingress (for hook-based agents)
 
 If your agent uses hook scripts (like Claude Code's `PostToolUse` hooks or Codex CLI's
-hooks), those scripts connect to the ingress socket to forward events into Gallager.
+hooks), those scripts connect to the ingress socket to forward events into CtrlX.
 Your sidecar's `install` implementation should template `CTRLX_INGRESS_SOCK` and
 `CTRLX_PLUGIN_ID` into a hook bridge script.
 
@@ -301,7 +304,7 @@ try:
         sock.connect(SOCKET_PATH)
         sock.sendall(frame)
 except Exception:
-    pass  # Gallager not running — drop silently.
+    pass  # CtrlX not running — drop silently.
 ```
 
 **Platform note:** `socket.AF_UNIX` is available in Python 3.9+ on macOS and Linux.
@@ -314,15 +317,15 @@ GNU netcat use `nc --unixsock <path>` (the `-U` flag is BSD-only).
 
 ### Startup
 
-1. Gallager spawns the executable with the spawn environment described in Section 3.
-2. Gallager immediately sends an `initialize` request with the `PluginEnvWire` payload.
+1. CtrlX spawns the executable with the spawn environment described in Section 3.
+2. CtrlX immediately sends an `initialize` request with the `PluginEnvWire` payload.
 3. The sidecar must respond to `initialize` before any other requests are sent.
-4. Gallager closes its copies of the child-inherited pipe ends after spawning
+4. CtrlX closes its copies of the child-inherited pipe ends after spawning
    (`stdin.fileHandleForReading`, `stdout.fileHandleForWriting`, `stderr.fileHandleForWriting`).
 
 ### Supervised restarts
 
-Gallager supervises the sidecar. On unexpected exit (not triggered by a `stop()` call):
+CtrlX supervises the sidecar. On unexpected exit (not triggered by a `stop()` call):
 
 1. The crash is recorded with a timestamp.
 2. Crashes are counted in a rolling 60-second window.
@@ -330,12 +333,12 @@ Gallager supervises the sidecar. On unexpected exit (not triggered by a `stop()`
 4. On the 4th crash within the 60-second window the plugin is **auto-disabled**.
    The last 50 lines of stderr are collected for the crash-loop banner.
 
-**After any restart, Gallager re-sends `initialize`.** Your sidecar must be prepared to
+**After any restart, CtrlX re-sends `initialize`.** Your sidecar must be prepared to
 receive a fresh `initialize` at any point and treat it as a clean-slate startup.
 
 ### Shutdown
 
-On graceful shutdown Gallager:
+On graceful shutdown CtrlX:
 1. Sends a `shutdown` request.
 2. Waits for the sidecar to exit.
 3. Sends SIGTERM after 5 seconds if the process is still running.
@@ -357,9 +360,9 @@ separate from structured log lines written via the `log` notification, which go 
 
 ## 6. Telemetry (Optional)
 
-If your agent (or your bridge) can emit OTLP, Gallager will aggregate a per-session
+If your agent (or your bridge) can emit OTLP, CtrlX will aggregate a per-session
 token / cost / latency / model meter for it — the same meter Claude Code and Codex
-get. Gallager runs a local OTLP/JSON receiver on the IPv4 loopback
+get. CtrlX runs a local OTLP/JSON receiver on the IPv4 loopback
 (`http://127.0.0.1:<port>`, default port `24318` but not guaranteed — always use
 the `otlpReceiverEndpoint` value received in the `initialize` params verbatim).
 
@@ -425,7 +428,7 @@ Two steps:
 The `plugins/opencode/` bundled plugin is the reference consumer: its bridge
 (`opencode-bridge/ctrlx.js`) POSTs one record per completed assistant message
 with a plain `fetch`, and its sidecar bakes the endpoint into the bridge at
-`install` time (the agent process does not inherit Gallager's env).
+`install` time (the agent process does not inherit CtrlX's env).
 `plugins/pi/` follows the same pattern from a pi extension
 (`pi-bridge/ctrlx.ts` — one record per assistant `message_end`). If your
 agent has a native OTLP exporter you can instead point that exporter at the
@@ -439,7 +442,7 @@ declaration.
 ### Packaging (both modes)
 
 `scripts/package-plugin.sh <plugin-dir>` builds the bundle for you — it validates
-the tree the same way Gallager will (manifest at the root, declared executable
+the tree the same way CtrlX will (manifest at the root, declared executable
 present *and* executable, declared `ui.icon` present), zips the plugin tree at the
 archive root, and prints the SHA-256. Add `--base-url <https-url>` (where both files
 will be hosted, no filename) and it also emits a ready-to-host distribution
@@ -467,9 +470,9 @@ The bundle must be a zip archive whose root contains `plugin.json` and the execu
 
 Users install via:
 - **Settings UI:** "Add Plugin from URL…" — paste the manifest URL
-- **CLI:** `gallager plugin install https://example.com/plugin.json`
+- **CLI:** `ctrlx plugin install https://example.com/plugin.json`
 
-Install flow (enforced by Gallager):
+Install flow (enforced by CtrlX):
 1. Fetch the manifest over HTTPS. Non-`https://` URLs are rejected.
 2. Validate `schema_version == 1`, id sanitization passes.
 3. Present a trust confirmation dialog showing publisher, id, version, and bundle URL.
@@ -489,9 +492,9 @@ the executable (the same archive layout as the remote `bundle_url`). No `manifes
 
 Users install via:
 - **Settings UI:** Agents tab → "Install from Zip…" — pick the `.zip` in the open panel.
-- **CLI:** `gallager plugin install --zip <path>` (add `--yes` to skip the trust prompt).
+- **CLI:** `ctrlx plugin install --zip <path>` (add `--yes` to skip the trust prompt).
 
-Install flow (enforced by Gallager):
+Install flow (enforced by CtrlX):
 1. Peek `plugin.json` at the archive root (no extraction yet) and validate
    `schema_version == 1` + id sanitization.
 2. Present the same trust confirmation dialog (showing publisher, id, version, the
@@ -507,7 +510,7 @@ newer zip to upgrade.
 
 ### Folder-drop install
 
-Copy the plugin directory directly into `~/.ctrlx/plugins/<id>/`. Gallager discovers
+Copy the plugin directory directly into `~/.ctrlx/plugins/<id>/`. CtrlX discovers
 it on the next launch. Requirements:
 - Directory name must equal the manifest's `id` (after sanitization).
 - `plugin.json` must decode successfully with `runtime == "sidecar"`.
@@ -516,7 +519,7 @@ it on the next launch. Requirements:
 ### Updates
 
 ```
-gallager plugin update <id>
+ctrlx plugin update <id>
 ```
 
 Fetches the manifest from the stored `manifest_url`, repeats the download/verify/unpack
@@ -526,28 +529,28 @@ currently send `If-None-Match` (a v2.x follow-on).
 #### Auto-update contract (for plugin authors)
 
 URL-installed plugins are also checked automatically, with no user action needed:
-once when Gallager first launches after an app-version change, and at most once daily
-thereafter while Gallager keeps running. Each plugin has an opt-out toggle in
+once when CtrlX first launches after an app-version change, and at most once daily
+thereafter while CtrlX keeps running. Each plugin has an opt-out toggle in
 Settings → Agents (`autoUpdate` on the plugin's `registry.json` entry, default `true`);
 users can also force an immediate check with "Check Now".
 
 Automatic updates go through the exact same manifest-fetch → SHA-256 → zip-validation →
-atomic-commit pipeline as `gallager plugin update`. **A changed bundle host is never
+atomic-commit pipeline as `ctrlx plugin update`. **A changed bundle host is never
 auto-installed:** if the freshly-fetched manifest's `bundle_url` host differs from the
-one recorded when the plugin was installed, Gallager shows "Update _version_ is served
+one recorded when the plugin was installed, CtrlX shows "Update _version_ is served
 from a new source" with a "Review…" button and requires the user to go through the
 manual trust flow instead of silently trusting a new host.
 
 Once an update lands on disk — via any path that replaces an already-installed
-plugin: an automatic or "Check Now" apply, `gallager plugin update`, completing the
-source-changed Review… trust flow, `gallager plugin install` over an existing id, or
-a zip reinstall — Gallager brings the running sidecar up to date:
+plugin: an automatic or "Check Now" apply, `ctrlx plugin update`, completing the
+source-changed Review… trust flow, `ctrlx plugin install` over an existing id, or
+a zip reinstall — CtrlX brings the running sidecar up to date:
 - **No active sessions:** the sidecar is hot-restarted (disable → enable), then
-  Gallager re-invokes your `install` RPC for every config root that currently reports
+  CtrlX re-invokes your `install` RPC for every config root that currently reports
   `install_status: installed` — this re-lays the hook/bridge files for the new version
   without any user action.
 - **Active sessions:** the old sidecar process is left running so live sessions aren't
-  disrupted, and the bridge refresh is deferred until Gallager's next launch.
+  disrupted, and the bridge refresh is deferred until CtrlX's next launch.
 
 **Implication for plugin authors:** your `install` RPC handler must be safe to call
 repeatedly against a target that's already installed — idempotent, and atomic so a
@@ -563,7 +566,7 @@ that missed a refresh — diagnosable by inspection instead of guesswork.
 ### Uninstall
 
 ```
-gallager plugin uninstall <id>
+ctrlx plugin uninstall <id>
 ```
 
 Calls the sidecar's `uninstall` RPC (which removes hook files from agent config
@@ -587,7 +590,7 @@ deletes the state directory when `--delete-state` is passed.
 
 ```python
 #!/usr/bin/env python3
-"""Minimal Gallager sidecar — handles initialize/shutdown, ignores everything else."""
+"""Minimal CtrlX sidecar — handles initialize/shutdown, ignores everything else."""
 import json, sys
 
 def read_message():
@@ -624,7 +627,7 @@ while True:
 
 ## 9. Security Model
 
-**Honest scope:** Gallager v2 provides **trusted-on-install, hash-pinned, runs with
+**Honest scope:** CtrlX v2 provides **trusted-on-install, hash-pinned, runs with
 your permissions** security — not "safe to run untrusted plugins."
 
 What the v2 security model does:

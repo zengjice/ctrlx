@@ -1288,14 +1288,14 @@ public actor TestOrchestrator {
     /// sidecar on startup (folder-drop channel, spec §9).
     ///
     /// `<ctrlxRoot>` is the parent of the instance's `--ctrlx-state-root`
-    /// (mirrors `GallagerPaths(stateRootOverride:).ctrlxRoot`).
+    /// (mirrors `CtrlxPaths(stateRootOverride:).ctrlxRoot`).
     private func stageSidecarFixture(
         id: String,
         instance: Int,
         otlpNamespace: String? = nil,
         displayName: String = "Echo Sidecar (E2E)"
     ) throws {
-        // ctrlxRoot = parent of stateRoot (same derivation as GallagerPaths).
+        // ctrlxRoot = parent of stateRoot (same derivation as CtrlxPaths).
         let stateRoot = URL(fileURLWithPath: ctrlxStateRootPath(for: instance))
         let ctrlxRoot = stateRoot.deletingLastPathComponent()
         let pluginDir = ctrlxRoot
@@ -1533,7 +1533,7 @@ public actor TestOrchestrator {
 
     /// Return the ingress socket path for the given instance — the
     /// `ingress.sock` under that instance's `--ctrlx-state-root` (mirrors
-    /// `GallagerPaths.ingressSocketPath`). The hook-delivery DSL step connects
+    /// `CtrlxPaths.ingressSocketPath`). The hook-delivery DSL step connects
     /// here to write length-prefixed frames.
     private func ingressSocketPath(for instance: Int) -> String {
         "\(ctrlxStateRootPath(for: instance))/ingress.sock"
@@ -1577,7 +1577,7 @@ public actor TestOrchestrator {
         /// exit-status prompt themes would flag `$? = 1` at the first prompt.
         func delegating(to file: String, in root: String) -> String {
             """
-            # Written by the Gallager E2E orchestrator. Delegates to the user's
+            # Written by the CtrlX E2E orchestrator. Delegates to the user's
             # real \(file) so e2e shells behave like normal ones.
             if [[ -f "\(root)/\(file)" ]]; then
               source "\(root)/\(file)"

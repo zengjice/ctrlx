@@ -3,7 +3,7 @@ import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// The OpenAI Codex CLI agent, behind the agent-blind `PluginCore` contract.
 /// An in-process actor constructed from the compile-time registry.

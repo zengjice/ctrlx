@@ -25,7 +25,7 @@ struct WaitReadyCommand: ParsableCommand {
         abstract: "Block until CtrlX responds to ping, or fail after a timeout",
         discussion: """
         Polls `system.ping` until it succeeds, then exits 0. Useful in
-        login-time scripts that fire before the Gallager app finishes launching.
+        login-time scripts that fire before the CtrlX app finishes launching.
         """
     )
 

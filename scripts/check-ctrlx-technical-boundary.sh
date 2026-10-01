@@ -12,6 +12,19 @@ if rg -n -g '!check-ctrlx-technical-boundary.sh' "$forbidden" $runtime_paths; th
   exit 1
 fi
 
+internal_names='GallagerCLI|GallagerEmoji|GallagerPluginProtocol|GallagerPaths|GallagerProgressReporter|parseGallagerStateRoot|runGallager|resolveGallager|Sources/Gallager/'
+if rg -n "$internal_names" CtrlxPackage/Package.swift CtrlxPackage/Sources \
+  CtrlxPackage/Tests Ctrlx.xcodeproj CtrlxServerTests .github .vscode .claude \
+  AGENTS.md docs/emoji-search.md docs/services-reference.md \
+  docs/plugins/sidecar-authoring.md docs/agent-browser*.md scripts/generate-emoji-data.py; then
+  printf '\nCtrlX technical boundary check failed: a legacy internal name remains.\n' >&2
+  exit 1
+fi
+if rg --files CtrlxPackage/Sources CtrlxPackage/Tests | rg '(^|/)Gallager'; then
+  printf '\nCtrlX technical boundary check failed: a legacy source path remains.\n' >&2
+  exit 1
+fi
+
 required_patterns='com\.jicezeng\.ctrlx\.macos|com\.jicezeng\.ctrlx\.notification-service|group\.com\.jicezeng\.ctrlx|com\.jicezeng\.ctrlx\.shared|CTRLX_SOCKET|@ctrlx-description|\.ctrlx|ctrlx\.sock|CTRLX_SOURCE_REVISION|app\.get\("source"\)'
 for pattern in $(printf '%s' "$required_patterns" | tr '|' ' '); do
   if ! rg -q "$pattern" $runtime_paths; then

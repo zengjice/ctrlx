@@ -54,7 +54,7 @@
             var paneState = PaneState(paneId: "%1", sessionName: "work")
             paneState.agentSession = AgentSession(
                 paneId: "%1",
-                detectedProjectPath: "/Users/me/Dev/Gallager",
+                detectedProjectPath: "/Users/me/Dev/CtrlX",
                 state: .doneWorking(summary: nil)
             )
             let data = SessionSortData.forLocalSession(
@@ -65,7 +65,7 @@
                 sidebarTerminalFields: terminalFields
             )
             #expect(data.hasClaude)
-            #expect(data.primaryLabel == "Gallager")
+            #expect(data.primaryLabel == "CtrlX")
             #expect(data.statusPriority == 0)
         }
 

@@ -290,7 +290,7 @@ public enum TerminalProgressBarScenario {
         // The host's API socket is `ctrlx-e2e.sock` (set in AppCoordinator
         // when running with `--e2e-test`). The CLI binary lives next to the
         // app under `Contents/MacOS/CtrlXCLI` — same path the
-        // GallagerCLIScenario uses to drive the CLI.
+        // CtrlxCLIScenario uses to drive the CLI.
         Shortcut.tmuxRunCommand(
             target: "e2e-progress:0.0",
             command: #"CTRLX_SOCKET="$TMPDIR/ctrlx-e2e.sock" "${macOSAppPath}/Contents/MacOS/CtrlXCLI" set-progress 90 > /tmp/e2e-progress-cli-override.txt 2>&1"#

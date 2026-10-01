@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ``EmojiData.swift`` for the ``GallagerEmoji`` target.
+"""Generate ``EmojiData.swift`` for the ``CtrlxEmoji`` target.
 
 The Mac/iOS emoji picker and the ``ctrlx find-emoji`` / ``set-emoji`` CLI
 commands both need to resolve an emoji from a free-form query like ``trash``,
@@ -7,15 +7,15 @@ commands both need to resolve an emoji from a free-form query like ``trash``,
 name (``WASTEBASKET`` for 🗑️), which is why searching for "trash" used to find
 nothing. This script pulls the CLDR-derived keyword annotations from
 `emojibase-data` and bakes them into a compact tab-separated table that is
-embedded directly in the ``GallagerEmoji`` binary (no runtime resource bundle,
-so the single-file ``GallagerCLI`` copied into the app bundle stays
+embedded directly in the ``CtrlxEmoji`` binary (no runtime resource bundle,
+so the single-file ``CtrlxCLI`` copied into the app bundle stays
 self-contained).
 
 Run it whenever you want to refresh the emoji set:
 
     python3 scripts/generate-emoji-data.py
 
-It rewrites ``CtrlxPackage/Sources/GallagerEmoji/EmojiData.swift`` in place.
+It rewrites ``CtrlxPackage/Sources/CtrlxEmoji/EmojiData.swift`` in place.
 The output is deterministic (sorted by group then CLDR display order) so
 re-running with the same upstream data produces no diff.
 """
@@ -81,7 +81,7 @@ OUTPUT_PATH = os.path.join(
     REPO_ROOT,
     "CtrlxPackage",
     "Sources",
-    "GallagerEmoji",
+    "CtrlxEmoji",
     "EmojiData.swift",
 )
 

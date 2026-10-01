@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simulates the Gallager CLI `edit` command for E2E testing.
+Simulates the CtrlX CLI `edit` command for E2E testing.
 
 Connects to the app's E2E API socket, sends a JSON-RPC `editor.open` request,
 then blocks until the app responds (after the user finishes editing in the overlay).

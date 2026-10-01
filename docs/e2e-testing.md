@@ -98,11 +98,11 @@ The macOS app accepts `--tmux-socket <path>` (alongside `--e2e-test`) to use a d
 
 ### Plugin state isolation
 
-Sidecar plugins are staged (`macStageSidecarFixture`) or installed (`gallager plugin install`) into the app's `~/.gallager` tree, which E2E redirects under a shared per-suite base via `--gallager-state-root`. The folder-dropped/installed bundles live in `<base>/plugins/<id>` and the installed-plugin registry in `<base>/registry.json` — both **siblings** of the per-scenario `<base>/<idx>` state root. During cleanup the orchestrator wipes this shared plugin state (`plugins/`, `registry.json`, and the E2E `zip-fixtures/` staging dir) too, so a plugin staged or installed by one scenario cannot leak into a later scenario that opens Settings → Agents. Each scenario re-stages what it needs at launch, keeping plugin state deterministic and independent of scenario order (issue #690).
+Sidecar plugins are staged (`macStageSidecarFixture`) or installed (`ctrlx plugin install`) into the app's `~/.ctrlx` tree, which E2E redirects under a shared per-suite base via `--ctrlx-state-root`. The folder-dropped/installed bundles live in `<base>/plugins/<id>` and the installed-plugin registry in `<base>/registry.json` — both **siblings** of the per-scenario `<base>/<idx>` state root. During cleanup the orchestrator wipes this shared plugin state (`plugins/`, `registry.json`, and the E2E `zip-fixtures/` staging dir) too, so a plugin staged or installed by one scenario cannot leak into a later scenario that opens Settings → Agents. Each scenario re-stages what it needs at launch, keeping plugin state deterministic and independent of scenario order (issue #690).
 
 ### Shell history isolation
 
-Shells spawned in E2E panes never write to the developer's `~/.zsh_history`. The orchestrator maintains a `$ZDOTDIR` shim directory (`<TMPDIR>/gallager-e2e-zdotdir`) whose zsh startup files source the user's real dotfiles — so the shell behaves exactly like a normal one — and then unset `HISTFILE` after the user's rc has run. A plain `HISTFILE=` env var wouldn't work: macOS's `/etc/zshrc` reassigns `HISTFILE` after tmux applies the pane environment.
+Shells spawned in E2E panes never write to the developer's `~/.zsh_history`. The orchestrator maintains a `$ZDOTDIR` shim directory (`<TMPDIR>/ctrlx-e2e-zdotdir`) whose zsh startup files source the user's real dotfiles — so the shell behaves exactly like a normal one — and then unset `HISTFILE` after the user's rc has run. A plain `HISTFILE=` env var wouldn't work: macOS's `/etc/zshrc` reassigns `HISTFILE` after tmux applies the pane environment.
 
 The shim reaches both spawn paths: orchestrator-created sessions get `-e ZDOTDIR=<shim>` on `new-session` directly, and app-created panes get it via the `--zdotdir <shim>` launch argument, which the composition root forwards to `TmuxService.zdotDirOverride`. The shim path is deliberately stable (shared across instances and runs) so zsh's `.zcompdump-*` completion cache is reused. Side effect: commands you type into panes during `--interactive` sessions aren't recorded either. Verified end-to-end by the "Terminal Env Vars" scenario.
 
@@ -152,8 +152,8 @@ Build all targets first, then:
 
 ```bash
 CtrlxE2E \
-    --ios-app-path /path/to/Gallager.app \
-    --macos-app-path /path/to/Gallager.app \
+    --ios-app-path /path/to/CtrlX.app \
+    --macos-app-path /path/to/CtrlX.app \
     --sim-name "iPhone 17 Pro" \
     --screenshots-dir /tmp/e2e-screenshots \
     --baselines-dir ./E2ETests \
@@ -178,7 +178,7 @@ CtrlxE2E --scenario "Fresh Pairing" ...
 - The simulator named in `--sim-name` must exist (`xcrun simctl list devices available`)
 - Accessibility permissions for Terminal/IDE (System Settings > Privacy > Accessibility)
 - `xcsift` installed (`brew install xcsift`) for build output filtering
-- **macOS 15+ Local Network:** the app no longer does a blocking local-network call at startup, so a fresh machine runs without a Local Network prompt. (If you ever do see Gallager hang at launch with a "find devices on your local network" prompt, allow it once in System Settings > Privacy & Security > Local Network and re-run.)
+- **macOS 15+ Local Network:** the app no longer does a blocking local-network call at startup, so a fresh machine runs without a Local Network prompt. (If you ever do see CtrlX hang at launch with a "find devices on your local network" prompt, allow it once in System Settings > Privacy & Security > Local Network and re-run.)
 
 ## Recording runs as video (`--record`)
 
@@ -206,7 +206,7 @@ failure) by `RecordingCoordinator`, a `TestProgressReporter`.
 - **Artifacts** per scenario dir: `timeline.json` (raw step offsets),
   `video.mp4`, `video.json` (published duration + remapped seek chapters).
   `e2e-report.sh` stores the video content-addressed (`images/<sha>.mp4`) and
-  embeds a `video` field in `report.json`; the ClaudeSpyTestResults viewer
+  embeds a `video` field in `report.json`; the CtrlxTestResults viewer
   plays it with clickable step-seek chapters.
 - **Caveats:** records the whole desktop — prefer CI VMs over personal
   machines; incidental system UI can appear; occlusion is minimized, not
@@ -215,9 +215,13 @@ failure) by `RecordingCoordinator`, a `TestProgressReporter`.
 
 ### Attaching a video to a PR (`e2e-attach-video.sh`)
 
+Set `RESULTS_REPO=OWNER/results` (or pass `--results-repo OWNER/results`) before
+uploading or fetching named assets. There is no default upstream repository.
+Local files and full release URLs remain usable without this setting.
+
 `./scripts/e2e-attach-video.sh "Scenario Name"` uploads a recorded scenario's
-`video.mp4` as an asset on the rolling `e2e-videos` prerelease of
-ClaudeSpyTestResults (official `gh release upload` API — no repo history, no
+`video.mp4` as an asset on the configured results repo's rolling `e2e-videos`
+prerelease (official `gh release upload` API — no repo history, no
 undocumented endpoints) and posts a PR comment linking it. Video proof that a
 feature works, discardable after review:
 
@@ -234,9 +238,9 @@ scenario (a bug-fix repro pair), `--label failing` / `--label passing` suffixes
 the asset name and link title so the uploads don't clobber each other — attach
 each take before re-recording, since a new run overwrites the local
 `video.mp4`. Assets are named `pr<N>-<scenario-dir>.mp4`
-(re-runs clobber), post as `gpa-agent` when `BOT_GITHUB_TOKEN` is set, and are
+(re-runs clobber), use the configured bot when `BOT_GITHUB_TOKEN` is set, and are
 deletable any time: `gh release delete-asset e2e-videos <asset>.mp4 --repo
-gpambrozio/ClaudeSpyTestResults`. Note: release-asset links download rather
+"$RESULTS_REPO"`. Note: release-asset links download rather
 than play inline, and require access to the (private) results repo — use
 `e2e-watch-video.sh` (below) to watch one in the browser.
 
@@ -252,7 +256,8 @@ release-asset download URL, a local video file / scenario dir (opened
 directly), or a scenario name (`--pr N`, defaulting to the current branch's
 PR). `--results-repo` / `--release-tag` override the defaults, as with the
 attach script. The attach script's PR comments include a copy-pasteable
-`watch:` hint per video.
+`watch:` hint per video with the upload's repository and release tag, so the
+command does not depend on the viewer's `RESULTS_REPO` environment variable.
 
 Design: `docs/superpowers/specs/2026-07-05-e2e-watch-video-design.md`.
 
@@ -263,11 +268,13 @@ whose PR merged or closed more than 3 days ago are deleted, and the PR comments
 that linked them are edited (links struck through, deletion note appended) so
 nobody clicks dead links. Open — including reopened — PRs are skipped; asset
 names not matching `pr<N>-*.mp4` are left alone. Needs the `RESULTS_REPO_TOKEN`
-secret (fine-grained PAT, Contents read/write on ClaudeSpyTestResults only);
-everything on Ctrlx uses the workflow's own token. Also runs locally:
+secret (fine-grained PAT, Contents read/write on the configured results repo only)
+and the `RESULTS_REPO` repository variable. The job is skipped until that variable
+is configured; PR lookups target the current GitHub repository using its workflow
+token. Also runs locally:
 
 ```bash
-./scripts/e2e_video_cleanup.py --dry-run   # print, don't mutate
+./scripts/e2e_video_cleanup.py --repo OWNER/ctrlx --results-repo OWNER/results --dry-run
 ```
 
 Design: `docs/superpowers/specs/2026-07-02-e2e-video-cleanup-design.md`.
@@ -637,12 +644,15 @@ Captures are best-effort: if a platform isn't running, or the screenshot itself 
 
 ## Test report generation
 
-The `e2e-report.sh` script runs all E2E scenarios, collects results and screenshots, and publishes a report to the [ClaudeSpyTestResults](https://github.com/gpambrozio/ClaudeSpyTestResults) repository.
+The `e2e-report.sh` script runs all E2E scenarios, collects results and screenshots,
+and publishes a report to an explicitly configured results repository. Set
+`RESULTS_REPO=OWNER/results`, `RESULTS_REPO_URL=<git URL>`, or pass `--results-repo`.
+No upstream repository is used by default.
 
 ### How it works
 
 1. Gathers git metadata (branch, commit, PR number) from the current Ctrlx checkout
-2. Ensures a clone of the results repository exists as a sibling folder (`../ClaudeSpyTestResults`)
+2. Ensures a clone of the results repository exists as a sibling folder (`../CtrlxTestResults`)
 3. Runs `e2e-test.sh` with `--json-output` to get structured step-level results
 4. Syncs the results repo to the latest remote **right before writing results** (not at startup), then copies screenshots into a **content-addressable image store** (`images/<sha256>.png`) — identical images are stored once
 5. Generates a `report.json` with metadata and per-scenario/per-step results (including screenshot hashes)
@@ -672,10 +682,12 @@ All `e2e-test.sh` options (`--skip-build`, `--sim-name`, `--scenario`, etc.) are
 
 ### Results repository structure
 
-The results repository ([ClaudeSpyTestResults](https://github.com/gpambrozio/ClaudeSpyTestResults)) is a separate git repository that stores test results and screenshots. It includes a static HTML viewer that loads results dynamically from JSON — no server-side processing or rebuild needed.
+The results repository is a separate git repository that stores test results and
+screenshots. To use the report viewer, provide its static HTML and `serve.sh`;
+these are not provisioned by the report script.
 
 ```
-ClaudeSpyTestResults/
+CtrlxTestResults/
 ├── index.html                        # Single-page viewer app
 ├── serve.sh                          # Local HTTP server for viewing
 ├── images/                           # Content-addressable image store
@@ -698,7 +710,7 @@ Each `report.json` contains:
 ### Viewing results
 
 ```bash
-cd ../ClaudeSpyTestResults && ./serve.sh
+cd ../CtrlxTestResults && ./serve.sh
 # Open http://localhost:8000
 ```
 

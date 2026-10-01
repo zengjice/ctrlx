@@ -73,7 +73,7 @@ APNs 凭据。
 
 构建要求近期 Xcode、Swift 6.3 或更新版本，以及 macOS 15 或更新版本。打开
 `Ctrlx.xcworkspace`，macOS 使用 `CtrlxServer` scheme，iOS 使用 `Ctrlx`
-scheme。内部 target 仍保留历史 `Ctrlx*` 名称。
+scheme。内部 Swift 模块统一使用 `Ctrlx*` 前缀，产品名称为 `CtrlX`。
 
 ```bash
 swift test --package-path CtrlxPackage

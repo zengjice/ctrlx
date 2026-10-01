@@ -14,7 +14,7 @@ import Foundation
 /// Flow:
 /// 1. Enable SGR mouse tracking in the pane.
 /// 2. Print an OSC 8 `file:///tmp/hello.txt` hyperlink.
-/// 3. Click the link in the Gallager mirror.
+/// 3. Click the link in the CtrlX mirror.
 /// 4. Verify the in-app file tab appears (proves the URL handler ran instead
 ///    of the click being delivered to the shell as a mouse event).
 public enum TerminalFileLinkMouseModeScenario {

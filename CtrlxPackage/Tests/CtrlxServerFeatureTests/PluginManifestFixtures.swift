@@ -1,6 +1,6 @@
 #if os(macOS)
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
 
     extension PluginManifest {
         /// A minimal sidecar manifest for use in supervisor tests.

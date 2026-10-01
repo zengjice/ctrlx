@@ -9,7 +9,7 @@ import Foundation
 import Testing
 
 @testable import CtrlxNetworking
-@testable import Gallager
+@testable import CtrlX
 
 struct CtrlxServerTests {
     @Test func example() async throws {

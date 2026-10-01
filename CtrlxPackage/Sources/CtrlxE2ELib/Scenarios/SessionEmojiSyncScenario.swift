@@ -111,11 +111,11 @@ public enum SessionEmojiSyncScenario {
         TestStep.macScreenshot(label: "viewer-before-emoji", instance: 1)
         TestStep.iosScreenshot(label: "ios-before-emoji")
 
-        // ── Phase 4: Set distinct emojis via the GallagerEmojiPicker popover ──
+        // ── Phase 4: Set distinct emojis via the CtrlxEmojiPicker popover ──
         //
         // Each pick is done through the host's right-click → "Set Emoji"
         // entry, which opens a popover anchored to the row carrying the
-        // GallagerEmojiPicker grid. We drive it by focusing its search field,
+        // CtrlxEmojiPicker grid. We drive it by focusing its search field,
         // typing a name that uniquely surfaces the target glyph, and
         // clicking the glyph cell — the picker auto-dismisses on selection.
         // The badge then has to land on every platform before the next
@@ -181,7 +181,7 @@ public enum SessionEmojiSyncScenario {
         TestStep.macWaitForElement(titled: "Search", timeout: 5)
         TestStep.wait(seconds: 0.5)
         TestStep.macFocusElement(titled: "Search")
-        // GallagerEmojiPicker matches CLDR keyword synonyms, and "checkmark" is
+        // CtrlxEmojiPicker matches CLDR keyword synonyms, and "checkmark" is
         // one of ✅'s keywords. Both ✔️ and ✅ surface, but only the ✅ cell's
         // accessibility label contains "✅", so the click lands on the intended
         // glyph.
@@ -245,7 +245,7 @@ public enum SessionEmojiSyncScenario {
 
         // ── Phase 7: iOS viewer changes Bravo ✅ → 😍 via emoji picker ───
         //
-        // iOS presents the GallagerEmojiPicker as a half-detent sheet. We open
+        // iOS presents the CtrlxEmojiPicker as a half-detent sheet. We open
         // it via long-press → "Emoji: ✅", wait for the picker to render,
         // and tap a glyph that's already visible on the initial Smileys
         // page so we don't have to drive the picker's search field

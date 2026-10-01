@@ -1,5 +1,5 @@
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// A single registry entry describing a plugin and its deployment state.
 public struct PluginRegistryEntry: Codable, Sendable, Equatable {

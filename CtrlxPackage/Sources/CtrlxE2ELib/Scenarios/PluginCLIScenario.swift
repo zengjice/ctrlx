@@ -8,7 +8,7 @@ import Foundation
 /// - `plugin info <unknown>` exits non-zero.
 ///
 /// All CLI commands are typed into the `plugin-cli` pane via the same
-/// socket-backed `ctrlx` helper used by the Gallager CLI API scenario.
+/// socket-backed `ctrlx` helper used by the CtrlX CLI API scenario.
 public enum PluginCLIScenario {
     public static let scenario = CtrlxE2ELib.scenario(
         "Plugin CLI Introspection",

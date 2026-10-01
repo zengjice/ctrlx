@@ -65,14 +65,14 @@
         @Test("Snapshot preserves Unicode and remains immutable")
         func unicodeAndImmutability() throws {
             let (terminal, _) = makeTerminal(cols: 40, rows: 3)
-            terminal.feed(text: "你好 Gallager")
+            terminal.feed(text: "你好 CtrlX")
             let snapshot = try #require(TerminalTextSnapshot(terminal: terminal))
 
             terminal.feed(text: " updated")
 
-            #expect(snapshot.text == "你好 Gallager")
+            #expect(snapshot.text == "你好 CtrlX")
             #expect(!snapshot.text.contains("\0"))
-            #expect(TerminalTextSnapshot(terminal: terminal)?.text == "你好 Gallager updated")
+            #expect(TerminalTextSnapshot(terminal: terminal)?.text == "你好 CtrlX updated")
         }
 
         private func makeTerminal(cols: Int, rows: Int) -> (Terminal, TestTerminalDelegate) {

@@ -1,7 +1,7 @@
 import CtrlxCommon
 import Dependencies
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// Shared Host-side preparation for local and remote session creation. Does no
 /// tmux mutation: bad paths and declined explicit launches fail before creation.

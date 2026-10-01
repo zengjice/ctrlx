@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.44 — Native conversation forks, terminal updates and internal naming cleanup
+
+- Add native Codex and Claude Code conversation forks on Mac and iOS, using
+  the current directory or a new Git worktree. Keep agent configuration scoped
+  to the fork invocation, use the intended shell, and verify worktree ignore rules.
+- Add Quick Phrase drag reordering on Mac and iOS. Include iOS terminal-fit,
+  dollar-key and ordered clipboard-paste improvements from the merged branch.
+- Pin the tested SwiftTerm iOS line-layout cache optimization. Package local iOS
+  builds as optimized Release by default, retaining local signing overrides and
+  a separate Debug artifact for same-source performance comparisons.
+- Rename internal CLI, emoji, plugin-contract, path and E2E symbols to Ctrlx.
+  Preserve the public ctrlx command, packaged CtrlXCLI binary, saved editor
+  preferences, upstream attribution and third-party licenses.
+- Support worktree-local packaging and bounded local artifact retention. Remove
+  upstream results-repository defaults; make generated proof-video watch commands
+  carry the upload repository and release tag, with offline regressions.
+- This publication packages Mac only. iOS changes need a separate signed package
+  and installation; no Relay deployment or local Mac replacement is performed.
+
 ## 3.0.43 — Manual resume identity and Mac command-panel recovery
 
 - Keep the Mac agent-command button openable while pane identity is unavailable.

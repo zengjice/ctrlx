@@ -21,14 +21,14 @@ struct RecapAndOverviewTests {
         telemetry.linesAdded = 120
         telemetry.linesRemoved = 30
 
-        let recap = SessionRecap(telemetry: telemetry, projectName: "Gallager", summary: "Done", isFinal: true)
+        let recap = SessionRecap(telemetry: telemetry, projectName: "CtrlX", summary: "Done", isFinal: true)
         #expect(recap.tokensUsed == 45_000)
         #expect(recap.costUSD == 1.20)
         #expect(recap.activeTimeSeconds == 720)
         #expect(recap.toolInvocations == 28)
         #expect(recap.commitCount == 3)
         #expect(recap.linesAdded == 120)
-        #expect(recap.projectName == "Gallager")
+        #expect(recap.projectName == "CtrlX")
         #expect(recap.isFinal)
         #expect(recap.model == "claude-opus-4-8")
         #expect(recap.hasMeaningfulMetrics)
@@ -43,7 +43,7 @@ struct RecapAndOverviewTests {
     @Test("SessionRecap Codable round-trips")
     func recapRoundTrip() throws {
         let recap = SessionRecap(
-            projectName: "Gallager", model: "claude-opus-4-8", tokensUsed: 45_000, costUSD: 1.2,
+            projectName: "CtrlX", model: "claude-opus-4-8", tokensUsed: 45_000, costUSD: 1.2,
             commitCount: 3, pullRequestCount: 1, activeTimeSeconds: 720, toolInvocations: 28,
             linesAdded: 120, linesRemoved: 30, summary: "Done", isFinal: true
         )

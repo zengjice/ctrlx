@@ -1,6 +1,6 @@
 #if os(macOS)
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 
@@ -33,7 +33,7 @@
             )
 
             let registry = PluginRegistry()
-            registry.attachPaths(GallagerPaths(stateRootOverride: root.appendingPathComponent("state")))
+            registry.attachPaths(CtrlxPaths(stateRootOverride: root.appendingPathComponent("state")))
             registry.registerSidecar(manifest: manifest, root: root, source: .folder)
 
             let core = registry.makeCore("opencode")

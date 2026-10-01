@@ -1,6 +1,6 @@
 import CtrlxCommon
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 import Testing
 @testable import ClaudeCodePluginCore
 
@@ -319,7 +319,7 @@ struct ClaudeCodeCLIInstallerTests {
     }
 
     @Test("parseStatus: a bare \"ctrlx\" id from another marketplace is NOT our plugin")
-    func parseStatusForeignGallager() {
+    func parseStatusForeignMarketplace() {
         // Regression: the old substring match treated any line containing
         // "ctrlx" as installed. The full id must equal `ctrlx@ctrlx`.
         let listing = #"[{ "id": "ctrlx@someone-else", "version": "9.9.9", "scope": "user", "enabled": true }]"#

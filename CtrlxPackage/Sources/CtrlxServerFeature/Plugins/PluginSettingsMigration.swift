@@ -33,7 +33,7 @@ enum PluginSettingsMigration {
         static let additionalClaudeFolders = "additionalClaudeFolders"
     }
 
-    static func runIfNeeded(paths: GallagerPaths, preferences: PreferencesService) {
+    static func runIfNeeded(paths: CtrlxPaths, preferences: PreferencesService) {
         guard preferences.optionalBool(flagKey) != true else { return }
 
         let claudeCommandPath = preferences.string(LegacyKeys.claudeCommandPath) ?? "claude"

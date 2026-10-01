@@ -1,24 +1,33 @@
 import Foundation
 
-/// How Gallager handles the in-app prompt editor (Ctrl-G) when the user's
-/// shell config clobbers the `$VISUAL` Gallager sets on tmux panes.
+/// How CtrlX handles the in-app prompt editor (Ctrl-G) when the user's
+/// shell config clobbers the `$VISUAL` CtrlX sets on tmux panes.
 ///
-/// Gallager points `$VISUAL` at the bundled `ctrlx edit` CLI so Ctrl-G in
+/// CtrlX points `$VISUAL` at the bundled `ctrlx edit` CLI so Ctrl-G in
 /// Claude Code / Codex opens the in-app prompt editor. Spawned panes run a
 /// login shell that sources the user's rc files *after* the session env is
 /// applied, so a user with `export VISUAL=<their editor>` in `~/.zshrc` /
-/// `~/.bashrc` clobbers Gallager's value. This setting is the user's deliberate
-/// choice about what to do about that — Gallager's env is a *default*, never a
+/// `~/.bashrc` clobbers CtrlX's value. This setting is the user's deliberate
+/// choice about what to do about that — CtrlX's env is a *default*, never a
 /// silent override. See issue #591.
 public enum EditorOverrideMode: String, CaseIterable, Identifiable, Sendable {
     /// Probe each launch; on a detected conflict, ask the user (the dialog is
     /// deferred to the first session creation, when Ctrl-G has context). Default.
     case ask
-    /// Type `export VISUAL=…` into Gallager's own shell panes so the in-app
+    /// Type `export VISUAL=…` into CtrlX's own shell panes so the in-app
     /// editor wins there (keystroke injection — see ``EditorOverride``).
-    case overrideInGallagerSessions
+    case overrideInCtrlxSessions
     /// Never override, never ask — the user's editor wins everywhere.
     case useMyEditor
+
+    /// Read the old persisted case without resetting the user's choice.
+    init?(persistedValue: String) {
+        if persistedValue == "overrideInGallagerSessions" {
+            self = .overrideInCtrlxSessions
+        } else {
+            self.init(rawValue: persistedValue)
+        }
+    }
 
     public var id: String {
         rawValue
@@ -28,7 +37,7 @@ public enum EditorOverrideMode: String, CaseIterable, Identifiable, Sendable {
     public var displayName: String {
         switch self {
         case .ask: "Ask me"
-        case .overrideInGallagerSessions: "Override in CtrlX sessions"
+        case .overrideInCtrlxSessions: "Override in CtrlX sessions"
         case .useMyEditor: "Use my editor"
         }
     }
@@ -36,12 +45,12 @@ public enum EditorOverrideMode: String, CaseIterable, Identifiable, Sendable {
 
 /// Outcome of the startup `$VISUAL` survival probe (issue #591 §1).
 ///
-/// The trigger is "does Gallager's `$VISUAL` survive the user's rc files?",
+/// The trigger is "does CtrlX's `$VISUAL` survive the user's rc files?",
 /// *not* "does the user have `VISUAL`/`EDITOR` set" — `EDITOR=vim` alone is not
-/// a conflict, because both agents resolve `VISUAL` → `EDITOR` and Gallager
+/// a conflict, because both agents resolve `VISUAL` → `EDITOR` and CtrlX
 /// sets `VISUAL`, so it still wins.
 public enum VisualProbeResult: Sendable, Equatable {
-    /// The sentinel survived the user's rc files — Gallager's `$VISUAL` wins,
+    /// The sentinel survived the user's rc files — CtrlX's `$VISUAL` wins,
     /// no conflict, the dialog is never shown.
     case intact
     /// rc files overrode (`effectiveValue` = their resolved value) or unset
@@ -93,7 +102,7 @@ public enum EditorOverride {
     /// Whether an active override should be dropped because the probe proved the
     /// rc `$VISUAL` conflict is gone (issue #591). The override types
     /// `export VISUAL=…` into every shell pane; once the user removes their
-    /// conflicting `export VISUAL` from their rc files, Gallager's `-e VISUAL`
+    /// conflicting `export VISUAL` from their rc files, CtrlX's `-e VISUAL`
     /// already wins on its own, so that injection is pure redundancy and should
     /// stop.
     ///
@@ -105,13 +114,13 @@ public enum EditorOverride {
         mode: EditorOverrideMode,
         probe: VisualProbeResult?
     ) -> Bool {
-        mode == .overrideInGallagerSessions && probe == .intact
+        mode == .overrideInCtrlxSessions && probe == .intact
     }
 
     /// Builds the override line to type into a shell pane (issue #591 §5), or
     /// nil for shells we don't recognize (so they're skipped rather than
     /// corrupted). `visualValue` is the value `$VISUAL` should resolve to —
-    /// Gallager's `<ctrlx> edit` for the override.
+    /// CtrlX's `<ctrlx> edit` for the override.
     ///
     /// The leading space keeps the line out of history under the common
     /// `HISTCONTROL=ignorespace` (bash) / `setopt HIST_IGNORE_SPACE` (zsh)
@@ -139,11 +148,11 @@ public enum EditorOverride {
         injectionCommand(visualValue: "x", shell: command) != nil
     }
 
-    /// The guarded rc line suggested by dialog Option 1 (issue #591 §3). Gallager
+    /// The guarded rc line suggested by dialog Option 1 (issue #591 §3). CtrlX
     /// exports `CTRLX_SOCKET` into panes *before* rc files run, so the user's
-    /// rc can detect a Gallager pane natively and skip its own override there —
-    /// keeping their editor in every non-Gallager terminal. `visualValue` here is
-    /// the *user's* editor (their probed value), not Gallager's.
+    /// rc can detect a CtrlX pane natively and skip its own override there —
+    /// keeping their editor in every non-CtrlX terminal. `visualValue` here is
+    /// the *user's* editor (their probed value), not CtrlX's.
     public static func recommendedRcLine(visualValue: String, shell: String) -> String {
         if shellBasename(shell) == "fish" {
             return "set -q CTRLX_SOCKET; or set -gx VISUAL \(visualValue.posixSingleQuoted)"

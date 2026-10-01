@@ -24,7 +24,7 @@ body:
         - Mac app
         - iOS app
         - Relay server
-        - CLI (gallager)
+        - CLI (ctrlx)
         - Plugins / agent support
         - Website / docs
         - Not sure

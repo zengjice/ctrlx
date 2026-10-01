@@ -3,7 +3,7 @@
     import CtrlxNetworking
     import CodexPluginCore
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Logging
 
     /// Owns the agent-blind plugin runtime's compile-time factory table, the
@@ -34,9 +34,9 @@
         /// implicit `.bundled` not stored here; only sidecar registrations write it.
         private var sources: [String: PluginRegistryEntry.Source] = [:]
 
-        /// Gallager paths needed to build `PluginRootLayout` for sidecar cores.
+        /// CtrlX paths needed to build `PluginRootLayout` for sidecar cores.
         /// Set once at startup via `attachPaths(_:)` before any sidecar is enabled.
-        private var paths: GallagerPaths?
+        private var paths: CtrlxPaths?
 
         /// Enabled + successfully-initialized cores, keyed by id.
         public private(set) var active: [String: any PluginCore] = [:]
@@ -86,9 +86,9 @@
 
         // MARK: - Sidecar registration
 
-        /// Store the Gallager paths needed to build `PluginRootLayout` for sidecar
+        /// Store the CtrlX paths needed to build `PluginRootLayout` for sidecar
         /// cores. Call once at startup before enabling any sidecar plugin.
-        public func attachPaths(_ paths: GallagerPaths) {
+        public func attachPaths(_ paths: CtrlxPaths) {
             self.paths = paths
         }
 

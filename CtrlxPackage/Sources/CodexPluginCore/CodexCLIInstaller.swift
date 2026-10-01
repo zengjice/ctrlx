@@ -1,6 +1,6 @@
 import CtrlxCommon
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// Installs the CtrlX Codex plugin through Codex's own CLI
 /// (`codex plugin …`), scoped to a `CODEX_HOME`. Mirrors `ClaudeCodeCLIInstaller`.

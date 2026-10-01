@@ -5,7 +5,7 @@
     import CtrlxNetworking
     import CodexPluginCore
     import Dependencies
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import SwiftUI
     import UniformTypeIdentifiers
 

@@ -3,7 +3,7 @@ import CoreGraphics
 import Foundation
 import Logging
 
-/// Drives the macOS Gallager app via external Accessibility APIs, CGEvent, and AppleScript.
+/// Drives the macOS CtrlX app via external Accessibility APIs, CGEvent, and AppleScript.
 ///
 /// Tracks the launched app instance by PID so E2E tests can run alongside a
 /// production copy of the same app without interfering with it.

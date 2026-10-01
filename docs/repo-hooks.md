@@ -2,7 +2,7 @@
 
 This repo ships a few **project-scoped Claude Code hooks** in `.claude/settings.json`.
 They run for anyone working in the repo with Claude Code and exist to keep the
-development workflow consistent. They are unrelated to the `gallager` plugin hooks
+development workflow consistent. They are unrelated to the `ctrlx` plugin hooks
 (`plugin/**/hooks/`), which forward session events to the monitoring app and never
 talk back to the agent.
 
@@ -18,7 +18,7 @@ After any file edit, an inline command runs `swiftformat` on the file when it is
 Fires after every `Bash` tool call. When the command that just ran opens a pull
 request (`gh pr create`), the hook prints a `hookSpecificOutput.additionalContext`
 block so the agent finishes the project's post-PR chores before stopping:
-documentation/AGENTS.md updates, CLI + `gallager`-skill updates for new features, and
+documentation/AGENTS.md updates, CLI + `ctrlx`-skill updates for new features, and
 end-to-end scenarios (with committed baseline screenshots) for new features or bug
 fixes. For every other Bash command it prints nothing and exits 0, so it is a no-op.
 

@@ -608,7 +608,7 @@ struct NotificationActionWireTests {
         // The APNs envelope APNsService emits: placeholder alert + badge +
         // mutable-content, plus the encrypted field and pairId at the root.
         let envelope = """
-        {"aps":{"alert":{"title":"Gallager","body":"New activity"},"badge":42,\
+        {"aps":{"alert":{"title":"CtrlX","body":"New activity"},"badge":42,\
         "mutable-content":1},"encrypted":"\(encryptedField)","pairId":"\(UUID().uuidString)"}
         """
         #expect(envelope.utf8.count <= 4096)

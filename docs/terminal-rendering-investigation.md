@@ -2,6 +2,21 @@
 
 > **Historical status (PR #179):** The first fix moved live terminal bytes to `pipe-pane`, resolving corruption in the original String-based `%output` parser. In September 2026, terminal content moved back to control mode. The September 8 findings below correct two holes in that transition: connection identity and capture atomicity. `pipe-pane` remains scan-only for OSC side effects. The older diagrams and hypotheses below are historical; see `streaming-architecture.md` for the current data flow.
 
+## iOS remaining layout cost (September 30, 2026)
+
+After Mac scrolling became acceptable, iOS still rebuilt attributed strings and
+CoreText layouts on every CoreGraphics draw: the existing moved-line cache was
+Mac-only. Local-device packaging also hard-coded Debug, unlike Mac Release.
+SwiftTerm `157d01c` shares that cache with UIKit, with viewport bounds,
+font/color/mode invalidation and selection/dynamic-link bypasses. Local iOS
+packages now default to Release; Debug remains separately selectable for A/B.
+See `swiftterm-ios-scrolling.md` for the implementation and validation evidence.
+
+This is a display-client optimization. Host, Relay, Codex launch, wheel step,
+DEC 2026 and feed/input queues are unchanged. Cache/pixel regressions and the
+iOS Release build passed, but no iPhone FPS or hand-feel measurement was made.
+Dirty-region drawing and feed-budget tuning remain deferred until profiling.
+
 ## 3.0.40: remaining scroll cost after 3.0.39 (September 29, 2026)
 
 The user confirmed the black/blurred first-frame regression was fixed, but still

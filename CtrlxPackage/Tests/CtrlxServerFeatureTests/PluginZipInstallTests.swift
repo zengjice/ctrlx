@@ -1,7 +1,7 @@
 #if os(macOS)
     import CtrlxNetworking
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 
@@ -16,12 +16,12 @@
         func log(_: LogLine) async { }
     }
 
-    private func makeTempPaths() throws -> (GallagerPaths, URL) {
+    private func makeTempPaths() throws -> (CtrlxPaths, URL) {
         let testRoot = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("PluginZipInstallTests-\(UUID().uuidString)")
         let stateRoot = testRoot.appendingPathComponent("state")
         try FileManager.default.createDirectory(at: stateRoot, withIntermediateDirectories: true)
-        return (GallagerPaths(stateRootOverride: stateRoot), testRoot)
+        return (CtrlxPaths(stateRootOverride: stateRoot), testRoot)
     }
 
     /// Build a valid sidecar bundle `.zip` (plugin.json at the archive root) and

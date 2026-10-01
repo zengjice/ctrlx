@@ -1,6 +1,6 @@
 import CtrlxNetworking
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 // MARK: - ClaudeCodeKeystrokes
 

@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 E2E_TMPDIR="${TMPDIR:-/tmp}/ctrlx-e2e"
 SCREENSHOTS_DIR="$E2E_TMPDIR/e2e-screenshots"
-RESULTS_REPO="gpambrozio/ClaudeSpyTestResults"
+RESULTS_REPO="${RESULTS_REPO:-}"
 RELEASE_TAG="e2e-videos"
 PLAYER="$SCRIPT_DIR/e2e-video-player.html"
 PR_NUMBER=""
@@ -48,7 +48,7 @@ usage() {
     echo "                      (default: PR for current branch)"
     echo "  --screenshots DIR   Screenshots dir local scenario videos live under"
     echo "                      (default: $SCREENSHOTS_DIR)"
-    echo "  --results-repo SLUG owner/repo hosting the release (default: $RESULTS_REPO)"
+    echo "  --results-repo SLUG owner/repo hosting the release (or set RESULTS_REPO)"
     echo "  --release-tag TAG   Release tag holding the assets (default: $RELEASE_TAG)"
     echo "  -h, --help          Show this help"
 }
@@ -146,6 +146,10 @@ resolve_local_video() {
 # Location of the API's octet-stream response (without following it).
 signed_url_for_asset() {
     local repo="$1" tag="$2" asset="$3"
+    if [ -z "$repo" ]; then
+        echo "ERROR: set RESULTS_REPO or pass --results-repo owner/repo; no upstream default is used." >&2
+        return 1
+    fi
     local asset_id token location
     asset_id=$(gh api "repos/$repo/releases/tags/$tag" \
         --jq ".assets[] | select(.name == \"$asset\") | .id" 2>/dev/null || true)

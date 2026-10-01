@@ -15,7 +15,7 @@ Last updated: 2026-05-22
 > - `CtrlxNetworking/Models/CodingAgent.swift` — the enum itself
 >
 > Implementation notes vs. the plan below:
-> - **CodexHookInstaller was renamed to `CodexPluginInstaller`**, and install/uninstall now go through `codex plugin install gallager` against a bundled marketplace at `~/.ctrlx/marketplaces/gallager/` (instead of writing `~/.codex/hooks.json` directly). The bridge script is shipped via the same `gallager` plugin that backs Claude Code.
+> - **CodexHookInstaller was renamed to `CodexPluginInstaller`**, and install/uninstall now go through `codex plugin install ctrlx` against a bundled marketplace at `~/.ctrlx/marketplaces/ctrlx/` (instead of writing `~/.codex/hooks.json` directly). The bridge script is shipped via the same `ctrlx` plugin that backs Claude Code.
 > - **Out of scope (deferred):** type renames (`ClaudeProjectInfo` → `AgentProjectInfo` etc.), `codex exec --json` streaming firehose, embedded OpenTelemetry collector, and auto-install on first launch.
 
 ## 1. Goal

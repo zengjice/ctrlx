@@ -1,6 +1,6 @@
 #if os(macOS)
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
 
     /// A per-plugin file log sink backing `PluginHost.log` (spec §15). Appends
     /// `LogLine`s to `<stateDir>/logs/sidecar.log`, rotating to `sidecar.log.1`

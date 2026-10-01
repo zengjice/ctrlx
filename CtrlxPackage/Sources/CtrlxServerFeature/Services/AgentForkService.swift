@@ -1,7 +1,7 @@
 import CtrlxNetworking
 import Dependencies
 import Foundation
-import GallagerPluginProtocol
+import CtrlxPluginProtocol
 
 /// One Host-side path for local menus and encrypted Viewer commands.
 @MainActor

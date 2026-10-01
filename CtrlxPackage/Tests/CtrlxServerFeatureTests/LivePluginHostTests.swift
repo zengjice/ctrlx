@@ -3,7 +3,7 @@
     import CtrlxNetworking
     import Dependencies
     import Foundation
-    import GallagerPluginProtocol
+    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 

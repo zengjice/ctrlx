@@ -14,6 +14,82 @@ SCRIPT = Path(__file__).resolve().parents[1] / "package-local-ios.sh"
 CONFIG_DIR = SCRIPT.parent.parent / "Config"
 
 
+class LocalIOSPackageTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        self.script = scripts / SCRIPT.name
+        shutil.copyfile(SCRIPT, self.script)
+        (self.root / "Config").mkdir()
+        (self.root / "Config" / "Local.xcconfig").touch()
+        # Stop at the first build log, after the real argument/path preparation.
+        # All writes stay inside the disposable fixture; Xcode is never invoked.
+        (scripts / "common.sh").write_text("""
+log_error() { printf '%s\\n' "$1" >&2; exit 1; }
+assert_git_worktree() { :; }
+get_version() { printf '3.0.40'; }
+get_build_stamp() { printf 'test-stamp'; }
+get_source_revision() { printf 'test-revision'; }
+log_info() {
+    printf '%s\\n' "$CONFIGURATION" "$APP_PATH" "$EXTENSION_PATH" "$IPA_PATH"
+    exit 0
+}
+""")
+
+    def run_script(self, *arguments):
+        return subprocess.run(["bash", str(self.script), *arguments],
+                              capture_output=True, text=True, timeout=5)
+
+    def assert_configuration(self, arguments, configuration, ipa_name):
+        result = self.run_script(*arguments)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        app = self.root / ".build-local" / "DerivedData" / "iOS" / "Build" / "Products" / f"{configuration}-iphoneos" / "CtrlX.app"
+        self.assertEqual(result.stdout.splitlines(), [configuration, str(app),
+                         str(app / "PlugIns" / "CtrlxNotificationExtension.appex"),
+                         str(self.root / "dist" / ipa_name)])
+
+    def test_default_is_release(self):
+        self.assert_configuration([], "Release", "CtrlX-3.0.40.ipa")
+
+    def test_explicit_release(self):
+        self.assert_configuration(["--configuration", "Release"], "Release", "CtrlX-3.0.40.ipa")
+
+    def test_debug_does_not_overwrite_release_artifact(self):
+        self.assert_configuration(["--configuration", "Debug"], "Debug", "CtrlX-3.0.40-Debug.ipa")
+
+    def test_invalid_configuration_fails_before_build(self):
+        result = self.run_script("--configuration", "Profile")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Release or Debug", result.stderr)
+        self.assertFalse((self.root / ".build-local").exists())
+
+    def test_missing_configuration_fails(self):
+        result = self.run_script("--configuration")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires Release or Debug", result.stderr)
+
+    def test_unknown_argument_fails(self):
+        result = self.run_script("--release")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unknown argument", result.stderr)
+
+    def test_help_needs_no_signing_config(self):
+        (self.root / "Config" / "Local.xcconfig").unlink()
+        result = self.run_script("--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Default: Release", result.stdout)
+        self.assertFalse((self.root / ".build-local").exists())
+
+    def test_build_and_app_path_use_the_same_configuration(self):
+        source = SCRIPT.read_text()
+        self.assertIn('-configuration "$CONFIGURATION"', source)
+        self.assertNotIn('-configuration Debug', source)
+        self.assertIn('/Build/Products/$CONFIGURATION-iphoneos/CtrlX.app', source)
+
+
 @unittest.skipUnless(sys.platform == "darwin" and shutil.which("xcodebuild"),
                      "Requires Xcode to evaluate xcconfig inheritance")
 class IOSIdentityConfigTests(unittest.TestCase):
