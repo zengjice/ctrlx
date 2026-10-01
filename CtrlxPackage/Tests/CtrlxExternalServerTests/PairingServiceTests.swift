@@ -60,14 +60,16 @@ struct PairingServiceTests {
             pairId: info.pairId, publicKey: "new-viewer-key", publicKeyId: "new-viewer-id", deviceName: "Renamed iPhone"
         )
         await service.registerPushToken("new-token", for: info.pairId)
-        #expect(try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == marker)
+        let unchangedRegistrationDate = try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date
+        #expect(unchangedRegistrationDate == marker)
 
         await service.removePushToken(for: info.pairId)
         let withoutToken = PairingService(dataDirectory: directory)
         #expect(await withoutToken.getPair(pairId: info.pairId)?.pushToken == nil)
         try FileManager.default.setAttributes([.modificationDate: marker], ofItemAtPath: file.path)
         await service.removePushToken(for: info.pairId)
-        #expect(try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == marker)
+        let unchangedTokenDate = try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date
+        #expect(unchangedTokenDate == marker)
     }
 
     @Test("Registering a pairing code succeeds")
