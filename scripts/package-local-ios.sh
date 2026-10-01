@@ -11,6 +11,7 @@ LOCAL_CONFIG="$PROJECT_ROOT/Config/Local.xcconfig"
 source "$SCRIPT_DIR/common.sh"
 
 CONFIGURATION=Release
+SAVE_SPACE=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --configuration)
@@ -18,9 +19,14 @@ while [ "$#" -gt 0 ]; do
             CONFIGURATION="$2"
             shift 2
             ;;
+        --save-space)
+            SAVE_SPACE=true
+            shift
+            ;;
         --help|-h)
-            printf '%s\n' 'Usage: package-local-ios.sh [--configuration Release|Debug]' \
-                'Default: Release. Debug writes a separate -Debug.ipa for comparison.'
+            printf '%s\n' 'Usage: package-local-ios.sh [--configuration Release|Debug] [--save-space]' \
+                'Default: Release. Debug writes a separate -Debug.ipa for comparison.' \
+                '--save-space: after success, remove compilation caches; keep App, IPA and downloads. Next build is slower.'
             exit 0
             ;;
         *) log_error "Unknown argument: $1" ;;
@@ -49,6 +55,10 @@ if [ "$CONFIGURATION" = Debug ]; then
     IPA_PATH="$DIST_DIR/CtrlX-$VERSION-Debug.ipa"
 fi
 
+check_build_space "$PROJECT_ROOT"
+if [ "$SAVE_SPACE" = true ]; then
+    log_warning 'Space-saving mode: compilation caches are removed only after success. App and downloads are kept; the next build is slower.'
+fi
 mkdir -p "$DERIVED_DATA" "$SOURCE_PACKAGES" "$DIST_DIR"
 PACKAGE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/package-ios.XXXXXX")"
 PROFILE_ROOT=""
@@ -158,7 +168,7 @@ fi
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload "$IPA_PATH"
 )
 write_artifact_metadata "$IPA_PATH"
-prune_local_artifacts "$IPA_PATH" iOS
+prune_local_artifacts "$IPA_PATH" iOS "$SAVE_SPACE"
 
 log_success "IPA: $IPA_PATH"
 log_success "App: $APP_PATH"

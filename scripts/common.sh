@@ -127,10 +127,17 @@ assert_git_worktree() {
     fi
 }
 
+check_build_space() {
+    python3 "$SCRIPT_DIR/clean-build.py" check-space --path "$1"
+}
+
 prune_local_artifacts() {
     local arguments=(prune --artifact "$1" --yes)
-    if [ "$#" -eq 2 ]; then
+    if [ "$#" -ge 2 ]; then
         arguments+=(--platform "$2")
+    fi
+    if [ "${3:-false}" = true ]; then
+        arguments+=(--save-space)
     fi
     python3 "$SCRIPT_DIR/clean-build.py" "${arguments[@]}"
 }

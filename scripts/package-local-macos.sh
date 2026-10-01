@@ -10,6 +10,22 @@ LOCAL_MAC_CONFIG="$PROJECT_ROOT/Config/Local-macOS.xcconfig"
 # shellcheck source=scripts/common.sh
 source "$SCRIPT_DIR/common.sh"
 
+SAVE_SPACE=false
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --save-space)
+            SAVE_SPACE=true
+            shift
+            ;;
+        --help|-h)
+            printf '%s\n' 'Usage: package-local-macos.sh [--save-space]' \
+                '--save-space: after success, remove compilation caches; keep App, DMG and downloads. Next build is slower.'
+            exit 0
+            ;;
+        *) log_error "Unknown argument: $1" ;;
+    esac
+done
+
 assert_git_worktree
 [ -f "$LOCAL_MAC_CONFIG" ] \
     || log_error 'Missing Config/Local-macOS.xcconfig. Copy Config/Local-macOS.xcconfig.example and configure your personal team.'
@@ -30,6 +46,10 @@ SIGNING_IDENTITY="$(find_apple_development_identity "$DEVELOPMENT_TEAM")"
 [ -n "$SIGNING_IDENTITY" ] \
     || log_error "No Apple Development signing identity is available for team $DEVELOPMENT_TEAM."
 
+check_build_space "$PROJECT_ROOT"
+if [ "$SAVE_SPACE" = true ]; then
+    log_warning 'Space-saving mode: compilation caches are removed only after success. App and downloads are kept; the next build is slower.'
+fi
 mkdir -p "$DERIVED_DATA" "$SOURCE_PACKAGES" "$DIST_DIR"
 PACKAGE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/package-macos.XXXXXX")"
 
@@ -85,7 +105,7 @@ fi
     "$DMG_PATH"
 /usr/bin/hdiutil verify "$DMG_PATH" >/dev/null
 write_artifact_metadata "$DMG_PATH"
-prune_local_artifacts "$DMG_PATH" macOS
+prune_local_artifacts "$DMG_PATH" macOS "$SAVE_SPACE"
 
 log_success "DMG: $DMG_PATH"
 log_success "Build: $VERSION ($(get_build_number)) · $BUILD_STAMP · $SOURCE_REVISION"

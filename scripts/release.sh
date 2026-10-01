@@ -43,6 +43,8 @@ TAG_COMMIT="$(git -C "$PROJECT_ROOT" rev-list -n 1 "$EXPECTED_TAG" 2>/dev/null |
     || log_error "Tag $EXPECTED_TAG must point at the exact release commit $SOURCE_REVISION."
 
 DIST_DIR="$PROJECT_ROOT/dist"
+check_build_space "$PROJECT_ROOT"
+check_build_space "${TMPDIR:-/tmp}"
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ctrlx-release.XXXXXX")"
 DERIVED_DATA="$WORK_ROOT/DerivedData"
 SOURCE_PACKAGES="$PROJECT_ROOT/.build-local/SourcePackages"

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Worktree guard regressions; never builds, signs or installs an app."""
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -58,6 +59,41 @@ class PackageWorktreeTests(unittest.TestCase):
                 self.assertIn("\nassert_git_worktree\n", script)
                 self.assertNotIn("assert_primary_worktree", script)
                 self.assertIn('PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"', script)
+
+    def test_save_space_cleanup_stays_in_selected_git_worktree(self):
+        caches = []
+        apps = []
+        artifacts = []
+        for root in (self.primary.resolve(), self.linked.resolve()):
+            scripts = root / "scripts"
+            scripts.mkdir()
+            shutil.copy2(SCRIPTS / "clean-build.py", scripts / "clean-build.py")
+            cache = root / ".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o"
+            cache.parent.mkdir(parents=True)
+            cache.write_text("fixture")
+            caches.append(cache)
+            app = root / ".build-local/DerivedData/iOS/Build/Products/CtrlX.app/executable"
+            app.parent.mkdir(parents=True)
+            app.write_text("fixture")
+            apps.append(app)
+            artifact = root / "dist/CtrlX-3.0.1.ipa"
+            artifact.parent.mkdir()
+            for suffix in ("", ".sha256", ".manifest.json"):
+                Path(str(artifact) + suffix).write_text("fixture")
+            artifacts.append(artifact)
+        for index, root in enumerate((self.linked.resolve(), self.primary.resolve())):
+            result = subprocess.run([
+                "bash", "-c", 'PROJECT_ROOT="$1"; SCRIPT_DIR="$1/scripts"; source "$2"; '
+                'assert_git_worktree; check_build_space "$PROJECT_ROOT"; '
+                'prune_local_artifacts "$3" iOS true',
+                "cleanup-test", str(root), str(SCRIPTS / "common.sh"), str(artifacts[1 - index]),
+            ], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Available build space", result.stdout)
+            self.assertFalse(caches[1 - index].exists())
+            if index == 0:
+                self.assertTrue(caches[0].exists())
+            self.assertTrue(all(path.exists() for path in apps + artifacts))
 
 
 if __name__ == "__main__":

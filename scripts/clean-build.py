@@ -15,6 +15,14 @@ import sys
 ARTIFACT_NAME = re.compile(r"CtrlX-[0-9]+\.[0-9]+\.[0-9]+(?P<configuration>-Debug)?\.(?P<platform>ipa|dmg)")
 RELEASE_DIRECTORY = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+")
 PUBLISH_REPORT = re.compile(r"publish-report(?:-[0-9]+)?\.json")
+LOW_SPACE_BYTES = 20 * 1024 ** 3
+COMPILATION_CACHE_DIRS = (
+    "Build/Intermediates.noindex",
+    "CompilationCache.noindex",
+    "ModuleCache.noindex",
+    "SDKExplicitPrecompiledModules",
+    "SDKStatCaches.noindex",
+)
 DEEP_CACHE_DIRS = (
     ".build-local/DerivedData",
     ".build-local/SourcePackages",
@@ -26,6 +34,15 @@ DEEP_CACHE_DIRS = (
     ".build",
     "CtrlxPackage/.build",
 )
+
+
+def check_space(path):
+    free = shutil.disk_usage(path).free
+    print(f"Available build space at {path}: {free / 1024 ** 3:.1f} GiB", flush=True)
+    if free < LOW_SPACE_BYTES:
+        print("WARNING: Less than 20 GiB available; packaging may run out of space. "
+              "Clean unused caches before building. --save-space only cleans after success.",
+              file=sys.stderr)
 
 
 def validate_path(root, path):
@@ -69,7 +86,7 @@ def artifact_targets(root, current):
     return targets
 
 
-def packaging_cache_targets(root, artifact):
+def packaging_cache_targets(root, artifact, save_space=False):
     platform = "macOS" if artifact.suffix == ".dmg" else "iOS"
     derived = root / ".build-local/DerivedData" / platform
     targets = [derived / "Index.noindex"]
@@ -79,6 +96,8 @@ def packaging_cache_targets(root, artifact):
     validate_path(root, shared)
     if shared.is_dir():
         targets.append(derived / "SourcePackages")
+    if save_space:
+        targets.extend(derived / name for name in COMPILATION_CACHE_DIRS)
     for path in targets:
         validate_path(root, path)
     return [path for path in targets if path.exists()]
@@ -169,11 +188,14 @@ def main():
     prune = modes.add_parser("prune", help="Keep two packages per platform/configuration and clean packaging leftovers")
     prune.add_argument("--artifact", required=True, type=Path, help="Just-built package to protect")
     prune.add_argument("--platform", choices=("iOS", "macOS"), help="Also clean that local packaging DerivedData")
+    prune.add_argument("--save-space", action="store_true", help="Also remove platform compilation caches; keep products and downloads")
     prune.add_argument("--yes", action="store_true", help="Delete the listed old packages")
     receipts = modes.add_parser("receipts", help="Remove verified public DMG copies; keep publication reports")
     receipts.add_argument("--yes", action="store_true", help="Delete the listed verified copies")
     deep = modes.add_parser("deep", help="Remove build caches; preserve dist, signing config and user data")
     deep.add_argument("--yes", action="store_true", help="Delete the listed caches")
+    space = modes.add_parser("check-space", help="Warn when less than 20 GiB is available; never delete anything")
+    space.add_argument("--path", required=True, type=Path, help="Existing build-volume directory to check")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent.parent
@@ -182,19 +204,24 @@ def main():
     ).strip()).resolve()
     if root != git_root:
         raise ValueError("Cleanup script must live in a Git worktree root's scripts directory")
+    if args.mode == "check-space":
+        check_space(args.path)
+        return
     with contextlib.ExitStack() as locks:
         if args.mode == "deep":
             print("Stop builds, packaging and device installs in this worktree before deleting caches.")
             print("Built installable apps will be removed; IPA/DMG files in dist are preserved.")
             targets = deep_targets(root)
         elif args.mode == "prune":
+            if args.save_space and not args.platform:
+                raise ValueError("--save-space requires --platform")
             artifact = args.artifact.absolute()
             targets = artifact_targets(root, artifact)
             if args.platform:
                 expected = "macOS" if artifact.suffix == ".dmg" else "iOS"
                 if args.platform != expected:
                     raise ValueError("--platform does not match the artifact")
-                targets += packaging_cache_targets(root, artifact)
+                targets += packaging_cache_targets(root, artifact, args.save_space)
             targets += receipt_targets(root, locks)
         else:
             targets = receipt_targets(root, locks)

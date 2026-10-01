@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parent.parent
@@ -151,6 +152,61 @@ class BuildCleanupTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             storage.packaging_cache_targets(self.root, current)
         self.assertTrue(outside.exists())
+
+    def test_save_space_only_removes_selected_platform_compilation_caches(self):
+        for platform, extension, other_platform in (("iOS", "ipa", "macOS"), ("macOS", "dmg", "iOS")):
+            with self.subTest(platform=platform):
+                current = self.artifact("3.0.3", extension)
+                removed = [self.file(f".build-local/DerivedData/{platform}/{name}/fixture")
+                           for name in storage.COMPILATION_CACHE_DIRS]
+                kept = [self.file(name) for name in (
+                    f".build-local/DerivedData/{platform}/Build/Products/CtrlX.app/executable",
+                    f".build-local/DerivedData/{platform}/Build/Products/CtrlX.app/PlugIns/extension.appex/executable",
+                    f".build-local/DerivedData/{platform}/Logs/build.log",
+                    f".build-local/DerivedData/{other_platform}/Build/Intermediates.noindex/object.o",
+                    ".build-local/SourcePackages/checkouts/dependency.swift",
+                    ".build-local/cef-browser-probe/cef.tar.bz2",
+                    ".build-local/cef-browser-probe/sdk/include/cef.h",
+                    ".build-local/agent-browser/Embedded/browser",
+                    ".build-local/agent-browser-engine/0.38.1/agent-browser",
+                    "CtrlxPackage/.build/object.o", "Config/Local.xcconfig",
+                )]
+                outside = self.file(f".build-local/DerivedData/{platform}/Build/Intermediates.noindex/object.o", self.other)
+                self.clean(storage.packaging_cache_targets(self.root, current, save_space=True))
+                self.assertTrue(all(not path.exists() for path in removed))
+                self.assertTrue(all(path.exists() for path in kept + [current, outside]))
+
+    def test_save_space_preserves_dependencies_without_shared_cache(self):
+        current = self.artifact("3.0.3")
+        dependency = self.file(".build-local/DerivedData/iOS/SourcePackages/checkouts/dependency.swift")
+        intermediate = self.file(".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o")
+        self.clean(storage.packaging_cache_targets(self.root, current, save_space=True))
+        self.assertTrue(dependency.exists())
+        self.assertFalse(intermediate.exists())
+
+    def test_save_space_symlink_rejected_before_deletion(self):
+        current = self.artifact("3.0.3")
+        intermediate = self.file(".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o")
+        outside = self.file("modules/fixture", self.other)
+        (self.root / ".build-local/DerivedData/iOS/ModuleCache.noindex").symlink_to(outside.parent)
+        with self.assertRaises(ValueError):
+            storage.packaging_cache_targets(self.root, current, save_space=True)
+        self.assertTrue(intermediate.exists())
+        self.assertTrue(outside.exists())
+
+    def test_disk_preflight_warns_below_threshold_without_deleting(self):
+        cached = self.file(".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o")
+        for free, warns in ((storage.LOW_SPACE_BYTES - 1, True),
+                            (storage.LOW_SPACE_BYTES, False), (0, True)):
+            with self.subTest(free=free), mock.patch.object(storage.shutil, "disk_usage", return_value=mock.Mock(free=free)) as usage, \
+                    contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+                storage.check_space(self.root)
+                usage.assert_called_once_with(self.root)
+                self.assertIn("GiB", output.getvalue())
+                self.assertEqual("WARNING" in errors.getvalue(), warns)
+                if warns:
+                    self.assertIn("only cleans after success", errors.getvalue())
+                self.assertTrue(cached.exists())
 
     def test_successful_public_copy_removed_but_all_release_evidence_preserved(self):
         public, report = self.publication()
@@ -406,12 +462,85 @@ class BuildCleanupTests(unittest.TestCase):
                 self.assertNotIn("clean-build.py\" deep", source)
 
     def test_packaging_prunes_only_after_metadata_is_written(self):
-        for name, variable, platform in (("package-local-ios.sh", "IPA_PATH", " iOS"),
-                                         ("package-local-macos.sh", "DMG_PATH", " macOS"),
+        for name, variable, platform in (("package-local-ios.sh", "IPA_PATH", ' iOS "$SAVE_SPACE"'),
+                                         ("package-local-macos.sh", "DMG_PATH", ' macOS "$SAVE_SPACE"'),
                                          ("release.sh", "DMG_PATH", "")):
             with self.subTest(script=name):
                 script = (SCRIPTS / name).read_text()
                 self.assertIn(f'write_artifact_metadata "${variable}"\nprune_local_artifacts "${variable}"{platform}\n', script)
+
+    def test_space_saving_packaging_tail_only_cleans_after_success(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(SCRIPTS / "clean-build.py", scripts / "clean-build.py")
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        for platform, variable, extension in (("iOS", "IPA_PATH", "ipa"), ("macOS", "DMG_PATH", "dmg")):
+            script = (SCRIPTS / f"package-local-{platform.lower()}.sh").read_text()
+            tail = script[script.index(f'write_artifact_metadata "${variable}"'):script.index('\nlog_success "', script.index('write_artifact_metadata'))]
+            for save_space in ("false", "true"):
+                for status in (0, 7):
+                    with self.subTest(platform=platform, save_space=save_space, status=status):
+                        current = self.artifact("3.0.3", extension)
+                        intermediate = self.file(f".build-local/DerivedData/{platform}/Build/Intermediates.noindex/object.o")
+                        app = self.file(f".build-local/DerivedData/{platform}/Build/Products/CtrlX.app/executable")
+                        commands = 'set -euo pipefail\nSCRIPT_DIR="$1/scripts"\nsource "$2"\n' \
+                            + f'{variable}="$3"\n' + 'SAVE_SPACE="$4"\nMETADATA_STATUS="$5"\n' \
+                            + 'write_artifact_metadata() { return "$METADATA_STATUS"; }\n' + tail
+                        result = subprocess.run(["bash", "-c", commands, "packaging-test", str(self.root),
+                                                 str(SCRIPTS / "common.sh"), str(current), save_space, str(status)],
+                                                text=True, capture_output=True)
+                        self.assertEqual(result.returncode, status, result.stderr)
+                        self.assertEqual(intermediate.exists(), not (save_space == "true" and status == 0))
+                        self.assertTrue(app.exists())
+                        self.assertTrue(current.exists())
+
+    def test_save_space_cli_requires_platform_and_previews_without_deleting(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        script = scripts / "clean-build.py"
+        shutil.copy2(SCRIPTS / "clean-build.py", script)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        old = self.artifact("3.0.1")
+        self.artifact("3.0.2")
+        current = self.artifact("3.0.3")
+        intermediate = self.file(".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o")
+        arguments = ["python3", str(script), "prune", "--artifact", str(current), "--save-space"]
+        result = subprocess.run([*arguments, "--yes"], text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires --platform", result.stderr)
+        result = subprocess.run([*arguments, "--platform", "macOS", "--yes"], text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        result = subprocess.run([*arguments, "--platform", "iOS"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(intermediate.parent), result.stdout)
+        self.assertIn("Preview only", result.stdout)
+        self.assertTrue(old.exists())
+        self.assertTrue(intermediate.exists())
+
+    def test_all_packaging_checks_space_before_building(self):
+        for name in ("package-local-ios.sh", "package-local-macos.sh", "release.sh"):
+            with self.subTest(script=name):
+                source = (SCRIPTS / name).read_text()
+                preflight = source.index('check_build_space "$PROJECT_ROOT"')
+                self.assertLess(preflight, source.index("xcodebuild"))
+                if name == "package-local-macos.sh":
+                    self.assertLess(preflight, source.index('bash "$SCRIPT_DIR/build-agent-browser.sh"'))
+                if name == "release.sh":
+                    self.assertIn('check_build_space "${TMPDIR:-/tmp}"', source)
+
+    def test_macos_help_and_unknown_argument_do_not_need_signing_config(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(SCRIPTS / "common.sh", scripts / "common.sh")
+        script = scripts / "package-local-macos.sh"
+        shutil.copy2(SCRIPTS / script.name, script)
+        result = subprocess.run(["bash", str(script), "--help"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--save-space", result.stdout)
+        result = subprocess.run(["bash", str(script), "--unknown"], text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unknown argument", result.stdout)
+        self.assertFalse((self.root / ".build-local").exists())
 
     def test_packaging_traps_clean_temporary_copies_on_success_and_failure(self):
         for platform in ("ios", "macos"):

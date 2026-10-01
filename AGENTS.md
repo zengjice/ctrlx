@@ -142,6 +142,12 @@ Packaging deletes temporary App copies on exit and keeps two local IPA/DMG
 packages per platform/configuration. Successful packaging removes old platform
 indexes, duplicate dependency copies and completed public-download verification
 copies; reusable build/download caches and installable apps remain worktree-local.
+Packaging warns below 20 GiB free before building. Local Mac/iOS packaging accepts
+`--save-space`: only after success, remove that platform's compilation intermediates
+and module/SDK caches, retaining signed installable apps and downloaded dependencies.
+The next build is slower; this mode cannot free space before the current build.
+Default behavior remains incremental. Never run concurrent builds/installs against
+the same DerivedData directory; cleanup never sweeps other worktrees.
 Use `python3 scripts/clean-build.py deep` to preview deep cleanup; add `--yes`
 only when builds and device installs in that worktree are stopped. See `RELEASE.md`.
 

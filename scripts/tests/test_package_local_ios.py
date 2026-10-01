@@ -33,6 +33,8 @@ assert_git_worktree() { :; }
 get_version() { printf '3.0.40'; }
 get_build_stamp() { printf 'test-stamp'; }
 get_source_revision() { printf 'test-revision'; }
+check_build_space() { :; }
+log_warning() { :; }
 log_info() {
     printf '%s\\n' "$CONFIGURATION" "$APP_PATH" "$EXTENSION_PATH" "$IPA_PATH"
     exit 0
@@ -59,6 +61,15 @@ log_info() {
 
     def test_debug_does_not_overwrite_release_artifact(self):
         self.assert_configuration(["--configuration", "Debug"], "Debug", "CtrlX-3.0.40-Debug.ipa")
+
+    def test_save_space_keeps_configuration_and_installable_app_path(self):
+        for arguments, configuration, artifact in (
+            (["--save-space"], "Release", "CtrlX-3.0.40.ipa"),
+            (["--save-space", "--configuration", "Debug"], "Debug", "CtrlX-3.0.40-Debug.ipa"),
+            (["--configuration", "Debug", "--save-space"], "Debug", "CtrlX-3.0.40-Debug.ipa"),
+        ):
+            with self.subTest(arguments=arguments):
+                self.assert_configuration(arguments, configuration, artifact)
 
     def test_invalid_configuration_fails_before_build(self):
         result = self.run_script("--configuration", "Profile")

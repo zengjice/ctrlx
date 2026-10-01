@@ -63,8 +63,33 @@ formal Mac releases, but never prunes Qcloud or Inbox files.
 Command-line packaging disables index generation. After success, local Mac/iOS
 packaging removes only that platform's old `Index.noindex` and duplicate DerivedData
 `SourcePackages` directory (when the shared dependency directory exists).
-Build intermediates, compilation/module caches and installable apps are kept.
+By default, build intermediates, compilation/module caches and installable apps
+are kept.
 Do not run concurrent builds or installs against the same DerivedData directory.
+
+All packaging entrypoints check available disk space before building and warn
+below 20 GiB. This is an advisory threshold, not a guarantee or a hard minimum;
+packaging still proceeds and never deletes caches to make room before a build.
+Formal releases also check their temporary build volume.
+
+For low-storage machines, opt in per invocation:
+
+```bash
+./scripts/package-local-macos.sh --save-space
+./scripts/package-local-ios.sh --save-space
+./scripts/package-local-ios.sh --configuration Debug --save-space
+```
+
+Only after packaging and integrity metadata succeed, this mode removes the
+selected platform's `Build/Intermediates.noindex`, compilation/module caches,
+explicit precompiled SDK modules and SDK stat caches. It keeps `Build/Products`
+(including the signed installable App), IPA/DMG files, shared dependencies,
+Chromium SDKs/runtime and logs. The next build recompiles and will be slower;
+downloads need not repeat. Failed builds do not trigger this cleanup, and other
+platforms/worktrees and the separate Swift package test cache are untouched.
+`--save-space` does not solve insufficient space for the current build.
+Formal releases already remove their temporary DerivedData on exit and remain
+zero-parameter.
 
 Packaging also removes `dist/qcloud-release/<version>/public-CtrlX-<version>.dmg`
 copies whose latest publication report records success and whose SHA-256 still
