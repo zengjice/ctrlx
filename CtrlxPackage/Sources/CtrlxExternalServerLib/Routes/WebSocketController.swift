@@ -4,11 +4,13 @@ import Vapor
 /// Handles WebSocket connections for real-time communication
 struct WebSocketController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
-        routes.webSocket(
-            "ws",
-            maxFrameSize: .init(integerLiteral: RelayPayloadLimits.maxWebSocketFrameBytes),
-            onUpgrade: handleWebSocketUpgrade
-        )
+        routes.get("ws") { req -> Response in
+            let response = Response(status: .switchingProtocols)
+            response.upgrader = RelayWebSocketUpgrader { socket in
+                handleWebSocketUpgrade(req: req, ws: socket)
+            }
+            return response
+        }
     }
 
     /// Handle WebSocket upgrade

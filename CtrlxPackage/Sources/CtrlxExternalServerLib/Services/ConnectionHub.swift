@@ -30,7 +30,7 @@ actor ConnectionHub {
         }
         connections[connection.pairId]?[connection.deviceType] = connection
         if previous?.webSocket !== connection.webSocket {
-            previous?.stopReceiving?()
+            previous?.close()
         }
     }
 
@@ -71,29 +71,25 @@ actor ConnectionHub {
 
     /// Close and remove a single device's connection for a pair (used by the
     /// licensing sweep to evict hosts whose entitlement lapsed mid-connection).
-    func disconnect(pairId: String, deviceType: DeviceType) async {
+    func disconnect(pairId: String, deviceType: DeviceType) {
         guard let connection = connections[pairId]?[deviceType] else { return }
-        // Remove from the map BEFORE awaiting close: the await is a suspension
-        // point, and a reconnect that registers during it must not be clobbered
-        // by post-await cleanup (same guarantee unregisterIfCurrent provides).
+        // Remove ownership before closing so the close callback cannot report
+        // a replacement connection offline.
         connections[pairId]?[deviceType] = nil
         if connections[pairId]?.isEmpty == true {
             connections.removeValue(forKey: pairId)
         }
-        try? await connection.webSocket.close()
+        connection.close()
     }
 
     /// Disconnect all connections for a pair
     func disconnectAll(pairId: String) {
         guard let pairConnections = connections[pairId] else { return }
 
-        for (_, connection) in pairConnections {
-            Task {
-                try? await connection.webSocket.close()
-            }
-        }
-
         connections.removeValue(forKey: pairId)
+        for connection in pairConnections.values {
+            connection.close()
+        }
     }
 
     /// Check if a device type is currently blocked from connecting (for E2E testing)
@@ -106,9 +102,9 @@ actor ConnectionHub {
     ///
     /// - Returns: the pair IDs whose connection was removed (see `disconnectAll(deviceType:)`).
     @discardableResult
-    func blockDeviceType(_ deviceType: DeviceType) async -> [String] {
+    func blockDeviceType(_ deviceType: DeviceType) -> [String] {
         blockedDeviceTypes.insert(deviceType)
-        let affectedPairIds = await disconnectAll(deviceType: deviceType)
+        let affectedPairIds = disconnectAll(deviceType: deviceType)
         logger.info("Blocked device type: \(deviceType)")
         return affectedPairIds
     }
@@ -135,16 +131,16 @@ actor ConnectionHub {
     ///
     /// - Returns: the pair IDs whose connection of this type was removed.
     @discardableResult
-    func disconnectAll(deviceType: DeviceType) async -> [String] {
+    func disconnectAll(deviceType: DeviceType) -> [String] {
         var affectedPairIds: [String] = []
         for (pairId, pairConnections) in connections {
             guard let connection = pairConnections[deviceType] else { continue }
-            try? await connection.webSocket.close()
             connections[pairId]?[deviceType] = nil
             if connections[pairId]?.isEmpty == true {
                 connections.removeValue(forKey: pairId)
             }
             affectedPairIds.append(pairId)
+            connection.close()
         }
         return affectedPairIds
     }
@@ -267,6 +263,7 @@ actor ConnectionHub {
             // drop the fresh connection and falsely notify the peer of a disconnect.
             let removed = unregisterIfCurrent(pairId: pairId, deviceType: deviceType, webSocket: connection.webSocket)
             guard removed else { return }
+            connection.close()
 
             // Notify the peer device that this device disconnected
             let peerDevice: DeviceType = deviceType == .host ? .viewer : .host

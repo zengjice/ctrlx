@@ -17,4 +17,9 @@ struct Connection: Sendable {
 
     /// Stop and discard the old inbound FIFO when a reconnect replaces it.
     var stopReceiving: (@Sendable () -> Void)?
+
+    func close() {
+        stopReceiving?()
+        webSocket.close(code: .goingAway, promise: nil)
+    }
 }

@@ -19,7 +19,7 @@ import VaporTesting
 ///
 /// These tests drive the real WebSocket lifecycle against a running relay: they
 /// open two viewer sockets for the same pair (the second replaces the first in
-/// `ConnectionHub`), then close the *first* and assert the live replacement keeps
+/// `ConnectionHub`), then assert the *first* closes and the live replacement keeps
 /// routing and the host is never told the viewer left. `deviceId` isn't validated
 /// on upgrade, so distinct viewer sockets simply model "same viewer, new socket".
 ///
@@ -37,6 +37,83 @@ extension EnvSerializedSuites {
         private static let viewerKeyId = "viewer-key-id-1"
 
         // MARK: - Test
+
+        @Test("A fragmented message within the limit is forwarded without changing bytes")
+        func fragmentedMessageIsForwarded() async throws {
+            try await withRunningRelay { app, port in
+                try await verifyFragmentedMessageIsForwarded(app: app, port: port)
+            }
+        }
+
+        private func verifyFragmentedMessageIsForwarded(app: Application, port: Int) async throws {
+            let pairId = try await makePair(app)
+            let viewer = TextCollector()
+            let viewerWS = try await connectClient(
+                port: port, query: "pairId=\(pairId)&deviceType=viewer&deviceId=viewer-fragments", collector: viewer
+            )
+            let hostWS = try await connectClient(
+                port: port, query: "pairId=\(pairId)&deviceType=host&deviceId=host-fragments", collector: TextCollector()
+            )
+            #expect(await waitUntil { count(of: "hostConnected", in: viewer.all()) == 1 })
+            let frame = try opaqueFrame(Data(repeating: 42, count: 600_000))
+            let chunkSize = 256 * 1024
+            for offset in stride(from: 0, to: frame.count, by: chunkSize) {
+                let end = min(offset + chunkSize, frame.count)
+                try await hostWS.send(
+                    raw: frame.subdata(in: offset..<end),
+                    opcode: offset == 0 ? .binary : .continuation, fin: end == frame.count
+                )
+            }
+            #expect(await waitUntil { count(of: "encrypted", in: viewer.all()) == 1 })
+            #expect(viewer.all().contains(String(decoding: frame, as: UTF8.self)))
+            try await hostWS.close()
+            try await viewerWS.close()
+        }
+
+        @Test("An unfinished fragmented message exceeding 1 MiB closes the socket")
+        func oversizedFragmentsAreRejectedBeforeFinalFrame() async throws {
+            try await withRunningRelay { app, port in
+                try await verifyOversizedFragmentsAreRejected(app: app, port: port)
+            }
+        }
+
+        private func verifyOversizedFragmentsAreRejected(app: Application, port: Int) async throws {
+            let pairId = try await makePair(app)
+            let hostWS = try await connectClient(
+                port: port, query: "pairId=\(pairId)&deviceType=host&deviceId=host-overflow", collector: TextCollector()
+            )
+            #expect(await waitUntil { await app.connectionHub.isHostConnected(pairId: pairId) })
+            let fragment = Data(repeating: 42, count: 256 * 1024)
+            for index in 0..<4 {
+                try await hostWS.send(raw: fragment, opcode: index == 0 ? .binary : .continuation, fin: false)
+            }
+            #expect(!hostWS.isClosed)
+            try await hostWS.send(raw: fragment, opcode: .continuation, fin: false)
+            let closed = await waitUntil { hostWS.isClosed }
+            #expect(closed)
+            #expect(await waitUntil { !(await app.connectionHub.isHostConnected(pairId: pairId)) })
+        }
+
+        @Test("Empty continuation frames cannot bypass the fragment count limit")
+        func excessiveEmptyFragmentsAreRejected() async throws {
+            try await withRunningRelay { app, port in
+                try await verifyEmptyFragmentsAreRejected(app: app, port: port)
+            }
+        }
+
+        private func verifyEmptyFragmentsAreRejected(app: Application, port: Int) async throws {
+            let pairId = try await makePair(app)
+            let hostWS = try await connectClient(
+                port: port, query: "pairId=\(pairId)&deviceType=host&deviceId=host-fragment-count", collector: TextCollector()
+            )
+            #expect(await waitUntil { await app.connectionHub.isHostConnected(pairId: pairId) })
+            for index in 0..<RelayWebSocketUpgrader.maximumFragments {
+                hostWS.send(raw: Data(), opcode: index == 0 ? .binary : .continuation, fin: false, promise: nil)
+            }
+            let closed = await waitUntil { hostWS.isClosed }
+            #expect(closed)
+            #expect(await waitUntil { !(await app.connectionHub.isHostConnected(pairId: pairId)) })
+        }
 
         @Test("Frames sent immediately at upgrade survive validation in order")
         func immediateUpgradeFrames() async throws {
@@ -221,72 +298,76 @@ extension EnvSerializedSuites {
         @Test("A stale viewer socket closing does not evict the reconnected viewer or notify the host")
         func staleCloseKeepsLiveViewerRouting() async throws {
             try await withRunningRelay { app, port in
-                let pairId = try await makePair(app)
-
-                // Host stays connected throughout; it's the peer that would be
-                // (wrongly) told "viewer disconnected".
-                let host = TextCollector()
-                let hostWS = try await connectClient(
-                    port: port,
-                    query: "pairId=\(pairId)&deviceType=host&deviceId=host-1",
-                    collector: host
-                )
-
-                // Viewer socket A — the connection that will go half-open and close late.
-                let viewerA = TextCollector()
-                let viewerAWS = try await connectClient(
-                    port: port,
-                    query: "pairId=\(pairId)&deviceType=viewer&deviceId=viewer-A",
-                    collector: viewerA
-                )
-                // Server processed A's registration once the host is told the viewer connected.
-                #expect(await waitUntil { count(of: "viewerConnected", in: host.all()) == 1 })
-
-                // Viewer socket B — the reconnection. Registering it replaces A in the
-                // hub (last-write-wins on `(pairId, .viewer)`). A stays open for now.
-                let viewerB = TextCollector()
-                let viewerBWS = try await connectClient(
-                    port: port,
-                    query: "pairId=\(pairId)&deviceType=viewer&deviceId=viewer-B",
-                    collector: viewerB
-                )
-                // Waiting for the *second* viewerConnected guarantees register(B) ran
-                // after register(A) — so B is the current entry when A closes next.
-                #expect(await waitUntil { count(of: "viewerConnected", in: host.all()) == 2 })
-                #expect(await app.connectionHub.isViewerConnected(pairId: pairId))
-
-                // Now the stale socket closes — the crux of the bug.
-                try await viewerAWS.close()
-
-                // The buggy behavior surfaces fast (a clean localhost close's onClose
-                // fires in well under this window): the live viewer B gets evicted
-                // and/or the host is told the viewer disconnected. Assert neither
-                // happens within a generous window — this is the non-event we're proving.
-                let sawRegression = await waitUntil(timeout: .seconds(2)) {
-                    let viewerEvicted = !(await app.connectionHub.isViewerConnected(pairId: pairId))
-                    let hostToldDisconnected = count(of: "viewerDisconnected", in: host.all()) > 0
-                    return viewerEvicted || hostToldDisconnected
-                }
-                #expect(
-                    sawRegression == false,
-                    "Stale viewer close evicted the live replacement and/or falsely notified the host"
-                )
-
-                // Positive confirmation the replacement is still routable: a host→viewer
-                // relay lands on B. On the buggy path the viewer entry is gone, so this
-                // never arrives.
-                await app.connectionHub.send(.ping, to: pairId, deviceType: .viewer)
-                #expect(
-                    await waitUntil { count(of: "ping", in: viewerB.all()) > 0 },
-                    "Host→viewer routing broke after the stale close (replacement viewer was evicted)"
-                )
-
-                // And A — the socket that closed — should never have received the relay.
-                #expect(count(of: "ping", in: viewerA.all()) == 0)
-
-                try await hostWS.close()
-                try await viewerBWS.close()
+                try await verifyStaleViewerCloseKeepsRouting(app: app, port: port)
             }
+        }
+
+        private func verifyStaleViewerCloseKeepsRouting(app: Application, port: Int) async throws {
+            let pairId = try await makePair(app)
+
+            // Host stays connected throughout; it's the peer that would be
+            // (wrongly) told "viewer disconnected".
+            let host = TextCollector()
+            let hostWS = try await connectClient(
+                port: port,
+                query: "pairId=\(pairId)&deviceType=host&deviceId=host-1",
+                collector: host
+            )
+
+            // Viewer socket A — the connection that will go half-open and close late.
+            let viewerA = TextCollector()
+            let viewerAWS = try await connectClient(
+                port: port,
+                query: "pairId=\(pairId)&deviceType=viewer&deviceId=viewer-A",
+                collector: viewerA
+            )
+            // Server processed A's registration once the host is told the viewer connected.
+            #expect(await waitUntil { count(of: "viewerConnected", in: host.all()) == 1 })
+
+            // Viewer socket B — the reconnection. Registering it replaces A in the
+            // hub (last-write-wins on `(pairId, .viewer)`) and closes A.
+            let viewerB = TextCollector()
+            let viewerBWS = try await connectClient(
+                port: port,
+                query: "pairId=\(pairId)&deviceType=viewer&deviceId=viewer-B",
+                collector: viewerB
+            )
+            // Waiting for the *second* viewerConnected guarantees register(B) ran
+            // after register(A) — so B is the current entry when A closes next.
+            #expect(await waitUntil { count(of: "viewerConnected", in: host.all()) == 2 })
+            #expect(await app.connectionHub.isViewerConnected(pairId: pairId))
+
+            let oldViewerClosed = await waitUntil { viewerAWS.isClosed }
+            #expect(oldViewerClosed, "Replaced viewer socket must be reclaimed")
+
+            // The buggy behavior surfaces fast (a clean localhost close's onClose
+            // fires in well under this window): the live viewer B gets evicted
+            // and/or the host is told the viewer disconnected. Assert neither
+            // happens within a generous window — this is the non-event we're proving.
+            let sawRegression = await waitUntil(timeout: .seconds(2)) {
+                let viewerEvicted = !(await app.connectionHub.isViewerConnected(pairId: pairId))
+                let hostToldDisconnected = count(of: "viewerDisconnected", in: host.all()) > 0
+                return viewerEvicted || hostToldDisconnected
+            }
+            #expect(
+                sawRegression == false,
+                "Stale viewer close evicted the live replacement and/or falsely notified the host"
+            )
+
+            // Positive confirmation the replacement is still routable: a host→viewer
+            // relay lands on B. On the buggy path the viewer entry is gone, so this
+            // never arrives.
+            await app.connectionHub.send(.ping, to: pairId, deviceType: .viewer)
+            #expect(
+                await waitUntil { count(of: "ping", in: viewerB.all()) > 0 },
+                "Host→viewer routing broke after the stale close (replacement viewer was evicted)"
+            )
+
+            // And A — the socket that closed — should never have received the relay.
+            #expect(count(of: "ping", in: viewerA.all()) == 0)
+
+            try await hostWS.close()
+            try await viewerBWS.close()
         }
 
         @Test("A stale host frame cannot reclaim routing from the replacement socket")
@@ -331,16 +412,8 @@ extension EnvSerializedSuites {
             )
             #expect(count(of: "encrypted", in: viewer.all()) == 0)
 
-            // Model a frame that was already in flight when B replaced A. The old
-            // message path used to register A again before handling this ping.
-            try await send(.ping, through: hostAWS)
-
-            let staleFrameWasHandled = await waitUntil(timeout: .milliseconds(500)) {
-                count(of: "pong", in: hostA.all()) > 0
-            }
-            #expect(!staleFrameWasHandled, "Relay accepted a frame from the replaced Host socket")
-
-            try await hostAWS.close()
+            let oldHostClosed = await waitUntil { hostAWS.isClosed }
+            #expect(oldHostClosed, "Replaced host socket must be reclaimed")
 
             let sawRegression = await waitUntil(timeout: .seconds(2)) {
                 let hostEvicted = !(await app.connectionHub.isHostConnected(pairId: pairId))
@@ -458,13 +531,6 @@ extension EnvSerializedSuites {
                     if gate.claim() { continuation.resume(throwing: error) }
                 }
             }
-        }
-
-        private func send(_ message: WebSocketMessage, through webSocket: WebSocket) async throws {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(message)
-            try await webSocket.send(raw: data, opcode: .text)
         }
 
         // MARK: - Polling

@@ -1,4 +1,5 @@
 import CtrlxNetworking
+import Foundation
 import Testing
 @testable import CtrlxExternalServerLib
 
@@ -9,6 +10,65 @@ struct PairingServiceTests {
     private let testMacKeyId = "mac-key-id-1"
     private let testIOSPublicKey = "dGVzdC1pb3MtcHVibGljLWtleS0wMTIzNDU2Nzg5MDEyMw=="
     private let testIOSKeyId = "ios-key-id-1"
+
+    @Test("Registration changes persist together and unchanged registrations do not rewrite pairs")
+    func registrationPersistence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("relay-persistence-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = PairingService(dataDirectory: directory)
+        let result = await service.registerCode(
+            code: "PERSIST", deviceId: "mac-persist", deviceName: "My Mac", username: "testuser",
+            publicKey: testMacPublicKey, publicKeyId: testMacKeyId
+        )
+        guard case let .registered(info) = result else {
+            Issue.record("Expected pairing registration")
+            return
+        }
+        _ = await service.completePairing(
+            code: "PERSIST", deviceId: "ios-persist", deviceName: "My iPhone",
+            publicKey: testIOSPublicKey, publicKeyId: testIOSKeyId
+        )
+        await service.updateHostRegistration(
+            pairId: info.pairId, publicKey: "new-host-key", publicKeyId: "new-host-id",
+            username: "new-user", deviceName: "Renamed Mac"
+        )
+        await service.updateViewerRegistration(
+            pairId: info.pairId, publicKey: "new-viewer-key", publicKeyId: "new-viewer-id", deviceName: "Renamed iPhone"
+        )
+        await service.registerPushToken("new-token", for: info.pairId)
+
+        let restored = PairingService(dataDirectory: directory)
+        let pair = try #require(await restored.getPair(pairId: info.pairId))
+        #expect(pair.hostPublicKey == "new-host-key")
+        #expect(pair.hostPublicKeyId == "new-host-id")
+        #expect(pair.hostUsername == "new-user")
+        #expect(pair.hostDeviceName == "Renamed Mac")
+        #expect(pair.viewerPublicKey == "new-viewer-key")
+        #expect(pair.viewerPublicKeyId == "new-viewer-id")
+        #expect(pair.viewerDeviceName == "Renamed iPhone")
+        #expect(pair.pushToken == "new-token")
+
+        let file = directory.appendingPathComponent("pairs.json")
+        let marker = Date(timeIntervalSince1970: 1_000_000)
+        try FileManager.default.setAttributes([.modificationDate: marker], ofItemAtPath: file.path)
+        await service.updateHostRegistration(
+            pairId: info.pairId, publicKey: "new-host-key", publicKeyId: "new-host-id",
+            username: "new-user", deviceName: "Renamed Mac"
+        )
+        await service.updateViewerRegistration(
+            pairId: info.pairId, publicKey: "new-viewer-key", publicKeyId: "new-viewer-id", deviceName: "Renamed iPhone"
+        )
+        await service.registerPushToken("new-token", for: info.pairId)
+        #expect(try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == marker)
+
+        await service.removePushToken(for: info.pairId)
+        let withoutToken = PairingService(dataDirectory: directory)
+        #expect(await withoutToken.getPair(pairId: info.pairId)?.pushToken == nil)
+        try FileManager.default.setAttributes([.modificationDate: marker], ofItemAtPath: file.path)
+        await service.removePushToken(for: info.pairId)
+        #expect(try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == marker)
+    }
 
     @Test("Registering a pairing code succeeds")
     func registerPairingCode() async throws {

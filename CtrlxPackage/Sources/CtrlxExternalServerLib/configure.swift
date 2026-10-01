@@ -109,8 +109,8 @@ public func configure(_ app: Application, env: [String: String]? = nil) async th
     // `APNsService.lastBadge` for the process lifetime; harmless for the
     // aggregated total (the pair stops matching the device token), but a small
     // leak we can avoid by hanging it off the canonical removal path.
-    await pairingService.setOnPairRemoved { [apnsService] pairId in
-        await apnsService.clearBadge(pairId: pairId)
+    await pairingService.setOnPairRemoved { [weak apnsService] pairId in
+        await apnsService?.clearBadge(pairId: pairId)
     }
 
     // Initialize relay service with all dependencies

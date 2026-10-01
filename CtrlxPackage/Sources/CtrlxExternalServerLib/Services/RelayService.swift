@@ -193,13 +193,13 @@ actor RelayService {
         // Store host's public key, username, and current device name for the pair.
         // Updating the name here lets the host change its display name and have
         // viewers pick it up on the next connection without re-pairing.
-        await pairingService.updateHostPublicKey(
+        await pairingService.updateHostRegistration(
             pairId: pairId,
             publicKey: registration.publicKey,
             publicKeyId: registration.publicKeyId,
-            username: registration.username
+            username: registration.username,
+            deviceName: registration.deviceName
         )
-        await pairingService.updateHostDeviceName(pairId: pairId, deviceName: registration.deviceName)
 
         let viewerDeviceName = await pairingService.getViewerDeviceName(pairId: pairId)
         let isViewerConnected = await connectionHub.isViewerConnected(pairId: pairId)
@@ -252,12 +252,12 @@ actor RelayService {
         // Store viewer's public key and current device name for the pair.
         // Updating the name here lets the user rename their iOS device in
         // settings and have hosts pick up the new name on the next reconnect.
-        await pairingService.updateViewerPublicKey(
+        await pairingService.updateViewerRegistration(
             pairId: pairId,
             publicKey: registration.publicKey,
-            publicKeyId: registration.publicKeyId
+            publicKeyId: registration.publicKeyId,
+            deviceName: registration.deviceName
         )
-        await pairingService.updateViewerDeviceName(pairId: pairId, deviceName: registration.deviceName)
 
         let hostDeviceName = await pairingService.getHostDeviceName(pairId: pairId)
         let hostUsername = await pairingService.getHostUsername(pairId: pairId)

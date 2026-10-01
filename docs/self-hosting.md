@@ -74,6 +74,11 @@ the same version and commit, starts the container, then validates `/health` and
 | `POST /api/pairing/complete` | Complete pairing from a viewer |
 | `WS /api/ws` | Encrypted relay stream |
 
+WebSocket frames and complete messages are limited to 1 MiB, with at most 1024
+fragments per message. The Relay pings every 30 seconds to detect unresponsive
+peers. Reconnecting closes the previous socket; a peer that does not acknowledge
+a close frame is forcibly disconnected after 5 seconds.
+
 ## APNs
 
 For push notifications, mount a `.p8` key read-only at `/secrets/AuthKey.p8`
