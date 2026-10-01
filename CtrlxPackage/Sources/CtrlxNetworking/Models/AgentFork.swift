@@ -10,6 +10,16 @@ public struct AgentForkSource: Codable, Sendable, Equatable, Identifiable {
     public let workingDirectory: String
     public var id: String { paneID }
 
+    public static func unavailableReason(panes: [PaneState]) -> String? {
+        if panes.contains(where: { AgentForkSource(pane: $0) != nil }) { return nil }
+        let supported = panes.filter { ["codex", "claude-code"].contains($0.agentSession?.pluginID ?? "") }
+        guard !supported.isEmpty else { return "Fork requires a recognized Codex or Claude Code conversation." }
+        if supported.allSatisfy({ $0.claudeSessionID.flatMap(UUID.init(uuidString:)) == nil }) {
+            return "The conversation ID is not verified yet. Wait for Agent activity to restore it."
+        }
+        return "The source Agent's working directory is unavailable."
+    }
+
     public init?(pane: PaneState) {
         guard let agent = pane.agentSession,
               agent.pluginID == "codex" || agent.pluginID == "claude-code",

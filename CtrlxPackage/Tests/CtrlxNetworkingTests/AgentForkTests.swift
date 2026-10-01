@@ -3,6 +3,18 @@ import Testing
 @testable import CtrlxNetworking
 
 struct AgentForkTests {
+    @Test("Fork explains unsupported Agents, unverified IDs and unavailable directories without enabling invalid sources")
+    func unavailableReasons() {
+        var pane = PaneState(paneId: "%1", sessionName: "work", currentPath: "/repo", agentSession: .init(paneId: "%1", pluginID: "codex"))
+        #expect(AgentForkSource.unavailableReason(panes: [pane])?.contains("not verified") == true)
+        pane.claudeSessionID = UUID().uuidString
+        #expect(AgentForkSource.unavailableReason(panes: [pane]) == nil)
+        pane.currentPath = nil
+        #expect(AgentForkSource.unavailableReason(panes: [pane])?.contains("directory") == true)
+        pane.agentSession?.pluginID = "pi"
+        #expect(AgentForkSource.unavailableReason(panes: [pane])?.contains("Codex or Claude Code") == true)
+    }
+
     @Test("Only recognized native Agent conversations can be forked; window reordering preserves identity")
     func sourceIdentity() throws {
         var pane = PaneState(paneId: "%12", sessionName: "work", tmuxWindowId: "@4", currentPath: "/repo",

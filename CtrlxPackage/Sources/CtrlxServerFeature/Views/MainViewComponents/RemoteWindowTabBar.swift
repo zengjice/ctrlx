@@ -326,6 +326,7 @@ struct RemoteWindowTabBar: View {
                     AgentForkMenu(
                         sources: window.panes.compactMap(AgentForkSource.init(pane:)),
                         unavailableReason: forkUnavailableReason,
+                        sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes),
                         choose: { onForkWindow(window, $0) }
                     )
                 }

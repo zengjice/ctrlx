@@ -40,10 +40,24 @@ private final class ForkFixture {
     func service(failsLaunch: Bool = false) -> AgentForkService {
         let core = ForkTestCore()
         return AgentForkService(
-            source: { $0 == self.current?.paneID ? self.current : nil },
-            core: { _ in core },
-            refresh: { self.refreshes += 1 },
+            source: {
+                MainActor.preconditionIsolated()
+                return $0 == self.current?.paneID ? self.current : nil
+            },
+            core: { _ in
+                MainActor.preconditionIsolated()
+                return core
+            },
+            refresh: {
+                MainActor.preconditionIsolated()
+                await Task.detached {}.value
+                MainActor.preconditionIsolated()
+                self.refreshes += 1
+            },
             launch: { session, preparation in
+                MainActor.preconditionIsolated()
+                await Task.detached {}.value
+                MainActor.preconditionIsolated()
                 self.launches.append((session, preparation))
                 if failsLaunch { throw AgentForkError("Window created (%99), but Agent launch failed. Check that tab before retrying.") }
                 return "%99"
@@ -52,8 +66,33 @@ private final class ForkFixture {
     }
 }
 
+private actor ForkBackgroundCaller {
+    func run(service: AgentForkService, source: AgentForkSource, usingWorktree: Bool) async throws -> String {
+        let prepared = try await service.prepare(source)
+        return try await service.fork(.init(source: source, worktree: usingWorktree ? .init(name: "new", expectedHead: prepared.worktree?.head ?? "") : nil))
+    }
+}
+
 @MainActor
 struct AgentForkServiceTests {
+    @Test("Viewer background requests keep all Host callbacks on MainActor across suspension", arguments: [false, true])
+    func callbackIsolation(usingWorktree: Bool) async throws {
+        let fixture = try ForkFixture()
+        let service = fixture.service()
+        try await withDependencies {
+            $0[SessionDirectoryClient.self].resolve = { $0 }
+            $0[AgentForkWorktreeClient.self].inspect = { path in
+                .init(repositoryRoot: path, primaryRoot: path, head: "abc", relativeDirectory: "", hasUncommittedChanges: false)
+            }
+            $0[AgentForkWorktreeClient.self].create = { _, _ in "/repo/.worktrees/new" }
+        } operation: {
+            let paneID = try await ForkBackgroundCaller().run(service: service, source: fixture.original, usingWorktree: usingWorktree)
+            #expect(paneID == "%99")
+            #expect(fixture.refreshes == 3)
+            #expect(fixture.launches.count == 1)
+        }
+    }
+
     @Test("Concurrent/repeated Viewer retries produce exactly one new pane, without modifying source state")
     func idempotency() async throws {
         let fixture = try ForkFixture()

@@ -429,6 +429,20 @@ Directory / In New Worktree…**. Codex and Claude Code implement the optional
 One recognized Agent forks directly in the current directory. Multiple Agent
 panes require a source choice, defaulting to native focus or the active pane.
 Detection without a native conversation UUID is not enough to enable Fork.
+Unavailable Fork actions show whether the Host is offline/outdated, the native
+conversation ID is unverified, or the working directory is missing.
+
+The Host stores verified native conversation identities in
+`<stateRoot>/agent-session-identities.json`, binding each UUID to its pane,
+session, stable window, plugin, and kernel process identity (PID + start time).
+After an app restart, process reconciliation restores only that UUID when exactly
+one matching Agent process is still alive. A reused PID/pane, mismatched window
+or Agent, and ambiguous processes fail closed. Restoration does not replay old
+working, approval, telemetry, or notification state; recovered identities are
+rechecked during reconciliation and Fork preparation. Legacy correlation files
+without process identity are not trusted for restoration: a fresh native Agent
+event is required to establish the binding. Writes are serialized per pane and
+do not block live status/notification delivery.
 
 On iOS, open the window-title menu → **Fork → In Current Directory / In New
 Worktree…**. The selected pane is the default source when there are multiple
@@ -455,6 +469,9 @@ Ordinary Terminal windows keep their existing tmux startup behavior.
 Fork is an explicit action, independent of Auto-run. It does not send `/fork`,
 use the last session, send a continuation prompt, or copy source telemetry/approval
 state.
+All UI-facing Fork callbacks retain explicit `@MainActor` function types,
+including the shared Mac/iOS panel and Host refresh/launch callbacks. Network
+callers and suspended I/O must hop back before accessing pane/UI state.
 
 Worktrees start from the source workspace's HEAD, with branch `fork/<name>` at
 the primary repository's `.worktrees/<name>`. Linked source worktrees and source

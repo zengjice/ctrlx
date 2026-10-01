@@ -122,31 +122,36 @@
         var pluginRegistry: PluginRegistry?
 
         @ObservationIgnored
-        private lazy var agentForkService = AgentForkService(
-            source: { [weak self] paneID in self?.windowManager.paneStates[paneID].flatMap(AgentForkSource.init(pane:)) },
-            core: { [weak self] pluginID in self?.pluginRegistry?.core(pluginID) as? any AgentSessionForking },
-            refresh: { [weak self] in
-                guard let self else { return }
-                windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
-            },
-            launch: { [weak self] sessionName, prepared in
-                guard let self else { throw AgentForkError("Host is shutting down.") }
-                let paneID = try await tmuxService.newWindow(
-                    sessionName: sessionName, workingDirectory: prepared.workingDirectory,
-                    windowName: (prepared.launch?.command as NSString?)?.lastPathComponent.appending(" fork"),
-                    runCommand: try prepared.forkRunCommand(shell: tmuxService.loginShellPath),
-                    extraEnvironment: prepared.extraEnvironment, forceLoginShell: true
-                )
-                for attempt in 0..<PaneSurfaceRetry.attempts {
-                    let panes = await tmuxService.refreshPanes()
-                    windowManager.updatePaneStates(from: panes)
-                    if panes.contains(where: { $0.paneId == paneID }) { break }
-                    if attempt < PaneSurfaceRetry.attempts - 1 { try await Task.sleep(for: PaneSurfaceRetry.delay) }
+        private lazy var agentForkService = makeAgentForkService()
+
+        private func makeAgentForkService() -> AgentForkService {
+            AgentForkService(
+                source: { [weak self] paneID in self?.windowManager.paneStates[paneID].flatMap(AgentForkSource.init(pane:)) },
+                core: { [weak self] pluginID in self?.pluginRegistry?.core(pluginID) as? any AgentSessionForking },
+                refresh: { [weak self] in
+                    guard let self else { return }
+                    windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
+                    await refreshAgentCommandIdentity()
+                },
+                launch: { [weak self] sessionName, prepared in
+                    guard let self else { throw AgentForkError("Host is shutting down.") }
+                    let paneID = try await tmuxService.newWindow(
+                        sessionName: sessionName, workingDirectory: prepared.workingDirectory,
+                        windowName: (prepared.launch?.command as NSString?)?.lastPathComponent.appending(" fork"),
+                        runCommand: try prepared.forkRunCommand(shell: tmuxService.loginShellPath),
+                        extraEnvironment: prepared.extraEnvironment, forceLoginShell: true
+                    )
+                    for attempt in 0..<PaneSurfaceRetry.attempts {
+                        let panes = await tmuxService.refreshPanes()
+                        windowManager.updatePaneStates(from: panes)
+                        if panes.contains(where: { $0.paneId == paneID }) { break }
+                        if attempt < PaneSurfaceRetry.attempts - 1 { try await Task.sleep(for: PaneSurfaceRetry.delay) }
+                    }
+                    await connectedViewerManager?.pushSessionStateToAll()
+                    return paneID
                 }
-                await connectedViewerManager?.pushSessionStateToAll()
-                return paneID
-            }
-        )
+            )
+        }
 
         func prepareAgentFork(_ source: AgentForkSource) async throws -> AgentForkPreparation {
             try await agentForkService.prepare(source)
@@ -1606,6 +1611,12 @@
                 projectPath: projectPath,
                 permissionMode: permissionMode
             )
+            if let paneID = tmuxPane, let names = pluginRegistry?.processNamesByPlugin {
+                // Identity persistence must not hold up live status or notification delivery.
+                Task { [weak windowManager] in
+                    await windowManager?.rememberAgentSessionIdentity(forPane: paneID, processNamesByPlugin: names)
+                }
+            }
             // Issue #598: when the agent finishes a turn, snapshot a recap card
             // from the accumulated telemetry. Only when there's real telemetry to
             // show; `applyState` already cleared any prior recap if a new turn
@@ -3062,10 +3073,7 @@
             // each enabled plugin's manifest `process_names` (spec §6). The same
             // reconciliation runs every ten seconds after setup completes.
             let processNames = pluginRegistry?.processNamesByPlugin ?? [:]
-            let agentPanes = await tmuxService.detectAgentPanes(processNamesByPlugin: processNames)
-            if windowManager.reconcileDetectedAgentSessions(agentPanes) {
-                logger.info("Detected running agents in panes: \(agentPanes.keys.sorted())")
-            }
+            await windowManager.refreshDetectedAgentSessions(processNamesByPlugin: processNames)
 
             // Connect pane stream manager to window manager for view injection
             windowManager.paneStreamManager = paneStreamManager
@@ -3206,7 +3214,7 @@
                         )
                         winManager.applyState(
                             pluginID: session.pluginID,
-                            sessionID: command.paneId,
+                            sessionID: winManager.paneStates[command.paneId]?.claudeSessionID ?? command.paneId,
                             state: .working,
                             tmuxPane: command.paneId,
                             projectPath: nil

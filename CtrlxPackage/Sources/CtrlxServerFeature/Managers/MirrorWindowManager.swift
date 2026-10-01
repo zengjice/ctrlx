@@ -44,6 +44,15 @@ final public class MirrorWindowManager {
     @ObservationIgnored
     private var lastDetectedAgentProcesses: [String: TmuxService.DetectedAgentPane] = [:]
 
+    @ObservationIgnored
+    private var rememberedAgentSources: [String: AgentForkSource] = [:]
+
+    @ObservationIgnored
+    private var identityWrites: [String: (id: UUID, source: AgentForkSource, task: Task<Void, Never>)] = [:]
+
+    @ObservationIgnored
+    @Dependency(AgentSessionIdentityClient.self) private var agentIdentities
+
     /// Called when session metadata (description, color, or emoji) changes,
     /// to push updated state to viewers.
     public var onSessionMetadataChanged: (@MainActor @Sendable () async -> Void)?
@@ -155,6 +164,8 @@ final public class MirrorWindowManager {
             return updatedStates[paneId]?.sessionName.isEmpty == false
         }
         for paneId in stalePaneIds {
+            identityWrites.removeValue(forKey: paneId)?.task.cancel()
+            rememberedAgentSources.removeValue(forKey: paneId)
             processDetectedPaneIds.remove(paneId)
             suppressedAgentProcessIDs.removeValue(forKey: paneId)
             lastDetectedAgentProcesses.removeValue(forKey: paneId)
@@ -425,9 +436,70 @@ final public class MirrorWindowManager {
         guard let panes = await tmuxService.detectAgentPanesIfAvailable(
             processNamesByPlugin: processNamesByPlugin, refreshSnapshot: refreshSnapshot
         ), !Task.isCancelled else { return }
-        if reconcileDetectedAgentSessions(panes) {
+        let changed = reconcileDetectedAgentSessions(panes)
+        let restored = await restoreNativeAgentIdentities(from: panes)
+        if changed || restored {
             await onAgentProcessReconciliationChanged?()
         }
+    }
+
+    func rememberAgentSessionIdentity(forPane paneID: String, processNamesByPlugin: [String: [String]]) async {
+        guard let pane = paneStates[paneID], let source = AgentForkSource(pane: pane),
+              rememberedAgentSources[paneID] != source,
+              let names = processNamesByPlugin[source.pluginID], !names.isEmpty
+        else { return }
+        if let pending = identityWrites[paneID], pending.source == source {
+            await pending.task.value
+            return
+        }
+        let previous = identityWrites[paneID]?.task
+        let id = UUID()
+        let task = Task { [weak self] in
+            // A late write for an old conversation must never replace its successor.
+            await previous?.value
+            guard !Task.isCancelled, let self,
+                  paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == source,
+                  let detected = await tmuxService.detectAgentPanesIfAvailable(
+                      processNamesByPlugin: [source.pluginID: names], refreshSnapshot: true
+                  )?[paneID],
+                  detected.processIDs.count == 1, let pid = detected.processIDs.first,
+                  let runtime = agentIdentities.runtimeID(pid),
+                  !Task.isCancelled,
+                  paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == source
+            else { return }
+            if await agentIdentities.save(.init(source: source, processID: pid, runtimeID: runtime)),
+               paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == source {
+                rememberedAgentSources[paneID] = source
+            }
+        }
+        identityWrites[paneID] = (id, source, task)
+        await task.value
+        if identityWrites[paneID]?.id == id { identityWrites.removeValue(forKey: paneID) }
+    }
+
+    private func restoreNativeAgentIdentities(from detected: [String: TmuxService.DetectedAgentPane]) async -> Bool {
+        var changed = false
+        for (paneID, info) in detected {
+            guard processDetectedPaneIds.contains(paneID) else { continue }
+            let identity = await agentIdentities.load(paneID)
+            guard !Task.isCancelled, processDetectedPaneIds.contains(paneID), let pane = paneStates[paneID],
+                  lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
+                  lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs
+            else { continue }
+            if let identity, identity.matches(pane: pane, detected: info, runtimeID: agentIdentities.runtimeID(identity.processID)) {
+                // Restore only the join key, never old working/approval/notification state.
+                if pane.claudeSessionID != identity.source.sessionID {
+                    paneStates[paneID]?.claudeSessionID = identity.source.sessionID
+                    changed = true
+                }
+            } else if pane.claudeSessionID != nil {
+                paneStates[paneID]?.claudeSessionID = nil
+                paneStates[paneID]?.telemetry = nil
+                rememberedAgentSources.removeValue(forKey: paneID)
+                changed = true
+            }
+        }
+        return changed
     }
 
     // MARK: - Session Management
@@ -465,6 +537,7 @@ final public class MirrorWindowManager {
             let remaining = processIDs.intersection(panes[paneId]?.processIDs ?? [])
             suppressedAgentProcessIDs[paneId] = remaining.isEmpty ? nil : remaining
         }
+        let previousProcesses = lastDetectedAgentProcesses
         lastDetectedAgentProcesses = panes
 
         // Clear only sessions created by this fallback. A transient `ps` miss
@@ -484,6 +557,12 @@ final public class MirrorWindowManager {
                 guard var session = paneStates[paneId]?.agentSession else {
                     processDetectedPaneIds.remove(paneId)
                     continue
+                }
+                if previousProcesses[paneId]?.processIDs != info.processIDs || session.pluginID != info.pluginID {
+                    paneStates[paneId]?.claudeSessionID = nil
+                    paneStates[paneId]?.telemetry = nil
+                    rememberedAgentSources.removeValue(forKey: paneId)
+                    changed = true
                 }
                 guard
                     session.pluginID != info.pluginID
@@ -529,6 +608,8 @@ final public class MirrorWindowManager {
 
     private func clearAgentSessionState(forPane paneId: String) -> Bool {
         guard paneStates[paneId]?.agentSession != nil else { return false }
+        identityWrites.removeValue(forKey: paneId)?.task.cancel()
+        rememberedAgentSources.removeValue(forKey: paneId)
         paneStates[paneId]?.agentSession = nil
         // Drop the OTEL telemetry joined to this session (issue #597) so a fresh
         // session in the same pane doesn't inherit the prior meter / mode.

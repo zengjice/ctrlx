@@ -243,7 +243,8 @@
                         if let window {
                             AgentForkMenu(
                                 sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
-                                unavailableReason: agentForkUnavailableReason
+                                unavailableReason: agentForkUnavailableReason,
+                                sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes)
                             ) { usingWorktree in
                                 agentForkConfiguration = forkConfiguration(window: window, usingWorktree: usingWorktree)
                             }

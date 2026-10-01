@@ -3,8 +3,35 @@ import Foundation
 import Testing
 @testable import CtrlxCommon
 
+private actor ForkPanelBackgroundCaller {
+    func run(configuration: AgentForkConfiguration, source: AgentForkSource) async throws {
+        _ = try await configuration.prepare(source)
+        try await configuration.fork(.init(source: source))
+    }
+}
+
 @MainActor
 struct AgentForkConfigurationTests {
+    @Test("Shared Mac/iOS panel callbacks retain MainActor isolation across suspension")
+    func callbackIsolation() async throws {
+        let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
+        var calls = 0
+        let config = AgentForkConfiguration(sources: [source], usingWorktree: true, prepare: { source in
+            MainActor.preconditionIsolated()
+            await Task.detached {}.value
+            MainActor.preconditionIsolated()
+            calls += 1
+            return .init(source: source, worktree: nil)
+        }, fork: { _ in
+            MainActor.preconditionIsolated()
+            await Task.detached {}.value
+            MainActor.preconditionIsolated()
+            calls += 1
+        })
+        try await ForkPanelBackgroundCaller().run(configuration: config, source: source)
+        #expect(calls == 2)
+    }
+
     private func pane(_ id: String, index: Int, agent: String = "codex", active: Bool = false) -> PaneState {
         PaneState(
             paneId: id, sessionName: "work", tmuxWindowId: "@4", paneIndex: index, currentPath: "/Host/repo", isActive: active,

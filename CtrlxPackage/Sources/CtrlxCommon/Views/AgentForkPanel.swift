@@ -6,13 +6,13 @@ public struct AgentForkConfiguration: Identifiable {
     public let id = UUID()
     let sources: [AgentForkSource]
     let usingWorktree: Bool
-    let prepare: (AgentForkSource) async throws -> AgentForkPreparation
-    let fork: (ForkAgentSession) async throws -> Void
+    let prepare: @MainActor (AgentForkSource) async throws -> AgentForkPreparation
+    let fork: @MainActor (ForkAgentSession) async throws -> Void
 
     public init(
         sources: [AgentForkSource], usingWorktree: Bool,
-        prepare: @escaping (AgentForkSource) async throws -> AgentForkPreparation,
-        fork: @escaping (ForkAgentSession) async throws -> Void
+        prepare: @escaping @MainActor (AgentForkSource) async throws -> AgentForkPreparation,
+        fork: @escaping @MainActor (ForkAgentSession) async throws -> Void
     ) {
         self.sources = sources
         self.usingWorktree = usingWorktree
@@ -49,28 +49,34 @@ public struct AgentForkConfiguration: Identifiable {
 public struct AgentForkMenu: View {
     let sources: [AgentForkSource]
     let unavailableReason: String?
+    let sourceUnavailableReason: String?
     let choose: (Bool) -> Void
 
-    public init(sources: [AgentForkSource], unavailableReason: String?, choose: @escaping (Bool) -> Void) {
+    public init(sources: [AgentForkSource], unavailableReason: String?, sourceUnavailableReason: String? = nil, choose: @escaping (Bool) -> Void) {
         self.sources = sources
         self.unavailableReason = unavailableReason
+        self.sourceUnavailableReason = sourceUnavailableReason
         self.choose = choose
+    }
+
+    private var disabledReason: String? {
+        unavailableReason ?? (sources.isEmpty ? sourceUnavailableReason ?? "Fork requires a recognized Codex or Claude Code conversation." : nil)
     }
 
     public var body: some View {
         Menu {
             Button("In Current Directory") { choose(false) }
+                .disabled(disabledReason != nil)
             Button("In New Worktree…") { choose(true) }
-            if let reason = unavailableReason {
+                .disabled(disabledReason != nil)
+            if let reason = disabledReason {
                 Text(reason)
-            } else if sources.isEmpty {
-                Text("Fork requires a recognized Codex or Claude Code conversation.")
             }
         } label: {
             Label("Fork", symbol: .arrowTriangleBranch)
         }
-        .disabled(sources.isEmpty || unavailableReason != nil)
-        .help(unavailableReason ?? (sources.isEmpty ? "Wait for the Agent conversation to be recognized." : "Fork this Agent into a new window."))
+        .help(disabledReason ?? "Fork this Agent into a new window.")
+        .accessibilityHint(disabledReason ?? "Fork this Agent into a new window.")
         .accessibilityIdentifier("agentFork.menu")
     }
 }

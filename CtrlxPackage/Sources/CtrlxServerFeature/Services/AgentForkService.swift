@@ -6,18 +6,18 @@ import CtrlxPluginProtocol
 /// One Host-side path for local menus and encrypted Viewer commands.
 @MainActor
 final class AgentForkService {
-    private let source: (String) -> AgentForkSource?
-    private let core: (String) -> (any AgentSessionForking)?
-    private let refresh: () async -> Void
-    private let launch: (String, SessionLaunchPreparation) async throws -> String
+    private let source: @MainActor (String) -> AgentForkSource?
+    private let core: @MainActor (String) -> (any AgentSessionForking)?
+    private let refresh: @MainActor () async -> Void
+    private let launch: @MainActor (String, SessionLaunchPreparation) async throws -> String
     private var operations: [UUID: (request: ForkAgentSession, task: Task<String, Error>)] = [:]
     private var completed: [UUID] = []
 
     init(
-        source: @escaping (String) -> AgentForkSource?,
-        core: @escaping (String) -> (any AgentSessionForking)?,
-        refresh: @escaping () async -> Void,
-        launch: @escaping (String, SessionLaunchPreparation) async throws -> String
+        source: @escaping @MainActor (String) -> AgentForkSource?,
+        core: @escaping @MainActor (String) -> (any AgentSessionForking)?,
+        refresh: @escaping @MainActor () async -> Void,
+        launch: @escaping @MainActor (String, SessionLaunchPreparation) async throws -> String
     ) {
         self.source = source
         self.core = core

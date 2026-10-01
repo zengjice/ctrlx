@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.46 — Fork callback isolation and verified session recovery
+
+- Keep Host and shared Mac/iOS Fork callbacks explicitly on MainActor across
+  suspended I/O, correcting the Host crash when Fork is requested from iOS.
+- Persist native Codex/Claude conversation UUIDs with the pane, stable window
+  and kernel process identity. Restore only a matching live process after a
+  Host restart; reject reused processes, ambiguous panes and stale records.
+  Legacy sessions need one fresh native Agent event to establish the binding.
+- Keep identity writes off live status/notification delivery, serialize
+  conversation changes, and preserve native IDs during automatic approvals.
+  Unavailable Fork actions now expose their specific reason on Mac and iOS.
+- Validation: 2,460 Swift tests passed on serial rerun after a parallel-process
+  SIGPIPE interruption; two environment-dependent Apple Intelligence evaluations
+  were excluded. Mac and unsigned iOS device-target compilation passed.
+  Real-device Fork acceptance remains pending installation of the correction.
+- This publication packages Mac only. No Relay deployment, iOS package/install
+  or local Mac replacement is performed.
+
 ## 3.0.45 — Packaging disk checks and worktree-local storage management
 
 - Check available build-volume space before packaging and warn below 20 GiB.
