@@ -7,6 +7,21 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.47 — Fork names, terminal quick actions and neutral iOS session names
+
+- Allow custom Codex and Claude Code Fork names on Mac and iOS. Reuse the
+  chosen name for the window and, for worktree forks, the branch and directory;
+  reject existing names before creating a worktree.
+- Move Mac quick-command and quick-phrase buttons to the focused window's
+  status bar. Expand both agents' command catalogs and group destructive
+  session actions separately without changing pane dispatch guards.
+- Show explicit drag destinations when reordering iOS quick phrases, without
+  persisting intermediate hover positions.
+- Default iOS New Terminal sessions to `session` instead of `claude`, preserving
+  saved custom names and existing project/directory naming.
+- Release scope: publish the Mac package on Qcloud and build the signed iOS
+  device package. No Relay deployment or local Mac replacement is included.
+
 ## 3.0.46 — Fork callback isolation and verified session recovery
 
 - Keep Host and shared Mac/iOS Fork callbacks explicitly on MainActor across
