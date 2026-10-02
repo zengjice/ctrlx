@@ -31,11 +31,12 @@
         let currentContext: TerminalPhraseContext
         let sendPhrase: @MainActor (TerminalPhraseRequest) -> Bool
         let close: () -> Void
-        @Binding var showsAddPhrase: Bool
+        @Binding var isEditingPhrase: Bool
 
         @ScaledMetric(relativeTo: .subheadline) private var minimumButtonWidth: CGFloat = 112
         @State private var hasSubmitted = false
         @State private var errorMessage: String?
+        @State private var editingPhrase: QuickPhrase?
 
         private var unavailableReason: String? {
             guard capturedContext.hasSameInput(as: currentContext) else {
@@ -45,8 +46,11 @@
         }
 
         var body: some View {
-            if showsAddPhrase {
-                QuickPhraseEditor(store: store, finish: { showsAddPhrase = false })
+            if isEditingPhrase {
+                QuickPhraseEditor(store: store, phrase: editingPhrase) {
+                    isEditingPhrase = false
+                    editingPhrase = nil
+                }
             } else {
                 phraseList
             }
@@ -83,6 +87,11 @@
                                 .foregroundStyle(unavailableReason == nil ? Color.primary : .secondary)
                                 .accessibilityIdentifier("terminal-quick-phrase-\(phrase.id)")
                                 .contextMenu {
+                                    Button {
+                                        beginEditing(phrase)
+                                    } label: {
+                                        Label("Edit", symbol: .pencil)
+                                    }
                                     Button(role: .destructive) {
                                         remove(phrase)
                                     } label: {
@@ -91,7 +100,7 @@
                                 }
                                 .quickPhraseReordering(phrase, store: store) { errorMessage = $0 }
                             }
-                            Button { showsAddPhrase = true } label: {
+                            Button { beginEditing(nil) } label: {
                                 Label("Add Phrase", symbol: .plus)
                                     .font(.subheadline.weight(.medium))
                                     .frame(maxWidth: .infinity, minHeight: 36)
@@ -102,7 +111,7 @@
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.roundedRectangle(radius: 12))
                         .tint(.primary)
-                        Text("Tap to send and Return. Drag onto a highlighted tile to reorder; its number shows the new position. Long-press for Delete. Existing terminal input is kept.")
+                        Text("Tap to send and Return. Drag onto a highlighted tile to reorder; its number shows the new position. Long-press to Edit or Delete. Existing terminal input is kept.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         if let errorMessage {
@@ -115,7 +124,7 @@
         }
 
         private func send(_ phrase: QuickPhrase) {
-            guard !hasSubmitted, unavailableReason == nil else { return }
+            guard !hasSubmitted, !isEditingPhrase, unavailableReason == nil else { return }
             let request = TerminalPhraseRequest(phrase: phrase, context: currentContext)
             guard sendPhrase(request) else {
                 errorMessage = "Phrase not sent. The pane, input, or connection changed."
@@ -129,16 +138,30 @@
             do { try store.remove(phrase.id) }
             catch { errorMessage = error.localizedDescription }
         }
+
+        private func beginEditing(_ phrase: QuickPhrase?) {
+            editingPhrase = phrase
+            errorMessage = nil
+            isEditingPhrase = true
+        }
     }
 
     @MainActor
     private struct QuickPhraseEditor: View {
         let store: QuickPhraseStore
+        let phrase: QuickPhrase?
         /// Returns to the phrase list; never dismisses the surrounding session.
         let finish: () -> Void
-        @State private var text = ""
+        @State private var text: String
         @State private var errorMessage: String?
         @FocusState private var isFocused: Bool
+
+        init(store: QuickPhraseStore, phrase: QuickPhrase?, finish: @escaping () -> Void) {
+            self.store = store
+            self.phrase = phrase
+            self.finish = finish
+            _text = State(initialValue: phrase?.text ?? "")
+        }
 
         var body: some View {
             VStack(spacing: 0) {
@@ -146,7 +169,7 @@
                     Button("Cancel", action: finish)
                         .accessibilityIdentifier("terminal-quick-phrase-cancel")
                     Spacer()
-                    Text("Add Phrase").font(.headline)
+                    Text(phrase == nil ? "Add Phrase" : "Edit Phrase").font(.headline)
                     Spacer()
                     Button("Save", action: save)
                         .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -177,7 +200,11 @@
 
         private func save() {
             do {
-                try store.add(text)
+                if let phrase {
+                    try store.update(phrase, text: text)
+                } else {
+                    try store.add(text)
+                }
                 finish()
             } catch {
                 errorMessage = error.localizedDescription

@@ -76,7 +76,8 @@ fixed-delay presentation snippets are **not** the current implementation.
 
 ## Explicit fit and clipboard paste (September 30, 2026)
 
-The window-title menu provides **Fit Terminal to Screen**. It measures each
+The top-right toolbar provides **Fit Terminal to Screen**, next to image upload
+and the other session controls, rather than inside the window-title menu. It measures each
 terminal's available viewport using its actual font cell size, excluding
 telemetry and controls, then combines the pane layout into one window grid.
 Each split is constrained by its smallest proportional child capacity, not a

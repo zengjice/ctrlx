@@ -19,7 +19,10 @@ or extra Send step, and existing terminal input is never cleared automatically.
   discovery. Unsupported agents have no command catalog. Working agents are not
   disabled just because a turn is running.
 - Phrases work in ordinary shells too. **Add Phrase** saves without sending;
-  right-click a phrase to delete it. Drag a phrase onto another tile to move it
+  right-click a phrase on Mac or long-press it on iOS for **Edit** and **Delete**.
+  Editing reuses the add editor with the saved text prefilled; Save keeps its
+  current position without sending, while Cancel leaves it unchanged.
+  Drag a phrase onto another tile to move it
   to that tile's position on both Mac and iOS. On iOS, the hovered tile gets an
   accented dashed outline and a **Drop at #N** marker showing the final position.
   The marker is an overlay: hovering never changes layout or saves/syncs an order,
@@ -38,8 +41,8 @@ sheet. The overlay covers terminal content without contributing to its layout:
 opening, switching and closing it leave the native first responder, keyboard
 intent and second-row shortcut accessory in place. Tap the same toolbar button
 again, outside the panel or Close to dismiss; the other button switches panels
-directly. Panel toggles remain usable in **Add Phrase**, while terminal-key
-buttons stay disabled. Only entering **Add Phrase** borrows input focus for its native editor;
+directly. Panel toggles remain usable in **Add/Edit Phrase**, while terminal-key
+buttons stay disabled. Only entering **Add/Edit Phrase** borrows input focus for its native editor;
 returning restores the terminal's existing keyboard intent. Both tiled windows
 and standalone terminal views use the same presentation state and target checks.
 The overlay uses plain headers and local state for its phrase editor, with no
@@ -174,8 +177,10 @@ real agent or change account credentials.
 `CtrlxCommon/Models` owns `AgentCommandMenu`, `QuickPhraseStore` and
 `TerminalPhraseContext` for both platforms. `QuickPhraseStore` migrates the existing
 `terminalQuickPhrases.v1` array into `terminalQuickPhrases.v2`, preserving IDs and
-order and leaving v1 intact as a backup. v2 is authoritative thereafter; unreadable
-v2 fails closed instead of falling back to an obsolete v1 library.
+order and leaving v1 intact as a backup. The same authoritative key loads existing
+v2 libraries and writes schema v3 on the next change, adding per-record edit versions.
+Older apps reject v3 instead of stripping edit metadata on downgrade. Unreadable
+authoritative data fails closed instead of falling back to an obsolete v1 library.
 
 `TerminalQuickActionRouter` is scene-local and tracks native first-responder
 events. Each mounted coordinator provides an endpoint backed by its **existing**
@@ -229,29 +234,42 @@ message only after the version handshake. Until both sides opt in, frames contai
 consent only, no phrases. Connection epochs bind messages to the current handshake;
 disconnect clears peer consent and cancels pending work. Plaintext sync messages
 are rejected by both clients. Notification-only connections don't opt into sync.
+Sync offer v2 requires versioned-edit support on both devices. Legacy v1 and
+unknown peers receive no frames and show an update hint; local phrase management
+and ordinary terminal access remain available.
 
 Changes are saved immediately offline. On connection, both peers exchange and merge
-their records; additions/deletions while connected are pushed without polling.
+their records; additions/edits/deletions while connected are pushed without polling.
 An iPhone in the background/offline catches up when its connection resumes; this
 does not claim background/iCloud synchronization. Sync never dispatches terminal
 commands or changes terminal size, rendering, scroll position, or input queues.
 
-Records are immutable additions with stable UUIDs and deterministic ordering.
+Records have stable UUIDs and immutable original ordering, with versioned text.
 Deletion is a permanent tombstone for the observed IDs (not an array removal),
 so stale snapshots cannot resurrect them. Identical text saved independently is
 displayed once; deletion marks all currently known aliases. Explicitly saving
 the same text again creates a new addition. This is an observed-remove merge,
 not wall-clock last-writer-wins, and requires no device clock synchronization.
 
+An edit atomically updates all known text aliases, keeping their IDs and visible
+slots. A logical revision increments beyond the accepted edits; a random UUID
+deterministically breaks concurrent ties. Offline edits of the same phrase
+converge to **one version**, regardless of arrival order or device clocks. There
+is no per-edit history growth, and stale snapshots cannot restore older text.
+Deletion wins against even an unseen offline edit of that same ID. An unchanged
+save is a no-op; invalid/duplicate text or capacity failure leaves the old phrase
+intact. A stale editor whose captured text changed reports an error instead of
+silently overwriting a remote edit. Explicitly re-adding a deleted phrase still
+creates a new ID.
+
 User-defined order is a separate optional snapshot, not a mutation of an
-addition's original `order`. It is stored in the same v2 library and encrypted
+record's original `order`. It is stored in the same library and encrypted
 sync frame. Higher logical revisions win; a UUID deterministically breaks ties
 between concurrent offline reorders. The next local reorder increments the
 accepted revision. New, unranked phrases append; known duplicate-text aliases
 move together, and tombstones still prevent resurrection. A stale or record-only
-snapshot never resets an accepted order. Both devices must be updated to sync
-ordering; older clients ignore the additive field and continue syncing additions
-and deletions. Reordering neither changes consent nor needs a Relay deployment.
+snapshot never resets an accepted order. Reordering neither changes consent nor
+needs a Relay deployment.
 
 Snapshots are atomic and bounded: at most 4,096 records including tombstones and
 512 KB of encoded library JSON including ordering, leaving room for encryption/base64 within the relay's
@@ -259,11 +277,11 @@ Snapshots are atomic and bounded: at most 4,096 records including tombstones and
 overwriting local data. Tombstones are not automatically pruned (offline peers
 may still carry the deleted addition). At capacity, save/merge fails visibly.
 
-Regression coverage: `AgentCommandMenuTests`, `QuickPhraseTests`, `QuickPhraseReorderingTests`, `QuickPhraseDeviceSyncTests`,
+Regression coverage: `AgentCommandMenuTests`, `QuickPhraseTests`, `QuickPhraseEditingTests`, `QuickPhraseReorderingTests`, `QuickPhraseDeviceSyncTests`,
 `QuickPhraseDeviceSettingsTests` (real Mac settings load/pair/unpair), `QuickPhraseSyncTests`
 (including all 16 reciprocal legacy combinations and a four-device cycle),
 `QuickPhraseSyncTransportTests` (real local WebSockets with both production clients/E2EE),
 `TerminalQuickActionRouterTests`, `LocalKeystrokeInputTests`, and
 `KeystrokeDebouncerTests`. When manually checking the UI, cover local and remote
-split panes, focus changes while a popover is open, adding/deleting phrases while
+split panes, focus changes while a popover is open, adding/editing/deleting phrases while
 offline, typing after closing the editor, and sending with an existing draft.

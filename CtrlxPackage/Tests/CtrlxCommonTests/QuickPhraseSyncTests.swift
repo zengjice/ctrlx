@@ -144,6 +144,35 @@ struct QuickPhraseSyncTests {
         func disconnect() { a.reset(); b.reset() }
     }
 
+    @Test("Edited text and its slot sync live and offline without an echo loop")
+    func editing() async throws {
+        let a = store(), b = store()
+        for text in ["one", "two", "three"] { try a.add(text) }
+        a.setSyncEnabled(true, for: "pair")
+        b.setSyncEnabled(true, for: "pair")
+        let link = Link(a, b)
+        defer { link.disconnect() }
+        await link.connect()
+        try b.move(b.phrases[0].id, to: b.phrases[2].id)
+        await link.settle()
+        try b.update(b.phrases[1], text: "edited on iPhone")
+        await link.settle()
+        #expect(a.phrases == b.phrases)
+        #expect(a.phrases.map(\.text) == ["two", "edited on iPhone", "one"])
+        #expect(a.records == b.records)
+        let sends = link.sentA.count + link.sentB.count
+        await link.settle()
+        #expect(link.sentA.count + link.sentB.count == sends)
+        link.disconnect()
+        try a.update(a.phrases[0], text: "offline Mac edit")
+        try b.update(b.phrases[2], text: "offline iPhone edit")
+        await link.connect()
+        #expect(a.phrases == b.phrases)
+        #expect(a.ordering == b.ordering)
+        #expect(a.records == b.records)
+        #expect(Set(a.phrases.map(\.text)) == ["offline Mac edit", "edited on iPhone", "offline iPhone edit"])
+    }
+
     private func pairings(_ ids: [String], key: UInt8) -> [QuickPhraseSyncPairing] {
         ids.map { .init(pairID: $0, name: "Device", publicKey: Data(repeating: key, count: 32).base64EncodedString()) }
     }
@@ -356,7 +385,15 @@ struct QuickPhraseSyncTests {
         try a.add("new")
         await sync.flush()
         #expect(sent.isEmpty)
-        sync.receiveHello(.init(version: 2, epoch: UUID(), enabled: true))
+        let legacy = QuickPhraseSyncOffer(version: 1, epoch: UUID(), enabled: true)
+        sync.receiveHello(legacy)
+        await sync.flush()
+        #expect(sent.isEmpty)
+        #expect(a.syncErrors["pair"] == "Update both devices to sync quick phrases.")
+        sync.receive(.init(senderEpoch: legacy.epoch, recipientEpoch: sync.offer.epoch, enabled: true,
+                           records: [.init(id: UUID(), order: 0, text: "legacy")]))
+        #expect(a.phrases.map(\.text) == ["new"])
+        sync.receiveHello(.init(version: 99, epoch: UUID(), enabled: true))
         await sync.flush()
         #expect(sent.isEmpty)
         let old = sync.offer, peer = QuickPhraseSyncOffer(epoch: UUID(), enabled: true)

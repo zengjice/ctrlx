@@ -234,12 +234,6 @@
                         .disabled(!relayClient.isHostConnected || isCreatingWindow)
                         .accessibilityIdentifier("new-agent-window")
 
-                        Button(action: resizeWindowToFit) {
-                            Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
-                        }
-                        .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
-                        .accessibilityHint("Changes the window size on the Host and all Viewers")
-
                         if let window {
                             AgentForkMenu(
                                 sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
@@ -314,6 +308,15 @@
                         }
                         .disabled(!relayClient.isHostConnected || activePaneId == nil)
                     }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: resizeWindowToFit) {
+                        Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
+                    }
+                    .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
+                    .accessibilityHint("Changes the window size on the Host and all Viewers")
+                    .accessibilityIdentifier("terminal-fit-to-screen")
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {

@@ -63,6 +63,11 @@ struct QuickPhraseSyncTransportTests {
                 try viewerStore.move(viewerStore.phrases[0].id, to: viewerStore.phrases[2].id)
                 try await waitUntil { hostStore.ordering != nil && hostStore.phrases == viewerStore.phrases }
                 #expect(hostStore.ordering == viewerStore.ordering)
+                try viewerStore.update(viewerStore.phrases[1], text: "edited on iPhone")
+                try await waitUntil {
+                    hostStore.phrases[1].text == "edited on iPhone" && hostStore.phrases == viewerStore.phrases
+                }
+                #expect(hostStore.records == viewerStore.records)
                 await viewer.disconnect()
                 try await waitUntil { !host.isViewerConnected }
                 #expect(hostStore.syncStatus(for: hostStore.syncDevices[0].id) == .offline)

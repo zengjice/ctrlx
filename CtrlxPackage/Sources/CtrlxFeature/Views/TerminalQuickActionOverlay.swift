@@ -84,7 +84,7 @@
                     currentContext: phraseContext,
                     sendPhrase: sendPhrase,
                     close: close,
-                    showsAddPhrase: $presentation.isEditingPhrase
+                    isEditingPhrase: $presentation.isEditingPhrase
                 )
             }
         }
