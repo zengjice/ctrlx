@@ -102,7 +102,7 @@
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.roundedRectangle(radius: 12))
                         .tint(.primary)
-                        Text("Tap to send and Return. Drag phrases to reorder. Long-press for Delete. Existing terminal input is kept.")
+                        Text("Tap to send and Return. Drag onto a highlighted tile to reorder; its number shows the new position. Long-press for Delete. Existing terminal input is kept.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         if let errorMessage {

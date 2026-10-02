@@ -20,7 +20,10 @@ or extra Send step, and existing terminal input is never cleared automatically.
   disabled just because a turn is running.
 - Phrases work in ordinary shells too. **Add Phrase** saves without sending;
   right-click a phrase to delete it. Drag a phrase onto another tile to move it
-  to that tile's position on both Mac and iOS. Reordering saves immediately, even
+  to that tile's position on both Mac and iOS. On iOS, the hovered tile gets an
+  accented dashed outline and a **Drop at #N** marker showing the final position.
+  The marker is an overlay: hovering never changes layout or saves/syncs an order,
+  and leaving the tile or completing a drop clears it. Reordering saves on drop, even
   offline, without sending terminal input or closing the panel. VoiceOver offers
   **Move Earlier** and **Move Later** actions. The library is local-first and shared across
   windows and hosts. Optional, explicitly enabled pairing sync merges libraries
