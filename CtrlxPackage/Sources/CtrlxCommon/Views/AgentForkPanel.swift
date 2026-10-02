@@ -43,6 +43,19 @@ public struct AgentForkConfiguration: Identifiable {
         }
         return .init(name: name, expectedHead: plan.head, allowUncommittedChanges: allowUncommittedChanges)
     }
+
+    func forkRequest(
+        source: AgentForkSource, preparation: AgentForkPreparation?,
+        name: String, allowUncommittedChanges: Bool
+    ) throws -> ForkAgentSession {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let worktree = try worktreeRequest(
+            source: source, preparation: preparation, name: name, allowUncommittedChanges: allowUncommittedChanges
+        )
+        let request = ForkAgentSession(source: source, windowName: name, worktree: worktree)
+        try request.validateName()
+        return request
+    }
 }
 
 @MainActor
@@ -87,7 +100,7 @@ public struct AgentForkPanel: View {
     @Environment(\.dismiss) private var dismiss
     @State private var sourceID: String
     @State private var preparation: AgentForkPreparation?
-    @State private var worktreeName: String
+    @State private var forkName: String
     @State private var acceptsCleanWorktree = false
     @State private var isLoading = false
     @State private var isLaunching = false
@@ -97,14 +110,15 @@ public struct AgentForkPanel: View {
     public init(configuration: AgentForkConfiguration) {
         self.configuration = configuration
         self._sourceID = State(initialValue: configuration.sources.first?.paneID ?? "")
-        self._worktreeName = State(initialValue: "\(configuration.sources.first?.pluginID == "codex" ? "codex" : "claude")-\(UUID().uuidString.prefix(8).lowercased())")
+        let agentName = configuration.sources.first?.pluginID == "codex" ? "codex" : "claude"
+        self._forkName = State(initialValue: configuration.usingWorktree ? "\(agentName)-\(UUID().uuidString.prefix(8).lowercased())" : "\(agentName) fork")
     }
 
     private var source: AgentForkSource? { configuration.sources.first { $0.paneID == sourceID } }
     private var canLaunch: Bool {
         guard source != nil, !isLoading, !isLaunching else { return false }
         do {
-            _ = try makeWorktreeRequest()
+            _ = try makeRequest()
             return true
         } catch { return false }
     }
@@ -135,10 +149,7 @@ public struct AgentForkPanel: View {
             preparation = nil
             errorMessage = nil
             guard let source else { return }
-            if !configuration.usingWorktree {
-                if configuration.sources.count == 1 { await start() }
-                return
-            }
+            guard configuration.usingWorktree else { return }
             isLoading = true
             defer { if sourceID == source.paneID { isLoading = false } }
             do {
@@ -152,7 +163,10 @@ public struct AgentForkPanel: View {
                 errorMessage = error.localizedDescription
             }
         }
-        .onChange(of: worktreeName) { request = nil }
+        .onChange(of: forkName) {
+            if request != nil { errorMessage = nil }
+            request = nil
+        }
         .onChange(of: acceptsCleanWorktree) { request = nil }
     }
 
@@ -174,6 +188,14 @@ public struct AgentForkPanel: View {
                 Text("Opens a new conversation with the saved history. The original Agent keeps running; no prompt is sent automatically.")
                     .font(.callout)
             }
+            TextField("Name", text: $forkName).disabled(isLaunching)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                #endif
+                .accessibilityIdentifier("agentFork.name")
+            Text(configuration.usingWorktree ? "Used for the window, branch and worktree directory." : "Used for the new window.")
+                .font(.caption).foregroundStyle(.secondary)
             if configuration.usingWorktree {
                 worktreeFields
             }
@@ -195,15 +217,10 @@ public struct AgentForkPanel: View {
     @ViewBuilder
     private var worktreeFields: some View {
         if let worktree = preparation?.worktree {
-            TextField("Worktree name", text: $worktreeName).disabled(isLaunching)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                #endif
-                .accessibilityIdentifier("agentFork.worktreeName")
-            Text("Use letters, numbers, ., _ or -; start with a letter or number.")
+            Text("Use letters, numbers, ., _ or -; start with a letter or number. Do not use HEAD, .., or end with . or .lock.")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("Branch: fork/\(worktreeName)\nDirectory: \(worktree.directory(name: worktreeName))\nBase: \(worktree.head.prefix(12))")
+            let name = forkName.trimmingCharacters(in: .whitespacesAndNewlines)
+            Text("Branch: \(name)\nDirectory: \(worktree.directory(name: name))\nBase: \(worktree.head.prefix(12))")
                 .font(.callout).textSelection(.enabled)
             Text("Starts from HEAD. Uncommitted, untracked and ignored files are not copied. The worktree remains after closing its tab.")
                 .font(.callout).foregroundStyle(.secondary)
@@ -217,22 +234,21 @@ public struct AgentForkPanel: View {
         }
     }
 
-    private func makeWorktreeRequest() throws -> ForkAgentSession.Worktree? {
+    private func makeRequest() throws -> ForkAgentSession {
         guard let source else { throw AgentForkError("Choose a source Agent.") }
-        return try configuration.worktreeRequest(
-            source: source, preparation: preparation, name: worktreeName,
+        return try configuration.forkRequest(
+            source: source, preparation: preparation, name: forkName,
             allowUncommittedChanges: acceptsCleanWorktree
         )
     }
 
     private func start() async {
-        guard canLaunch, let source else { return }
+        guard canLaunch else { return }
         isLaunching = true
         errorMessage = nil
         defer { isLaunching = false }
         do {
-            let worktree = try makeWorktreeRequest()
-            let next = request ?? ForkAgentSession(source: source, worktree: worktree)
+            let next = try request ?? makeRequest()
             request = next
             try await configuration.fork(next)
             dismiss()

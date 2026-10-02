@@ -72,6 +72,36 @@ struct AgentForkConfigurationTests {
         #expect(try config.worktreeRequest(source: source, preparation: nil, name: "", allowUncommittedChanges: false) == nil)
     }
 
+    @Test("Current-directory Fork uses the entered window name without needing Git")
+    func currentDirectoryName() throws {
+        let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
+        let config = configuration(sources: [source], usingWorktree: false)
+        let request = try config.forkRequest(source: source, preparation: nil, name: "  我的 Fork  ", allowUncommittedChanges: false)
+        #expect(request.windowName == "我的 Fork")
+        #expect(request.worktree == nil)
+        for name in ["", "  ", "line\nbreak"] {
+            #expect(throws: AgentForkError.self) {
+                try config.forkRequest(source: source, preparation: nil, name: name, allowUncommittedChanges: false)
+            }
+        }
+    }
+
+    @Test("Worktree drafts share one name; correcting a conflict gets a fresh retry identity")
+    func namedWorktree() throws {
+        let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
+        let config = configuration(sources: [source], usingWorktree: true)
+        let preparation = AgentForkPreparation(source: source, worktree: .init(
+            repositoryRoot: "/Host/repo", primaryRoot: "/Host/repo", head: "source-head", relativeDirectory: "", hasUncommittedChanges: false
+        ))
+        let first = try config.forkRequest(source: source, preparation: preparation, name: "  feature  ", allowUncommittedChanges: false)
+        #expect(first.windowName == "feature")
+        #expect(first.worktree?.name == "feature")
+        #expect(preparation.worktree?.directory(name: try #require(first.windowName)) == "/Host/repo/.worktrees/feature")
+        let corrected = try config.forkRequest(source: source, preparation: preparation, name: "feature-2", allowUncommittedChanges: false)
+        #expect(corrected.requestID != first.requestID)
+        #expect(corrected.windowName == corrected.worktree?.name)
+    }
+
     @Test("Worktree review preserves the selected source HEAD and requires dirty-file acknowledgement", arguments: [false, true])
     func worktree(hasChanges: Bool) throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))

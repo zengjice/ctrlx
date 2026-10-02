@@ -133,11 +133,11 @@
                     windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
                     await refreshAgentCommandIdentity()
                 },
-                launch: { [weak self] sessionName, prepared in
+                launch: { [weak self] sessionName, windowName, prepared in
                     guard let self else { throw AgentForkError("Host is shutting down.") }
                     let paneID = try await tmuxService.newWindow(
                         sessionName: sessionName, workingDirectory: prepared.workingDirectory,
-                        windowName: (prepared.launch?.command as NSString?)?.lastPathComponent.appending(" fork"),
+                        windowName: windowName,
                         runCommand: try prepared.forkRunCommand(shell: tmuxService.loginShellPath),
                         extraEnvironment: prepared.extraEnvironment, forceLoginShell: true
                     )

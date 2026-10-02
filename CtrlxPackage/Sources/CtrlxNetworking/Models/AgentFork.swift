@@ -56,7 +56,8 @@ public struct AgentForkWorktree: Codable, Sendable, Equatable {
     }
 
     public static func isValidName(_ name: String) -> Bool {
-        name.utf8.count <= 80 && name.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]*$"#, options: .regularExpression) != nil
+        name.utf8.count <= 80 && name != "HEAD" && !name.contains("..") && !name.hasSuffix(".") && !name.hasSuffix(".lock")
+            && name.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]*$"#, options: .regularExpression) != nil
     }
 }
 
@@ -95,11 +96,30 @@ public struct ForkAgentSession: CommandSpec, Equatable {
     /// Kept across a transport retry so a delayed reply cannot create a second fork.
     public let requestID: UUID
     public let source: AgentForkSource
+    /// Optional so requests from clients without the naming panel still decode.
+    public let windowName: String?
     public let worktree: Worktree?
-    public init(requestID: UUID = UUID(), source: AgentForkSource, worktree: Worktree? = nil) {
+    public init(requestID: UUID = UUID(), source: AgentForkSource, windowName: String? = nil, worktree: Worktree? = nil) {
         self.requestID = requestID
         self.source = source
+        self.windowName = windowName
         self.worktree = worktree
+    }
+
+    public func validateName() throws {
+        if let windowName {
+            guard !windowName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !windowName.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+            else { throw AgentForkError("Enter a window name without line breaks or control characters.") }
+        }
+        if let worktree {
+            guard AgentForkWorktree.isValidName(worktree.name) else {
+                throw AgentForkError("Use a worktree name starting with a letter or number, followed by letters, numbers, ., _ or -. Do not use HEAD, .., or end with . or .lock.")
+            }
+            guard windowName == nil || windowName == worktree.name else {
+                throw AgentForkError("The window, branch and worktree directory must use the same name.")
+            }
+        }
     }
     public var commandType: CommandType { .forkAgentSession(self) }
 }

@@ -37,7 +37,7 @@ struct AgentForkTests {
     func wire() throws {
         let source = try #require(AgentForkSource(pane: .init(paneId: "%9", sessionName: "office", tmuxWindowId: "@3", currentPath: "/repo 'space'",
             agentSession: .init(paneId: "%9", pluginID: "claude-code"), claudeSessionID: UUID().uuidString)))
-        let request = ForkAgentSession(source: source, worktree: .init(name: "feature", expectedHead: "abc", allowUncommittedChanges: true))
+        let request = ForkAgentSession(source: source, windowName: "feature", worktree: .init(name: "feature", expectedHead: "abc", allowUncommittedChanges: true))
         let command = CommandMessage(paneId: "", command: request.commandType)
         let decoded = try JSONDecoder().decode(CommandMessage.self, from: JSONEncoder().encode(command))
         #expect(decoded.command == command.command)
@@ -51,10 +51,34 @@ struct AgentForkTests {
         #expect(try JSONDecoder().decode(CommandResponseMessage.self, from: JSONEncoder().encode(response)).forkPreparation == response.forkPreparation)
     }
 
+    @Test("Unnamed legacy Fork requests still decode; new names survive both Fork modes")
+    func legacyNames() throws {
+        let source = try #require(AgentForkSource(pane: .init(
+            paneId: "%1", sessionName: "office", currentPath: "/repo",
+            agentSession: .init(paneId: "%1", pluginID: "codex"), claudeSessionID: UUID().uuidString
+        )))
+        for worktree in [nil, ForkAgentSession.Worktree(name: "feature", expectedHead: "abc")] {
+            let request = ForkAgentSession(source: source, worktree: worktree)
+            let data = try JSONEncoder().encode(request)
+            let dictionary = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(dictionary["windowName"] == nil)
+            let legacy = try JSONDecoder().decode(ForkAgentSession.self, from: data)
+            #expect(legacy == request)
+            try legacy.validateName()
+            let named = ForkAgentSession(source: source, windowName: worktree?.name ?? "我的 Fork", worktree: worktree)
+            #expect(try JSONDecoder().decode(ForkAgentSession.self, from: JSONEncoder().encode(named)) == named)
+            try named.validateName()
+            #expect(throws: AgentForkError.self) { try ForkAgentSession(source: source, windowName: "\t").validateName() }
+        }
+        #expect(throws: AgentForkError.self) {
+            try ForkAgentSession(source: source, windowName: "other", worktree: .init(name: "feature", expectedHead: "abc")).validateName()
+        }
+    }
+
     @Test("Worktree names cannot escape the primary repository or become Git options")
     func worktreeNames() {
         for name in ["codex-123", "feature.x", "fix_42"] { #expect(AgentForkWorktree.isValidName(name)) }
-        for name in ["", "..", ".hidden", "../other", "a/b", "--force", "a b", "a\n", String(repeating: "x", count: 81)] {
+        for name in ["", "..", ".hidden", "../other", "a/b", "--force", "a b", "a\n", "HEAD", "a..b", "a.", "a.lock", String(repeating: "x", count: 81)] {
             #expect(!AgentForkWorktree.isValidName(name))
         }
     }

@@ -48,13 +48,13 @@ actor AgentForkWorktreeManager {
         let plan = try await inspect(directory)
         try validate(plan, request: request)
         let path = plan.directory(name: request.name)
-        let branch = "fork/\(request.name)"
+        let branch = request.name
         let files = FileManager.default
-        guard !files.fileExists(atPath: path) else { throw AgentForkError("Worktree directory already exists: \(path)") }
+        guard !files.fileExists(atPath: path) else { throw AgentForkError("Worktree directory already exists: \(path). Choose a different name.") }
         _ = try await git(plan.repositoryRoot, ["check-ref-format", "--branch", branch])
         let existing = try await processes.run("/usr/bin/git", ["-C", plan.repositoryRoot, "show-ref", "--verify", "--quiet", "refs/heads/\(branch)"], nil, 15)
         guard existing.exitCode == 1 else {
-            throw AgentForkError(existing.isSuccess ? "Branch already exists: \(branch)" : existing.stderrString)
+            throw AgentForkError(existing.isSuccess ? "Branch already exists: \(branch). Choose a different name." : existing.stderrString)
         }
         let parent = URL(fileURLWithPath: path).deletingLastPathComponent()
         guard parent.resolvingSymlinksInPath().path == plan.primaryRoot + "/.worktrees" else {

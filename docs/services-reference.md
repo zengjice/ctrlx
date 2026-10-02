@@ -426,8 +426,9 @@ Claude telemetry environment. No agent command/config is constructed by iOS.
 Right-click a local or Viewer terminal-window tab → **Fork → In Current
 Directory / In New Worktree…**. Codex and Claude Code implement the optional
 `AgentSessionForking` capability; sidecars retain their existing wire contract.
-One recognized Agent forks directly in the current directory. Multiple Agent
-panes require a source choice, defaulting to native focus or the active pane.
+Both modes open the shared naming panel before creation. The entered name is
+used for the new window; current-directory names may contain spaces or Unicode.
+Multiple Agent panes require a source choice, defaulting to native focus or the active pane.
 Detection without a native conversation UUID is not enough to enable Fork.
 Unavailable Fork actions show whether the Host is offline/outdated, the native
 conversation ID is unverified, or the working directory is missing.
@@ -473,8 +474,12 @@ All UI-facing Fork callbacks retain explicit `@MainActor` function types,
 including the shared Mac/iOS panel and Host refresh/launch callbacks. Network
 callers and suspended I/O must hop back before accessing pane/UI state.
 
-Worktrees start from the source workspace's HEAD, with branch `fork/<name>` at
-the primary repository's `.worktrees/<name>`. Linked source worktrees and source
+Worktrees start from the source workspace's HEAD, with branch `<name>` at
+the primary repository's `.worktrees/<name>` and the same window name. An existing
+branch or directory is rejected with a prompt to choose another name; the panel
+keeps the draft, and editing the name creates a new request UUID rather than
+replaying a failed request. Names are single safe Git branch/path components;
+no prefix or automatic suffix is added. Linked source worktrees and source
 subdirectories are supported. A local `info/exclude` rule is added when needed,
 then Git's effective ignore status is verified before checkout. If `.gitignore`
 negation overrides the rule, Fork fails with an actionable message rather than

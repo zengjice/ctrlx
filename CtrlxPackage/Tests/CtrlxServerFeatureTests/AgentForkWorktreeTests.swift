@@ -62,7 +62,7 @@ struct AgentForkWorktreeTests {
             let path = plan.directory(name: "new-agent")
             #expect(cwd == path + "/src folder")
             #expect(try await fixture.git(["rev-parse", "HEAD"], at: cwd) == plan.head)
-            #expect(try await fixture.git(["branch", "--show-current"], at: cwd) == "fork/new-agent")
+            #expect(try await fixture.git(["branch", "--show-current"], at: cwd) == "new-agent")
             #expect(try String(contentsOfFile: cwd + "/file.txt", encoding: .utf8) == "committed")
             #expect(try await fixture.git(["status", "--porcelain"]).isEmpty)
             // Retrying with a different request must not overwrite an existing checkout.
@@ -93,7 +93,7 @@ struct AgentForkWorktreeTests {
                 }
             }
             #expect(!FileManager.default.fileExists(atPath: plan.directory(name: "blocked")))
-            #expect(try await fixture.git(["branch", "--list", "fork/blocked"]).isEmpty)
+            #expect(try await fixture.git(["branch", "--list", "blocked"]).isEmpty)
             #expect(try await fixture.git(["status", "--porcelain"]).isEmpty)
             #expect(try String(contentsOf: ignoreFile, encoding: .utf8) == ignoreRules)
             let excludePath = try await fixture.git(["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"])
@@ -171,11 +171,46 @@ struct AgentForkWorktreeTests {
             let manager = AgentForkWorktreeManager()
             let plan = try await manager.inspect(fixture.source)
             await #expect(throws: AgentForkError.self) { try await manager.create(fixture.source, request: .init(name: "../escape", expectedHead: plan.head)) }
-            _ = try await fixture.git(["branch", "fork/existing"])
+            _ = try await fixture.git(["branch", "existing"])
             await #expect(throws: AgentForkError.self) { try await manager.create(fixture.source, request: .init(name: "existing", expectedHead: plan.head)) }
             _ = try await fixture.git(["commit", "--allow-empty", "-m", "new HEAD"])
             await #expect(throws: AgentForkError.self) { try await manager.create(fixture.source, request: .init(name: "stale", expectedHead: plan.head)) }
             #expect(!FileManager.default.fileExists(atPath: plan.directory(name: "stale")))
+        }
+    }
+
+    @Test("Existing exact branch or directory names prompt renaming without overwriting anything", arguments: ["branch", "directory"])
+    func nameConflicts(kind: String) async throws {
+        try await live {
+            let fixture = try await ForkGitFixture.make()
+            defer { try? fixture.cleanUp() }
+            let manager = AgentForkWorktreeManager()
+            let plan = try await manager.inspect(fixture.source)
+            let existingPath = plan.directory(name: "existing")
+            if kind == "branch" {
+                _ = try await fixture.git(["branch", "existing"])
+            } else {
+                try FileManager.default.createDirectory(atPath: existingPath, withIntermediateDirectories: true)
+                try "keep me".write(toFile: existingPath + "/sentinel.txt", atomically: true, encoding: .utf8)
+            }
+            do {
+                _ = try await manager.create(fixture.source, request: .init(name: "existing", expectedHead: plan.head, allowUncommittedChanges: true))
+                Issue.record("An existing destination must not be reused")
+            } catch {
+                #expect(error.localizedDescription.contains(kind == "branch" ? "Branch already exists: existing" : "Worktree directory already exists:"))
+                #expect(error.localizedDescription.contains("Choose a different name"))
+            }
+            #expect(try await fixture.git(["worktree", "list", "--porcelain"]).components(separatedBy: "worktree ").count == 2)
+            if kind == "branch" {
+                #expect(try await fixture.git(["rev-parse", "existing"]) == plan.head)
+                #expect(!FileManager.default.fileExists(atPath: existingPath))
+            } else {
+                #expect(try String(contentsOfFile: existingPath + "/sentinel.txt", encoding: .utf8) == "keep me")
+                #expect(try await fixture.git(["branch", "--list", "existing"]).isEmpty)
+            }
+            let newPath = try await manager.create(fixture.source, request: .init(name: "available", expectedHead: plan.head, allowUncommittedChanges: true))
+            #expect(newPath == plan.directory(name: "available") + "/src folder")
+            #expect(try await fixture.git(["branch", "--show-current"], at: newPath) == "available")
         }
     }
 
@@ -195,7 +230,7 @@ struct AgentForkWorktreeTests {
                 Issue.record("Missing cwd must fail rather than silently launch at the repository root")
             } catch { #expect(error.localizedDescription.contains(path)) }
             #expect(FileManager.default.fileExists(atPath: path))
-            #expect(try await fixture.git(["branch", "--show-current"], at: path) == "fork/retained")
+            #expect(try await fixture.git(["branch", "--show-current"], at: path) == "retained")
         }
     }
 
@@ -279,15 +314,16 @@ struct AgentForkWorktreeTests {
                     let service = AgentForkService(
                         source: { $0 == source.paneID ? source : nil }, core: { _ in core },
                         refresh: { _ = await tmux.refreshPanes() },
-                        launch: { session, prepared in
+                        launch: { session, name, prepared in
                             try await tmux.newWindow(sessionName: session, workingDirectory: prepared.workingDirectory,
-                                windowName: "fork probe", runCommand: prepared.forkRunCommand(shell: tmux.loginShellPath),
+                                windowName: name, runCommand: prepared.forkRunCommand(shell: tmux.loginShellPath),
                                 extraEnvironment: prepared.extraEnvironment + ["FORK_TEST_AGENT=\(pluginID)"], forceLoginShell: true)
                         }
                     )
                     let plan = try await service.prepare(source)
                     let worktree = mode.worktree ? ForkAgentSession.Worktree(name: "probe", expectedHead: try #require(plan.worktree).head) : nil
-                    let request = ForkAgentSession(source: source, worktree: worktree)
+                    let name = mode.worktree ? "probe" : "我的 Fork probe"
+                    let request = ForkAgentSession(source: source, windowName: name, worktree: worktree)
                     let paneID = try await service.fork(request)
                     #expect(try await service.fork(request) == paneID)
                     let expectedDirectory = mode.worktree ? fixture.root.path + "/.worktrees/probe/src folder" : fixture.source
@@ -301,6 +337,10 @@ struct AgentForkWorktreeTests {
                     #expect(screen.contains("FORK_ARG[\(source.sessionID)]"))
                     let expectedConfig = pluginID == "claude-default" ? "UNSET" : fixture.container.path
                     #expect(screen.contains("FORK_CONFIG[\(expectedConfig)]"))
+                    let windowName = try await runner.runOrThrow(executable: tmuxPath, arguments: [
+                        "-S", socket, "display-message", "-p", "-t", paneID, "#{window_name}",
+                    ])
+                    #expect(windowName.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == name)
                     if pluginID == "codex" {
                         #expect(screen.contains("FORK_ARG[fork]"))
                         #expect(screen.contains("FORK_ARG[-C]"))

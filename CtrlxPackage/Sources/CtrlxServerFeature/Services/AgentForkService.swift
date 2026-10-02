@@ -9,7 +9,7 @@ final class AgentForkService {
     private let source: @MainActor (String) -> AgentForkSource?
     private let core: @MainActor (String) -> (any AgentSessionForking)?
     private let refresh: @MainActor () async -> Void
-    private let launch: @MainActor (String, SessionLaunchPreparation) async throws -> String
+    private let launch: @MainActor (String, String, SessionLaunchPreparation) async throws -> String
     private var operations: [UUID: (request: ForkAgentSession, task: Task<String, Error>)] = [:]
     private var completed: [UUID] = []
 
@@ -17,7 +17,7 @@ final class AgentForkService {
         source: @escaping @MainActor (String) -> AgentForkSource?,
         core: @escaping @MainActor (String) -> (any AgentSessionForking)?,
         refresh: @escaping @MainActor () async -> Void,
-        launch: @escaping @MainActor (String, SessionLaunchPreparation) async throws -> String
+        launch: @escaping @MainActor (String, String, SessionLaunchPreparation) async throws -> String
     ) {
         self.source = source
         self.core = core
@@ -55,6 +55,7 @@ final class AgentForkService {
     }
 
     private func perform(_ request: ForkAgentSession) async throws -> String {
+        try request.validateName()
         await refresh()
         let agent = try validate(request.source)
         @Dependency(SessionDirectoryClient.self) var directories
@@ -72,7 +73,8 @@ final class AgentForkService {
             // Only the new pane receives this command. Source state and keys are untouched.
             let forkCommand = request.worktree == nil ? command : try await agent.commandForFork(sessionID: request.source.sessionID, projectPath: directory)
             _ = try validate(request.source)
-            return try await launch(request.source.sessionName, SessionLaunchPreparation(workingDirectory: directory, fork: forkCommand))
+            let windowName = request.windowName ?? request.worktree?.name ?? (forkCommand.command.command as NSString).lastPathComponent.appending(" fork")
+            return try await launch(request.source.sessionName, windowName, SessionLaunchPreparation(workingDirectory: directory, fork: forkCommand))
         } catch {
             throw AgentForkError(error.localizedDescription + (request.worktree == nil ? "" : "\nThe new worktree is kept at \(directory). Check it before retrying."))
         }
