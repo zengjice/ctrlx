@@ -27,13 +27,14 @@ package struct QuickPhrase: Codable, Identifiable, Equatable, Sendable {
     }
 
     package enum ValidationError: LocalizedError {
-        case empty, multiline, duplicate
+        case empty, multiline, duplicate, unavailable
 
         package var errorDescription: String? {
             switch self {
             case .empty: "Enter a phrase first."
             case .multiline: "Use a single line without control characters."
             case .duplicate: "This phrase is already saved."
+            case .unavailable: "This phrase changed or was deleted. Reopen the editor."
             }
         }
     }
@@ -81,7 +82,7 @@ package final class QuickPhraseStore {
         do {
             if let data = preferences.data(Self.syncStorageKey) {
                 let library = try JSONDecoder().decode(Library.self, from: data)
-                guard library.version == 2 else { throw SyncError.invalidLibrary }
+                guard library.version == 2 || library.version == 3 else { throw SyncError.invalidLibrary }
                 try validate(library.records, ordering: library.ordering)
                 apply(library.records, ordering: library.ordering)
                 return
@@ -116,7 +117,22 @@ package final class QuickPhraseStore {
         // The UI deduplicates independently-created identical phrases. Delete all
         // known aliases, so a hidden duplicate cannot immediately reappear.
         try save(records.map {
-            $0.text == phrase.text ? QuickPhraseRecord(id: $0.id, order: $0.order, text: nil) : $0
+            $0.text == phrase.text ? QuickPhraseRecord(id: $0.id, order: $0.order, text: nil, edit: $0.edit) : $0
+        })
+    }
+
+    package func update(_ phrase: QuickPhrase, text: String) throws {
+        let text = try QuickPhrase.validatedText(text)
+        guard phrases.contains(phrase) else { throw QuickPhrase.ValidationError.unavailable }
+        guard text != phrase.text else { return }
+        guard !phrases.contains(where: { $0.text == text }) else { throw QuickPhrase.ValidationError.duplicate }
+
+        let revision = records.filter { $0.text == phrase.text }.compactMap(\.edit?.revision).max() ?? 0
+        let edit = QuickPhraseEdit(revision: revision + 1)
+        // Update known aliases together, keeping IDs and the current order.
+        // One save/notification prevents intermediate sync or partial edits.
+        try save(records.map {
+            $0.text == phrase.text ? QuickPhraseRecord(id: $0.id, order: $0.order, text: text, edit: edit) : $0
         })
     }
 
@@ -145,10 +161,22 @@ package final class QuickPhraseStore {
         var merged = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
         for record in incoming {
             if let old = merged[record.id] {
-                guard old.order == record.order,
-                      old.text == nil || record.text == nil || old.text == record.text
-                else { throw SyncError.invalidLibrary }
-                if record.text == nil { merged[record.id] = record }
+                guard old.order == record.order else { throw SyncError.invalidLibrary }
+                // Deletion always wins, including against an unseen offline edit.
+                if old.text == nil, record.text != nil { continue }
+                if record.text == nil, old.text != nil {
+                    merged[record.id] = record
+                    continue
+                }
+                switch (old.edit, record.edit) {
+                case (nil, nil):
+                    guard old.text == record.text else { throw SyncError.invalidLibrary }
+                case (_, nil): break
+                case (nil, _): merged[record.id] = record
+                case let (previous?, incoming?):
+                    guard previous != incoming || old.text == record.text else { throw SyncError.invalidLibrary }
+                    if incoming.isNewer(than: previous) { merged[record.id] = record }
+                }
             } else {
                 merged[record.id] = record
             }
@@ -289,11 +317,14 @@ package final class QuickPhraseStore {
         // Bound the actual JSON (including escapes), leaving room for the E2EE
         // envelope/base64 inside the relay's 1 MB frame limit.
         guard values.count <= 4096,
-              try JSONEncoder().encode(Library(version: 2, records: values, ordering: ordering)).count <= 512 * 1024
+              try JSONEncoder().encode(Library(version: 3, records: values, ordering: ordering)).count <= 512 * 1024
         else { throw SyncError.capacity }
         guard Set(values.map(\.id)).count == values.count else { throw SyncError.invalidLibrary }
         for record in values {
             guard (0..<Int.max - 1).contains(record.order) else { throw SyncError.invalidLibrary }
+            if let edit = record.edit {
+                guard (1..<Int.max - 1).contains(edit.revision) else { throw SyncError.invalidLibrary }
+            }
             if let text = record.text {
                 guard try QuickPhrase.validatedText(text) == text else { throw SyncError.invalidLibrary }
             }
@@ -331,7 +362,7 @@ package final class QuickPhraseStore {
         try validate(updated, ordering: ordering)
         let sorted = updated.sorted { $0.order == $1.order ? $0.id.uuidString < $1.id.uuidString : $0.order < $1.order }
         guard sorted != records || ordering != self.ordering else { return }
-        let data = try JSONEncoder().encode(Library(version: 2, records: sorted, ordering: ordering))
+        let data = try JSONEncoder().encode(Library(version: 3, records: sorted, ordering: ordering))
         preferences.setData(data, Self.syncStorageKey)
         apply(sorted, ordering: ordering)
         notify()

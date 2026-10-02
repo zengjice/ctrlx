@@ -42,7 +42,7 @@ package final class QuickPhraseSyncSession {
 
     package func receiveHello(_ offer: QuickPhraseSyncOffer?) {
         peerHelloReceived = true
-        peer = offer?.version == 1 ? offer : nil
+        peer = offer?.version == QuickPhraseSyncOffer.currentVersion ? offer : nil
         lastSent = nil
         store.syncErrors[pairID] = nil
         schedule()

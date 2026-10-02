@@ -1,26 +1,45 @@
 import Foundation
 
-/// Immutable additions plus permanent deletion markers. A new save gets a new ID.
+/// Stable phrase identity, versioned text, and permanent deletion markers.
 public struct QuickPhraseRecord: Codable, Equatable, Sendable {
     public let id: UUID
     public let order: Int
     public let text: String?
+    public let edit: QuickPhraseEdit?
 
-    public init(id: UUID, order: Int, text: String?) {
+    public init(id: UUID, order: Int, text: String?, edit: QuickPhraseEdit? = nil) {
         self.id = id
         self.order = order
         self.text = text
+        self.edit = edit
+    }
+}
+
+/// Logical versions avoid relying on device clocks. Concurrent edits converge
+/// to one winner by UUID; subsequent edits increment the accepted revision.
+public struct QuickPhraseEdit: Codable, Equatable, Sendable {
+    public let revision: Int
+    public let id: UUID
+
+    public init(revision: Int, id: UUID = UUID()) {
+        self.revision = revision
+        self.id = id
+    }
+
+    public func isNewer(than other: Self) -> Bool {
+        revision == other.revision ? id.uuidString > other.id.uuidString : revision > other.revision
     }
 }
 
 /// Optional hello capability: absent on older clients. Epochs bind consent and
 /// snapshots to one live peer connection, not a previous connection's consent.
 public struct QuickPhraseSyncOffer: Codable, Equatable, Sendable {
+    public static let currentVersion = 2
     public let version: Int
     public let epoch: UUID
     public let enabled: Bool
 
-    public init(version: Int = 1, epoch: UUID, enabled: Bool) {
+    public init(version: Int = Self.currentVersion, epoch: UUID, enabled: Bool) {
         self.version = version
         self.epoch = epoch
         self.enabled = enabled

@@ -68,7 +68,7 @@ struct QuickPhraseReorderingTests {
         let records: [QuickPhraseRecord]
     }
 
-    @Test("Existing v2 storage loads; reordered storage is still readable by old clients")
+    @Test("Existing v2 storage loads; drag order upgrades storage without mutating records")
     func legacyStorage() throws {
         let preferences = PreferencesService.inMemory()
         let records = [QuickPhraseRecord(id: UUID(), order: 0, text: "one"),
@@ -81,6 +81,7 @@ struct QuickPhraseReorderingTests {
         #expect(preferences.data(QuickPhraseStore.syncStorageKey) == data)
         try library.move(records[1].id, to: records[0].id)
         let saved = try #require(preferences.data(QuickPhraseStore.syncStorageKey))
+        #expect(try JSONDecoder().decode(OldLibrary.self, from: saved).version == 3)
         #expect(try JSONDecoder().decode(OldLibrary.self, from: saved).records == records)
         #expect(store(preferences).phrases.map(\.text) == ["two", "one"])
     }

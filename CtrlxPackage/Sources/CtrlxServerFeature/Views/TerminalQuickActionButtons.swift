@@ -255,7 +255,8 @@ private struct MacQuickPhrasePanel: View {
     let unavailableReason: String?
     let send: @MainActor (QuickPhrase) -> Bool
     @Environment(\.dismiss) private var dismiss
-    @State private var isAdding = false
+    @State private var showsEditor = false
+    @State private var editingPhrase: QuickPhrase?
     @State private var draft = ""
     @State private var error: String?
     @State private var hasSubmitted = false
@@ -267,29 +268,25 @@ private struct MacQuickPhrasePanel: View {
                 Text("Quick Phrases").font(.headline)
                 Spacer()
                 Button {
-                    isAdding = true
-                    isEditorFocused = true
+                    beginEditing(nil)
                 } label: {
                     Label("Add Phrase", symbol: .plus)
                 }
-                .disabled(store.loadError != nil)
+                .disabled(store.loadError != nil || showsEditor)
             }
             Text(targetLabel).font(.caption).foregroundStyle(.secondary)
             if let reason = store.loadError ?? error ?? unavailableReason {
                 Text(reason).font(.caption).foregroundStyle(.secondary)
             }
-            if isAdding {
+            if showsEditor {
+                Text(editingPhrase == nil ? "Add Phrase" : "Edit Phrase").font(.subheadline)
                 TextField("Single-line phrase", text: $draft)
                     .textFieldStyle(.roundedBorder)
                     .focused($isEditorFocused)
                     .onSubmit(savePhrase)
                     .accessibilityIdentifier("quick-phrase-editor")
                 HStack {
-                    Button("Cancel") {
-                        isAdding = false
-                        draft = ""
-                        error = nil
-                    }
+                    Button("Cancel", action: finishEditing)
                     Spacer()
                     Button("Save", action: savePhrase)
                         .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -312,6 +309,12 @@ private struct MacQuickPhrasePanel: View {
                             // offline; submission itself checks live availability.
                             .foregroundStyle(unavailableReason == nil ? Color.primary : .secondary)
                             .contextMenu {
+                                Button {
+                                    beginEditing(phrase)
+                                } label: {
+                                    Label("Edit", symbol: .pencil)
+                                }
+                                .disabled(store.loadError != nil || showsEditor)
                                 Button(role: .destructive) {
                                     do {
                                         try store.remove(phrase.id)
@@ -327,7 +330,7 @@ private struct MacQuickPhrasePanel: View {
                     }
                 }
                 .frame(maxHeight: 280)
-                Text("Drag phrases to reorder. Right-click for Delete.")
+                Text("Drag phrases to reorder. Right-click to Edit or Delete.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -338,17 +341,35 @@ private struct MacQuickPhrasePanel: View {
 
     private func savePhrase() {
         do {
-            try store.add(draft)
-            draft = ""
-            isAdding = false
-            error = nil
+            if let editingPhrase {
+                try store.update(editingPhrase, text: draft)
+            } else {
+                try store.add(draft)
+            }
+            finishEditing()
         } catch {
             self.error = error.localizedDescription
         }
     }
 
+    private func beginEditing(_ phrase: QuickPhrase?) {
+        editingPhrase = phrase
+        draft = phrase?.text ?? ""
+        error = nil
+        showsEditor = true
+        isEditorFocused = true
+    }
+
+    private func finishEditing() {
+        showsEditor = false
+        editingPhrase = nil
+        draft = ""
+        error = nil
+        isEditorFocused = false
+    }
+
     private func submit(_ phrase: QuickPhrase) {
-        guard !hasSubmitted, !isAdding, unavailableReason == nil else { return }
+        guard !hasSubmitted, !showsEditor, unavailableReason == nil else { return }
         if send(phrase) {
             hasSubmitted = true
             dismiss()
