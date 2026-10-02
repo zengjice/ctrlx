@@ -49,6 +49,20 @@ struct QuickPhraseReorderingTests {
         #expect(changes == 1)
     }
 
+    @Test("The numbered target position matches the final slot in either direction",
+          arguments: 0..<6, 0..<6)
+    func targetPosition(source: Int, destination: Int) throws {
+        let library = store()
+        for index in 0..<6 { try library.add("phrase \(index)") }
+        let original = library.phrases
+        let targetIndex = try #require(library.phrases.firstIndex { $0.id == original[destination].id })
+        #expect(library.ordering == nil)
+        let changed = try library.move(original[source].id, to: original[destination].id)
+        #expect(changed == (source != destination))
+        #expect(library.phrases[targetIndex].id == original[source].id)
+        #expect(library.phrases.count == original.count)
+    }
+
     private struct OldLibrary: Codable {
         let version: Int
         let records: [QuickPhraseRecord]

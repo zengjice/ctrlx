@@ -15,6 +15,9 @@ private struct QuickPhraseReordering: ViewModifier {
     let store: QuickPhraseStore
     let reportError: (String) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if os(iOS)
+        @State private var isTargeted = false
+    #endif
 
     func body(content: Content) -> some View {
         content
@@ -24,12 +27,50 @@ private struct QuickPhraseReordering: ViewModifier {
                     .background(.regularMaterial, in: .rect(cornerRadius: 12))
             }
             .dropDestination(for: QuickPhraseDragPayload.self) { items, _ in
+                #if os(iOS)
+                    isTargeted = false
+                #endif
                 guard items.count == 1, let item = items.first else { return false }
                 return move(item.id, to: phrase.id)
+            } isTargeted: { targeted in
+                #if os(iOS)
+                    if isTargeted != targeted { isTargeted = targeted }
+                #endif
             }
+            #if os(iOS)
+                .overlay {
+                    dropIndicator
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            #endif
             .accessibilityAction(named: "Move Earlier") { moveBy(-1) }
             .accessibilityAction(named: "Move Later") { moveBy(1) }
     }
+
+    #if os(iOS)
+        @ViewBuilder
+        private var dropIndicator: some View {
+            if isTargeted, let index = store.phrases.firstIndex(where: { $0.id == phrase.id }) {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.accentColor.opacity(0.15))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [6, 3]))
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        Text("Drop at #\(index + 1)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.background, in: .capsule)
+                            .offset(x: 4, y: -8)
+                    }
+                    .accessibilityIdentifier("quick-phrase-drop-target-\(phrase.id)")
+            }
+        }
+    #endif
 
     private func move(_ id: UUID, to target: UUID) -> Bool {
         do {
