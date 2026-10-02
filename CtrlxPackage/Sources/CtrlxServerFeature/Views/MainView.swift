@@ -1906,8 +1906,6 @@ public struct MainView: View {
 
         // Actions for selected window
         ToolbarItemGroup(placement: .primaryAction) {
-            TerminalQuickActionButtons(router: terminalQuickActions)
-
             if let window = selectedWindow, selectedRemoteSession == nil {
                 let claudePane = window.panes.first { windowManager.paneStates[$0.paneId]?.agentSession != nil }
                 let activePane = window.activePane

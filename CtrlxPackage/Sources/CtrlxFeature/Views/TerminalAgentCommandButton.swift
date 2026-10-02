@@ -62,6 +62,10 @@
         @State private var hasSubmitted = false
         @State private var showsUnavailableAlert = false
 
+        private var sections: [AgentCommandSection] {
+            AgentCommandSection.sections(for: capturedContext.commands)
+        }
+
         private var liveContext: AgentCommandContext? {
             capturedContext.hasSameInput(as: currentContext) ? currentContext : nil
         }
@@ -86,24 +90,30 @@
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .accessibilityIdentifier("terminal-agent-command-unavailable")
                         }
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: minimumButtonWidth), spacing: 8)], spacing: 8) {
-                            ForEach(capturedContext.commands) { command in
-                                Button {
-                                    send(command)
-                                } label: {
-                                    Text(command.text)
-                                        .font(.subheadline.monospaced().weight(.medium))
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.75)
-                                        .frame(maxWidth: .infinity, minHeight: 36)
-                                }
-                                .accessibilityIdentifier("terminal-agent-command-\(command.id)")
+                        ForEach(sections) { section in
+                            if section.id == .sessionActions {
+                                Divider()
+                                Text("Session Actions").font(.subheadline.weight(.semibold))
                             }
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: minimumButtonWidth), spacing: 8)], spacing: 8) {
+                                ForEach(section.commands) { command in
+                                    Button {
+                                        send(command)
+                                    } label: {
+                                        Text(command.text)
+                                            .font(.subheadline.monospaced().weight(.medium))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.75)
+                                            .frame(maxWidth: .infinity, minHeight: 36)
+                                    }
+                                    .accessibilityIdentifier("terminal-agent-command-\(command.id)")
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.roundedRectangle(radius: 12))
+                            .tint(section.id == .sessionActions ? Color.red : Color.primary)
+                            .disabled(hasSubmitted || liveContext?.canSend != true)
                         }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.roundedRectangle(radius: 12))
-                        .tint(.primary)
-                        .disabled(hasSubmitted || liveContext?.canSend != true)
                     }
                     .padding(16)
                 }

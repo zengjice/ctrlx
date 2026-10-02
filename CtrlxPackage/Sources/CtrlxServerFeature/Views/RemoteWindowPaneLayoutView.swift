@@ -27,15 +27,20 @@ struct RemoteWindowPaneLayoutView: View {
     var onOpenURL: TerminalOpenURLHandler?
 
     var body: some View {
-        if let layout = TmuxLayoutParser.parse(window.windowLayout) {
-            VStack(spacing: 0) {
-                tiledLayout(from: layout)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 0) {
+            paneContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                if settings.showStatusBar {
-                    statusBar
-                }
+            if settings.showStatusBar {
+                statusBar
             }
+        }
+    }
+
+    @ViewBuilder
+    private var paneContent: some View {
+        if let layout = TmuxLayoutParser.parse(window.windowLayout) {
+            tiledLayout(from: layout)
         } else if window.isSinglePane, let pane = window.panes.first {
             // Fallback for unparseable single-pane layout
             singlePaneView(pane: pane)
@@ -243,6 +248,7 @@ struct RemoteWindowPaneLayoutView: View {
             )
 
             Spacer()
+            TerminalQuickActionStatusBarButtons(hostID: connection.id, paneIDs: window.panes.map(\.paneId))
         }
         .font(.caption)
         .foregroundStyle(.secondary)

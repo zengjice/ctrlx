@@ -24,6 +24,9 @@ struct AgentCommandMenuTests {
             "/fast", "/personality", "/plan", "/goal", "/compact", "/resume", "/fork", "/rename", "/agent",
             "/diff", "/review", "/ps",
             "/permissions", "/skills", "/mcp", "/plugins", "/theme", "/keymap", "/statusline", "/experimental", "/debug-config",
+            "/ide", "/vim", "/apps", "/hooks", "/memories", "/copy", "/import", "/feedback", "/init",
+            "/app", "/side", "/raw", "/title", "/pets",
+            "/new", "/clear", "/archive", "/delete", "/approve", "/stop", "/logout", "/exit",
         ])
         #expect(context()?.canSend == true)
     }
@@ -33,10 +36,16 @@ struct AgentCommandMenuTests {
         let claude = context(pluginID: "claude-code")
         #expect(claude?.commands.map(\.text) == [
             "/model", "/status", "/usage",
-            "/effort", "/plan", "/goal", "/compact", "/autocompact", "/context", "/resume", "/branch", "/rename",
+            "/effort", "/fast", "/plan", "/goal", "/compact", "/autocompact", "/context", "/resume", "/branch", "/fork", "/rename",
             "/diff", "/review",
             "/permissions", "/skills", "/mcp", "/plugin", "/reload-skills", "/reload-plugins",
             "/config", "/theme", "/output-style", "/memory", "/hooks", "/tasks", "/help",
+            "/advisor", "/artifacts", "/copy", "/export", "/import", "/feedback", "/bug", "/ide", "/chrome", "/color",
+            "/desktop", "/mobile", "/passes", "/powerup", "/privacy-settings", "/radio", "/rate-limit-options", "/recap",
+            "/release-notes", "/remote-control", "/remote-env", "/sandbox", "/scroll-speed", "/skill-doctor", "/teleport",
+            "/tui", "/focus", "/upgrade", "/usage-credits", "/voice", "/web-setup", "/workflows",
+            "/statusline", "/doctor", "/debug", "/init", "/insights", "/security-review", "/simplify",
+            "/background", "/rewind", "/clear", "/stop", "/login", "/logout", "/exit",
         ])
         #expect(claude?.canSend == true)
     }
@@ -52,12 +61,14 @@ struct AgentCommandMenuTests {
 
     @Test("Agent-specific names and bare-command semantics do not leak between catalogs")
     func distinctCommandSemantics() {
-        for command in [AgentQuickCommand.agent, .plugins, .statusline, .fast, .fork] {
+        for command in [AgentQuickCommand.agent, .plugins, .vim, .apps, .memories, .app, .side, .raw, .title, .pets,
+                        .new, .archive, .delete, .approve] {
             #expect(AgentCommandRequest(command, in: context()) != nil)
             #expect(AgentCommandRequest(command, in: context(pluginID: "claude-code")) == nil)
         }
         for command in [AgentQuickCommand.plugin, .context, .memory, .tasks, .help,
-                        .effort, .autocompact, .branch, .outputStyle, .reloadSkills, .reloadPlugins] {
+                        .effort, .autocompact, .branch, .outputStyle, .reloadSkills, .reloadPlugins,
+                        .advisor, .chrome, .export, .desktop, .login, .background, .rewind] {
             #expect(AgentCommandRequest(command, in: context(pluginID: "claude-code")) != nil)
             #expect(AgentCommandRequest(command, in: context()) == nil)
         }
@@ -67,7 +78,9 @@ struct AgentCommandMenuTests {
     func claudeExpandedCommands() throws {
         let claude = try #require(context(pluginID: "claude-code"))
         for text in ["/effort", "/diff", "/review", "/goal", "/autocompact", "/output-style",
-                     "/branch", "/rename", "/reload-skills", "/reload-plugins"] {
+                     "/branch", "/fork", "/fast", "/rename", "/reload-skills", "/reload-plugins",
+                     "/advisor", "/copy", "/export", "/ide", "/chrome", "/statusline",
+                     "/release-notes", "/login", "/logout", "/clear", "/exit"] {
             let command = try #require(claude.commands.first { $0.text == text })
             let request = try #require(AgentCommandRequest(command, in: claude))
             #expect(request.isValid(in: claude))
@@ -75,12 +88,12 @@ struct AgentCommandMenuTests {
         }
     }
 
-    @Test("Claude excludes removed entries, duplicate aliases and commands with different side effects")
+    @Test("Claude excludes removed entries and duplicate aliases")
     func claudeExcludedCommands() {
         let commands = Set(AgentQuickCommand.commands(for: "claude-code").map(\.text))
         #expect(commands.isDisjoint(with: [
             "/agents", "/agent", "/plugins", "/cost", "/stats", "/code-review",
-            "/fast", "/fork", "/statusline", "/doctor", "/simplify",
+            "/vim", "/pr-comments", "/ultraplan", "/new", "/reset", "/settings", "/app", "/rc", "/tp", "/bg",
         ]))
         #expect(AgentQuickCommand(rawValue: "agents") == nil)
     }
@@ -92,6 +105,51 @@ struct AgentCommandMenuTests {
         #expect(Set(current.commands.map(\.id)).count == current.commands.count)
         #expect(current.commands.allSatisfy { $0.text == "/\($0.id)" })
         #expect(Array(current.commands.prefix(3)) == [.model, .status, .usage])
+    }
+
+    @Test("Both panels share a complete ordered partition with session actions last", arguments: ["codex", "claude-code"])
+    func panelSections(pluginID: String) throws {
+        let commands = AgentQuickCommand.commands(for: pluginID)
+        let sections = AgentCommandSection.sections(for: commands)
+        #expect(sections.map(\.id) == [.commands, .sessionActions])
+        #expect(sections.flatMap(\.commands) == commands)
+        let ordinary = try #require(sections.first)
+        let actions = try #require(sections.last)
+        #expect(ordinary.commands.allSatisfy { !$0.isSessionAction })
+        #expect(actions.commands.allSatisfy { $0.isSessionAction })
+        #expect(actions.commands.contains(.logout))
+        #expect(actions.commands.contains(.clear))
+        #expect(actions.commands.contains(.exit))
+        #expect(Set(sections.map(\.id)).count == sections.count)
+    }
+
+    @Test("Section building omits empty sections and preserves order within each group")
+    func emptyAndPartialSections() {
+        #expect(AgentCommandSection.sections(for: []).isEmpty)
+        #expect(AgentCommandSection.sections(for: AgentQuickCommand.commands(for: "unknown")).isEmpty)
+        #expect(AgentCommandSection.sections(for: [.status, .model]) == [
+            AgentCommandSection(id: .commands, commands: [.status, .model]),
+        ])
+        #expect(AgentCommandSection.sections(for: [.logout, .exit]) == [
+            AgentCommandSection(id: .sessionActions, commands: [.logout, .exit]),
+        ])
+        #expect(AgentCommandSection.sections(for: [.logout, .status, .exit, .model]) == [
+            AgentCommandSection(id: .commands, commands: [.status, .model]),
+            AgentCommandSection(id: .sessionActions, commands: [.logout, .exit]),
+        ])
+    }
+
+    @Test("Shared new entries are available for both agents without confirmation", arguments: [
+        AgentQuickCommand.fast, .fork, .hooks, .ide, .copy, .import, .feedback, .initialize,
+        .statusline, .stop, .clear, .logout, .exit,
+    ])
+    func sharedExpandedCommands(command: AgentQuickCommand) throws {
+        for pluginID in ["codex", "claude-code"] {
+            let current = try #require(context(pluginID: pluginID))
+            let request = try #require(AgentCommandRequest(command, in: current))
+            #expect(request.isValid(in: current))
+            #expect(request.command.keys == [.text(command.text), .delay(200), .enter])
+        }
     }
 
     @Test("Panel identity belongs to the captured target; input changes still invalidate its snapshot")
@@ -111,12 +169,12 @@ struct AgentCommandMenuTests {
         #expect(context(state: .working) == captured)
     }
 
-    @Test("One-tap catalogs exclude destructive, interruption and argument-only commands", arguments: ["codex", "claude-code"])
+    @Test("One-tap catalogs exclude argument-only, Windows-only and unsupported commands", arguments: ["codex", "claude-code"])
     func excludedCommands(pluginID: String) {
         let commands = Set(AgentQuickCommand.commands(for: pluginID).map(\.text))
         #expect(commands.isDisjoint(with: [
-            "/new", "/clear", "/delete", "/archive", "/exit", "/quit", "/logout", "/stop", "/init",
-            "/mention", "/sandbox-add-read-dir", "/approve", "/rewind", "/add-dir", "/cd", "/batch",
+            "/quit", "/mention", "/sandbox-add-read-dir", "/setup-default-sandbox", "/add-dir", "/cd", "/batch",
+            "/deep-research", "/subtask", "/heapdump",
         ]))
     }
 

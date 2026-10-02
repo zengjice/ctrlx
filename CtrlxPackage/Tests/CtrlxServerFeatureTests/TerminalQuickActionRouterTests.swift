@@ -41,6 +41,41 @@ struct TerminalQuickActionRouterTests {
         #expect(remote.batches == [AgentQuickCommand.usage.keys])
     }
 
+    @Test("Status-bar controls belong to the focused window and distinguish identical pane IDs on different hosts")
+    func statusBarScope() throws {
+        let router = TerminalQuickActionRouter()
+        let sink = Sink()
+        #expect(!router.containsFocus(hostID: nil, paneIDs: ["%1", "%2"]))
+        router.focus(sink.endpoint(pane: "%2"))
+        let captured = try #require(router.token)
+        #expect(router.containsFocus(hostID: nil, paneIDs: ["%1", "%2"]))
+        #expect(!router.containsFocus(hostID: nil, paneIDs: ["%3"]))
+        #expect(!router.containsFocus(hostID: "office", paneIDs: ["%2"]))
+        #expect(router.matches(captured))
+
+        router.focus(sink.endpoint(pane: "%3"))
+        #expect(!router.containsFocus(hostID: nil, paneIDs: ["%1", "%2"]))
+        #expect(router.containsFocus(hostID: nil, paneIDs: ["%3"]))
+        router.focus(sink.endpoint(host: "office", pane: "%3"))
+        #expect(!router.containsFocus(hostID: nil, paneIDs: ["%3"]))
+        #expect(router.containsFocus(hostID: "office", paneIDs: ["%3"]))
+        #expect(!router.containsFocus(hostID: "home", paneIDs: ["%3"]))
+    }
+
+    @Test("Status-bar browsing remains available during bootstrap, but unmounted or retired endpoints own no controls")
+    func statusBarLifecycle() {
+        let router = TerminalQuickActionRouter()
+        let sink = Sink()
+        let endpoint = sink.endpoint()
+        router.focus(endpoint)
+        endpoint.isReady = false
+        #expect(router.containsFocus(hostID: nil, paneIDs: [endpoint.paneID]))
+        endpoint.invalidate()
+        #expect(!router.containsFocus(hostID: nil, paneIDs: [endpoint.paneID]))
+        router.retire(endpoint)
+        #expect(!router.containsFocus(hostID: nil, paneIDs: [endpoint.paneID]))
+    }
+
     @Test("Switching away and back or remounting the same pane never revives an old action")
     func staleFocus() throws {
         let router = TerminalQuickActionRouter()

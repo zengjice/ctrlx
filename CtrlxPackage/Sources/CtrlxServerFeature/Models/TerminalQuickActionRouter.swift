@@ -61,6 +61,11 @@ final class TerminalQuickActionRouter {
                      inputRevision: active.inputRevision)
     }
 
+    func containsFocus(hostID: String?, paneIDs: [String]) -> Bool {
+        guard let active, active.isMounted else { return false }
+        return active.hostID == hostID && paneIDs.contains(active.paneID)
+    }
+
     func focus(_ endpoint: TerminalQuickActionEndpoint) {
         guard endpoint.isMounted, active !== endpoint else { return }
         focusRevision &+= 1

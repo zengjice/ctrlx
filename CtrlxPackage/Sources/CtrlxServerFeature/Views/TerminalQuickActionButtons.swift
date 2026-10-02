@@ -164,6 +164,29 @@ struct TerminalQuickActionButtons: View {
 }
 
 @MainActor
+struct TerminalQuickActionStatusBarButtons: View {
+    let hostID: String?
+    let paneIDs: [String]
+    @Environment(\.terminalQuickActions) private var router
+
+    var body: some View {
+        if let router {
+            let ownsFocus = router.containsFocus(hostID: hostID, paneIDs: paneIDs)
+            HStack(spacing: 12) {
+                TerminalQuickActionButtons(router: router)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.mini)
+            // Reserve the controls' height so focus changes never resize terminals.
+            .opacity(ownsFocus ? 1 : 0)
+            .disabled(!ownsFocus)
+            .accessibilityHidden(!ownsFocus)
+            .accessibilityIdentifier("terminal-quick-action-status-bar")
+        }
+    }
+}
+
+@MainActor
 private struct MacAgentCommandPanel: View {
     let commands: [AgentQuickCommand]
     let targetLabel: String
@@ -173,6 +196,10 @@ private struct MacAgentCommandPanel: View {
     @State private var hasSubmitted = false
     @State private var error: String?
 
+    private var sections: [AgentCommandSection] {
+        AgentCommandSection.sections(for: commands)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Agent Commands").font(.headline)
@@ -181,20 +208,24 @@ private struct MacAgentCommandPanel: View {
                 Text(reason).font(.caption).foregroundStyle(.secondary)
             }
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 105))], spacing: 8) {
-                    ForEach(commands) { command in
-                        Button {
-                            guard !hasSubmitted else { return }
-                            if send(command) {
-                                hasSubmitted = true
-                                dismiss()
-                            } else {
-                                error = "The terminal changed. Reopen the panel to send."
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(sections) { section in
+                        if section.id == .sessionActions {
+                            Divider()
+                            Text("Session Actions").font(.subheadline.weight(.semibold))
+                        }
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 105))], spacing: 8) {
+                            ForEach(section.commands) { command in
+                                Button {
+                                    submit(command)
+                                } label: {
+                                    Text(command.text).monospaced().frame(maxWidth: .infinity, minHeight: 26)
+                                }
+                                .accessibilityIdentifier("terminal-agent-command-\(command.id)")
                             }
-                        } label: {
-                            Text(command.text).monospaced().frame(maxWidth: .infinity, minHeight: 26)
                         }
                         .buttonStyle(.bordered)
+                        .tint(section.id == .sessionActions ? Color.red : Color.accentColor)
                         .disabled(unavailableReason != nil || hasSubmitted)
                     }
                 }
@@ -204,6 +235,16 @@ private struct MacAgentCommandPanel: View {
         }
         .padding(16)
         .frame(width: 380)
+    }
+
+    private func submit(_ command: AgentQuickCommand) {
+        guard !hasSubmitted else { return }
+        if send(command) {
+            hasSubmitted = true
+            dismiss()
+        } else {
+            error = "The terminal changed. Reopen the panel to send."
+        }
     }
 }
 

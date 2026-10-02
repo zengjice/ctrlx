@@ -228,6 +228,7 @@ struct WindowPaneLayoutView: View {
             )
 
             Spacer()
+            TerminalQuickActionStatusBarButtons(hostID: nil, paneIDs: window.panes.map(\.paneId))
         }
         .font(.caption)
         .foregroundStyle(.secondary)

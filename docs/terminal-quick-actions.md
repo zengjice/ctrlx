@@ -1,14 +1,20 @@
 # Terminal quick actions
 
-macOS offers **Agent Commands** (`/`) and **Quick Phrases** in the panes-window
-toolbar. Both open button-grid popovers. Click a command or saved phrase to send
-literal text, a host-side 200 ms pause, and one Return. There is no confirmation
+macOS offers **Agent Commands** (`/`) and **Quick Phrases** on the right side of
+the terminal's bottom status bar, for both local and Viewer windows. They follow
+Settings → General → Show status bar. Both open button-grid popovers. Click a
+command or saved phrase to send literal text, a host-side 200 ms pause, and one
+Return. There is no confirmation
 or extra Send step, and existing terminal input is never cleared automatically.
 
 - The target is the last focused native terminal in this panes scene, including
   a pane in the right-hand workbench split. The popover shows its host, session,
   window name and pane ID. It never infers the target from the left selected tab
   or from a remote tmux client's active pane.
+- Only the focused window's status bar shows the controls. Other visible terminal
+  windows reserve the same space, preventing focus changes from resizing terminals;
+  their hidden controls cannot be clicked or accessed by VoiceOver. Unparseable
+  remote layouts retain the same window-level status bar as tiled layouts.
 - Commands use the same curated agent catalog as iOS; this is not live capability
   discovery. Unsupported agents have no command catalog. Working agents are not
   disabled just because a turn is running.
@@ -85,19 +91,38 @@ iOS for the always-openable explanation; no Relay deployment is needed.
 Both clients use `AgentQuickCommand.commands(for:)` as the display order and
 send allowlist. Keep the agents' lists independent: matching command names do
 not guarantee matching behavior. The current catalog was checked against Codex
-CLI 0.154.0 and Claude Code 2.1.276 plus their official command references:
-[Codex](https://developers.openai.com/codex/cli/slash-commands) and
+CLI 0.160.0 and Claude Code 2.1.276 plus their official command references:
+[Codex](https://learn.chatgpt.com/docs/developer-commands?surface=cli) and
 [Claude Code](https://code.claude.com/docs/en/commands).
 
-- **Codex (24):** `/model`, `/status`, `/usage`, `/fast`, `/personality`, `/plan`,
+- **Codex (46):** `/model`, `/status`, `/usage`, `/fast`, `/personality`, `/plan`,
   `/goal`, `/compact`, `/resume`, `/fork`, `/rename`, `/agent`, `/diff`, `/review`,
   `/ps`, `/permissions`, `/skills`, `/mcp`, `/plugins`, `/theme`, `/keymap`,
-  `/statusline`, `/experimental`, `/debug-config`.
-- **Claude Code (27):** `/model`, `/status`, `/usage`, `/effort`, `/plan`, `/goal`,
-  `/compact`, `/autocompact`, `/context`, `/resume`, `/branch`, `/rename`, `/diff`,
+  `/statusline`, `/experimental`, `/debug-config`, `/ide`, `/vim`, `/apps`,
+  `/hooks`, `/memories`, `/copy`, `/import`, `/feedback`, `/init`, `/app`, `/side`,
+  `/raw`, `/title`, `/pets`; **Session Actions:** `/new`, `/clear`, `/archive`,
+  `/delete`, `/approve`, `/stop`, `/logout`, `/exit`.
+- **Claude Code (75):** `/model`, `/status`, `/usage`, `/effort`, `/fast`, `/plan`, `/goal`,
+  `/compact`, `/autocompact`, `/context`, `/resume`, `/branch`, `/fork`, `/rename`, `/diff`,
   `/review`, `/permissions`, `/skills`, `/mcp`, `/plugin`, `/reload-skills`,
   `/reload-plugins`, `/config`, `/theme`, `/output-style`, `/memory`, `/hooks`,
-  `/tasks`, `/help`.
+  `/tasks`, `/help`, `/advisor`, `/artifacts`, `/copy`, `/export`, `/import`,
+  `/feedback`, `/bug`, `/ide`, `/chrome`, `/color`, `/desktop`, `/mobile`, `/passes`,
+  `/powerup`, `/privacy-settings`, `/radio`, `/rate-limit-options`, `/recap`,
+  `/release-notes`, `/remote-control`, `/remote-env`, `/sandbox`, `/scroll-speed`,
+  `/skill-doctor`, `/teleport`, `/tui`, `/focus`, `/upgrade`, `/usage-credits`,
+  `/voice`, `/web-setup`, `/workflows`, `/statusline`, `/doctor`, `/debug`, `/init`,
+  `/insights`, `/security-review`, `/simplify`; **Session Actions:** `/background`,
+  `/rewind`, `/clear`, `/stop`, `/login`, `/logout`, `/exit`.
+
+`AgentCommandSection` partitions the same send allowlist for both clients,
+preserving order with nonempty sections and stable section/command IDs.
+Session/account actions are separated at the bottom by a **Session Actions**
+heading and red-tinted buttons. They still send immediately on a single click;
+CtrlX does not add a confirmation or suppress the agent's own dialogs.
+These actions can reset a conversation, remove a transcript, stop work, exit or
+change host credentials. They retain the same target/input/availability checks
+as ordinary commands; `/approve` cannot bypass an open blocking form.
 
 Only include commands with a useful no-argument invocation. Bare `/goal`
 inspects the goal; it does not create one. Codex `/fast` changes the service
@@ -113,15 +138,19 @@ and `/review` starts a review without adding `--fix` or `--comment`.
 `/reload-skills` and `/reload-plugins` pick up pending changes without restarting;
 CtrlX never appends `--force` to bypass Claude's plugin-reload warning.
 
-`/agents` no longer opens an agent manager (since 2.1.198), so it is removed.
-`/cost` and `/stats` are aliases of `/usage`, and `/code-review` duplicates
-`/review`. Claude's `/fork` starts a background copy rather than switching into
-a normal branch; `/fast` has additional cost and account restrictions. These,
-`/statusline` (a setup task), `/doctor` (a repair workflow), and `/simplify`
-(applies code changes) are deliberately excluded from Claude's one-tap catalog.
-Clear/delete/exit/stop/approval actions and argument-required commands remain
-outside these one-tap catalogs. Newer version-dependent entries are not added
-solely because they appear in the latest documentation.
+Claude's `/fork` starts a background copy rather than switching into a normal
+branch; `/fast` has additional cost and account restrictions. Setup/repair
+workflows such as `/statusline`, `/doctor` and `/init`, plus code-editing
+`/simplify`, are now explicit user-invoked buttons, not automatic tasks.
+`/remote-control`, `/chrome`, `/desktop` and other integrations retain Claude's
+own semantics; CtrlX does not replace them with its Relay or Agent Browser.
+
+Removed Claude entries (`/agents`, `/vim`, `/pr-comments`, `/ultraplan`), duplicate
+aliases, required-inline-argument entries (`/mention`, `/add-dir`, `/batch`,
+`/deep-research`, `/subtask`), Codex's Windows-only sandbox setup and hidden
+credential-bearing `/heapdump` stay out. Claude's provider-specific setup and
+other-terminal configuration commands are not generic CtrlX shortcuts. This is
+a curated built-in catalog, not enumeration of every bundled/custom skill.
 
 The Claude expansion was checked against the installed 2.1.276 command
 definitions as well as the reference above. Updating Claude on a viewer Mac
@@ -132,8 +161,10 @@ update, not a Relay deployment or phrase-library synchronization.
 The Mac command grid scrolls within a capped height; its header and target label
 stay visible. iOS retains its existing scrollable overlay and keyboard behavior.
 Catalog tests cover both agents independently, including commands accepted by
-one agent but rejected by the other, direct Return submission and stale-target
-guards.
+one agent but rejected by the other, stable section order and complete coverage,
+direct Return submission and stale-target guards. Tests construct requests and
+inspect key sequences; they never execute logout/reset/delete/exit against a
+real agent or change account credentials.
 
 ### Shared models and routing
 

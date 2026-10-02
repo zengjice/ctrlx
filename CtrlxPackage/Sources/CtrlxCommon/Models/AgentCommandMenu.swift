@@ -1,7 +1,7 @@
 import CtrlxNetworking
 
-/// A curated command catalog, not runtime capability discovery. Keep commands
-/// that delete/reset sessions, stop work, or require inline arguments out of it.
+/// A curated command catalog, not runtime capability discovery. Entries have a
+/// useful bare invocation; session/account actions appear in a separate section.
 package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
     case model
     case status
@@ -40,6 +40,63 @@ package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
     case statusline
     case debugConfig = "debug-config"
     case help
+    case ide
+    case vim
+    case apps
+    case memories
+    case copy
+    case `import`
+    case feedback
+    case initialize = "init"
+    case app
+    case side
+    case raw
+    case title
+    case pets
+    case advisor
+    case artifacts
+    case bug
+    case chrome
+    case color
+    case desktop
+    case export
+    case focus
+    case mobile
+    case passes
+    case powerup
+    case privacySettings = "privacy-settings"
+    case radio
+    case rateLimitOptions = "rate-limit-options"
+    case recap
+    case releaseNotes = "release-notes"
+    case remoteControl = "remote-control"
+    case remoteEnv = "remote-env"
+    case sandbox
+    case scrollSpeed = "scroll-speed"
+    case skillDoctor = "skill-doctor"
+    case teleport
+    case tui
+    case upgrade
+    case usageCredits = "usage-credits"
+    case voice
+    case webSetup = "web-setup"
+    case workflows
+    case doctor
+    case debug
+    case insights
+    case securityReview = "security-review"
+    case simplify
+    case new
+    case clear
+    case archive
+    case delete
+    case approve
+    case background
+    case rewind
+    case stop
+    case login
+    case logout
+    case exit
 
     package var id: String { rawValue }
     package var text: String { "/\(rawValue)" }
@@ -47,8 +104,16 @@ package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
     /// composer, send the pause to the host so network batching cannot remove it.
     package var keys: [TmuxKey] { [.text(text), .delay(200), .enter] }
 
+    package var isSessionAction: Bool {
+        switch self {
+        case .new, .clear, .archive, .delete, .approve, .background, .rewind, .stop, .login, .logout, .exit: true
+        default: false
+        }
+    }
+
     /// The panel's display order is also the send allowlist. Do not give other
-    /// agents the Codex catalog.
+    /// agents the Codex catalog. Checked against Codex 0.160.0 / Claude 2.1.276;
+    /// aliases, removed entries and required-inline-argument commands stay out.
     package static func commands(for pluginID: String) -> [Self] {
         switch pluginID {
         case "codex": [
@@ -56,18 +121,44 @@ package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
             .fast, .personality, .plan, .goal, .compact, .resume, .fork, .rename, .agent,
             .diff, .review, .ps,
             .permissions, .skills, .mcp, .plugins, .theme, .keymap, .statusline, .experimental, .debugConfig,
+            .ide, .vim, .apps, .hooks, .memories, .copy, .import, .feedback, .initialize,
+            .app, .side, .raw, .title, .pets,
+            .new, .clear, .archive, .delete, .approve, .stop, .logout, .exit,
         ]
         // Checked against Claude 2.1.276: bare /rename auto-names the session;
         // /branch switches to a conversation copy, while /fork runs one in the
         // background. /agents is removed; /plugin remains singular.
         case "claude-code": [
             .model, .status, .usage,
-            .effort, .plan, .goal, .compact, .autocompact, .context, .resume, .branch, .rename,
+            .effort, .fast, .plan, .goal, .compact, .autocompact, .context, .resume, .branch, .fork, .rename,
             .diff, .review,
             .permissions, .skills, .mcp, .plugin, .reloadSkills, .reloadPlugins,
             .config, .theme, .outputStyle, .memory, .hooks, .tasks, .help,
+            .advisor, .artifacts, .copy, .export, .import, .feedback, .bug, .ide, .chrome, .color,
+            .desktop, .mobile, .passes, .powerup, .privacySettings, .radio, .rateLimitOptions, .recap,
+            .releaseNotes, .remoteControl, .remoteEnv, .sandbox, .scrollSpeed, .skillDoctor, .teleport,
+            .tui, .focus, .upgrade, .usageCredits, .voice, .webSetup, .workflows,
+            .statusline, .doctor, .debug, .initialize, .insights, .securityReview, .simplify,
+            .background, .rewind, .clear, .stop, .login, .logout, .exit,
         ]
         default: []
+        }
+    }
+}
+
+package struct AgentCommandSection: Identifiable, Equatable, Sendable {
+    package enum ID: CaseIterable, Hashable, Sendable {
+        case commands
+        case sessionActions
+    }
+
+    package let id: ID
+    package let commands: [AgentQuickCommand]
+
+    package static func sections(for commands: [AgentQuickCommand]) -> [Self] {
+        ID.allCases.compactMap { id in
+            let entries = commands.filter { $0.isSessionAction == (id == .sessionActions) }
+            return entries.isEmpty ? nil : Self(id: id, commands: entries)
         }
     }
 }
