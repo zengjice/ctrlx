@@ -198,7 +198,7 @@
         private var voiceCorrectionTestedModelIDsByProvider: [String: [String]] = [:]
 
         /// Base name for new tmux sessions created from iOS
-        public var newSessionName = "claude" {
+        public var newSessionName = "session" {
             didSet { preferences.setString(newSessionName, Keys.newSessionName) }
         }
 
@@ -327,7 +327,7 @@
             }
 
             // New session settings
-            self.newSessionName = preferences.string(Keys.newSessionName) ?? "claude"
+            self.newSessionName = preferences.string(Keys.newSessionName) ?? "session"
             self.newSessionWidth = preferences.optionalInt(Keys.newSessionWidth) ?? 120
             self.newSessionHeight = preferences.optionalInt(Keys.newSessionHeight) ?? 40
 
