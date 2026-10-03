@@ -3,7 +3,7 @@ import Foundation
 /// E2E scenario: Close remote window/session from iOS viewer
 ///
 /// Verifies that the iOS remote viewer can close tmux windows and sessions
-/// on the host via the window switcher menu:
+/// on the host via the window switcher and session-list context menus:
 /// 1. Create a session with two named windows, navigate to it on iOS
 /// 2. Close an idle window via the title menu — should close without confirmation
 /// 3. Run a process in the remaining window, try to close the session
@@ -42,15 +42,16 @@ public enum CloseRemoteWindowIOSScenario {
         // 4. Switch to window 1, then close it (idle window — no confirmation expected)
         TestStep.log("Stage 3: Switch to window 1 and close it via menu")
         // Tap navigation title to open window switcher menu
-        TestStep.iosTap(.labelContains("ios-close"))
+        TestStep.iosTap(.labelContains("main"))
         TestStep.wait(seconds: 1)
+        TestStep.iosWaitForElementToDisappear(.label("Close Session"), timeout: 3)
         TestStep.iosScreenshot(label: "ios-window-menu-two-windows")
         // Tap window 1 ("other") in the menu — label is the window name only
         TestStep.iosTap(.labelContains("other"))
         TestStep.iosWaitForElement(.labelContains("ios-close:1"), timeout: 5)
 
         // Open menu again and tap "Close Window"
-        TestStep.iosTap(.labelContains("ios-close"))
+        TestStep.iosTap(.labelContains("other"))
         TestStep.wait(seconds: 1)
         TestStep.iosScreenshot(label: "ios-window-menu-close-option")
         TestStep.iosTap(.label("Close Window"))
@@ -78,27 +79,39 @@ public enum CloseRemoteWindowIOSScenario {
             timeout: 10
         )
 
-        TestStep.iosTap(.labelContains("ios-close"))
+        TestStep.iosTap(.label("Sessions"))
+        TestStep.iosWaitForElement(.labelContains("ios-close"), timeout: 10)
+        TestStep.iosLongPress(.labelContains("ios-close"), duration: 1)
         TestStep.wait(seconds: 1)
+        TestStep.iosWaitForElement(.label("Rename Session"), timeout: 5)
         TestStep.iosTap(.label("Close Session"))
 
         // Confirmation alert should appear with process info
         TestStep.iosWaitForElement(.labelContains("Close Session"), timeout: 10)
         TestStep.iosWaitForElement(.labelContains("sleep"), timeout: 10)
-        // iOS restores the title-menu label in two stages after a menu tap —
-        // text first, chevron symbol ~1-2s later — and the presented alert
-        // prunes the background accessibility tree, so there is no element to
-        // poll for. A fixed wait is the only way to capture the restored title.
-        TestStep.wait(seconds: 2)
         TestStep.iosScreenshot(label: "ios-close-session-confirmation")
+
+        TestStep.iosTap(.label("Cancel"))
+        TestStep.iosWaitForElement(.labelContains("ios-close"), timeout: 10)
+        TestStep.iosLongPress(.labelContains("ios-close"), duration: 1)
+        TestStep.iosTap(.label("Close Session"))
+        TestStep.iosWaitForElement(.labelContains("sleep"), timeout: 10)
 
         // 6. Confirm by tapping "Close Anyway"
         TestStep.log("Stage 5: Confirm close — session should be killed")
         TestStep.iosTap(.roleAndLabelContains(role: "Button", label: "Close Anyway"))
 
-        // After session is killed, the view should auto-dismiss to the session list
+        // Closing from the list must keep us on the list and remove its row.
         TestStep.iosWaitForElement(.labelContains("Sessions"), timeout: 30)
         TestStep.iosWaitForElementToDisappear(.labelContains("ios-close"), timeout: 15)
         TestStep.iosScreenshot(label: "ios-session-list-after-close")
+
+        TestStep.log("Stage 6: Close an idle session from the list without a process warning")
+        TestStep.tmuxCreateSession(name: "ios-close-idle", width: 120, height: 40)
+        Shortcut.tmuxClearAndSetPrompt(target: "ios-close-idle:0")
+        TestStep.iosWaitForElement(.labelContains("ios-close-idle"), timeout: 20)
+        TestStep.iosLongPress(.labelContains("ios-close-idle"), duration: 1)
+        TestStep.iosTap(.label("Close Session"))
+        TestStep.iosWaitForElementToDisappear(.labelContains("ios-close-idle"), timeout: 15)
     }
 }

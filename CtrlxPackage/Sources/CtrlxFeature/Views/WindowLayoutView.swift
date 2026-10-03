@@ -18,7 +18,6 @@
         @Environment(SessionStore.self) private var sessionStore
         @Environment(ViewerConnectionManager.self) private var connectionManager
         @Environment(AgentBackgroundMonitoringService.self) private var backgroundMonitoring
-        @Environment(\.dismiss) private var dismiss
 
         /// The currently selected window within the session
         @State private var selectedWindowId: String?
@@ -81,9 +80,9 @@
         @Dependency(ClipboardClient.self) private var clipboard
 
         /// Close confirmation state for showing alert with running processes
-        @State private var closeConfirmation: CloseConfirmation?
+        @State private var closeConfirmation: TerminalCloseConfirmation<TmuxWindow>?
 
-        /// Error message from failed commands (close window/session)
+        /// Error message from failed window commands
         @State private var commandError: String?
 
         /// Rename-window alert state: the window being renamed (if any).
@@ -263,15 +262,6 @@
                             }
                             .disabled(!relayClient.isHostConnected)
                         }
-
-                        Divider()
-
-                        Button(role: .destructive) {
-                            requestCloseSession()
-                        } label: {
-                            Label("Close Session", symbol: .rectangleStackBadgeMinus)
-                        }
-                        .disabled(!relayClient.isHostConnected)
                     } label: {
                         HStack(spacing: 4) {
                             Text(navigationTitle)
@@ -366,7 +356,7 @@
                     .presentationDetents([.large])
             }
             .alert(
-                closeConfirmation?.title ?? "Close?",
+                "Close Window?",
                 isPresented: .init(
                     get: { closeConfirmation != nil },
                     set: { if !$0 { closeConfirmation = nil } }
@@ -374,12 +364,7 @@
             ) {
                 if let confirmation = closeConfirmation {
                     Button("Close Anyway", role: .destructive) {
-                        switch confirmation.target {
-                        case let .window(window):
-                            performCloseWindow(window)
-                        case .session:
-                            performCloseSession()
-                        }
+                        performCloseWindow(confirmation.target)
                     }
                     .keyboardShortcut(.defaultAction)
                 }
@@ -1079,7 +1064,7 @@
             )
         }
 
-        // MARK: - Close Window/Session
+        // MARK: - Close Window
 
         private func requestCloseWindow(_ window: TmuxWindow) {
             Task {
@@ -1090,26 +1075,8 @@
                     if processes.isEmpty {
                         performCloseWindow(window)
                     } else {
-                        closeConfirmation = CloseConfirmation(
-                            target: .window(window),
-                            runningProcesses: processes
-                        )
-                    }
-                }
-            }
-        }
-
-        private func requestCloseSession() {
-            Task {
-                let spec = CheckRunningProcesses(target: .session(sessionName))
-                let result = await relayClient.sendCommand(spec, paneId: "")
-                if case let .success(response) = result {
-                    let processes = response.runningProcesses ?? []
-                    if processes.isEmpty {
-                        performCloseSession()
-                    } else {
-                        closeConfirmation = CloseConfirmation(
-                            target: .session(sessionName),
+                        closeConfirmation = TerminalCloseConfirmation(
+                            target: window,
                             runningProcesses: processes
                         )
                     }
@@ -1134,18 +1101,6 @@
                 }
             }
         }
-
-        private func performCloseSession() {
-            Task {
-                let spec = KillTmuxSession(sessionName: sessionName)
-                let result = await relayClient.sendCommand(spec, paneId: "")
-                if case .success = result {
-                    dismiss()
-                } else if case let .failure(error) = result {
-                    commandError = error.localizedDescription
-                }
-            }
-        }
     }
 
     // MARK: - Layout Helpers
@@ -1155,34 +1110,6 @@
         let id: String
         let paneState: PaneState
         let rect: CGRect
-    }
-
-    // MARK: - Close Confirmation
-
-    private struct CloseConfirmation {
-        enum Target {
-            case window(TmuxWindow)
-            case session(String)
-        }
-
-        let target: Target
-        let runningProcesses: [RunningProcessInfo]
-
-        var title: String {
-            switch target {
-            case .window: "Close Window?"
-            case .session: "Close Session?"
-            }
-        }
-
-        var message: String {
-            let grouped = Dictionary(grouping: runningProcesses) { $0.paneIndex }
-            let descriptions = grouped.sorted(by: { $0.key < $1.key }).map { paneIndex, processes in
-                let names = Set(processes.map(\.name)).sorted().joined(separator: ", ")
-                return "Terminal \(paneIndex): \(names)"
-            }
-            return "The following processes are still running:\n\(descriptions.joined(separator: "\n"))"
-        }
     }
 
 #endif

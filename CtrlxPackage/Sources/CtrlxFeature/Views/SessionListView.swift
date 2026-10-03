@@ -24,6 +24,9 @@
         @State private var creationError: String?
         @State private var renameError: String?
         @State private var selectedHostForNewSession: PairedHost?
+        @State private var closeConfirmation: TerminalCloseConfirmation<SessionNavigation>?
+        @State private var closeError: String?
+        @State private var isClosingSession = false
 
         var body: some View {
             Group {
@@ -90,6 +93,31 @@
                     Text(renameError)
                 }
             }
+            .alert("Close Session?", isPresented: .init(
+                get: { closeConfirmation != nil },
+                set: { if !$0 { closeConfirmation = nil } }
+            )) {
+                if let confirmation = closeConfirmation {
+                    Button("Close Anyway", role: .destructive) {
+                        confirmCloseSession(confirmation.target)
+                    }
+                }
+                Button("Cancel", role: .cancel) { closeConfirmation = nil }
+            } message: {
+                if let confirmation = closeConfirmation {
+                    Text("Session: \(confirmation.target.sessionName)\n\n\(confirmation.message)")
+                }
+            }
+            .alert("Session Close Failed", isPresented: .init(
+                get: { closeError != nil },
+                set: { if !$0 { closeError = nil } }
+            )) {
+                Button("OK") { closeError = nil }
+            } message: {
+                if let closeError {
+                    Text(closeError)
+                }
+            }
             .sheet(item: $selectedHostForNewSession) { host in
                 ProjectPickerSheet(
                     host: host,
@@ -115,6 +143,10 @@
                         showUsername: settings.hasDuplicateHostName(for: host),
                         onNewSession: {
                             selectedHostForNewSession = host
+                        },
+                        isClosingSession: isClosingSession,
+                        onClose: { sessionName in
+                            requestCloseSession(SessionNavigation(sessionName: sessionName, hostId: host.id))
                         },
                         onRename: { sessionName, newName in
                             Task {
@@ -160,6 +192,53 @@
             }
             .refreshable {
                 await connectionManager.requestAllSessionStates()
+            }
+        }
+
+        // MARK: - Close Session
+
+        private func requestCloseSession(_ target: SessionNavigation) {
+            guard !isClosingSession else { return }
+            isClosingSession = true
+            Task {
+                defer { isClosingSession = false }
+                let result = await connectionManager.sendCommand(
+                    CheckRunningProcesses(target: .session(target.sessionName)),
+                    paneId: "",
+                    hostId: target.hostId
+                )
+                switch result {
+                case let .success(response):
+                    let processes = response.runningProcesses ?? []
+                    if processes.isEmpty {
+                        await performCloseSession(target)
+                    } else {
+                        closeConfirmation = TerminalCloseConfirmation(target: target, runningProcesses: processes)
+                    }
+                case let .failure(error):
+                    closeError = error.localizedDescription
+                }
+            }
+        }
+
+        private func confirmCloseSession(_ target: SessionNavigation) {
+            guard !isClosingSession else { return }
+            isClosingSession = true
+            closeConfirmation = nil
+            Task {
+                defer { isClosingSession = false }
+                await performCloseSession(target)
+            }
+        }
+
+        private func performCloseSession(_ target: SessionNavigation) async {
+            let result = await connectionManager.sendCommand(
+                KillTmuxSession(sessionName: target.sessionName),
+                paneId: "",
+                hostId: target.hostId
+            )
+            if case let .failure(error) = result {
+                closeError = error.localizedDescription
             }
         }
 
@@ -281,6 +360,8 @@
         let sessions: [TmuxSession]
         var showUsername = false
         let onNewSession: () -> Void
+        var isClosingSession = false
+        let onClose: (String) -> Void
         var onRename: (String, String) -> Void = { _, _ in }
         var onSetDescription: (String, String?) -> Void = { _, _ in }
         var onSetColor: (String, SessionColor?) -> Void = { _, _ in }
@@ -446,6 +527,16 @@
                     ) { newState in
                         onSetState(session.sessionName, newState)
                     }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        onClose(session.sessionName)
+                    } label: {
+                        Label("Close Session", symbol: .rectangleStackBadgeMinus)
+                    }
+                    .disabled(connection?.isHostConnected != true || isClosingSession)
+                    .accessibilityIdentifier("close-session")
                 }
             ))
             .listRowInsets(
