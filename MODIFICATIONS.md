@@ -7,6 +7,21 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.48 — Editable quick phrases and iOS session controls
+
+- Edit existing quick phrases on Mac and iOS while preserving their stable
+  identifiers, ordering, and cross-device synchronization.
+- Promote iOS terminal fit to the window toolbar and keep the bottom terminal
+  actions focused on frequently used controls.
+- Move iOS Close Session to the session-list context menu. Keep Close Window
+  in the window menu, and show running-process warnings before closing a session.
+- Validation: 2,387 Swift tests passed across the full run and the serial Mac
+  rerun; two existing Apple Intelligence evaluations were excluded. Brand and
+  technical boundaries, website build, iOS device build and 19 publisher tests passed.
+- Release scope: publish the Mac package on Qcloud. The merged iOS changes were
+  installed separately on iPhone Air as a local 3.0.47 build. No Relay deployment
+  or local Mac replacement is included.
+
 ## 3.0.47 — Fork names, terminal quick actions and neutral iOS session names
 
 - Allow custom Codex and Claude Code Fork names on Mac and iOS. Reuse the
