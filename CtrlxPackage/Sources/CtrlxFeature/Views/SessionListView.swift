@@ -21,6 +21,7 @@
         @Environment(IOSSettings.self) private var settings
 
         @State private var creatingSelection: ProjectPickerSelection?
+        @State private var sessionCreation = NewSessionCreation()
         @State private var initialSessionFit: NewSessionSizing.InitialFit?
         @State private var creationError: String?
         @State private var renameError: String?
@@ -55,6 +56,7 @@
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
+                        sessionCreation.cancel()
                         onOpenSettings()
                     } label: {
                         Symbols.gearshape.image
@@ -70,7 +72,17 @@
                 }
             }
             .onChange(of: navigationPath.count) {
+                sessionCreation.cancel()
                 if navigationPath.isEmpty { initialSessionFit = nil }
+            }
+            .onChange(of: createdSessionName) {
+                navigateToCreatedSessionIfReady()
+            }
+            .onChange(of: creationHostIsConnected) {
+                if !creationHostIsConnected { sessionCreation.cancel() }
+            }
+            .onDisappear {
+                sessionCreation.cancel()
             }
             .alert("Session Creation Failed", isPresented: .init(
                 get: { creationError != nil },
@@ -123,7 +135,11 @@
                     Text(closeError)
                 }
             }
-            .sheet(item: $selectedHostForNewSession) { host in
+            .sheet(item: $selectedHostForNewSession, onDismiss: {
+                // Our success dismissal retains the pane while its snapshot is
+                // in flight. A user dismissal before the reply cancels routing.
+                if sessionCreation.paneID == nil { sessionCreation.cancel() }
+            }) { host in
                 ProjectPickerSheet(
                     host: host,
                     creatingSelection: creatingSelection,
@@ -147,6 +163,7 @@
                         sessions: sessionStore.sessions(for: host.id),
                         showUsername: settings.hasDuplicateHostName(for: host),
                         onNewSession: {
+                            sessionCreation.cancel()
                             selectedHostForNewSession = host
                         },
                         isClosingSession: isClosingSession,
@@ -307,6 +324,28 @@
 
         // MARK: - New Session Creation
 
+        private var createdSessionName: String? {
+            guard let hostID = sessionCreation.hostID, let paneID = sessionCreation.paneID else { return nil }
+            return sessionStore.paneState(for: paneID, hostId: hostID)?.sessionName
+        }
+
+        private var creationHostIsConnected: Bool {
+            guard let hostID = sessionCreation.hostID else { return false }
+            return connectionManager.connection(for: hostID)?.isHostConnected == true
+        }
+
+        private func navigateToCreatedSessionIfReady() {
+            guard navigationPath.isEmpty else {
+                sessionCreation.cancel()
+                return
+            }
+            guard let destination = sessionCreation.takeDestination(
+                paneStates: sessionStore.paneStates, isConnected: creationHostIsConnected
+            ) else { return }
+            initialSessionFit = destination.initialFit
+            navigationPath.append(SessionNavigation(sessionName: destination.sessionName, hostId: destination.hostID))
+        }
+
         private func createNewSession(on host: PairedHost, request: SessionLaunchRequest) async {
             guard creatingSelection == nil else { return }
 
@@ -319,6 +358,7 @@
             // Use project name for session name if available, otherwise use default
             let sessionName = project?.name ?? settings.newSessionName
             let automaticFit = settings.newSessionAutoFit
+            let revision = sessionCreation.begin(hostID: host.id, automaticFit: automaticFit)
             let grid = NewSessionSizing.creationGrid(
                 automaticFit: automaticFit, width: settings.newSessionWidth, height: settings.newSessionHeight
             )
@@ -335,30 +375,27 @@
 
             // paneId is not used for session creation, pass empty string
             let result = await connectionManager.sendCommand(command, paneId: "", hostId: host.id)
+            creatingSelection = nil
+            guard sessionCreation.revision == revision, selectedHostForNewSession?.id == host.id else { return }
 
             switch result {
             case let .success(response):
-                // Session created - dismiss sheet and clear selection
-                creatingSelection = nil
-                selectedHostForNewSession = nil
-
-                // Request a refresh to update the session list
-                await connectionManager.requestSessionState(for: host.id)
-
-                // Navigate to the new terminal if we got a pane ID
-                if
-                    let paneId = response.paneId,
-                    let paneState = sessionStore.paneState(for: paneId, hostId: host.id) {
-                    initialSessionFit = automaticFit ? .init(
-                        hostID: host.id, sessionName: paneState.sessionName, paneID: paneId
-                    ) : nil
-                    navigationPath.append(SessionNavigation(sessionName: paneState.sessionName, hostId: host.id))
+                guard let paneID = response.paneId else {
+                    sessionCreation.cancel()
+                    selectedHostForNewSession = nil
+                    return
                 }
+                sessionCreation.receivePaneID(paneID, revision: revision)
+                selectedHostForNewSession = nil
+                // Consume cached state now, or let its arrival drive navigation.
+                // Sending a refresh does not wait for the Host's snapshot.
+                navigateToCreatedSessionIfReady()
+                await connectionManager.requestSessionState(for: host.id)
             case let .failure(error):
+                sessionCreation.cancel()
                 // Include project name in error for context (sheet stays open)
                 let projectContext = project?.name ?? "terminal"
                 creationError = "Failed to create \(projectContext): \(error.localizedDescription)"
-                creatingSelection = nil
             }
         }
     }

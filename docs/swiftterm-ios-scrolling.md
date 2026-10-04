@@ -103,6 +103,15 @@ Unsupported Hosts keep 120 × 40. Settings → New Session can disable automatic
 sizing and retain explicit rows/columns; migration preserves legacy customized
 fixed sizes and enables automatic sizing for the old 120 × 40 default.
 
+The creation reply is retained before requesting a snapshot. A targeted state
+arrival drives navigation whether it precedes or follows that reply; sending
+`requestSessionState` is not treated as waiting for a response. The returned
+Host/pane identity and captured sizing preference survive a late snapshot.
+Navigation is consumed once, before entering the session. Opening another
+session, Settings or another creation picker, leaving the list, dismissing the
+picker before the reply, or losing the Host connection cancels pending routing;
+an old reply cannot restore it. No snapshot polling or fixed sleep is added.
+
 The iOS system Paste action sends one `PasteTerminalText` operation, not
 `TmuxKey.from(bytes:)`. Both Viewer and Host serialize it with keyboard input.
 The Host loads a unique tmux buffer and uses `paste-buffer -p -r -d`: tmux checks
