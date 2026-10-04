@@ -72,13 +72,14 @@ struct AgentForkConfigurationTests {
         #expect(try config.worktreeRequest(source: source, preparation: nil, name: "", allowUncommittedChanges: false) == nil)
     }
 
-    @Test("Current-directory Fork uses the entered window name without needing Git")
-    func currentDirectoryName() throws {
-        let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
+    @Test("Mac/iOS current-directory Fork uses the entered window name without needing Git", arguments: ["codex", "claude-code"])
+    func currentDirectoryName(agent: String) throws {
+        let source = try #require(AgentForkSource(pane: pane("%1", index: 1, agent: agent)))
         let config = configuration(sources: [source], usingWorktree: false)
         let request = try config.forkRequest(source: source, preparation: nil, name: "  我的 Fork  ", allowUncommittedChanges: false)
         #expect(request.windowName == "我的 Fork")
         #expect(request.worktree == nil)
+        #expect(request.source.pluginID == agent)
         for name in ["", "  ", "line\nbreak"] {
             #expect(throws: AgentForkError.self) {
                 try config.forkRequest(source: source, preparation: nil, name: name, allowUncommittedChanges: false)
@@ -86,9 +87,9 @@ struct AgentForkConfigurationTests {
         }
     }
 
-    @Test("Worktree drafts share one name; correcting a conflict gets a fresh retry identity")
-    func namedWorktree() throws {
-        let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
+    @Test("Mac/iOS worktree drafts share one name; correcting a conflict gets a fresh retry identity", arguments: ["codex", "claude-code"])
+    func namedWorktree(agent: String) throws {
+        let source = try #require(AgentForkSource(pane: pane("%1", index: 1, agent: agent)))
         let config = configuration(sources: [source], usingWorktree: true)
         let preparation = AgentForkPreparation(source: source, worktree: .init(
             repositoryRoot: "/Host/repo", primaryRoot: "/Host/repo", head: "source-head", relativeDirectory: "", hasUncommittedChanges: false
@@ -96,6 +97,7 @@ struct AgentForkConfigurationTests {
         let first = try config.forkRequest(source: source, preparation: preparation, name: "  feature  ", allowUncommittedChanges: false)
         #expect(first.windowName == "feature")
         #expect(first.worktree?.name == "feature")
+        #expect(first.source.pluginID == agent)
         #expect(preparation.worktree?.directory(name: try #require(first.windowName)) == "/Host/repo/.worktrees/feature")
         let corrected = try config.forkRequest(source: source, preparation: preparation, name: "feature-2", allowUncommittedChanges: false)
         #expect(corrected.requestID != first.requestID)
