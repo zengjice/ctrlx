@@ -1,7 +1,7 @@
 import CtrlxCommon
 import CtrlxNetworking
 
-/// Keeps the creation reply and Host snapshot independent of their arrival order.
+/// Shared by session and window creation to reconcile replies with Host snapshots.
 struct NewSessionCreation: Equatable, Sendable {
     struct Destination: Equatable, Sendable {
         let hostID: String
@@ -45,6 +45,15 @@ struct NewSessionCreation: Equatable, Sendable {
         )
         cancel()
         return destination
+    }
+
+    mutating func takeWindowDestination(
+        selectedPaneID: String?,
+        paneStates: [PaneKey: PaneState],
+        isConnected: Bool
+    ) -> Destination? {
+        guard let paneID, paneID == selectedPaneID else { return nil }
+        return takeDestination(paneStates: paneStates, isConnected: isConnected)
     }
 
     mutating func cancel() {

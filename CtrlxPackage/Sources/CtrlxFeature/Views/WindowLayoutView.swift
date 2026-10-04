@@ -51,10 +51,10 @@
 
         @State private var newAgentConfiguration: NewAgentTabConfiguration?
         @State private var agentForkConfiguration: AgentForkConfiguration?
+        @State private var creationSheetIsPresented = false
         @State private var isCreatingWindow = false
-        /// Follow the returned pane when its state arrives, not after a fixed delay.
-        @State private var createdPaneId: String?
-        @State private var windowSelectionRevision = 0
+        /// Follow and fit the returned pane independently of snapshot arrival order.
+        @State private var windowCreation = NewSessionCreation()
 
         /// Width of the navigation bar (measured from the full-width content
         /// area). Used to cap the centered title so it doesn't bleed behind the
@@ -205,8 +205,7 @@
                         let windows = sessionWindows
                         ForEach(windows) { win in
                             Button {
-                                createdPaneId = nil
-                                windowSelectionRevision += 1
+                                cancelCreationFollowUp()
                                 selectedWindowId = win.id
                                 activePaneId = win.activePane?.paneId ?? win.panes.first?.paneId
                                 Task {
@@ -229,6 +228,7 @@
                         .disabled(!relayClient.isHostConnected || isCreatingWindow)
 
                         Button {
+                            creationSheetIsPresented = true
                             newAgentConfiguration = agentTabConfiguration()
                         } label: {
                             Label("New Agent…", symbol: .sparkles)
@@ -242,6 +242,7 @@
                                 unavailableReason: agentForkUnavailableReason,
                                 sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes)
                             ) { usingWorktree in
+                                creationSheetIsPresented = true
                                 agentForkConfiguration = forkConfiguration(window: window, usingWorktree: usingWorktree)
                             }
                             .disabled(isCreatingWindow)
@@ -350,11 +351,11 @@
                     }
                 }
             }
-            .sheet(item: $newAgentConfiguration) { configuration in
+            .sheet(item: $newAgentConfiguration, onDismiss: creationSheetDidDismiss) { configuration in
                 NewAgentTabPanel(configuration: configuration)
                     .presentationDetents([.large])
             }
-            .sheet(item: $agentForkConfiguration) { configuration in
+            .sheet(item: $agentForkConfiguration, onDismiss: creationSheetDidDismiss) { configuration in
                 AgentForkPanel(configuration: configuration)
                     .presentationDetents([.large])
             }
@@ -421,21 +422,22 @@
                 reconcileWindowSelection(candidates: windowSelectionCandidates)
             }
             .onChange(of: viewportGrids) {
-                fitNewSessionIfReady()
+                fitCreatedTerminalIfReady()
             }
             .onChange(of: window?.windowLayout, initial: true) {
-                fitNewSessionIfReady()
+                fitCreatedTerminalIfReady()
+            }
+            .onChange(of: isResizing) {
+                if !isResizing { fitCreatedTerminalIfReady() }
             }
             .onChange(of: relayClient.isHostConnected) {
                 if !relayClient.isHostConnected {
-                    initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
+                    cancelCreationFollowUp()
                 }
             }
             .onDisappear {
                 // A delayed creation reply must not redirect a later visit.
-                windowSelectionRevision += 1
-                createdPaneId = nil
-                initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
+                cancelCreationFollowUp()
             }
             .onChange(of: activeService?.session?.state) {
                 if activeSessionHasBlockingForm {
@@ -531,14 +533,17 @@
             if let reason = agentForkUnavailableReason { throw AgentForkError(reason) }
             guard request.source.sessionName == sessionName else { throw AgentForkError("Reopen Fork in the source session.") }
             isCreatingWindow = true
-            defer { isCreatingWindow = false }
-            let selectionRevision = windowSelectionRevision
+            initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
+            let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit)
+            defer {
+                isCreatingWindow = false
+                if windowCreation.revision == revision, windowCreation.paneID == nil { windowCreation.cancel() }
+            }
             let response = try await connectionManager.sendCommand(request, paneId: "", hostId: hostId, timeout: 180).get()
             guard let paneId = response.paneId else {
                 throw AgentForkError("Host returned no new pane. Check its windows before retrying.")
             }
-            if windowSelectionRevision == selectionRevision {
-                createdPaneId = paneId
+            if windowCreation.receivePaneID(paneId, revision: revision) {
                 reconcileWindowSelection(candidates: windowSelectionCandidates)
             }
             await connectionManager.requestSessionState(for: hostId)
@@ -557,14 +562,17 @@
                 throw NewAgentTabConfiguration.LaunchError(reason)
             }
             isCreatingWindow = true
-            defer { isCreatingWindow = false }
-            let selectionRevision = windowSelectionRevision
+            initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
+            let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit)
+            defer {
+                isCreatingWindow = false
+                if windowCreation.revision == revision, windowCreation.paneID == nil { windowCreation.cancel() }
+            }
             let response = try await relayClient.sendCommand(request, paneId: "").get()
             guard let paneId = response.paneId else {
                 throw NewAgentTabConfiguration.LaunchError("Host returned no new pane. Check its windows before retrying.")
             }
-            if windowSelectionRevision == selectionRevision {
-                createdPaneId = paneId
+            if windowCreation.receivePaneID(paneId, revision: revision) {
                 // State may arrive before or after the command response.
                 reconcileWindowSelection(candidates: windowSelectionCandidates)
             }
@@ -575,7 +583,7 @@
             let decision = WindowSelectionReconciliation.resolve(
                 selectedWindowId: selectedWindowId,
                 candidates: candidates,
-                createdPaneId: createdPaneId
+                createdPaneId: windowCreation.paneID
             )
 
             switch decision {
@@ -585,7 +593,13 @@
             case let .select(windowId, paneId):
                 selectedWindowId = windowId
                 activePaneId = paneId
-                if paneId == createdPaneId { createdPaneId = nil }
+                if let destination = windowCreation.takeWindowDestination(
+                    selectedPaneID: paneId, paneStates: sessionStore.paneStates,
+                    isConnected: relayClient.isHostConnected
+                ) {
+                    initialSessionFit = destination.initialFit
+                    fitCreatedTerminalIfReady()
+                }
             }
         }
 
@@ -866,19 +880,30 @@
         }
 
         private func resizeWindowToFit() {
-            initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
+            cancelCreationFollowUp()
             guard relayClient.isHostConnected, !isResizing,
                   let windowID = window?.stableId, let request = resizeToFitRequest else { return }
             resizeWindow(request, windowID: windowID)
         }
 
-        private func fitNewSessionIfReady() {
+        private func cancelCreationFollowUp() {
+            windowCreation.cancel()
+            initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
+        }
+
+        private func creationSheetDidDismiss() {
+            creationSheetIsPresented = false
+            fitCreatedTerminalIfReady()
+        }
+
+        private func fitCreatedTerminalIfReady() {
             guard !isResizing, var fit = initialSessionFit,
                   fit.matches(hostID: hostId, sessionName: sessionName) else { return }
             let request = fit.takeRequest(
                 isAvailable: relayClient.isHostConnected && relayClient.hostSupportsTerminalFit,
                 paneIDs: window?.panes.map(\.paneId),
-                measuredRequest: resizeToFitRequest
+                measuredRequest: resizeToFitRequest,
+                isPresentationReady: !creationSheetIsPresented
             )
             // Consume before dispatch, including failures; never retry on later
             // keyboard, rotation, reconnect or geometry changes.
@@ -911,6 +936,7 @@
                 // Split pane horizontally (left-right)
                 Button {
                     guard let activePaneId, !isSplitting else { return }
+                    cancelCreationFollowUp()
                     isSplitting = true
                     Task {
                         await sendCommand(.splitTmuxPane(direction: .horizontal), paneId: activePaneId)
@@ -923,6 +949,7 @@
                 // Split pane vertically (top-bottom)
                 Button {
                     guard let activePaneId, !isSplitting else { return }
+                    cancelCreationFollowUp()
                     isSplitting = true
                     Task {
                         await sendCommand(.splitTmuxPane(direction: .vertical), paneId: activePaneId)

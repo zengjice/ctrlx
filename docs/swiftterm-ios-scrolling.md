@@ -112,6 +112,15 @@ session, Settings or another creation picker, leaving the list, dismissing the
 picker before the reply, or losing the Host connection cancels pending routing;
 an old reply cannot restore it. No snapshot polling or fixed sleep is added.
 
+Fork (both directory modes), New Terminal and New Agent windows reuse this
+creation reconciliation and the captured automatic-sizing preference. The fit
+is armed only after selecting the exact returned pane, never while the source
+window is still displayed. Agent/Fork sheets must be dismissed before measuring
+for dispatch. Each new window is fitted once using its stable window ID; the
+source window is not resized. Manual window selection, Fit, split, disconnect
+and page exit cancel pending selection and fitting, including delayed replies.
+With automatic sizing disabled, the Host's new-window dimensions are preserved.
+
 The iOS system Paste action sends one `PasteTerminalText` operation, not
 `TmuxKey.from(bytes:)`. Both Viewer and Host serialize it with keyboard input.
 The Host loads a unique tmux buffer and uses `paste-buffer -p -r -d`: tmux checks

@@ -12,7 +12,7 @@ enum NewSessionSizing {
     }
 
     /// Owned by the session list, so rebuilding or revisiting a destination
-    /// cannot restore permission to resize a session after its first fit.
+    /// cannot restore permission to resize a created terminal after its first fit.
     struct InitialFit: Equatable, Sendable {
         let hostID: String
         let sessionName: String
@@ -31,7 +31,8 @@ enum NewSessionSizing {
         mutating func takeRequest(
             isAvailable: Bool,
             paneIDs: [String]?,
-            measuredRequest: ResizeTmuxPane?
+            measuredRequest: ResizeTmuxPane?,
+            isPresentationReady: Bool = true
         ) -> ResizeTmuxPane? {
             guard let paneID else { return nil }
             guard isAvailable else {
@@ -44,7 +45,7 @@ enum NewSessionSizing {
                 self.paneID = nil
                 return nil
             }
-            guard let measuredRequest else { return nil }
+            guard isPresentationReady, let measuredRequest else { return nil }
             self.paneID = nil
             return measuredRequest
         }
