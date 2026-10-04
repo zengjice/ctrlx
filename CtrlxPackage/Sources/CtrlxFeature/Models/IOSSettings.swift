@@ -74,6 +74,7 @@
             case voiceCorrectionModelID
             case voiceCorrectionTestedModelIDsByProvider
             case newSessionName
+            case newSessionAutoFit
             case newSessionWidth
             case newSessionHeight
         }
@@ -202,12 +203,17 @@
             didSet { preferences.setString(newSessionName, Keys.newSessionName) }
         }
 
-        /// Width (columns) for new tmux sessions
+        /// Fit newly created sessions once after their terminal viewport is measured.
+        public var newSessionAutoFit = true {
+            didSet { preferences.setBool(newSessionAutoFit, Keys.newSessionAutoFit) }
+        }
+
+        /// Manual width (columns) for new tmux sessions
         public var newSessionWidth = 120 {
             didSet { preferences.setInt(newSessionWidth, Keys.newSessionWidth) }
         }
 
-        /// Height (rows) for new tmux sessions
+        /// Manual height (rows) for new tmux sessions
         public var newSessionHeight = 40 {
             didSet { preferences.setInt(newSessionHeight, Keys.newSessionHeight) }
         }
@@ -330,6 +336,15 @@
             self.newSessionName = preferences.string(Keys.newSessionName) ?? "session"
             self.newSessionWidth = preferences.optionalInt(Keys.newSessionWidth) ?? 120
             self.newSessionHeight = preferences.optionalInt(Keys.newSessionHeight) ?? 40
+            let savedAutoFit = preferences.optionalBool(Keys.newSessionAutoFit)
+            self.newSessionAutoFit = NewSessionSizing.automaticFit(
+                savedPreference: savedAutoFit, width: newSessionWidth, height: newSessionHeight
+            )
+            if savedAutoFit == nil {
+                // Preserve intentional legacy fixed sizes, then persist the mode
+                // so later edits to those dimensions do not change it on launch.
+                preferences.setBool(newSessionAutoFit, Keys.newSessionAutoFit)
+            }
 
             // Load paired hosts
             self.pairedHosts = loadPairedHosts()

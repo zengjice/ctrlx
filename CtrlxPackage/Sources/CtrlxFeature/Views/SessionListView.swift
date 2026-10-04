@@ -21,6 +21,7 @@
         @Environment(IOSSettings.self) private var settings
 
         @State private var creatingSelection: ProjectPickerSelection?
+        @State private var initialSessionFit: NewSessionSizing.InitialFit?
         @State private var creationError: String?
         @State private var renameError: String?
         @State private var selectedHostForNewSession: PairedHost?
@@ -44,7 +45,8 @@
                         sessionName: destination.sessionName,
                         hostId: destination.hostId,
                         relayClient: connection.relayClient,
-                        settings: settings
+                        settings: settings,
+                        initialSessionFit: $initialSessionFit
                     )
                 } else {
                     hostDisconnectedView
@@ -66,6 +68,9 @@
                     EditButton()
                         .accessibilityIdentifier("remote-session-order-edit-button")
                 }
+            }
+            .onChange(of: navigationPath.count) {
+                if navigationPath.isEmpty { initialSessionFit = nil }
             }
             .alert("Session Creation Failed", isPresented: .init(
                 get: { creationError != nil },
@@ -313,11 +318,15 @@
 
             // Use project name for session name if available, otherwise use default
             let sessionName = project?.name ?? settings.newSessionName
+            let automaticFit = settings.newSessionAutoFit
+            let grid = NewSessionSizing.creationGrid(
+                automaticFit: automaticFit, width: settings.newSessionWidth, height: settings.newSessionHeight
+            )
 
             let command = CreateTmuxSession(
                 sessionName: sessionName,
-                width: settings.newSessionWidth,
-                height: settings.newSessionHeight,
+                width: grid.columns,
+                height: grid.rows,
                 workingDirectory: project?.path,
                 configDir: project?.configDir,
                 pluginID: project?.pluginID ?? AgentLaunchDefaults.pluginID,
@@ -340,6 +349,9 @@
                 if
                     let paneId = response.paneId,
                     let paneState = sessionStore.paneState(for: paneId, hostId: host.id) {
+                    initialSessionFit = automaticFit ? .init(
+                        hostID: host.id, sessionName: paneState.sessionName, paneID: paneId
+                    ) : nil
                     navigationPath.append(SessionNavigation(sessionName: paneState.sessionName, hostId: host.id))
                 }
             case let .failure(error):

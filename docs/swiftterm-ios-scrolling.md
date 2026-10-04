@@ -91,6 +91,18 @@ at least two rows/columns per leaf), and applies the resized grid and layout in
 one tmux command queue. An impossible target fails before changing the window.
 The Viewer enables Fit only when the Host advertises `supportsTerminalFit`.
 
+New sessions created on iOS default to automatic sizing. They start at 120 × 40
+and reuse the same Fit measurement once the new terminal has a usable viewport
+and font cell size. Only the exact pane returned by creation is eligible;
+ordinary navigation and deep links never grant this permission. The session
+list owns the one-shot request and consumes it before sending, even if the
+command fails. Before measurement, leaving the page, disconnecting, manually
+fitting, switching windows or splitting cancels it. There is no fixed delay,
+rendering gate, repeated fitting on rotation/keyboard changes or Relay change.
+Unsupported Hosts keep 120 × 40. Settings → New Session can disable automatic
+sizing and retain explicit rows/columns; migration preserves legacy customized
+fixed sizes and enables automatic sizing for the old 120 × 40 default.
+
 The iOS system Paste action sends one `PasteTerminalText` operation, not
 `TmuxKey.from(bytes:)`. Both Viewer and Host serialize it with keyboard input.
 The Host loads a unique tmux buffer and uses `paste-buffer -p -r -d`: tmux checks

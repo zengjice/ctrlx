@@ -14,6 +14,7 @@
         let hostId: String
         let relayClient: ViewerRelayClient
         let settings: IOSSettings
+        @Binding var initialSessionFit: NewSessionSizing.InitialFit?
 
         @Environment(SessionStore.self) private var sessionStore
         @Environment(ViewerConnectionManager.self) private var connectionManager
@@ -95,12 +96,14 @@
             sessionName: String,
             hostId: String,
             relayClient: ViewerRelayClient,
-            settings: IOSSettings
+            settings: IOSSettings,
+            initialSessionFit: Binding<NewSessionSizing.InitialFit?>
         ) {
             self.sessionName = sessionName
             self.hostId = hostId
             self.relayClient = relayClient
             self.settings = settings
+            self._initialSessionFit = initialSessionFit
             self._isKeyboardActive = State(initialValue: settings.showTerminalKeyboardOnEntry)
         }
 
@@ -417,10 +420,22 @@
             .task(id: windowSelectionCandidates) {
                 reconcileWindowSelection(candidates: windowSelectionCandidates)
             }
+            .onChange(of: viewportGrids) {
+                fitNewSessionIfReady()
+            }
+            .onChange(of: window?.windowLayout, initial: true) {
+                fitNewSessionIfReady()
+            }
+            .onChange(of: relayClient.isHostConnected) {
+                if !relayClient.isHostConnected {
+                    initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
+                }
+            }
             .onDisappear {
                 // A delayed creation reply must not redirect a later visit.
                 windowSelectionRevision += 1
                 createdPaneId = nil
+                initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
             }
             .onChange(of: activeService?.session?.state) {
                 if activeSessionHasBlockingForm {
@@ -851,8 +866,28 @@
         }
 
         private func resizeWindowToFit() {
+            initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
             guard relayClient.isHostConnected, !isResizing,
                   let windowID = window?.stableId, let request = resizeToFitRequest else { return }
+            resizeWindow(request, windowID: windowID)
+        }
+
+        private func fitNewSessionIfReady() {
+            guard !isResizing, var fit = initialSessionFit,
+                  fit.matches(hostID: hostId, sessionName: sessionName) else { return }
+            let request = fit.takeRequest(
+                isAvailable: relayClient.isHostConnected && relayClient.hostSupportsTerminalFit,
+                paneIDs: window?.panes.map(\.paneId),
+                measuredRequest: resizeToFitRequest
+            )
+            // Consume before dispatch, including failures; never retry on later
+            // keyboard, rotation, reconnect or geometry changes.
+            if fit != initialSessionFit { initialSessionFit = fit }
+            guard let request, let windowID = window?.stableId else { return }
+            resizeWindow(request, windowID: windowID)
+        }
+
+        private func resizeWindow(_ request: ResizeTmuxPane, windowID: String) {
             isResizing = true
             Task {
                 defer { isResizing = false }
