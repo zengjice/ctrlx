@@ -40,6 +40,7 @@ final public class ExternalServerClient {
     // MARK: - Properties
 
     private let logger = Logger(label: "com.jicezeng.ctrlx.externalserver")
+    @ObservationIgnored private let fileRequests = FileBrowserCommandQueue()
 
     /// Current connection state
     public private(set) var state: ConnectionState = .disconnected
@@ -250,6 +251,7 @@ final public class ExternalServerClient {
 
     /// Disconnect from the relay server
     public func disconnect() async {
+        fileRequests.cancelAll()
         shouldReconnect = false
         reconnectionDelayTask?.cancel()
         reconnectionDelayTask = nil
@@ -509,6 +511,16 @@ final public class ExternalServerClient {
             }
 
         case let .command(command):
+            if case .browseFiles = command.command, let onCommand {
+                let socket = webSocketTask
+                if !fileRequests.enqueue(command, execute: onCommand, reply: { [weak self] response in
+                    guard let self, self.webSocketTask === socket else { return }
+                    await self.sendEncrypted(.commandResponse(response))
+                }) {
+                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Too many file requests. Please retry.")))
+                }
+                return
+            }
             logger.info("Received command from viewer", metadata: ["type": "\(command.command)"])
             if let onCommand, let response = await onCommand(command), command.command.requiresResponse {
                 await sendEncrypted(.commandResponse(response))
@@ -549,6 +561,7 @@ final public class ExternalServerClient {
 
         case .viewerDisconnected:
             logger.info("Viewer device disconnected")
+            fileRequests.cancelAll()
             isViewerConnected = false
             connectedViewerDeviceName = nil
 
@@ -675,6 +688,7 @@ final public class ExternalServerClient {
     }
 
     private func cleanupConnection() async {
+        fileRequests.cancelAll()
         receiveTask?.cancel()
         receiveTask = nil
 

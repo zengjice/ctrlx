@@ -61,6 +61,7 @@ struct WindowTabBar: View {
     let onReorderFileTabs: ([UUID]) -> Void
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
+    var onNewFiles: (() -> Void)?
 
     @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(MarkdownOpenSuggestionStore.self) private var openSuggestionStore
@@ -136,7 +137,8 @@ struct WindowTabBar: View {
             windowIds: session.windows.map(\.stableId),
             fileTabIds: openFileTabs.map(\.id),
             browserTabIds: openBrowserTabs.map(\.id),
-            storedOrder: sessionTabs.tabOrder
+            storedOrder: sessionTabs.tabOrder,
+            includeFileExplorer: false
         )
     }
 
@@ -337,7 +339,8 @@ struct WindowTabBar: View {
             helpText: "New agent, terminal or browser in \(session.sessionName)",
             agentConfiguration: agentConfiguration,
             onNewTerminal: onNewWindow,
-            onNewBrowser: onNewBrowser
+            onNewBrowser: onNewBrowser,
+            onNewFiles: onNewFiles
         )
     }
 
@@ -554,13 +557,15 @@ struct WindowTabBar: View {
                 onSelectFileTab(tab.id)
             } label: {
                 HStack(spacing: 4) {
-                    Symbols.docPlaintextFill.image
+                    (tab.isDirectory ? Symbols.folder : Symbols.docPlaintextFill).image
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
-                    Text(tab.name)
+                    Text(sessionTabs.directoryTabs[tab.id]?.title ?? tab.name)
                         .font(.system(.caption, design: .monospaced))
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 180, alignment: .leading)
                         .strikethrough(tab.isDeleted, color: .secondary)
                 }
                 .padding(.leading, 12)
@@ -592,11 +597,14 @@ struct WindowTabBar: View {
             DropIndicator(visible: dropIndicator == payload)
         }
         .fileContextMenu(
-            fullPath: tab.path,
-            directoryPath: tab.directoryPath,
-            isDirectory: false,
+            fullPath: sessionTabs.directoryTabs[tab.id]?.path ?? tab.path,
+            directoryPath: sessionTabs.directoryTabs[tab.id]?.path ?? tab.directoryPath,
+            isDirectory: tab.isDirectory,
             onOpenFileInNewTab: nil,
-            onShowInFileExplorer: onShowInFileExplorer
+            onShowInFileExplorer: { path in
+                if tab.isDirectory { onSelectFileTab(tab.id) }
+                else { onShowInFileExplorer(path) }
+            }
         )
         .onHover { hovering in
             hoveredFileTabId = hovering ? tab.id : nil

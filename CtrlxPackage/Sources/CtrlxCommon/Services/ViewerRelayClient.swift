@@ -99,6 +99,7 @@ final public class ViewerRelayClient {
 
     public private(set) var hostSupportsTerminalPaste = false
     public private(set) var hostSupportsDirectoryCreation = false
+    public private(set) var hostSupportsFileBrowsing = false
     public private(set) var hostSupportsTerminalFit = false
 
     /// Name of the connected host device (if known)
@@ -491,6 +492,8 @@ final public class ViewerRelayClient {
         }
 
         switch command.commandType {
+        case .browseFiles where !hostSupportsFileBrowsing:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to browse files"))
         case .createSessionDirectory where !hostSupportsDirectoryCreation:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to create folders"))
         case .pasteTerminalText where !hostSupportsTerminalPaste:
@@ -588,6 +591,8 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .createSessionDirectory(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
+        case let .browseFiles(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .resizeTmuxPane(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .setSharedTerminalLayout(spec):
@@ -977,6 +982,7 @@ final public class ViewerRelayClient {
             logger.info("Received session state from host")
             hostSupportsTerminalPaste = sessionState.supportsTerminalPaste == true
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
+            hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             onSessionState?(sessionState)
 
@@ -999,6 +1005,7 @@ final public class ViewerRelayClient {
         case let .hostConnected(connectedMessage):
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
+            hostSupportsFileBrowsing = false
             hostSupportsTerminalFit = false
             logger.info("Host device connected")
             hostSubscriptionInactive = false
@@ -1043,6 +1050,7 @@ final public class ViewerRelayClient {
         case let .peerHello(peerHello):
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
+            hostSupportsFileBrowsing = false
             hostSupportsTerminalFit = false
             logger.info(
                 "Received peerHello from host",
@@ -1069,6 +1077,7 @@ final public class ViewerRelayClient {
         case .hostDisconnected:
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
+            hostSupportsFileBrowsing = false
             hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
             logger.info("Host device disconnected")
@@ -1079,6 +1088,7 @@ final public class ViewerRelayClient {
         case .hostSubscriptionInactive:
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
+            hostSupportsFileBrowsing = false
             hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
             logger.info("Host blocked: subscription inactive")
@@ -1376,6 +1386,7 @@ final public class ViewerRelayClient {
     private func cleanupConnection() async {
         hostSupportsTerminalPaste = false
         hostSupportsDirectoryCreation = false
+        hostSupportsFileBrowsing = false
         hostSupportsTerminalFit = false
         quickPhraseSync?.reset()
         connectionGeneration.invalidate()

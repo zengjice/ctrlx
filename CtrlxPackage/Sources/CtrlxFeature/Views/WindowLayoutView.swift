@@ -22,6 +22,7 @@
 
         /// The currently selected window within the session
         @State private var selectedWindowId: String?
+        @State private var fileWorkspace = IOSFileBrowserWorkspace()
 
         /// The currently selected pane (receives keyboard input)
         @State private var activePaneId: String?
@@ -137,6 +138,7 @@
         /// Use the displayed window's name, matching the window switcher.
         /// Keep the session name only while window data is unavailable.
         private var navigationTitle: String {
+            if let tab = fileWorkspace.selected { return tab.title }
             guard let window else { return sessionName }
             return windowTabLabel(for: window)
         }
@@ -158,9 +160,13 @@
             return max(120, barWidth - reservedPerSide * 2)
         }
 
-        var body: some View {
+        private var browserContent: some View {
             Group {
-                if let window {
+                if let tab = fileWorkspace.selected {
+                    WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: hostId, paneID: tab.sourcePaneID,
+                                                                       connection: connectionManager.connection(for: hostId)))
+                        .id(tab.id)
+                } else if let window {
                     windowContent(window)
                 } else {
                     ContentUnavailableView(
@@ -186,7 +192,7 @@
                 sendCommand: sendAgentCommand
             ))
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if window != nil, settings.terminalKeyboardControlPosition == .bottomBar {
+                if fileWorkspace.selected == nil, window != nil, settings.terminalKeyboardControlPosition == .bottomBar {
                     TerminalKeyboardBar(
                         keyboardRequested: isKeyboardActive,
                         isEnabled: relayClient.isHostConnected && activePaneId != nil,
@@ -202,170 +208,25 @@
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                // Window switcher as title menu (placement: .principal replaces the title)
-                ToolbarItem(placement: .principal) {
-                    Menu {
-                        let windows = sessionWindows
-                        ForEach(windows) { win in
-                            Button {
-                                cancelCreationFollowUp()
-                                selectedWindowId = win.id
-                                activePaneId = win.activePane?.paneId ?? win.panes.first?.paneId
-                                Task {
-                                    await sendCommand(.selectTmuxWindow, paneId: win.id)
-                                }
-                            } label: {
-                                if win.id == (selectedWindowId ?? window?.id) {
-                                    Label(windowTabLabel(for: win), symbol: .checkmark)
-                                } else {
-                                    Text(windowTabLabel(for: win))
-                                }
-                            }
-                        }
+            .toolbar { windowToolbar }
+        }
 
-                        Divider()
+        private var fileWorkspaceContext: IOSFileBrowserWorkspace.Context? {
+            .init(hostID: hostId, windows: sessionWindows)
+        }
 
-                        Button(action: createTerminalWindow) {
-                            Label("New Terminal", symbol: .terminal)
-                        }
-                        .disabled(!relayClient.isHostConnected || isCreatingWindow)
+        private func saveFileWorkspace() {
+            fileWorkspace.updateContext(fileWorkspaceContext)
+            fileWorkspace.save()
+        }
 
-                        Button {
-                            creationSheetIsPresented = true
-                            newAgentConfiguration = agentTabConfiguration()
-                        } label: {
-                            Label("New Agent…", symbol: .sparkles)
-                        }
-                        .disabled(!relayClient.isHostConnected || isCreatingWindow)
-                        .accessibilityIdentifier("new-agent-window")
-
-                        if let window {
-                            AgentForkMenu(
-                                sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
-                                unavailableReason: agentForkUnavailableReason,
-                                sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes)
-                            ) { usingWorktree in
-                                creationSheetIsPresented = true
-                                agentForkConfiguration = forkConfiguration(window: window, usingWorktree: usingWorktree)
-                            }
-                            .disabled(isCreatingWindow)
-
-                            Button {
-                                renameWindowText = window.windowName
-                                renamingWindow = window
-                            } label: {
-                                Label("Rename Window", symbol: .pencil)
-                            }
-                            .disabled(!relayClient.isHostConnected)
-                        }
-
-                        if let window, sessionWindows.count > 1 {
-                            Divider()
-
-                            Button(role: .destructive) {
-                                requestCloseWindow(window)
-                            } label: {
-                                Label("Close Window", symbol: .rectangleBadgeMinus)
-                            }
-                            .disabled(!relayClient.isHostConnected)
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(navigationTitle)
-                                .fontWeight(.semibold)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            Symbols.chevronDown.image
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.secondary)
-                        }
-                        // Cap the centered title so a long one truncates instead
-                        // of bleeding behind the bar buttons (#600).
-                        .frame(maxWidth: principalTitleMaxWidth)
-                    }
-                }
-                if settings.terminalKeyboardControlPosition == .topRight {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        TerminalVoiceInputButton(
-                            isDisabled: !relayClient.isHostConnected || activePaneId == nil,
-                            contextProvider: activeVoiceInputContext,
-                            sendKeys: sendVoiceKeys
-                        )
-                        .id(activePhraseContext.target)
-                    }
-
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            isKeyboardActive.toggle()
-                        } label: {
-                            Label(
-                                isKeyboardActive ? "Hide Keyboard" : "Show Keyboard",
-                                symbol: isKeyboardActive ? .keyboardChevronCompactDown : .keyboard
-                            )
-                        }
-                        .disabled(!relayClient.isHostConnected || activePaneId == nil)
-                    }
-                }
-
-                if window != nil {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            activeCopyAction?()
-                        } label: {
-                            Label("Copy Terminal Text", symbol: .docOnClipboard)
-                        }
-                        .disabled(activeCopyAction == nil)
-                    }
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    ImageUploadToolbarButton(
-                        paneId: activePaneId,
-                        relayClient: relayClient
-                    )
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: resizeWindowToFit) {
-                        Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
-                    }
-                    .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
-                    .accessibilityHint("Changes the window size on the Host and all Viewers")
-                    .accessibilityIdentifier("terminal-fit-to-screen")
-                }
-
-                if let activeService, activeService.session != nil {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            Button {
-                                let newValue = !activeService.isYoloModeEnabled
-                                Task {
-                                    await activeService.sendCommand(.setYoloMode(enabled: newValue))
-                                }
-                            } label: {
-                                Label(
-                                    activeService.isYoloModeEnabled ? "Disable Yolo Mode" : "Enable Yolo Mode",
-                                    symbol: .bolt
-                                )
-                            }
-
-                            Button {
-                                showSessionInfo = true
-                            } label: {
-                                Label("Session Info", symbol: .infoCircle)
-                            }
-                            .tint(nil)
-                        } label: {
-                            Label("Commands", symbol: .ellipsisCircle)
-                        }
-                        .tint(activeService.isYoloModeEnabled ? .red : nil)
-                        .popover(isPresented: $showSessionInfo) {
-                            sessionInfoPopover
-                        }
-                    }
-                }
+        private var presentedContent: some View {
+            browserContent
+            .onChange(of: fileWorkspaceContext, initial: true) { _, context in
+                fileWorkspace.updateContext(context)
             }
+            .onChange(of: fileWorkspace.snapshots) { _, _ in saveFileWorkspace() }
+            .onDisappear(perform: saveFileWorkspace)
             .sheet(item: $newAgentConfiguration, onDismiss: creationSheetDidDismiss) { configuration in
                 NewAgentTabPanel(configuration: configuration)
                     .presentationDetents([.large])
@@ -428,6 +289,10 @@
             } message: {
                 Text("Enter a new name for this window")
             }
+        }
+
+        var body: some View {
+            presentedContent
             .task {
                 updateActiveService()
                 // Mark session as handled when navigating into the view
@@ -483,6 +348,211 @@
                 guard oldValue != nil, let newValue else { return }
                 Task {
                     await sendCommand(.selectTmuxPane, paneId: newValue)
+                }
+            }
+        }
+
+        @ToolbarContentBuilder
+        private var windowToolbar: some ToolbarContent {
+            // Window switcher as title menu (placement: .principal replaces the title)
+            ToolbarItem(placement: .principal) {
+                Menu {
+                    let windows = sessionWindows
+                    ForEach(windows) { win in
+                        Button {
+                            fileWorkspace.selectedID = nil
+                            cancelCreationFollowUp()
+                            selectedWindowId = win.id
+                            activePaneId = win.activePane?.paneId ?? win.panes.first?.paneId
+                            Task {
+                                await sendCommand(.selectTmuxWindow, paneId: win.id)
+                            }
+                        } label: {
+                            if fileWorkspace.selected == nil, win.id == (selectedWindowId ?? window?.id) {
+                                Label(windowTabLabel(for: win), symbol: .checkmark)
+                            } else {
+                                Text(windowTabLabel(for: win))
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    ForEach(fileWorkspace.tabs) { tab in
+                        Button {
+                            cancelCreationFollowUp()
+                            isKeyboardActive = false
+                            quickActionPresentation.dismiss()
+                            fileWorkspace.selectedID = tab.id
+                        } label: {
+                            Label(tab.title, symbol: tab.id == fileWorkspace.selectedID ? .checkmark : .folder)
+                        }
+                    }
+                    Button {
+                        cancelCreationFollowUp()
+                        isKeyboardActive = false
+                        quickActionPresentation.dismiss()
+                        fileWorkspace.open(paneID: activePaneId ?? window?.activePane?.paneId)
+                    } label: { Label("New Files", symbol: .folderBadgePlus) }
+                    .disabled(!relayClient.isHostConnected || fileWorkspace.tabs.count >= 30)
+
+                    if fileWorkspace.selected != nil {
+                        Button("Close Files Tab", role: .destructive) {
+                            if let sourcePaneID = fileWorkspace.selected?.sourcePaneID,
+                               let sourceWindow = sessionWindows.first(where: { $0.panes.contains { $0.paneId == sourcePaneID } }) {
+                                selectedWindowId = sourceWindow.id
+                                activePaneId = sourcePaneID
+                                Task { await sendCommand(.selectTmuxWindow, paneId: sourceWindow.id) }
+                            }
+                            fileWorkspace.closeSelected()
+                        }
+                    }
+
+                    Divider()
+
+                    Button {
+                        fileWorkspace.selectedID = nil
+                        createTerminalWindow()
+                    } label: {
+                        Label("New Terminal", symbol: .terminal)
+                    }
+                    .disabled(!relayClient.isHostConnected || isCreatingWindow)
+
+                    Button {
+                        fileWorkspace.selectedID = nil
+                        creationSheetIsPresented = true
+                        newAgentConfiguration = agentTabConfiguration()
+                    } label: {
+                        Label("New Agent…", symbol: .sparkles)
+                    }
+                    .disabled(!relayClient.isHostConnected || isCreatingWindow)
+                    .accessibilityIdentifier("new-agent-window")
+
+                    if fileWorkspace.selected == nil, let window {
+                        AgentForkMenu(
+                            sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
+                            unavailableReason: agentForkUnavailableReason,
+                            sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes)
+                        ) { usingWorktree in
+                            creationSheetIsPresented = true
+                            agentForkConfiguration = forkConfiguration(window: window, usingWorktree: usingWorktree)
+                        }
+                        .disabled(isCreatingWindow)
+
+                        Button {
+                            renameWindowText = window.windowName
+                            renamingWindow = window
+                        } label: {
+                            Label("Rename Window", symbol: .pencil)
+                        }
+                        .disabled(!relayClient.isHostConnected)
+                    }
+
+                    if fileWorkspace.selected == nil, let window, sessionWindows.count > 1 {
+                        Divider()
+
+                        Button(role: .destructive) {
+                            requestCloseWindow(window)
+                        } label: {
+                            Label("Close Window", symbol: .rectangleBadgeMinus)
+                        }
+                        .disabled(!relayClient.isHostConnected)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(navigationTitle)
+                            .fontWeight(.semibold)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Symbols.chevronDown.image
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    // Cap the centered title so a long one truncates instead
+                    // of bleeding behind the bar buttons (#600).
+                    .frame(maxWidth: principalTitleMaxWidth)
+                }
+            }
+            if fileWorkspace.selected == nil, settings.terminalKeyboardControlPosition == .topRight {
+                ToolbarItem(placement: .topBarTrailing) {
+                    TerminalVoiceInputButton(
+                        isDisabled: !relayClient.isHostConnected || activePaneId == nil,
+                        contextProvider: activeVoiceInputContext,
+                        sendKeys: sendVoiceKeys
+                    )
+                    .id(activePhraseContext.target)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isKeyboardActive.toggle()
+                    } label: {
+                        Label(
+                            isKeyboardActive ? "Hide Keyboard" : "Show Keyboard",
+                            symbol: isKeyboardActive ? .keyboardChevronCompactDown : .keyboard
+                        )
+                    }
+                    .disabled(!relayClient.isHostConnected || activePaneId == nil)
+                }
+            }
+
+            if fileWorkspace.selected == nil, window != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        activeCopyAction?()
+                    } label: {
+                        Label("Copy Terminal Text", symbol: .docOnClipboard)
+                    }
+                    .disabled(activeCopyAction == nil)
+                }
+            }
+
+            if fileWorkspace.selected == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ImageUploadToolbarButton(
+                        paneId: activePaneId,
+                        relayClient: relayClient
+                    )
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: resizeWindowToFit) {
+                        Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
+                    }
+                    .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
+                    .accessibilityHint("Changes the window size on the Host and all Viewers")
+                    .accessibilityIdentifier("terminal-fit-to-screen")
+                }
+            }
+
+            if fileWorkspace.selected == nil, let activeService, activeService.session != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            let newValue = !activeService.isYoloModeEnabled
+                            Task {
+                                await activeService.sendCommand(.setYoloMode(enabled: newValue))
+                            }
+                        } label: {
+                            Label(
+                                activeService.isYoloModeEnabled ? "Disable Yolo Mode" : "Enable Yolo Mode",
+                                symbol: .bolt
+                            )
+                        }
+
+                        Button {
+                            showSessionInfo = true
+                        } label: {
+                            Label("Session Info", symbol: .infoCircle)
+                        }
+                        .tint(nil)
+                    } label: {
+                        Label("Commands", symbol: .ellipsisCircle)
+                    }
+                    .tint(activeService.isYoloModeEnabled ? .red : nil)
+                    .popover(isPresented: $showSessionInfo) {
+                        sessionInfoPopover
+                    }
                 }
             }
         }

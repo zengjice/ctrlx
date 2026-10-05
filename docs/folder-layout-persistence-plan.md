@@ -296,10 +296,11 @@ local and remote records — distinguished by the `host` field:
   (`LayoutFolderKey.canonicalizeRemote`: strip a trailing slash, *no* `~` /
   symlink resolution) — a remote path lives on the host's disk, so resolving it
   against the *viewer's* filesystem would be wrong.
-- **Browser-only.** Remote file browsing doesn't exist yet, so remote
-  persistence covers **browser tabs + split arrangement + selection** only. The
-  snapshot's `fileTabs` come out empty (the mapper already tolerates that) and
-  there is no `FileBrowserState` to seed.
+- **Files and browser tabs.** Remote persistence now covers Host-backed
+  directory tabs, browser tabs, split arrangement and selection.
+  `SavedFileTab.browser` stores independent directory state; legacy local-editor
+  tabs remain excluded. No remote path is resolved on the Viewer's filesystem.
+  See `file-browser.md` for transport, limits and iOS workspace persistence.
 - **Same birth/save invariant (§4.1).** Seeding happens once per remote session
   while its workbench is empty (`seedRemoteLayoutIfNeeded`); auto-save runs on
   the same 2 s cadence (`persistChangedRemoteLayouts`). Bookkeeping
@@ -379,8 +380,8 @@ Pruning + edge cases.
   Syncing a viewer's arranged layout back to the relay/host or to other viewers
   would need a new relay message type (today `CommandType` has no "set layout"
   verb) plus cross-viewer conflict handling. Tracked separately if ever needed.
-- **Remote file tabs** — blocked on remote file browsing not existing yet; until
-  then remote persistence is browser-tabs-only (§4.8).
+- **Remote file tabs** — Host-backed directory tabs participate in private
+  Viewer layouts (§4.8); editing and large-file transfer remain out of scope.
 - **Folder re-key on mid-life `cd`** — see §4.6.
 
 ## 8. Open questions

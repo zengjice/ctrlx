@@ -1,4 +1,5 @@
 #if os(macOS)
+    import CtrlxCommon
     import CtrlxNetworking
     import Foundation
 
@@ -103,9 +104,11 @@
             windowIndexForId: (String) -> Int?
         ) -> SavedFolderLayout {
             // Deleted tabs reference files that no longer exist — don't persist them.
-            let liveFileTabs = tabs.openFileTabs.filter { !$0.isDeleted }
+            let liveFileTabs = tabs.openFileTabs.filter {
+                !$0.isDeleted && (!$0.isDirectory || tabs.directoryTabs[$0.id]?.snapshot != nil)
+            }
             let fileTabs = liveFileTabs.map {
-                SavedFileTab(id: $0.id, path: $0.path, directoryPath: $0.directoryPath)
+                SavedFileTab(id: $0.id, path: $0.path, directoryPath: $0.directoryPath, browser: tabs.directoryTabs[$0.id]?.snapshot)
             }
             let browserTabs = tabs.openBrowserTabs.filter { !$0.isAgentBrowser }.map { tab in
                 SavedBrowserTab(
@@ -161,10 +164,15 @@
         /// permanent half-width terminal after restore.
         static func viewerPrivateLayout(from layout: SavedFolderLayout) -> SavedFolderLayout {
             let browserIds = Set(layout.browserTabs.map(\.id))
+            let files = layout.fileTabs.filter { $0.browser != nil }
+            let fileIDs = Set(files.map(\.id))
 
             func validBrowserRef(_ ref: SavedTabRef) -> SavedTabRef? {
-                guard case let .browser(id) = ref, browserIds.contains(id) else { return nil }
-                return ref
+                switch ref {
+                case let .browser(id) where browserIds.contains(id): return ref
+                case let .file(id) where fileIDs.contains(id): return ref
+                default: return nil
+                }
             }
 
             let rightSide = layout.rightSide.compactMap(validBrowserRef)
@@ -178,6 +186,7 @@
 
             return SavedFolderLayout(
                 schemaVersion: layout.schemaVersion,
+                fileTabs: files,
                 browserTabs: layout.browserTabs,
                 tabOrder: layout.tabOrder.compactMap(validBrowserRef),
                 rightSide: rightSide,
@@ -209,8 +218,11 @@
         ) {
             // File tabs — ids preserved so SavedTabRef.file references stay valid.
             tabs.openFileTabs = layout.fileTabs.map {
-                OpenFileTab(id: $0.id, path: $0.path, directoryPath: $0.directoryPath)
+                OpenFileTab(id: $0.id, path: $0.path, directoryPath: $0.directoryPath, isDirectory: $0.browser != nil)
             }
+            tabs.directoryTabs = Dictionary(uniqueKeysWithValues: layout.fileTabs.compactMap { saved in
+                saved.browser.map { (saved.id, FileBrowserTab(snapshot: $0)) }
+            })
 
             // Browser tabs — rebuild the value type and its live state.
             var restoredBrowserTabs: [BrowserTab] = []

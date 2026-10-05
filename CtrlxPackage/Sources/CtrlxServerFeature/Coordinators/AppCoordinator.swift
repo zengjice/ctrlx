@@ -3111,6 +3111,15 @@
                 if case let .createSessionDirectory(spec) = command.command {
                     return await SessionDirectoryResolver.respond(to: command, request: spec)
                 }
+                if case let .browseFiles(spec) = command.command {
+                    do {
+                        let source = FileBrowserSource.local(paneID: command.paneId, tmux: tmux, windows: winManager)
+                        let response = try await source.request(spec.operation)
+                        return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
+                    } catch {
+                        return .failure(for: command.id, error: error.localizedDescription)
+                    }
+                }
                 // Handle stream commands
                 if case let .startTerminalStream(spec) = command.command {
                     return await Self.handleStartStream(
@@ -3488,7 +3497,8 @@
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
                     supportsTerminalPaste: true,
-                    supportsTerminalFit: true
+                    supportsTerminalFit: true,
+                    supportsFileBrowsing: true
                 )
             }
 

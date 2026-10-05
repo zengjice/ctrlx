@@ -153,6 +153,7 @@ final public class ConnectedViewer: Identifiable {
     /// Serial chain for input commands (keystrokes, raw input, clipboard paste).
     /// Each new command awaits the previous one to preserve WebSocket ordering.
     private var pendingInputCommand: Task<Void, Never>?
+    @ObservationIgnored private let fileRequests = FileBrowserCommandQueue()
 
     /// Serial chain for outbound encrypted messages. Encrypted sends have multiple
     /// suspension points (E2EE check, encrypt, WebSocket send), so concurrent
@@ -761,6 +762,16 @@ final public class ConnectedViewer: Identifiable {
             }
 
         case let .command(command):
+            if case .browseFiles = command.command, let onCommand {
+                let generation = connectionGeneration.current
+                if !fileRequests.enqueue(command, execute: onCommand, reply: { [weak self] response in
+                    guard let self, self.connectionGeneration.isCurrent(generation) else { return }
+                    await self.sendEncrypted(.commandResponse(response))
+                }) {
+                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Too many file requests. Please retry.")))
+                }
+                return
+            }
             let logType = if case .pasteTerminalText = command.command { "pasteTerminalText" }
                 else { String(describing: command.command) }
             logger.info("Received command from viewer", metadata: ["type": "\(logType)"])
@@ -1164,6 +1175,7 @@ final public class ConnectedViewer: Identifiable {
     }
 
     private func invalidateConnectionWork() {
+        fileRequests.cancelAll()
         quickPhraseSync?.reset()
         connectionGeneration.invalidate()
         pendingInputCommand?.cancel()

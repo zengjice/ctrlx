@@ -53,19 +53,22 @@ struct OpenFileTab: Identifiable, Equatable {
     let directoryPath: String
     var isDeleted: Bool
     var origin: FileTabOrigin?
+    var isDirectory: Bool
 
     init(
         id: UUID = UUID(),
         path: String,
         directoryPath: String,
         isDeleted: Bool = false,
-        origin: FileTabOrigin? = nil
+        origin: FileTabOrigin? = nil,
+        isDirectory: Bool = false
     ) {
         self.id = id
         self.path = path
         self.directoryPath = directoryPath
         self.isDeleted = isDeleted
         self.origin = origin
+        self.isDirectory = isDirectory
     }
 
     var name: String {
@@ -285,9 +288,39 @@ final class FileBrowserState {
 final class SessionFileTabsState {
     /// Files opened as their own tabs via the "Open in New Tab" context menu.
     var openFileTabs: [OpenFileTab] = []
+    var directoryTabs: [UUID: FileBrowserTab] = [:]
+
+    func migrateLegacyExplorer(directory: String) {
+        guard tabOrder.contains(.fileExplorer) || rightSide.contains(.fileExplorer) else { return }
+        let browser = FileBrowserTab(path: directory)
+        directoryTabs[browser.id] = browser
+        openFileTabs.append(.init(id: browser.id, path: directory, directoryPath: directory, isDirectory: true))
+        tabOrder = tabOrder.map { $0 == .fileExplorer ? .file(browser.id) : $0 }
+        if rightSide.remove(.fileExplorer) != nil { rightSide.insert(.file(browser.id)) }
+        if selectedRight == .fileExplorer { selectedRight = .file(browser.id) }
+    }
     /// When non-nil, the content area shows this file tab instead of the tree
     /// or terminal. Refers to a tab on the *left* side when split is active.
     var selectedFileTabId: UUID?
+
+    /// Directory tabs own their content; only editor tabs need the legacy tree underneath.
+    func selectLeftFileTab(_ id: UUID, windowID: String, legacyExplorerWindows: inout Set<String>) {
+        if directoryTabs[id] != nil {
+            legacyExplorerWindows.remove(windowID)
+        } else {
+            legacyExplorerWindows.insert(windowID)
+        }
+        selectedFileTabId = id
+        selectedBrowserTabId = nil
+    }
+
+    func selectLeftTerminalWindow(_ stableID: String) -> Bool {
+        guard !rightSide.contains(.window(stableID)) else { return false }
+        selectedFileTabId = nil
+        selectedBrowserTabId = nil
+        return true
+    }
+
     /// Saved vertical scroll offset per open file tab. Lives here (not on
     /// `OpenFileTab` itself) so the `LiveFileContentView` can read/write the
     /// position via a stable binding while the tab struct stays a value type.
@@ -623,6 +656,7 @@ struct FileBrowserView: View {
         let dirPrefix = directoryPath + "/"
         for index in sessionTabs.openFileTabs.indices {
             let tab = sessionTabs.openFileTabs[index]
+            guard !tab.isDirectory else { continue }
             guard tab.path.hasPrefix(dirPrefix) else { continue }
             let shouldBeDeleted = !existingPaths.contains(tab.path)
             if tab.isDeleted != shouldBeDeleted {

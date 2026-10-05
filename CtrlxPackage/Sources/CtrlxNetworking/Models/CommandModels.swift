@@ -1068,6 +1068,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     /// Browse/complete directories without creating a session or reading files.
     case listSessionDirectories(ListSessionDirectories)
     case createSessionDirectory(CreateSessionDirectory)
+    case browseFiles(BrowseFiles)
     /// Resize a tmux pane
     case resizeTmuxPane(ResizeTmuxPane)
     /// Set the shared terminal-window layout for a tmux session
@@ -1340,6 +1341,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let directoryListing: SessionDirectoryListing?
     public let createdDirectory: String?
     public let forkPreparation: AgentForkPreparation?
+    public let fileBrowser: FileBrowserResponse?
 
     public init(
         commandId: UUID,
@@ -1349,7 +1351,8 @@ public struct CommandResponseMessage: Codable, Sendable {
         runningProcesses: [RunningProcessInfo]? = nil,
         directoryListing: SessionDirectoryListing? = nil,
         createdDirectory: String? = nil,
-        forkPreparation: AgentForkPreparation? = nil
+        forkPreparation: AgentForkPreparation? = nil,
+        fileBrowser: FileBrowserResponse? = nil
     ) {
         self.commandId = commandId
         self.success = success
@@ -1359,6 +1362,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.directoryListing = directoryListing
         self.createdDirectory = createdDirectory
         self.forkPreparation = forkPreparation
+        self.fileBrowser = fileBrowser
     }
 
     public static func success(for commandId: UUID, paneId: String? = nil) -> CommandResponseMessage {

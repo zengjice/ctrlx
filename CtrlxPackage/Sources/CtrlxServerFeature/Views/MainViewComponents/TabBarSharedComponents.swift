@@ -73,6 +73,7 @@ struct NewTabMenuButton: View {
     var isTerminalDisabled = false
     let onNewTerminal: () -> Void
     let onNewBrowser: () -> Void
+    var onNewFiles: (() -> Void)?
     @State private var presentedAgents: NewAgentTabConfiguration?
 
     var body: some View {
@@ -89,6 +90,10 @@ struct NewTabMenuButton: View {
                 Label("New Terminal", symbol: .terminal)
             }
             .disabled(isTerminalDisabled)
+            if let onNewFiles {
+                Button(action: onNewFiles) { Label("New Files", symbol: .folderBadgePlus) }
+                .disabled(isTerminalDisabled)
+            }
             Button {
                 onNewBrowser()
             } label: {

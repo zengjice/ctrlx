@@ -44,7 +44,7 @@ func macOnlyTargetDependencies(for target: String) -> [Target.Dependency] {
     #if os(macOS)
         switch target {
         case "CtrlxCommon":
-            return [.sfSymbolsMacro, .swiftTerm]
+            return [.sfSymbolsMacro, .swiftTerm, .textual]
         case "CtrlxFeature":
             return [.swiftTerm]
         case "CtrlxServerFeature":

@@ -4,6 +4,13 @@ Detailed documentation for Ctrlx services. Reference when modifying specific com
 
 ## macOS Services
 
+### FileBrowserClient / HostFileBrowser
+
+Dependency-injected, read-only Host filesystem operations for Mac Host, Mac Viewer
+and iOS Files tabs. `HostFileBrowser` is an independent I/O actor; per-connection
+`FileBrowserCommandQueue` keeps file requests outside the keyboard receive loop.
+See [Host-backed Files tabs](file-browser.md) for capabilities, bounds and tests.
+
 ### AppCoordinator (`CtrlxServerFeature/Coordinators/AppCoordinator.swift`)
 
 `@Observable @MainActor` central coordinator for all services.
