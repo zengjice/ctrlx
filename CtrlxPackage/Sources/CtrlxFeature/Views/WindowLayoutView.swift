@@ -35,6 +35,7 @@
         @State private var voiceInputContextProviders: [String: TerminalVoiceInputContextProvider] = [:]
         @State private var cursorNavigationCancellations: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
+        @State private var terminalCopyActions: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputRevision: UInt64 = 0
         @State private var quickActionPresentation = TerminalQuickActionPresentation()
 
@@ -304,13 +305,15 @@
                     }
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: resizeWindowToFit) {
-                        Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
+                if window != nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            activeCopyAction?()
+                        } label: {
+                            Label("Copy Terminal Text", symbol: .docOnClipboard)
+                        }
+                        .disabled(activeCopyAction == nil)
                     }
-                    .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
-                    .accessibilityHint("Changes the window size on the Host and all Viewers")
-                    .accessibilityIdentifier("terminal-fit-to-screen")
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -318,6 +321,15 @@
                         paneId: activePaneId,
                         relayClient: relayClient
                     )
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: resizeWindowToFit) {
+                        Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
+                    }
+                    .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
+                    .accessibilityHint("Changes the window size on the Host and all Viewers")
+                    .accessibilityIdentifier("terminal-fit-to-screen")
                 }
 
                 if let activeService, activeService.session != nil {
@@ -757,6 +769,11 @@
 
         // MARK: - Pane Terminal
 
+        private var activeCopyAction: (@MainActor () -> Void)? {
+            guard let activePaneId else { return nil }
+            return terminalCopyActions[activePaneId]
+        }
+
         private func paneTerminal(pane: PaneState, windowName: String) -> some View {
             LiveTerminalView(
                 paneId: pane.paneId,
@@ -774,7 +791,7 @@
                 isConnected: relayClient.isHostConnected,
                 hideNavigationBar: false,
                 showKeyboardButton: false,
-                showCopyButton: pane.paneId == activePaneId,
+                showCopyButton: false,
                 isActive: pane.paneId == activePaneId,
                 isInputSuspended: quickActionPresentation.suspendsTerminalInput,
                 parentKeyboardRequested: isKeyboardActive,
@@ -810,6 +827,9 @@
                 },
                 onTerminalInputReadinessChange: { readiness in
                     terminalInputReadiness[pane.paneId] = readiness
+                },
+                onCopyActionChange: { action in
+                    terminalCopyActions[pane.paneId] = action
                 },
                 onViewportGridChange: { grid in
                     if viewportGrids[pane.paneId] != grid {

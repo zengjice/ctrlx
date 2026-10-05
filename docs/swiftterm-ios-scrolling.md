@@ -755,8 +755,12 @@ follow wide characters; SwiftTerm's generic buffer export does not do that and w
 invisible NUL after Chinese or other double-width glyphs. Alternate-screen applications are
 read from the active alternate buffer rather than stale normal-buffer history.
 
-Only the selected pane contributes the toolbar action in a multi-pane layout. This avoids
-duplicated toolbar items and makes the copied buffer unambiguous. The sheet receives an
+The Window toolbar orders its controls as Copy, Images, Fit, then Agent commands
+(the last control is omitted for non-Agent windows). Each streaming pane supplies
+its existing copy action, and the Window invokes only the selected pane's action;
+panes no longer add their own toolbar Copy item in this layout. Standalone terminals
+retain their original Copy control. This avoids duplicated toolbar items and makes
+the copied buffer unambiguous. The sheet receives an
 immutable value: new terminal output continues normally but cannot move or invalidate the
 user's current selection.
 

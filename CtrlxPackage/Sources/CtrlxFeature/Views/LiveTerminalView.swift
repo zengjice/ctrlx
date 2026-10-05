@@ -80,6 +80,8 @@
         /// Lets a parent-owned command menu fail closed while this pane is
         /// bootstrapping or reconnecting, without reading terminal pixels.
         let onTerminalInputReadinessChange: @MainActor ((@MainActor () -> Bool)?) -> Void
+        /// Parent toolbars can place Copy without moving the pane-owned snapshot sheet.
+        let onCopyActionChange: @MainActor ((@MainActor () -> Void)?) -> Void
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
         let onTerminalPaste: @MainActor (String) -> Void
 
@@ -137,6 +139,7 @@
             onCursorNavigationCancellationChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
             onExternalInputSenderChange: @escaping @MainActor ((@MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool)?) -> Void = { _ in },
             onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in },
+            onCopyActionChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
             onViewportGridChange: @escaping @MainActor (TerminalViewportSizing.Grid?) -> Void = { _ in }
         ) {
             self.paneId = paneId
@@ -162,6 +165,7 @@
             self.onCursorNavigationCancellationChange = onCursorNavigationCancellationChange
             self.onExternalInputSenderChange = onExternalInputSenderChange
             self.onTerminalInputReadinessChange = onTerminalInputReadinessChange
+            self.onCopyActionChange = onCopyActionChange
             self.onViewportGridChange = onViewportGridChange
             self.onTerminalPaste = onTerminalPaste
             self.coordinator = StreamCoordinator(
@@ -288,6 +292,7 @@
                 await synchronizeStreamingWithConnection()
             }
             .onAppear {
+                onCopyActionChange(coordinator.streamState == .streaming ? presentTextSnapshot : nil)
                 let coordinator = coordinator
                 onVoiceInputContextProviderChange { [weak coordinator] in
                     coordinator?.voiceInputContext()
@@ -312,6 +317,7 @@
                 onCursorNavigationCancellationChange(nil)
                 onExternalInputSenderChange(nil)
                 onTerminalInputReadinessChange(nil)
+                onCopyActionChange(nil)
                 coordinator.cancelPendingKeys()
                 Task { await stopStreaming() }
             }
@@ -321,6 +327,7 @@
                 coordinator.terminalState?.scrollToBottom?()
             }
             .onChange(of: coordinator.streamState) { _, newState in
+                onCopyActionChange(newState == .streaming ? presentTextSnapshot : nil)
                 if
                     newState == .ended,
                     coordinator.shouldRetryUnexpectedEnd(isConnected: isConnected) {
