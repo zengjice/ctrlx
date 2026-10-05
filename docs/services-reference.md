@@ -552,6 +552,12 @@ New Terminal remains a shell in the Host's home. Missing wire flags decode as
 `false` for older viewers. Update both the launching client and the Host for
 the new flow/strict validation; the opaque Relay requires no update.
 
+iOS New Terminal uses `session` as its default session name. On upgrade, a
+one-time settings migration replaces the old saved default `claude` with
+`session`, preserving other saved names and leaving existing tmux sessions
+untouched. After migration, all explicit name changes are preserved, including
+`claude`. This naming fix requires only an iOS update.
+
 Directory browsing uses `ListSessionDirectories` / the optional
 `CommandResponseMessage.directoryListing` over the existing encrypted command
 channel, not a shell command or a recursive filesystem scan. Both local and
