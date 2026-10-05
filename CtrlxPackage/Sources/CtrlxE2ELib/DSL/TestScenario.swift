@@ -186,6 +186,8 @@ public enum TestStep: Sendable {
     case iosType(text: String)
     /// Swipe left on an iOS UI element
     case iosSwipeLeft(ElementQuery)
+    /// Swipe right on an iOS UI element to reveal leading row actions
+    case iosSwipeRight(ElementQuery)
     /// Perform a swipe gesture between two raw simulator coordinates. Useful
     /// for testing pan-driven UI like terminal scrolling where the gesture
     /// direction and distance matter, not the targeted element.

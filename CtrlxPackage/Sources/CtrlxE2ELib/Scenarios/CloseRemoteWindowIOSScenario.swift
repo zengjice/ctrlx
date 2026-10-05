@@ -3,7 +3,7 @@ import Foundation
 /// E2E scenario: Close remote window/session from iOS viewer
 ///
 /// Verifies that the iOS remote viewer can close tmux windows and sessions
-/// on the host via the window switcher and session-list context menus:
+/// on the host via the window switcher and session-list swipe actions:
 /// 1. Create a session with two named windows, navigate to it on iOS
 /// 2. Close an idle window via the title menu — should close without confirmation
 /// 3. Run a process in the remaining window, try to close the session
@@ -81,10 +81,13 @@ public enum CloseRemoteWindowIOSScenario {
 
         TestStep.iosTap(.label("Sessions"))
         TestStep.iosWaitForElement(.labelContains("ios-close"), timeout: 10)
+        // Long-press no longer opens session actions or competes with reordering.
         TestStep.iosLongPress(.labelContains("ios-close"), duration: 1)
+        TestStep.iosWaitForElementToDisappear(.label("Rename Session"), timeout: 3)
+        TestStep.iosSwipeRight(.labelContains("ios-close"))
         TestStep.wait(seconds: 1)
-        TestStep.iosWaitForElement(.label("Rename Session"), timeout: 5)
-        TestStep.iosTap(.label("Close Session"))
+        TestStep.iosWaitForElement(.identifier("rename-session"), timeout: 5)
+        TestStep.iosTap(.identifier("close-session"))
 
         // Confirmation alert should appear with process info
         TestStep.iosWaitForElement(.labelContains("Close Session"), timeout: 10)
@@ -93,8 +96,8 @@ public enum CloseRemoteWindowIOSScenario {
 
         TestStep.iosTap(.label("Cancel"))
         TestStep.iosWaitForElement(.labelContains("ios-close"), timeout: 10)
-        TestStep.iosLongPress(.labelContains("ios-close"), duration: 1)
-        TestStep.iosTap(.label("Close Session"))
+        TestStep.iosSwipeRight(.labelContains("ios-close"))
+        TestStep.iosTap(.identifier("close-session"))
         TestStep.iosWaitForElement(.labelContains("sleep"), timeout: 10)
 
         // 6. Confirm by tapping "Close Anyway"
@@ -110,8 +113,9 @@ public enum CloseRemoteWindowIOSScenario {
         TestStep.tmuxCreateSession(name: "ios-close-idle", width: 120, height: 40)
         Shortcut.tmuxClearAndSetPrompt(target: "ios-close-idle:0")
         TestStep.iosWaitForElement(.labelContains("ios-close-idle"), timeout: 20)
-        TestStep.iosLongPress(.labelContains("ios-close-idle"), duration: 1)
-        TestStep.iosTap(.label("Close Session"))
+        TestStep.iosSwipeRight(.labelContains("ios-close-idle"))
+        TestStep.iosWaitForElement(.identifier("rename-session"), timeout: 5)
+        TestStep.iosTap(.identifier("close-session"))
         TestStep.iosWaitForElementToDisappear(.labelContains("ios-close-idle"), timeout: 15)
     }
 }

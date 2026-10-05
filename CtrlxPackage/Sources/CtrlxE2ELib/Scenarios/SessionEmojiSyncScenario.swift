@@ -246,7 +246,7 @@ public enum SessionEmojiSyncScenario {
         // ── Phase 7: iOS viewer changes Bravo ✅ → 😍 via emoji picker ───
         //
         // iOS presents the CtrlxEmojiPicker as a half-detent sheet. We open
-        // it via long-press → "Emoji: ✅", wait for the picker to render,
+        // it via swipe right → More → "Emoji: ✅", wait for the picker to render,
         // and tap a glyph that's already visible on the initial Smileys
         // page so we don't have to drive the picker's search field
         // (XCUITest taps land on the field but iOS doesn't reliably grant
@@ -257,7 +257,8 @@ public enum SessionEmojiSyncScenario {
 
         TestStep.log("iOS viewer changing BravoProject → 😍 via emoji picker")
 
-        TestStep.iosLongPress(.label("BravoProject"), duration: 1)
+        TestStep.iosSwipeRight(.label("BravoProject"))
+        TestStep.iosTap(.identifier("session-more-actions"))
         TestStep.wait(seconds: 1)
         TestStep.iosTap(.label("Emoji: ✅"))
         TestStep.iosWaitForElement(.label("😍"), timeout: 5)
@@ -279,9 +280,9 @@ public enum SessionEmojiSyncScenario {
         TestStep.macScreenshot(label: "viewer-after-ios-set", instance: 1)
         TestStep.iosScreenshot(label: "ios-after-ios-set")
 
-        // ── Phase 8: iOS viewer clears Alpha 🚀 via long-press menu ──────
+        // ── Phase 8: iOS viewer clears Alpha 🚀 via swipe actions ──────
         //
-        // SwiftUI `.contextMenu { }` opens on a sustained press on iOS.
+        // Swipe right and open More on the session row.
         // Tapping "Clear Emoji" sends a `setSessionEmoji(nil)` command back
         // through the relay to the host's `MirrorWindowManager`, which
         // writes tmux and pushes session state to every viewer. This
@@ -292,9 +293,10 @@ public enum SessionEmojiSyncScenario {
         // specific emoji typing concerns (iOS hardware keyboard input via
         // AppleScript can be flaky for multi-codepoint glyphs).
 
-        TestStep.log("iOS viewer clearing AlphaProject's emoji via long-press")
+        TestStep.log("iOS viewer clearing AlphaProject's emoji via swipe actions")
 
-        TestStep.iosLongPress(.label("AlphaProject"), duration: 1)
+        TestStep.iosSwipeRight(.label("AlphaProject"))
+        TestStep.iosTap(.identifier("session-more-actions"))
         TestStep.wait(seconds: 1)
         TestStep.iosTap(.label("Clear Emoji"))
 

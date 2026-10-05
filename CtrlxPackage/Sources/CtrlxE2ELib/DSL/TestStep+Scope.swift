@@ -31,6 +31,7 @@ public extension TestStep {
              .iosTapCoordinate,
              .iosType,
              .iosSwipeLeft,
+             .iosSwipeRight,
              .iosSwipe,
              .iosWaitForElementToDisappear,
              .iosScreenshot,

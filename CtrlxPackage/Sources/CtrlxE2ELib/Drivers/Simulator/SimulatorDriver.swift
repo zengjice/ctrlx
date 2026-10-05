@@ -482,6 +482,16 @@ public actor SimulatorDriver {
         )
     }
 
+    /// Swipe right on a UI element via the XCTest runner's touch synthesis.
+    public func swipeRight(on element: UIElement) async throws {
+        let center = element.center
+        let swipeDistance: CGFloat = max(element.frame.width * 0.6, 200)
+        try await SimulatorHTTPClient.swipe(
+            startX: max(center.x - swipeDistance / 2, 10), startY: center.y,
+            endX: center.x + swipeDistance / 2, endY: center.y
+        )
+    }
+
     /// Swipe between two raw simulator coordinates via the XCTest runner's
     /// touch synthesis. Direction and distance are fully controlled by the
     /// caller — useful for testing pan-driven UI like terminal scrolling

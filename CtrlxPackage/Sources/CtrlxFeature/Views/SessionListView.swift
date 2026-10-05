@@ -553,40 +553,16 @@
                 }
             }
             .accessibilityValue(cliSessionState?.statusLabel ?? claudePaneInSession?.agentSession?.statusLabel ?? "")
-            .modifier(DescriptionEditingModifier(
-                sessionName: session.sessionName,
-                currentDescription: session.customDescription,
-                currentEmoji: session.customEmoji,
+            .modifier(SessionSwipeActionsModifier(
+                session: session,
                 isDisabled: connection?.isHostConnected != true,
+                isClosingSession: isClosingSession,
                 onRename: onRename,
                 onSetDescription: onSetDescription,
                 onSetEmoji: onSetEmoji,
-                additionalMenu: {
-                    ColorContextMenuButtons(
-                        currentColor: session.customColor,
-                        isDisabled: connection?.isHostConnected != true
-                    ) { newColor in
-                        onSetColor(session.sessionName, newColor)
-                    }
-
-                    StateContextMenuButtons(
-                        currentState: session.displayedState,
-                        hasOverride: session.cliSessionState != nil,
-                        isDisabled: connection?.isHostConnected != true
-                    ) { newState in
-                        onSetState(session.sessionName, newState)
-                    }
-
-                    Divider()
-
-                    Button(role: .destructive) {
-                        onClose(session.sessionName)
-                    } label: {
-                        Label("Close Session", symbol: .rectangleStackBadgeMinus)
-                    }
-                    .disabled(connection?.isHostConnected != true || isClosingSession)
-                    .accessibilityIdentifier("close-session")
-                }
+                onSetColor: onSetColor,
+                onSetState: onSetState,
+                onClose: onClose
             ))
             .listRowInsets(
                 EdgeInsets(top: 15, leading: 0, bottom: 0, trailing: 16)

@@ -230,16 +230,15 @@ public enum SessionColorSyncScenario {
 
         // ── Phase 7: iOS viewer changes Alpha Red → Pink ────────────────
         //
-        // SwiftUI `.contextMenu { }` opens on a sustained press on iOS.
-        // The picker inside is a SwiftUI `Menu`, so tapping the parent
-        // submenu label slides in a second sheet of items. Driving the
+        // Swipe right, then open More and its color submenu. Driving the
         // viewer-initiated SetSessionColor command this way exercises
         // the iOS-to-host command path the host- and Mac-viewer-driven
         // phases above don't touch.
 
-        TestStep.log("iOS viewer changing AlphaProject → Pink via long-press context menu")
+        TestStep.log("iOS viewer changing AlphaProject → Pink via swipe actions")
 
-        TestStep.iosLongPress(.label("AlphaProject"), duration: 1)
+        TestStep.iosSwipeRight(.label("AlphaProject"))
+        TestStep.iosTap(.identifier("session-more-actions"))
         TestStep.wait(seconds: 1)
         // Parent label shows "Color: Red" once a colour is already set.
         TestStep.iosTap(.labelContains("Color: Red"))
