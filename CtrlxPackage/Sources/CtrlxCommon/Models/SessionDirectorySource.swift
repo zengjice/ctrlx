@@ -1,25 +1,31 @@
 import CtrlxNetworking
 import Foundation
 
-/// The form knows only its target and a read-only lookup, not local filesystem
-/// APIs or connection routing. Each remote source is bound to one Host.
+/// The form knows only its target and directory operations, not local
+/// filesystem APIs or connection routing. Each source is bound to one Host.
 @MainActor
 public struct SessionDirectorySource {
     public let id: String
     public let unavailableReason: String?
+    public let creationUnavailableReason: String?
+    public let create: (@MainActor (CreateSessionDirectory) async throws -> String)?
     public let list: @MainActor (ListSessionDirectories) async throws -> SessionDirectoryListing
 
     public init(
         id: String,
         unavailableReason: String? = nil,
+        creationUnavailableReason: String? = nil,
+        create: (@MainActor (CreateSessionDirectory) async throws -> String)? = nil,
         list: @escaping @MainActor (ListSessionDirectories) async throws -> SessionDirectoryListing
     ) {
         self.id = id
         self.unavailableReason = unavailableReason
+        self.creationUnavailableReason = creationUnavailableReason ?? (create == nil ? "Folder creation is unavailable from this Host." : nil)
+        self.create = create
         self.list = list
     }
 
-    public static func remote(hostID: String, connection: ViewerConnection?, supportsBrowsing: Bool) -> Self {
+    public static func remote(hostID: String, connection: ViewerConnection?, supportsBrowsing: Bool, supportsCreation: Bool = false) -> Self {
         let reason: String? = if connection?.isHostConnected != true {
             "Host is offline. Reconnect to browse its directories."
         } else if !supportsBrowsing {
@@ -27,7 +33,19 @@ public struct SessionDirectorySource {
         } else {
             nil
         }
-        return Self(id: hostID, unavailableReason: reason) { request in
+        let creationReason = creationUnavailableReason(isConnected: connection?.isHostConnected == true, supportsCreation: supportsCreation)
+        return Self(id: hostID, unavailableReason: reason, creationUnavailableReason: creationReason, create: { request in
+            if let creationReason { throw LookupError.unavailable(creationReason) }
+            guard let connection, connection.isHostConnected else {
+                throw LookupError.unavailable("Host is offline. Reconnect to create folders.")
+            }
+            try Task.checkCancellation()
+            let response = try await connection.sendCommand(request, paneId: "", timeout: 10).get()
+            guard let directory = response.createdDirectory else {
+                throw LookupError.unavailable("The Host did not return the created directory. Refresh before retrying.")
+            }
+            return directory
+        }) { request in
             if let reason { throw LookupError.unavailable(reason) }
             guard let connection, connection.isHostConnected else {
                 throw LookupError.unavailable("Host is offline. Reconnect to browse its directories.")
@@ -40,6 +58,12 @@ public struct SessionDirectorySource {
             }
             return listing
         }
+    }
+
+    static func creationUnavailableReason(isConnected: Bool, supportsCreation: Bool) -> String? {
+        if !isConnected { return "Host is offline. Reconnect to create folders." }
+        if !supportsCreation { return "Update this Host to create folders." }
+        return nil
     }
 
     enum LookupError: LocalizedError {

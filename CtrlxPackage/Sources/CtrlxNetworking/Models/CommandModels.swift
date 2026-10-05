@@ -1067,6 +1067,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case createTmuxSession(CreateTmuxSession)
     /// Browse/complete directories without creating a session or reading files.
     case listSessionDirectories(ListSessionDirectories)
+    case createSessionDirectory(CreateSessionDirectory)
     /// Resize a tmux pane
     case resizeTmuxPane(ResizeTmuxPane)
     /// Set the shared terminal-window layout for a tmux session
@@ -1337,6 +1338,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     /// Running processes returned by `checkRunningProcesses` command
     public let runningProcesses: [RunningProcessInfo]?
     public let directoryListing: SessionDirectoryListing?
+    public let createdDirectory: String?
     public let forkPreparation: AgentForkPreparation?
 
     public init(
@@ -1346,6 +1348,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         paneId: String? = nil,
         runningProcesses: [RunningProcessInfo]? = nil,
         directoryListing: SessionDirectoryListing? = nil,
+        createdDirectory: String? = nil,
         forkPreparation: AgentForkPreparation? = nil
     ) {
         self.commandId = commandId
@@ -1354,6 +1357,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.paneId = paneId
         self.runningProcesses = runningProcesses
         self.directoryListing = directoryListing
+        self.createdDirectory = createdDirectory
         self.forkPreparation = forkPreparation
     }
 

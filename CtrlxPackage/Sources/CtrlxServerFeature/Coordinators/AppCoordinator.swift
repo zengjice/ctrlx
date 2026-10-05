@@ -3108,6 +3108,9 @@
                 if case let .listSessionDirectories(spec) = command.command {
                     return await SessionDirectoryResolver.respond(to: command, request: spec)
                 }
+                if case let .createSessionDirectory(spec) = command.command {
+                    return await SessionDirectoryResolver.respond(to: command, request: spec)
+                }
                 // Handle stream commands
                 if case let .startTerminalStream(spec) = command.command {
                     return await Self.handleStartStream(
@@ -3481,6 +3484,7 @@
                     sidebarSortMode: await self?.settings.sidebarSortMode.rawValue,
                     sharedTerminalLayouts: sharedTerminalLayouts,
                     supportsDirectoryBrowsing: true,
+                    supportsDirectoryCreation: true,
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
                     supportsTerminalPaste: true,

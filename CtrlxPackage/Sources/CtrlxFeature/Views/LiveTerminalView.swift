@@ -226,6 +226,7 @@
             .modifier(TerminalQuickActionOverlay(
                 presentation: $quickActionPresentation,
                 store: settings.quickPhrases,
+                customButtonStore: settings.customButtons,
                 phraseContext: phraseContext,
                 sendPhrase: sendPhrase
             ))
@@ -238,7 +239,9 @@
                         contextProvider: terminalVoiceInputContext,
                         sendKeys: sendTerminalKeys,
                         phraseContext: phraseContext,
-                        quickActionPresentation: $quickActionPresentation
+                        quickActionPresentation: $quickActionPresentation,
+                        customButtonStore: settings.customButtons,
+                        sendCustomButton: sendCustomButton
                     )
                 }
             }
@@ -569,6 +572,19 @@
             onTerminalInputQueued()
             coordinator.enqueueKeySend(keys: request.phrase.keys, relayClient: relayClient, immediately: true) {
                 onTerminalInput(request.phrase.keys)
+            }
+            return true
+        }
+
+        private func sendCustomButton(_ request: TerminalCustomButtonRequest) -> Bool {
+            guard !isInputSuspended, !quickActionPresentation.suspendsTerminalInput,
+                  request.isValid(in: phraseContext, savedButtons: settings.customButtons.buttons) else { return false }
+            coordinator.terminalState?.prepareForExternalInput?()
+            let keys = request.button.action.keys
+            phraseInputRevision &+= 1
+            onTerminalInputQueued()
+            coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: true) {
+                onTerminalInput(keys)
             }
             return true
         }

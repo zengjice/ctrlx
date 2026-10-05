@@ -104,6 +104,7 @@ public actor TmuxCommandExecutor {
 
             case .startTerminalStream,
                  .listSessionDirectories,
+                 .createSessionDirectory,
                  .stopTerminalStream,
                  .createTmuxSession,
                  .createTmuxWindow,

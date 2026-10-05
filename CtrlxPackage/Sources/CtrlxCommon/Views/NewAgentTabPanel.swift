@@ -147,6 +147,7 @@ private struct AgentTabLaunchCard: View {
     let onStart: (String) -> Void
     @State private var directory: String
     @State private var showsDirectories = false
+    @State private var isCreatingDirectory = false
 
     init(agent: SessionLaunchAgent, initialDirectory: String, directorySource: SessionDirectorySource,
          isDisabled: Bool, isLaunching: Bool, onStart: @escaping (String) -> Void) {
@@ -172,14 +173,17 @@ private struct AgentTabLaunchCard: View {
                 .accessibilityIdentifier("new-agent-directory-\(agent.id)")
             DisclosureGroup("Choose Directory…", isExpanded: $showsDirectories) {
                 if showsDirectories {
-                    SessionDirectoryBrowser(path: $directory, source: directorySource)
+                    SessionDirectoryBrowser(path: $directory, source: directorySource, isCreatingDirectory: $isCreatingDirectory)
                         .padding(.top, 8)
                 }
             }
             HStack {
                 Spacer()
                 if isLaunching { ProgressView().controlSize(.small) }
-                Button("Start \(agent.name)") { onStart(directory) }
+                Button("Start \(agent.name)") {
+                    guard !isCreatingDirectory else { return }
+                    onStart(directory)
+                }
                     .buttonStyle(.borderedProminent)
                     .disabled(!SessionDirectoryPath.isValid(directory))
                     .accessibilityIdentifier("new-agent-start-\(agent.id)")
@@ -187,7 +191,7 @@ private struct AgentTabLaunchCard: View {
         }
         .padding(12)
         .background(.quaternary, in: .rect(cornerRadius: 10))
-        .disabled(isDisabled)
+        .disabled(isDisabled || isCreatingDirectory)
         .accessibilityIdentifier("new-agent-card-\(agent.id)")
     }
 }

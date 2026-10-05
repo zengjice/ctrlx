@@ -1,5 +1,6 @@
 import CtrlxCommon
 import CtrlxNetworking
+import Darwin
 import Dependencies
 import DependenciesMacros
 import Foundation
@@ -8,12 +9,14 @@ import Foundation
 struct SessionDirectoryClient: Sendable {
     var resolve: @Sendable (_ path: String) async throws -> String
     var list: @Sendable (_ request: ListSessionDirectories) async throws -> SessionDirectoryListing
+    var create: @Sendable (_ request: CreateSessionDirectory) async throws -> String
 }
 
 extension SessionDirectoryClient: DependencyKey {
     static let liveValue = Self(
         resolve: { try await SessionDirectoryResolver.shared.resolve($0) },
-        list: { try await SessionDirectoryResolver.shared.list($0) }
+        list: { try await SessionDirectoryResolver.shared.list($0) },
+        create: { try await SessionDirectoryResolver.shared.create($0) }
     )
 }
 
@@ -22,6 +25,32 @@ actor SessionDirectoryResolver {
     static let shared = SessionDirectoryResolver()
     static let maximumResults = 200
     static let maximumEntryBytes = 128 * 1024
+
+    func create(_ request: CreateSessionDirectory) throws -> String {
+        try Task.checkCancellation()
+        guard SessionDirectoryName.isValid(request.name) else { throw DirectoryError.invalidName }
+        guard request.parentDirectory.utf8.count <= 4096 else { throw DirectoryError.invalidPath }
+        let parent = try resolve(request.parentDirectory)
+        let directory = (parent as NSString).appendingPathComponent(request.name)
+        // mkdir is exclusive: an existing directory, file or symlink must fail.
+        // No shell, intermediate parents, or overwriting an existing item.
+        guard mkdir(directory, 0o777) == 0 else {
+            let code = errno
+            if code == EEXIST { throw DirectoryError.alreadyExists(request.name) }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: directory])
+        }
+        return directory
+    }
+
+    static func respond(to command: CommandMessage, request: CreateSessionDirectory) async -> CommandResponseMessage {
+        @Dependency(SessionDirectoryClient.self) var client
+        do {
+            let directory = try await client.create(request)
+            return CommandResponseMessage(commandId: command.id, success: true, createdDirectory: directory)
+        } catch {
+            return .failure(for: command.id, error: error.localizedDescription)
+        }
+    }
 
     func list(_ request: ListSessionDirectories) throws -> SessionDirectoryListing {
         try Task.checkCancellation()
@@ -118,14 +147,18 @@ actor SessionDirectoryResolver {
         return path
     }
 
-    enum DirectoryError: Error, LocalizedError {
+    enum DirectoryError: Error, LocalizedError, Equatable {
         case invalidPath
+        case invalidName
+        case alreadyExists(String)
         case notDirectory(String)
         case inaccessible(String)
 
         var errorDescription: String? {
             switch self {
             case .invalidPath: "Enter an absolute Host directory or ~/… without control characters."
+            case .invalidName: "Enter one folder name, without / or control characters."
+            case let .alreadyExists(name): "An item named \(name) already exists in this directory."
             case let .notDirectory(path): "Directory does not exist on the Host: \(path)"
             case let .inaccessible(path): "Directory is not accessible on the Host: \(path)"
             }

@@ -937,7 +937,7 @@
         case project(String) // project path as ID
     }
 
-    /// Sheet for selecting a Claude project to create a new session in
+    /// Sheet for launching a session from project history or a Host directory.
     struct ProjectPickerSheet: View {
         let host: PairedHost
         /// The currently selected item (shows spinner), nil if nothing selected yet
@@ -973,7 +973,7 @@
 
         var body: some View {
             NavigationStack {
-                List {
+                let pickerContent = List {
                     Section {
                         if showsDirectoryForm {
                             DirectorySessionForm(
@@ -981,7 +981,8 @@
                                 directorySource: .remote(
                                     hostID: host.id,
                                     connection: connectionManager.connection(for: host.id),
-                                    supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(host.id)
+                                    supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(host.id),
+                                    supportsCreation: sessionStore.hostsSupportingDirectoryCreation.contains(host.id)
                                 ),
                                 isCreating: isCreating,
                                 onStart: onSelect,
@@ -1101,10 +1102,19 @@
                         }
                     }
                 }
-                .searchable(text: $searchText, prompt: "Search projects")
-                .onSubmit(of: .search) {
-                    if !showsDirectoryForm && filteredProjects.count == 1 {
-                        onSelect(.project(filteredProjects[0]))
+                // Directory browsing owns its path field. Do not retain the
+                // project search controller (or its bottom toolbar) in that mode.
+                Group {
+                    if showsDirectoryForm {
+                        pickerContent
+                    } else {
+                        pickerContent
+                            .searchable(text: $searchText, prompt: "Search projects")
+                            .onSubmit(of: .search) {
+                                if filteredProjects.count == 1 {
+                                    onSelect(.project(filteredProjects[0]))
+                                }
+                            }
                     }
                 }
                 .navigationTitle("New Session on \(host.displayName)")
@@ -1118,7 +1128,7 @@
                     }
                 }
             }
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
         }
     }
 

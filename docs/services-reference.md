@@ -507,6 +507,25 @@ only a shortcut list, not an allowlist; a directory need not already appear
 there. No directories are
 created automatically. Do not add shell quotes around paths with spaces.
 
+On iOS, New Session uses a large system sheet for both project history and directory
+browsing, rather than starting at half height. Project search is present only in
+project-history mode; directory mode keeps its own path field without the unrelated
+search toolbar. Back returns to the project list with the search text preserved.
+Cancel and the system swipe-to-dismiss remain available; directory lookup and
+Agent launch behavior are unchanged.
+
+The iOS directory browser also offers **New Folder** beside Home/Up. It is
+enabled only for an exact, successfully listed directory on a Host advertising
+`supportsDirectoryCreation`; older Hosts show an update hint and receive no
+creation command. The name prompt displays the chosen parent. Creation is an
+acknowledged `CreateSessionDirectory` filesystem operation on the Host actor,
+not terminal input: it accepts one literal child name, creates no intermediate
+parents, and fails for existing files/directories/symlinks or insufficient
+permissions. Success enters the new directory without launching a session.
+Path navigation and Agent launch are disabled while creation is pending;
+late replies cannot redirect a different Host/path or a reopened form. Both
+iOS and the Host Mac need the update; the encrypted Relay remains unchanged.
+
 `AgentLaunchDefaults` makes Codex the initial choice on iOS, Mac local and Mac
 Viewer, and in Mac Agents settings. An explicit selection is preserved; when
 Codex is unavailable on that Host, the picker falls back to its first available

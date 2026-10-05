@@ -89,6 +89,7 @@
 
         /// Device-local phrase library, independent of sessions and agent plugins.
         let quickPhrases = QuickPhraseStore()
+        let customButtons = TerminalCustomButtonStore()
         @ObservationIgnored private var quickPhrasePairingsLoaded = false
 
         /// Unique device identifier (generated once and persisted)

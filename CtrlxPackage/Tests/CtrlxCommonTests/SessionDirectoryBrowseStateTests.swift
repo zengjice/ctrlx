@@ -67,5 +67,24 @@ struct SessionDirectoryCapabilityTests {
         await #expect(throws: SessionDirectorySource.LookupError.self) {
             try await source.list(.init(path: "~/"))
         }
+        await #expect(throws: SessionDirectorySource.LookupError.self) {
+            try await source.create?(.init(parentDirectory: "/Host", name: "new"))
+        }
+    }
+
+    @Test("Folder creation needs explicit capability and is cleared on downgrade/disconnect")
+    func creationCapabilities() {
+        let store = SessionStore()
+        store.handleStateUpdate(.init(pairId: "office", paneStates: [:], supportsDirectoryBrowsing: true, supportsDirectoryCreation: true))
+        store.handleStateUpdate(.init(pairId: "home", paneStates: [:], supportsDirectoryBrowsing: true))
+        #expect(store.hostsSupportingDirectoryCreation == ["office"])
+        store.handleStateUpdate(.init(pairId: "office", paneStates: [:], supportsDirectoryBrowsing: true))
+        #expect(store.hostsSupportingDirectoryCreation.isEmpty)
+        store.handleStateUpdate(.init(pairId: "home", paneStates: [:], supportsDirectoryCreation: true))
+        store.clearSessions(for: "home")
+        #expect(store.hostsSupportingDirectoryCreation.isEmpty)
+        #expect(SessionDirectorySource.creationUnavailableReason(isConnected: true, supportsCreation: false)?.contains("Update") == true)
+        #expect(SessionDirectorySource.creationUnavailableReason(isConnected: true, supportsCreation: true) == nil)
+        #expect(SessionDirectorySource.creationUnavailableReason(isConnected: false, supportsCreation: true)?.contains("offline") == true)
     }
 }

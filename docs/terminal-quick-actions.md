@@ -55,6 +55,29 @@ height across the live terminal. The animation never wraps the terminal or keybo
 fade only, and Reduce Transparency uses an opaque, legible surface. The phrase
 editor hides its Form background so it does not obscure the shared material.
 
+## iOS custom input buttons
+
+The first input row's horizontal scroll area ends with `$`, device-local custom
+buttons, then **Add Button** (`＋`). Send remains pinned outside the scroll area.
+Add Button opens the same in-page overlay, without a settings page. Choose a name
+and either single-line literal text or one special key (Tab, Home, End, Ctrl+C,
+etc.). **Send Return After Text** defaults off; when enabled it queues literal
+text, the existing host-side 200 ms pause and one Return. No action clears an
+existing terminal draft. Text cannot contain newlines or terminal controls.
+
+Tap a custom button to execute; long-press it to delete directly, without sending
+on release. Horizontal scrolling cancels the long press, and built-in buttons are
+not deletable. VoiceOver also offers Delete. Creation/deletion remain available
+offline, while execution uses the active pane's existing keyboard FIFO and the
+same connection, readiness, input-revision and blocking-form checks as phrases.
+The add editor suspends terminal input and returns the existing keyboard intent
+when closed, cancelled or saved. It has no nested navigation stack.
+
+The library is shared by all iOS windows, including ordinary shells, and persists
+under `terminalCustomButtons.v1`. It is independent of Quick Phrase Sync; this
+first version has no editing, reordering or synchronization, and requires no new
+Host or Relay command.
+
 ## Implementation boundaries
 
 ### Agent identity and command-panel availability

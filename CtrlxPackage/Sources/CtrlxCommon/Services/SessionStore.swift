@@ -48,6 +48,7 @@ final public class SessionStore {
     /// Home directory path for each host, keyed by pairId
     public private(set) var homeDirectoryByHost: [String: String] = [:]
     public private(set) var hostsSupportingDirectoryBrowsing: Set<String> = []
+    public private(set) var hostsSupportingDirectoryCreation: Set<String> = []
     public private(set) var hostsSupportingAgentWindowLaunch: Set<String> = []
     public private(set) var hostsSupportingAgentFork: Set<String> = []
 
@@ -296,6 +297,11 @@ final public class SessionStore {
         } else {
             hostsSupportingDirectoryBrowsing.remove(hostId)
         }
+        if state.supportsDirectoryCreation == true {
+            hostsSupportingDirectoryCreation.insert(hostId)
+        } else {
+            hostsSupportingDirectoryCreation.remove(hostId)
+        }
         if let usageOverview = state.usageOverview {
             usageOverviewByHost[hostId] = usageOverview
         } else {
@@ -338,6 +344,7 @@ final public class SessionStore {
         launchAgentsByHost.removeValue(forKey: hostId)
         homeDirectoryByHost.removeValue(forKey: hostId)
         hostsSupportingDirectoryBrowsing.remove(hostId)
+        hostsSupportingDirectoryCreation.remove(hostId)
         hostsSupportingAgentWindowLaunch.remove(hostId)
         hostsSupportingAgentFork.remove(hostId)
         usageOverviewByHost.removeValue(forKey: hostId)

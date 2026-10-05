@@ -179,6 +179,7 @@
             .modifier(TerminalQuickActionOverlay(
                 presentation: $quickActionPresentation,
                 store: settings.quickPhrases,
+                customButtonStore: settings.customButtons,
                 phraseContext: activePhraseContext,
                 sendPhrase: sendPhrase,
                 commandContext: activeAgentCommandContext,
@@ -194,6 +195,8 @@
                         sendKeys: sendVoiceKeys,
                         phraseContext: activePhraseContext,
                         quickActionPresentation: $quickActionPresentation,
+                        customButtonStore: settings.customButtons,
+                        sendCustomButton: sendCustomButton,
                         agentCommandContext: activeAgentCommandContext
                     )
                 }
@@ -498,7 +501,8 @@
                 agents: sessionStore.launchAgents(for: hostId),
                 directorySource: .remote(
                     hostID: hostId, connection: connectionManager.connection(for: hostId),
-                    supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(hostId)
+                    supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(hostId),
+                    supportsCreation: sessionStore.hostsSupportingDirectoryCreation.contains(hostId)
                 ),
                 unavailableReason: sessionStore.agentWindowLaunchUnavailableReason(
                     hostID: hostId, isConnected: relayClient.isHostConnected
@@ -1067,6 +1071,17 @@
                 observeTerminalInput(request.phrase.keys, paneId: paneId, windowName: windowName)
             }) else { return false }
             return true
+        }
+
+        private func sendCustomButton(_ request: TerminalCustomButtonRequest) -> Bool {
+            guard !quickActionPresentation.suspendsTerminalInput,
+                  request.isValid(in: activePhraseContext, savedButtons: settings.customButtons.buttons),
+                  let paneId = request.context.target.paneID else { return false }
+            let keys = request.button.action.keys
+            let windowName = window?.windowName ?? ""
+            return enqueueToolbarKeys(keys, paneId: paneId, immediately: true, onSent: {
+                observeTerminalInput(keys, paneId: paneId, windowName: windowName)
+            })
         }
 
         private var activeAgentCommandContext: AgentCommandContext? {
