@@ -1,6 +1,7 @@
 import CtrlxNetworking
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 /// Client-private navigation state. No file contents or paths are broadcast as session state.
 @MainActor @Observable
@@ -29,6 +30,7 @@ public final class FileBrowserTab: Identifiable {
     public private(set) var searchResults: FileBrowserSearchResults?
     public private(set) var preview: FileBrowserEntry?
     public private(set) var previewData: Data?
+    public private(set) var previewURL: URL?
     public private(set) var error: String?
     public private(set) var previewError: String?
     public private(set) var isLoading = false
@@ -62,6 +64,7 @@ public final class FileBrowserTab: Identifiable {
     public func releasePreview() {
         previewID = UUID()
         previewData = nil
+        previewURL = nil
         isPreviewLoading = false
     }
 
@@ -158,6 +161,7 @@ public final class FileBrowserTab: Identifiable {
         previewID = token
         preview = nil
         previewData = nil
+        previewURL = nil
         previewError = nil
         isPreviewLoading = false
         guard let selectedFile else { return }
@@ -170,9 +174,16 @@ public final class FileBrowserTab: Identifiable {
             try Task.checkCancellation()
             guard token == previewID else { return }
             preview = info
+            if let localFileURL = source.localFileURL, Self.isMedia(path: info.path) {
+                let url = try await localFileURL(info)
+                try Task.checkCancellation()
+                guard token == previewID else { return }
+                previewURL = url
+                return
+            }
             let limit = info.kind == .text || info.kind == .markdown ? FileBrowserLimits.maximumTextBytes : FileBrowserLimits.maximumPreviewBytes
             guard info.kind != .unsupported, info.kind != .directory, info.size >= 0, info.size <= limit else {
-                throw FileBrowserError.message("Preview unavailable for this format or size. Copy the path to open it on the Host.")
+                throw FileBrowserError.message("This format or size cannot be previewed here. Open it in another app.")
             }
             var data = Data()
             while data.count < info.size {
@@ -198,5 +209,10 @@ public final class FileBrowserTab: Identifiable {
             previewData = data
         } catch is CancellationError { }
         catch { if token == previewID { previewError = error.localizedDescription } }
+    }
+
+    static func isMedia(path: String) -> Bool {
+        guard let type = UTType(filenameExtension: (path as NSString).pathExtension) else { return false }
+        return type.conforms(to: .movie) || type.conforms(to: .audio)
     }
 }

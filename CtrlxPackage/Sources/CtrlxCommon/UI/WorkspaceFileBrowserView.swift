@@ -6,7 +6,7 @@ import PDFKit
 import SwiftUI
 import Textual
 
-/// Same Host-backed browser on all three surfaces; no client-side file URL reads.
+/// Host files on all three surfaces. Only a local source can supply a native URL.
 @MainActor
 public struct WorkspaceFileBrowserView: View {
     @Bindable private var tab: FileBrowserTab
@@ -172,16 +172,35 @@ public struct WorkspaceFileBrowserView: View {
                     } label: { Label("File Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly) }
                 }.padding(10)
                 Divider()
+                FileBrowserOpenActions(path: path, source: source)
+                    .id(OpenKey(path: path, sourceID: source.id, unavailable: source.unavailableReason,
+                                downloadUnavailable: source.downloadUnavailableReason))
                 if tab.isPreviewLoading { ProgressView().padding() }
                 if let error = tab.previewError { Text(error).padding().textSelection(.enabled) }
+                #if os(macOS)
+                if let url = tab.previewURL {
+                    FileBrowserMediaPreview(url: url).id(url)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let data = tab.previewData, let info = tab.preview {
+                    FileBrowserPreview(data: data, kind: info.kind).id(info.path)
+                } else { Spacer() }
+                #else
                 if let data = tab.previewData, let info = tab.preview {
                     FileBrowserPreview(data: data, kind: info.kind).id(info.path)
                 } else { Spacer() }
+                #endif
             } else {
                 ContentUnavailableView("Select a File", symbol: .docPlaintextFill, description: "Preview files from the Host without downloading a folder.")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private struct OpenKey: Hashable {
+        let path: String
+        let sourceID: String
+        let unavailable: String?
+        let downloadUnavailable: String?
     }
 }
 

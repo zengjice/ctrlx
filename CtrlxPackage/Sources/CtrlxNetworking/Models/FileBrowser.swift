@@ -14,6 +14,8 @@ public enum FileBrowserOperation: Codable, Sendable, Equatable {
     case list(path: String?, offset: Int, includeHidden: Bool)
     case info(path: String)
     case read(path: String, offset: Int, revision: String)
+    /// Explicit export, separate from bounded inline previews. Capability-gated on viewers.
+    case download(path: String, offset: Int, revision: String)
     case search(path: String, query: String, mode: FileBrowserSearchMode, includeHidden: Bool)
 }
 
@@ -37,6 +39,7 @@ public enum FileBrowserLimits {
     public static let chunkBytes = 128 * 1_024
     public static let maximumPreviewBytes = 8 * 1_024 * 1_024
     public static let maximumTextBytes = 512 * 1_024
+    public static let maximumDownloadBytes = 1_024 * 1_024 * 1_024
     public static let maximumSearchResults = 200
     public static let maximumSearchEntries = 20_000
 }

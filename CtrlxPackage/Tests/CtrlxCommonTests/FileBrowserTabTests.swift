@@ -5,6 +5,46 @@ import Testing
 
 @MainActor
 struct FileBrowserTabTests {
+    @Test func localMoviePreviewUsesNativeURLWithoutReadingOrApplyingTransferLimit() async {
+        let tab = FileBrowserTab(path: "/host")
+        let info = FileBrowserEntry(path: "/host/movie.mp4", name: "movie.mp4", kind: .unsupported,
+                                    size: FileBrowserLimits.maximumDownloadBytes + 1, revision: "1")
+        tab.selectedFile = info.path
+        var reads = 0
+        let source = FileBrowserSource(id: "local", paneID: nil, localFileURL: { item in
+            #expect(item == info)
+            return URL(fileURLWithPath: item.path)
+        }) { operation in
+            if case .info = operation { return .info(info) }
+            reads += 1
+            throw FileBrowserError.message("A local movie must not be transferred")
+        }
+        await tab.loadPreview(source: source)
+        #expect(tab.previewURL?.path == info.path)
+        #expect(tab.previewData == nil)
+        #expect(tab.previewError == nil)
+        #expect(reads == 0)
+        tab.releasePreview()
+        #expect(tab.previewURL == nil)
+    }
+
+    @Test func remoteMovieSelectionDoesNotReadOrConstructALocalURL() async {
+        let tab = FileBrowserTab(path: "/host")
+        let info = FileBrowserEntry(path: "/host/movie.mp4", name: "movie.mp4", kind: .unsupported, size: 3, revision: "1")
+        tab.selectedFile = info.path
+        var reads = 0
+        let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
+            if case .info = operation { return .info(info) }
+            reads += 1
+            throw FileBrowserError.message("Selection must not download")
+        }
+        await tab.loadPreview(source: source)
+        #expect(tab.previewURL == nil)
+        #expect(tab.previewData == nil)
+        #expect(tab.previewError != nil)
+        #expect(reads == 0)
+    }
+
     private func source(_ path: String) -> FileBrowserSource {
         .init(id: path, paneID: nil) { _ in .listing(.init(directory: path, homeDirectory: "/Host", entries: [], nextOffset: nil, revision: "1")) }
     }

@@ -3498,7 +3498,8 @@
                     supportsAgentFork: true,
                     supportsTerminalPaste: true,
                     supportsTerminalFit: true,
-                    supportsFileBrowsing: true
+                    supportsFileBrowsing: true,
+                    supportsFileDownloads: true
                 )
             }
 

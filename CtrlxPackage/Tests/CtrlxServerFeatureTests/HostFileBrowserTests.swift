@@ -1,5 +1,6 @@
 import CtrlxCommon
 import CtrlxNetworking
+import AVFoundation
 import Darwin
 import ConcurrencyExtras
 import Dependencies
@@ -77,6 +78,69 @@ struct HostFileBrowserTests {
             try await host.request(.list(path: root.path, offset: -1, includeHidden: false))
         }
         await #expect(throws: FileBrowserError.self) { try await host.request(.info(path: "relative")) }
+    }
+
+    @Test func localVideoAndExplicitDownloadDoNotRelaxInlinePreviewLimits() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("movie.mp4")
+        try Data([0, 1, 2]).write(to: url)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(FileBrowserLimits.maximumPreviewBytes + 1))
+        try handle.close()
+        let host = HostFileBrowser()
+        guard case let .info(info) = try await host.request(.info(path: url.path)) else { return }
+        #expect(info.kind == .unsupported)
+        #expect(try await host.localFileURL(info) == url)
+        await #expect(throws: FileBrowserError.self) {
+            try await host.request(.read(path: info.path, offset: 0, revision: info.revision))
+        }
+        guard case let .chunk(chunk) = try await host.request(.download(path: info.path, offset: 0, revision: info.revision)) else { return }
+        #expect(chunk.data.count == FileBrowserLimits.chunkBytes)
+        #expect(chunk.data.prefix(3) == Data([0, 1, 2]))
+        try Data("replacement".utf8).write(to: url, options: .atomic)
+        await #expect(throws: FileBrowserError.self) { try await host.localFileURL(info) }
+        await #expect(throws: FileBrowserError.self) {
+            try await host.request(.download(path: info.path, offset: 0, revision: info.revision))
+        }
+    }
+
+    @MainActor @Test func nativePreviewLoadsTheRealMP4Fixture() async throws {
+        let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let url = package.appendingPathComponent("Sources/CtrlxE2ELib/Scenarios/SampleFiles/test_video.mp4")
+        let host = HostFileBrowser()
+        let source = FileBrowserSource(id: "local", paneID: nil, localFileURL: { try await host.localFileURL($0) }) { try await host.request($0) }
+        let tab = FileBrowserTab()
+        tab.selectedFile = url.path
+        await tab.loadPreview(source: source)
+        let nativeURL = try #require(tab.previewURL)
+        #expect(nativeURL == url)
+        #expect(tab.previewData == nil)
+        #expect(tab.previewError == nil)
+        #expect(try await AVURLAsset(url: nativeURL).load(.isPlayable))
+        tab.releasePreview()
+        #expect(tab.previewURL == nil)
+    }
+
+    @Test func downloadsRejectSpecialFilesAndOversizeEvenAtZeroOffset() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifo = root.appendingPathComponent("pipe.mp4")
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+        let large = root.appendingPathComponent("large.mp4")
+        try Data().write(to: large)
+        let handle = try FileHandle(forWritingTo: large)
+        try handle.truncate(atOffset: UInt64(FileBrowserLimits.maximumDownloadBytes + 1))
+        try handle.close()
+        let host = HostFileBrowser()
+        for url in [fifo, large, root] {
+            guard case let .info(info) = try await host.request(.info(path: url.path)) else { return }
+            await #expect(throws: FileBrowserError.self) {
+                try await host.request(.download(path: info.path, offset: 0, revision: info.revision))
+            }
+        }
+        guard case let .info(info) = try await host.request(.info(path: fifo.path)) else { return }
+        await #expect(throws: FileBrowserError.self) { try await host.localFileURL(info) }
     }
 
     @Test func textAndNameSearchDoNotFollowSymlinkLoops() async throws {

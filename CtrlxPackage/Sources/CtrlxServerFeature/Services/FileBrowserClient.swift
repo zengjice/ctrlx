@@ -8,15 +8,20 @@ import Foundation
 @DependencyClient
 struct FileBrowserClient: Sendable {
     var request: @Sendable (FileBrowserOperation) async throws -> FileBrowserResponse
+    var localFileURL: @Sendable (FileBrowserEntry) async throws -> URL
 }
 
 extension FileBrowserClient: DependencyKey {
-    static let liveValue = Self(request: { try await HostFileBrowser.shared.request($0) })
+    static let liveValue = Self(request: { try await HostFileBrowser.shared.request($0) },
+                                localFileURL: { try await HostFileBrowser.shared.localFileURL($0) })
 }
 
 extension FileBrowserSource {
     static func local(paneID: String?, tmux: TmuxService, windows: MirrorWindowManager) -> Self {
-        Self(id: "local", paneID: paneID) { operation in
+        Self(id: "local", paneID: paneID, localFileURL: { info in
+            @Dependency(FileBrowserClient.self) var client
+            return try await client.localFileURL(info)
+        }) { operation in
             @Dependency(FileBrowserClient.self) var client
             var request = operation
             if case let .list(nil, offset, hidden) = operation {
@@ -64,9 +69,24 @@ actor HostFileBrowser {
             let path = try resolve(path)
             let data = try read(path: path, offset: offset, revision: revision)
             return .chunk(.init(path: path, revision: revision, offset: offset, data: data))
+        case let .download(path, offset, revision):
+            let path = try resolve(path)
+            let data = try read(path: path, offset: offset, revision: revision, download: true)
+            return .chunk(.init(path: path, revision: revision, offset: offset, data: data))
         case let .search(path, query, mode, hidden):
             return try .search(search(path: resolve(path), query: query, mode: mode, hidden: hidden))
         }
+    }
+
+    func localFileURL(_ info: FileBrowserEntry) throws -> URL {
+        try Task.checkCancellation()
+        let path = try resolve(info.path)
+        let value = try metadata(path)
+        guard value.st_mode & S_IFMT == S_IFREG, files.isReadableFile(atPath: path) else {
+            throw FileBrowserError.message("Only readable regular files can be opened.")
+        }
+        guard revision(value) == info.revision else { throw FileBrowserError.message("File changed. Refresh and try again.") }
+        return URL(fileURLWithPath: path)
     }
 
     private func resolve(_ input: String) throws -> String {
@@ -139,7 +159,7 @@ actor HostFileBrowser {
                      nextOffset: next < entries.count ? next : nil, revision: revision(before))
     }
 
-    private func read(path: String, offset: Int, revision expected: String) throws -> Data {
+    private func read(path: String, offset: Int, revision expected: String, download: Bool = false) throws -> Data {
         guard offset >= 0 else { throw FileBrowserError.message("Invalid file offset.") }
         // O_NONBLOCK + fstat avoids hanging on a FIFO or a replaced special file.
         let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
@@ -152,7 +172,8 @@ actor HostFileBrowser {
         guard revision(before) == expected else { throw FileBrowserError.message("File changed. Refresh its preview.") }
         let kind = Self.kind(for: path)
         let limit = kind == .text || kind == .markdown ? FileBrowserLimits.maximumTextBytes : FileBrowserLimits.maximumPreviewBytes
-        guard kind != .unsupported, before.st_size <= limit, offset <= before.st_size else {
+        guard before.st_size >= 0, before.st_size <= (download ? FileBrowserLimits.maximumDownloadBytes : limit),
+              (download || kind != .unsupported), offset <= before.st_size else {
             throw FileBrowserError.message("This file is too large or its format cannot be previewed.")
         }
         var data = Data(count: min(FileBrowserLimits.chunkBytes, Int(before.st_size) - offset))

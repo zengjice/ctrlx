@@ -29,20 +29,36 @@ without adding a navigation stack or presenting a half-height sheet.
 ## Supported operations
 
 Directory listing, hidden files, recursive filename/text search, UTF-8 text and
-Markdown, image and PDF previews, copy path/text. Mac supports tree expansion;
+Markdown, image and PDF previews, copy path/text. The local Mac Host also previews
+video/audio using AVKit and the validated local file URL, without loading media
+into memory or applying remote preview limits. Mac supports tree expansion;
 iOS opens folders as full-area lists. Markdown attachments do not automatically
 fetch network resources or read Viewer-local `file://` URLs.
 
-Editing, large-file transfer, video playback and remote Chromium control are not
-part of this change. Existing local editor tabs and web-browser ownership remain
-separate.
+**Open in Default App** hands a local Host file to macOS. **Download and Open**
+on Mac Viewer or iOS downloads a copy only after a click. Mac opens the copy in
+the default app; iOS uses Quick Look and offers **Share / Open in…** for other
+apps or Save to Files. System codec/app support still determines whether a file
+can be opened. Copies are not edited back onto the Host.
+
+Downloads show byte progress and can be cancelled. Selecting another file,
+leaving the tab or disconnecting cancels pending work. Partial copies are removed;
+successful copies stay in the app's `Caches/CtrlX/FileBrowserDownloads` directory
+so external apps can continue reading. Starting another download cleans copies
+older than 24 hours, never active downloads. Free space is checked before writing.
+
+Editing and remote Chromium control are not part of this change. Existing local
+editor tabs and web-browser ownership remain separate.
 
 ## Transport and bounds
 
 `BrowseFiles` uses the existing encrypted command/response connection. The Host
 advertises optional `supportsFileBrowsing`; missing/false capability fails before
 sending a command, with an upgrade message. The opaque Relay needs no deployment.
-The Host and the Viewer app must both contain this feature.
+The Host and the Viewer app must both contain this feature. Explicit downloads
+have their own optional `supportsFileDownloads` capability; an older Host can
+still browse/preview while a new Viewer immediately prompts an upgrade for
+downloads, without sending the unknown command variant.
 
 `FileBrowserSource` hides local/remote transport. The dependency-injected
 `FileBrowserClient` runs filesystem work on the independent `HostFileBrowser`
@@ -55,6 +71,10 @@ Disconnect cancels pending work and prevents old-connection replies.
 - Reads: regular files only, 128 KiB chunks; text up to 512 KiB, images/PDFs up to
   8 MiB. Descriptor/path revisions are checked around reads; mixed-version data
   is never shown. Directory page revisions are also checked before appending.
+- Explicit downloads: regular files up to 1 GiB, the same 128 KiB encrypted
+  chunks and revision checks, written one chunk at a time off the UI actor.
+  This does not relax the inline-preview or search bounds. Even empty files
+  require a validated Host read, rejecting FIFOs/devices without blocking.
 - Search: at most 20,000 entries, 200 matches, approximately 16 MiB read and a
   two-second scan budget, checked between files. Partial results are labelled.
   Search does not recurse into symlinks; explicit navigation into one is allowed.
@@ -64,16 +84,22 @@ Disconnect cancels pending work and prevents old-connection replies.
 ## Validation
 
 Focused coverage: `HostFileBrowserTests`, `FileBrowserLayoutTests`,
-`FileBrowserTabTests`, `FileBrowserProtocolTests`, `IOSFileBrowserWorkspaceTests`,
+`FileBrowserTabTests`, `FileBrowserTransferTests`, `FileBrowserProtocolTests`, `IOSFileBrowserWorkspaceTests`,
 `LayoutSnapshotMapperTests`, and `TerminalPasteTransportTests`.
 Tests include fresh source-pane cwd resolution,
 directory pagination/hidden files, symlink loops, special/oversized/changing files,
 multi-chunk search, stale replies, private layout restoration after directory
 changes, terminal selection replacing Files without disturbing split tabs,
 legacy capability gating, and encrypted transport while a file response is delayed.
+Additional coverage checks native local-media URLs without transfer, explicit
+binary downloads, download frame round-trips, cancellation/failed-copy cleanup,
+disk-cache expiration, and new-command rejection on a legacy Host.
 
 Manual acceptance on installed apps: open two panes in different directories;
 create a Files tab from each on Mac Host, Mac Viewer and iOS; preview text,
 Markdown, image and PDF; switch tabs during loading; disconnect/reconnect; return
 to a terminal and type while a search is running. Verify Mac tab reorder/split/
 close and that the iOS title menu stays in the session page.
+Also preview a local MP4 larger than 8 MiB, open it in the default app, then
+download/open it on Mac Viewer and iOS. Verify Quick Look/share, cancel mid-copy,
+change the source file mid-copy, and test against a Host without download support.
