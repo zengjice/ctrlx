@@ -1057,15 +1057,15 @@ public struct MainView: View {
                             to: newOrder
                         )
                     },
-                    onNewFiles: {
-                        openDirectoryTab(sessionName: remote.sessionName, windowID: window.id, hostID: remote.hostId,
-                                         paneIDs: window.panes.map(\.paneId), fallbackPaneID: window.activePane?.paneId)
-                    },
                     onSelectFileTab: { id in
                         selectRemoteFileTab(id, hostID: remote.hostId, sessionName: remote.sessionName)
                     },
                     onCloseFileTab: { id in
                         closeRemoteFileTab(id, hostID: remote.hostId, sessionName: remote.sessionName)
+                    },
+                    onOpenFiles: { sourceWindow in
+                        openDirectoryTab(sessionName: remote.sessionName, windowID: sourceWindow.id, hostID: remote.hostId,
+                                         paneIDs: sourceWindow.panes.map(\.paneId), fallbackPaneID: sourceWindow.activePane?.paneId)
                     }
                 )
 
@@ -1268,9 +1268,9 @@ public struct MainView: View {
                         onReorderBrowserTabs: { newOrder in
                             reorderBrowserTabs(in: session.sessionName, to: newOrder)
                         },
-                        onNewFiles: {
-                            openDirectoryTab(sessionName: session.sessionName, windowID: window.id, hostID: nil,
-                                             paneIDs: window.panes.map(\.paneId), fallbackPaneID: window.activePane?.paneId)
+                        onOpenFiles: { sourceWindow in
+                            openDirectoryTab(sessionName: session.sessionName, windowID: sourceWindow.id, hostID: nil,
+                                             paneIDs: sourceWindow.panes.map(\.paneId), fallbackPaneID: sourceWindow.activePane?.paneId)
                         }
                     )
                 }
@@ -3091,14 +3091,14 @@ public struct MainView: View {
         }
     }
 
-    /// Captures the session's focused terminal as the initial directory and return target.
+    /// Captures a pane in the source window as the initial directory and return target.
     @discardableResult
     private func openDirectoryTab(sessionName: String, windowID: String, hostID: String?, paneIDs: [String], fallbackPaneID: String?, path: String? = nil) -> FileBrowserTab {
         let localWindows = tmuxService.windows.filter { $0.sessionName == sessionName }
         let remoteWindows = hostID.map { remoteSessionWindows(hostId: $0, sessionName: sessionName) } ?? []
-        let sessionPaneIDs = hostID == nil ? localWindows.flatMap { $0.panes.map(\.paneId) } : remoteWindows.flatMap { $0.panes.map(\.paneId) }
-        let focused = terminalQuickActions.active.flatMap { $0.hostID == hostID && sessionPaneIDs.contains($0.paneID) ? $0.paneID : nil }
-        let tab = FileBrowserTab(path: path, sourcePaneID: focused ?? fallbackPaneID ?? paneIDs.first)
+        let focused = terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
+        let sourcePaneID = FileBrowserTab.sourcePaneID(in: paneIDs, focusedPaneID: focused, activePaneID: fallbackPaneID)
+        let tab = FileBrowserTab(path: path, sourcePaneID: sourcePaneID)
         let localOrigin = localWindows.first { $0.panes.contains { $0.paneId == tab.sourcePaneID } }
         let remoteOrigin = remoteWindows.first { $0.panes.contains { $0.paneId == tab.sourcePaneID } }
         let originID = hostID == nil ? localOrigin?.id : remoteOrigin?.id
@@ -3119,8 +3119,9 @@ public struct MainView: View {
             tabs.selectedRight = .file(tab.id)
         } else {
             if hostID == nil {
-                tabs.selectLeftFileTab(tab.id, windowID: windowID, legacyExplorerWindows: &fileBrowserActiveWindowIds)
-                gitActiveWindowIds.remove(windowID)
+                let presentationWindowID = selectedWindow.flatMap { $0.sessionName == sessionName ? $0.id : nil } ?? windowID
+                tabs.selectLeftFileTab(tab.id, windowID: presentationWindowID, legacyExplorerWindows: &fileBrowserActiveWindowIds)
+                gitActiveWindowIds.remove(presentationWindowID)
             } else {
                 tabs.selectedFileTabId = tab.id
                 tabs.selectedBrowserTabId = nil

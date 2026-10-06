@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 /// local sessions, with Host-backed directory tabs and client-private browser tabs.
 ///
 /// Supports the same affordances as the local bar:
-/// - Leading "+" menu also opens independent Files and Browser tabs.
+/// - Leading "+" menu opens Agent, Terminal and Browser tabs.
+/// - Window context menus open Files rooted in that window's pane.
 /// - Drag-to-reorder for tmux windows (pushed to the host via
 ///   `MoveTmuxWindows`) and client-private file/browser tabs.
 /// - Cross-divider drag/split toggle so any tab can be sent
@@ -50,9 +51,9 @@ struct RemoteWindowTabBar: View {
     let onReorderWindows: (_ stableWindowIds: [String], _ rollbackOrder: [TabDragPayload]) -> Void
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
-    var onNewFiles: (() -> Void)?
     var onSelectFileTab: ((UUID) -> Void)?
     var onCloseFileTab: ((UUID) -> Void)?
+    let onOpenFiles: (TmuxWindow) -> Void
 
     /// Cached width of the split-mode tab strip. Measured via the background
     /// `onGeometryChange` so the HStack can drive intrinsic height instead of
@@ -278,8 +279,7 @@ struct RemoteWindowTabBar: View {
             agentConfiguration: agentConfiguration,
             isTerminalDisabled: !isHostConnected,
             onNewTerminal: onNewWindow,
-            onNewBrowser: onNewBrowser,
-            onNewFiles: onNewFiles
+            onNewBrowser: onNewBrowser
         )
     }
 
@@ -350,6 +350,12 @@ struct RemoteWindowTabBar: View {
                     onRenameWindow(window, newName)
                 },
                 additionalMenu: {
+                    Button { onOpenFiles(window) } label: {
+                        Label("Open Files", symbol: .folderBadgePlus)
+                    }
+                    .disabled(!isHostConnected)
+                    .accessibilityIdentifier("window-open-files-\(window.stableId)")
+
                     AgentForkMenu(
                         sources: window.panes.compactMap(AgentForkSource.init(pane:)),
                         unavailableReason: forkUnavailableReason,

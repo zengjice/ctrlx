@@ -60,8 +60,13 @@ final class IOSFileBrowserWorkspace {
     }
 
     func closeSelected() {
-        tabs.removeAll { $0.id == selectedID }
-        selectedID = nil
+        guard let selectedID else { return }
+        close(selectedID)
+    }
+
+    func close(_ id: UUID) {
+        tabs.removeAll { $0.id == id }
+        if selectedID == id { selectedID = nil }
         save()
     }
 }

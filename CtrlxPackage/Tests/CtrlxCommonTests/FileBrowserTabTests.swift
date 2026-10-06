@@ -5,6 +5,15 @@ import Testing
 
 @MainActor
 struct FileBrowserTabTests {
+    @Test("Files source stays inside the window whose menu was used")
+    func scopedSourcePane() {
+        let panes = ["%1", "%2"]
+        #expect(FileBrowserTab.sourcePaneID(in: panes, focusedPaneID: "%2", activePaneID: "%1") == "%2")
+        #expect(FileBrowserTab.sourcePaneID(in: panes, focusedPaneID: "%other-window", activePaneID: "%2") == "%2")
+        #expect(FileBrowserTab.sourcePaneID(in: panes, focusedPaneID: "%removed", activePaneID: "%removed") == "%1")
+        #expect(FileBrowserTab.sourcePaneID(in: [], focusedPaneID: "%other-window", activePaneID: "%stale") == nil)
+    }
+
     @Test func localMoviePreviewUsesNativeURLWithoutReadingOrApplyingTransferLimit() async {
         let tab = FileBrowserTab(path: "/host")
         let info = FileBrowserEntry(path: "/host/movie.mp4", name: "movie.mp4", kind: .unsupported,

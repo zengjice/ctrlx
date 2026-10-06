@@ -23,6 +23,8 @@
         /// The currently selected window within the session
         @State private var selectedWindowId: String?
         @State private var fileWorkspace = IOSFileBrowserWorkspace()
+        @State private var showsWindowTabs = false
+        @State private var pendingWindowTabAction: WindowTabAction?
 
         /// The currently selected pane (receives keyboard input)
         @State private var activePaneId: String?
@@ -227,6 +229,23 @@
             }
             .onChange(of: fileWorkspace.snapshots) { _, _ in saveFileWorkspace() }
             .onDisappear(perform: saveFileWorkspace)
+            .sheet(isPresented: $showsWindowTabs, onDismiss: windowTabsDidDismiss) {
+                WindowTabsPanel(
+                    windows: sessionWindows,
+                    files: fileWorkspace.tabs,
+                    selectedWindowID: window?.stableId,
+                    selectedFileID: fileWorkspace.selectedID,
+                    isConnected: relayClient.isHostConnected,
+                    canOpenFiles: relayClient.isHostConnected && relayClient.hostSupportsFileBrowsing && fileWorkspace.tabs.count < 30,
+                    isCreatingWindow: isCreatingWindow,
+                    forkUnavailableReason: agentForkUnavailableReason,
+                    onChoose: { action in
+                        if pendingWindowTabAction == nil { pendingWindowTabAction = action }
+                    }
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
             .sheet(item: $newAgentConfiguration, onDismiss: creationSheetDidDismiss) { configuration in
                 NewAgentTabPanel(configuration: configuration)
                     .presentationDetents([.large])
@@ -265,9 +284,7 @@
                 }
             }
             // Intentionally inline rather than using `WindowRenamingModifier`:
-            // iOS attaches rename via a `Menu` inside the tab (see WindowTabBar),
-            // not a `contextMenu`, so the alert lives on the enclosing view and
-            // `renamingWindow`/`renameWindowText` bridge the Menu tap to it.
+            // The tab list closes before this enclosing view presents rename.
             .alert("Rename Window", isPresented: .init(
                 get: { renamingWindow != nil },
                 set: { if !$0 { renamingWindow = nil } }
@@ -278,7 +295,7 @@
                     if let target = renamingWindow, !trimmed.isEmpty {
                         Task {
                             _ = await relayClient.sendCommand(
-                                SetWindowName(windowId: target.id, name: trimmed),
+                                SetWindowName(windowId: target.stableId, name: trimmed),
                                 paneId: ""
                             )
                         }
@@ -318,6 +335,8 @@
             .onDisappear {
                 // A delayed creation reply must not redirect a later visit.
                 cancelCreationFollowUp()
+                pendingWindowTabAction = nil
+                showsWindowTabs = false
             }
             .onChange(of: activeService?.session?.state) {
                 if activeSessionHasBlockingForm {
@@ -354,110 +373,11 @@
 
         @ToolbarContentBuilder
         private var windowToolbar: some ToolbarContent {
-            // Window switcher as title menu (placement: .principal replaces the title)
+            // Title opens the tab picker; each row owns its window actions.
             ToolbarItem(placement: .principal) {
-                Menu {
-                    let windows = sessionWindows
-                    ForEach(windows) { win in
-                        Button {
-                            fileWorkspace.selectedID = nil
-                            cancelCreationFollowUp()
-                            selectedWindowId = win.id
-                            activePaneId = win.activePane?.paneId ?? win.panes.first?.paneId
-                            Task {
-                                await sendCommand(.selectTmuxWindow, paneId: win.id)
-                            }
-                        } label: {
-                            if fileWorkspace.selected == nil, win.id == (selectedWindowId ?? window?.id) {
-                                Label(windowTabLabel(for: win), symbol: .checkmark)
-                            } else {
-                                Text(windowTabLabel(for: win))
-                            }
-                        }
-                    }
-
-                    Divider()
-
-                    ForEach(fileWorkspace.tabs) { tab in
-                        Button {
-                            cancelCreationFollowUp()
-                            isKeyboardActive = false
-                            quickActionPresentation.dismiss()
-                            fileWorkspace.selectedID = tab.id
-                        } label: {
-                            Label(tab.title, symbol: tab.id == fileWorkspace.selectedID ? .checkmark : .folder)
-                        }
-                    }
-                    Button {
-                        cancelCreationFollowUp()
-                        isKeyboardActive = false
-                        quickActionPresentation.dismiss()
-                        fileWorkspace.open(paneID: activePaneId ?? window?.activePane?.paneId)
-                    } label: { Label("New Files", symbol: .folderBadgePlus) }
-                    .disabled(!relayClient.isHostConnected || fileWorkspace.tabs.count >= 30)
-
-                    if fileWorkspace.selected != nil {
-                        Button("Close Files Tab", role: .destructive) {
-                            if let sourcePaneID = fileWorkspace.selected?.sourcePaneID,
-                               let sourceWindow = sessionWindows.first(where: { $0.panes.contains { $0.paneId == sourcePaneID } }) {
-                                selectedWindowId = sourceWindow.id
-                                activePaneId = sourcePaneID
-                                Task { await sendCommand(.selectTmuxWindow, paneId: sourceWindow.id) }
-                            }
-                            fileWorkspace.closeSelected()
-                        }
-                    }
-
-                    Divider()
-
-                    Button {
-                        fileWorkspace.selectedID = nil
-                        createTerminalWindow()
-                    } label: {
-                        Label("New Terminal", symbol: .terminal)
-                    }
-                    .disabled(!relayClient.isHostConnected || isCreatingWindow)
-
-                    Button {
-                        fileWorkspace.selectedID = nil
-                        creationSheetIsPresented = true
-                        newAgentConfiguration = agentTabConfiguration()
-                    } label: {
-                        Label("New Agent…", symbol: .sparkles)
-                    }
-                    .disabled(!relayClient.isHostConnected || isCreatingWindow)
-                    .accessibilityIdentifier("new-agent-window")
-
-                    if fileWorkspace.selected == nil, let window {
-                        AgentForkMenu(
-                            sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
-                            unavailableReason: agentForkUnavailableReason,
-                            sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes)
-                        ) { usingWorktree in
-                            creationSheetIsPresented = true
-                            agentForkConfiguration = forkConfiguration(window: window, usingWorktree: usingWorktree)
-                        }
-                        .disabled(isCreatingWindow)
-
-                        Button {
-                            renameWindowText = window.windowName
-                            renamingWindow = window
-                        } label: {
-                            Label("Rename Window", symbol: .pencil)
-                        }
-                        .disabled(!relayClient.isHostConnected)
-                    }
-
-                    if fileWorkspace.selected == nil, let window, sessionWindows.count > 1 {
-                        Divider()
-
-                        Button(role: .destructive) {
-                            requestCloseWindow(window)
-                        } label: {
-                            Label("Close Window", symbol: .rectangleBadgeMinus)
-                        }
-                        .disabled(!relayClient.isHostConnected)
-                    }
+                Button {
+                    pendingWindowTabAction = nil
+                    showsWindowTabs = true
                 } label: {
                     HStack(spacing: 4) {
                         Text(navigationTitle)
@@ -472,6 +392,8 @@
                     // of bleeding behind the bar buttons (#600).
                     .frame(maxWidth: principalTitleMaxWidth)
                 }
+                .accessibilityLabel("Tabs: \(navigationTitle)")
+                .accessibilityIdentifier("window-tabs-picker")
             }
             if fileWorkspace.selected == nil, settings.terminalKeyboardControlPosition == .topRight {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -557,6 +479,89 @@
             }
         }
 
+        private func windowTabsDidDismiss() {
+            guard let action = pendingWindowTabAction else {
+                fitCreatedTerminalIfReady()
+                return
+            }
+            pendingWindowTabAction = nil
+            switch action {
+            case let .window(_, operation):
+                guard let target = action.targetWindow(in: sessionWindows) else {
+                    commandError = "This window has been closed. Reopen the tab list."
+                    return
+                }
+                if operation != .select, !relayClient.isHostConnected {
+                    commandError = "Host is offline. Reconnect before operating on this window."
+                    return
+                }
+                switch operation {
+                case .select:
+                    selectTerminalWindow(target)
+                case .openFiles:
+                    guard relayClient.hostSupportsFileBrowsing, fileWorkspace.tabs.count < 30,
+                          let paneID = FileBrowserTab.sourcePaneID(
+                            in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
+                          ) else {
+                        commandError = "Files is unavailable for this window. Check the Host and tab limit."
+                        return
+                    }
+                    cancelCreationFollowUp()
+                    isKeyboardActive = false
+                    quickActionPresentation.dismiss()
+                    fileWorkspace.open(paneID: paneID)
+                case let .fork(usingWorktree):
+                    guard !isCreatingWindow else { return }
+                    if let reason = agentForkUnavailableReason {
+                        commandError = reason
+                        return
+                    }
+                    creationSheetIsPresented = true
+                    agentForkConfiguration = forkConfiguration(window: target, usingWorktree: usingWorktree)
+                case .rename:
+                    renameWindowText = target.windowName
+                    renamingWindow = target
+                case .close:
+                    guard sessionWindows.count > 1 else { return }
+                    requestCloseWindow(target)
+                }
+            case let .selectFiles(id):
+                guard fileWorkspace.tabs.contains(where: { $0.id == id }) else { return }
+                cancelCreationFollowUp()
+                isKeyboardActive = false
+                quickActionPresentation.dismiss()
+                fileWorkspace.selectedID = id
+            case let .closeFiles(id):
+                if id == fileWorkspace.selectedID,
+                   let sourcePaneID = fileWorkspace.selected?.sourcePaneID,
+                   let sourceWindow = sessionWindows.first(where: { $0.panes.contains { $0.paneId == sourcePaneID } }) {
+                    selectTerminalWindow(sourceWindow, preferredPaneID: sourcePaneID)
+                }
+                fileWorkspace.close(id)
+            case .newTerminal:
+                guard relayClient.isHostConnected, !isCreatingWindow else { return }
+                fileWorkspace.selectedID = nil
+                createTerminalWindow()
+            case .newAgent:
+                guard relayClient.isHostConnected, !isCreatingWindow else { return }
+                fileWorkspace.selectedID = nil
+                creationSheetIsPresented = true
+                newAgentConfiguration = agentTabConfiguration()
+            }
+        }
+
+        private func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String? = nil) {
+            fileWorkspace.selectedID = nil
+            cancelCreationFollowUp()
+            selectedWindowId = target.id
+            activePaneId = FileBrowserTab.sourcePaneID(
+                in: target.panes.map(\.paneId), focusedPaneID: preferredPaneID, activePaneID: target.activePane?.paneId
+            )
+            if relayClient.isHostConnected {
+                Task { await sendCommand(.selectTmuxWindow, paneId: target.stableId) }
+            }
+        }
+
         /// Inherit the pane the iPhone is actually controlling, which may not
         /// yet match the Host's active-pane flag during a state round trip.
         private var newWindowDirectory: String {
@@ -630,6 +635,7 @@
                 throw AgentForkError("Host returned no new pane. Check its windows before retrying.")
             }
             if windowCreation.receivePaneID(paneId, revision: revision) {
+                fileWorkspace.selectedID = nil
                 reconcileWindowSelection(candidates: windowSelectionCandidates)
             }
             await connectionManager.requestSessionState(for: hostId)
@@ -997,7 +1003,7 @@
                 isAvailable: relayClient.isHostConnected && relayClient.hostSupportsTerminalFit,
                 paneIDs: window?.panes.map(\.paneId),
                 measuredRequest: resizeToFitRequest,
-                isPresentationReady: !creationSheetIsPresented
+                isPresentationReady: !creationSheetIsPresented && !showsWindowTabs
             )
             // Consume before dispatch, including failures; never retry on later
             // keyboard, rotation, reconnect or geometry changes.
@@ -1235,7 +1241,7 @@
 
         private func requestCloseWindow(_ window: TmuxWindow) {
             Task {
-                let spec = CheckRunningProcesses(target: .window(window.id))
+                let spec = CheckRunningProcesses(target: .window(window.stableId))
                 let result = await relayClient.sendCommand(spec, paneId: "")
                 if case let .success(response) = result {
                     let processes = response.runningProcesses ?? []
@@ -1253,7 +1259,7 @@
 
         private func performCloseWindow(_ window: TmuxWindow) {
             Task {
-                let spec = KillTmuxWindow(windowId: window.id)
+                let spec = KillTmuxWindow(windowId: window.stableId)
                 let result = await relayClient.sendCommand(spec, paneId: "")
                 if case .success = result {
                     // Select another window if the closed one was selected

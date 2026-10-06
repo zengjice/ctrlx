@@ -1,15 +1,27 @@
 # Host-backed Files tabs
 
 Mac Host, Mac Viewer and iOS share the read-only `WorkspaceFileBrowserView`.
-Open **New Files** from the Mac tab-strip `+` menu or the iOS window-title menu.
+Right-click a terminal window tab on Mac Host/Viewer and choose **Open Files**.
+On iOS, tap the window title to open the **Tabs** list, then use that window row's
+`⋯` menu → **Open Files**. Tapping a row switches tabs; its menu operates on that
+row without first switching the terminal. Fork, rename and close use the same
+per-window menu. New Terminal / Agent remain separate creation actions at the
+bottom of the iOS list; the Mac `+` menu does not create Files.
 Each session can keep multiple independent Files tabs alongside terminals and
 web browsers. On Mac, these are ordinary reorderable, closable, splittable tabs.
-On iOS, a Files tab fills the session content area; the title menu switches tabs
-without adding a navigation stack or presenting a half-height sheet.
+On iOS, a Files tab fills the session content area. The title opens a native
+medium/large tab-list sheet without a nested navigation stack. Actions are
+applied after dismissing this list, before presenting a Fork/Agent sheet or alert.
+Files rows expose only their own selection/close actions, not terminal operations.
 
 ## Directories and lifetime
 
-- A new tab captures the focused terminal pane. The Host resolves the agent's
+- A new tab captures a pane inside the window whose menu was used: prefer the
+  focused pane only if it belongs to that window, then its active/first pane.
+  Focus in another window can never redirect the initial directory. iOS captures
+  the stable window ID and resolves the target again after the list closes; a
+  closed target fails rather than falling back to the currently selected window.
+  The Host resolves the agent's
   project directory, then a fresh `pane_current_path`, then its home directory.
   The Viewer never interprets a remote path against its own disk.
 - Once opened, its directory does not follow later `cd` operations. **Source Pane
@@ -99,7 +111,11 @@ Manual acceptance on installed apps: open two panes in different directories;
 create a Files tab from each on Mac Host, Mac Viewer and iOS; preview text,
 Markdown, image and PDF; switch tabs during loading; disconnect/reconnect; return
 to a terminal and type while a search is running. Verify Mac tab reorder/split/
-close and that the iOS title menu stays in the session page.
+close and that the iOS tab list stays in the session page.
 Also preview a local MP4 larger than 8 MiB, open it in the default app, then
 download/open it on Mac Viewer and iOS. Verify Quick Look/share, cancel mid-copy,
 change the source file mid-copy, and test against a Host without download support.
+Also operate on a nonselected window while focus remains in another one. Check
+its directory/Fork source, rename/close target after a window reorder, and close
+an unselected Files row without changing the current tab. Cancelling the iOS tab
+list must not switch tabs, start a request or open a second sheet.

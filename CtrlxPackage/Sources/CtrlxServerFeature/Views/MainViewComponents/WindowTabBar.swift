@@ -61,7 +61,7 @@ struct WindowTabBar: View {
     let onReorderFileTabs: ([UUID]) -> Void
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
-    var onNewFiles: (() -> Void)?
+    let onOpenFiles: (LocalTmuxWindow) -> Void
 
     @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(MarkdownOpenSuggestionStore.self) private var openSuggestionStore
@@ -339,8 +339,7 @@ struct WindowTabBar: View {
             helpText: "New agent, terminal or browser in \(session.sessionName)",
             agentConfiguration: agentConfiguration,
             onNewTerminal: onNewWindow,
-            onNewBrowser: onNewBrowser,
-            onNewFiles: onNewFiles
+            onNewBrowser: onNewBrowser
         )
     }
 
@@ -501,6 +500,11 @@ struct WindowTabBar: View {
                     onRenameWindow(window, newName)
                 },
                 additionalMenu: {
+                    Button { onOpenFiles(window) } label: {
+                        Label("Open Files", symbol: .folderBadgePlus)
+                    }
+                    .accessibilityIdentifier("window-open-files-\(window.stableId)")
+
                     AgentForkMenu(
                         sources: window.panes.compactMap { windowManager.paneStates[$0.paneId].flatMap(AgentForkSource.init(pane:)) },
                         unavailableReason: nil,

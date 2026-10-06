@@ -49,6 +49,12 @@ public final class FileBrowserTab: Identifiable {
     public var title: String { "Files · \(path.map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? "/" : $0 } ?? "…")" }
     public var listing: FileBrowserListing? { path.flatMap { listings[$0] } }
 
+    public static func sourcePaneID(in paneIDs: [String], focusedPaneID: String?, activePaneID: String?) -> String? {
+        if let focusedPaneID, paneIDs.contains(focusedPaneID) { return focusedPaneID }
+        if let activePaneID, paneIDs.contains(activePaneID) { return activePaneID }
+        return paneIDs.first
+    }
+
     public var snapshot: Snapshot? {
         path.map { .init(id: id, path: $0, includeHidden: includeHidden, expanded: expanded.sorted(), selectedFile: selectedFile) }
     }

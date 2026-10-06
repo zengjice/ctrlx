@@ -8,6 +8,28 @@ import Testing
 @MainActor
 @Suite("iOS Files workspace persistence")
 struct IOSFileBrowserWorkspaceTests {
+    @Test("Closing an unselected Files row preserves selection and other independent tabs")
+    func closesSpecificTab() {
+        withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let workspace = IOSFileBrowserWorkspace()
+            workspace.open(paneID: "%1")
+            let firstID = workspace.selectedID
+            workspace.open(paneID: "%2")
+            let selectedID = workspace.selectedID
+            if let firstID { workspace.close(firstID) }
+            #expect(workspace.tabs.count == 1)
+            #expect(workspace.selectedID == selectedID)
+            #expect(workspace.selected?.sourcePaneID == "%2")
+            workspace.close(UUID())
+            #expect(workspace.selectedID == selectedID)
+            workspace.closeSelected()
+            #expect(workspace.tabs.isEmpty)
+            #expect(workspace.selectedID == nil)
+        }
+    }
+
     private func context(_ directory: String, hostID: String = "office") throws -> IOSFileBrowserWorkspace.Context {
         try #require(IOSFileBrowserWorkspace.Context(hostID: hostID, windows: TmuxWindow.groupPanes([
             PaneState(paneId: "%1", sessionName: "work", currentPath: directory, isWindowActive: true),
