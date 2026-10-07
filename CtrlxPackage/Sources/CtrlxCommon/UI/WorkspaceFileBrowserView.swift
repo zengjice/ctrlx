@@ -35,7 +35,7 @@ public struct WorkspaceFileBrowserView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: tab.loadKey(source: source)) { await tab.load(source: source) }
-        .task(id: PreviewKey(path: tab.selectedFile, refresh: tab.refresh, sourceID: source.id, unavailable: source.unavailableReason)) {
+        .task(id: previewKey) {
             await tab.loadPreview(source: source)
         }
         .onDisappear { tab.releasePreview() }
@@ -44,11 +44,17 @@ public struct WorkspaceFileBrowserView: View {
         }
     }
 
-    private struct PreviewKey: Equatable {
+    private struct PreviewKey: Hashable {
         let path: String?
         let refresh: Int
         let sourceID: String
         let unavailable: String?
+        let downloadUnavailable: String?
+    }
+
+    private var previewKey: PreviewKey {
+        .init(path: tab.selectedFile, refresh: tab.refresh, sourceID: source.id,
+              unavailable: source.unavailableReason, downloadUnavailable: source.downloadUnavailableReason)
     }
 
     private func updateSearch(query: String, mode: FileBrowserSearchMode) {
@@ -177,18 +183,22 @@ public struct WorkspaceFileBrowserView: View {
                                 downloadUnavailable: source.downloadUnavailableReason))
                 if tab.isPreviewLoading { ProgressView().padding() }
                 if let error = tab.previewError { Text(error).padding().textSelection(.enabled) }
-                #if os(macOS)
-                if let url = tab.previewURL {
-                    FileBrowserMediaPreview(url: url).id(url)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let data = tab.previewData, let info = tab.preview {
-                    FileBrowserPreview(data: data, kind: info.kind).id(info.path)
-                } else { Spacer() }
-                #else
-                if let data = tab.previewData, let info = tab.preview {
-                    FileBrowserPreview(data: data, kind: info.kind).id(info.path)
-                } else { Spacer() }
-                #endif
+                if FileBrowserOfficeDocument.supports(path: path) {
+                    FileBrowserOfficePreview(path: path, source: source).id(previewKey)
+                } else {
+                    #if os(macOS)
+                    if let url = tab.previewURL {
+                        FileBrowserMediaPreview(url: url).id(url)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let data = tab.previewData, let info = tab.preview {
+                        FileBrowserPreview(data: data, kind: info.kind).id(info.path)
+                    } else { Spacer() }
+                    #else
+                    if let data = tab.previewData, let info = tab.preview {
+                        FileBrowserPreview(data: data, kind: info.kind).id(info.path)
+                    } else { Spacer() }
+                    #endif
+                }
             } else {
                 ContentUnavailableView("Select a File", symbol: .docPlaintextFill, description: "Preview files from the Host without downloading a folder.")
             }

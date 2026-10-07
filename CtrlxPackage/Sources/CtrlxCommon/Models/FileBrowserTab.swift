@@ -171,6 +171,9 @@ public final class FileBrowserTab: Identifiable {
         previewError = nil
         isPreviewLoading = false
         guard let selectedFile else { return }
+        // Office uses a native file-URL preview with its own cancellable transfer,
+        // including on older Hosts that classify these binary documents as text.
+        guard !FileBrowserOfficeDocument.supports(path: selectedFile) else { return }
         isPreviewLoading = true
         defer { if token == previewID { isPreviewLoading = false } }
         do {

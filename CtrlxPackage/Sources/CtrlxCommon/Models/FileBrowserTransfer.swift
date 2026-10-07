@@ -11,7 +11,8 @@ final class FileBrowserTransfer {
     @ObservationIgnored @Dependency(FileBrowserDownloadClient.self) private var downloads
     @ObservationIgnored private var generation = UUID()
 
-    func fileForOpening(path: String, source: FileBrowserSource) async throws -> URL {
+    func fileForOpening(path: String, source: FileBrowserSource,
+                        maximumRemoteBytes: Int = FileBrowserLimits.maximumDownloadBytes) async throws -> URL {
         try Task.checkCancellation()
         let token = UUID()
         generation = token
@@ -30,8 +31,10 @@ final class FileBrowserTransfer {
             try Task.checkCancellation()
             return url
         }
-        guard info.kind != .directory, info.size >= 0, info.size <= FileBrowserLimits.maximumDownloadBytes else {
-            throw FileBrowserError.message("Only files up to 1 GiB can be downloaded.")
+        let limit = min(maximumRemoteBytes, FileBrowserLimits.maximumDownloadBytes)
+        guard info.kind != .directory, info.size >= 0, info.size <= limit else {
+            let size = ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .binary)
+            throw FileBrowserError.message("Only files up to \(size) can be downloaded here. Use Download and Open for larger preview files.")
         }
         totalBytes = info.size
         let url = try await downloads.begin(info.name, info.size)

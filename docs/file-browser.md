@@ -47,6 +47,19 @@ into memory or applying remote preview limits. Mac supports tree expansion;
 iOS opens folders as full-area lists. Markdown attachments do not automatically
 fetch network resources or read Viewer-local `file://` URLs.
 
+Word (`doc`, `docx`), Excel (`xls`, `xlsx`) and PowerPoint (`ppt`, `pptx`)
+use read-only system Quick Look inside the Files preview area: `QLPreviewView`
+on Mac and `QLPreviewController` on iOS, not an external app or modal sheet.
+The local Host uses a validated file URL. Viewer/iOS selection automatically
+downloads a cache copy through the existing encrypted download command, capped
+at 32 MiB before creating the cache. Loading shows progress and Cancel; changing
+file, refreshing, leaving the tab or disconnecting cancels that task and removes
+partial copies. Refresh Preview retries a cancelled/failed preview. Existing
+text/image/PDF/media limits and rendering remain unchanged. Quick Look support
+and fidelity depend on the OS; encrypted, damaged or complex documents may not
+render. Office editing, macros, formula recalculation and slide animations are
+not supported. The external-open action remains available as a fallback.
+
 **Open in Default App** hands a local Host file to macOS. **Download and Open**
 on Mac Viewer or iOS downloads a copy only after a click. Mac opens the copy in
 the default app; iOS uses Quick Look and offers **Share / Open in…** for other
@@ -71,6 +84,9 @@ The Host and the Viewer app must both contain this feature. Explicit downloads
 have their own optional `supportsFileDownloads` capability; an older Host can
 still browse/preview while a new Viewer immediately prompts an upgrade for
 downloads, without sending the unknown command variant.
+Office inline previews need the same download capability. They detect the file
+extension on the client, so a download-capable older Host that labels Office as
+text does not need a protocol update. No Office-specific wire enum is added.
 
 `FileBrowserSource` hides local/remote transport. The dependency-injected
 `FileBrowserClient` runs filesystem work on the independent `HostFileBrowser`
@@ -87,6 +103,8 @@ Disconnect cancels pending work and prevents old-connection replies.
   chunks and revision checks, written one chunk at a time off the UI actor.
   This does not relax the inline-preview or search bounds. Even empty files
   require a validated Host read, rejecting FIFOs/devices without blocking.
+- Automatic Office previews use that download path with a stricter 32 MiB
+  client-side limit; local Host Office previews use the file directly.
 - Search: at most 20,000 entries, 200 matches, approximately 16 MiB read and a
   two-second scan budget, checked between files. Partial results are labelled.
   Search does not recurse into symlinks; explicit navigation into one is allowed.
@@ -106,6 +124,9 @@ legacy capability gating, and encrypted transport while a file response is delay
 Additional coverage checks native local-media URLs without transfer, explicit
 binary downloads, download frame round-trips, cancellation/failed-copy cleanup,
 disk-cache expiration, and new-command rejection on a legacy Host.
+Office regressions cover six case-insensitive extensions, binary copies from
+Hosts classifying them as text, the automatic-preview size boundary, local
+file URLs, download capability gating and preservation of other preview paths.
 
 Manual acceptance on installed apps: open two panes in different directories;
 create a Files tab from each on Mac Host, Mac Viewer and iOS; preview text,
@@ -119,3 +140,8 @@ Also operate on a nonselected window while focus remains in another one. Check
 its directory/Fork source, rename/close target after a window reorder, and close
 an unselected Files row without changing the current tab. Cancelling the iOS tab
 list must not switch tabs, start a request or open a second sheet.
+Office acceptance: open Word/Excel/PowerPoint documents in all three Files
+surfaces without a sheet or external app; inspect multiple pages/sheets/slides.
+Cancel a slow transfer, switch files, refresh, and disconnect; confirm partial
+copies are removed and later previews still work. A remote document above
+32 MiB must offer the existing Download and Open path rather than auto-transfer.
