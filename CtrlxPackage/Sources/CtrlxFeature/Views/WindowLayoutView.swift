@@ -418,17 +418,6 @@
                 }
             }
 
-            if fileWorkspace.selected == nil, window != nil {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        activeCopyAction?()
-                    } label: {
-                        Label("Copy Terminal Text", symbol: .docOnClipboard)
-                    }
-                    .disabled(activeCopyAction == nil)
-                }
-            }
-
             if fileWorkspace.selected == nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     ImageUploadToolbarButton(
@@ -447,31 +436,42 @@
                 }
             }
 
-            if fileWorkspace.selected == nil, let activeService, activeService.session != nil {
+            if fileWorkspace.selected == nil, window != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
-                            let newValue = !activeService.isYoloModeEnabled
-                            Task {
-                                await activeService.sendCommand(.setYoloMode(enabled: newValue))
-                            }
+                            activeCopyAction?()
                         } label: {
-                            Label(
-                                activeService.isYoloModeEnabled ? "Disable Yolo Mode" : "Enable Yolo Mode",
-                                symbol: .bolt
-                            )
+                            Label("Copy Terminal Text", symbol: .docOnClipboard)
                         }
+                        .disabled(activeCopyAction == nil)
 
-                        Button {
-                            showSessionInfo = true
-                        } label: {
-                            Label("Session Info", symbol: .infoCircle)
+                        if let activeService, activeService.session != nil {
+                            Divider()
+
+                            Button {
+                                let newValue = !activeService.isYoloModeEnabled
+                                Task {
+                                    await activeService.sendCommand(.setYoloMode(enabled: newValue))
+                                }
+                            } label: {
+                                Label(
+                                    activeService.isYoloModeEnabled ? "Disable Yolo Mode" : "Enable Yolo Mode",
+                                    symbol: .bolt
+                                )
+                            }
+
+                            Button {
+                                showSessionInfo = true
+                            } label: {
+                                Label("Session Info", symbol: .infoCircle)
+                            }
+                            .tint(nil)
                         }
-                        .tint(nil)
                     } label: {
-                        Label("Commands", symbol: .ellipsisCircle)
+                        Label("More", symbol: .ellipsisCircle)
                     }
-                    .tint(activeService.isYoloModeEnabled ? .red : nil)
+                    .tint(activeService?.isYoloModeEnabled == true ? .red : nil)
                     .popover(isPresented: $showSessionInfo) {
                         sessionInfoPopover
                     }
