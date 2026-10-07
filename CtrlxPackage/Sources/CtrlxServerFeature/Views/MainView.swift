@@ -547,7 +547,8 @@ public struct MainView: View {
             paneStates: windowManager.paneStates,
             lastActivity: { windowManager.lastActivity(for: $0) },
             sidebarFields: settings.sidebarFields,
-            sidebarTerminalFields: settings.sidebarTerminalFields
+            sidebarTerminalFields: settings.sidebarTerminalFields,
+            preferredSessionNames: settings.localSessionOrder
         )
     }
 
@@ -596,6 +597,7 @@ public struct MainView: View {
                 ForEach(sessions) { session in
                     sessionButton(session: session)
                 }
+                .onMove(perform: moveLocalSessions)
             }
         } header: {
             SectionHeader(
@@ -606,7 +608,17 @@ public struct MainView: View {
             ) {
                 localNewSessionPopover
             }
+            .contextMenu {
+                Button("Restore Automatic Order") { settings.setLocalSessionOrder([]) }
+                    .disabled(settings.localSessionOrder.isEmpty)
+            }
         }
+    }
+
+    private func moveLocalSessions(fromOffsets source: IndexSet, toOffset destination: Int) {
+        settings.setLocalSessionOrder(RemoteSessionOrder.moving(
+            sortedLocalSessions.map(\.sessionName), fromOffsets: source, toOffset: destination
+        ))
     }
 
     /// The local session that owns `selectedWindow`, or nil when the current
@@ -2895,7 +2907,7 @@ public struct MainView: View {
     }
 
     /// Rebuilds the sidebar's visible session order: local sessions first (in
-    /// `sidebarSortMode` order), then each paired host's sessions in
+    /// manual or `sidebarSortMode` order), then each paired host's sessions in
     /// `pairedHosts` order, each independently sorted the same way its
     /// `RemoteHostSidebarSection` sorts them. Kept in lockstep with `windowList`
     /// and `RemoteHostSidebarSection` so keyboard cycling matches what's on

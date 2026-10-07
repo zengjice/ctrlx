@@ -164,9 +164,10 @@ extension SessionSortData {
         paneStates: [String: PaneState],
         lastActivity: (String) -> Date?,
         sidebarFields: [SidebarField],
-        sidebarTerminalFields: [SidebarField]
+        sidebarTerminalFields: [SidebarField],
+        preferredSessionNames: [String] = []
     ) -> [LocalTmuxSession] {
-        mode.sorted(sessions) { session in
+        let automaticOrder = mode.sorted(sessions) { session in
             forLocalSession(
                 session,
                 paneStates: paneStates,
@@ -175,6 +176,7 @@ extension SessionSortData {
                 sidebarTerminalFields: sidebarTerminalFields
             )
         }
+        return RemoteSessionOrder.applying(preferredSessionNames, to: automaticOrder, sessionName: \.sessionName)
     }
 
 }

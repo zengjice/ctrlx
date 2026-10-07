@@ -170,6 +170,10 @@ struct RemoteHostSidebarSection: View {
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
         .accessibilityAddTraits(.isHeader)
+        .contextMenu {
+            Button("Restore Automatic Order") { settings.setRemoteSessionOrder([], for: host.id) }
+                .disabled(settings.remoteSessionOrder(for: host.id).isEmpty)
+        }
     }
 
     @ViewBuilder

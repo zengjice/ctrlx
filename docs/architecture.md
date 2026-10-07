@@ -70,6 +70,18 @@ Coding-agent integration is gated by a `CodingAgent` enum (`.claudeCode` / `.cod
 |-----------|------|----------------|
 | **ProcessRunner** | `actor` | Executes external processes asynchronously |
 
+## Sidebar Session Ordering
+
+- Mac session rows use native `List` drag reordering within their Local/Host section.
+- Before the first drag, `sidebarSortMode` determines the order. A drag captures
+  the displayed order as a device-local preference; state changes do not re-rank it.
+- `AppSettings.localSessionOrder` is separate from remote host ranks. Existing
+  pane refreshes reconcile local renames by matching pane-ID sets, remove closed
+  sessions and append new sessions. Unchanged ranks do not write preferences.
+- The sidebar, menu bar and keyboard session cycling use the same local sorter.
+- Right-click Local or a remote Host header → **Restore Automatic Order** to
+  clear only that section's preference. No ordering is sent to tmux or the Relay.
+
 ## App Bootstrap
 
 The app entry point (`TmuxPaneMirrorApp`) creates the coordinator and defines three scenes:

@@ -76,6 +76,10 @@ struct SidebarLayoutSettingsView: View {
                     }
                     .pickerStyle(.radioGroup)
                     .labelsHidden()
+                    Text("Drag sessions to use manual order. Right-click a section header to restore automatic sorting.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding()

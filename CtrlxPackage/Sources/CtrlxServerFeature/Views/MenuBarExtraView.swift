@@ -27,7 +27,8 @@ public struct MenuBarExtraView: View {
             paneStates: windowManager.paneStates,
             lastActivity: { windowManager.lastActivity(for: $0) },
             sidebarFields: settings.sidebarFields,
-            sidebarTerminalFields: settings.sidebarTerminalFields
+            sidebarTerminalFields: settings.sidebarTerminalFields,
+            preferredSessionNames: settings.localSessionOrder
         )
     }
 

@@ -1,5 +1,6 @@
 import AppKit
 import CtrlxCommon
+import CtrlxNetworking
 import Dependencies
 import Foundation
 import SwiftUI
@@ -418,6 +419,14 @@ final public class AppSettings {
         didSet { preferences.setString(sidebarSortMode.rawValue, Keys.sidebarSortMode) }
     }
 
+    /// Device-local rank; an empty order uses `sidebarSortMode`.
+    public private(set) var localSessionOrder: [String] = [] {
+        didSet {
+            guard let data = try? JSONEncoder().encode(localSessionOrder) else { return }
+            preferences.setData(data, Keys.localSessionOrder)
+        }
+    }
+
     // MARK: - External Editor Settings
 
     /// External editors the user can pick to open files with.
@@ -539,6 +548,7 @@ final public class AppSettings {
         self.sidebarSortMode = SidebarSortMode(
             rawValue: preferences.string(Keys.sidebarSortMode) ?? ""
         ) ?? .statusPriorityIdleFirst
+        self.localSessionOrder = RemoteSessionOrder.normalized(Self.loadCodable(from: preferences, key: .localSessionOrder))
 
         // External Editors
         self.editors = Self.loadCodable(from: preferences, key: Keys.editors)
@@ -614,6 +624,7 @@ final public class AppSettings {
         case sidebarFields
         case sidebarTerminalFields
         case sidebarSortMode
+        case localSessionOrder
         /// External Editors
         case editors
         case hasSeededEditors
@@ -881,8 +892,30 @@ final public class AppSettings {
         remoteSessionOrderByHost[hostId] ?? []
     }
 
+    public func setLocalSessionOrder(_ sessionNames: [String]) {
+        let normalized = RemoteSessionOrder.normalized(sessionNames)
+        guard normalized != localSessionOrder else { return }
+        localSessionOrder = normalized
+    }
+
+    func reconcileLocalSessionOrder(previousPaneStates: [String: PaneState], panes: [PaneInfo]) {
+        guard !localSessionOrder.isEmpty else { return }
+        let oldPaneIDs = Dictionary(grouping: previousPaneStates.values.filter { !$0.sessionName.isEmpty }, by: \.sessionName)
+            .mapValues { Set($0.map(\.paneId)) }
+        // An empty, uninitialized pane cache must not erase the saved rank on launch.
+        guard !panes.isEmpty || !oldPaneIDs.isEmpty else { return }
+        let newPaneIDs = Dictionary(grouping: panes, by: \.sessionName)
+            .mapValues { Set($0.map(\.paneId)) }
+        var order = localSessionOrder
+        for rename in SessionRenameMapping.detectNames(from: oldPaneIDs, to: newPaneIDs) {
+            order = RemoteSessionOrder.replacing(rename.oldName, with: rename.newName, in: order)
+        }
+        setLocalSessionOrder(RemoteSessionOrder.applying(order, to: newPaneIDs.keys.sorted(), sessionName: { $0 }))
+    }
+
     public func setRemoteSessionOrder(_ sessionNames: [String], for hostId: String) {
         let normalized = RemoteSessionOrder.normalized(sessionNames)
+        guard normalized != remoteSessionOrder(for: hostId) else { return }
         if normalized.isEmpty {
             remoteSessionOrderByHost.removeValue(forKey: hostId)
         } else {

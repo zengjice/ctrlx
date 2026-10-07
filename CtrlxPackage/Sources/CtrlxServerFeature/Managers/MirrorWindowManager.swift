@@ -122,6 +122,7 @@ final public class MirrorWindowManager {
     /// are still observable via the warnings below and the producer-side logs.
     @discardableResult
     public func updatePaneStates(from panes: [PaneInfo]) -> Bool {
+        settings.reconcileLocalSessionOrder(previousPaneStates: paneStates, panes: panes)
         if panes.isEmpty && !paneStates.isEmpty {
             logger.warning("updatePaneStates clearing non-empty state from empty panes", metadata: [
                 "existingPaneCount": "\(paneStates.count)",
