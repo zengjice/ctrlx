@@ -66,6 +66,35 @@ the default app; iOS uses Quick Look and offers **Share / Open in…** for other
 apps or Save to Files. System codec/app support still determines whether a file
 can be opened. Copies are not edited back onto the Host.
 
+### Remote video playback
+
+Mac Viewer and iOS offer **Play Video** for MP4/MOV in the inline preview area.
+Selection alone sends no video reads. Playback uses AVKit and a custom
+AVFoundation resource loader, requesting byte ranges through the existing
+encrypted download command. It does not expose a public file URL, start an HTTP
+server, create a complete disk copy or use Chromium. The local Mac Host keeps
+its validated file-URL player unchanged. Other formats retain Download and Open;
+actual codec support is determined by the OS. There is no transcoding or live
+streaming, and the existing 1 GiB export limit is preserved.
+
+Each preview has an 8 MiB LRU chunk cache, at most one network read in flight,
+and a bounded loading-request queue. Reads rotate between pending ranges, so
+file-tail metadata and seeks cannot wait behind a request for the entire file.
+The player requests a three-second forward buffer; actual loaded time ranges
+also suspend feeding once sufficiently buffered. This is not a hard bound on
+AVFoundation's own decoder/buffer memory. Pause/background suspend reads.
+Leaving the active scene during metadata preparation cancels that attempt;
+late replies cannot create a player, even after returning to the foreground.
+A ready player is retained but never automatically resumed on foregrounding.
+Unbuffered seeks while paused are serviced on explicit resume. Closing, changing file,
+refreshing or disconnecting cancels reads and drops the memory cache. There is
+no persistent video cache. Low bandwidth/high latency can still cause buffering.
+Blocks yield between replies; they do not change terminal receive scheduling.
+
+Streaming needs the existing file-download capability, so download-capable
+older Hosts work without a new command/handshake field or Relay deployment.
+New viewers fail immediately with the existing upgrade hint on a legacy Host.
+
 Downloads show byte progress and can be cancelled. Selecting another file,
 leaving the tab or disconnecting cancels pending work. Partial copies are removed;
 successful copies stay in the app's `Caches/CtrlX/FileBrowserDownloads` directory
@@ -127,6 +156,11 @@ disk-cache expiration, and new-command rejection on a legacy Host.
 Office regressions cover six case-insensitive extensions, binary copies from
 Hosts classifying them as text, the automatic-preview size boundary, local
 file URLs, download capability gating and preservation of other preview paths.
+Video coverage includes random ranges/EOF/overflow, LRU and the default 8 MiB
+bound, corrupt/stale replies, cancellation, capability gating, real MP4/MOV
+first-frame decoding before a complete download, forward/backward seeks,
+single-flight reads, native playback pause/resume/teardown, and delayed metadata
+across backgrounding, foregrounding, cancellation and a fresh preparation.
 
 Manual acceptance on installed apps: open two panes in different directories;
 create a Files tab from each on Mac Host, Mac Viewer and iOS; preview text,
@@ -145,3 +179,8 @@ surfaces without a sheet or external app; inspect multiple pages/sheets/slides.
 Cancel a slow transfer, switch files, refresh, and disconnect; confirm partial
 copies are removed and later previews still work. A remote document above
 32 MiB must offer the existing Download and Open path rather than auto-transfer.
+Video acceptance: use Play Video on Mac Viewer/iOS, seek forward/backward,
+pause/resume and leave the tab. Check unsupported codecs, a movie above 1 GiB,
+Host disconnect/reconnect and simultaneous terminal input. Compare first-frame,
+seek latency and terminal-input latency on LAN, WireGuard and the hosted Relay;
+automated local-delay tests cannot establish real-network playback quality.

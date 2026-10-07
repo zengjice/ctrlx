@@ -174,6 +174,8 @@ public final class FileBrowserTab: Identifiable {
         // Office uses a native file-URL preview with its own cancellable transfer,
         // including on older Hosts that classify these binary documents as text.
         guard !FileBrowserOfficeDocument.supports(path: selectedFile) else { return }
+        // Remote video starts only when Play is tapped, using random-access reads.
+        guard source.localFileURL != nil || !FileBrowserVideo.supports(path: selectedFile) else { return }
         isPreviewLoading = true
         defer { if token == previewID { isPreviewLoading = false } }
         do {

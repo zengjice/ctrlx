@@ -50,7 +50,7 @@ struct FileBrowserTabTests {
         await tab.loadPreview(source: source)
         #expect(tab.previewURL == nil)
         #expect(tab.previewData == nil)
-        #expect(tab.previewError != nil)
+        #expect(tab.previewError == nil)
         #expect(reads == 0)
     }
 

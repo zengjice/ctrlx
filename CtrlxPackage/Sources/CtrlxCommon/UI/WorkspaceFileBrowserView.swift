@@ -185,6 +185,8 @@ public struct WorkspaceFileBrowserView: View {
                 if let error = tab.previewError { Text(error).padding().textSelection(.enabled) }
                 if FileBrowserOfficeDocument.supports(path: path) {
                     FileBrowserOfficePreview(path: path, source: source).id(previewKey)
+                } else if source.localFileURL == nil, FileBrowserVideo.supports(path: path) {
+                    FileBrowserVideoPreview(path: path, source: source).id(previewKey)
                 } else {
                     #if os(macOS)
                     if let url = tab.previewURL {

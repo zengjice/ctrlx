@@ -1,4 +1,4 @@
-import CtrlxCommon
+@testable import CtrlxCommon
 import CtrlxEncryption
 import CtrlxNetworking
 import ConcurrencyExtras
@@ -11,6 +11,91 @@ import Vapor
 @MainActor
 @Suite("File requests across Viewer reconnects", .serialized)
 struct FileBrowserConnectionTests {
+    @Test func encryptedVideoRangeReadsLeaveKeyboardCommandsResponsive() async throws {
+        let originalVersion = VersionCompatibility.appVersionOverride
+        VersionCompatibility.appVersionOverride = "3.0.43"
+        defer { VersionCompatibility.appVersionOverride = originalVersion }
+        let relay = PhraseTestRelay()
+        let app = try await Application.make(.testing)
+        app.webSocket("api", "ws", maxFrameSize: .init(integerLiteral: RelayPayloadLimits.maxWebSocketFrameBytes)) { _, ws in
+            ws.onBinary { ws, bytes in
+                let data = Data(bytes.readableBytesView)
+                Task { await relay.receive(data, from: ws) }
+            }
+        }
+        try await app.asyncBoot()
+        try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+        do {
+            let port = try #require(app.http.server.shared.localAddress?.port)
+            let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
+            let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
+            let host = ConnectedViewer(
+                pairedViewer: .init(id: "pair", deviceName: "Viewer",
+                                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
+                                    partnerPublicKeyId: viewerEncryption.keyId), e2eeService: hostEncryption)
+            let viewer = ViewerRelayClient()
+            let block = FileBrowserLimits.chunkBytes
+            let info = FileBrowserEntry(path: "/Host/movie.mp4", name: "movie.mp4", kind: .unsupported,
+                                       size: 2 * block + 13, revision: "1")
+            let (gate, release) = AsyncStream<Void>.makeStream()
+            defer { release.finish() }
+            var reading = false
+            var replied = false
+            var keysArrived = false
+            host.onSessionStateRequest = { .init(pairId: "", paneStates: [:], supportsFileBrowsing: true, supportsFileDownloads: true) }
+            host.onCommand = { command in
+                if case let .browseFiles(spec) = command.command,
+                   case let .download(path, offset, revision) = spec.operation {
+                    if offset == block {
+                        reading = true
+                        for await _ in gate { break }
+                        replied = true
+                    }
+                    return .init(commandId: command.id, success: true,
+                                 fileBrowser: .chunk(.init(path: path, revision: revision, offset: offset,
+                                                          data: Data(repeating: 0xFF, count: min(block, info.size - offset)))))
+                }
+                if case .sendKeystroke = command.command { keysArrived = true }
+                return .success(for: command.id)
+            }
+            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test",
+                               publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
+            do {
+                await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
+                try await waitUntil { host.isViewerConnected && viewer.hostSupportsFileDownloads }
+                let source = FileBrowserSource(id: "remote", paneID: "%7") { operation in
+                    let response = try await viewer.sendCommand(BrowseFiles(operation), paneId: "%7").get()
+                    return try #require(response.fileBrowser)
+                }
+                let reader = try FileBrowserVideoReader(info: info, source: source)
+                let request = Task { try await reader.read(offset: block + 7, length: 4) }
+                defer { request.cancel() }
+                try await waitUntil { reading }
+                _ = await viewer.sendCommand(SendKeystroke([.text("test")]), paneId: "%7")
+                try await waitUntil { keysArrived }
+                #expect(!replied, "Keyboard input must arrive even while a video read is blocked")
+                release.yield()
+                #expect(try await request.value == Data(repeating: 0xFF, count: 4))
+                #expect(try await reader.read(offset: info.size - 2, length: 8) == Data(repeating: 0xFF, count: 2))
+                #expect(reader.cachedBytes == block + 13)
+                #expect(await relay.errors.isEmpty)
+                #expect(await relay.unexpectedTypes.isEmpty)
+            } catch {
+                await viewer.disconnect()
+                await host.disconnect()
+                throw error
+            }
+            await viewer.disconnect()
+            await host.disconnect()
+        } catch {
+            await app.server.shutdown()
+            try await app.asyncShutdown()
+            throw error
+        }
+        await app.server.shutdown()
+        try await app.asyncShutdown()
+    }
+
     @Test func viewerDisconnectFreesSlotsBeforeOldIOFinishes() async throws {
         let originalVersion = VersionCompatibility.appVersionOverride
         VersionCompatibility.appVersionOverride = "3.0.43"
