@@ -85,7 +85,7 @@ Open `Ctrlx.xcworkspace` and use scheme `CtrlxServer` for macOS or
 is `CtrlX`.
 
 ```bash
-swift test --package-path CtrlxPackage
+./scripts/unit-tests.sh
 
 ./sbin/auto-env.sh
 ./sbin/start_server.sh

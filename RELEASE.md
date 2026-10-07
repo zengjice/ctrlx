@@ -91,6 +91,28 @@ platforms/worktrees and the separate Swift package test cache are untouched.
 Formal releases already remove their temporary DerivedData on exit and remain
 zero-parameter.
 
+Use `./scripts/unit-tests.sh` for package tests, passing test filters after `--`.
+The script fixes the `swiftbuild` backend and disables indexes, so repeated runs
+do not accumulate native and Swift Build outputs. Only after tests succeed, it
+removes obsolete native outputs for configurations already switched to
+`swiftbuild`, plus old test indexes. `--save-space` also removes Swift Build's
+compilation caches, but keeps test products and downloaded dependencies. Failed
+tests perform no cleanup. The E2E sidecar build uses the same backend and indexing
+policy. Do not build or clean the same package cache concurrently.
+
+For an inactive worktree, prefer this narrower cleanup over `deep`:
+
+```bash
+python3 scripts/clean-build.py idle        # Preview only
+python3 scripts/clean-build.py idle --yes  # Stop this worktree's builds/installs first
+```
+
+It removes package/platform compilation caches, indexes and redundant Xcode
+dependency copies. Signed apps in DerivedData, Swift Build products, IPA/DMG
+files, dependency downloads, Chromium SDKs and signing configuration remain.
+It does not scan other worktrees or automatically decide which ones are idle.
+The next build recompiles; the kept dependency caches remain reusable.
+
 Packaging also removes `dist/qcloud-release/<version>/public-CtrlX-<version>.dmg`
 copies whose latest publication report records success and whose SHA-256 still
 matches. The maintainer's Mac publisher performs the same cleanup immediately

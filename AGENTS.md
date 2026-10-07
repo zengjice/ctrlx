@@ -99,7 +99,11 @@ the `.xcodeproj`, so local packages and shared schemes resolve consistently.
 
 - macOS scheme: `CtrlxServer`
 - iOS scheme: `Ctrlx`
-- Unit tests: `swift test --package-path CtrlxPackage`
+- Unit tests: `./scripts/unit-tests.sh` (pass filters after `--`). Uses Swift's
+  `swiftbuild` backend without indexes; after success, prunes old native-backend
+  outputs and test indexes. Do not alternate backends or build concurrently in
+  the same package cache. Use `--save-space` to remove test compilation caches
+  after success, keeping test products and dependencies.
 
 ### iOS build, package, and device install
 
@@ -150,6 +154,8 @@ Default behavior remains incremental. Never run concurrent builds/installs again
 the same DerivedData directory; cleanup never sweeps other worktrees.
 Use `python3 scripts/clean-build.py deep` to preview deep cleanup; add `--yes`
 only when builds and device installs in that worktree are stopped. See `RELEASE.md`.
+Prefer `python3 scripts/clean-build.py idle` for an inactive worktree: it preserves
+signed apps, packages and downloaded dependencies. Both modes stay worktree-local.
 
 For same-source performance comparisons, `--configuration Debug` produces
 `Debug-iphoneos/CtrlX.app` and a separate `CtrlX-<version>-Debug.ipa`. Install the

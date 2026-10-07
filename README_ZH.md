@@ -76,7 +76,7 @@ APNs 凭据。
 scheme。内部 Swift 模块统一使用 `Ctrlx*` 前缀，产品名称为 `CtrlX`。
 
 ```bash
-swift test --package-path CtrlxPackage
+./scripts/unit-tests.sh
 
 ./sbin/auto-env.sh
 ./sbin/start_server.sh

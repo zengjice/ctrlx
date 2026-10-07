@@ -143,6 +143,122 @@ class BuildCleanupTests(unittest.TestCase):
         self.clean(storage.packaging_cache_targets(self.root, current))
         self.assertTrue(kept.exists())
 
+    def test_test_cleanup_only_prunes_configurations_switched_to_swiftbuild(self):
+        self.file("CtrlxPackage/.build/.buildSystem_debug").write_text("swiftbuild")
+        self.file("CtrlxPackage/.build/.buildSystem_release").write_text("native")
+        removed = [self.file(name) for name in (
+            "CtrlxPackage/.build/arm64-apple-macosx/debug/object.o",
+            "CtrlxPackage/.build/out/v5/records/index",
+        )]
+        kept = [self.file(name) for name in (
+            "CtrlxPackage/.build/arm64-apple-macosx/release/executable",
+            "CtrlxPackage/.build/x86_64-unknown-linux-gnu/debug/executable",
+            "CtrlxPackage/.build/out/Products/Debug/test.xctest/executable",
+            "CtrlxPackage/.build/out/Intermediates.noindex/object.o",
+            "CtrlxPackage/.build/out/ModuleCache.noindex/module.pcm",
+            "CtrlxPackage/.build/checkouts/dependency.swift",
+            "CtrlxPackage/.build/repositories/repository/objects/pin",
+            "CtrlxPackage/.build/artifacts/SDK/library",
+            ".build-local/DerivedData/iOS/Build/Products/CtrlX.app/executable",
+        )]
+        outside = self.file("CtrlxPackage/.build/out/v5/records/index", self.other)
+        self.clean(storage.test_cache_targets(self.root))
+        self.assertTrue(all(not path.exists() for path in removed))
+        self.assertTrue(all(path.exists() for path in kept + [outside]))
+
+    def test_missing_backend_marker_preserves_native_outputs(self):
+        kept = self.file("CtrlxPackage/.build/arm64-apple-macosx/debug/object.o")
+        self.clean(storage.test_cache_targets(self.root))
+        self.assertTrue(kept.exists())
+
+    def test_test_save_space_preserves_swiftbuild_products_and_downloads(self):
+        removed = [self.file(f"CtrlxPackage/.build/out/{name}/fixture")
+                   for name in storage.TEST_CACHE_DIRS]
+        kept = [self.file(name) for name in (
+            "CtrlxPackage/.build/out/Products/Debug/test.xctest/executable",
+            "CtrlxPackage/.build/checkouts/dependency.swift",
+            "CtrlxPackage/.build/prebuilts/tool",
+        )]
+        self.clean(storage.test_cache_targets(self.root, save_space=True))
+        self.assertTrue(all(not path.exists() for path in removed))
+        self.assertTrue(all(path.exists() for path in kept))
+
+    def test_idle_cleanup_preserves_apps_packages_downloads_and_other_worktrees(self):
+        removed = [self.file(name) for name in (
+            "CtrlxPackage/.build/arm64-apple-macosx/debug/object.o",
+            "CtrlxPackage/.build/out/Intermediates.noindex/object.o",
+            "CtrlxPackage/.build/out/v5/records/index",
+            ".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o",
+            ".build-local/DerivedData/macOS/ModuleCache.noindex/module.pcm",
+            ".build-local/DerivedData/iOS-Simulator/Index.noindex/index",
+            ".build-local/DerivedData/iOS/SourcePackages/checkouts/dependency.swift",
+        )]
+        kept = [self.file(name) for name in (
+            "CtrlxPackage/.build/out/Products/Debug/CtrlxCLI",
+            "CtrlxPackage/.build/checkouts/dependency.swift",
+            "CtrlxPackage/.build/repositories/repository/objects/pin",
+            "CtrlxPackage/.build/artifacts/SDK/library",
+            ".build-local/SourcePackages/checkouts/dependency.swift",
+            ".build-local/DerivedData/iOS/Build/Products/Release-iphoneos/CtrlX.app/executable",
+            ".build-local/DerivedData/macOS/Build/Products/Release/CtrlX.app/executable",
+            ".build-local/DerivedData/iOS/Logs/build.log",
+            ".build-local/cef-browser-probe/sdk/include/cef.h",
+            ".build-local/agent-browser/Embedded/browser",
+            ".build-local/agent-browser-engine/0.38.1/agent-browser",
+            "dist/CtrlX-3.0.3.ipa", "Config/Local.xcconfig", "browser-profile/Cookies",
+        )]
+        outside = self.file("CtrlxPackage/.build/out/Intermediates.noindex/object.o", self.other)
+        targets = storage.idle_targets(self.root)
+        self.assertIn("Preview only", self.clean(targets, apply=False))
+        self.assertTrue(all(path.exists() for path in removed))
+        self.clean(targets)
+        self.assertTrue(all(not path.exists() for path in removed))
+        self.assertTrue(all(path.exists() for path in kept + [outside]))
+        self.assertEqual(storage.idle_targets(self.root), [])
+
+    def test_idle_cleanup_keeps_only_dependency_copy_without_shared_cache(self):
+        kept = self.file(".build-local/DerivedData/iOS/SourcePackages/checkouts/dependency.swift")
+        self.clean(storage.idle_targets(self.root))
+        self.assertTrue(kept.exists())
+
+    def test_empty_shared_cache_does_not_make_derived_dependencies_redundant(self):
+        kept = self.file(".build-local/DerivedData/iOS/SourcePackages/checkouts/dependency.swift")
+        (self.root / ".build-local/SourcePackages/checkouts").mkdir(parents=True)
+        self.clean(storage.idle_targets(self.root))
+        self.assertTrue(kept.exists())
+        current = self.artifact("3.0.3")
+        self.clean(storage.packaging_cache_targets(self.root, current))
+        self.assertTrue(kept.exists())
+
+    def test_test_cache_symlink_and_backend_marker_symlink_rejected(self):
+        outside = self.file("outside/fixture", self.other)
+        native = self.file("CtrlxPackage/.build/arm64-apple-macosx/debug/object.o")
+        marker = self.file("CtrlxPackage/.build/.buildSystem_debug")
+        marker.unlink()
+        marker.symlink_to(outside)
+        with self.assertRaises(ValueError):
+            storage.test_cache_targets(self.root)
+        self.assertTrue(native.exists())
+        marker.unlink()
+        marker.write_text("swiftbuild")
+        out = self.root / "CtrlxPackage/.build/out"
+        out.symlink_to(outside.parent, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            storage.test_cache_targets(self.root)
+        self.assertTrue(native.exists())
+        self.assertTrue(outside.exists())
+
+    def test_idle_platform_symlink_rejected_before_any_deletion(self):
+        existing = self.file("CtrlxPackage/.build/out/v5/records/index")
+        outside = self.file("cache/Build/Intermediates.noindex/object.o", self.other)
+        derived = self.root / ".build-local/DerivedData"
+        derived.mkdir(parents=True)
+        (derived / "iOS").symlink_to(self.other / "cache", target_is_directory=True)
+        with self.assertRaises(ValueError):
+            storage.idle_targets(self.root)
+        self.assertTrue(existing.exists())
+        self.assertTrue(outside.exists())
+
     def test_packaging_cache_symlink_rejected(self):
         current = self.artifact("3.0.3")
         outside = self.file("index/fixture", self.other)

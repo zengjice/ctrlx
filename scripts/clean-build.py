@@ -23,6 +23,11 @@ COMPILATION_CACHE_DIRS = (
     "SDKExplicitPrecompiledModules",
     "SDKStatCaches.noindex",
 )
+PACKAGE_TRIPLE = re.compile(r"(?:arm64|x86_64)-apple-macosx")
+TEST_CACHE_DIRS = (
+    "Intermediates.noindex", "CompilationCache.noindex", "ModuleCache.noindex",
+    "SDKExplicitPrecompiledModules", "SDKStatCaches.noindex", "PCH",
+)
 DEEP_CACHE_DIRS = (
     ".build-local/DerivedData",
     ".build-local/SourcePackages",
@@ -88,19 +93,58 @@ def artifact_targets(root, current):
 
 def packaging_cache_targets(root, artifact, save_space=False):
     platform = "macOS" if artifact.suffix == ".dmg" else "iOS"
-    derived = root / ".build-local/DerivedData" / platform
+    return derived_cache_targets(root, root / ".build-local/DerivedData" / platform, save_space)
+
+
+def derived_cache_targets(root, derived, save_space=False):
     targets = [derived / "Index.noindex"]
     # Packaging explicitly uses the shared -clonedSourcePackagesDirPath.
     # Old manual builds may have left a second dependency copy in DerivedData.
     shared = root / ".build-local/SourcePackages"
     validate_path(root, shared)
-    if shared.is_dir():
+    checkouts = shared / "checkouts"
+    validate_path(root, checkouts)
+    if checkouts.is_dir() and any(checkouts.iterdir()):
         targets.append(derived / "SourcePackages")
     if save_space:
         targets.extend(derived / name for name in COMPILATION_CACHE_DIRS)
     for path in targets:
         validate_path(root, path)
     return [path for path in targets if path.exists()]
+
+
+def test_cache_targets(root, save_space=False, idle=False):
+    build = root / "CtrlxPackage/.build"
+    validate_path(root, build)
+    if not build.is_dir():
+        return []
+    targets = [build / "out/v5", build / "out/Index.noindex"]
+    if save_space or idle:
+        targets.extend(build / "out" / name for name in TEST_CACHE_DIRS)
+    for triple in sorted(build.iterdir()):
+        if not PACKAGE_TRIPLE.fullmatch(triple.name):
+            continue
+        validate_path(root, triple)
+        for configuration in ("debug", "release"):
+            marker = build / f".buildSystem_{configuration}"
+            validate_path(root, marker)
+            if idle or (marker.is_file() and marker.read_text().strip() == "swiftbuild"):
+                targets.append(triple / configuration)
+    for path in targets:
+        validate_path(root, path)
+    return [path for path in targets if path.exists()]
+
+
+def idle_targets(root):
+    targets = test_cache_targets(root, idle=True)
+    derived = root / ".build-local/DerivedData"
+    validate_path(root, derived)
+    if derived.is_dir():
+        for platform in sorted(derived.iterdir()):
+            validate_path(root, platform)
+            if platform.is_dir():
+                targets += derived_cache_targets(root, platform, save_space=True)
+    return targets
 
 
 def receipt_targets(root, locks):
@@ -194,6 +238,11 @@ def main():
     receipts.add_argument("--yes", action="store_true", help="Delete the listed verified copies")
     deep = modes.add_parser("deep", help="Remove build caches; preserve dist, signing config and user data")
     deep.add_argument("--yes", action="store_true", help="Delete the listed caches")
+    tests = modes.add_parser("tests", help="Remove obsolete native backend outputs and test indexes; keep swiftbuild caches")
+    tests.add_argument("--save-space", action="store_true", help="Also remove test compilation caches; keep products and downloads")
+    tests.add_argument("--yes", action="store_true", help="Delete the listed test caches")
+    idle = modes.add_parser("idle", help="Remove compilation caches in an idle worktree; keep signed apps, packages and downloads")
+    idle.add_argument("--yes", action="store_true", help="Delete the listed caches after stopping this worktree's builds and installs")
     space = modes.add_parser("check-space", help="Warn when less than 20 GiB is available; never delete anything")
     space.add_argument("--path", required=True, type=Path, help="Existing build-volume directory to check")
     args = parser.parse_args()
@@ -208,10 +257,15 @@ def main():
         check_space(args.path)
         return
     with contextlib.ExitStack() as locks:
-        if args.mode == "deep":
+        if args.mode in ("deep", "idle", "tests"):
             print("Stop builds, packaging and device installs in this worktree before deleting caches.")
-            print("Built installable apps will be removed; IPA/DMG files in dist are preserved.")
-            targets = deep_targets(root)
+            if args.mode == "deep":
+                print("Built installable apps will be removed; IPA/DMG files in dist are preserved.")
+                targets = deep_targets(root)
+            elif args.mode == "idle":
+                targets = idle_targets(root)
+            else:
+                targets = test_cache_targets(root, args.save_space)
         elif args.mode == "prune":
             if args.save_space and not args.platform:
                 raise ValueError("--save-space requires --platform")

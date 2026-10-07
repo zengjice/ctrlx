@@ -95,6 +95,37 @@ class PackageWorktreeTests(unittest.TestCase):
                 self.assertTrue(caches[0].exists())
             self.assertTrue(all(path.exists() for path in apps + artifacts))
 
+    def test_idle_cleanup_is_explicit_and_stays_in_linked_worktree(self):
+        caches = []
+        apps = []
+        downloads = []
+        for root in (self.primary.resolve(), self.linked.resolve()):
+            scripts = root / "scripts"
+            scripts.mkdir()
+            shutil.copy2(SCRIPTS / "clean-build.py", scripts / "clean-build.py")
+            for relative, collection in (
+                (".build-local/DerivedData/macOS/Build/Intermediates.noindex/object.o", caches),
+                (".build-local/DerivedData/macOS/Build/Products/Release/CtrlX.app/executable", apps),
+                ("CtrlxPackage/.build/checkouts/dependency.swift", downloads),
+            ):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture")
+                collection.append(path)
+        draft = self.primary / "other-agent.txt"
+        draft.write_text("work in progress")
+        arguments = ["python3", str(self.linked / "scripts/clean-build.py"), "idle"]
+        preview = subprocess.run(arguments, text=True, capture_output=True)
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertIn("Preview only", preview.stdout)
+        self.assertTrue(all(path.exists() for path in caches))
+        result = subprocess.run([*arguments, "--yes"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(caches[1].exists())
+        self.assertTrue(caches[0].exists())
+        self.assertTrue(all(path.exists() for path in apps + downloads))
+        self.assertEqual(draft.read_text(), "work in progress")
+
 
 if __name__ == "__main__":
     unittest.main()

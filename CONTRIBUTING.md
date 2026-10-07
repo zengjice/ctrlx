@@ -28,7 +28,7 @@ Internal Swift modules use the `Ctrlx` prefix; user-facing branding is `CtrlX`.
 - Requires a recent Xcode (Swift 6.3+ toolchain), macOS 15+, and tmux.
 - Mac app: open `Ctrlx.xcworkspace`, scheme `CtrlxServer`.
   iOS app: scheme `Ctrlx`.
-- Unit tests: `swift test` in `CtrlxPackage/`.
+- Unit tests: `./scripts/unit-tests.sh` (or `./scripts/unit-tests.sh -- --filter SuiteName`).
 - End-to-end suite: `./scripts/e2e-test.sh` (see [docs/e2e-testing.md](docs/e2e-testing.md)).
   E2E screenshot baselines are CI-generated — don't commit locally regenerated
   baselines.
@@ -50,6 +50,6 @@ The short version (full details in [AGENTS.md](AGENTS.md) and
 ## Pull requests
 
 - Keep PRs focused — unrelated changes belong in separate PRs.
-- Make sure `swift test` passes; add tests for new behavior.
+- Make sure `./scripts/unit-tests.sh` passes; add tests for new behavior.
 - By contributing you agree your work is licensed under the project's
   [AGPL-3.0 license](LICENSE).
