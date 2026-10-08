@@ -2,6 +2,43 @@
 
 > **Historical status (PR #179):** The first fix moved live terminal bytes to `pipe-pane`, resolving corruption in the original String-based `%output` parser. In September 2026, terminal content moved back to control mode. The September 8 findings below correct two holes in that transition: connection identity and capture atomicity. `pipe-pane` remains scan-only for OSC side effects. The older diagrams and hypotheses below are historical; see `streaming-architecture.md` for the current data flow.
 
+## Sparse table updates leave white blocks (October 8, 2026)
+
+Replaying the affected pane's raw terminal bytes reproduced the white rectangles
+without networking. Clearing the CoreGraphics line cache produced identical
+pixels. The trace contained no block characters or SGR inverse sequence.
+
+Two shared SwiftTerm buffer defects caused this:
+
+- Wide-character continuations used `Buffer.curAttr`, an unused state initialized
+  to `Attribute.empty` with an inverted background, instead of the actual
+  character's attributes.
+- Printing into one half of an existing wide character left the other half
+  intact. Codex's sparse table refresh writes a space at the old character's
+  first column; the orphan continuation was then drawn as a white blank cell.
+
+The source fix removes the stale attribute state, inherits continuation
+attributes from the character, and clears partial wide characters at both ends
+of a write. ASCII bulk insertion still checks only two boundaries, not every
+overwritten cell. Insert mode also clears a split character before shifting.
+Rendering caches, scrolling, feed batching, Codex launch and Relay are unchanged.
+
+Validation: 534 Swift Testing and 85 XCTest tests passed, including Chinese,
+emoji, narrow/wide partial overwrites, insert/wrap, fragmented UTF-8 and native
+CoreGraphics pixel comparisons under default, colored and inverse attributes.
+The real 2670-chunk trace replay left zero orphan continuations and zero erroneous
+inverted backgrounds; cached and fresh pixels matched, and the table was visually
+checked. UIKit library compilation and shared test-source typechecking passed;
+these are separate from iPhone runtime acceptance. Test builds use SwiftPM's
+native backend because the installed Xcode lacks the Metal compiler; no build
+setting was changed.
+
+SwiftTerm `04cd54b6cb65561f50628bdffd5ced298437d48e` is published and pinned
+in CtrlX. SwiftPM and Xcode resolved the published revision; their checked-out
+buffer source hashes match the tested source, and no other dependency pins changed.
+Rollout requires updated Mac/iOS display clients, not a Relay deployment.
+Source validation alone does not update installed apps.
+
 ## iOS remaining layout cost (September 30, 2026)
 
 After Mac scrolling became acceptable, iOS still rebuilt attributed strings and
