@@ -594,10 +594,12 @@ public struct MainView: View {
                     .foregroundStyle(.secondary)
                     .font(.caption)
             } else {
-                ForEach(sessions) { session in
+                SessionReorderableRows(
+                    sessions: sessions, sessionName: \.sessionName,
+                    onMove: moveLocalSession, rowBackground: localSessionBackground
+                ) { session in
                     sessionButton(session: session)
                 }
-                .onMove(perform: moveLocalSessions)
             }
         } header: {
             SectionHeader(
@@ -615,10 +617,14 @@ public struct MainView: View {
         }
     }
 
-    private func moveLocalSessions(fromOffsets source: IndexSet, toOffset destination: Int) {
-        settings.setLocalSessionOrder(RemoteSessionOrder.moving(
-            sortedLocalSessions.map(\.sessionName), fromOffsets: source, toOffset: destination
-        ))
+    private func moveLocalSession(_ source: String, to target: SessionDropTarget) {
+        settings.setLocalSessionOrder(target.moving(sortedLocalSessions.map(\.sessionName), source: source))
+    }
+
+    private func localSessionBackground(_ session: LocalTmuxSession) -> Color? {
+        guard settings.highlightSelectedSidebarSession, selectedRemoteSession == nil,
+              let selectedWindow, session.windows.contains(where: { $0.id == selectedWindow.id }) else { return nil }
+        return settings.theme.selectedSidebarRowBackgroundColor
     }
 
     /// The local session that owns `selectedWindow`, or nil when the current
@@ -787,7 +793,6 @@ public struct MainView: View {
             override: stateOverride,
             agentState: claudePane.flatMap { windowManager.paneStates[$0.paneId]?.agentSession?.state }
         )
-        let isSelected = selectedWindow.map { selected in session.windows.contains(where: { $0.id == selected.id }) } ?? false
         // Compute effective progress here (and not just inside the row) so we can expose
         // a sibling AX element OUTSIDE the Button label below — when the row
         // shows a "Working" indicator, SwiftUI flips the merged button to
@@ -811,11 +816,6 @@ public struct MainView: View {
         .id(session.sessionName)
         .buttonStyle(.plain)
         .help(help ?? "")
-        .listRowBackground(
-            settings.highlightSelectedSidebarSession && isSelected && selectedRemoteSession == nil
-                ? settings.theme.selectedSidebarRowBackgroundColor
-                : nil
-        )
         .accessibilityChildren {
             // When the row contains a "Working" ProgressView, SwiftUI merges
             // the Button's children into one `AXBusyIndicator` element and

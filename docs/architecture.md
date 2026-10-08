@@ -72,7 +72,14 @@ Coding-agent integration is gated by a `CodingAgent` enum (`.claudeCode` / `.cod
 
 ## Sidebar Session Ordering
 
-- Mac session rows use native `List` drag reordering within their Local/Host section.
+- Mac session rows have an explicit drag handle, independent of the row's click,
+  double-click and context menu. Local and remote sections share
+  `SessionReorderableRows`; a line marks the insertion point before/after a row.
+  Releasing inside the same group saves the order; releasing outside cancels.
+  Off-screen row frames are removed, and dismantled drag handles clear the feedback.
+  `SessionReorderHandle` captures the mouse sequence with a small AppKit view:
+  native `List.onMove` did not fire on macOS 27, and List selection could cancel
+  SwiftUI's `DragGesture` before its end callback.
 - Before the first drag, `sidebarSortMode` determines the order. A drag captures
   the displayed order as a device-local preference; state changes do not re-rank it.
 - `AppSettings.localSessionOrder` is separate from remote host ranks. Existing

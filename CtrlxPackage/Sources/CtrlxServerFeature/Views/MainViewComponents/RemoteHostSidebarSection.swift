@@ -82,10 +82,12 @@ struct RemoteHostSidebarSection: View {
                         .padding(.vertical, 2)
                         .accessibilityIdentifier("usage-overview-remote-\(host.id)")
                 }
-                ForEach(sortedSessions) { session in
+                SessionReorderableRows(
+                    sessions: sortedSessions, sessionName: \.sessionName,
+                    onMove: moveSession, rowBackground: sessionBackground
+                ) { session in
                     remoteSessionButton(session)
                 }
-                .onMove(perform: moveSessions)
             } else if connection?.isHostConnected == true {
                 Text("No active sessions")
                     .foregroundStyle(.secondary)
@@ -179,8 +181,6 @@ struct RemoteHostSidebarSection: View {
     @ViewBuilder
     private func remoteSessionButton(_ session: TmuxSession) -> some View {
         let claudePane = session.windows.flatMap(\.panes).first(where: { $0.agentSession != nil })
-        let isSelected = selectedRemoteSession?.sessionName == session.sessionName
-            && selectedRemoteSession?.hostId == host.id
         // See `sessionButton` — when the row gains a "Working" indicator the
         // merged button becomes `AXBusyIndicator` and swallows the bar's
         // separate accessibility element. Mirror the bar AX info on a sibling
@@ -205,11 +205,6 @@ struct RemoteHostSidebarSection: View {
             )
         }
         .buttonStyle(.plain)
-        .listRowBackground(
-            settings.highlightSelectedSidebarSession && isSelected
-                ? settings.theme.selectedSidebarRowBackgroundColor
-                : nil
-        )
         .accessibilityChildren {
             SessionProgressAccessibilityProxy(progress: sessionProgress)
         }
@@ -279,15 +274,18 @@ struct RemoteHostSidebarSection: View {
         ))
     }
 
-    private func moveSessions(fromOffsets source: IndexSet, toOffset destination: Int) {
+    private func moveSession(_ source: String, to target: SessionDropTarget) {
         settings.setRemoteSessionOrder(
-            RemoteSessionOrder.moving(
-                sortedSessions.map(\.sessionName),
-                fromOffsets: source,
-                toOffset: destination
-            ),
+            target.moving(sortedSessions.map(\.sessionName), source: source),
             for: host.id
         )
+    }
+
+    private func sessionBackground(_ session: TmuxSession) -> Color? {
+        guard settings.highlightSelectedSidebarSession,
+              selectedRemoteSession?.sessionName == session.sessionName,
+              selectedRemoteSession?.hostId == host.id else { return nil }
+        return settings.theme.selectedSidebarRowBackgroundColor
     }
 
     private func moveHost(by offset: Int) {
