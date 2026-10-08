@@ -45,6 +45,10 @@ public struct DirectorySessionForm: View {
             Text("Choose a folder on the Host, or type a path to find it. Opening a folder does not start a session.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                #if os(macOS)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                #endif
             TextField("Directory on Host", text: $path, prompt: Text("~/Projects/my-project"))
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
