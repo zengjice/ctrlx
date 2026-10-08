@@ -1,5 +1,6 @@
 import AVFoundation
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Testing
 @testable import CtrlxCommon
@@ -251,15 +252,307 @@ struct FileBrowserVideoTests {
         #expect(reads == stoppedReads)
     }
 
+    @Test func audioLeasesOnlyDeactivateAfterTheLastOwnerReleases() throws {
+        var activations = 0
+        var deactivations = 0
+        let leases = FileBrowserVideoAudioLeases(activate: { activations += 1 }, deactivate: { deactivations += 1 })
+        let first = UUID()
+        let second = UUID()
+        try leases.acquire(first)
+        try leases.acquire(first)
+        try leases.acquire(second)
+        #expect(leases.owners == [first, second])
+        #expect(activations == 2, "Duplicate acquisition must not reactivate audio")
+        try leases.release(UUID())
+        try leases.release(first)
+        try leases.release(first)
+        #expect(leases.owners == [second])
+        #expect(deactivations == 0, "An active player must keep the shared session")
+        try leases.release(second)
+        try leases.release(second)
+        #expect(leases.owners.isEmpty && deactivations == 1)
+        try leases.acquire(first)
+        try leases.release(first)
+        #expect(leases.owners.isEmpty && activations == 3 && deactivations == 2)
+    }
+
+    @Test func failedAudioLeaseDoesNotAcquireOrReleaseAnotherOwnersSession() throws {
+        var attempts = 0
+        var deactivations = 0
+        let leases = FileBrowserVideoAudioLeases(
+            activate: {
+                attempts += 1
+                if attempts > 1 { throw FileBrowserError.message("Audio unavailable") }
+            },
+            deactivate: { deactivations += 1 }
+        )
+        let first = UUID()
+        let second = UUID()
+        try leases.acquire(first)
+        #expect(throws: FileBrowserError.self) { try leases.acquire(second) }
+        #expect(leases.owners == [first])
+        try leases.release(second)
+        #expect(leases.owners == [first] && deactivations == 0)
+        try leases.release(first)
+        #expect(leases.owners.isEmpty && deactivations == 1)
+    }
+
+    @Test(arguments: ["nativePause", "background", "stop"])
+    func onePlayerReleasingAudioDoesNotDeactivateAnotherPlayersSession(action: String) async throws {
+        var sessionIsActive = false
+        var deactivations = 0
+        let leases = FileBrowserVideoAudioLeases(
+            activate: { sessionIsActive = true },
+            deactivate: { sessionIsActive = false; deactivations += 1 }
+        )
+        try await withDependencies {
+            $0[FileBrowserVideoAudioClient.self] = .init(
+                acquire: { try leases.acquire($0) },
+                release: { try leases.release($0) }
+            )
+        } operation: {
+            let first = FileBrowserVideoPlayback(startsMuted: false)
+            let second = FileBrowserVideoPlayback(startsMuted: false)
+            defer { first.stop(); second.stop() }
+            let data = try fixture()
+            let info = info(size: data.count)
+            let source = videoSource(data: data, info: info)
+            try await first.prepare(path: info.path, source: source)
+            try await second.prepare(path: info.path, source: source)
+            let firstPlayer = try #require(first.player)
+            let secondPlayer = try #require(second.player)
+            first.play()
+            let firstOwner = try #require(leases.owners.first)
+            second.play()
+            let secondOwner = try #require(leases.owners.subtracting([firstOwner]).first)
+            try await waitUntil {
+                firstPlayer.timeControlStatus == .playing && secondPlayer.timeControlStatus == .playing && leases.owners.count == 2
+            }
+            let previousDeactivations = deactivations
+            switch action {
+            case "nativePause": firstPlayer.pause()
+            case "background": first.setSceneActive(false)
+            default: first.stop()
+            }
+            try await waitUntil { leases.owners == [secondOwner] && secondPlayer.timeControlStatus == .playing }
+            #expect(sessionIsActive && deactivations == previousDeactivations)
+            first.stop()
+            first.stop()
+            #expect(leases.owners == [secondOwner] && sessionIsActive && deactivations == previousDeactivations)
+            second.stop()
+            #expect(leases.owners.isEmpty && !sessionIsActive)
+            #expect(deactivations == previousDeactivations + 1)
+        }
+    }
+
+    @Test func audioSessionFollowsExplicitAndNativePlayback() async throws {
+        var activations = 0
+        var deactivations = 0
+        let leases = FileBrowserVideoAudioLeases(activate: { activations += 1 }, deactivate: { deactivations += 1 })
+        try await withDependencies {
+            $0[FileBrowserVideoAudioClient.self] = .init(
+                acquire: { try leases.acquire($0) },
+                release: { try leases.release($0) }
+            )
+        } operation: {
+            let playback = FileBrowserVideoPlayback(startsMuted: false)
+            defer { playback.stop() }
+            playback.play()
+            #expect(activations == 0, "No player means no audio-session activation")
+            let data = try fixture()
+            let info = info(size: data.count)
+            let source = videoSource(data: data, info: info)
+            try await playback.prepare(path: info.path, source: source)
+            #expect(activations == 0, "Preparing metadata must not interrupt other audio")
+            let player = try #require(playback.player)
+            playback.play()
+            try await waitUntil { player.timeControlStatus == .playing && leases.owners.count == 1 }
+            let owner = try #require(leases.owners.first)
+            player.pause()
+            try await waitUntil { player.timeControlStatus == .paused && leases.owners.isEmpty }
+            player.play()
+            try await waitUntil { leases.owners == [owner] && player.timeControlStatus == .playing }
+            playback.setSceneActive(false)
+            #expect(leases.owners.isEmpty)
+            playback.play()
+            // Native controls must not bypass the background guard either.
+            player.play()
+            try await waitUntil { player.timeControlStatus == .paused }
+            playback.setSceneActive(true)
+            try await Task.sleep(for: .milliseconds(80))
+            #expect(leases.owners.isEmpty, "Returning to the foreground must not activate audio automatically")
+            playback.play()
+            try await waitUntil { leases.owners == [owner] && player.timeControlStatus == .playing }
+            playback.stop()
+            #expect(leases.owners.isEmpty)
+            #expect(activations == deactivations, "Every activation must be balanced after teardown")
+            let releases = deactivations
+            playback.stop()
+            #expect(deactivations == releases, "Repeated cleanup must not deactivate another audio session")
+        }
+    }
+
+    @Test func audioActivationFailureDoesNotStartPlayback() async throws {
+        var releases = 0
+        try await withDependencies {
+            $0[FileBrowserVideoAudioClient.self] = .init(
+                acquire: { _ in throw FileBrowserError.message("Audio unavailable") },
+                release: { _ in releases += 1 }
+            )
+        } operation: {
+            let playback = FileBrowserVideoPlayback(startsMuted: false)
+            defer { playback.stop() }
+            let data = try fixture()
+            let info = info(size: data.count)
+            try await playback.prepare(path: info.path, source: videoSource(data: data, info: info))
+            let player = try #require(playback.player)
+            playback.play()
+            #expect(playback.error?.contains("Audio unavailable") == true)
+            #expect(player.timeControlStatus == .paused)
+            player.play()
+            try await waitUntil { player.timeControlStatus == .paused }
+            playback.stop()
+            #expect(releases == 0, "A failed activation must not release audio owned by another feature")
+        }
+    }
+
+    @Test func defaultMutePolicyOnlyChangesOnIOS() {
+        let playback = FileBrowserVideoPlayback()
+        #if os(iOS)
+        #expect(playback.isMuted)
+        #else
+        #expect(!playback.isMuted, "Mac playback must retain its existing audible default")
+        #endif
+    }
+
+    @Test func mutedPlaybackAndSoundTogglePreserveThePlayer() async throws {
+        var activations = 0
+        var deactivations = 0
+        let leases = FileBrowserVideoAudioLeases(activate: { activations += 1 }, deactivate: { deactivations += 1 })
+        try await withDependencies {
+            $0[FileBrowserVideoAudioClient.self] = .init(
+                acquire: { try leases.acquire($0) },
+                release: { try leases.release($0) }
+            )
+        } operation: {
+            let playback = FileBrowserVideoPlayback(startsMuted: true)
+            defer { playback.stop() }
+            let data = try fixture()
+            let info = info(size: data.count)
+            try await playback.prepare(path: info.path, source: videoSource(data: data, info: info))
+            let player = try #require(playback.player)
+            let item = try #require(player.currentItem)
+            #expect(playback.isMuted && player.isMuted)
+            playback.play()
+            try await waitUntil { player.timeControlStatus == .playing }
+            #expect(activations == 0, "Starting muted must not explicitly activate media audio")
+            let beforeToggle = player.currentTime()
+            playback.toggleSound()
+            #expect(!playback.isMuted && !player.isMuted)
+            #expect(leases.owners.count == 1)
+            let owner = try #require(leases.owners.first)
+            playback.toggleSound()
+            #expect(playback.isMuted && player.isMuted)
+            #expect(player.timeControlStatus == .playing)
+            #expect(playback.player === player && player.currentItem === item)
+            #expect(CMTimeCompare(player.currentTime(), beforeToggle) >= 0, "Sound toggling must not seek back")
+            player.pause()
+            try await waitUntil { player.timeControlStatus == .paused && leases.owners.isEmpty }
+            let pausedActivations = activations
+            playback.toggleSound()
+            #expect(!playback.isMuted)
+            #expect(player.timeControlStatus == .paused)
+            #expect(activations == pausedActivations, "Enabling sound while paused must not start playback or audio")
+            player.play()
+            try await waitUntil { leases.owners == [owner] && player.timeControlStatus == .playing }
+            playback.setSceneActive(false)
+            #expect(leases.owners.isEmpty)
+            playback.setSceneActive(true)
+            #expect(!playback.isMuted && !player.isMuted, "The current preview keeps the user's choice")
+            #expect(player.timeControlStatus == .paused)
+            playback.play()
+            // AVPlayer may briefly pause again while completing a rapid background/resume.
+            // Verify effective ownership, not the lifetime count of its status callbacks.
+            try await waitUntil { leases.owners == [owner] && player.timeControlStatus == .playing }
+            player.isMuted = true
+            try await waitUntil { playback.isMuted }
+            #expect(player.timeControlStatus == .playing, "Native mute must update the button, not pause the video")
+            playback.stop()
+            #expect(leases.owners.isEmpty && activations == deactivations)
+            #expect(playback.isMuted, "Closing a preview resets its mute choice")
+            try await playback.prepare(path: info.path, source: videoSource(data: data, info: info))
+            #expect(playback.player?.isMuted == true, "Reopening must assign mute before the first frame")
+            playback.play()
+            try await waitUntil { playback.player?.timeControlStatus == .playing }
+            #expect(leases.owners.isEmpty)
+            playback.player?.isMuted = false
+            try await waitUntil { !playback.isMuted && leases.owners == [owner] }
+            playback.stop()
+            #expect(leases.owners.isEmpty && activations == deactivations)
+        }
+    }
+
+    @Test func failedSoundActivationKeepsTheVideoMuted() async throws {
+        try await withDependencies {
+            $0[FileBrowserVideoAudioClient.self] = .init(
+                acquire: { _ in throw FileBrowserError.message("Audio unavailable") },
+                release: { _ in Issue.record("Failed activation must not own an audio session") }
+            )
+        } operation: {
+            let playback = FileBrowserVideoPlayback(startsMuted: true)
+            defer { playback.stop() }
+            let data = try fixture()
+            let info = info(size: data.count)
+            try await playback.prepare(path: info.path, source: videoSource(data: data, info: info))
+            let player = try #require(playback.player)
+            playback.play()
+            try await waitUntil { player.timeControlStatus == .playing }
+            playback.toggleSound()
+            #expect(playback.isMuted && player.isMuted)
+            #expect(player.timeControlStatus == .paused)
+            #expect(playback.error?.contains("Audio unavailable") == true)
+            player.isMuted = false
+            player.play()
+            try await waitUntil { playback.isMuted && player.timeControlStatus == .paused }
+        }
+    }
+
+    @Test func streamedVideoPreservesItsAudioTrack() async throws {
+        let data = try fixture(name: "test_video_with_audio.mp4")
+        let info = info(size: data.count)
+        let reader = try FileBrowserVideoReader(info: info, source: videoSource(data: data, info: info))
+        let loader = try FileBrowserVideoResourceLoader(reader: reader) { Issue.record("\($0)") }
+        defer { loader.stop() }
+        let asset = loader.makeAsset()
+        #expect(try await asset.loadTracks(withMediaType: .video).count == 1)
+        #expect(try await asset.loadTracks(withMediaType: .audio).count == 1)
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-video-audio-\(UUID()).m4a")
+        defer { try? FileManager.default.removeItem(at: output) }
+        let export = try #require(AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A))
+        try await export.export(to: output, as: .m4a)
+        let audioAsset = AVURLAsset(url: output)
+        #expect(try await audioAsset.loadTracks(withMediaType: .audio).count == 1)
+        #expect(CMTimeGetSeconds(try await audioAsset.load(.duration)) > 1)
+    }
+
+    private func videoSource(data: Data, info: FileBrowserEntry) -> FileBrowserSource {
+        FileBrowserSource(id: "remote", paneID: nil) { operation in
+            if case .info = operation { return .info(info) }
+            guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Unexpected operation") }
+            return .chunk(.init(path: path, revision: revision, offset: offset,
+                               data: data.subdata(in: offset..<min(offset + self.block, data.count))))
+        }
+    }
+
     private func waitUntil(_ predicate: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         try #require(predicate(), "Native video playback did not converge")
     }
 
-    private func fixture() throws -> Data {
+    private func fixture(name: String = "test_video.mp4") throws -> Data {
         let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        return try Data(contentsOf: package.appendingPathComponent("Sources/CtrlxE2ELib/Scenarios/SampleFiles/test_video.mp4"))
+        return try Data(contentsOf: package.appendingPathComponent("Sources/CtrlxE2ELib/Scenarios/SampleFiles/\(name)"))
     }
 
     @Test(arguments: ["mp4", "mov"])

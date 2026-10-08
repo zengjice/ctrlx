@@ -117,6 +117,7 @@ extension View {
         @ObservationIgnored private var permissionTask: Task<Void, Never>?
         @ObservationIgnored private var finalizationTask: Task<Void, Never>?
         @ObservationIgnored private var hasAudioTap = false
+        @ObservationIgnored private var ownsAudioSession = false
         @ObservationIgnored private var activeRecognitionID: UUID?
         @ObservationIgnored private var modernSession: AnyObject?
         @ObservationIgnored private var recognitionContext: String?
@@ -277,6 +278,7 @@ extension View {
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+            ownsAudioSession = true
 
             let inputNode = audioEngine.inputNode
             let recordingFormat = inputNode.outputFormat(forBus: 0)
@@ -457,7 +459,13 @@ extension View {
             recognitionRequest = nil
             activeRecognitionID = nil
 
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            if ownsAudioSession {
+                ownsAudioSession = false
+                let session = AVAudioSession.sharedInstance()
+                if session.category == .record, session.mode == .measurement {
+                    try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                }
+            }
         }
 
         private func cancelModernSession() {

@@ -104,6 +104,8 @@ public enum Symbols: String {
     case rectangleStackBadgeMinus = "rectangle.stack.badge.minus"
     case shield
     case sparkles
+    case speakerSlashFill = "speaker.slash.fill"
+    case speakerWave2Fill = "speaker.wave.2.fill"
     case square
     case squareAndArrowUp = "square.and.arrow.up"
     case squareFill = "square.fill"

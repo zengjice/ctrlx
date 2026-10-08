@@ -21,6 +21,16 @@ struct FileBrowserVideoPreview: View {
                     .overlay(alignment: .top) {
                         if playback.isBuffering { ProgressView("Buffering Video").padding(8) }
                     }
+                #if os(iOS)
+                Button(action: playback.toggleSound) {
+                    Label(playback.isMuted ? "Enable Sound" : "Mute",
+                          symbol: playback.isMuted ? .speakerSlashFill : .speakerWave2Fill)
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityValue(playback.isMuted ? "Muted" : "Sound On")
+                .padding(.bottom, 8)
+                #endif
             } else if started {
                 ProgressView("Loading Video")
                 Button("Cancel", role: .cancel) { started = false; playback.stop() }
@@ -29,6 +39,10 @@ struct FileBrowserVideoPreview: View {
                     .disabled(source.unavailableReason != nil || source.downloadUnavailableReason != nil)
                 Text(source.unavailableReason ?? source.downloadUnavailableReason ?? "Plays from the Host without downloading the entire file.")
                     .font(.caption).foregroundStyle(.secondary).padding()
+                #if os(iOS)
+                Text("Starts muted. Tap Enable Sound to hear audio.")
+                    .font(.caption).foregroundStyle(.secondary)
+                #endif
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

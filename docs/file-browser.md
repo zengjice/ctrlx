@@ -86,6 +86,20 @@ AVFoundation's own decoder/buffer memory. Pause/background suspend reads.
 Leaving the active scene during metadata preparation cancels that attempt;
 late replies cannot create a player, even after returning to the foreground.
 A ready player is retained but never automatically resumed on foregrounding.
+On iOS, each opened video starts muted, with a persistent **Enable Sound / Mute**
+speaker button below the player. The choice survives pause/foregrounding within
+that preview, but closing/reopening or selecting another video starts muted again.
+Enabling sound during playback uses the media-playback audio session, so the
+Silent Mode switch does not prevent sound. Media volume and the selected output
+route (including headphones) remain system-controlled. Preparing or starting a
+muted video does not explicitly activate audio. Once enabled, audio is released
+on pause, backgrounding or closing; muting does not restart the player. Native
+controls reactivate audio on audible resume and keep the speaker button in sync.
+Audio ownership uses one stable lease per player across all iOS scenes; only
+releasing the last lease deactivates the shared session. Pausing or closing one
+iPad window therefore leaves another window's audible playback active.
+Voice-input cleanup only releases its own recording session and cannot deactivate
+a video that has since taken over. Mac Host/Viewer playback defaults are unchanged.
 Unbuffered seeks while paused are serviced on explicit resume. Closing, changing file,
 refreshing or disconnecting cancels reads and drops the memory cache. There is
 no persistent video cache. Low bandwidth/high latency can still cause buffering.
@@ -161,6 +175,15 @@ bound, corrupt/stale replies, cancellation, capability gating, real MP4/MOV
 first-frame decoding before a complete download, forward/backward seeks,
 single-flight reads, native playback pause/resume/teardown, and delayed metadata
 across backgrounding, foregrounding, cancellation and a fresh preparation.
+Audio coverage uses an H.264/AAC fixture to extract its audio track through the
+streaming loader, and injected audio-session calls verify explicit/native resume,
+pause/background/close, default-muted playback, sound toggling without restart,
+native mute changes, activation failure and idempotent cleanup. Audible output
+in Silent Mode and output routing still require an iPhone acceptance check.
+Shared-lease tests cover duplicate acquisition/release, failed acquisition and
+two players when one pauses, backgrounds or closes. Native resume tests check
+current playback and lease ownership rather than accumulated callback counts,
+since AVPlayer can transiently pause during a rapid background/resume.
 
 Manual acceptance on installed apps: open two panes in different directories;
 create a Files tab from each on Mac Host, Mac Viewer and iOS; preview text,
@@ -184,3 +207,9 @@ pause/resume and leave the tab. Check unsupported codecs, a movie above 1 GiB,
 Host disconnect/reconnect and simultaneous terminal input. Compare first-frame,
 seek latency and terminal-input latency on LAN, WireGuard and the hosted Relay;
 automated local-delay tests cannot establish real-network playback quality.
+On iPhone, repeat with Silent Mode enabled and a nonzero media volume: confirm
+initial playback is silent, Enable Sound produces speaker/headphone audio, and
+Mute silences it without a seek/restart. Check pause/foreground behavior, a fresh
+preview resetting to muted, and video/voice-input switching.
+On iPad, enable sound in two app windows, then pause/background/close one:
+the other must retain sound until it too pauses or closes.

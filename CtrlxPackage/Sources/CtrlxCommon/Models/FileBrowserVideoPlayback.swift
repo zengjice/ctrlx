@@ -1,20 +1,41 @@
 #if os(macOS) || os(iOS)
 import AVFoundation
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Observation
 import UniformTypeIdentifiers
+import os
 
 @MainActor @Observable
 final class FileBrowserVideoPlayback {
     private(set) var player: AVPlayer?
     private(set) var isBuffering = false
+    private(set) var isMuted: Bool
     private(set) var error: String?
+    @ObservationIgnored private let startsMuted: Bool
+    @ObservationIgnored @Dependency(FileBrowserVideoAudioClient.self) private var audio
+    @ObservationIgnored private var ownsAudioSession = false
+    @ObservationIgnored private let audioOwnerID = UUID()
     @ObservationIgnored private var loader: FileBrowserVideoResourceLoader?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var sceneIsActive = true
     @ObservationIgnored private var preparationID = UUID()
+    private static let logger = Logger(subsystem: "com.jicezeng.ctrlx", category: "VideoPlayback")
+
+    nonisolated static var defaultMuted: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    init(startsMuted: Bool = FileBrowserVideoPlayback.defaultMuted) {
+        self.startsMuted = startsMuted
+        isMuted = startsMuted
+    }
 
     func prepare(path: String, source: FileBrowserSource) async throws {
         try Task.checkCancellation()
@@ -32,12 +53,14 @@ final class FileBrowserVideoPlayback {
         let loader = try FileBrowserVideoResourceLoader(reader: reader) { [weak self] message in
             self?.error = message
             self?.player?.pause()
+            self?.releaseAudio()
         }
         let asset = loader.makeAsset()
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 3
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         let player = AVPlayer(playerItem: item)
+        player.isMuted = isMuted
         self.loader = loader
         self.player = player
         observations = [
@@ -45,6 +68,9 @@ final class FileBrowserVideoPlayback {
                 Task { @MainActor [weak self] in self?.updateState() }
             },
             player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in self?.updateState() }
+            },
+            player.observe(\.isMuted, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor [weak self] in self?.updateState() }
             },
             item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] _, _ in
@@ -63,19 +89,48 @@ final class FileBrowserVideoPlayback {
         else {
             player?.pause()
             loader?.setSuspended(true)
+            releaseAudio()
         }
     }
 
     func play() {
-        guard sceneIsActive else { return }
-        player?.play()
+        guard sceneIsActive, let player else { return }
+        if !isMuted, !activateAudio() { return }
+        player.play()
+    }
+
+    func toggleSound() {
+        setMuted(!isMuted)
+    }
+
+    func setMuted(_ muted: Bool) {
+        guard isMuted != muted else { return }
+        if !muted, sceneIsActive, let player, player.timeControlStatus != .paused,
+           !activateAudio() { return }
+        isMuted = muted
+        player?.isMuted = muted
     }
 
     private func updateState() {
         guard let player else { return }
+        if isMuted != player.isMuted { isMuted = player.isMuted }
         if player.currentItem?.status == .failed {
             if error == nil { error = player.currentItem?.error?.localizedDescription ?? "This video cannot be played. Use Download and Open." }
+            player.pause()
+            releaseAudio()
             loader?.stop()
+            return
+        }
+        // Native AVKit controls resume the AVPlayer directly, not through play().
+        if sceneIsActive, player.timeControlStatus != .paused {
+            if !isMuted, !activateAudio() {
+                isMuted = true
+                player.isMuted = true
+                return
+            }
+        } else {
+            if !sceneIsActive { player.pause() }
+            releaseAudio()
         }
         let buffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
         if isBuffering != buffering { isBuffering = buffering }
@@ -87,17 +142,40 @@ final class FileBrowserVideoPlayback {
         loader?.setSuspended(!sceneIsActive || player.timeControlStatus == .paused || (!buffering && ahead >= 3))
     }
 
+    private func activateAudio() -> Bool {
+        guard !ownsAudioSession else { return true }
+        do {
+            try audio.acquire(audioOwnerID)
+            ownsAudioSession = true
+            return true
+        } catch {
+            self.error = "Could not start video audio: \(error.localizedDescription)"
+            player?.pause()
+            loader?.setSuspended(true)
+            return false
+        }
+    }
+
+    private func releaseAudio() {
+        guard ownsAudioSession else { return }
+        ownsAudioSession = false
+        do { try audio.release(audioOwnerID) }
+        catch { Self.logger.error("Could not release video audio: \(error)") }
+    }
+
     func stop() {
         preparationID = UUID()
         observations.removeAll()
         if let timeObserver, let player { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
         player?.pause()
+        releaseAudio()
         player?.replaceCurrentItem(with: nil)
         loader?.stop()
         loader = nil
         player = nil
         isBuffering = false
+        isMuted = startsMuted
     }
 }
 
