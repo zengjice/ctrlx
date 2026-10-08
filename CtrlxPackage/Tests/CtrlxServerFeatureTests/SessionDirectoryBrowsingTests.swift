@@ -72,8 +72,9 @@
                 try files.createDirectory(at: root.appendingPathComponent("repo-\(index)"), withIntermediateDirectories: true)
             }
             let resolver = SessionDirectoryResolver()
-            let home = try await resolver.list(.init(path: "~/"))
-            #expect(home.directory == files.homeDirectoryForCurrentUser.standardizedFileURL.path)
+            // Check expansion without enumerating user-owned mounts in Home.
+            let home = try await resolver.resolve("~/")
+            #expect(home == files.homeDirectoryForCurrentUser.standardizedFileURL.path)
             #expect(try await resolver.list(.init(path: "/")).parentDirectory == nil)
             let limited = try await resolver.list(.init(path: root.path))
             #expect(limited.isTruncated)
