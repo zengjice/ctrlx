@@ -279,6 +279,29 @@ else:
                 self.assertIn(f"  - watch: ~~`{command}`~~", cleaned)
                 self.assertIsNone(vc.rewrite_comment(cleaned, [url]))
 
+    def test_report_results_directory_is_shared_across_worktrees(self):
+        source = Path(__file__).resolve().parents[1] / "e2e-report.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "primary"
+            scripts = root / "scripts"
+            scripts.mkdir(parents=True)
+            shutil.copyfile(source, scripts / source.name)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".git" / "info" / "exclude").write_text("/.worktrees/\n")
+            subprocess.run(["git", "-C", str(root), "add", "scripts"], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Test",
+                            "-c", "user.email=test@example.invalid", "-c", "commit.gpgSign=false",
+                            "commit", "-qm", "Fixture"], check=True)
+            linked = root / ".worktrees" / "linked"
+            subprocess.run(["git", "-C", str(root), "worktree", "add", "--detach",
+                            str(linked), "HEAD"], check=True, capture_output=True)
+            for checkout in (root, linked):
+                with self.subTest(checkout=checkout):
+                    result = subprocess.run(["bash", str(checkout / "scripts" / source.name), "--help"],
+                                            cwd=linked, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn(f"default: {(root.parent / 'CtrlxTestResults').resolve()}", result.stdout)
+
     def test_missing_results_repo_fails_without_external_writes(self):
         source_scripts = Path(__file__).resolve().parents[1]
         for name, arguments in (("e2e-attach-video.sh", ["smoke"]),
