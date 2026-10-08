@@ -7,6 +7,26 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.50 — Reliable Mac session reordering and terminal table rendering
+
+- Fix Mac local and remote session drag reordering with a dedicated native drag
+  handle and explicit insertion feedback. Save once on release, reject drops
+  outside the source group, and preserve selection, rename and context menus.
+- Pin the published SwiftTerm correction for partial wide-character overwrites
+  and continuation attributes, removing white rectangles in sparse table updates.
+  The rendering fix requires an updated display client, including a separate
+  iOS build for iPhone users; no Relay deployment is needed.
+- Keep the Mac New Session directory form inside its popover with explicit
+  padding, sufficient width and vertically expanding explanatory text.
+- Validation: 36 session-order regressions and isolated native mouse interaction
+  checks passed. SwiftTerm's 619 buffer/rendering tests and the real terminal
+  trace replay passed; iPhone runtime acceptance remains separate.
+  The release rerun passed 2,529 Swift tests, excluding two existing Apple
+  Intelligence evaluations unavailable on this device. Brand/technical boundaries,
+  website build, 131 script tests and 19 publisher tests passed.
+- Release scope: publish the Mac package on Qcloud from this linked worktree.
+  No Relay deployment, iOS publication or local App replacement.
+
 ## 3.0.49 — Host-backed Files tabs, media previews and iOS launch controls
 
 - Add independent Host-backed Files tabs on Mac Host, Mac Viewer and iOS,
