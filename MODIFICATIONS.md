@@ -7,6 +7,32 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.49 — Host-backed Files tabs, media previews and iOS launch controls
+
+- Add independent Host-backed Files tabs on Mac Host, Mac Viewer and iOS,
+  opening at the source terminal's directory and restoring per-session layouts.
+  Keep directory/search/preview requests bounded and off keyboard delivery.
+- Restore local media previews; preview Office documents on all clients, offer
+  Download and Open for other remote files, and stream MP4/MOV video with bounded
+  range reads, seeking, and scene-safe pause/cancellation.
+- Start iOS videos muted with an explicit sound button. Share audio ownership
+  across players and protect voice-input cleanup from deactivating video audio.
+- Support manual Mac session ordering and iOS session swipe actions. Scope Files
+  and Fork entry points to window tabs and move iOS copy into the More menu.
+- Fit newly created iOS sessions/windows and Fork windows to the viewport,
+  retaining fit intent until state arrives; expose custom Fork names and use
+  neutral New Terminal session names.
+- Add custom iOS terminal buttons and Host-directory creation, with a full-height
+  directory picker. Keep build caches worktree-local and add idle cleanup.
+- Validation: 2,518 Swift tests passed on serial rerun; two existing Apple
+  Intelligence evaluations were excluded because this device is not eligible.
+  Brand/technical boundaries, website build, 131 script tests and 19 publisher
+  tests passed. Ten repeated native-playback regressions passed; signed
+  development Mac/iOS packages were installed and launched. Actual iPad
+  multi-window audio acceptance remains pending.
+- Release scope: publish the Mac package on Qcloud from this linked worktree.
+  No Relay deployment, iOS publication or further local App replacement.
+
 ## 3.0.48 — Editable quick phrases and iOS session controls
 
 - Edit existing quick phrases on Mac and iOS while preserving their stable
