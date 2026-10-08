@@ -504,15 +504,20 @@ final public class ConnectedViewer: Identifiable {
 
     /// Send terminal stream data to viewer (encrypted)
     public func sendTerminalStream(_ streamMessage: TerminalStreamMessage) async {
+        await enqueueTerminalStream(streamMessage)?.value
+    }
+
+    /// Admit bytes before the caller suspends; fan-out tasks must only await delivery.
+    func enqueueTerminalStream(_ streamMessage: TerminalStreamMessage) -> Task<Void, Never>? {
         guard Self.canSendTerminalStream(
             relayConnected: state.isConnected,
             viewerConnected: isViewerConnected
         ) else {
-            return
+            return nil
         }
 
         let message = WebSocketMessage.terminalStream(streamMessage)
-        await sendEncrypted(message)
+        return enqueueEncrypted(message)
     }
 
     /// Send this host's peerHello to the viewer once the E2EE session is up.
@@ -1032,6 +1037,10 @@ final public class ConnectedViewer: Identifiable {
     }
 
     private func sendEncrypted(_ message: WebSocketMessage) async {
+        await enqueueEncrypted(message).value
+    }
+
+    private func enqueueEncrypted(_ message: WebSocketMessage) -> Task<Void, Never> {
         let generation = connectionGeneration.current
         let sendId = UUID()
         pendingSendEnqueuedAt[sendId] = ContinuousClock.now
@@ -1052,7 +1061,7 @@ final public class ConnectedViewer: Identifiable {
             self.recordSendQueue()
         }
         pendingSend = task
-        await task.value
+        return task
     }
 
     private func performEncryptedSend(_ message: WebSocketMessage, generation: UInt64) async {

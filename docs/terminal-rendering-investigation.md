@@ -2,6 +2,40 @@
 
 > **Historical status (PR #179):** The first fix moved live terminal bytes to `pipe-pane`, resolving corruption in the original String-based `%output` parser. In September 2026, terminal content moved back to control mode. The September 8 findings below correct two holes in that transition: connection identity and capture atomicity. `pipe-pane` remains scan-only for OSC side effects. The older diagrams and hypotheses below are historical; see `streaming-architecture.md` for the current data flow.
 
+## Shell live-buffer divergence (October 8, 2026)
+
+After one typed `c`, the Host captured `cat` (the gray `at` was a Shell
+autosuggestion), while iOS copied `ccat`. Reopening rebuilt the correct buffer.
+This establishes incremental buffer divergence, not merely stale pixels.
+Direct replay of private zsh redraw bytes did not reproduce the extra character.
+
+`ConnectedViewerManager` had a separate, reproducible ordering hole: fan-out
+child tasks admitted terminal messages into each connection's encrypted FIFO.
+Overlapping stream calls could therefore enqueue out of order even though the
+FIFO itself sent in admission order. The fix admits every eligible viewer's
+message synchronously on the main actor before any suspension; child tasks only
+await those sends. Encryption/I/O remain asynchronous per connection, and
+readiness checks, generation invalidation and existing queue cleanup remain.
+
+`TerminalStreamTransportTests` exercises the actual manager, two encrypted
+WebSocket pairs and shared SwiftTerm with private Shell redraw bytes (backspaces,
+color changes, UTF-8 prompt and autosuggestions). Under concurrent calls the old
+fan-out failed message/byte-order checks for 1-, 2- and 7-byte fragments on both
+viewers. The corrected entry passed all four fragmentation cases, including a
+whole batch; both buffers ended at `cat` with cursor `(48, 0)`. Disconnected
+connections did not admit bytes. This reproduces the transport defect, not the
+user's exact screenshot. After installing the local 3.0.50 Host build
+(`20261008-143805`), the user confirmed the duplicate-character issue was resolved
+on iPhone.
+The two new tests (including four fragmentation cases) and 226 existing input,
+stream/bootstrap, capture, lifecycle, phrase-sync and encryption tests passed.
+Logs: `/tmp/ctrlx-terminal-order-{red,green,regression}.log`.
+
+Rollout is the Host Mac. There is no SwiftTerm, iOS, Relay or wire-format change,
+no local echo/input rewriting and no periodic refresh/resubscription workaround.
+The signed Host app was installed locally; all eight existing sessions were
+preserved. No iOS update, Relay deployment or publication was performed.
+
 ## Sparse table updates leave white blocks (October 8, 2026)
 
 Replaying the affected pane's raw terminal bytes reproduced the white rectangles
