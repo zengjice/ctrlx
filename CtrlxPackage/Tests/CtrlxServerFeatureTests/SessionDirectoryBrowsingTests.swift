@@ -1,6 +1,7 @@
 #if os(macOS)
     import CtrlxCommon
     import CtrlxNetworking
+    import Darwin
     import Dependencies
     import Foundation
     import Testing
@@ -23,6 +24,9 @@
             }
             try Data("not a directory".utf8).write(to: root.appendingPathComponent("file"))
             try files.createSymbolicLink(at: root.appendingPathComponent("linked"), withDestinationURL: root.appendingPathComponent("outer"))
+            try files.createSymbolicLink(at: root.appendingPathComponent("file-link"), withDestinationURL: root.appendingPathComponent("file"))
+            try files.createSymbolicLink(at: root.appendingPathComponent("broken-link"), withDestinationURL: root.appendingPathComponent("missing"))
+            try files.createSymbolicLink(atPath: root.appendingPathComponent("loop-link").path, withDestinationPath: "loop-link")
             let resolver = SessionDirectoryResolver()
             let result = try await resolver.list(.init(path: root.path + "/"))
             #expect(result.isExactDirectory)
@@ -41,6 +45,47 @@
             let alias = try await resolver.list(.init(path: root.path + "/linked/"))
             #expect(alias.entries.first?.path == root.path + "/linked/inner")
             #expect(alias.parentDirectory == root.path)
+        }
+
+        @Test("Known directories and mounted-directory entries never require child metadata")
+        func entryTypesAvoidMetadata() {
+            // Invalid descriptor: any accidental fstatat cannot return a directory.
+            #expect(SessionDirectoryResolver.isDirectoryEntry(type: UInt8(DT_DIR), name: "offline-mount", descriptor: -1))
+            for type in [DT_REG, DT_FIFO, DT_SOCK, DT_BLK, DT_CHR] {
+                #expect(!SessionDirectoryResolver.isDirectoryEntry(type: UInt8(type), name: "not-a-directory", descriptor: -1))
+            }
+            #expect(!SessionDirectoryResolver.isDirectoryEntry(type: UInt8(DT_UNKNOWN), name: "missing", descriptor: -1))
+            #expect(!SessionDirectoryResolver.isDirectoryEntry(type: UInt8(DT_LNK), name: "missing", descriptor: -1))
+        }
+
+        @Test("Explicit read-only Home probe", .enabled(if: ProcessInfo.processInfo.environment["CTRLX_VERIFY_HOME_DIRECTORY"] == "1"))
+        func liveHomeProbe() async throws {
+            let clock = ContinuousClock()
+            let start = clock.now
+            let result = try await SessionDirectoryResolver().list(.init(path: "~/"))
+            let elapsed = start.duration(to: clock.now)
+            #expect(result.isExactDirectory)
+            #expect(result.directory == FileManager.default.homeDirectoryForCurrentUser.path)
+            #expect(result.entries.allSatisfy { !$0.name.hasPrefix(".") })
+            print("Home directory probe: \(result.entries.count) directory entries in \(elapsed)")
+        }
+
+        @Test("Unknown entry types and relative directory links preserve directory-only filtering")
+        func unknownTypesAndRelativeLinks() async throws {
+            let files = FileManager.default
+            let root = try fixture()
+            defer { try? files.removeItem(at: root) }
+            try files.createDirectory(at: root.appendingPathComponent("folder"), withIntermediateDirectories: true)
+            try Data().write(to: root.appendingPathComponent("file"))
+            try files.createSymbolicLink(atPath: root.appendingPathComponent("relative-link").path, withDestinationPath: "folder")
+            let result = try await SessionDirectoryResolver().list(.init(path: root.path))
+            #expect(Set(result.entries.map(\.name)) == ["folder", "relative-link"])
+
+            let handle = try #require(opendir(root.path))
+            defer { closedir(handle) }
+            #expect(SessionDirectoryResolver.isDirectoryEntry(type: UInt8(DT_UNKNOWN), name: "folder", descriptor: dirfd(handle)))
+            #expect(!SessionDirectoryResolver.isDirectoryEntry(type: UInt8(DT_UNKNOWN), name: "file", descriptor: dirfd(handle)))
+            #expect(SessionDirectoryResolver.isDirectoryEntry(type: UInt8(DT_LNK), name: "relative-link", descriptor: dirfd(handle)))
         }
 
         @Test("Partial paths complete case-insensitively, while exact paths browse children")

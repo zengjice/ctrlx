@@ -574,6 +574,21 @@ file content. Replies are capped at 200 entries / 128 KiB of encoded entries;
 truncated results ask the user to refine the path. Permission and missing-path
 errors stay visible, with Refresh to retry and manual entry still available.
 
+The Host enumerates direct POSIX directory entries, not Foundation URL-property
+prefetch. Known directory entries (including mount points) need no child metadata
+request: an unresponsive NFS mount inside Home cannot block the whole list just
+to determine its type. Hidden-name filtering and partial-path matching run before
+any fallback lookup; only symlinks and unknown entry types require `fstatat` to
+preserve directory-only results. Opening a mount or following a directory link
+still requires the underlying filesystem to respond; this is not a general I/O
+timeout. The selected directory is validated as before, user-visible alias paths
+are preserved, and cancellation/error/response-size limits remain unchanged.
+An optional read-only real-Home probe can be run with
+`CTRLX_VERIFY_HOME_DIRECTORY=1 ./scripts/unit-tests.sh -- --filter SessionDirectoryBrowsingTests`.
+On the affected Mac, the real resolver returned 14 Home directory entries in
+13.5 ms without restarting OrbStack. Directory/launch/capability regressions and
+the Mac Release app build passed; the popover was not tested in an installed app.
+
 `SessionStateMessage.supportsDirectoryBrowsing` is an optional per-Host
 capability, forwarded by `withPairId` and cleared on disconnect/downgrade.
 Older Hosts receive no new lookup command and retain manual entry. iOS and Mac
