@@ -154,6 +154,7 @@ final public class ConnectedViewer: Identifiable {
     /// Each new command awaits the previous one to preserve WebSocket ordering.
     private var pendingInputCommand: Task<Void, Never>?
     @ObservationIgnored private let fileRequests = FileBrowserCommandQueue()
+    @ObservationIgnored private let browserRequests = FileBrowserCommandQueue(limit: 4)
 
     /// Serial chain for outbound encrypted messages. Encrypted sends have multiple
     /// suspension points (E2EE check, encrypt, WebSocket send), so concurrent
@@ -256,6 +257,10 @@ final public class ConnectedViewer: Identifiable {
                 oldest.duration(to: ContinuousClock.now)
             )
         )
+    }
+
+    nonisolated static func canCaptureBrowserFrame(_ queue: TerminalSendQueueSnapshot) -> Bool {
+        queue.depth < 3 && queue.oldestWaitMilliseconds < 100
     }
 
     // MARK: - Connection Management
@@ -767,6 +772,21 @@ final public class ConnectedViewer: Identifiable {
             }
 
         case let .command(command):
+            if case let .browseBrowser(request) = command.command, let onCommand {
+                // Frames are disposable; terminal output and ordered input are not.
+                if request.operation == .frame, !Self.canCaptureBrowserFrame(terminalSendQueueSnapshot) {
+                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Browser preview paused while the connection catches up.")))
+                    return
+                }
+                let generation = connectionGeneration.current
+                if !browserRequests.enqueue(command, execute: onCommand, reply: { [weak self] response in
+                    guard let self, self.connectionGeneration.isCurrent(generation) else { return }
+                    await self.sendEncrypted(.commandResponse(response))
+                }) {
+                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Too many browser requests.")))
+                }
+                return
+            }
             if case .browseFiles = command.command, let onCommand {
                 let generation = connectionGeneration.current
                 if !fileRequests.enqueue(command, execute: onCommand, reply: { [weak self] response in
@@ -1185,6 +1205,7 @@ final public class ConnectedViewer: Identifiable {
 
     private func invalidateConnectionWork() {
         fileRequests.cancelAll()
+        browserRequests.cancelAll()
         quickPhraseSync?.reset()
         connectionGeneration.invalidate()
         pendingInputCommand?.cancel()

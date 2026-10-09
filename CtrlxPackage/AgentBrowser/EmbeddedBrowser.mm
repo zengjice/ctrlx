@@ -195,7 +195,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     // Read-only routing/attachment diagnostics, filtered by ownership by Tabs.
     return @{@"session": route_[@"session"] ?: @"", @"window": route_[@"window"] ?: @"",
              @"pane": route_[@"pane"] ?: @"", @"embedded": @YES,
-             @"visible": @(container_.window != nil && !container_.isHiddenOrHasHiddenAncestor)};
+             @"visible": @(container_.window.isVisible && !container_.isHiddenOrHasHiddenAncestor)};
   }
  private:
   std::string owner_;
@@ -270,6 +270,20 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
 @implementation CXBrowserApplication
 - (BOOL)isHandlingSendEvent { return self.handlingSendEvent; }
 - (void)sendEvent:(NSEvent *)event {
+  // CDP input bypasses NSApplication. Physical Host input must not race the
+  // remote controller, including a CEF field that was already first responder.
+  if (runtime.started) for (auto& [id, browser] : browsers) {
+    if (!AgentBrowserHumanControlled(browser)) continue;
+    NSView *view = (__bridge NSView*)browser->GetHost()->GetWindowHandle();
+    if (event.window != view.window) continue;
+    BOOL keyboard = event.type == NSEventTypeKeyDown || event.type == NSEventTypeKeyUp || event.type == NSEventTypeFlagsChanged;
+    if (keyboard && [view.window.firstResponder isKindOfClass:NSView.class] &&
+        [(NSView*)view.window.firstResponder isDescendantOf:view]) return;
+    BOOL pointer = event.type == NSEventTypeLeftMouseDown || event.type == NSEventTypeLeftMouseUp ||
+      event.type == NSEventTypeLeftMouseDragged || event.type == NSEventTypeRightMouseDown ||
+      event.type == NSEventTypeRightMouseUp || event.type == NSEventTypeScrollWheel;
+    if (pointer && !view.isHiddenOrHasHiddenAncestor && NSPointInRect([view convertPoint:event.locationInWindow fromView:nil], view.bounds)) return;
+  }
   if (runtime.started) { CefScopedSendingEvent scope; [super sendEvent:event]; }
   else [super sendEvent:event];
 }
@@ -377,6 +391,17 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
 - (void)closeTab:(NSString *)identifier {
   auto browser = AgentBrowserTarget(identifier);
   if (browser) { CloseDevToolsFor(browser); browser->GetHost()->CloseBrowser(true); }
+}
+- (BOOL)setHumanControl:(NSString *)token forTab:(NSString *)identifier {
+  return self.started && !self.closing && SetAgentBrowserHumanControl(identifier, token);
+}
+- (void)requestBrowserTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData *, NSString *))completion {
+  if (!self.started || self.closing) { completion(nil, @"Chromium is not ready."); return; }
+  NSString *target = [identifier copy]; NSData *data = [request copy];
+  void (^reply)(NSData*, NSString*) = [completion copy];
+  if (!CefPostTask(TID_UI, new BrowserUITask([target, data, reply] {
+    RequestRemoteBrowserTab(target, data, reply);
+  }))) completion(nil, @"Chromium could not schedule the request.");
 }
 - (void)beginShutdown {
   self.closing = YES;

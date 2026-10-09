@@ -341,6 +341,60 @@ final class SessionFileTabsState {
     /// switches between tabs/sessions.
     var browserStates: [UUID: BrowserTabState] = [:]
     var agentBrowserStates: [UUID: AgentBrowserTabState] = [:]
+    var remoteBrowserTabs: [UUID: RemoteBrowserTab] = [:]
+
+    /// Returns whether reconciliation collapsed the split, so the view can repair terminal focus.
+    @discardableResult
+    func syncHostBrowserTabs(_ values: [RemoteBrowserTab], sessionWindowIDs: [String]) -> Bool {
+        let live = Set(values.map(\.id))
+        let removed = Set(remoteBrowserTabs.keys).subtracting(live)
+        openBrowserTabs.removeAll { removed.contains($0.id) }
+        for id in removed {
+            remoteBrowserTabs.removeValue(forKey: id)
+            rightSide.remove(.browser(id))
+            if selectedBrowserTabId == id { selectedBrowserTabId = nil }
+            if selectedRight == .browser(id) { selectedRight = nil }
+        }
+        for value in values {
+            remoteBrowserTabs[value.id] = value
+            var tab = BrowserTab(id: value.id, url: URL(string: value.url) ?? URL(staticString: "about:blank"),
+                displayTitle: "\(value.title.isEmpty ? "Browser" : value.title) · Host", originWindowId: value.windowID, parentTabId: value.parentID)
+            tab.isAgentBrowser = true
+            if let index = openBrowserTabs.firstIndex(where: { $0.id == value.id }) {
+                if openBrowserTabs[index] != tab { openBrowserTabs[index] = tab }
+            } else { openBrowserTabs.append(tab) }
+        }
+        for index in openBrowserTabs.indices where !live.contains(openBrowserTabs[index].id) {
+            openBrowserTabs[index].isViewerLocal = true
+        }
+        return reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+    }
+
+    @discardableResult
+    func reconcileRemoteRightPaneSelection(sessionWindowIDs: [String]) -> Bool {
+        if let selectedRight, !rightSide.contains(selectedRight) { self.selectedRight = nil }
+        guard isSplit else { return false }
+
+        let leftEmpty = !sessionWindowIDs.isEmpty
+            && sessionWindowIDs.allSatisfy { rightSide.contains(.window($0)) }
+            && openBrowserTabs.allSatisfy { rightSide.contains(.browser($0.id)) }
+            && openFileTabs.allSatisfy { rightSide.contains(.file($0.id)) }
+        if leftEmpty {
+            rightSide.removeAll()
+            selectedRight = nil
+            return true
+        }
+
+        guard selectedRight == nil else { return false }
+        if let window = rightSide.first(where: { if case .window = $0 { true } else { false } }) {
+            selectedRight = window
+        } else if let browser = openBrowserTabs.last(where: { rightSide.contains(.browser($0.id)) }) {
+            selectedRight = .browser(browser.id)
+        } else if let file = openFileTabs.last(where: { rightSide.contains(.file($0.id)) }) {
+            selectedRight = .file(file.id)
+        }
+        return false
+    }
 
     // MARK: - Split View State (issue #498)
 

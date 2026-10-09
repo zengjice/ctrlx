@@ -3,7 +3,9 @@
 The default **vercel** engine adapts the unmodified, pinned agent-browser 0.38.1
 executable. The original **ctrlx** engine is preserved as an explicit choice,
 including its bounded page-action implementation. Neither selection changes CEF, creates a second
-browser/profile, replaces WebKit New Browser, or enables remote browser control.
+browser/profile or replaces WebKit New Browser. Paired Viewer access is a
+separate [typed Host surface](agent-browser.md#viewer-browser-surface), not an
+exposed engine/CDP endpoint. A Viewer control lease gates both Agent backends.
 
 ## Usage
 

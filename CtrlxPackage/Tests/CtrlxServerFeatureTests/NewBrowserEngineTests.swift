@@ -45,6 +45,8 @@
             func goForward(_ identifier: String) {}
             func reloadTab(_ identifier: String) {}
             func showDevTools(_ identifier: String) {}
+            func setHumanControl(_ token: String?, forTab identifier: String) -> Bool { true }
+            func requestBrowserTab(_ identifier: String, request: Data, completion: @escaping (Data?, String?) -> Void) { completion(nil, "Not configured") }
             func closeTab(_ identifier: String) { closed.append(identifier) }
             func beginShutdown() {}
             func finishShutdown() -> Bool { true }

@@ -164,6 +164,9 @@ public struct MainView: View {
         }
         .background(AgentBrowserWorkspaceAnchor(workspace: agentBrowserWorkspace))
         .onAppear { registerAgentBrowserWorkspace() }
+        .onChange(of: tmuxService.windows.map(\.id)) { _, _ in
+            coordinator.agentBrowser.register(agentBrowserWorkspace)
+        }
         .onDisappear { coordinator.agentBrowser.unregister(agentBrowserWorkspace) }
         .task {
             // Initial load only - periodic refresh is handled by MirrorWindowManager
@@ -1090,6 +1093,9 @@ public struct MainView: View {
                 )
             }
             .id("\(remote.hostId)-\(window.id)")
+            .onChange(of: connection.relayClient.browserTabs, initial: true) { _, _ in
+                syncHostBrowserTabs(hostId: remote.hostId, sessionName: remote.sessionName, client: connection.relayClient)
+            }
         } else if
             let remote = selectedRemoteSession,
             coordinator.viewerConnectionManager?.connection(for: remote.hostId) != nil {
@@ -1402,6 +1408,8 @@ public struct MainView: View {
         if let tabs = remoteSessionTabsStates[tabsKey], let id = tabs.selectedFileTabId, let tab = tabs.directoryTabs[id] {
             WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: remote.hostId, paneID: tab.sourcePaneID, connection: connection))
                 .id(tab.id)
+        } else if let selectedBrowserTab, let tab = remoteSessionTabsStates[tabsKey]?.remoteBrowserTabs[selectedBrowserTab.id] {
+            RemoteBrowserView(tab: tab, client: connection.relayClient).id(tab.id)
         } else if let selectedBrowserTab, let state = remoteSessionTabsStates[tabsKey]?.agentBrowserStates[selectedBrowserTab.id] {
             AgentBrowserTabContentView(state: state)
                 .id(selectedBrowserTab.id)
@@ -1494,7 +1502,11 @@ public struct MainView: View {
                 rightPanePlaceholder
             }
         case let .browser(id):
-            if let state = sessionTabs.agentBrowserStates[id] {
+            if let tab = sessionTabs.remoteBrowserTabs[id] {
+                RemoteBrowserView(tab: tab, client: connection.relayClient)
+                    .id(id)
+                    .accessibilityIdentifier("split-right-pane")
+            } else if let state = sessionTabs.agentBrowserStates[id] {
                 AgentBrowserTabContentView(state: state)
                     .id(id)
                     .accessibilityIdentifier("split-right-pane")
@@ -3707,12 +3719,17 @@ public struct MainView: View {
     }
 
     private func registerAgentBrowserWorkspace() {
+        agentBrowserWorkspace.acceptsSession = { session in tmuxService.windows.contains { $0.sessionName == session } }
         agentBrowserWorkspace.acceptsPane = { pane in
             tmuxService.windows.contains { $0.id == pane.windowId }
         }
         agentBrowserWorkspace.onCreate = { state, parent in
             if let target = state.manualTarget {
-                guard let tabs = manualBrowserTabs(for: target) else { state.service.close(state); return }
+                if target.hostID == nil, sessionFileTabsStates[target.sessionName] == nil {
+                    sessionFileTabsStates[target.sessionName] = SessionFileTabsState()
+                }
+                guard let tabs = manualBrowserTabs(for: target) else { return }
+                guard !tabs.openBrowserTabs.contains(where: { $0.id == state.id }) else { return }
                 var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), parentTabId: parent)
                 // All native Chromium pages are transient; never restore them as
                 // WebKit or implicitly give a future agent control of a page.
@@ -3730,6 +3747,7 @@ public struct MainView: View {
             }
             let tabs = sessionFileTabsStates[window.sessionName] ?? SessionFileTabsState()
             sessionFileTabsStates[window.sessionName] = tabs
+            guard !tabs.openBrowserTabs.contains(where: { $0.id == state.id }) else { return }
             var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"),
                 originWindowId: window.id, parentTabId: parent)
             tab.isAgentBrowser = true
@@ -3785,6 +3803,7 @@ public struct MainView: View {
             guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.agentBrowserStates[state.id] != nil }) else { return }
             closeBrowserTab(state.id, sessionName: session)
         }
+        agentBrowserWorkspace.onDetach = agentBrowserWorkspace.onClose
         coordinator.agentBrowser.register(agentBrowserWorkspace)
     }
 
@@ -3919,6 +3938,14 @@ public struct MainView: View {
     ) {
         let key = remoteTabsKey(hostId: hostId, sessionName: sessionName)
         guard let tabs = remoteSessionTabsStates[key] else { return }
+        if let tab = tabs.remoteBrowserTabs[tabId],
+           let client = coordinator.viewerConnectionManager?.connection(for: hostId)?.relayClient {
+            Task {
+                do { try await RemoteBrowserSession.close(tab: tab, client: client) }
+                catch { attachError = error.localizedDescription }
+            }
+            return
+        }
         guard let closedIndex = tabs.openBrowserTabs.firstIndex(where: { $0.id == tabId }) else { return }
         let closedTab = tabs.openBrowserTabs[closedIndex]
         let payload = TabDragPayload.browser(tabId)
@@ -3976,30 +4003,29 @@ public struct MainView: View {
     /// is asked to take keyboard focus so the user can start typing a URL
     /// immediately. Mirror of `openEmptyBrowserTab` for remote sessions.
     private func openEmptyRemoteBrowserTab(hostId: String, sessionName: String) {
-        let key = remoteTabsKey(hostId: hostId, sessionName: sessionName)
-        let tabs: SessionFileTabsState
-        if let existing = remoteSessionTabsStates[key] {
-            tabs = existing
-        } else {
-            tabs = SessionFileTabsState()
-            remoteSessionTabsStates[key] = tabs
-        }
-        tabs.selectedFileTabId = nil
-        if settings.newBrowserEngine == .chromium {
-            openManualChromiumTab(target: ManualBrowserTarget(hostID: hostId, sessionName: sessionName))
+        guard let client = coordinator.viewerConnectionManager?.connection(for: hostId)?.relayClient,
+              client.isHostConnected, client.hostSupportsBrowserSharing else {
+            attachError = "Update and connect the Host Mac to create a shared Chromium browser. Existing Local browser tabs remain local."
             return
         }
-        let blank = URL(staticString: "about:blank")
-        let newTab = BrowserTab(url: blank)
-        let state = BrowserTabState(initialURL: blank)
-        // Clear the URL field text so the user sees an empty input rather
-        // than the literal "about:blank" placeholder when the field gains
-        // focus. The page itself still loads at the blank URL.
-        state.urlFieldText = ""
-        tabs.openBrowserTabs.append(newTab)
-        tabs.browserStates[newTab.id] = state
-        tabs.selectedBrowserTabId = newTab.id
-        state.urlFieldFocusRequest += 1
+        Task {
+            do {
+                let tab = try await RemoteBrowserSession.create(sessionName: sessionName, client: client)
+                syncHostBrowserTabs(hostId: hostId, sessionName: sessionName, client: client)
+                selectRemoteBrowserTab(tab.id, hostId: hostId, sessionName: sessionName)
+            } catch { attachError = error.localizedDescription }
+        }
+    }
+
+    private func syncHostBrowserTabs(hostId: String, sessionName: String, client: ViewerRelayClient) {
+        let key = remoteTabsKey(hostId: hostId, sessionName: sessionName)
+        let tabs = remoteSessionTabsStates[key] ?? SessionFileTabsState()
+        remoteSessionTabsStates[key] = tabs
+        let values = client.browserTabs.filter { $0.sessionName == sessionName }
+        let windows = remoteSessionWindows(hostId: hostId, sessionName: sessionName)
+        if tabs.syncHostBrowserTabs(values, sessionWindowIDs: windows.map(\.stableId)) {
+            restoreRemoteLeftWindowSelection(hostId: hostId, sessionName: sessionName, sessionWindows: windows)
+        }
     }
 
     /// Toggles which side of the split a remote tab strip entry lives on.
@@ -4186,40 +4212,17 @@ public struct MainView: View {
     ) {
         let key = remoteTabsKey(hostId: hostId, sessionName: sessionName)
         guard let tabs = remoteSessionTabsStates[key] else { return }
-        if let sel = tabs.selectedRight, !tabs.rightSide.contains(sel) {
-            tabs.selectedRight = nil
+        if tabs.reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindows.map(\.stableId)) {
+            restoreRemoteLeftWindowSelection(hostId: hostId, sessionName: sessionName, sessionWindows: sessionWindows)
         }
-        guard tabs.isSplit else { return }
+    }
 
-        let leftEmpty = !sessionWindows.isEmpty
-            && sessionWindows.allSatisfy { tabs.rightSide.contains(.window($0.stableId)) }
-            && tabs.openBrowserTabs.allSatisfy { tabs.rightSide.contains(.browser($0.id)) }
-            && tabs.openFileTabs.allSatisfy { tabs.rightSide.contains(.file($0.id)) }
-        if leftEmpty {
-            tabs.rightSide.removeAll()
-            tabs.selectedRight = nil
-            // Only touch `selectedRemoteWindowId` for the currently-selected
-            // session — it's session-scoped state and a background session's
-            // auto-collapse can't change which window the user is viewing.
-            if
-                let remote = selectedRemoteSession,
-                remote.hostId == hostId,
-                remote.sessionName == sessionName,
-                selectedRemoteWindowId == nil
-                || sessionWindows.first(where: { $0.id == selectedRemoteWindowId }) == nil {
-                selectedRemoteWindowId = (sessionWindows.first(where: \.isWindowActive) ?? sessionWindows.first)?.id
-            }
-            return
-        }
-
-        if tabs.selectedRight != nil { return }
-        // Auto-pick: window > newest browser.
-        if let window = tabs.rightSide.first(where: { if case .window = $0 { true } else { false } }) {
-            tabs.selectedRight = window
-        } else if let browser = tabs.openBrowserTabs.last(where: { tabs.rightSide.contains(.browser($0.id)) }) {
-            tabs.selectedRight = .browser(browser.id)
-        } else if let file = tabs.openFileTabs.last(where: { tabs.rightSide.contains(.file($0.id)) }) {
-            tabs.selectedRight = .file(file.id)
+    private func restoreRemoteLeftWindowSelection(hostId: String, sessionName: String, sessionWindows: [TmuxWindow]) {
+        // A background session's auto-collapse must not change the visible session's focus.
+        if let remote = selectedRemoteSession,
+           remote.hostId == hostId, remote.sessionName == sessionName,
+           selectedRemoteWindowId == nil || !sessionWindows.contains(where: { $0.id == selectedRemoteWindowId }) {
+            selectedRemoteWindowId = (sessionWindows.first(where: \.isWindowActive) ?? sessionWindows.first)?.id
         }
     }
 

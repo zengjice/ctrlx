@@ -2880,7 +2880,11 @@
 
             // Start the socket server (use separate path in E2E to avoid conflicts)
             let isE2E = CommandLine.arguments.contains("--e2e-test")
-            let socketPath = NSTemporaryDirectory() + (isE2E ? "ctrlx-e2e.sock" : "ctrlx.sock")
+            var socketPath = NSTemporaryDirectory() + (isE2E ? "ctrlx-e2e.sock" : "ctrlx.sock")
+            if isE2E, let index = CommandLine.arguments.firstIndex(of: "--e2e-api-socket"),
+               index + 1 < CommandLine.arguments.count {
+                socketPath = CommandLine.arguments[index + 1]
+            }
             do {
                 try await apiSocketServer.start(socketPath)
             } catch {
@@ -3041,7 +3045,11 @@
                 connectionManager: connectionManager,
                 paneStreamManager: paneStreamManager
             )
-            connectionManager.onViewerUnavailable = { [weak terminalStreamService] viewerId in
+            agentBrowser.onTabsChanged = { [weak connectionManager] in
+                Task { await connectionManager?.pushSessionStateToAll() }
+            }
+            connectionManager.onViewerUnavailable = { [weak terminalStreamService, weak self] viewerId in
+                self?.agentBrowser.disconnectBrowserViewer(viewerId)
                 await terminalStreamService?.stopStreams(for: viewerId)
             }
 
@@ -3064,6 +3072,7 @@
 
             // Start notification-only readers for all discovered panes
             let initialPanes = await tmuxService.refreshPanes()
+            agentBrowser.updateBrowserRoutes(initialPanes)
             windowManager.updatePaneStates(from: initialPanes)
             await windowManager.refreshGitBranches()
             await paneStreamManager.startMonitoring(panes: initialPanes)
@@ -3086,6 +3095,7 @@
             controlClientManager.setOnPanesChanged { [weak self] in
                 Task {
                     let panes = await tmuxForCleanup.refreshPanes()
+                    self?.agentBrowser.updateBrowserRoutes(panes)
                     winManager.updatePaneStates(from: panes)
                     await terminalStreaming.stopStreamsForClosedPanes(currentPanes: panes)
                     await paneStreaming.updateMonitoring(panes: panes)
@@ -3105,6 +3115,15 @@
             let tmux = tmuxService
             let editorManager = editorSessionManager
             connectionManager.onCommand = { [weak self, executor, streamService, tmux, winManager, editorManager, paneStreaming, weak connectionManager] viewerId, command in
+                if case let .browseBrowser(spec) = command.command {
+                    guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
+                        return .failure(for: command.id, error: "Session no longer exists.")
+                    }
+                    do {
+                        let result = try await self.agentBrowser.handleBrowser(spec, viewerID: viewerId)
+                        return CommandResponseMessage(commandId: command.id, success: true, browser: result)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .listSessionDirectories(spec) = command.command {
                     return await SessionDirectoryResolver.respond(to: command, request: spec)
                 }
@@ -3263,6 +3282,7 @@
                     do {
                         try await tmux.renameSession(from: spec.sessionName, to: spec.newName)
                         let allPanes = await tmux.refreshPanes()
+                        self?.agentBrowser.updateBrowserRoutes(allPanes)
                         winManager.updatePaneStates(from: allPanes)
                         await paneStreaming.updateMonitoring(panes: allPanes)
                         await connectionManager?.pushSessionStateToAll()
@@ -3499,7 +3519,9 @@
                     supportsTerminalPaste: true,
                     supportsTerminalFit: true,
                     supportsFileBrowsing: true,
-                    supportsFileDownloads: true
+                    supportsFileDownloads: true,
+                    supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
+                    browserTabs: await self?.agentBrowser.sharedBrowserTabs
                 )
             }
 

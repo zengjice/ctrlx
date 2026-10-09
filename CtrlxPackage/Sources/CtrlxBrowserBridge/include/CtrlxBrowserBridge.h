@@ -23,6 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)reloadTab:(NSString *)identifier;
 - (void)showDevTools:(NSString *)identifier;
 - (void)closeTab:(NSString *)identifier;
+// Private Host boundary: validated page operations, never a remote CDP tunnel.
+- (BOOL)setHumanControl:(nullable NSString *)token forTab:(NSString *)identifier;
+- (void)requestBrowserTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData * _Nullable result, NSString * _Nullable error))completion;
 - (void)beginShutdown;
 - (BOOL)finishShutdown;
 @end

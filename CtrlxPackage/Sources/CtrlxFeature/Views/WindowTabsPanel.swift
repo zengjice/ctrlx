@@ -6,10 +6,13 @@
     struct WindowTabsPanel: View {
         let windows: [TmuxWindow]
         let files: [FileBrowserTab]
+        var browsers: [RemoteBrowserTab] = []
         let selectedWindowID: String?
         let selectedFileID: UUID?
+        var selectedBrowserID: UUID?
         let isConnected: Bool
         let canOpenFiles: Bool
+        var canOpenBrowser: Bool = false
         let isCreatingWindow: Bool
         let forkUnavailableReason: String?
         let onChoose: (WindowTabAction) -> Void
@@ -37,6 +40,28 @@
                             }
                         }
                     }
+                    if !browsers.isEmpty {
+                        Section("Browsers on Host") {
+                            ForEach(browsers) { tab in
+                                HStack {
+                                    Button { choose(.selectBrowser(tab.id)) } label: {
+                                        HStack {
+                                            Label(tab.title.isEmpty ? "Browser" : tab.title, symbol: .globe).lineLimit(1)
+                                            Spacer()
+                                            if selectedBrowserID == tab.id { Symbols.checkmark.image }
+                                        }.contentShape(Rectangle())
+                                    }.buttonStyle(.plain)
+                                    Menu {
+                                        Button("Close Browser on Host", role: .destructive) { choose(.closeBrowser(tab.id)) }
+                                            .disabled(!isConnected)
+                                    } label: {
+                                        Label("Browser Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly)
+                                            .frame(minWidth: 44, minHeight: 44)
+                                    }.buttonStyle(.borderless)
+                                }
+                            }
+                        }
+                    }
                     Section {
                         Button { choose(.newTerminal) } label: {
                             Label("New Terminal", symbol: .terminal)
@@ -47,6 +72,12 @@
                         }
                         .disabled(!isConnected || isCreatingWindow)
                         .accessibilityIdentifier("new-agent-window")
+                        Button { choose(.newBrowser) } label: {
+                            Label("New Browser on Host", symbol: .globe)
+                        }
+                        .disabled(!isConnected || !canOpenBrowser || isCreatingWindow)
+                        Text("Chromium pages run on the Host. WebKit pages are local-only.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -61,7 +92,7 @@
                         Label(name, symbol: window.hasClaude ? .sparkles : .terminal)
                             .lineLimit(1)
                         Spacer()
-                        if selectedWindowID == window.stableId, selectedFileID == nil {
+                        if selectedWindowID == window.stableId, selectedFileID == nil, selectedBrowserID == nil {
                             Symbols.checkmark.image
                         }
                     }

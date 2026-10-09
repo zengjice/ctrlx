@@ -106,6 +106,7 @@ public actor TmuxCommandExecutor {
                  .listSessionDirectories,
                  .createSessionDirectory,
                  .browseFiles,
+                 .browseBrowser,
                  .stopTerminalStream,
                  .createTmuxSession,
                  .createTmuxWindow,

@@ -18,6 +18,8 @@ struct AgentBrowserDevToolsTests {
         func goForward(_ identifier: String) {}
         func reloadTab(_ identifier: String) {}
         func showDevTools(_ identifier: String) { inspected.append(identifier) }
+        func setHumanControl(_ token: String?, forTab identifier: String) -> Bool { true }
+        func requestBrowserTab(_ identifier: String, request: Data, completion: @escaping (Data?, String?) -> Void) { completion(nil, "Not configured") }
         func closeTab(_ identifier: String) { closed.append(identifier) }
         func beginShutdown() {}
         func finishShutdown() -> Bool { true }
@@ -80,14 +82,19 @@ struct AgentBrowserDevToolsTests {
         #expect(runtime.inspected.isEmpty)
     }
 
-    @Test("Unregister removes UI tabs before delayed native close callbacks")
+    @Test("Unregister parks Host pages; re-registering reuses the same page")
     func unregisterRemovesUITabs() throws {
         let runtime = Runtime()
         let service = AgentBrowserService(runtime: runtime)
         let workspace = AgentBrowserWorkspace()
+        workspace.acceptsSession = { _ in true }
         var visible: [String: AgentBrowserTabState] = [:]
         var removed: [String] = []
         workspace.onCreate = { tab, _ in visible[tab.identifier] = tab }
+        workspace.onDetach = { tab in
+            visible.removeValue(forKey: tab.identifier)
+            service.close(tab)
+        }
         workspace.onClose = { tab in
             #expect(tab.isClosed)
             visible.removeValue(forKey: tab.identifier)
@@ -104,14 +111,14 @@ struct AgentBrowserDevToolsTests {
 
         service.unregister(workspace)
         #expect(visible.isEmpty)
-        #expect(old.isClosed)
-        #expect(removed == [id])
-        #expect(runtime.closed == [id])
+        #expect(!old.isClosed)
+        #expect(removed.isEmpty)
+        #expect(runtime.closed.isEmpty)
+        #expect(old.view.window != nil)
         #expect(!other.isClosed)
 
-        // Reappearance can reuse the same SwiftUI state; old callbacks must
-        // neither restore a closed page nor remove the newly created one.
         service.register(workspace)
+        #expect(visible[id] === old)
         let replacement = UUID().uuidString
         service.browserTabCreated(replacement, view: NSView(),
             route: ["workspace": workspace.id.uuidString, "pane": "%1"], owner: "first", parent: nil)
@@ -127,8 +134,8 @@ struct AgentBrowserDevToolsTests {
         service.unregister(workspace)
         service.browserTabClosed(replacement)
         #expect(visible.isEmpty)
-        #expect(removed == [id, replacement])
-        #expect(runtime.closed == [id, replacement])
+        #expect(removed == [id])
+        #expect(runtime.closed.isEmpty)
     }
 }
 #endif

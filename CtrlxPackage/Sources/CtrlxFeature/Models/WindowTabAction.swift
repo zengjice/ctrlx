@@ -13,6 +13,9 @@ enum WindowTabAction: Equatable, Sendable {
     case window(stableID: String, operation: WindowOperation)
     case selectFiles(UUID)
     case closeFiles(UUID)
+    case selectBrowser(UUID)
+    case closeBrowser(UUID)
+    case newBrowser
     case newTerminal
     case newAgent
 

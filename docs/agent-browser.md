@@ -4,11 +4,11 @@ Mac **Settings → Browser → New Browser → Engine** selects **Chromium** (de
 or **WebKit** for explicit New Browser actions. Chromium uses the same sandboxed
 CEF runtime as Agent Browser, embedded as native child views in CtrlX's same
 session tab strip and left/right split layout. No standalone browser window, no
-ChatGPT extension, MCP server, browser-wide TCP debugging port or Relay browser control is
-involved. Apple Silicon only for this first implementation.
+ChatGPT extension, MCP server or browser-wide TCP debugging port is involved.
+Apple Silicon only for the native Host runtime.
 
-This device-local setting affects new human-created tabs only, including New
-Browser in a Mac Viewer session (the page still runs on the viewing Mac). Existing
+This device-local setting affects new human-created local tabs only. New Browser
+in a Mac Viewer session now creates a Chromium page on the Host. Existing
 tabs, restored WebKit tabs, terminal-link rules and Codex automation are unchanged;
 it is unrelated to the `vercel` / `ctrlx` automation-backend selection. iOS has no
 corresponding setting. Chromium tabs share CtrlX's dedicated Chromium profile and
@@ -56,7 +56,7 @@ The control owner is the **Codex process instance**; the display location is the
 strip, not control grants. Children inherit their opener's owner and location.
 Switching tabs reparents the existing native view; it does not reload Chromium.
 Transient Chromium tabs are excluded from WKWebView layout persistence. Browser
-tabs are not mirrored to iOS/remote viewers in this increment.
+tabs are available to paired Mac/iOS Viewers through the typed remote surface below.
 
 The host initializes CEF before use, then enters `CefRunMessageLoop` from a
 deferred AppKit RunLoop callback, never a Swift serial main-actor job. CEF's
@@ -72,13 +72,61 @@ does it call `CefShutdown`. This uses CEF's
 [FlushStore completion contract](https://cef-builds.spotifycdn.com/docs/125.0/classCefCookieManager.html),
 not a fixed sleep or disabled cookie encryption.
 
-Workspace unregistration retires its UI tab state synchronously before requesting
-native close. Delayed CEF close callbacks must not leave dead tabs in a reused
-SwiftUI workspace, repeat cleanup, or affect another workspace. Native tab state
-is not restored by making a workspace visible again. For local installation
+Host workspace unregistration retires its UI representations, then parks the same
+native views in an off-screen NSWindow. Pages remain alive for Viewers and are
+adopted again when the matching workspace opens. Existing Viewer-local pages
+retain their old close-on-workspace-disposal behavior. Explicit tab close still
+closes the native page; quitting CtrlX closes all pages. For local installation
 acceptance, verify the running process's loaded executable and dylib paths/inodes
 as well as bundle hashes; replacing the App on disk does not replace a library
 already mapped by an older process.
+
+## Viewer browser surface
+
+Mac Viewer tabs marked **Host** and iOS **Tabs → Browsers on Host** show the same
+Host Chromium pages, including manual, Agent and popup tabs. New Browser on Host
+creates an ownerless human page in that session. Existing Viewer-local tabs are
+marked **Local** and are not migrated. WebKit remains device-local. Page DOM,
+login state, local network access and localhost resolution all stay on the Host;
+the Viewer does not load a second copy of the URL or receive browser credentials.
+
+- `supportsBrowserSharing` and optional tab metadata extend session snapshots.
+  Older Hosts reject the feature locally before any new command enum is sent.
+  `BrowseBrowser` operations and frame replies use the existing paired E2EE
+  command channel; the opaque Relay requires no browser-specific deployment.
+- The native surface exposes only bounded capture/navigation/input operations,
+  never a raw remote CDP/JavaScript gateway. There is at most one outstanding
+  frame per visible surface, a 180 ms delay between replies, JPEG quality 50,
+  a 1024-pixel longest side and a 180 KiB encoded-image budget. Four captures
+  globally and four requests per Viewer bound work. Congested terminal output
+  pauses new captures; this is interactive page sharing, not a video stream.
+- Selection is per Viewer. Agent-created tabs do not steal Viewer focus.
+  Disappearing/background surfaces stop polling and release control; they do not
+  close the Host page. Only explicit Close closes it.
+- Agent pages start read-only. **Take Control** acquires one lease per page;
+  another surface/Viewer cannot steal it. Manual pages attempt acquisition on
+  first display. **Return to Agent / Release Control**, Host **Take Back**,
+  disconnect or a 20-second lease expiry release it (expiry checked every 5 s).
+  Acquisition refuses in-flight Agent work/recording. Both CLI backends,
+  including existing Vercel gateway attachments, reject commands during handoff.
+  The Host page blocks direct keyboard/pointer input until Take Back.
+- Viewers scale the existing viewport by default. **Fit to This Device** is an
+  explicit shared Host viewport change. Inputs carry the last displayed page /
+  geometry generation and an exact surface/control identity. Stale inputs fail,
+  never replay. Input is ordered, bounded to 32 queued items, with consecutive
+  moves/wheel deltas coalesced. Losing the lease cancels the input task and clears
+  the queue; retaking control never promotes old input to the new lease.
+  Transport failure releases control.
+- Mac uses native IME composition; iOS commits UITextView composition before
+  sending text, with explicit Keyboard and Paste buttons. One finger scrolls;
+  two fingers drag. System/CEF popup UI, file chooser, remote clipboard reads,
+  remote audio/video streaming and remote DevTools are not included.
+
+Validation scope and outstanding physical-device acceptance are tracked in
+[`v3.0.52/STAGE1_TODO.md`](v3.0.52/STAGE1_TODO.md). Native acceptance:
+`tests/remote_browser.py <isolated-app> <engine> <codex-fixture>` after
+`tests/prepare_upstream_probe.sh`; uses a per-test API socket/profile and fixture
+processes, **not real Codex or an end-to-end iPhone UI test**.
 
 ## Ownership and data
 
@@ -171,7 +219,7 @@ The wrench button at the right of an **Agent Browser** tab's address bar opens
 CEF's native Developer Tools for that exact page. It is a separate tools window
 inside the same CtrlX application, not another browser app or a WebKit tab.
 Repeated clicks focus the existing tools window. Closing the tools preserves
-the page; closing the page/workspace or quitting CtrlX also disposes its tools.
+the page; closing the page or quitting CtrlX also disposes its tools.
 Navigation keeps the inspector attached to the same page tab.
 
 This is an explicit local, human debugging entry point (DOM/CSS, Console,

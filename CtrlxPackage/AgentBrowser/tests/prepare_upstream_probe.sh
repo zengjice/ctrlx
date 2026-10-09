@@ -32,6 +32,8 @@ curl --fail --location --retry 2 --connect-timeout 15 --max-time 180 \
 }
 chmod u+x "$PROBE_BUILD/agent-browser"
 clang++ -std=c++20 "$PROBE_REPO/CtrlxPackage/AgentBrowser/tests/identity.cc" -o "$PROBE_BUILD/identity"
+# The long-lived CLI fixture tolerates terminal focus/resize input during setup.
+clang++ -std=c++20 "$PROBE_REPO/CtrlxPackage/AgentBrowser/tests/engine_identity.cc" -o "$PROBE_BUILD/codex"
 clang++ -std=c++20 -O1 -fobjc-arc -fPIC -arch arm64 -mmacosx-version-min=12.0 \
   -DCTRLX_UPSTREAM_BROWSER_PROBE=1 -dynamiclib -I "$PROBE_SDK" \
   "$PROBE_REPO/CtrlxPackage/AgentBrowser/EmbeddedBrowser.mm" \
@@ -40,7 +42,9 @@ clang++ -std=c++20 -O1 -fobjc-arc -fPIC -arch arm64 -mmacosx-version-min=12.0 \
   -install_name @rpath/libCtrlXAgentBrowser.dylib \
   -o "$PROBE_BUILD/CtrlX.app/Contents/Frameworks/libCtrlXAgentBrowser.dylib"
 codesign --force --sign "$PROBE_IDENTITY" "$PROBE_BUILD/CtrlX.app/Contents/Frameworks/libCtrlXAgentBrowser.dylib"
-codesign --force --sign "$PROBE_IDENTITY" "$PROBE_BUILD/CtrlX.app"
+# Compile-only workspace builds can carry stale signatures on copied package
+# frameworks. Sign this disposable app's nested code too, never the source app.
+codesign --force --deep --sign "$PROBE_IDENTITY" "$PROBE_BUILD/CtrlX.app"
 codesign --verify --deep --strict "$PROBE_BUILD/CtrlX.app"
 printf 'Prepared isolated fixture: %s\n' "$PROBE_BUILD"
 printf 'Run: python3 -u %q %q %q %q\n' \

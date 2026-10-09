@@ -29,6 +29,7 @@ struct BrowserTab: Identifiable, Equatable {
     /// Native Chromium tabs (agent-owned or human-only) are transient. Never
     /// restore them as WebKit pages or grant a new Codex control over old tabs.
     var isAgentBrowser: Bool = false
+    var isViewerLocal: Bool = false
 
     init(
         id: UUID = UUID(),
@@ -49,6 +50,11 @@ struct BrowserTab: Identifiable, Equatable {
     /// title yet. The truncation keeps long query/fragment URLs from
     /// overflowing the tab strip's max label width.
     var tabLabel: String {
+        let label = baseTabLabel
+        return isViewerLocal ? "\(label) · Local" : label
+    }
+
+    private var baseTabLabel: String {
         if let title = displayTitle, !title.isEmpty {
             return title
         }

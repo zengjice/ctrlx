@@ -102,6 +102,13 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsFileBrowsing = false
     public private(set) var hostSupportsFileDownloads = false
     public private(set) var hostSupportsTerminalFit = false
+    public private(set) var hostSupportsBrowserSharing = false
+    public private(set) var browserTabs: [RemoteBrowserTab] = []
+
+    func rememberCreatedBrowser(_ tab: RemoteBrowserTab) {
+        guard !browserTabs.contains(where: { $0.id == tab.id }) else { return }
+        browserTabs.append(tab)
+    }
 
     /// Name of the connected host device (if known)
     public private(set) var connectedHostName: String?
@@ -493,6 +500,8 @@ final public class ViewerRelayClient {
         }
 
         switch command.commandType {
+        case .browseBrowser where !hostSupportsBrowserSharing:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
         case .browseFiles where !hostSupportsFileBrowsing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to browse files"))
         case let .browseFiles(spec) where !hostSupportsFileDownloads:
@@ -609,6 +618,8 @@ final public class ViewerRelayClient {
         case let .createSessionDirectory(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .browseFiles(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+        case let .browseBrowser(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .resizeTmuxPane(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
@@ -1001,6 +1012,8 @@ final public class ViewerRelayClient {
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
             hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
+            hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
+            browserTabs = sessionState.browserTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             onSessionState?(sessionState)
 
@@ -1021,6 +1034,7 @@ final public class ViewerRelayClient {
             terminalStreamHandlers.deliver(streamMessage)
 
         case let .hostConnected(connectedMessage):
+            resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
@@ -1067,6 +1081,7 @@ final public class ViewerRelayClient {
             }
 
         case let .peerHello(peerHello):
+            resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
@@ -1095,6 +1110,7 @@ final public class ViewerRelayClient {
             quickPhraseSync?.receive(payload)
 
         case .hostDisconnected:
+            resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
@@ -1107,6 +1123,7 @@ final public class ViewerRelayClient {
             await onHostDisconnected?()
 
         case .hostSubscriptionInactive:
+            resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
@@ -1406,6 +1423,7 @@ final public class ViewerRelayClient {
     }
 
     private func cleanupConnection() async {
+        resetBrowserState()
         hostSupportsTerminalPaste = false
         hostSupportsDirectoryCreation = false
         hostSupportsFileBrowsing = false
@@ -1443,5 +1461,9 @@ final public class ViewerRelayClient {
             handler(.failure(ViewerRelayClientError.notConnected))
         }
         pendingCommands.removeAll()
+    }
+
+    private func resetBrowserState() {
+        hostSupportsBrowserSharing = false
     }
 }

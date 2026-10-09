@@ -14,31 +14,47 @@ struct AgentBrowserTabContentView: View {
         VStack(spacing: 0) {
             HStack {
                 Button { state.service.back(state) } label: { Label("Back", symbol: .chevronLeft) }
+                    .disabled(state.isRemotelyControlled)
                 Button { state.service.forward(state) } label: { Label("Forward", symbol: .chevronRight) }
+                    .disabled(state.isRemotelyControlled)
                 Button { state.service.reload(state) } label: { Label("Reload", symbol: .arrowClockwise) }
+                    .disabled(state.isRemotelyControlled)
                 TextField("https://…", text: $address)
                     .focused($editingAddress)
                     .onSubmit(navigate)
                     .accessibilityIdentifier("agent-browser-address")
-                Text(state.manualTarget == nil ? "Codex · \(state.owner.prefix(6))" : "Chromium")
+                    .disabled(state.isRemotelyControlled)
+                if state.isRemotelyControlled {
+                    Button("Take Back Control") { state.service.releaseBrowserControl(state.id) }
+                        .help("This page is controlled by a Viewer")
+                } else {
+                    Text(state.manualTarget == nil ? "Codex · \(state.owner.prefix(6))" : "Chromium")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .help(state.manualTarget == nil
                           ? "Shared Agent Browser logins; only this Codex instance controls this tab"
                           : "Shared CtrlX Chromium logins; this tab is not controlled by an agent")
+                }
                 if state.isLoading { ProgressView().controlSize(.small) }
                 Button {
                     state.service.showDevTools(state)
                 } label: { Label("Developer Tools", symbol: .wrenchAndScrewdriver) }
                 .help("Open Developer Tools for this Chromium tab")
                 .accessibilityIdentifier("agent-browser-developer-tools")
-                .disabled(state.isClosed)
+                .disabled(state.isClosed || state.isRemotelyControlled)
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
             .padding(8)
             Divider()
-            EmbeddedAgentBrowserView(view: state.view)
+            EmbeddedAgentBrowserView(state: state)
+                .overlay {
+                    if state.isRemotelyControlled {
+                        Color.black.opacity(0.05)
+                            .contentShape(Rectangle())
+                            .onTapGesture {}
+                    }
+                }
         }
         .onChange(of: state.url, initial: true) { _, url in
             if !editingAddress { address = url == "about:blank" ? "" : url }
@@ -61,7 +77,9 @@ struct AgentBrowserTabContentView: View {
 }
 
 private struct EmbeddedAgentBrowserView: NSViewRepresentable {
-    let view: NSView
+    let state: AgentBrowserTabState
+    private var view: NSView { state.view }
+    func makeCoordinator() -> AgentBrowserTabState { state }
 
     func makeNSView(context: Context) -> NSView {
         let host = NSView()
@@ -77,9 +95,9 @@ private struct EmbeddedAgentBrowserView: NSViewRepresentable {
         view.autoresizingMask = [.width, .height]
         host.addSubview(view)
     }
-    static func dismantleNSView(_ host: NSView, coordinator: ()) {
+    static func dismantleNSView(_ host: NSView, coordinator: AgentBrowserTabState) {
         // Detach only: switching tabs must not close Chromium or reload the page.
-        for view in host.subviews { view.removeFromSuperview() }
+        if coordinator.view.superview === host { coordinator.service.park(coordinator) }
     }
 }
 

@@ -31,6 +31,22 @@
     client.browser = tabs_.at(client.tab).browser;
     client.generation = tabs_.at(client.tab).generation;
     int browserID = client.browser->GetIdentifier();
+    if ([command isEqual:@"probe.remote-control"]) {
+      NSString* lease = request[@"lease"];
+      Reply(id, @{@"accepted": @(SetHumanControl(token, [lease isKindOfClass:NSString.class] ? lease : nil))});
+      return true;
+    }
+    if ([command isEqual:@"probe.remote"]) {
+      NSDictionary* payload = request[@"request"];
+      if (![payload isKindOfClass:NSDictionary.class]) { Reply(id, nil, @"Missing remote request."); return true; }
+      client.busy = true;
+      CefRefPtr<Bridge> self = this;
+      auto bytes = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+      RemoteRequest(token, bytes, ^(NSData* data, NSString* error) {
+        self->Reply(id, data ? Parse(data.bytes, data.length) : nil, error);
+      });
+      return true;
+    }
     if ([command isEqual:@"probe.devtools"]) {
       NSString *action = request[@"action"];
       if (![@[@"show", @"close", @"status"] containsObject:action]) {

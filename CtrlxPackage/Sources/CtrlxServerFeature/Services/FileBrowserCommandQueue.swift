@@ -5,12 +5,14 @@ import Foundation
 @MainActor
 final class FileBrowserCommandQueue {
     private var tasks: [UUID: Task<Void, Never>] = [:]
+    private let limit: Int
+    init(limit: Int = 4) { self.limit = limit }
 
     @discardableResult
     func enqueue(_ command: CommandMessage,
                  execute: @escaping @MainActor (CommandMessage) async -> CommandResponseMessage?,
                  reply: @escaping @MainActor (CommandResponseMessage) async -> Void) -> Bool {
-        guard tasks.count < 4, tasks[command.id] == nil else { return false }
+        guard tasks.count < limit, tasks[command.id] == nil else { return false }
         tasks[command.id] = Task { [weak self] in
             let response = await execute(command)
             self?.tasks.removeValue(forKey: command.id)

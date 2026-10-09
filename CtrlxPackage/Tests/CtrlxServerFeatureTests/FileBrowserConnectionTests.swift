@@ -11,6 +11,89 @@ import Vapor
 @MainActor
 @Suite("File requests across Viewer reconnects", .serialized)
 struct FileBrowserConnectionTests {
+    @Test func browserCapabilitySlowFramesAndReconnect() async throws {
+        let originalVersion = VersionCompatibility.appVersionOverride
+        VersionCompatibility.appVersionOverride = "3.0.51"
+        defer { VersionCompatibility.appVersionOverride = originalVersion }
+        #expect(ConnectedViewer.canCaptureBrowserFrame(.empty))
+        #expect(!ConnectedViewer.canCaptureBrowserFrame(.init(depth: 3, oldestWaitMilliseconds: 1)))
+        #expect(!ConnectedViewer.canCaptureBrowserFrame(.init(depth: 1, oldestWaitMilliseconds: 100)))
+        let relay = PhraseTestRelay()
+        let app = try await Application.make(.testing)
+        app.webSocket("api", "ws", maxFrameSize: .init(integerLiteral: RelayPayloadLimits.maxWebSocketFrameBytes)) { _, ws in
+            ws.onBinary { ws, bytes in
+                let data = Data(bytes.readableBytesView)
+                Task { await relay.receive(data, from: ws) }
+            }
+            ws.onClose.whenComplete { _ in Task { await relay.closed(ws) } }
+        }
+        try await app.asyncBoot()
+        try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+        do {
+            let port = try #require(app.http.server.shared.localAddress?.port)
+            let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
+            let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
+            let host = ConnectedViewer(pairedViewer: .init(id: "pair", deviceName: "Viewer",
+                partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(), partnerPublicKeyId: viewerEncryption.keyId),
+                e2eeService: hostEncryption)
+            let viewer = ViewerRelayClient()
+            let enabled = LockIsolated(false)
+            var held: [CheckedContinuation<Void, Never>] = []
+            var cancelled = 0
+            var input = false
+            defer { for continuation in held { continuation.resume() } }
+            host.onSessionStateRequest = { .init(pairId: "", paneStates: [:], supportsBrowserSharing: enabled.value ? true : nil) }
+            host.onCommand = { command in
+                if case let .browseBrowser(spec) = command.command, spec.operation == .frame {
+                    await withCheckedContinuation { held.append($0) }
+                    if Task.isCancelled { cancelled += 1 }
+                }
+                if case .sendKeystroke = command.command { input = true }
+                return .init(commandId: command.id, success: true, browser: .init())
+            }
+            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test",
+                publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
+            do {
+                await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
+                try await waitUntil { host.isViewerConnected && viewer.isHostConnected }
+                let command = BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .frame)
+                let frames = await relay.encryptedFrames
+                let rejected = await viewer.sendCommand(command, paneId: "")
+                if case .success = rejected { Issue.record("Legacy Host accepted browser input") }
+                #expect(await relay.encryptedFrames == frames)
+                enabled.setValue(true)
+                await host.pushSessionState()
+                try await waitUntil { viewer.hostSupportsBrowserSharing }
+                let requests = (0..<4).map { _ in Task { await viewer.sendCommand(command, paneId: "") } }
+                defer { requests.forEach { $0.cancel() } }
+                try await waitUntil { held.count == 4 }
+                _ = await viewer.sendCommand(SendKeystroke([.text("typing")]), paneId: "%7")
+                try await waitUntil { input }
+                #expect(cancelled == 0, "Keyboard must not wait for browser capture")
+                await viewer.disconnect()
+                #expect(!viewer.hostSupportsBrowserSharing)
+                try await waitUntil { !host.isViewerConnected }
+                for request in requests { _ = await request.value }
+                await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
+                try await waitUntil { viewer.hostSupportsBrowserSharing && host.isViewerConnected }
+                let fresh = await viewer.sendCommand(BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .create), paneId: "")
+                #expect(try fresh.get().success, "Disconnected captures must free request slots")
+                let old = held
+                held.removeAll()
+                old.forEach { $0.resume() }
+                try await waitUntil { cancelled == 4 }
+                #expect(await relay.errors.isEmpty)
+                #expect(await relay.unexpectedTypes.isEmpty)
+            } catch {
+                await viewer.disconnect(); await host.disconnect(); throw error
+            }
+            await viewer.disconnect(); await host.disconnect()
+        } catch {
+            await app.server.shutdown(); try await app.asyncShutdown(); throw error
+        }
+        await app.server.shutdown(); try await app.asyncShutdown()
+    }
+
     @Test func encryptedVideoRangeReadsLeaveKeyboardCommandsResponsive() async throws {
         let originalVersion = VersionCompatibility.appVersionOverride
         VersionCompatibility.appVersionOverride = "3.0.43"

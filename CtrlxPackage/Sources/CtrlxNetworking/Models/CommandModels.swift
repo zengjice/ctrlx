@@ -1069,6 +1069,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case listSessionDirectories(ListSessionDirectories)
     case createSessionDirectory(CreateSessionDirectory)
     case browseFiles(BrowseFiles)
+    case browseBrowser(BrowseBrowser)
     /// Resize a tmux pane
     case resizeTmuxPane(ResizeTmuxPane)
     /// Set the shared terminal-window layout for a tmux session
@@ -1342,6 +1343,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let createdDirectory: String?
     public let forkPreparation: AgentForkPreparation?
     public let fileBrowser: FileBrowserResponse?
+    public let browser: RemoteBrowserResponse?
 
     public init(
         commandId: UUID,
@@ -1352,7 +1354,8 @@ public struct CommandResponseMessage: Codable, Sendable {
         directoryListing: SessionDirectoryListing? = nil,
         createdDirectory: String? = nil,
         forkPreparation: AgentForkPreparation? = nil,
-        fileBrowser: FileBrowserResponse? = nil
+        fileBrowser: FileBrowserResponse? = nil,
+        browser: RemoteBrowserResponse? = nil
     ) {
         self.commandId = commandId
         self.success = success
@@ -1363,6 +1366,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.createdDirectory = createdDirectory
         self.forkPreparation = forkPreparation
         self.fileBrowser = fileBrowser
+        self.browser = browser
     }
 
     public static func success(for commandId: UUID, paneId: String? = nil) -> CommandResponseMessage {
