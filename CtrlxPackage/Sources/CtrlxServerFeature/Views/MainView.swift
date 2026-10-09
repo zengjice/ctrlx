@@ -4930,15 +4930,25 @@ public struct MainView: View {
                     return
                 }
                 guard let manager = coordinator.viewerConnectionManager else { return }
-                if case let .failure(error) = await manager.sendCommand(
+                let result = await manager.sendCommand(
                     request,
                     paneId: "",
                     hostId: hostId
-                ) {
-                    attachError = "Failed to update shared layout: \(error.localizedDescription)"
+                )
+                if let message = Self.sharedTerminalLayoutSyncError(result) {
+                    attachError = message
                 }
             }
         }
+    }
+
+    static func sharedTerminalLayoutSyncError(_ result: Result<CommandResponseMessage, Error>) -> String? {
+        // Selection changes can cancel a task while it awaits a remote reply.
+        // Its late result must not surface an error in the newly selected window.
+        guard !Task.isCancelled,
+              case let .failure(error) = result,
+              !(error is CancellationError) else { return nil }
+        return "Failed to update shared layout: \(error.localizedDescription)"
     }
 
     private func terminalLayout(_ layout: SharedTerminalLayout, matches request: SetSharedTerminalLayout) -> Bool {
