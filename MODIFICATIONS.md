@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.51 — Responsive directory browsing and ordered terminal delivery
+
+- Enumerate known directory entries without fetching mounted child metadata,
+  preventing an unresponsive Home mount from blocking Start in Directory.
+  Preserve hidden-folder filtering, path completion, directory links and bounds.
+  Explicitly opening an unresponsive mount still depends on the filesystem.
+- Admit terminal output to each Viewer's encrypted FIFO before suspending,
+  preserving stream order across overlapping Host fan-out calls. The user
+  confirmed the duplicate Shell character was resolved after a local Host update.
+- Include the iOS quiet-Shell viewport and final native fit-measurement fixes
+  in the corresponding source. These require a separately updated iOS app;
+  this Mac publication does not update installed iPhone clients.
+- Validation: directory/launch/capability and terminal-stream regressions passed.
+  The affected Mac's real Home listing returned 14 folders in 13.5 ms. Mac and
+  iOS Release compilation passed; iOS native first-frame/keyboard acceptance
+  remains pending because the package scheme lacks an iOS test host.
+  The full Swift regression run passed after a serial Mac-suite rerun for a
+  process-cache assertion affected by parallel scheduling; two unavailable Apple
+  Intelligence evaluations were excluded. Brand/technical boundaries, website
+  build, 131 script tests and 19 publisher tests passed.
+- Release scope: publish the Mac package on Qcloud from this linked worktree.
+  No Relay deployment, iOS publication or local App replacement.
+
 ## 3.0.50 — Reliable Mac session reordering and terminal table rendering
 
 - Fix Mac local and remote session drag reordering with a dedicated native drag
