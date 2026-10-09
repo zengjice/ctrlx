@@ -138,7 +138,14 @@ outside its sequential receive loop so a slow file request does not block keys.
 Disconnect cancels pending work and prevents old-connection replies.
 
 - Directory pages: at most 200 entries / 128 KiB; directories above 50,000 entries
-  require opening a subfolder directly.
+  require opening a subfolder directly. Listings use `getattrlistbulk` types and
+  flags from the parent filesystem without reading child-directory metadata, so
+  a stalled child NFS mount does not block its parent (including Home). Directory
+  rows carry navigation hints (zero size/empty revision); entering a directory
+  validates its actual metadata.
+  Files, symbolic links and unknown entry types retain metadata checks. Hidden
+  listings include dot-prefixed names and entries marked with macOS `UF_HIDDEN`;
+  otherwise both are skipped before sorting and pagination.
 - Reads: regular files only, 128 KiB chunks; text up to 512 KiB, images/PDFs up to
   8 MiB. Descriptor/path revisions are checked around reads; mixed-version data
   is never shown. Directory page revisions are also checked before appending.
@@ -160,10 +167,14 @@ Focused coverage: `HostFileBrowserTests`, `FileBrowserLayoutTests`,
 `FileBrowserTabTests`, `FileBrowserTransferTests`, `FileBrowserProtocolTests`, `IOSFileBrowserWorkspaceTests`,
 `LayoutSnapshotMapperTests`, and `TerminalPasteTransportTests`.
 Tests include fresh source-pane cwd resolution,
-directory pagination/hidden files, symlink loops, special/oversized/changing files,
+directory pagination/dot-prefixed and system-hidden files and folders, search
+visibility consistency, deferred mount-point metadata, unknown types,
+symlink loops, special/oversized/changing files,
 multi-chunk search, stale replies, private layout restoration after directory
 changes, terminal selection replacing Files without disturbing split tabs,
 legacy capability gating, and encrypted transport while a file response is delayed.
+The opt-in `CTRLX_VERIFY_FILE_BROWSER_HOME=1` enables the read-only
+`HostFileBrowserTests.liveHomeProbe` against the actual Host Home directory.
 Additional coverage checks native local-media URLs without transfer, explicit
 binary downloads, download frame round-trips, cancellation/failed-copy cleanup,
 disk-cache expiration, and new-command rejection on a legacy Host.

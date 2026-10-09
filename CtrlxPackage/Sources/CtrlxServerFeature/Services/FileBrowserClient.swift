@@ -118,6 +118,15 @@ actor HostFileBrowser {
                      size: max(0, Int(value.st_size)), revision: revision(value), isSymbolicLink: isLink)
     }
 
+    func listedEntry(path: String, type: fsobj_type_t) throws -> FileBrowserEntry {
+        // A child mount's stat can block on an unavailable NFS server. Directory
+        // rows only need a path; validate metadata when the user enters it.
+        if type == VDIR.rawValue {
+            return .init(path: path, name: (path as NSString).lastPathComponent, kind: .directory, size: 0, revision: "")
+        }
+        return try entry(path: path)
+    }
+
     private func list(path: String, offset: Int, hidden: Bool) throws -> FileBrowserListing {
         let path = try resolve(path)
         guard offset >= 0, offset <= FileBrowserLimits.maximumDirectoryEntries else {
@@ -128,19 +137,7 @@ actor HostFileBrowser {
         guard files.isReadableFile(atPath: path), files.isExecutableFile(atPath: path) else {
             throw FileBrowserError.message("Cannot read Host directory: \(path)")
         }
-        guard let enumerator = files.enumerator(at: URL(fileURLWithPath: path), includingPropertiesForKeys: nil,
-                                               options: hidden ? [.skipsSubdirectoryDescendants] : [.skipsSubdirectoryDescendants, .skipsHiddenFiles]) else {
-            throw FileBrowserError.message("Cannot read Host directory: \(path)")
-        }
-        var entries: [FileBrowserEntry] = []
-        for case let url as URL in enumerator {
-            try Task.checkCancellation()
-            guard entries.count < FileBrowserLimits.maximumDirectoryEntries else {
-                throw FileBrowserError.message("Directory is too large. Open a subfolder directly.")
-            }
-            // Unreadable/broken children do not make readable siblings inaccessible.
-            if let item = try? entry(path: (path as NSString).appendingPathComponent(url.lastPathComponent)) { entries.append(item) }
-        }
+        var entries = try directoryEntries(path: path, hidden: hidden)
         entries.sort {
             if ($0.kind == .directory) != ($1.kind == .directory) { return $0.kind == .directory }
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
@@ -157,6 +154,69 @@ actor HostFileBrowser {
         let next = offset + page.count
         return .init(directory: path, homeDirectory: files.homeDirectoryForCurrentUser.path, entries: page,
                      nextOffset: next < entries.count ? next : nil, revision: revision(before))
+    }
+
+    private func directoryEntries(path: String, hidden: Bool) throws -> [FileBrowserEntry] {
+        let fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard fd >= 0 else { throw posixError(path) }
+        defer { close(fd) }
+        // Bulk attributes come from the parent filesystem, not a mounted child's
+        // root. This preserves UF_HIDDEN without stat-ing potentially stalled mounts.
+        var attributes = attrlist()
+        attributes.bitmapcount = UInt16(ATTR_BIT_MAP_COUNT)
+        attributes.commonattr = UInt32(ATTR_CMN_NAME | ATTR_CMN_OBJTYPE | ATTR_CMN_FLAGS | ATTR_CMN_ERROR) | ATTR_CMN_RETURNED_ATTRS
+        // FSOPT_PACK_INVAL_ATTRS fixes the packed field positions, even on errors.
+        let errorOffset = MemoryLayout<UInt32>.size + MemoryLayout<attribute_set_t>.size
+        let nameOffset = errorOffset + MemoryLayout<UInt32>.size
+        let typeOffset = nameOffset + MemoryLayout<attrreference_t>.size
+        let flagsOffset = typeOffset + MemoryLayout<fsobj_type_t>.size
+        let headerSize = flagsOffset + MemoryLayout<UInt32>.size
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var entries: [FileBrowserEntry] = []
+        while true {
+            try Task.checkCancellation()
+            let count = buffer.withUnsafeMutableBytes {
+                getattrlistbulk(fd, &attributes, $0.baseAddress, $0.count, UInt64(FSOPT_PACK_INVAL_ATTRS))
+            }
+            guard count >= 0 else { throw posixError(path) }
+            if count == 0 { break }
+            try buffer.withUnsafeBytes { bytes in
+                var offset = 0
+                for _ in 0..<count {
+                    try Task.checkCancellation()
+                    guard offset <= bytes.count - MemoryLayout<UInt32>.size else {
+                        throw FileBrowserError.message("Invalid Host directory attributes.")
+                    }
+                    let length = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
+                    guard length >= headerSize, length <= bytes.count - offset else {
+                        throw FileBrowserError.message("Invalid Host directory attributes.")
+                    }
+                    let record = UnsafeRawBufferPointer(rebasing: bytes[offset..<offset + length])
+                    offset += length
+                    let returned = record.loadUnaligned(fromByteOffset: 4, as: attribute_set_t.self)
+                    guard record.loadUnaligned(fromByteOffset: errorOffset, as: UInt32.self) == 0,
+                          returned.commonattr & UInt32(ATTR_CMN_NAME) != 0 else { continue }
+                    let reference = record.loadUnaligned(fromByteOffset: nameOffset, as: attrreference_t.self)
+                    let nameStart = nameOffset + Int(reference.attr_dataoffset)
+                    let nameEnd = nameStart + Int(reference.attr_length)
+                    guard nameStart >= headerSize, nameEnd > nameStart, nameEnd <= length, record[nameEnd - 1] == 0 else {
+                        throw FileBrowserError.message("Invalid Host directory name.")
+                    }
+                    let name = String(decoding: record[nameStart..<nameEnd - 1], as: UTF8.self)
+                    let flags = record.loadUnaligned(fromByteOffset: flagsOffset, as: UInt32.self)
+                    guard name != ".", name != "..", hidden || (!name.hasPrefix(".") && flags & UInt32(UF_HIDDEN) == 0) else { continue }
+                    guard entries.count < FileBrowserLimits.maximumDirectoryEntries else {
+                        throw FileBrowserError.message("Directory is too large. Open a subfolder directly.")
+                    }
+                    let type = record.loadUnaligned(fromByteOffset: typeOffset, as: fsobj_type_t.self)
+                    // Unreadable/broken children do not hide readable siblings.
+                    if let item = try? listedEntry(path: (path as NSString).appendingPathComponent(name), type: type) {
+                        entries.append(item)
+                    }
+                }
+            }
+        }
+        return entries
     }
 
     private func read(path: String, offset: Int, revision expected: String, download: Bool = false) throws -> Data {

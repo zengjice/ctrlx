@@ -40,6 +40,167 @@ struct HostFileBrowserTests {
         #expect(hidden.entries.contains { $0.name == ".secret" })
     }
 
+    @Test("System-hidden files and directories match search visibility", arguments: [false, true])
+    func systemHiddenEntries(includeHidden: Bool) async throws {
+        let files = FileManager.default
+        let root = try fixture()
+        defer { try? files.removeItem(at: root) }
+        for name in ["visible.txt", "flag-hidden.txt", ".dot-hidden.txt"] {
+            try Data("needle".utf8).write(to: root.appendingPathComponent(name))
+        }
+        for name in ["visible-folder", "flag-hidden-folder", ".dot-hidden-folder"] {
+            let folder = root.appendingPathComponent(name)
+            try files.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data("needle".utf8).write(to: folder.appendingPathComponent("child.txt"))
+        }
+        for name in ["flag-hidden.txt", "flag-hidden-folder"] {
+            try #require(chflags(root.appendingPathComponent(name).path, UInt32(UF_HIDDEN)) == 0)
+        }
+        let host = HostFileBrowser()
+        guard case let .listing(listing) = try await host.request(.list(path: root.path, offset: 0, includeHidden: includeHidden)),
+              case let .search(search) = try await host.request(.search(path: root.path, query: "hidden", mode: .name, includeHidden: includeHidden)),
+              case let .search(content) = try await host.request(.search(path: root.path, query: "needle", mode: .content, includeHidden: includeHidden)) else {
+            Issue.record("Missing listing or search response"); return
+        }
+        let visible: Set<String> = ["visible.txt", "visible-folder"]
+        let hidden: Set<String> = ["flag-hidden.txt", "flag-hidden-folder", ".dot-hidden.txt", ".dot-hidden-folder"]
+        #expect(Set(listing.entries.map(\.name)) == (includeHidden ? visible.union(hidden) : visible))
+        #expect(Set(search.matches.map(\.entry.name)) == (includeHidden ? hidden : []))
+        #expect(content.matches.count == (includeHidden ? 6 : 2))
+        #expect(!content.isTruncated)
+        #expect(listing.entries.filter { $0.kind == .directory }.allSatisfy { $0.revision.isEmpty })
+    }
+
+    @Test("System-hidden entries are excluded before pagination")
+    func systemHiddenEntriesDoNotConsumePageSlots() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Long UTF-8 names make the attributes exceed one bulk-read buffer.
+        let prefix = "资料 ' $(x) " + String(repeating: "长", count: 40)
+        for n in 0..<205 {
+            try Data().write(to: root.appendingPathComponent("\(prefix)visible\(n).txt"))
+            let hidden = root.appendingPathComponent("\(prefix)hidden\(n).txt")
+            try Data().write(to: hidden)
+            try #require(chflags(hidden.path, UInt32(UF_HIDDEN)) == 0)
+        }
+        let host = HostFileBrowser()
+        guard case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
+              let next = first.nextOffset,
+              case let .listing(second) = try await host.request(.list(path: root.path, offset: next, includeHidden: false)) else {
+            Issue.record("Missing pages"); return
+        }
+        #expect(first.entries.count == FileBrowserLimits.directoryPageSize)
+        #expect(second.entries.count == 5)
+        #expect(second.nextOffset == nil)
+        #expect((first.entries + second.entries).map(\.name) == (0..<205).map { "\(prefix)visible\($0).txt" })
+    }
+
+    @Test("Listing a known directory or mount point never reads child metadata")
+    func directoryRowsDeferMetadataUntilNavigation() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A nonexistent path makes any accidental stat fail, without a real NFS dependency.
+        let path = root.appendingPathComponent("offline-mount").path
+        let host = HostFileBrowser()
+        let item = try await host.listedEntry(path: path, type: VDIR.rawValue)
+        #expect(item.path == path)
+        #expect(item.name == "offline-mount")
+        #expect(item.kind == .directory)
+        #expect(item.size == 0)
+        #expect(item.revision.isEmpty)
+        #expect(!item.isSymbolicLink)
+        await #expect(throws: NSError.self) { try await host.request(.info(path: path)) }
+        await #expect(throws: NSError.self) { try await host.request(.list(path: path, offset: 0, includeHidden: false)) }
+        for type in [VNON, VLNK, VREG] {
+            await #expect(throws: NSError.self) { try await host.listedEntry(path: path, type: type.rawValue) }
+        }
+    }
+
+    @Test("Unknown types and symbolic links still validate metadata, preserving literal paths and immediate children")
+    func directoryEntryFallbackAndLinks() async throws {
+        let files = FileManager.default
+        let root = try fixture()
+        defer { try? files.removeItem(at: root) }
+        let folder = root.appendingPathComponent("新目录 ' $(x)")
+        try files.createDirectory(at: folder.appendingPathComponent("nested"), withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("hello.md")
+        try Data("hello".utf8).write(to: file)
+        try files.createDirectory(at: root.appendingPathComponent(".hidden-folder"), withIntermediateDirectories: true)
+        try files.createSymbolicLink(atPath: root.appendingPathComponent("directory-link").path, withDestinationPath: folder.lastPathComponent)
+        try files.createSymbolicLink(atPath: root.appendingPathComponent("file-link.md").path, withDestinationPath: file.lastPathComponent)
+        try files.createSymbolicLink(atPath: root.appendingPathComponent("broken-link").path, withDestinationPath: "missing")
+
+        let host = HostFileBrowser()
+        let unknown = try await host.listedEntry(path: folder.path, type: VNON.rawValue)
+        #expect(unknown.kind == .directory)
+        #expect(!unknown.revision.isEmpty)
+        guard case let .listing(listing) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)) else {
+            Issue.record("Missing listing"); return
+        }
+        #expect(Set(listing.entries.map(\.name)) == [folder.lastPathComponent, "hello.md", "directory-link", "file-link.md"])
+        #expect(listing.entries.allSatisfy { $0.path == root.appendingPathComponent($0.name).path })
+        #expect(listing.entries.prefix(2).allSatisfy { $0.kind == .directory })
+        let direct = try #require(listing.entries.first { $0.path == folder.path })
+        #expect(direct.revision.isEmpty)
+        let directoryLink = try #require(listing.entries.first { $0.name == "directory-link" })
+        #expect(directoryLink.kind == .directory)
+        #expect(directoryLink.isSymbolicLink)
+        #expect(!directoryLink.revision.isEmpty)
+        let fileLink = try #require(listing.entries.first { $0.name == "file-link.md" })
+        #expect(fileLink.kind == .markdown)
+        #expect(fileLink.isSymbolicLink)
+        #expect(fileLink.size == 5)
+        #expect(!fileLink.revision.isEmpty)
+        guard case let .info(info) = try await host.request(.info(path: folder.path)),
+              case let .listing(children) = try await host.request(.list(path: folder.path, offset: 0, includeHidden: false)),
+              case let .listing(hidden) = try await host.request(.list(path: root.path, offset: 0, includeHidden: true)) else {
+            Issue.record("Missing directory metadata or listing"); return
+        }
+        #expect(!info.revision.isEmpty)
+        #expect(children.entries.map(\.name) == ["nested"])
+        #expect(hidden.entries.contains { $0.name == ".hidden-folder" })
+    }
+
+    @Test("Directory rows preserve sorting and pagination across multiple pages")
+    func directoryPaging() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0..<205 {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent("folder\(index)"), withIntermediateDirectories: true)
+        }
+        try Data("hello".utf8).write(to: root.appendingPathComponent("file.txt"))
+        let host = HostFileBrowser()
+        guard case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
+              let next = first.nextOffset,
+              case let .listing(second) = try await host.request(.list(path: root.path, offset: next, includeHidden: false)) else {
+            Issue.record("Missing pages"); return
+        }
+        let all = first.entries + second.entries
+        #expect(first.entries.count == FileBrowserLimits.directoryPageSize)
+        #expect(second.entries.count == 6)
+        #expect(second.nextOffset == nil)
+        #expect(first.revision == second.revision)
+        #expect(Set(all.map(\.path)).count == 206)
+        #expect(all.dropLast().map(\.name) == (0..<205).map { "folder\($0)" })
+        #expect(all.dropLast().allSatisfy { $0.kind == .directory && $0.revision.isEmpty })
+        #expect(all.last?.name == "file.txt")
+        #expect(all.last?.size == 5)
+        #expect(all.last?.revision.isEmpty == false)
+    }
+
+    @Test("Explicit read-only Files Home probe", .enabled(if: ProcessInfo.processInfo.environment["CTRLX_VERIFY_FILE_BROWSER_HOME"] == "1"))
+    func liveHomeProbe() async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        guard case let .listing(result) = try await HostFileBrowser().request(.list(path: "~/", offset: 0, includeHidden: false)) else {
+            Issue.record("Missing Home listing"); return
+        }
+        #expect(result.directory == FileManager.default.homeDirectoryForCurrentUser.path)
+        #expect(!result.entries.isEmpty)
+        #expect(result.entries.allSatisfy { !$0.name.hasPrefix(".") })
+        print("Files Home probe: \(result.entries.count) entries in \(start.duration(to: clock.now))")
+    }
+
     @Test func chunkedReadsAndChangingFile() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
