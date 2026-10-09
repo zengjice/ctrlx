@@ -40,6 +40,18 @@ struct NewSessionSizingTests {
         #expect(fit.takeRequest(isAvailable: true, paneIDs: ["%5"], measuredRequest: phoneFit) == phoneFit)
     }
 
+    @Test("A keyboard transition cannot consume an early grid or repeat the final fit")
+    func nativeViewportSettling() {
+        var fit = initialFit()
+        let early = ResizeTmuxPane(width: 69, height: 57, userInitiated: true)
+        #expect(fit.takeRequest(isAvailable: true, paneIDs: ["%5"], measuredRequest: early,
+                               isPresentationReady: false) == nil)
+        #expect(fit.takeRequest(isAvailable: true, paneIDs: ["%5"], measuredRequest: nil) == nil)
+        #expect(fit.paneID == "%5")
+        #expect(fit.takeRequest(isAvailable: true, paneIDs: ["%5"], measuredRequest: phoneFit) == phoneFit)
+        #expect(fit.takeRequest(isAvailable: true, paneIDs: ["%5"], measuredRequest: early) == nil)
+    }
+
     @Test("Only the newly created session on its Host can consume the fit")
     func scopedToCreation() {
         let fit = initialFit()

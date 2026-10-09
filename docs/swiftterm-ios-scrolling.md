@@ -69,6 +69,36 @@ No app installation, signed IPA verification or iPhone profiling was performed.
   active dragging, history momentum and selection. It must not force the inner
   terminal to the bottom on every feed or layout.
 
+### Quiet Shell first-screen positioning (October 9, 2026)
+
+The outer viewport follows the live cursor in the normal screen, rather than
+always showing the bottom of the Host grid. A tall, quiet Terminal can have its
+Shell prompt on row one with only blank rows below it; bottom anchoring hid that
+prompt until a downward drag. Cursor placement uses SwiftTerm's public live-tail
+position and native coordinate conversion, including scrollback and the passive
+canvas. Alternate-screen apps retain bottom anchoring. Deliberate outer or inner
+history scrolling is not overridden, and the Host grid is not changed to reveal
+the cursor.
+
+Fit capacity now comes from the native viewport after deferred input focus and
+keyboard/accessory presentation. Measurement excludes adjusted insets and any
+intersecting keyboard guide; keyboard transitions invalidate queued measurements.
+Publishing is deferred out of native layout and deduplicated by grid size. The
+existing creation-scoped, one-shot fit and its cancellation rules are unchanged;
+there is no timer, output replay, repeated automatic fit or Host/Relay change.
+
+Regression coverage includes quiet 57-row grids, reduced viewports, insets,
+manual scrolling and the fullscreen fallback, plus final-measurement-only fit.
+UIKit regressions additionally cover first-frame placement, native coordinate
+conversion, selection and measurement gating. The package scheme has no iOS test
+action, so UIKit execution and keyboard/first-frame acceptance still require an
+iPhone test; a successful device-SDK compile does not prove those effects.
+Validation: 65 focused package tests passed; the iOS Release app build and the
+five UIKit test sources passed device-SDK typechecking. Typechecking used the
+Release module with test-only access-check bypass, not a runnable test bundle.
+Brand/technical boundary checks and `git diff --check` passed. Logs:
+`/tmp/ctrlx-ios-viewport-{unit,build,typecheck}.log`. No installation was performed.
+
 See `terminal-rendering-investigation.md` for the reproduced 5-row drift and the
 iOS-only regression suite. The sections below retain historical implementation
 examples; old minimum-terminal-height constraints, scroll-blocking flags and

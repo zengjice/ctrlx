@@ -104,6 +104,25 @@ enum TerminalCursorTapNavigation {
         /// When false, tapping the terminal won't show the keyboard.
         /// Use `updateInput(isEnabled:keyboardRequested:)` to control this.
         private(set) var inputEnabled = false
+        var onInputPresentationChange: (() -> Void)?
+
+        var isInputPresentationReady: Bool {
+            !inputFocusUpdates.isInvalidated
+                && (!inputEnabled || (inputProxy.isFirstResponder && inputAccessoryView?.window != nil))
+        }
+
+        /// Content coordinates; converting through UIScrollView accounts for
+        /// inner scrollback and the passive canvas's bottom alignment.
+        var liveCursorRect: CGRect? {
+            let terminal = getTerminal()
+            guard !terminal.isCurrentBufferAlternate, terminal.isCursorVisible,
+                  !canScroll || scrollPosition == 1 else { return nil }
+            // At the live tail, the top visible row is the active screen's
+            // first row. History scrolling deliberately does not follow it.
+            let row = terminal.getTopVisibleRow() + terminal.getCursorLocation().y
+            let cellHeight = getOptimalFrameSize().height / CGFloat(terminal.rows)
+            return CGRect(x: 0, y: CGFloat(row) * cellHeight, width: 1, height: cellHeight)
+        }
 
         private(set) lazy var inputFocusUpdates = TerminalInputFocusUpdates { [weak self] state in
             self?.applyInputPresentation(state) ?? false
@@ -361,6 +380,7 @@ enum TerminalCursorTapNavigation {
         }
 
         private func applyInputPresentation(_ state: TerminalInputPresentation.State) -> Bool {
+            defer { onInputPresentationChange?() }
             guard let window, inputProxy.window === window else { return false }
             guard state.inputEnabled else {
                 return !inputProxy.isFirstResponder || inputProxy.resignFirstResponder()
