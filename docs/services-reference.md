@@ -444,10 +444,13 @@ The Host stores verified native conversation identities in
 `<stateRoot>/agent-session-identities.json`, binding each UUID to its pane,
 session, stable window, plugin, and kernel process identity (PID + start time).
 After an app restart, process reconciliation restores only that UUID when exactly
-one matching Agent process is still alive. A reused PID/pane, mismatched window
-or Agent, and ambiguous processes fail closed. Restoration does not replay old
-working, approval, telemetry, or notification state; recovered identities are
-rechecked during reconciliation and Fork preparation. Legacy correlation files
+one outermost matching Agent process is still alive. Nested helpers such as a
+Codex TUI's `codex app-server` do not count as independent sessions; their startup
+or exit does not invalidate the main process identity. A reused PID/pane,
+mismatched window or Agent, and multiple independent matching processes fail
+closed. A cached helper PID cannot substitute for the main process. Restoration
+does not replay old working, approval, telemetry, or notification state; recovered
+identities are rechecked during reconciliation and Fork preparation. Legacy correlation files
 without process identity are not trusted for restoration: a fresh native Agent
 event is required to establish the binding. Writes are serialized per pane and
 do not block live status/notification delivery.

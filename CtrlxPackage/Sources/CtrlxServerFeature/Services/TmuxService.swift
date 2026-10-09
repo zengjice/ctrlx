@@ -653,6 +653,7 @@ final public class TmuxService {
         public let path: String
         /// Id of the plugin whose `process_names` matched (spec §6).
         public let pluginID: String
+        /// Outermost matching processes; nested Agent helpers are not new sessions.
         public let processIDs: Set<String>
     }
 
@@ -730,7 +731,10 @@ final public class TmuxService {
                     }
                 }
                 if let winner = matches.keys.min(), let matchedProcesses = matches[winner] {
-                    detected[paneId] = DetectedAgentPane(path: info.path, pluginID: winner, processIDs: matchedProcesses)
+                    detected[paneId] = DetectedAgentPane(
+                        path: info.path, pluginID: winner,
+                        processIDs: tree.outermostProcesses(in: matchedProcesses, from: info.pid)
+                    )
                 }
             }
 
@@ -2989,6 +2993,24 @@ final public class TmuxService {
 
         func processName(for pid: String) -> String? {
             names[pid]
+        }
+
+        /// A Codex TUI can spawn another `codex` (e.g. an app-server) through
+        /// tools. Only independent roots identify sessions in this pane.
+        func outermostProcesses(in candidates: Set<String>, from rootPid: String) -> Set<String> {
+            guard candidates.count > 1 else { return candidates }
+            var result: Set<String> = []
+            var seen: Set<String> = []
+            var stack = [rootPid]
+            while let pid = stack.popLast() {
+                guard seen.insert(pid).inserted else { continue }
+                if candidates.contains(pid) {
+                    result.insert(pid)
+                } else {
+                    stack.append(contentsOf: childrenOf[pid, default: []])
+                }
+            }
+            return result
         }
 
         /// Returns all descendant PIDs of the given root (excluding the root itself).

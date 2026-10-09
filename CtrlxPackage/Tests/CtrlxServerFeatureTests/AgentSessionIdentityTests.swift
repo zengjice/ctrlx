@@ -41,13 +41,14 @@ struct AgentSessionIdentityTests {
         values[AgentSessionIdentityClient.self] = client
     }
 
-    @Test("Restart restores the native UUID of the same Codex/Claude process without replaying status or notifications", arguments: ["codex", "claude-code"])
+    @Test("Restart restores the main Codex/Claude UUID despite helper churn, without replaying status or notifications", arguments: ["codex", "claude-code"])
     func restart(pluginID: String) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-native-identity-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let command = pluginID == "codex" ? "codex" : "claude"
         let names = [pluginID: [command]]
-        let rows = LockIsolated("100 1 zsh\n101 100 \(command)\n")
+        let mainRows = "100 1 zsh\n101 100 \(command)\n"
+        let rows = LockIsolated(mainRows + "201 101 node_repl\n202 201 \(command)\n")
         let sessionID = UUID().uuidString
         let runtime = LockIsolated("101:start-1")
         var client = AgentSessionIdentityClient.diskBacked(stateRoot: directory)
@@ -58,7 +59,9 @@ struct AgentSessionIdentityTests {
             let original = manager()
             original.applyState(pluginID: pluginID, sessionID: sessionID, state: .working, tmuxPane: "%5", projectPath: "/repo")
             await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names)
+            #expect(await client.load("%5")?.processID == "101")
         }
+        rows.setValue(mainRows + "301 101 node_repl\n302 301 \(command)\n")
         // A new disk reader rules out restoration from the old manager/store's memory.
         var reloaded = AgentSessionIdentityClient.diskBacked(stateRoot: directory)
         reloaded.runtimeID = client.runtimeID
@@ -77,6 +80,14 @@ struct AgentSessionIdentityTests {
             #expect(pushes == 1)
             await restarted.refreshDetectedAgentSessions(processNamesByPlugin: names, refreshSnapshot: true)
             #expect(pushes == 1)
+            rows.setValue(mainRows)
+            await restarted.refreshDetectedAgentSessions(processNamesByPlugin: names, refreshSnapshot: true)
+            #expect(restarted.paneStates["%5"]?.claudeSessionID == sessionID)
+            #expect(pushes == 1)
+            rows.setValue(mainRows + "401 101 zsh\n402 401 \(command)\n")
+            await restarted.refreshDetectedAgentSessions(processNamesByPlugin: names, refreshSnapshot: true)
+            #expect(restarted.paneStates["%5"]?.claudeSessionID == sessionID)
+            #expect(pushes == 1)
             runtime.setValue("101:start-2")
             await restarted.refreshDetectedAgentSessions(processNamesByPlugin: names, refreshSnapshot: true)
             #expect(restarted.paneStates["%5"]?.claudeSessionID == nil)
@@ -87,12 +98,13 @@ struct AgentSessionIdentityTests {
     }
 
     @Test("A cached UUID cannot be reused for a different runtime, Agent, window, or ambiguous pane",
-          arguments: ["reused-pid", "missing-process", "new-pid", "multiple", "other-agent", "other-window", "invalid-id"])
+          arguments: ["reused-pid", "missing-process", "new-pid", "multiple", "helper-id", "other-agent", "other-window", "invalid-id"])
     func rejectsStaleIdentity(scenario: String) async throws {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
         let pane = PaneState(paneId: "%5", sessionName: "work", tmuxWindowId: "@7", currentPath: "/repo",
                              agentSession: .init(paneId: "%5", pluginID: "codex"), claudeSessionID: UUID().uuidString)
-        let valid = AgentSessionIdentity(source: try #require(AgentForkSource(pane: pane)), processID: "101", runtimeID: "101:start-1")
+        let pid = scenario == "helper-id" ? "202" : "101"
+        let valid = AgentSessionIdentity(source: try #require(AgentForkSource(pane: pane)), processID: pid, runtimeID: "\(pid):start-1")
         let data = String(decoding: try JSONEncoder().encode(valid), as: UTF8.self)
         let identity = try JSONDecoder().decode(AgentSessionIdentity.self, from: Data((scenario == "invalid-id"
             ? data.replacingOccurrences(of: valid.source.sessionID, with: "--last") : data).utf8))
@@ -101,7 +113,8 @@ struct AgentSessionIdentityTests {
             return $0 == "101" ? (scenario == "reused-pid" ? "101:start-2" : "101:start-1") : "202:start-1"
         })
         if scenario == "new-pid" { rows.setValue("100 1 zsh\n202 100 codex\n") }
-        if scenario == "multiple" { rows.setValue("100 1 zsh\n101 100 codex\n202 101 codex\n") }
+        if scenario == "multiple" { rows.setValue("100 1 zsh\n101 100 codex\n202 100 codex\n") }
+        if scenario == "helper-id" { rows.setValue("100 1 zsh\n101 100 codex\n201 101 node_repl\n202 201 codex\n") }
         if scenario == "other-agent" { rows.setValue("100 1 zsh\n101 100 claude\n") }
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
@@ -110,6 +123,25 @@ struct AgentSessionIdentityTests {
             await restarted.refreshDetectedAgentSessions(processNamesByPlugin: ["codex": ["codex"], "claude-code": ["claude"]], refreshSnapshot: true)
             #expect(restarted.paneStates["%5"]?.claudeSessionID == nil)
             #expect(restarted.paneStates["%5"].flatMap(AgentForkSource.init(pane:)) == nil)
+        }
+    }
+
+    @Test("Independent Agent processes cannot establish a cached Fork identity", arguments: ["codex", "claude-code"])
+    func ambiguousWrite(pluginID: String) async {
+        let command = pluginID == "codex" ? "codex" : "claude"
+        let rows = LockIsolated("100 1 zsh\n101 100 \(command)\n202 100 \(command)\n")
+        let writes = LockIsolated(0)
+        let client = AgentSessionIdentityClient(load: { _ in nil }, save: { _ in
+            writes.withValue { $0 += 1 }
+            return true
+        }, runtimeID: { "\($0):start-1" })
+        await withDependencies {
+            defaults(&$0, rows: rows, client: client)
+        } operation: {
+            let original = manager()
+            original.applyState(pluginID: pluginID, sessionID: UUID().uuidString, state: .idle, tmuxPane: "%5", projectPath: "/repo")
+            await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: [pluginID: [command]])
+            #expect(writes.value == 0)
         }
     }
 
