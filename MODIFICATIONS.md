@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.52 — Viewer browser access and reliable workspace navigation
+
+- Share Host Chromium tabs with Mac and iOS Viewers, including manually opened,
+  Agent-owned and popup pages. Keep the Host profile/session, bounded encrypted
+  frames and input, explicit control leases and Agent/human handoff. WebKit tabs
+  stay local; remote audio, system dialogs and remote DevTools are not included.
+  Both Host and Viewer need the updated capability; iOS requires a separate build.
+- Discard queued input when browser control is lost, forward Mac hover events,
+  and repair split selection after a Host browser tab closes.
+- Preserve verified Fork conversation identity while nested Agent helpers run.
+- Keep Home browsing responsive without stat-ing mounted child directories, and
+  restore dot-prefix and macOS system-hidden filtering before pagination.
+- Treat cancelled/obsolete Viewer layout updates as normal window-switch flow,
+  while still reporting current disconnects, timeouts and Host rejections.
+- Validation: 2,576 Swift tests passed across the full run and serial Mac rerun
+  after loaded-run timing failures; two unavailable Apple Intelligence evaluations
+  were excluded. Brand/technical boundaries, website build, 131 script tests and
+  19 publisher tests passed. Native remote-browser and managed-engine evidence,
+  remaining expanded-engine failure, physical Viewer/iPhone UI acceptance and
+  throttled WAN measurements are recorded in `docs/v3.0.52/`.
+- Release scope: Mac package only, published from this linked worktree. No Relay
+  deployment, iOS publication or local App replacement.
+
 ## 3.0.51 — Responsive directory browsing and ordered terminal delivery
 
 - Enumerate known directory entries without fetching mounted child metadata,
