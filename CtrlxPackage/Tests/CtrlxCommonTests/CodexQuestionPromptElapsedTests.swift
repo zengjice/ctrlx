@@ -2,9 +2,9 @@ import Testing
 @testable import CtrlxCommon
 
 struct CodexQuestionPromptElapsedTests {
-    private func prompt(countLine: String, composer: String = "› Ask Codex to do anything") -> CodexQuestionPrompt? {
+    private func prompt(countLine: String, composer: String = "› Ask Codex to do anything", hint: String = "shift+← to answer") -> CodexQuestionPrompt? {
         CodexQuestionPrompt(
-            lines: ["• Queued follow-up inputs", countLine, "shift+← to answer", "", composer],
+            lines: ["• Queued follow-up inputs", countLine, hint, "", composer],
             cursorRow: 4, cursorColumn: 2
         )
     }
@@ -27,6 +27,14 @@ struct CodexQuestionPromptElapsedTests {
         let tickOpens = state.observe(tick.count)
         #expect(firstOpens)
         #expect(!tickOpens)
+    }
+
+    @Test("Codex 0.160's no-plus shortcut has the same queue identity as older versions")
+    func noPlusHint() throws {
+        let original = try #require(prompt(countLine: "? 1 question · 14s"))
+        let current = try #require(prompt(countLine: "? 1 question · 15s", hint: "shift← to answer"))
+        #expect(current == original)
+        #expect(prompt(countLine: "? 1 question", composer: "› draft", hint: "shift← to answer") == nil)
     }
 
     @Test("Reject arbitrary, malformed and partial suffixes", arguments: [

@@ -2961,7 +2961,7 @@ final public class TmuxService {
     }
 
     /// Known shell executables that indicate an idle pane.
-    private static let knownShells: Set = [
+    static let knownShells: Set = [
         "bash", "zsh", "sh", "fish", "dash", "csh", "tcsh", "ksh",
     ]
 

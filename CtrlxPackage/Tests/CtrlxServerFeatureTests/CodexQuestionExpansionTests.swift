@@ -11,7 +11,7 @@
     @Suite("Codex question expansion")
     @MainActor
     struct CodexQuestionExpansionTests {
-        nonisolated private static let supportedHints = ["shift + ← to answer", "shift+← to answer"]
+        nonisolated private static let supportedHints = ["shift + ← to answer", "shift+← to answer", "shift← to answer"]
         nonisolated private static let supportedSuffixes = ["", " · 14s", " · 1m 02s"]
 
         nonisolated private static func screen(
@@ -53,7 +53,7 @@
 
         @Test("Partial, changed or malformed footer is not an empty queue", arguments: [
             "shift + → to answer", "shift+→ to answer", "", "shift + ← to answer later",
-            "shift+← to answer later", "ctrl+← to answer", "shift+←",
+            "shift+← to answer later", "shift← to answer later", "shift→ to answer", "ctrl+← to answer", "shift+←", "shift←",
         ])
         func partialFooter(hint: String) {
             var lines = Self.screen()
@@ -89,15 +89,15 @@
             }
         }
 
-        @Test("Current Codex footer spacing and age are recognized in the alternate screen", arguments: supportedSuffixes)
-        func currentCodexSnapshot(suffix: String) {
+        @Test("Current Codex footer spacing and age are recognized in the alternate screen", arguments: supportedHints, supportedSuffixes)
+        func currentCodexSnapshot(hint: String, suffix: String) {
             let view = InteractiveTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
             view.getTerminal().resize(cols: 239, rows: 66)
             // Only the footer from the observed live screen; no transcript or
             // private question text is needed to reproduce the parser failure.
             let lines = [
                 "• Working (2m 11s • esc to interrupt)", "",
-                "• Queued follow-up inputs", "  ? 1 question\(suffix)", "    shift+← to answer",
+                "• Queued follow-up inputs", "  ? 1 question\(suffix)", "    \(hint)",
                 "", "", "› Ask Codex to do anything", "",
                 "  GPT-6-Astra xhigh fast", "  ← for agents · ? for shortcuts",
             ]
@@ -134,6 +134,7 @@
             }
             let keys = commands.value.filter { $0.contains("send-keys") }
             #expect(keys == [["send-keys", "-t", "%7", "S-Left"]])
+            #expect(!commands.value.contains { $0.first == "-eo" || $0.contains("list-panes") })
         }
 
         @Test("Host accepts elapsed footers but age changes cannot trigger duplicate opens", arguments: supportedHints)

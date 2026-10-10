@@ -62,7 +62,8 @@ empty marked text, bracketed paste, and starting a new composition in both proto
 **Codex question auto-expansion (Mac Host, Mac Viewer and iOS):**
 `CodexQuestionPrompt` recognizes the live `Queued follow-up inputs / ? N questions /
 shift + ← to answer` footer immediately above Codex's known empty composer. It
-also accepts the compact `shift+← to answer` hint observed in Codex 0.158.0 and
+also accepts the compact `shift+← to answer` hint observed in Codex 0.158.0,
+the no-plus `shift← to answer` hint observed in 0.160.0, and
 the optional question age (`? 1 question · 14s`, including h/m/s duration parts).
 Age is presentation-only: ticks neither restart the 350 ms stability check nor
 re-arm a dismissed queue. Other shortcuts, arbitrary suffixes, incomplete hints
@@ -76,7 +77,11 @@ focus nor sends Enter/answers, and does not change the agent's working state.
 Local panes call `TmuxService.expandCodexQuestions`; viewers enqueue the additive
 `ExpandCodexQuestions(expectedCount:)` intent behind existing keyboard input.
 The Host checks the foreground command, cursor, copy mode and actual screen before
-sending `S-Left`. Host-wide queue-count deduplication prevents duplicate automatic
+sending `S-Left`. When tmux reports a shell wrapper instead of `codex`, the Host
+reuses the agent-process scanner with a fresh snapshot to verify Codex in that pane, then rechecks
+the live screen before claiming the opener. Non-shell commands and missing/failed
+process snapshots fail closed. Duplicate counts do not repeat the process scan.
+Host-wide queue-count deduplication prevents duplicate automatic
 opens from multiple viewers, tab remounts and Escape/redraws. Queue reductions
 do not auto-open; a verified empty normal composer resets the baseline. Closed
 panes discard their state. There is no polling timer or history/rollout scan.
@@ -86,7 +91,7 @@ API: unknown/localized layouts, custom empty placeholders and equal-count questi
 replacements without an observed queue reduction stay manual. A missed/failed
 attempt is not retried against the same footer. Existing Shift+Left remains usable.
 For remote auto-expansion, update **both Macs**; an old Host safely rejects the new
-command (no raw-key fallback). The elapsed-footer compatibility fix also requires
+command (no raw-key fallback). The elapsed/no-plus footer compatibility fixes require
 an updated **Host Mac and viewing client (Mac/iOS)**: supporting the wire command
 alone is not enough, because the Host independently parses the footer. For example,
 Host 3.0.40 rejects both the compact shortcut and elapsed suffix. Relay deployment
@@ -103,7 +108,7 @@ view teardown cancel pending checks. It never moves focus or scrolls the viewpor
 to force eligibility. Counts enter the same `KeystrokeDebouncer` FIFO as text and
 mouse input; Host-wide dedup also covers an iPhone and Mac viewing the same pane.
 Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionExpansionTests`,
-`TerminalCodexQuestionExpansionTests` and
+`CodexQuestionShellWrapperTests`, `TerminalCodexQuestionExpansionTests` and
 `KeystrokeDebouncerTests.questionExpansionFIFO`. Opening and answering the elapsed
 footer passed manual acceptance on iPhone Air with the updated Host (2026-09-30).
 The complete UIKit focus/scroll/menu matrix still needs on-device acceptance;
