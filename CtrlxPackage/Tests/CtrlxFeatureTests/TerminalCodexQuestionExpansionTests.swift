@@ -8,7 +8,10 @@ import Testing
 @Suite("iOS Codex question auto-expansion")
 @MainActor
 struct TerminalCodexQuestionExpansionTests {
-    nonisolated private static let supportedHints = ["shift + ← to answer", "shift+← to answer", "shift← to answer"]
+    nonisolated private static let supportedHints = [
+        "shift + ← to answer", "shift+← to answer", "shift← to answer",
+        "⇧← to answer", "⇧ + ← to answer", "Shift + Left to answer",
+    ]
 
     private static func prompt(_ count: Int, hint: String = "shift + ← to answer", suffix: String = "") -> CodexQuestionPrompt? {
         let lines = count == 0 ? ["› Ask Codex to do anything"] : [
@@ -68,6 +71,30 @@ struct TerminalCodexQuestionExpansionTests {
                 opener.schedule()
                 await clock.advance(by: .seconds(1))
                 #expect(sent == [2])
+            }
+        }
+    }
+
+    @Test("Changing between text and symbol hints does not restart stability or reopen Questions")
+    func hintFormatting() async throws {
+        try await withMainSerialExecutor {
+            let clock = TestClock()
+            try await withDependencies { $0.continuousClock = clock } operation: {
+                var current = try #require(Self.prompt(1))
+                var sent: [Int] = []
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { sent.append($0); return true })
+                defer { opener.invalidate() }
+                opener.schedule()
+                await clock.advance(by: .milliseconds(200))
+                current = try #require(Self.prompt(1, hint: "⇧← to answer"))
+                opener.schedule()
+                await clock.advance(by: .milliseconds(150))
+                await Task.megaYield()
+                #expect(sent == [1])
+                current = try #require(Self.prompt(1, hint: "Shift + Left to answer"))
+                opener.schedule()
+                await clock.advance(by: .seconds(1))
+                #expect(sent == [1])
             }
         }
     }

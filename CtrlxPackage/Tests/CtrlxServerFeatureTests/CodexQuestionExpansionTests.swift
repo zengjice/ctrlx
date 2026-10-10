@@ -11,7 +11,10 @@
     @Suite("Codex question expansion")
     @MainActor
     struct CodexQuestionExpansionTests {
-        nonisolated private static let supportedHints = ["shift + ← to answer", "shift+← to answer", "shift← to answer"]
+        nonisolated private static let supportedHints = [
+            "shift + ← to answer", "shift+← to answer", "shift← to answer",
+            "⇧← to answer", "⇧ + ← to answer", "Shift + Left to answer",
+        ]
         nonisolated private static let supportedSuffixes = ["", " · 14s", " · 1m 02s"]
 
         nonisolated private static func screen(
@@ -54,6 +57,7 @@
         @Test("Partial, changed or malformed footer is not an empty queue", arguments: [
             "shift + → to answer", "shift+→ to answer", "", "shift + ← to answer later",
             "shift+← to answer later", "shift← to answer later", "shift→ to answer", "ctrl+← to answer", "shift+←", "shift←",
+            "⇧→ to answer", "⌃⇧← to answer", "⇧←", "⇧← to answer later", "Shift+Alt+Left to answer",
         ])
         func partialFooter(hint: String) {
             var lines = Self.screen()

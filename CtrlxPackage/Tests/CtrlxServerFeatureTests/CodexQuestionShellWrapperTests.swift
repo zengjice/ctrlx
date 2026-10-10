@@ -30,7 +30,7 @@
         }
 
         @Test("Nested wrappers expand all known hints; duplicate counts do not rescan", arguments: [
-            "shift + ← to answer", "shift+← to answer", "shift← to answer",
+            "shift + ← to answer", "shift+← to answer", "shift← to answer", "⇧← to answer", "Shift + Left to answer",
         ])
         func wrappedQueue(hint: String) async throws {
             let commands = LockIsolated<[[String]]>([])
