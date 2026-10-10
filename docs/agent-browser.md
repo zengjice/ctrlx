@@ -100,6 +100,15 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   a 1024-pixel longest side and a 180 KiB encoded-image budget. Four captures
   globally and four requests per Viewer bound work. Congested terminal output
   pauses new captures; this is interactive page sharing, not a video stream.
+  Capture uses the existing render surface without CDP `clip`/scale, which would
+  temporarily resize the live Host renderer on every frame. ImageIO generates
+  the bounded JPEG on a CEF worker; unscaled screenshots stay on the Host (8 MiB
+  private response limit, 64-megapixel image limit). Concurrent requests for the
+  same tab coalesce, with at most four waiting replies. Frame CSS dimensions cover
+  the full captured image, including scrollbars: the paired CDP physical/CSS
+  viewport ratio and pinch scale convert source pixels before JPEG downscaling.
+  Input coordinates remain independent of thumbnail pixels. Navigation/resize/
+  close invalidates pending results, and shutdown waits for image workers.
 - Selection is per Viewer. Agent-created tabs do not steal Viewer focus.
   Disappearing/background surfaces stop polling and release control; they do not
   close the Host page. Only explicit Close closes it.
@@ -127,6 +136,15 @@ Validation scope and outstanding physical-device acceptance are tracked in
 `tests/remote_browser.py <isolated-app> <engine> <codex-fixture>` after
 `tests/prepare_upstream_probe.sh`; uses a per-test API socket/profile and fixture
 processes, **not real Codex or an end-to-end iPhone UI test**.
+The native test calibrates transient child-view resize detection against the old
+clipped screenshot path, then checks continuous visible capture, shared concurrent
+frames, background capture and remote input. It also forces both scrollbars and
+clicks a target located from the JPEG through the Viewer coordinate mapping,
+including browser zoom, pinch zoom and Fit. Image-only regression is available
+without launching CEF: build the CMake `remote_browser_frame_tests` target and run
+`.build-local/agent-browser/remote_browser_frame_tests` (invalid/oversized sources,
+landscape/portrait/no-upscale JPEG output, full-image CSS dimensions and the
+180 KiB bound).
 
 ## Ownership and data
 

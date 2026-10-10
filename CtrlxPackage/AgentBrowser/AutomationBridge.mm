@@ -4,13 +4,16 @@
 #include "Ownership.h"
 #include "PageActions.h"
 #include "PageKeys.h"
+#include "RemoteBrowserFrame.h"
 #include "EngineServer.h"
+#include <atomic>
 #include <libproc.h>
 #include <sys/proc.h>
 #include <cerrno>
 #include <chrono>
 #include <fcntl.h>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -28,6 +31,7 @@ using Clock = std::chrono::steady_clock;
 constexpr size_t kMaxRequest = 65536;
 constexpr size_t kMaxResponse = 8 * 1024 * 1024;
 int engineServers = 0; // CEF UI RunLoop only, including shutdown completion.
+std::atomic_size_t remoteImageJobs{0};
 
 std::string JSON(id value) {
   NSData* data = [NSJSONSerialization dataWithJSONObject:value
@@ -91,6 +95,9 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Remove(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
+#if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
+    ForgetProbeView(browser->GetIdentifier());
+#endif
     RemoteForget(browser->GetIdentifier());
     EngineForget(browser);
     std::vector<int> lost;
@@ -107,6 +114,10 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Stop() {
     CEF_REQUIRE_UI_THREAD();
+#if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
+    while (!probeViews_.empty()) ForgetProbeView(probeViews_.begin()->first);
+#endif
+    while (!remoteFrames_.empty()) RemoteFrameFinish(remoteFrames_.begin()->first, remoteFrames_.begin()->second, nil, @"Browser stopped.");
     while (!remotePending_.empty()) RemoteFinish(remotePending_.begin()->first, nil, @"Browser stopped.");
     humanControl_.clear();
     remotePressedPointers_.clear();
@@ -709,4 +720,4 @@ bool AgentBrowserDialog(CefRefPtr<CefBrowser> browser, cef_jsdialog_type_t type,
 }
 void AgentBrowserDialogReset(CefRefPtr<CefBrowser> browser) { if (bridge) bridge->DialogReset(browser); }
 void StopAgentBrowser() { if (bridge) bridge->Stop(); bridge = nullptr; }
-bool AgentBrowserTransportsStopped() { return engineServers == 0; }
+bool AgentBrowserTransportsStopped() { return engineServers == 0 && remoteImageJobs.load() == 0; }

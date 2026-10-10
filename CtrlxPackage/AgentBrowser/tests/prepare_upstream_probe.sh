@@ -38,7 +38,7 @@ clang++ -std=c++20 -O1 -fobjc-arc -fPIC -arch arm64 -mmacosx-version-min=12.0 \
   -DCTRLX_UPSTREAM_BROWSER_PROBE=1 -dynamiclib -I "$PROBE_SDK" \
   "$PROBE_REPO/CtrlxPackage/AgentBrowser/EmbeddedBrowser.mm" \
   "$PROBE_REPO/CtrlxPackage/AgentBrowser/AutomationBridge.mm" \
-  "$PROBE_WRAPPER" -lpthread -framework AppKit -framework Cocoa -framework IOSurface \
+  "$PROBE_WRAPPER" -lpthread -framework AppKit -framework Cocoa -framework IOSurface -framework ImageIO -framework CoreGraphics \
   -install_name @rpath/libCtrlXAgentBrowser.dylib \
   -o "$PROBE_BUILD/CtrlX.app/Contents/Frameworks/libCtrlXAgentBrowser.dylib"
 codesign --force --sign "$PROBE_IDENTITY" "$PROBE_BUILD/CtrlX.app/Contents/Frameworks/libCtrlXAgentBrowser.dylib"

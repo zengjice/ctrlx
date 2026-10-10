@@ -6,11 +6,32 @@
     uint64_t generation;
     Clock::time_point deadline;
     RemoteReply reply;
+    size_t maximumBytes;
+  };
+  struct RemoteFrame {
+    uint64_t generation;
+    NSSize bounds;
+    std::vector<RemoteReply> replies;
   };
   std::map<std::string, std::string> humanControl_;
   std::map<std::string, NSSize> remoteViewports_;
   std::map<std::string, NSMutableDictionary*> remotePressedPointers_;
   std::map<std::pair<int, int>, RemotePending> remotePending_;
+  std::map<std::string, std::shared_ptr<RemoteFrame>> remoteFrames_;
+
+  void RemoteFrameFinish(std::string id, std::shared_ptr<RemoteFrame> capture,
+                         NSDictionary* value, NSString* error) {
+    CEF_REQUIRE_UI_THREAD();
+    auto pending = remoteFrames_.find(id);
+    if (pending == remoteFrames_.end() || pending->second != capture) return;
+    auto frame = pending->second;
+    remoteFrames_.erase(pending);
+    auto tab = tabs_.find(id);
+    if (!error && (tab == tabs_.end() || tab->second.generation != frame->generation ||
+        !NSEqualSizes(frame->bounds, ((__bridge NSView*)tab->second.browser->GetHost()->GetWindowHandle()).bounds.size)))
+      error = @"Page changed. Read a new frame before interacting.";
+    for (auto& reply : frame->replies) reply(error ? nil : value, error);
+  }
 
   void RemoteFinish(std::pair<int, int> key, NSDictionary* value, NSString* error) {
     auto found = remotePending_.find(key);
@@ -27,7 +48,7 @@
     if (tab == tabs_.end() || tab->second.generation != found->second.generation) {
       RemoteFinish(key, nil, @"Page changed. Read a new frame before interacting."); return true;
     }
-    id value = success && size <= 512 * 1024 ? Parse(data, size) : nil;
+    id value = success && size <= found->second.maximumBytes ? Parse(data, size) : nil;
     RemoteFinish(key, [value isKindOfClass:NSDictionary.class] ? value : nil,
       [value isKindOfClass:NSDictionary.class] ? nil : @"Browser operation failed or frame exceeded the size limit.");
     return true;
@@ -37,6 +58,8 @@
     for (auto& [key, pending] : remotePending_) if (key.first == browser) keys.push_back(key);
     for (auto key : keys) RemoteFinish(key, nil, @"Page closed or renderer detached.");
     for (auto& [id, tab] : tabs_) if (tab.browser->GetIdentifier() == browser) {
+      auto frame = remoteFrames_.find(id);
+      if (frame != remoteFrames_.end()) RemoteFrameFinish(id, frame->second, nil, @"Page closed or renderer detached.");
       humanControl_.erase(id); remoteViewports_.erase(id); remotePressedPointers_.erase(id);
     }
   }
@@ -45,12 +68,13 @@
     for (auto& [key, pending] : remotePending_) if (Clock::now() > pending.deadline) keys.push_back(key);
     for (auto key : keys) RemoteFinish(key, nil, @"Browser request timed out; not retried.");
   }
-  void RemoteCall(const std::string& id, const char* method, NSDictionary* params, RemoteReply reply) {
+  void RemoteCall(const std::string& id, const char* method, NSDictionary* params, RemoteReply reply,
+                  size_t maximumBytes = 512 * 1024) {
     auto found = tabs_.find(id);
     if (found == tabs_.end()) { reply(nil, @"Page closed."); return; }
     auto browser = found->second.browser;
     const auto key = std::pair{browser->GetIdentifier(), ++nextMessage_};
-    remotePending_[key] = {id, found->second.generation, Clock::now() + std::chrono::seconds(5), std::move(reply)};
+    remotePending_[key] = {id, found->second.generation, Clock::now() + std::chrono::seconds(5), std::move(reply), maximumBytes};
     auto parsed = CefParseJSON(JSON(params), JSON_PARSER_RFC);
     if (!browser->GetHost()->ExecuteDevToolsMethod(key.second, method, parsed->GetDictionary()))
       RemoteFinish(key, nil, @"Browser request could not be submitted.");
@@ -106,25 +130,54 @@
     if (prior != remoteViewports_.end() && !NSEqualSizes(prior->second, nativeView.bounds.size)) ++found->second.generation;
     remoteViewports_[id] = nativeView.bounds.size;
     if ([action isEqual:@"frame"]) {
-      const auto generation = found->second.generation;
-      const double pixelRatio = std::max(1.0, nativeView.window.backingScaleFactor);
-      RemoteCall(id, "Page.getLayoutMetrics", @{}, [this, id, generation, pixelRatio, reply](NSDictionary* metrics, NSString* error) {
-        if (error) { reply(nil, error); return; }
+      auto pending = remoteFrames_.find(id);
+      if (pending != remoteFrames_.end()) {
+        if (pending->second->generation != found->second.generation || pending->second->replies.size() >= 4) {
+          reply(nil, @"Browser capture is busy. Read a new frame shortly."); return;
+        }
+        pending->second->replies.push_back(std::move(reply));
+        return;
+      }
+      auto capture = std::make_shared<RemoteFrame>(RemoteFrame{found->second.generation, nativeView.bounds.size, {std::move(reply)}});
+      remoteFrames_[id] = capture;
+#if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
+      ++probeRemoteCaptureCounts_[browser->GetIdentifier()];
+#endif
+      RemoteCall(id, "Page.getLayoutMetrics", @{}, [this, id, capture](NSDictionary* metrics, NSString* error) {
+        if (error) { RemoteFrameFinish(id, capture, nil, error); return; }
         NSDictionary* viewport = metrics[@"cssVisualViewport"];
-        double width = [viewport[@"clientWidth"] doubleValue], height = [viewport[@"clientHeight"] doubleValue];
-        if (width < 1 || height < 1 || width > 8192 || height > 8192) { reply(nil, @"Page has no usable viewport."); return; }
-        double scale = std::min(1.0, 1024.0 / (std::max(width, height) * pixelRatio));
-        RemoteCall(id, "Page.captureScreenshot", @{@"format": @"jpeg", @"quality": @50,
-          @"fromSurface": @YES, @"captureBeyondViewport": @NO,
-          @"clip": @{@"x": viewport[@"pageX"] ?: @0, @"y": viewport[@"pageY"] ?: @0,
-                     @"width": @(width), @"height": @(height), @"scale": @(scale)}},
-          [reply, width, height, generation](NSDictionary* image, NSString* error) {
+        // Both viewport metrics exclude scrollbars. Use their unit ratio,
+        // including pinch scale, to convert the full screenshot to CSS pixels.
+        double cssWidth = [viewport[@"clientWidth"] doubleValue];
+        double pixelWidth = [metrics[@"visualViewport"][@"clientWidth"] doubleValue];
+        double pixelsPerCSSPixel = pixelWidth / cssWidth * [viewport[@"scale"] doubleValue];
+        if (!std::isfinite(pixelsPerCSSPixel) || pixelsPerCSSPixel <= 0) {
+          RemoteFrameFinish(id, capture, nil, @"Page has no usable viewport."); return;
+        }
+        // CDP clip/scale temporarily resizes the live render surface, which
+        // flickers on the Host. Capture its current viewport without emulation.
+        RemoteCall(id, "Page.captureScreenshot", @{@"format": @"jpeg", @"quality": @80,
+          @"fromSurface": @YES, @"captureBeyondViewport": @NO},
+          [this, id, capture, pixelsPerCSSPixel](NSDictionary* image, NSString* error) {
             NSString* encoded = image[@"data"];
-            if (error || ![encoded isKindOfClass:NSString.class] || encoded.length > 240 * 1024) {
-              reply(nil, error ?: @"Page frame exceeds the remote preview limit."); return;
+            if (error || ![encoded isKindOfClass:NSString.class]) {
+              RemoteFrameFinish(id, capture, nil, error ?: @"Browser frame is missing."); return;
             }
-            reply(@{@"jpeg": encoded, @"width": @(width), @"height": @(height), @"generation": @(generation)}, nil);
-          });
+            CefRefPtr<Bridge> self = this;
+            ++remoteImageJobs;
+            if (!CefPostTask(TID_FILE_USER_VISIBLE, new Action([self, id, capture, encoded, pixelsPerCSSPixel] {
+              auto frame = RemotePreviewFrame(encoded, pixelsPerCSSPixel);
+              if (!CefPostTask(TID_UI, new Action([self, id, capture, frame] {
+                --remoteImageJobs;
+                self->RemoteFrameFinish(id, capture, frame.jpeg ? @{@"jpeg": [frame.jpeg base64EncodedStringWithOptions:0],
+                  @"width": @(frame.width), @"height": @(frame.height), @"generation": @(capture->generation)} : nil,
+                  frame.jpeg ? nil : @"Browser frame could not be encoded within the remote preview limit.");
+              }))) { --remoteImageJobs; NSLog(@"CtrlX browser preview completion could not be scheduled."); }
+            }))) {
+              --remoteImageJobs;
+              RemoteFrameFinish(id, capture, nil, @"Browser preview could not be scheduled.");
+            }
+          }, kRemoteScreenshotResponseBytes);
       });
       return;
     }
