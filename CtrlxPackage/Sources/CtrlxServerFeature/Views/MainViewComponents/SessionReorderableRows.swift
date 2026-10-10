@@ -5,6 +5,7 @@ import SwiftUI
 struct SessionReorderableRows<Session: Identifiable, Row: View>: View {
     let sessions: [Session]
     let sessionName: KeyPath<Session, String>
+    let selection: (Session) -> SidebarSessionSelection
     let onMove: (String, SessionDropTarget) -> Void
     let rowBackground: (Session) -> Color?
     @ViewBuilder let row: (Session) -> Row
@@ -25,6 +26,8 @@ struct SessionReorderableRows<Session: Identifiable, Row: View>: View {
                 dragHandle(for: name)
             }
             .background(rowBackground(session) ?? .clear, in: .rect(cornerRadius: 5))
+            .background(SidebarSelectionBackground().accessibilityHidden(true))
+            .listRowBackground(Color.clear)
             .overlay(alignment: dropTarget?.insertAfter == true ? .bottom : .top) {
                 Rectangle()
                     .fill(Color.accentColor)
@@ -42,10 +45,7 @@ struct SessionReorderableRows<Session: Identifiable, Row: View>: View {
                 rowFrames.removeValue(forKey: name)
                 if dragSource == name { clearDrag() }
             }
-        }
-        .onChange(of: sessionNames) { _, names in
-            rowFrames = rowFrames.filter { names.contains($0.key) }
-            if let dragSource, !names.contains(dragSource) { clearDrag() }
+            .tag(selection(session))
         }
     }
 

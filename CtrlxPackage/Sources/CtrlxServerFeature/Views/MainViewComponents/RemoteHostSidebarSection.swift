@@ -84,6 +84,7 @@ struct RemoteHostSidebarSection: View {
                 }
                 SessionReorderableRows(
                     sessions: sortedSessions, sessionName: \.sessionName,
+                    selection: { .remote(hostID: host.id, sessionName: $0.sessionName) },
                     onMove: moveSession, rowBackground: sessionBackground
                 ) { session in
                     remoteSessionButton(session)

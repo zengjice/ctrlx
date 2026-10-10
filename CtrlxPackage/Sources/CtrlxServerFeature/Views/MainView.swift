@@ -559,7 +559,7 @@ public struct MainView: View {
         let sortedSessions = sortedLocalSessions
 
         return ScrollViewReader { proxy in
-            List {
+            List(selection: sidebarSessionSelection) {
                 localSessionsSection(sessions: sortedSessions)
                 remoteHostSections
             }
@@ -583,6 +583,27 @@ public struct MainView: View {
         }
     }
 
+    private var sidebarSessionSelection: Binding<SidebarSessionSelection?> {
+        Binding {
+            if let remote = selectedRemoteSession {
+                return .remote(hostID: remote.hostId, sessionName: remote.sessionName)
+            }
+            return currentLocalSession().map { .local(sessionName: $0.sessionName) }
+        } set: { selection in
+            guard let selection else { return }
+            switch selection {
+            case let .local(name):
+                guard let session = tmuxService.sessions.first(where: { $0.sessionName == name }) else { return }
+                selectLocalSession(session)
+            case let .remote(hostID, name):
+                guard let host = settings.pairedHosts.first(where: { $0.id == hostID }) else { return }
+                selectedRemoteSession = RemoteSessionSelection(hostId: hostID, hostName: host.displayName, sessionName: name)
+                selectedRemoteWindowId = nil
+                selectedWindow = nil
+            }
+        }
+    }
+
     private func localSessionsSection(sessions: [LocalTmuxSession]) -> some View {
         Section {
             // Host's own cross-session usage rollup (issue #598), collapsed to
@@ -599,6 +620,7 @@ public struct MainView: View {
             } else {
                 SessionReorderableRows(
                     sessions: sessions, sessionName: \.sessionName,
+                    selection: { .local(sessionName: $0.sessionName) },
                     onMove: moveLocalSession, rowBackground: localSessionBackground
                 ) { session in
                     sessionButton(session: session)
