@@ -19,9 +19,9 @@ struct TerminalCustomButtonTests {
             try store.add(name: "Stop", action: .key(.ctrlC))
             // Independent buttons can deliberately have the same name.
             try store.add(name: "Stop", action: .key(.escape))
-            try store.add(name: "Send", action: .text("继续", sendReturn: true))
+            try store.add(name: "Draft", action: .text("继续", sendReturn: false))
             let saved = store.buttons
-            #expect(saved.map(\.name) == ["Continue", "Stop", "Stop", "Send"])
+            #expect(saved.map(\.name) == ["Continue", "Stop", "Stop", "Draft"])
             #expect(Set(saved.map(\.id)).count == 4)
             #expect(TerminalCustomButtonStore().buttons == saved)
             try store.remove(saved[1].id)
@@ -31,11 +31,37 @@ struct TerminalCustomButtonTests {
         }
     }
 
-    @Test("Text defaults to literal input without Return and preserves meaningful spaces")
+    @Test("Text defaults to auto send; disabling it enters only literal text and preserves spaces")
     func literalText() {
         for text in ["  echo 'hello world' ", "继续 👩‍💻", "$(whoami)", "/model", " "] {
-            #expect(TerminalCustomButton.Action.text(text).keys == [.text(text)])
+            #expect(TerminalCustomButton.Action.text(text).keys == [.text(text), .delay(200), .enter])
+            #expect(TerminalCustomButton.Action.text(text, sendReturn: false).keys == [.text(text)])
             #expect(TerminalCustomButton.Action.text(text, sendReturn: true).keys == [.text(text), .delay(200), .enter])
+        }
+    }
+
+    @Test("Previously saved buttons retain their send setting when the default changes")
+    func existingSendPreferences() throws {
+        let saved = Data("""
+        [
+          {"id":"00000000-0000-0000-0000-000000000001","name":"Draft","action":{"text":{"_0":"draft","sendReturn":false}}},
+          {"id":"00000000-0000-0000-0000-000000000002","name":"Send","action":{"text":{"_0":"send","sendReturn":true}}}
+        ]
+        """.utf8)
+        let preferences = PreferencesService.inMemory()
+        preferences.setData(saved, TerminalCustomButtonStore.storageKey)
+        try withDependencies {
+            $0[PreferencesService.self] = preferences
+        } operation: {
+            let store = TerminalCustomButtonStore()
+            #expect(store.loadError == nil)
+            #expect(store.buttons.map { $0.action.keys } == [[.text("draft")], [.text("send"), .delay(200), .enter]])
+            #expect(preferences.data(TerminalCustomButtonStore.storageKey) == saved)
+            let original = store.buttons
+            try store.add(name: "New", action: .text("new"))
+            let restored = TerminalCustomButtonStore()
+            #expect(Array(restored.buttons.prefix(2)) == original)
+            #expect(restored.buttons.last?.action.keys == [.text("new"), .delay(200), .enter])
         }
     }
 
@@ -123,9 +149,9 @@ struct TerminalCustomButtonTests {
                               hasExternalEditor: editor, hasBlockingForm: form)
     }
 
-    @Test("Ordinary terminals and agent windows share the same target and readiness checks")
-    func sendGuards() {
-        let button = TerminalCustomButton(name: "Continue", action: .text("继续", sendReturn: true))
+    @Test("Both send modes share the same target and readiness checks", arguments: [false, true])
+    func sendGuards(sendReturn: Bool) {
+        let button = TerminalCustomButton(name: "Continue", action: .text("继续", sendReturn: sendReturn))
         let request = TerminalCustomButtonRequest(button: button, context: context())
         #expect(request.isValid(in: context(), savedButtons: [button]))
         for invalid in [context(host: "other"), context(pane: "%2"), context(revision: 1),

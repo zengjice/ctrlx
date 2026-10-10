@@ -61,9 +61,13 @@ The first input row's horizontal scroll area ends with `$`, device-local custom
 buttons, then **Add Button** (`＋`). Send remains pinned outside the scroll area.
 Add Button opens the same in-page overlay, without a settings page. Choose a name
 and either single-line literal text or one special key (Tab, Home, End, Ctrl+C,
-etc.). **Send Return After Text** defaults off; when enabled it queues literal
-text, the existing host-side 200 ms pause and one Return. No action clears an
-existing terminal draft. Text cannot contain newlines or terminal controls.
+etc.). The text action's **Auto Send** switch defaults on for new buttons:
+it queues literal text, the existing host-side 200 ms pause and one Return.
+Turning it off enters only the text, allowing further editing before tapping
+Send. Each button persists its own choice; existing buttons retain their saved
+behavior. Special keys send only the selected key and have no Auto Send switch.
+No action clears an existing terminal draft. Text cannot contain newlines or
+terminal controls. Saving a button never executes it.
 
 Tap a custom button to execute; long-press it to delete directly, without sending
 on release. Horizontal scrolling cancels the long press, and built-in buttons are

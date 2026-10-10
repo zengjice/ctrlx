@@ -67,7 +67,7 @@
         @State private var text = ""
         @State private var usesKey = false
         @State private var key: TerminalCustomButton.Key = .tab
-        @State private var sendReturn = false
+        @State private var sendReturn = true
         @State private var errorMessage: String?
         @FocusState private var nameFocused: Bool
 
@@ -107,10 +107,18 @@
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                                 .accessibilityIdentifier("terminal-custom-button-text")
-                            Toggle("Send Return After Text", isOn: $sendReturn)
+                            Toggle("Auto Send", isOn: $sendReturn)
+                                .accessibilityIdentifier("terminal-custom-button-auto-send")
                         }
                     } footer: {
-                        Text("Saved on this device for all windows. Saving does not send input. Long-press a custom button to delete it.")
+                        VStack(alignment: .leading, spacing: 8) {
+                            if !usesKey {
+                                Text(sendReturn
+                                     ? "Tapping this button enters the text and presses Return."
+                                     : "Tapping this button only enters the text. Continue editing, then tap Send when ready.")
+                            }
+                            Text("Saved on this device for all windows. Saving does not send input. Long-press a custom button to delete it.")
+                        }
                     }
                     if let error = store.loadError ?? errorMessage {
                         Section { Text(error).foregroundStyle(.red) }

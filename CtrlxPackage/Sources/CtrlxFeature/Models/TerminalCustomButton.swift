@@ -62,7 +62,7 @@ struct TerminalCustomButton: Codable, Identifiable, Equatable, Sendable {
     }
 
     enum Action: Codable, Equatable, Sendable {
-        case text(String, sendReturn: Bool = false)
+        case text(String, sendReturn: Bool = true)
         case key(Key)
 
         var keys: [TmuxKey] {
