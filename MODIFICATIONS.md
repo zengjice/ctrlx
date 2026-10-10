@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.55 — Stable Host browser capture and accurate remote clicks
+
+- Capture the existing Host browser surface without CDP clip/scale, avoiding
+  transient renderer resizing while Mac/iOS Viewers watch. Resize/compress the
+  bounded JPEG on a CEF worker, coalesce same-page capture requests and wait for
+  image workers during shutdown. Existing control leases and input remain intact.
+- Return CSS dimensions for the complete captured image, including scrollbars,
+  using the physical/CSS viewport ratio and pinch scale before downscaling.
+  This fixes Viewer click offsets without changing the wire protocol or UI.
+- Validation: image bounds/geometry tests, 15 isolated native browser checkpoints,
+  18 managed-engine checkpoints, 23 targeted Swift tests and signed native builds
+  passed. The screenshot-position regression fails against the previous capture
+  runtime and passes with both scrollbars, browser zoom, pinch zoom and Fit.
+  Evidence and pending physical-device/WAN acceptance remain in `docs/v3.0.52/`.
+  The cached serial release regression passed 2,587 Swift tests; two unavailable
+  Apple Intelligence evaluations were excluded. Brand/technical boundaries,
+  website build, 131 script tests, 19 publisher tests and 13 installer tests passed.
+- Release scope: Mac package only from this linked worktree. Update the Host Mac
+  for these fixes; existing Mac/iOS Viewers and the Relay need no update. No Relay
+  deployment, iOS publication or local App replacement.
+
 ## 3.0.54 — Codex question footer and shell-wrapper compatibility
 
 - Recognize the no-plus `shift← to answer` footer observed in Codex 0.160.0,
