@@ -58,6 +58,7 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsDirectoryCreation: Bool?
     public let supportsFileBrowsing: Bool?
     public let supportsFileDownloads: Bool?
+    public let supportsFileUploads: Bool?
     /// Older hosts only create shells; viewers must not send an agent request
     /// until this capability is explicitly advertised.
     public let supportsAgentWindowLaunch: Bool?
@@ -85,6 +86,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsTerminalFit: Bool? = nil,
         supportsFileBrowsing: Bool? = nil,
         supportsFileDownloads: Bool? = nil,
+        supportsFileUploads: Bool? = nil,
         supportsBrowserSharing: Bool? = nil,
         browserTabs: [RemoteBrowserTab]? = nil
     ) {
@@ -99,6 +101,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsDirectoryCreation = supportsDirectoryCreation
         self.supportsFileBrowsing = supportsFileBrowsing
         self.supportsFileDownloads = supportsFileDownloads
+        self.supportsFileUploads = supportsFileUploads
         self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
         self.supportsAgentFork = supportsAgentFork
         self.supportsTerminalPaste = supportsTerminalPaste
@@ -128,6 +131,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsTerminalFit: supportsTerminalFit,
             supportsFileBrowsing: supportsFileBrowsing,
             supportsFileDownloads: supportsFileDownloads,
+            supportsFileUploads: supportsFileUploads,
             supportsBrowserSharing: supportsBrowserSharing,
             browserTabs: browserTabs
         )

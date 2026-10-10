@@ -5,6 +5,7 @@ import ImageIO
 import PDFKit
 import SwiftUI
 import Textual
+import UniformTypeIdentifiers
 
 /// Host files on all three surfaces. Only a local source can supply a native URL.
 @MainActor
@@ -13,6 +14,30 @@ public struct WorkspaceFileBrowserView: View {
     private let source: FileBrowserSource
     @FocusState private var searchFocused: Bool
     @Dependency(ClipboardClient.self) private var clipboard
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var upload = FileBrowserUpload()
+    @State private var uploadRequest: UploadRequest?
+    @State private var destination: Destination?
+    @State private var showsImporter = false
+    @State private var showsFolderPrompt = false
+    @State private var folderName = ""
+    @State private var folderRequest: FolderRequest?
+    @State private var actionMessage: String?
+
+    private struct Destination {
+        let path: String
+        let source: FileBrowserSource
+    }
+    private struct UploadRequest: Identifiable {
+        let id = UUID()
+        let destination: Destination
+        let urls: [URL]
+    }
+    private struct FolderRequest: Identifiable {
+        let id = UUID()
+        let destination: Destination
+        let name: String
+    }
 
     public init(tab: FileBrowserTab, source: FileBrowserSource) {
         self.tab = tab
@@ -22,6 +47,27 @@ public struct WorkspaceFileBrowserView: View {
     public var body: some View {
         VStack(spacing: 0) {
             navigation
+            if upload.isRunning {
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(upload.filename).lineLimit(1)
+                        if let path = uploadRequest?.destination.path {
+                            Text("To: \(path)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                        ProgressView(value: Double(upload.sentBytes), total: Double(max(1, upload.totalBytes)))
+                        Text("\(upload.sentBytes.formatted(.byteCount(style: .file))) / \(upload.totalBytes.formatted(.byteCount(style: .file)))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button("Cancel") { uploadRequest = nil }
+                }.padding(10)
+            } else if let summary = upload.summary {
+                ScrollView {
+                    Text(summary).font(.caption).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                }.frame(maxHeight: 90)
+            }
+            if folderRequest != nil { ProgressView("Creating folder…").padding(10) }
+            if let actionMessage { Text(actionMessage).font(.caption).textSelection(.enabled).padding(10) }
             Divider()
             #if os(macOS)
             HSplitView {
@@ -38,7 +84,50 @@ public struct WorkspaceFileBrowserView: View {
         .task(id: previewKey) {
             await tab.loadPreview(source: source)
         }
-        .onDisappear { tab.releasePreview() }
+        .task(id: uploadRequest?.id) {
+            guard let request = uploadRequest else { return }
+            await upload.run(urls: request.urls, directory: request.destination.path, source: request.destination.source) {
+                tab.refresh += 1
+            }
+            if uploadRequest?.id == request.id { uploadRequest = nil }
+        }
+        .task(id: folderRequest?.id) { await createFolder() }
+        .onDisappear {
+            tab.releasePreview()
+            // The iOS document picker can cover this view without closing its tab.
+            if !showsImporter { cancelWrites() }
+        }
+        .onChange(of: source.unavailableReason) { _, reason in
+            if reason != nil { cancelWrites() }
+        }
+        .onChange(of: source.id) { _, _ in cancelWrites() }
+        .onChange(of: scenePhase) { _, phase in
+            #if os(iOS)
+            if phase == .background { cancelWrites() }
+            #endif
+        }
+        .alert("New Folder", isPresented: $showsFolderPrompt) {
+            TextField("Folder name", text: $folderName)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                #endif
+            Button("Cancel", role: .cancel) { destination = nil }
+            Button("Create") {
+                if let destination { folderRequest = .init(destination: destination, name: folderName) }
+            }.disabled(!SessionDirectoryName.isValid(folderName))
+        } message: {
+            Text("Create in \(destination?.path ?? ""). Enter one folder name, without /.")
+        }
+        .fileImporter(isPresented: $showsImporter, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
+            guard let target = destination, target.source.id == source.id, source.unavailableReason == nil else { return }
+            destination = nil
+            switch result {
+            case let .success(urls):
+                if !urls.isEmpty { uploadRequest = .init(destination: target, urls: urls) }
+            case let .failure(error): actionMessage = error.localizedDescription
+            }
+        }
         .onChange(of: tab.searchFocusRequest, initial: true) { _, value in
             if value > 0 { searchFocused = true }
         }
@@ -82,6 +171,25 @@ public struct WorkspaceFileBrowserView: View {
                     #endif
                 Button { tab.refresh += 1 } label: { Label("Refresh", symbol: .arrowClockwise).labelStyle(.iconOnly) }
                 Menu {
+                    Button {
+                        guard captureDestination() else { return }
+                        folderName = ""
+                        showsFolderPrompt = true
+                    } label: { Label("New Folder…", symbol: .folderBadgePlus) }
+                    .accessibilityIdentifier("file-browser-new-folder")
+                    .disabled(writesBusy || tab.path == nil || tab.isLoading || source.creationUnavailableReason != nil)
+                    Button {
+                        guard captureDestination() else { return }
+                        showsImporter = true
+                    } label: {
+                        Label(source.localFileURL == nil ? "Upload Files…" : "Import Files…", symbol: .squareAndArrowUp)
+                    }
+                    .accessibilityIdentifier("file-browser-upload")
+                    .disabled(writesBusy || tab.path == nil || tab.isLoading || source.uploadUnavailableReason != nil)
+                    if let reason = source.creationUnavailableReason ?? source.uploadUnavailableReason {
+                        Text(reason)
+                    }
+                    Divider()
                     if tab.sourcePaneID != nil {
                         Button { tab.navigate(nil) } label: { Label("Source Pane Directory", symbol: .terminal) }
                     }
@@ -112,6 +220,42 @@ public struct WorkspaceFileBrowserView: View {
         }
         .padding(10)
         .disabled(source.unavailableReason != nil)
+    }
+
+    private var writesBusy: Bool { uploadRequest != nil || upload.isRunning || folderRequest != nil }
+
+    private func captureDestination() -> Bool {
+        guard let path = tab.path, !writesBusy, source.unavailableReason == nil else { return false }
+        destination = Destination(path: path, source: source)
+        actionMessage = nil
+        return true
+    }
+
+    private func cancelWrites() {
+        uploadRequest = nil
+        folderRequest = nil
+        destination = nil
+        showsImporter = false
+        showsFolderPrompt = false
+    }
+
+    private func createFolder() async {
+        guard let request = folderRequest else { return }
+        defer { if folderRequest?.id == request.id { folderRequest = nil; destination = nil } }
+        do {
+            guard let create = request.destination.source.createDirectory else {
+                throw FileBrowserError.message("Update the Host Mac to create folders.")
+            }
+            try Task.checkCancellation()
+            _ = try await create(.init(parentDirectory: request.destination.path, name: request.name))
+            try Task.checkCancellation()
+            guard folderRequest?.id == request.id else { return }
+            actionMessage = "Created \(request.name) in \(request.destination.path)."
+            if tab.path == request.destination.path { tab.query = ""; tab.selectedFile = nil }
+            tab.refresh += 1
+        } catch {
+            if !Task.isCancelled, folderRequest?.id == request.id { actionMessage = error.localizedDescription }
+        }
     }
 
     private var directory: some View {

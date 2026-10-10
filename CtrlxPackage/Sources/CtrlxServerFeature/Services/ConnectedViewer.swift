@@ -154,6 +154,7 @@ final public class ConnectedViewer: Identifiable {
     /// Each new command awaits the previous one to preserve WebSocket ordering.
     private var pendingInputCommand: Task<Void, Never>?
     @ObservationIgnored private let fileRequests = FileBrowserCommandQueue()
+    @ObservationIgnored private var fileUploads = HostFileUploads()
     @ObservationIgnored private let browserRequests = FileBrowserCommandQueue(limit: 4)
 
     /// Serial chain for outbound encrypted messages. Encrypted sends have multiple
@@ -787,9 +788,22 @@ final public class ConnectedViewer: Identifiable {
                 }
                 return
             }
-            if case .browseFiles = command.command, let onCommand {
+            let isFileRequest: Bool = switch command.command {
+            case .browseFiles, .createSessionDirectory: true
+            default: false
+            }
+            if isFileRequest, let onCommand {
                 let generation = connectionGeneration.current
-                if !fileRequests.enqueue(command, execute: onCommand, reply: { [weak self] response in
+                let uploads = fileUploads
+                if !fileRequests.enqueue(command, execute: { command in
+                    if case let .browseFiles(spec) = command.command, case let .upload(operation) = spec.operation {
+                        do {
+                            let response = try await uploads.request(operation)
+                            return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
+                        } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                    }
+                    return await onCommand(command)
+                }, reply: { [weak self] response in
                     guard let self, self.connectionGeneration.isCurrent(generation) else { return }
                     await self.sendEncrypted(.commandResponse(response))
                 }) {
@@ -1205,6 +1219,9 @@ final public class ConnectedViewer: Identifiable {
 
     private func invalidateConnectionWork() {
         fileRequests.cancelAll()
+        let oldUploads = fileUploads
+        fileUploads = HostFileUploads()
+        Task { await oldUploads.shutdown() }
         browserRequests.cancelAll()
         quickPhraseSync?.reset()
         connectionGeneration.invalidate()

@@ -1,6 +1,6 @@
 # Host-backed Files tabs
 
-Mac Host, Mac Viewer and iOS share the read-only `WorkspaceFileBrowserView`.
+Mac Host, Mac Viewer and iOS share `WorkspaceFileBrowserView`.
 Right-click a terminal window tab on Mac Host/Viewer and choose **Open Files**.
 On iOS, tap the window title to open the **Tabs** list, then use that window row's
 `⋯` menu → **Open Files**. Tapping a row switches tabs; its menu operates on that
@@ -39,6 +39,49 @@ Files rows expose only their own selection/close actions, not terminal operation
   their data when hidden. Reopening reloads current Host contents.
 
 ## Supported operations
+
+### Creating folders and adding files
+
+The directory toolbar's **⋯** menu offers **New Folder…** and **Import Files…**
+(local Mac Host) / **Upload Files…** (Mac Viewer and iOS). New Folder accepts one
+literal child name through a native alert and reuses `CreateSessionDirectory`.
+It refreshes the list without navigating into the new folder or starting a session.
+The native file picker accepts multiple ordinary files. Import is a copy, never
+a move. Remote upload always writes to the Host, never a matching Viewer path.
+The destination is captured from the Files tab when the action begins; navigation
+or changing terminal focus cannot redirect an in-progress operation.
+
+Files transfer sequentially, at most 1 GiB each, with filename/byte progress and
+Cancel above the directory/preview. Successful files refresh the listing; there
+is no automatic preview or insertion into terminal input. Existing names (also
+directories or symlinks) are never replaced. Failed files are reported in the
+completion summary and remaining selections continue. Closing/hiding the tab,
+disconnecting, or backgrounding iOS cancels unfinished work; already completed
+files remain. Folder uploads, drag-and-drop, background transfers and resume
+are not supported.
+
+`FileBrowserUploadReader` uses the system file-picker access grant to prepare an
+`NSFileCoordinator.forUploading` snapshot off the UI actor. It waits for coordinated
+saves before taking that snapshot, opens its descriptor inside the accessor, then
+releases the original file and access grant. Later saves cannot change the upload
+or be blocked by a slow transfer. Reads remain bounded to 128 KiB; directories,
+symlinks and files over 1 GiB are rejected. Cancellation stops pending coordination;
+closing the descriptor releases the unlinked snapshot. `HostFileUploads` belongs
+to one Viewer connection (a separate local instance serves Host imports), allows
+four active uploads, and verifies ordered
+offsets, declared length and an incremental SHA-256 digest. It opens the destination
+directory once, creates a private sibling temporary file, then publishes through
+an exclusive atomic rename. Destination replacement/movement fails validation.
+Failure/cancel/disconnect removes partial files; abandoned uploads expire after
+60 seconds of inactivity, checked every 30 seconds. A process crash can leave
+hidden `.ctrlx-upload-*.tmp` files; these are not treated as completed uploads.
+
+Folder creation keeps the existing `supportsDirectoryCreation` capability;
+uploads require new optional `supportsFileUploads`. Unsupported actions are
+disabled with an upgrade hint, and commands are also gated before transmission.
+Host and Viewer need the updated upload implementation; the existing opaque
+Relay needs no deployment. Upload chunks and folder creation use the bounded
+file-operation queue, outside the keyboard receive loop.
 
 Directory listing, hidden files, recursive filename/text search, UTF-8 text and
 Markdown, image and PDF previews, copy path/text. The local Mac Host also previews
@@ -164,12 +207,15 @@ Disconnect cancels pending work and prevents old-connection replies.
 ## Validation
 
 Focused coverage: `HostFileBrowserTests`, `FileBrowserLayoutTests`,
+`HostFileUploadTests`, `FileBrowserUploadTests`,
 `FileBrowserTabTests`, `FileBrowserTransferTests`, `FileBrowserProtocolTests`, `IOSFileBrowserWorkspaceTests`,
 `LayoutSnapshotMapperTests`, and `TerminalPasteTransportTests`.
 Tests include fresh source-pane cwd resolution,
 directory pagination/dot-prefixed and system-hidden files and folders, search
 visibility consistency, deferred mount-point metadata, unknown types,
 symlink loops, special/oversized/changing files,
+upload snapshots waiting for coordinated saves, cancellation during that wait,
+and snapshot stability across subsequent saves,
 multi-chunk search, stale replies, private layout restoration after directory
 changes, terminal selection replacing Files without disturbing split tabs,
 legacy capability gating, and encrypted transport while a file response is delayed.

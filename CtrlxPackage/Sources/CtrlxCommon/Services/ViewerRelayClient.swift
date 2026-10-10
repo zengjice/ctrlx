@@ -101,6 +101,8 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsDirectoryCreation = false
     public private(set) var hostSupportsFileBrowsing = false
     public private(set) var hostSupportsFileDownloads = false
+    public private(set) var hostSupportsFileUploads = false
+    public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
     public private(set) var hostSupportsBrowserSharing = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
@@ -504,9 +506,12 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
         case .browseFiles where !hostSupportsFileBrowsing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to browse files"))
-        case let .browseFiles(spec) where !hostSupportsFileDownloads:
-            if case .download = spec.operation {
+        case let .browseFiles(spec):
+            if case .download = spec.operation, !hostSupportsFileDownloads {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to download files"))
+            }
+            if case .upload = spec.operation, !hostSupportsFileUploads {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to upload files"))
             }
         case .createSessionDirectory where !hostSupportsDirectoryCreation:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to create folders"))
@@ -1012,6 +1017,7 @@ final public class ViewerRelayClient {
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
             hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
+            hostSupportsFileUploads = sessionState.supportsFileUploads == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
             browserTabs = sessionState.browserTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
@@ -1034,6 +1040,7 @@ final public class ViewerRelayClient {
             terminalStreamHandlers.deliver(streamMessage)
 
         case let .hostConnected(connectedMessage):
+            resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
@@ -1081,6 +1088,7 @@ final public class ViewerRelayClient {
             }
 
         case let .peerHello(peerHello):
+            resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
@@ -1110,6 +1118,7 @@ final public class ViewerRelayClient {
             quickPhraseSync?.receive(payload)
 
         case .hostDisconnected:
+            resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
@@ -1123,6 +1132,7 @@ final public class ViewerRelayClient {
             await onHostDisconnected?()
 
         case .hostSubscriptionInactive:
+            resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
@@ -1423,6 +1433,7 @@ final public class ViewerRelayClient {
     }
 
     private func cleanupConnection() async {
+        resetFileUploads()
         resetBrowserState()
         hostSupportsTerminalPaste = false
         hostSupportsDirectoryCreation = false
@@ -1461,6 +1472,11 @@ final public class ViewerRelayClient {
             handler(.failure(ViewerRelayClientError.notConnected))
         }
         pendingCommands.removeAll()
+    }
+
+    private func resetFileUploads() {
+        hostSupportsFileUploads = false
+        fileTransferEpoch = UUID()
     }
 
     private func resetBrowserState() {

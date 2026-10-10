@@ -12,13 +12,19 @@ struct FileBrowserClient: Sendable {
 }
 
 extension FileBrowserClient: DependencyKey {
-    static let liveValue = Self(request: { try await HostFileBrowser.shared.request($0) },
+    static let liveValue = Self(request: {
+        if case let .upload(operation) = $0 { return try await HostFileUploads.local.request(operation) }
+        return try await HostFileBrowser.shared.request($0)
+    },
                                 localFileURL: { try await HostFileBrowser.shared.localFileURL($0) })
 }
 
 extension FileBrowserSource {
     static func local(paneID: String?, tmux: TmuxService, windows: MirrorWindowManager) -> Self {
-        Self(id: "local", paneID: paneID, localFileURL: { info in
+        Self(id: "local", paneID: paneID, createDirectory: { request in
+            @Dependency(SessionDirectoryClient.self) var client
+            return try await client.create(request)
+        }, localFileURL: { info in
             @Dependency(FileBrowserClient.self) var client
             return try await client.localFileURL(info)
         }) { operation in
@@ -61,6 +67,8 @@ actor HostFileBrowser {
     func request(_ request: FileBrowserOperation) throws -> FileBrowserResponse {
         try Task.checkCancellation()
         switch request {
+        case .upload:
+            throw FileBrowserError.message("Uploads require a connection-owned writer.")
         case let .list(path, offset, hidden):
             return try .listing(list(path: path ?? "~/", offset: offset, hidden: hidden))
         case let .info(path):

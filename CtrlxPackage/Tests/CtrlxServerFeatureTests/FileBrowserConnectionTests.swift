@@ -2,6 +2,7 @@
 import CtrlxEncryption
 import CtrlxNetworking
 import ConcurrencyExtras
+import CryptoKit
 import Dependencies
 import Foundation
 import Testing
@@ -180,6 +181,10 @@ struct FileBrowserConnectionTests {
     }
 
     @Test func viewerDisconnectFreesSlotsBeforeOldIOFinishes() async throws {
+        let uploadRoot = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-wire-upload-\(UUID())")
+        try FileManager.default.createDirectory(at: uploadRoot, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: uploadRoot) }
+        let uploadID = UUID()
         let originalVersion = VersionCompatibility.appVersionOverride
         VersionCompatibility.appVersionOverride = "3.0.43"
         defer { VersionCompatibility.appVersionOverride = originalVersion }
@@ -210,7 +215,8 @@ struct FileBrowserConnectionTests {
             let downloadsEnabled = LockIsolated(false)
             defer { for waiter in waiters { waiter.resume() } }
             host.onSessionStateRequest = {
-                .init(pairId: "", paneStates: [:], supportsFileBrowsing: true, supportsFileDownloads: downloadsEnabled.value ? true : nil)
+                .init(pairId: "", paneStates: [:], supportsFileBrowsing: true, supportsFileDownloads: downloadsEnabled.value ? true : nil,
+                      supportsFileUploads: downloadsEnabled.value ? true : nil)
             }
             host.onCommand = { command in
                 if case let .browseFiles(spec) = command.command,
@@ -238,9 +244,17 @@ struct FileBrowserConnectionTests {
                 if case .success = unsupported { Issue.record("Legacy Host accepted a download") }
                 #expect(ContinuousClock.now - started < .seconds(1))
                 #expect(await relay.encryptedFrames == frameCount, "Do not send a new enum case to an old Host")
+                let uploadBegin = BrowseFiles(.upload(.begin(id: uploadID, directory: uploadRoot.path, name: "file", size: 3)))
+                if case .success = await viewer.sendCommand(uploadBegin, paneId: "") { Issue.record("Legacy Host accepted an upload") }
+                #expect(await relay.encryptedFrames == frameCount)
                 downloadsEnabled.setValue(true)
                 await host.pushSessionState()
                 try await waitUntil { viewer.hostSupportsFileDownloads }
+                #expect(viewer.hostSupportsFileUploads)
+                #expect(try await viewer.sendCommand(uploadBegin, paneId: "").get().fileBrowser == .uploaded(offset: 0, path: nil))
+                let append = BrowseFiles(.upload(.append(id: uploadID, offset: 0, data: Data([1, 2]))))
+                #expect(try await viewer.sendCommand(append, paneId: "").get().fileBrowser == .uploaded(offset: 2, path: nil))
+                #expect(try FileManager.default.contentsOfDirectory(atPath: uploadRoot.path).count == 1)
                 let modern = await viewer.sendCommand(BrowseFiles(.download(path: "/movie.mp4", offset: 0, revision: "1")), paneId: "%7")
                 if case let .chunk(chunk) = try modern.get().fileBrowser {
                     #expect(chunk.data == Data(repeating: 7, count: FileBrowserLimits.chunkBytes))
@@ -255,8 +269,10 @@ struct FileBrowserConnectionTests {
                 else { Issue.record("Cancelled request unexpectedly succeeded") }
                 await viewer.disconnect()
                 #expect(!viewer.hostSupportsFileDownloads)
+                #expect(!viewer.hostSupportsFileUploads)
                 downloadsEnabled.setValue(false)
                 try await waitUntil { !host.isViewerConnected }
+                try await waitUntil { (try? FileManager.default.contentsOfDirectory(atPath: uploadRoot.path).isEmpty) == true }
                 #expect(host.state.isConnected, "This must exercise peer disconnect, not Host socket cleanup")
                 for request in requests { _ = await request.value }
 
@@ -265,6 +281,20 @@ struct FileBrowserConnectionTests {
                 #expect(!viewer.hostSupportsFileDownloads)
                 let result = await viewer.sendCommand(BrowseFiles(.info(path: "/new")), paneId: "%7", timeout: 5)
                 #expect(try result.get().success, "Old requests must not retain the four slots after reconnect")
+                downloadsEnabled.setValue(true)
+                await host.pushSessionState()
+                try await waitUntil { viewer.hostSupportsFileUploads }
+                let oldUpload = await viewer.sendCommand(append, paneId: "")
+                if case .success = oldUpload { Issue.record("Reconnected Host reused an old upload") }
+                let newID = UUID(), content = Data([4, 5, 6])
+                let freshBegin = BrowseFiles(.upload(.begin(id: newID, directory: uploadRoot.path, name: "complete", size: content.count)))
+                #expect(try await viewer.sendCommand(freshBegin, paneId: "").get().success)
+                let freshAppend = BrowseFiles(.upload(.append(id: newID, offset: 0, data: content)))
+                #expect(try await viewer.sendCommand(freshAppend, paneId: "").get().success)
+                let finish = BrowseFiles(.upload(.finish(id: newID, sha256: SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined())))
+                let savedPath = uploadRoot.appendingPathComponent("complete").path
+                #expect(try await viewer.sendCommand(finish, paneId: "").get().fileBrowser == .uploaded(offset: 3, path: savedPath))
+                #expect(try Data(contentsOf: URL(fileURLWithPath: savedPath)) == content)
                 #expect(finishedCancelled.isEmpty, "New work must enter before old I/O finishes")
                 let pending = waiters
                 waiters.removeAll()

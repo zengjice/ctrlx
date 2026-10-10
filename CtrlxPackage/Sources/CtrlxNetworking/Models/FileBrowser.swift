@@ -16,6 +16,7 @@ public enum FileBrowserOperation: Codable, Sendable, Equatable {
     case read(path: String, offset: Int, revision: String)
     /// Explicit export, separate from bounded inline previews. Capability-gated on viewers.
     case download(path: String, offset: Int, revision: String)
+    case upload(FileBrowserUploadOperation)
     case search(path: String, query: String, mode: FileBrowserSearchMode, includeHidden: Bool)
 }
 
@@ -40,6 +41,7 @@ public enum FileBrowserLimits {
     public static let maximumPreviewBytes = 8 * 1_024 * 1_024
     public static let maximumTextBytes = 512 * 1_024
     public static let maximumDownloadBytes = 1_024 * 1_024 * 1_024
+    public static let maximumUploadBytes = 1_024 * 1_024 * 1_024
     public static let maximumSearchResults = 200
     public static let maximumSearchEntries = 20_000
 }
@@ -122,4 +124,13 @@ public enum FileBrowserResponse: Codable, Sendable, Equatable {
     case info(FileBrowserEntry)
     case chunk(FileBrowserChunk)
     case search(FileBrowserSearchResults)
+    case uploaded(offset: Int, path: String?)
+}
+
+/// IDs belong to one connection; a reconnect cannot resume an old upload.
+public enum FileBrowserUploadOperation: Codable, Sendable, Equatable {
+    case begin(id: UUID, directory: String, name: String, size: Int)
+    case append(id: UUID, offset: Int, data: Data)
+    case finish(id: UUID, sha256: String)
+    case cancel(id: UUID)
 }

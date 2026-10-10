@@ -3520,6 +3520,7 @@
                     supportsTerminalFit: true,
                     supportsFileBrowsing: true,
                     supportsFileDownloads: true,
+                    supportsFileUploads: true,
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs
                 )
