@@ -98,6 +98,28 @@ struct RemoteBrowserControlTests {
         await service.shutdown()
     }
 
+    @Test func captureSizeIsValidatedAndForwardedWithoutChangingViewport() async throws {
+        let (service, runtime, tab) = try await fixture()
+        defer { service.disconnectBrowserViewer("a") }
+        func request(_ dimension: Int?) -> BrowseBrowser {
+            .init(sessionName: "test", tabID: tab.id, surfaceID: UUID(), frameMaxDimension: dimension, operation: .frame)
+        }
+        _ = try await service.handleBrowser(request(nil), viewerID: "a")
+        #expect(runtime.requests.last?["maximumDimension"] == nil)
+        for dimension in [256, 1280, 2560] {
+            _ = try await service.handleBrowser(request(dimension), viewerID: "a")
+            #expect(runtime.requests.last?["maximumDimension"] as? Int == dimension)
+            #expect(runtime.requests.last?["action"] as? String == "frame")
+        }
+        let count = runtime.requests.count
+        for dimension in [0, 255, 2561, Int.max] {
+            await #expect(throws: (any Error).self) { try await service.handleBrowser(request(dimension), viewerID: "a") }
+        }
+        #expect(runtime.requests.count == count)
+        #expect(service.remoteCaptures.isEmpty)
+        await service.shutdown()
+    }
+
     @Test func validationBeforeNativeBoundary() throws {
         #expect(throws: (any Error).self) { try AgentBrowserService.nativePayload(.text(String(repeating: "文", count: 6000))) }
         #expect(throws: (any Error).self) { try AgentBrowserService.nativePayload(.fit(width: 0, height: 10)) }

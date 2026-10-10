@@ -11,18 +11,20 @@
   struct RemoteFrame {
     uint64_t generation;
     NSSize bounds;
+    int maximumDimension;
+    NSUInteger maximumBytes;
     std::vector<RemoteReply> replies;
   };
   std::map<std::string, std::string> humanControl_;
   std::map<std::string, NSSize> remoteViewports_;
   std::map<std::string, NSMutableDictionary*> remotePressedPointers_;
   std::map<std::pair<int, int>, RemotePending> remotePending_;
-  std::map<std::string, std::shared_ptr<RemoteFrame>> remoteFrames_;
+  std::map<std::tuple<std::string, int, NSUInteger>, std::shared_ptr<RemoteFrame>> remoteFrames_;
 
   void RemoteFrameFinish(std::string id, std::shared_ptr<RemoteFrame> capture,
                          NSDictionary* value, NSString* error) {
     CEF_REQUIRE_UI_THREAD();
-    auto pending = remoteFrames_.find(id);
+    auto pending = remoteFrames_.find({id, capture->maximumDimension, capture->maximumBytes});
     if (pending == remoteFrames_.end() || pending->second != capture) return;
     auto frame = pending->second;
     remoteFrames_.erase(pending);
@@ -58,8 +60,9 @@
     for (auto& [key, pending] : remotePending_) if (key.first == browser) keys.push_back(key);
     for (auto key : keys) RemoteFinish(key, nil, @"Page closed or renderer detached.");
     for (auto& [id, tab] : tabs_) if (tab.browser->GetIdentifier() == browser) {
-      auto frame = remoteFrames_.find(id);
-      if (frame != remoteFrames_.end()) RemoteFrameFinish(id, frame->second, nil, @"Page closed or renderer detached.");
+      std::vector<std::shared_ptr<RemoteFrame>> frames;
+      for (auto& [key, frame] : remoteFrames_) if (std::get<0>(key) == id) frames.push_back(frame);
+      for (auto& frame : frames) RemoteFrameFinish(id, frame, nil, @"Page closed or renderer detached.");
       humanControl_.erase(id); remoteViewports_.erase(id); remotePressedPointers_.erase(id);
     }
   }
@@ -130,7 +133,22 @@
     if (prior != remoteViewports_.end() && !NSEqualSizes(prior->second, nativeView.bounds.size)) ++found->second.generation;
     remoteViewports_[id] = nativeView.bounds.size;
     if ([action isEqual:@"frame"]) {
-      auto pending = remoteFrames_.find(id);
+      NSObject* requested = request[@"maximumDimension"];
+      int maximumDimension = kRemotePreviewLegacyDimension;
+      if (requested) {
+        if (![requested isKindOfClass:NSNumber.class]) {
+          reply(nil, @"Unsupported browser frame size."); return;
+        }
+        NSNumber* number = (NSNumber*)requested;
+        if (number.doubleValue != number.intValue || number.intValue < 256 || number.intValue > kRemotePreviewMaximumDimension) {
+          reply(nil, @"Unsupported browser frame size."); return;
+        }
+        maximumDimension = number.intValue;
+      }
+      // Different-size Viewers must not inherit whichever thumbnail requested first.
+      NSUInteger maximumBytes = requested ? kRemotePreviewMaximumBytes : kRemotePreviewLegacyMaximumBytes;
+      auto key = std::tuple{id, maximumDimension, maximumBytes};
+      auto pending = remoteFrames_.find(key);
       if (pending != remoteFrames_.end()) {
         if (pending->second->generation != found->second.generation || pending->second->replies.size() >= 4) {
           reply(nil, @"Browser capture is busy. Read a new frame shortly."); return;
@@ -138,8 +156,8 @@
         pending->second->replies.push_back(std::move(reply));
         return;
       }
-      auto capture = std::make_shared<RemoteFrame>(RemoteFrame{found->second.generation, nativeView.bounds.size, {std::move(reply)}});
-      remoteFrames_[id] = capture;
+      auto capture = std::make_shared<RemoteFrame>(RemoteFrame{found->second.generation, nativeView.bounds.size, maximumDimension, maximumBytes, {std::move(reply)}});
+      remoteFrames_[key] = capture;
 #if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
       ++probeRemoteCaptureCounts_[browser->GetIdentifier()];
 #endif
@@ -156,7 +174,7 @@
         }
         // CDP clip/scale temporarily resizes the live render surface, which
         // flickers on the Host. Capture its current viewport without emulation.
-        RemoteCall(id, "Page.captureScreenshot", @{@"format": @"jpeg", @"quality": @80,
+        RemoteCall(id, "Page.captureScreenshot", @{@"format": @"jpeg", @"quality": @90,
           @"fromSurface": @YES, @"captureBeyondViewport": @NO},
           [this, id, capture, pixelsPerCSSPixel](NSDictionary* image, NSString* error) {
             NSString* encoded = image[@"data"];
@@ -166,7 +184,7 @@
             CefRefPtr<Bridge> self = this;
             ++remoteImageJobs;
             if (!CefPostTask(TID_FILE_USER_VISIBLE, new Action([self, id, capture, encoded, pixelsPerCSSPixel] {
-              auto frame = RemotePreviewFrame(encoded, pixelsPerCSSPixel);
+              auto frame = RemotePreviewFrame(encoded, pixelsPerCSSPixel, capture->maximumDimension, capture->maximumBytes);
               if (!CefPostTask(TID_UI, new Action([self, id, capture, frame] {
                 --remoteImageJobs;
                 self->RemoteFrameFinish(id, capture, frame.jpeg ? @{@"jpeg": [frame.jpeg base64EncodedStringWithOptions:0],

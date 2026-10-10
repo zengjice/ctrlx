@@ -27,12 +27,15 @@ class RemoteBrowser(Managed):
         async def remote(**request):
             return await self.request(run, 'probe.remote', tab=tab, request=request)
 
-        async def frame():
-            value = await remote(action='frame')
+        async def frame(maximum_dimension=None):
+            request = {} if maximum_dimension is None else {'maximumDimension': maximum_dimension}
+            value = await remote(action='frame', **request)
             jpeg = base64.b64decode(value['jpeg'])
-            assert len(jpeg) <= 180 * 1024 and value['width'] > 0 and value['height'] > 0
+            budget = (512 if maximum_dimension is not None else 180) * 1024
+            assert len(jpeg) <= budget and value['width'] > 0 and value['height'] > 0
             image = Image.open(io.BytesIO(jpeg)).convert('RGB')
-            assert image.width <= 1024 and image.height <= 1024
+            limit = maximum_dimension or 1024
+            assert image.width <= limit and image.height <= limit
             assert len(image.resize((64, 64)).getcolors(4096)) > 10, 'Blank background frame'
             (self.root / 'remote-background.jpg').write_bytes(jpeg)
             return value
@@ -72,9 +75,9 @@ class RemoteBrowser(Managed):
               requestAnimationFrame(monitor);})();""")
         geometry = await view('start')
         durations = []
-        for _ in range(12):
+        for index in range(12):
             started = time.monotonic()
-            await frame()
+            await frame(2560 if index % 2 else 768)
             durations.append(time.monotonic() - started)
             await asyncio.sleep(.18)
         stable = await view('stop')
@@ -91,6 +94,60 @@ class RemoteBrowser(Managed):
         assert all(value == concurrent[0] for value in concurrent), 'Concurrent Viewers received different capture state'
         assert grouped['sizeChanges'] == 0
         self.passed('concurrent Viewers share bounded frames without resizing the Host')
+
+        geometry = await view('start')
+        legacy = await frame()
+        sharper = await frame(2560)
+        legacy_image = Image.open(io.BytesIO(base64.b64decode(legacy['jpeg'])))
+        sharper_image = Image.open(io.BytesIO(base64.b64decode(sharper['jpeg'])))
+        assert max(sharper_image.size) > max(legacy_image.size), (legacy_image.size, sharper_image.size)
+        assert (legacy['width'], legacy['height'], legacy['generation']) == (sharper['width'], sharper['height'], sharper['generation'])
+        (self.root / 'remote-adaptive.jpg').write_bytes(base64.b64decode(sharper['jpeg']))
+        (self.root / 'remote-legacy.jpg').write_bytes(base64.b64decode(legacy['jpeg']))
+        stable = await view('stop')
+        assert stable['sizeChanges'] == 0
+        print('Legacy/adaptive image sizes:', legacy_image.size, sharper_image.size, flush=True)
+        self.passed('adaptive frame gains real pixels without changing Host viewport or input generation')
+
+        geometry = await view('start')
+        sizes = (768, 2560, 768, 2560)
+        concurrent = await asyncio.gather(*(remote(action='frame', maximumDimension=size) for size in sizes))
+        grouped = await view('stop')
+        images = [Image.open(io.BytesIO(base64.b64decode(value['jpeg']))) for value in concurrent]
+        assert max(images[0].size) <= 768 and max(images[2].size) <= 768
+        assert max(images[1].size) > 1024 and max(images[3].size) > 1024
+        assert concurrent[0] == concurrent[2] and concurrent[1] == concurrent[3]
+        assert grouped['captures'] - geometry['captures'] < 4 and grouped['sizeChanges'] == 0
+        self.passed('mixed-resolution Viewers coalesce within their own size and keep independent image quality')
+
+        await evaluate("""const dense=document.createElement('div');dense.id='remote-dense-text';
+          dense.style.cssText='position:fixed;inset:0;background:white;color:#222;z-index:9999;overflow:hidden;columns:2;font:12px/18px sans-serif';
+          for(let i=0;i<100;i++){const p=document.createElement('p');p.style.margin='4px 12px';
+            p.textContent='中文网页文字清晰度 Browser preview 0123456789 — 目录、搜索结果与滚动测试 '+i;dense.append(p)}
+          document.body.append(dense);""")
+        dense_legacy = await frame()
+        dense_adaptive = await frame(2560)
+        legacy_image = Image.open(io.BytesIO(base64.b64decode(dense_legacy['jpeg'])))
+        sharper_image = Image.open(io.BytesIO(base64.b64decode(dense_adaptive['jpeg'])))
+        assert max(sharper_image.size) > max(legacy_image.size), (legacy_image.size, sharper_image.size)
+        (self.root / 'remote-dense-legacy.jpg').write_bytes(base64.b64decode(dense_legacy['jpeg']))
+        (self.root / 'remote-dense-adaptive.jpg').write_bytes(base64.b64decode(dense_adaptive['jpeg']))
+        print('Dense text legacy/adaptive sizes:', legacy_image.size, sharper_image.size,
+              'bytes:', len(base64.b64decode(dense_adaptive['jpeg'])), flush=True)
+        await evaluate("document.querySelector('#remote-dense-text').remove()")
+        self.passed('dense Chinese/English page retains more pixels within the adaptive frame budget')
+
+        same_size = await asyncio.gather(remote(action='frame'), remote(action='frame', maximumDimension=1024))
+        assert len(base64.b64decode(same_size[0]['jpeg'])) <= 180 * 1024
+        assert len(base64.b64decode(same_size[1]['jpeg'])) <= 512 * 1024
+        assert same_size[0]['jpeg'] != same_size[1]['jpeg']
+        self.passed('legacy and adaptive requests at the same size retain separate quality and byte limits')
+
+        for invalid in (255, 2561, 1.5, 'large'):
+            denied = await asyncio.to_thread(call, self.endpoint['socket'], dict(run, command='probe.remote', tab=tab,
+                request=dict(action='frame', maximumDimension=invalid)), False)
+            assert 'Unsupported browser frame size' in denied, denied
+        self.passed('native boundary rejects invalid and oversized frame requests')
 
         await evaluate('window.scrollTo(0,0)')
         await self.control('select-session', 'upstream-beta')
@@ -211,7 +268,7 @@ class RemoteBrowser(Managed):
             await evaluate("""Object.assign(document.querySelector('#remote-click-target').style,{
                 left:(visualViewport.offsetLeft+visualViewport.width-40)+'px',
                 top:(visualViewport.offsetTop+visualViewport.height-46)+'px',right:'auto',bottom:'auto'})""")
-            shot = await frame()
+            shot = await frame(2560 if index % 2 == 0 else 768)
             image = Image.open(io.BytesIO(base64.b64decode(shot['jpeg']))).convert('RGB')
             red, green, blue = image.split()
             mask = ImageChops.multiply(red.point(lambda v: 255 if v > 220 else 0),

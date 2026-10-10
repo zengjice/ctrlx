@@ -12,6 +12,7 @@
 - [x] Review fixes: discard input on lease loss, forward Mac hover, reconcile removed Host tabs
 - [x] Host capture flicker: remove CDP clip/scale, worker-side JPEG sizing and per-tab coalescing
 - [x] Capture-coordinate review fix: include scrollbars in frame CSS dimensions and test screenshot-position clicks
+- [x] Automatic Viewer resolution, higher JPEG quality and bounded image-only budget downscaling
 - [ ] Complete expanded-capability regression (process-routing failure recorded in ISSUES)
 - [ ] Physical Mac Viewer / iPhone touch, keyboard, IME and paste acceptance
 - [ ] Throttled WAN terminal-latency measurement
@@ -95,3 +96,33 @@ browser-specific update.
   unavailable Apple Intelligence evaluations excluded), plus website build,
   131 script, 19 publisher and 13 installer tests. Logs:
   `/tmp/ctrlx-3.0.55-{unit-tests,website-build,script-tests,publisher-tests,installer-tests}.log`.
+
+## Automatic Viewer resolution regression (2026-10-10)
+
+- 31 focused Swift tests pass, covering optional-field compatibility with old
+  Hosts/Viewers, physical-pixel sizing with letterboxing and resolution buckets,
+  live size changes without losing control, native request validation and the
+  512 KiB JPEG fitting the existing encrypted Relay envelope.
+  `/tmp/ctrlx-browser-adaptive-swift-final.log`.
+- Native image tests and production runtime build/signing pass. Tests cover
+  landscape/portrait sizing, no upscaling, CSS coordinates independent of JPEG
+  pixels, budget-driven resampling and separate legacy/adaptive byte limits.
+  `/tmp/ctrlx-browser-adaptive-image-tests-final.log`,
+  `/tmp/ctrlx-browser-adaptive-native-build-final.log`.
+- Native remote acceptance passes 20 checkpoints. Continuous adaptive capture
+  does not resize the Host or change its scroll/pixel ratio; mixed-resolution
+  requests remain independent, including legacy/adaptive requests at the same
+  size. A dense Chinese/English page increases from 649×768 to 1050×1243 within
+  the adaptive budget (443,568 bytes). Screenshot-derived clicks still pass with
+  scrollbars, browser/pinch zoom and explicit Fit; control/input gates still pass.
+  `/tmp/ctrlx-browser-adaptive-native-verified.log`.
+- Managed-engine regression passes 18 checkpoints; both isolated Hosts stop
+  normally. `/tmp/ctrlx-browser-adaptive-managed-verified.log`.
+- Mac and iOS device-target Release builds pass:
+  `/tmp/ctrlx-browser-adaptive-mac-final.log`,
+  `/tmp/ctrlx-browser-adaptive-ios-final.log`. The iOS compile is unsigned and
+  is not an installable package. Brand/technical checks and Python syntax pass.
+- These are isolated fixture checks, not physical Mac Viewer/iPhone acceptance
+  or WAN measurements. No production application was replaced and no release
+  was published. Full adaptive quality requires updated Host and Viewer builds;
+  older peers retain the legacy frame contract. Relay deployment is unchanged.

@@ -27,6 +27,23 @@ struct RemoteBrowserProtocolTests {
         #expect(updated.browserTabs == [tab])
     }
 
+    @Test func adaptiveFrameSizeIsAdditiveForOldHostsAndViewers() throws {
+        struct LegacyRequest: Codable {
+            let sessionName: String
+            let surfaceID: UUID
+            let operation: RemoteBrowserOperation
+        }
+        let legacy = LegacyRequest(sessionName: "s", surfaceID: UUID(), operation: .frame)
+        let decoded = try JSONDecoder().decode(BrowseBrowser.self, from: JSONEncoder().encode(legacy))
+        #expect(decoded.frameMaxDimension == nil)
+        let updated = BrowseBrowser(sessionName: "s", surfaceID: legacy.surfaceID, frameMaxDimension: 2560, operation: .frame)
+        let data = try JSONEncoder().encode(updated)
+        #expect(try JSONDecoder().decode(BrowseBrowser.self, from: data) == updated)
+        #expect(try JSONDecoder().decode(LegacyRequest.self, from: data).operation == .frame)
+        let command = try JSONDecoder().decode(CommandType.self, from: JSONEncoder().encode(updated.commandType))
+        #expect(command == updated.commandType)
+    }
+
     @Test func frameBudgetFitsEncryptedRelayEnvelope() throws {
         let frame = RemoteBrowserFrame(jpeg: Data(repeating: 1, count: RemoteBrowserFrame.maximumBytes), width: 1200, height: 700, generation: 1)
         #expect(frame.isValid)

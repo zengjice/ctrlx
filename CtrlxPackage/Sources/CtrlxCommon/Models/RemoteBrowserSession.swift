@@ -18,6 +18,7 @@ public final class RemoteBrowserSession {
     @ObservationIgnored private var inputs: [(RemoteBrowserOperation, UInt64)] = []
     @ObservationIgnored private var inputTask: Task<Void, Never>?
     @ObservationIgnored private var inputEpoch = UUID()
+    @ObservationIgnored public var frameMaxDimension: Int?
 
     public init(tab: RemoteBrowserTab, send: @escaping @MainActor (BrowseBrowser) async throws -> RemoteBrowserResponse) {
         self.tab = tab; self.send = send
@@ -35,7 +36,8 @@ public final class RemoteBrowserSession {
 
     private func request(_ operation: RemoteBrowserOperation, generation: UInt64? = nil) -> BrowseBrowser {
         BrowseBrowser(sessionName: tab.sessionName, tabID: tab.id, surfaceID: surfaceID, controlID: controlID,
-                      generation: generation ?? frame?.generation, operation: operation)
+                      generation: generation ?? frame?.generation,
+                      frameMaxDimension: operation == .frame ? frameMaxDimension : nil, operation: operation)
     }
 
     public func watch() async {

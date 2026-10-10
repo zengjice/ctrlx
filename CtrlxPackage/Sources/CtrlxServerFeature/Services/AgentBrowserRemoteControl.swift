@@ -105,11 +105,18 @@ extension AgentBrowserService {
                lease.surfaceID == request.surfaceID, lease.id == request.controlID { releaseBrowserControl(tabID) }
             return RemoteBrowserResponse(tab: descriptor(tab))
         case .frame:
+            var payload: [String: Any] = ["action": "frame"]
+            if let dimension = request.frameMaxDimension {
+                guard (256...RemoteBrowserFrame.maximumDimension).contains(dimension) else {
+                    throw RemoteBrowserError.message("Unsupported browser frame size.")
+                }
+                payload["maximumDimension"] = dimension
+            }
             guard remoteCaptures.count < 4 else { throw RemoteBrowserError.message("Browser capture is busy. Try again shortly.") }
             let captureID = UUID()
             remoteCaptures.insert(captureID)
             defer { remoteCaptures.remove(captureID) }
-            let data = try await nativeBrowserRequest(tabID, payload: ["action": "frame"])
+            let data = try await nativeBrowserRequest(tabID, payload: payload)
             try Task.checkCancellation()
             let frame = try JSONDecoder().decode(RemoteBrowserFrame.self, from: data)
             guard frame.isValid else { throw RemoteBrowserError.message("Invalid or oversized browser frame.") }

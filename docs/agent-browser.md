@@ -96,19 +96,30 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   command channel; the opaque Relay requires no browser-specific deployment.
 - The native surface exposes only bounded capture/navigation/input operations,
   never a raw remote CDP/JavaScript gateway. There is at most one outstanding
-  frame per visible surface, a 180 ms delay between replies, JPEG quality 50,
-  a 1024-pixel longest side and a 180 KiB encoded-image budget. Four captures
-  globally and four requests per Viewer bound work. Congested terminal output
+  frame per visible surface, a 180 ms delay between replies, JPEG quality 82
+  and a 512 KiB encoded-image budget. Viewer canvas size, letterboxing and screen
+  scale determine the requested longest side, in 128-pixel buckets up to 2560.
+  Images never upscale beyond the source; oversized JPEGs resample the decoded
+  image in bounded 75% steps down to 256 pixels, without lowering text quality.
+  Four captures globally and four requests per Viewer bound work. Congested terminal output
   pauses new captures; this is interactive page sharing, not a video stream.
   Capture uses the existing render surface without CDP `clip`/scale, which would
   temporarily resize the live Host renderer on every frame. ImageIO generates
   the bounded JPEG on a CEF worker; unscaled screenshots stay on the Host (8 MiB
   private response limit, 64-megapixel image limit). Concurrent requests for the
-  same tab coalesce, with at most four waiting replies. Frame CSS dimensions cover
-  the full captured image, including scrollbars: the paired CDP physical/CSS
+  same tab and requested size coalesce, with at most four waiting replies. A small
+  phone Viewer cannot force a Mac Viewer to receive its smaller thumbnail.
+  Frame CSS dimensions cover the full captured image, including scrollbars: the paired CDP physical/CSS
   viewport ratio and pinch scale convert source pixels before JPEG downscaling.
   Input coordinates remain independent of thumbnail pixels. Navigation/resize/
   close invalidates pending results, and shutdown waits for image workers.
+  The request size is an optional `BrowseBrowser.frameMaxDimension` field, not
+  a new operation: old Hosts ignore it, and old Viewers still receive a frame
+  capped at 1024 pixels. The adaptive budget remains below the existing encrypted
+  Relay envelope limit; no Relay configuration or deployment changes are needed.
+  Legacy requests retain JPEG quality 50 and the 180 KiB limit, and do not
+  coalesce with higher-budget requests even when their dimensions match.
+  Size changes update the next poll without restarting viewing or control.
 - Selection is per Viewer. Agent-created tabs do not steal Viewer focus.
   Disappearing/background surfaces stop polling and release control; they do not
   close the Host page. Only explicit Close closes it.
@@ -144,7 +155,7 @@ including browser zoom, pinch zoom and Fit. Image-only regression is available
 without launching CEF: build the CMake `remote_browser_frame_tests` target and run
 `.build-local/agent-browser/remote_browser_frame_tests` (invalid/oversized sources,
 landscape/portrait/no-upscale JPEG output, full-image CSS dimensions and the
-180 KiB bound).
+legacy 180 KiB and adaptive 512 KiB bounds).
 
 ## Ownership and data
 

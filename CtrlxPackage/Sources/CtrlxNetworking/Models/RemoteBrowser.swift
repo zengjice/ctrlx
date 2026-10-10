@@ -28,12 +28,14 @@ public struct BrowseBrowser: CommandSpec, Equatable {
     public let surfaceID: UUID
     public let controlID: UUID?
     public let generation: UInt64?
+    /// Optional, so older Hosts ignore it and older Viewers keep the legacy size.
+    public let frameMaxDimension: Int?
     public let operation: RemoteBrowserOperation
 
     public init(sessionName: String, tabID: UUID? = nil, surfaceID: UUID, controlID: UUID? = nil,
-                generation: UInt64? = nil, operation: RemoteBrowserOperation) {
+                generation: UInt64? = nil, frameMaxDimension: Int? = nil, operation: RemoteBrowserOperation) {
         self.sessionName = sessionName; self.tabID = tabID; self.surfaceID = surfaceID
-        self.controlID = controlID; self.generation = generation; self.operation = operation
+        self.controlID = controlID; self.generation = generation; self.frameMaxDimension = frameMaxDimension; self.operation = operation
     }
     public var commandType: CommandType { .browseBrowser(self) }
 }
@@ -88,7 +90,8 @@ public struct RemoteBrowserPointer: Codable, Sendable, Equatable {
 }
 
 public struct RemoteBrowserFrame: Codable, Sendable, Equatable {
-    public static let maximumBytes = 180 * 1024
+    public static let maximumBytes = 512 * 1024
+    public static let maximumDimension = 2560
     public let jpeg: Data
     /// CSS viewport size, not JPEG pixels or Viewer points.
     public let width: Double

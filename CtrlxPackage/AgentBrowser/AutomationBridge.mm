@@ -16,6 +16,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -117,7 +118,7 @@ class Bridge final : public CefDevToolsMessageObserver {
 #if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
     while (!probeViews_.empty()) ForgetProbeView(probeViews_.begin()->first);
 #endif
-    while (!remoteFrames_.empty()) RemoteFrameFinish(remoteFrames_.begin()->first, remoteFrames_.begin()->second, nil, @"Browser stopped.");
+    while (!remoteFrames_.empty()) RemoteFrameFinish(std::get<0>(remoteFrames_.begin()->first), remoteFrames_.begin()->second, nil, @"Browser stopped.");
     while (!remotePending_.empty()) RemoteFinish(remotePending_.begin()->first, nil, @"Browser stopped.");
     humanControl_.clear();
     remotePressedPointers_.clear();

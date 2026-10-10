@@ -10,6 +10,7 @@ struct RemoteBrowserSessionTests {
         var operations: [RemoteBrowserOperation] = []
         var generations: [UInt64?] = []
         var controlIDs: [UUID?] = []
+        var frameDimensions: [Int?] = []
         var owned = false
         var inFlight = 0
         var maximumFrames = 0
@@ -29,6 +30,7 @@ struct RemoteBrowserSessionTests {
                 if request.controlID == control { owned = false }
                 return .init(tab: tab)
             case .frame:
+                frameDimensions.append(request.frameMaxDimension)
                 inFlight += 1
                 maximumFrames = max(maximumFrames, inFlight)
                 defer { inFlight -= 1 }
@@ -55,6 +57,37 @@ struct RemoteBrowserSessionTests {
         #expect(RemoteBrowserGeometry.pagePoint(CGPoint(x: 200, y: 400), viewSize: view, pageSize: page) == CGPoint(x: 500, y: 250))
         #expect(RemoteBrowserGeometry.pagePoint(CGPoint(x: 200, y: 100), viewSize: view, pageSize: page) == nil)
         #expect(RemoteBrowserGeometry.pagePoint(CGPoint(x: 450, y: 100), viewSize: view, pageSize: page, clamped: true) == CGPoint(x: 999, y: 0))
+    }
+
+    @Test func resolutionUsesLetterboxedPhysicalPixelsAndBuckets() {
+        let page = CGSize(width: 1000, height: 500)
+        #expect(RemoteBrowserGeometry.frameMaxDimension(viewSize: CGSize(width: 400, height: 800), pageSize: page, displayScale: 3) == 1280)
+        #expect(RemoteBrowserGeometry.frameMaxDimension(viewSize: CGSize(width: 1440, height: 900), pageSize: page, displayScale: 2) == 2560)
+        #expect(RemoteBrowserGeometry.frameMaxDimension(viewSize: CGSize(width: 401, height: 800), pageSize: page, displayScale: 3) == 1280)
+        #expect(RemoteBrowserGeometry.frameMaxDimension(viewSize: CGSize(width: 10, height: 10), pageSize: page, displayScale: 1) == 256)
+        #expect(RemoteBrowserGeometry.frameMaxDimension(viewSize: .zero, pageSize: page, displayScale: 2) == nil)
+        #expect(RemoteBrowserGeometry.frameMaxDimension(viewSize: CGSize(width: CGFloat.nan, height: 100), pageSize: page, displayScale: 2) == nil)
+        #expect(RemoteBrowserGeometry.frameMaxDimension(viewSize: CGSize(width: 400, height: 800), pageSize: page, displayScale: .infinity) == nil)
+    }
+
+    @Test func changingResolutionDoesNotRestartWatchOrReleaseControl() async throws {
+        let host = Host(agent: false)
+        let session = RemoteBrowserSession(tab: host.tab, send: host.send)
+        let task = Task { await session.watch() }
+        defer { session.stop(); task.cancel() }
+        try await wait { session.controlID != nil }
+        #expect(host.frameDimensions.first == .some(nil))
+        let control = session.controlID
+        session.frameMaxDimension = 1280
+        try await wait { host.frameDimensions.contains(1280) }
+        session.frameMaxDimension = 2560
+        try await wait { host.frameDimensions.contains(2560) }
+        session.submit(.text("after resize"))
+        try await wait { host.operations.contains(.text("after resize")) }
+        #expect(session.controlID == control)
+        #expect(host.maximumFrames == 1)
+        #expect(!host.operations.contains(.releaseControl))
+        #expect(!host.operations.contains { if case .fit = $0 { true } else { false } })
     }
     @Test func manualPageAutoControlAndAgentReadOnly() async throws {
         for agent in [true, false] {

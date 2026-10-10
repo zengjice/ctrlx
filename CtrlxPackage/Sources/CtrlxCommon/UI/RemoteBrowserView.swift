@@ -14,6 +14,7 @@ public struct RemoteBrowserView: View {
     @State private var keyboardRequested = false
     @FocusState private var editingAddress: Bool
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.displayScale) private var displayScale
     @Dependency(ClipboardClient.self) private var clipboard
     private let client: ViewerRelayClient
 
@@ -75,7 +76,10 @@ public struct RemoteBrowserView: View {
                                 keyboardRequested: keyboardRequested) { operation in
                 if let displayedFrame { session.submit(operation, generation: displayedFrame.generation) }
             }
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { viewport = $0 }
+                .onGeometryChange(for: CGSize.self) { $0.size } action: {
+                    viewport = $0
+                    updateFrameResolution()
+                }
                 .overlay {
                     if image == nil {
                         if client.isHostConnected { ProgressView("Connecting to Host page…") }
@@ -105,6 +109,8 @@ public struct RemoteBrowserView: View {
         .onChange(of: session.tab.url, initial: true) { _, url in
             if !editingAddress { address = url == "about:blank" ? "" : url }
         }
+        .onChange(of: session.frame.map { CGSize(width: $0.width, height: $0.height) }) { _, _ in updateFrameResolution() }
+        .onChange(of: displayScale) { _, _ in updateFrameResolution() }
         .onDisappear { session.stop() }
         .accessibilityIdentifier("remote-browser-page")
     }
@@ -114,6 +120,11 @@ public struct RemoteBrowserView: View {
         if !value.contains("://"), value != "about:blank" { value = "https://" + value }
         session.submit(.navigate(value))
         editingAddress = false
+    }
+
+    private func updateFrameResolution() {
+        let page = session.frame.map { CGSize(width: $0.width, height: $0.height) } ?? viewport
+        session.frameMaxDimension = RemoteBrowserGeometry.frameMaxDimension(viewSize: viewport, pageSize: page, displayScale: displayScale)
     }
 }
 
@@ -125,6 +136,16 @@ private enum BrowserFrameDecoder {
 }
 
 public enum RemoteBrowserGeometry {
+    public static func frameMaxDimension(viewSize: CGSize, pageSize: CGSize, displayScale: CGFloat) -> Int? {
+        guard viewSize.width.isFinite, viewSize.height.isFinite, pageSize.width.isFinite, pageSize.height.isFinite,
+              viewSize.width > 0, viewSize.height > 0, pageSize.width > 0, pageSize.height > 0,
+              displayScale.isFinite, displayScale > 0 else { return nil }
+        let size = imageRect(viewSize: viewSize, pageSize: pageSize).size
+        let pixels = min(CGFloat(RemoteBrowserFrame.maximumDimension), max(size.width, size.height) * displayScale)
+        // Buckets avoid creating a new capture size for every point of window resizing.
+        return max(256, Int(ceil(pixels / 128)) * 128)
+    }
+
     public static func imageRect(viewSize: CGSize, pageSize: CGSize) -> CGRect {
         guard viewSize.width > 0, viewSize.height > 0, pageSize.width > 0, pageSize.height > 0 else { return .zero }
         let scale = min(viewSize.width / pageSize.width, viewSize.height / pageSize.height)
