@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.53 — Reliable Mac sidebar selection after context menus
+
+- Preserve native sidebar selection for local and remote sessions so cancelling
+  a window's Fork submenu does not leave subsequent session clicks unresponsive.
+  Scope selection identities to the Host so identical names remain distinct.
+- Suppress native selection decoration and retain the existing theme-matched
+  highlight controlled by "Highlight selected session in sidebar", default off.
+  Keep row buttons, double-click rename, context menus and drag handles unchanged.
+- Validation: 61 targeted Swift regressions passed. Isolated production-row UI
+  checks passed for light/dark highlight toggles, first-click navigation after
+  cancelling a Fork submenu, double-click rename and drag reordering.
+  The release regression run and isolated serial Mac rerun passed 2,581 Swift
+  tests after a parallel Mac process SIGPIPE; two unavailable Apple Intelligence
+  evaluations were excluded. Brand/technical boundaries, website build and
+  19 offline publisher tests passed. No iOS source was changed in this release.
+- Release scope: Mac package only, published from this linked worktree. No Relay
+  deployment, iOS publication or local App replacement.
+
 ## 3.0.52 — Viewer browser access and reliable workspace navigation
 
 - Share Host Chromium tabs with Mac and iOS Viewers, including manually opened,
