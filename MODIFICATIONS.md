@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.54 — Codex question footer and shell-wrapper compatibility
+
+- Recognize the no-plus `shift← to answer` footer observed in Codex 0.160.0,
+  alongside the existing spaced/compact hints and optional elapsed time.
+  Mac Host, Mac Viewer and iOS share the same narrow live-screen parser.
+- Verify the actual Codex process when tmux reports its telemetry shell wrapper,
+  using the existing process scanner with a fresh snapshot. Recheck the live
+  composer after inspection; retain draft/cursor/copy-mode guards and Host-wide
+  queue-count deduplication. Duplicate counts do not repeat the process scan,
+  and no background polling is added.
+- Validation: 66 targeted Swift tests passed for footer parsing, native Mac
+  snapshots, iOS scheduling, Host guards, process reconciliation and input FIFO.
+  The release run exercised 2,587 Swift tests; existing cache-TTL, ephemeral-port
+  boundary and tmux refresh timing failures passed isolated reruns. Two unavailable
+  Apple Intelligence evaluations were excluded. Brand/technical boundaries,
+  website build, 131 script tests, 19 publisher tests and 13 installer tests passed.
+  Physical auto-expansion acceptance remains pending an updated installation.
+- Release scope: Mac package only from this linked worktree. Update both Host
+  and viewing Macs for the new footer; iOS requires a separately updated build.
+  No Relay deployment, iOS publication or local App replacement.
+
 ## 3.0.53 — Reliable Mac sidebar selection after context menus
 
 - Preserve native sidebar selection for local and remote sessions so cancelling
