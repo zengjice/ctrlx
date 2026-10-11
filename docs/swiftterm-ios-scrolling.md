@@ -69,18 +69,41 @@ No app installation, signed IPA verification or iPhone profiling was performed.
   active dragging, history momentum and selection. It must not force the inner
   terminal to the bottom on every feed or layout.
 
-### Window right-swipe navigation
+### Window swipe navigation
 
-In a session's active Terminal or Agent pane, a one-finger right swipe selects
-the next terminal Window in picker order; the last Window does not wrap. The
-native viewport observes this gesture alongside existing pans, without delaying
-vertical scrollback or TUI wheel gestures. The leftmost 32 points of the screen
+In a session's active Terminal or Agent pane, a one-finger swipe to the left selects
+the next terminal Window in picker order; a swipe to the right selects the previous
+Window. Neither end wraps. The
+native viewport uses a one-finger directional pan, rather than a discrete swipe
+competing simultaneously with the nested scroll views. Both scroll-view pans and
+the TUI wheel pan wait only for the direction decision: vertical/diagonal drags
+fail Window navigation at recognition start and retain their existing scrolling
+path. A predominantly horizontal drag switches once on release after 64 points;
+short, cancelled or reversed drags do not switch. The leftmost 32 points of the screen
 remain reserved for system Back; iOS 26's content-area Back waits for the Window
-swipe, without changing the leading-edge recognizer. Selection and a horizontally offset viewport
-disable switching for that touch, so panning back through wide content is safe.
+swipe, without changing the leading-edge recognizer. Selection disables switching.
+Wide content scrolls normally until the corresponding edge: right drags can
+navigate only at the left edge, and left drags only at the right edge (including
+adjusted content insets). Reaching an edge mid-drag does not switch a Window.
 Keyboard controls, Files and browser tabs are not swipe targets. Selection reuses
 the window picker path (including cancelling pending creation/fit); no terminal
 resizing, extra stream subscription, Host or Relay change is introduced.
+Refreshing SwiftUI callbacks does not reset a running recognizer or change its
+captured action; disabling the gesture drops that action. Package tests cover
+direction, distance and both list boundaries; UIKit regression sources cover
+callback/cancellation, horizontal edges and Back priority. Device-SDK compilation
+alone does not prove touch arbitration. Physical iPhone diagnostics confirmed
+that the reported no-op drags reached the recognizer with negative x translation,
+but the previous right-only direction check rejected them; an arbitration failure
+was not established. The user chose the bidirectional mapping above. Temporary
+gesture logging has been removed. The user subsequently confirmed that Window
+swipe navigation works on the physical iPhone.
+Validation: 15 focused package tests passed; the signed iOS Release build and
+UIKit test-source device-SDK typecheck passed. UIKit tests were not executed on
+a Simulator or in a device test runner. Brand/technical boundary checks and
+`git diff --check` passed. Device test build: `20261011-083542` (3.0.56 (1));
+the version label is unchanged from the release, but this build includes the
+bidirectional fix.
 
 ### Quiet Shell first-screen positioning (October 9, 2026)
 

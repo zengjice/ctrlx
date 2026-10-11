@@ -84,7 +84,7 @@
         let onCopyActionChange: @MainActor ((@MainActor () -> Void)?) -> Void
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
         let onTerminalPaste: @MainActor (String) -> Void
-        let onNextWindow: (@MainActor () -> Void)?
+        let onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
 
         /// Live OTEL telemetry for this pane's session (issue #597), shown as a
         /// thin meter strip above the terminal (surface C).
@@ -148,7 +148,7 @@
             onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in },
             onCopyActionChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
             onViewportGridChange: @escaping @MainActor (TerminalViewportSizing.Grid?) -> Void = { _ in },
-            onNextWindow: (@MainActor () -> Void)? = nil
+            onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)? = nil
         ) {
             self.paneId = paneId
             self.hostId = hostId
@@ -175,7 +175,7 @@
             self.onTerminalInputReadinessChange = onTerminalInputReadinessChange
             self.onCopyActionChange = onCopyActionChange
             self.onViewportGridChange = onViewportGridChange
-            self.onNextWindow = onNextWindow
+            self.onSwitchWindow = onSwitchWindow
             self.onTerminalPaste = onTerminalPaste
             self.coordinator = StreamCoordinator(
                 paneId: paneId,
@@ -502,8 +502,8 @@
                         },
                         onViewportGridChange: onViewportGridChange,
                         onOpenPath: openPathAction,
-                        onNextWindow: isActive && !isInputSuspended && textSnapshot == nil && scenePhase == .active
-                            ? onNextWindow : nil
+                        onSwitchWindow: isActive && !isInputSuspended && textSnapshot == nil && scenePhase == .active
+                            ? onSwitchWindow : nil
                     )
                 } else {
                     ProgressView("Initializing terminal...")
@@ -1363,7 +1363,7 @@
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
 
         var onOpenPath: (@MainActor (String) -> Void)?
-        var onNextWindow: (@MainActor () -> Void)?
+        var onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
 
         func makeUIView(context: Context) -> UIScrollView {
             // Calculate cell size using FontMetrics (matches SwiftTerm's computeFontDimensions)
@@ -1478,7 +1478,7 @@
             context.coordinator.heightConstraint = heightConstraint
             context.coordinator.onViewportGridChange = onViewportGridChange
             let windowSwipe = TerminalWindowSwipeGesture(viewport: scrollView, terminal: terminalView)
-            windowSwipe.onNextWindow = onNextWindow
+            windowSwipe.onSwitchWindow = onSwitchWindow
             context.coordinator.windowSwipe = windowSwipe
             scrollView.cursorTop = { [weak terminalView, weak scrollView] in
                 guard let terminalView, let scrollView, let rect = terminalView.liveCursorRect else { return nil }
@@ -1570,7 +1570,7 @@
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
             context.coordinator.onViewportGridChange = onViewportGridChange
-            context.coordinator.windowSwipe?.onNextWindow = onNextWindow
+            context.coordinator.windowSwipe?.onSwitchWindow = onSwitchWindow
             (scrollView as? BottomAnchoredTerminalScrollView)?.setKeyboardTransitioning(keyboardIsTransitioning)
 
             context.coordinator.updateInteraction(
@@ -1585,7 +1585,7 @@
 
         static func dismantleUIView(_ uiView: UIScrollView, coordinator: Coordinator) {
             coordinator.viewportReportTask?.cancel()
-            coordinator.windowSwipe?.onNextWindow = nil
+            coordinator.windowSwipe?.onSwitchWindow = nil
             coordinator.terminalView?.invalidateInput()
         }
 

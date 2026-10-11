@@ -546,6 +546,11 @@ enum TerminalCursorTapNavigation {
             }
         }
 
+        func prioritizeWindowSwipe(_ gesture: UIGestureRecognizer) {
+            panGestureRecognizer.require(toFail: gesture)
+            mouseModePanGesture?.require(toFail: gesture)
+        }
+
         /// Installs the native shadow editor as a fixed overlay of the outer
         /// viewport. Keeping it outside both terminal scroll views prevents
         /// UIKit's first-responder caret scrolling from moving terminal history.

@@ -7,7 +7,7 @@ import UIKit
 @Suite("Terminal native viewport", .serialized)
 @MainActor
 struct TerminalNativeViewportTests {
-    @Test("Window swipes reserve Back, selection and horizontal scrolling")
+    @Test("Window swipes reserve Back and selection")
     func windowSwipeEligibility() {
         let fixture = makeViewport(rows: 57)
         defer { fixture.close() }
@@ -15,41 +15,115 @@ struct TerminalNativeViewportTests {
         let center = CGPoint(x: 180, y: 200)
         #expect(!swipe.recognizer.isEnabled)
         #expect(!swipe.canStart(at: center))
-        swipe.onNextWindow = { }
+        swipe.onSwitchWindow = { _ in }
         #expect(swipe.canStart(at: center))
         #expect(!swipe.canStart(at: CGPoint(x: 32, y: 200)))
-        #expect(swipe.recognizer.direction == .right)
-        #expect(swipe.recognizer.numberOfTouchesRequired == 1)
+        #expect(swipe.recognizer.minimumNumberOfTouches == 1)
+        #expect(swipe.recognizer.maximumNumberOfTouches == 1)
         #expect(!swipe.recognizer.cancelsTouchesInView)
-
-        fixture.viewport.contentSize.width = 900
-        fixture.viewport.contentOffset.x = 80
-        #expect(!swipe.canStart(at: center))
-        fixture.viewport.contentInset.left = 12
-        fixture.viewport.contentOffset.x = -12
-        #expect(swipe.canStart(at: center))
+        #expect(swipe.recognizer.view === fixture.viewport)
 
         fixture.terminal.feedTerminalData(Array("selected text".utf8)[...])
         fixture.terminal.setSelectionRange(start: .init(col: 0, row: 0), end: .init(col: 8, row: 0))
         #expect(!swipe.canStart(at: center))
         #expect(!swipe.gestureRecognizerShouldBegin(swipe.recognizer))
-        swipe.onNextWindow = nil
+        swipe.onSwitchWindow = nil
         #expect(!swipe.recognizer.isEnabled)
     }
 
-    @Test("Window swipes coexist only with terminal pans, not navigation or selection gestures")
-    func windowSwipeGestureCoexistence() {
+    @Test("Window drags switch once on release, keeping the captured window and direction", arguments: [-1.0, 1.0])
+    func windowSwipeCompletion(sign: Double) {
         let fixture = makeViewport(rows: 57)
         defer { fixture.close() }
         let swipe = TerminalWindowSwipeGesture(viewport: fixture.viewport, terminal: fixture.terminal)
-        #expect(swipe.gestureRecognizer(swipe.recognizer, shouldRecognizeSimultaneouslyWith: fixture.viewport.panGestureRecognizer))
-        #expect(swipe.gestureRecognizer(swipe.recognizer, shouldRecognizeSimultaneouslyWith: fixture.terminal.panGestureRecognizer))
-        let back = UIScreenEdgePanGestureRecognizer()
-        fixture.window.addGestureRecognizer(back)
-        #expect(!swipe.gestureRecognizer(swipe.recognizer, shouldRecognizeSimultaneouslyWith: back))
-        let selection = UILongPressGestureRecognizer()
-        fixture.terminal.addGestureRecognizer(selection)
-        #expect(!swipe.gestureRecognizer(swipe.recognizer, shouldRecognizeSimultaneouslyWith: selection))
+        fixture.viewport.contentSize.width = fixture.viewport.bounds.width
+        fixture.viewport.contentOffset.x = 0
+        var actions: [String] = []
+        var directions: [TerminalWindowSwipePolicy.Direction] = []
+        swipe.onSwitchWindow = {
+            actions.append("original")
+            directions.append($0)
+        }
+        swipe.recognizer.setTranslation(CGPoint(x: sign * 12, y: 1), in: fixture.window)
+        #expect(swipe.gestureRecognizerShouldBegin(swipe.recognizer))
+        let pan = TestWindowPan()
+        pan.state = .began
+        swipe.handlePan(pan)
+        swipe.onSwitchWindow = { _ in actions.append("updated") }
+        pan.state = .changed
+        pan.delta = CGPoint(x: sign * 100, y: 10)
+        swipe.handlePan(pan)
+        #expect(actions.isEmpty)
+        pan.state = .ended
+        swipe.handlePan(pan)
+        swipe.handlePan(pan)
+        #expect(actions == ["original"])
+        #expect(directions == [sign < 0 ? .next : .previous])
+    }
+
+    @Test("Cancelled, short, reversed and disabled window drags never switch",
+          arguments: ["cancelled", "short", "reversed", "disabled", "selection"], [-1.0, 1.0])
+    func windowSwipeCancellation(reason: String, sign: Double) {
+        let fixture = makeViewport(rows: 57)
+        defer { fixture.close() }
+        let swipe = TerminalWindowSwipeGesture(viewport: fixture.viewport, terminal: fixture.terminal)
+        fixture.viewport.contentSize.width = fixture.viewport.bounds.width
+        fixture.viewport.contentOffset.x = 0
+        var count = 0
+        swipe.onSwitchWindow = { _ in count += 1 }
+        swipe.recognizer.setTranslation(CGPoint(x: sign * 12, y: 1), in: fixture.window)
+        #expect(swipe.gestureRecognizerShouldBegin(swipe.recognizer))
+        let pan = TestWindowPan()
+        pan.delta = CGPoint(x: sign * 100, y: 10)
+        switch reason {
+        case "cancelled":
+            pan.state = .cancelled
+            swipe.handlePan(pan)
+        case "short": pan.delta = CGPoint(x: sign * 30, y: 0)
+        case "reversed": pan.delta = CGPoint(x: sign * -100, y: 0)
+        case "disabled":
+            swipe.onSwitchWindow = nil
+            swipe.onSwitchWindow = { _ in count += 1 }
+        default:
+            fixture.terminal.feedTerminalData(Array("selected text".utf8)[...])
+            fixture.terminal.setSelectionRange(start: .init(col: 0, row: 0), end: .init(col: 8, row: 0))
+        }
+        pan.state = .ended
+        swipe.handlePan(pan)
+        #expect(count == 0)
+    }
+
+    @Test("Vertical and diagonal drags release the terminal's scrolling recognizers")
+    func windowSwipeDirection() {
+        let fixture = makeViewport(rows: 57)
+        defer { fixture.close() }
+        let swipe = TerminalWindowSwipeGesture(viewport: fixture.viewport, terminal: fixture.terminal)
+        swipe.onSwitchWindow = { _ in }
+        for translation in [CGPoint(x: 1, y: 12), CGPoint(x: -1, y: -12), CGPoint(x: 12, y: -12), CGPoint(x: -12, y: 12)] {
+            swipe.recognizer.setTranslation(translation, in: fixture.window)
+            #expect(!swipe.gestureRecognizerShouldBegin(swipe.recognizer))
+        }
+    }
+
+    @Test("Wide terminals scroll first and only navigate outward at the corresponding edge")
+    func windowSwipeHorizontalEdges() {
+        let fixture = makeViewport(rows: 57)
+        defer { fixture.close() }
+        let swipe = TerminalWindowSwipeGesture(viewport: fixture.viewport, terminal: fixture.terminal)
+        swipe.onSwitchWindow = { _ in }
+        fixture.viewport.contentSize.width = 900
+        fixture.viewport.contentInset.left = 12
+        fixture.viewport.contentInset.right = 20
+        let leftEdge = -fixture.viewport.adjustedContentInset.left
+        let rightEdge = 900 - fixture.viewport.bounds.width + fixture.viewport.adjustedContentInset.right
+        for offset in [leftEdge, 80, rightEdge] {
+            fixture.viewport.contentOffset.x = offset
+            for x in [-12.0, 12.0] {
+                swipe.recognizer.setTranslation(CGPoint(x: x, y: 1), in: fixture.window)
+                let isOutward = x < 0 ? offset == rightEdge : offset == leftEdge
+                #expect(swipe.gestureRecognizerShouldBegin(swipe.recognizer) == isOutward)
+            }
+        }
     }
 
     @Test("Window swipes take priority over iOS 26 content Back, but not edge Back")
@@ -61,7 +135,7 @@ struct TerminalNativeViewportTests {
         let navigation = UINavigationController(rootViewController: root)
         fixture.window.rootViewController = navigation
         let swipe = TerminalWindowSwipeGesture(viewport: fixture.viewport, terminal: fixture.terminal)
-        swipe.onNextWindow = { }
+        swipe.onSwitchWindow = { _ in }
         let contentBack = try #require(navigation.interactiveContentPopGestureRecognizer)
         let edgeBack = try #require(navigation.interactivePopGestureRecognizer)
         #expect(swipe.gestureRecognizer(swipe.recognizer, shouldBeRequiredToFailBy: contentBack))
@@ -190,6 +264,16 @@ struct TerminalNativeViewportTests {
             #expect(opened.last == path)
         }
         #expect(opened.count == 2)
+    }
+
+    private final class TestWindowPan: UIPanGestureRecognizer {
+        var delta = CGPoint.zero
+        private var testState: UIGestureRecognizer.State = .possible
+        override var state: UIGestureRecognizer.State {
+            get { testState }
+            set { testState = newValue }
+        }
+        override func translation(in view: UIView?) -> CGPoint { delta }
     }
 
     private func makeViewport(rows: Int) -> Fixture {

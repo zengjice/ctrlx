@@ -1,53 +1,73 @@
 #if os(iOS)
 import UIKit
 
-/// Observe a right swipe without making terminal pans wait for another recognizer.
+/// Decide the axis before the terminal's scroll gestures claim a drag.
 @MainActor
 final class TerminalWindowSwipeGesture: NSObject, UIGestureRecognizerDelegate {
-    let recognizer = UISwipeGestureRecognizer()
-    var onNextWindow: (@MainActor () -> Void)? {
+    let recognizer = UIPanGestureRecognizer()
+    var onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)? {
         didSet {
-            recognizer.isEnabled = onNextWindow != nil
-            if onNextWindow == nil { pendingAction = nil }
+            if recognizer.isEnabled != (onSwitchWindow != nil) {
+                recognizer.isEnabled = onSwitchWindow != nil
+            }
+            if onSwitchWindow == nil { pendingSwitch = nil }
         }
     }
     private weak var viewport: UIScrollView?
     private weak var terminal: InteractiveTerminalView?
-    private var pendingAction: (@MainActor () -> Void)?
+    private var pendingSwitch: (
+        direction: TerminalWindowSwipePolicy.Direction,
+        action: @MainActor (TerminalWindowSwipePolicy.Direction) -> Void
+    )?
 
     init(viewport: UIScrollView, terminal: InteractiveTerminalView) {
         self.viewport = viewport
         self.terminal = terminal
         super.init()
-        recognizer.direction = .right
-        recognizer.numberOfTouchesRequired = 1
+        recognizer.minimumNumberOfTouches = 1
+        recognizer.maximumNumberOfTouches = 1
         recognizer.cancelsTouchesInView = false
         recognizer.delaysTouchesBegan = false
         recognizer.delaysTouchesEnded = false
         recognizer.isEnabled = false
         recognizer.delegate = self
-        recognizer.addTarget(self, action: #selector(swiped))
+        recognizer.addTarget(self, action: #selector(handlePan(_:)))
         viewport.addGestureRecognizer(recognizer)
+        viewport.panGestureRecognizer.require(toFail: recognizer)
+        terminal.prioritizeWindowSwipe(recognizer)
     }
 
     func canStart(at locationInWindow: CGPoint) -> Bool {
-        guard onNextWindow != nil, let viewport, let window = viewport.window,
+        guard onSwitchWindow != nil, let viewport, let window = viewport.window,
               terminal?.selectionActive == false else { return false }
-        // Keep the system back edge and panning back across wide content intact.
+        // Keep the system's leading-edge Back gesture intact.
         return locationInWindow.x - window.bounds.minX > 32
-            && viewport.contentOffset.x + viewport.adjustedContentInset.left <= 1
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        pendingAction = nil
-        guard let window = viewport?.window, canStart(at: touch.location(in: window)) else { return false }
-        // Bind the action to the window touched, not a later SwiftUI update.
-        pendingAction = onNextWindow
-        return true
+        pendingSwitch = nil
+        guard let window = viewport?.window else { return false }
+        return canStart(at: touch.location(in: window))
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        onNextWindow != nil && terminal?.selectionActive == false
+        pendingSwitch = nil
+        guard let action = onSwitchWindow, let viewport, terminal?.selectionActive == false,
+              let direction = TerminalWindowSwipePolicy.direction(
+                  translation: recognizer.translation(in: viewport.window)
+              ) else { return false }
+        // Wide content scrolls first; only an outward drag at its edge navigates.
+        let leftEdge = -viewport.adjustedContentInset.left
+        let rightEdge = max(leftEdge, viewport.contentSize.width - viewport.bounds.width + viewport.adjustedContentInset.right)
+        switch direction {
+        case .previous:
+            guard viewport.contentOffset.x <= leftEdge + 1 else { return false }
+        case .next:
+            guard viewport.contentOffset.x >= rightEdge - 1 else { return false }
+        }
+        // Bind the action to the window dragged, not a later SwiftUI update.
+        pendingSwitch = (direction, action)
+        return true
     }
 
     func gestureRecognizer(
@@ -67,22 +87,24 @@ final class TerminalWindowSwipeGesture: NSObject, UIGestureRecognizerDelegate {
         return false
     }
 
-    func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
-        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool {
-        guard let viewport, let otherView = otherGestureRecognizer.view else { return false }
-        return otherGestureRecognizer is UIPanGestureRecognizer
-            && (otherView === viewport || otherView.isDescendant(of: viewport))
-    }
-
-    @objc private func swiped() {
-        defer { pendingAction = nil }
-        guard recognizer.state == .ended, onNextWindow != nil, terminal?.selectionActive == false else { return }
-        terminal?.cancelCursorNavigation()
-        terminal?.cancelQuestionCheck()
-        terminal?.cancelMouseScroll()
-        pendingAction?()
+    @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            terminal?.cancelCursorNavigation()
+            terminal?.cancelQuestionCheck()
+            terminal?.cancelMouseScroll()
+        case .ended:
+            defer { pendingSwitch = nil }
+            guard onSwitchWindow != nil, terminal?.selectionActive == false, let pendingSwitch,
+                  TerminalWindowSwipePolicy.shouldSwitch(
+                      translation: gesture.translation(in: viewport?.window), startedDirection: pendingSwitch.direction
+                  ) else { return }
+            pendingSwitch.action(pendingSwitch.direction)
+        case .cancelled, .failed:
+            pendingSwitch = nil
+        default:
+            break
+        }
     }
 }
 #endif

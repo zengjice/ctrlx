@@ -656,11 +656,13 @@
             }
         }
 
-        private func selectNextWindow(from sourceWindowID: String) {
+        private func selectAdjacentWindow(from sourceWindowID: String, direction: TerminalWindowSwipePolicy.Direction) {
             guard window?.id == sourceWindowID, fileWorkspace.selectedID == nil, selectedBrowserID == nil,
                   !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput,
-                  let nextID = WindowSelectionReconciliation.nextWindowID(after: sourceWindowID, in: windowSelectionCandidates),
-                  let target = sessionWindows.first(where: { $0.id == nextID }) else { return }
+                  let targetID = WindowSelectionReconciliation.adjacentWindowID(
+                      from: sourceWindowID, direction: direction, in: windowSelectionCandidates
+                  ),
+                  let target = sessionWindows.first(where: { $0.id == targetID }) else { return }
             selectTerminalWindow(target)
         }
 
@@ -1018,7 +1020,7 @@
                         viewportGrids[pane.paneId] = grid
                     }
                 },
-                onNextWindow: { selectNextWindow(from: windowID) }
+                onSwitchWindow: { selectAdjacentWindow(from: windowID, direction: $0) }
             )
             .environment(relayClient)
         }
