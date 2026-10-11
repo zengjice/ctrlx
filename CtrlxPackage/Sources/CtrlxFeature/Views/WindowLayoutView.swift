@@ -167,7 +167,15 @@
         private var browserContent: some View {
             Group {
                 if let tab = selectedBrowser {
-                    RemoteBrowserView(tab: tab, client: relayClient).id(tab.id)
+                    RemoteBrowserView(tab: tab, client: relayClient)
+                        .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
+                            targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
+                            didSend: { target in
+                                if let window = sessionWindows.first(where: { $0.stableId == target.windowID }) {
+                                    selectTerminalWindow(window, preferredPaneID: target.paneID)
+                                }
+                            }))
+                        .id(tab.id)
                 } else if let tab = fileWorkspace.selected {
                     WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: hostId, paneID: tab.sourcePaneID,
                                                                        connection: connectionManager.connection(for: hostId)))
@@ -585,10 +593,11 @@
             case .newBrowser:
                 guard relayClient.isHostConnected, relayClient.hostSupportsBrowserSharing, !isCreatingWindow else { return }
                 isCreatingWindow = true
+                let sourcePaneID = activePaneId ?? window?.activePane?.paneId
                 Task {
                     defer { isCreatingWindow = false }
                     do {
-                        let tab = try await RemoteBrowserSession.create(sessionName: sessionName, client: relayClient)
+                        let tab = try await RemoteBrowserSession.create(sessionName: sessionName, client: relayClient, sourcePaneID: sourcePaneID)
                         selectedBrowserID = tab.id
                         fileWorkspace.selectedID = nil
                         cancelCreationFollowUp()

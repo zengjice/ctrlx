@@ -640,6 +640,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             onFileDrop(urls)
         }
 
+        quickActions?.applyRequestedFocus(to: coordinator.terminalView, hostID: connection.id, paneID: paneId, autoFocus: autoFocus)
         return coordinator.terminalView
     }
 
@@ -675,6 +676,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         if wasEditorActive, !isEditorActive, !nsView.isHidden {
             nsView.focusTerminal()
         }
+        quickActions?.applyRequestedFocus(to: nsView, hostID: connection.id, paneID: paneId, autoFocus: autoFocus)
     }
 
     static func dismantleNSView(_ nsView: InteractiveTerminalView, coordinator: Coordinator) {

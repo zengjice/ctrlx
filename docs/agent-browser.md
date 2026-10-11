@@ -157,6 +157,34 @@ without launching CEF: build the CMake `remote_browser_frame_tests` target and r
 landscape/portrait/no-upscale JPEG output, full-image CSS dimensions and the
 legacy 180 KiB and adaptive 512 KiB bounds).
 
+## In-place screenshot annotation
+
+Mac Host (Chromium/WebKit), Mac Viewer (Host Chromium and device-local WebKit),
+and iOS (Host Chromium) offer **Annotate Screenshot** on the page. The native
+page stays mounted: a frozen viewport image covers it, with a floating rectangle,
+arrow, pen, undo/clear and recipient toolbar. There is no separate editor page,
+DOM injection, full-page stitching, viewport resize or implicit control takeover.
+The page/Agent can continue running elsewhere; this device's annotation gestures
+never become remote pointer input. Cancel returns to the live view.
+
+Agent-created pages capture their source recipient; manual pages remember the
+source Agent when available, and child pages inherit it. A source-less page can
+default to the only recognized Codex/Claude Code in the same session; otherwise
+the inline recipient menu requires a choice. A stale source never silently falls
+back to another Agent. Restored legacy WebKit pages use the source-less rule.
+The current recipient is captured before editing and explicitly reselectable.
+
+**Add to Input** uses the existing bounded encrypted image/drop transport, with
+an additive `expectedAgent` guard and `supportsAgentImageInput` capability. The
+Host checks pane, conversation, plugin, session and window identity, and refuses
+open approval/question/prompt-editor states. Old Hosts are blocked before sending.
+The Host saves the image and bracketed-pastes its path without Return, preserving
+the existing draft; success reveals the recipient terminal. Sending an image does
+not grant browser automation access. The opaque Relay needs no update.
+Annotation coordinates are normalized to the captured image; export flattens the
+red marks into PNG (or a compressed image within the existing 512 KiB budget).
+Screenshot/decode/send failures retain the editor or show an inline error.
+
 ## Ownership and data
 
 - One persistent, CtrlX-specific profile per Mac:

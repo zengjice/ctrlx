@@ -8,6 +8,7 @@ import SwiftUI
 struct AgentBrowserTabContentView: View {
     let state: AgentBrowserTabState
     @State private var address = ""
+    @State private var isAnnotating = false
     @FocusState private var editingAddress: Bool
 
     var body: some View {
@@ -44,10 +45,18 @@ struct AgentBrowserTabContentView: View {
                 .disabled(state.isClosed || state.isRemotelyControlled)
             }
             .labelStyle(.iconOnly)
+            .disabled(isAnnotating)
             .buttonStyle(.borderless)
             .padding(8)
             Divider()
-            EmbeddedAgentBrowserView(state: state)
+            BrowserAnnotationSurface(preferredTarget: state.sourceAgent,
+                requiresRecipientSelection: !state.owner.isEmpty && state.sourceAgent == nil,
+                capture: { try await state.service.annotationScreenshot(state) },
+                onEditingChanged: { editing in
+                    isAnnotating = editing
+                    if editing { state.view.window?.makeFirstResponder(nil) }
+                }) {
+                EmbeddedAgentBrowserView(state: state)
                 .overlay {
                     if state.isRemotelyControlled {
                         Color.black.opacity(0.05)
@@ -55,6 +64,7 @@ struct AgentBrowserTabContentView: View {
                             .onTapGesture {}
                     }
                 }
+            }
         }
         .onChange(of: state.url, initial: true) { _, url in
             if !editingAddress { address = url == "about:blank" ? "" : url }

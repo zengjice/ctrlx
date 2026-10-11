@@ -154,6 +154,7 @@ public struct MainView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .environment(\.terminalQuickActions, terminalQuickActions)
+        .environment(\.browserAnnotationContext, browserAnnotationContext)
         .background(settings.theme.workspaceBackgroundColor)
         .containerBackground(settings.theme.workspaceBackgroundColor, for: .window)
         .toolbarBackground(settings.theme.chromeBackgroundColor, for: .windowToolbar)
@@ -2596,6 +2597,64 @@ public struct MainView: View {
         selectTerminalWindow(stableId: targetID)
     }
 
+    private var browserAnnotationContext: BrowserAnnotationContext? {
+        if let remote = selectedRemoteSession {
+            guard let client = coordinator.viewerConnectionManager?.connection(for: remote.hostId)?.relayClient else { return nil }
+            let targets = remoteSessionWindows(hostId: remote.hostId, sessionName: remote.sessionName)
+                .flatMap(\.panes).compactMap(AgentImageTarget.init(pane:))
+            return .remote(targets: targets, client: client) { target in
+                revealAnnotationTarget(target, hostID: remote.hostId)
+            }
+        }
+        guard let sessionName = selectedWindow?.sessionName else { return nil }
+        let targets = windowManager.paneStates.values.filter { $0.sessionName == sessionName }
+            .sorted { $0.target < $1.target }.compactMap(AgentImageTarget.init(pane:))
+        return BrowserAnnotationContext(targets: targets) { image, target in
+            try await coordinator.insertBrowserImage(image, target: target)
+        } didSend: { target in revealAnnotationTarget(target, hostID: nil) }
+    }
+
+    private func revealAnnotationTarget(_ target: AgentImageTarget, hostID: String?) {
+        terminalQuickActions.requestFocus(hostID: hostID, paneID: target.paneID)
+        let tabs = hostID.map { remoteSessionTabsStates[remoteTabsKey(hostId: $0, sessionName: target.sessionName)] }
+            ?? sessionFileTabsStates[target.sessionName]
+        if tabs?.rightSide.contains(.window(target.windowID)) == true {
+            tabs?.selectedRight = .window(target.windowID)
+        } else {
+            selectTerminalWindow(stableId: target.windowID)
+        }
+        Task {
+            if let hostID {
+                guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient else { return }
+                _ = await client.sendCommand(SelectTmuxPane(), paneId: target.paneID)
+            } else {
+                do { try await tmuxService.selectPane(target.paneID) }
+                catch { attachError = error.localizedDescription }
+            }
+        }
+    }
+
+    private func browserSourcePane(sessionName: String, hostID: String?, windowID: String?) -> String? {
+        let panes: [PaneState] = if let hostID {
+            remoteSessionWindows(hostId: hostID, sessionName: sessionName).flatMap(\.panes)
+        } else {
+            windowManager.paneStates.values.filter { $0.sessionName == sessionName }
+        }
+        let source = panes.filter { windowID == nil || $0.windowId == windowID || $0.stableWindowId == windowID }
+        let focused = terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
+        return FileBrowserTab.sourcePaneID(in: source.map(\.paneId), focusedPaneID: focused,
+                                           activePaneID: source.first(where: \.isActive)?.paneId)
+    }
+
+    private func browserSourceAgent(sessionName: String, hostID: String?, windowID: String?) -> AgentImageTarget? {
+        guard let paneID = browserSourcePane(sessionName: sessionName, hostID: hostID, windowID: windowID) else { return nil }
+        if let hostID {
+            return remoteSessionWindows(hostId: hostID, sessionName: sessionName).flatMap(\.panes)
+                .first { $0.paneId == paneID }.flatMap(AgentImageTarget.init(pane:))
+        }
+        return windowManager.paneStates[paneID].flatMap(AgentImageTarget.init(pane:))
+    }
+
     private func selectTerminalWindow(at index: Int) {
         guard let targetID = TerminalWindowNavigation.windowID(
             at: index,
@@ -3498,6 +3557,8 @@ public struct MainView: View {
             let newTab = BrowserTab(url: url, originWindowId: originWindowId, parentTabId: parentTabId)
             tabs.openBrowserTabs.append(newTab)
             tabs.browserStates[newTab.id] = BrowserTabState(initialURL: url)
+            tabs.browserStates[newTab.id]?.sourceAgent = parentTabId.flatMap { tabs.browserStates[$0]?.sourceAgent }
+                ?? browserSourceAgent(sessionName: sessionName, hostID: nil, windowID: originWindowId ?? windowId)
             if useSplit {
                 tabs.rightSide.insert(.browser(newTab.id))
                 tabs.selectedRight = .browser(newTab.id)
@@ -3534,7 +3595,8 @@ public struct MainView: View {
         }
         guard let tabs = sessionFileTabsStates[sessionName] else { return }
         if settings.newBrowserEngine == .chromium {
-            openManualChromiumTab(target: ManualBrowserTarget(sessionName: sessionName))
+            openManualChromiumTab(target: ManualBrowserTarget(sessionName: sessionName),
+                                  sourcePaneID: browserSourcePane(sessionName: sessionName, hostID: nil, windowID: windowId))
             return
         }
         // about:blank gives WKWebView a deterministic, offline starting page
@@ -3543,6 +3605,7 @@ public struct MainView: View {
         let blank = URL(staticString: "about:blank")
         let newTab = BrowserTab(url: blank)
         let state = BrowserTabState(initialURL: blank)
+        state.sourceAgent = browserSourceAgent(sessionName: sessionName, hostID: nil, windowID: windowId)
         // Clear the URL field text so the user sees an empty input rather
         // than the literal "about:blank" placeholder when the field gains
         // focus. The page itself still loads at the blank URL.
@@ -3701,10 +3764,10 @@ public struct MainView: View {
 
     // MARK: - Embedded Agent Browser
 
-    private func openManualChromiumTab(target: ManualBrowserTarget) {
+    private func openManualChromiumTab(target: ManualBrowserTarget, sourcePaneID: String? = nil) {
         Task {
             do {
-                try await coordinator.agentBrowser.openManualTab(in: agentBrowserWorkspace, target: target)
+                try await coordinator.agentBrowser.openManualTab(in: agentBrowserWorkspace, target: target, sourcePaneID: sourcePaneID)
             } catch {
                 attachError = "Failed to open New Browser: \(error.localizedDescription)"
             }
@@ -3887,6 +3950,8 @@ public struct MainView: View {
             let newTab = BrowserTab(url: url, originWindowId: originWindowId, parentTabId: parentTabId)
             tabs.openBrowserTabs.append(newTab)
             tabs.browserStates[newTab.id] = BrowserTabState(initialURL: url)
+            tabs.browserStates[newTab.id]?.sourceAgent = parentTabId.flatMap { tabs.browserStates[$0]?.sourceAgent }
+                ?? browserSourceAgent(sessionName: sessionName, hostID: hostId, windowID: originWindowId)
             tabs.selectedBrowserTabId = newTab.id
         }
         tabs.selectedFileTabId = nil
@@ -4030,9 +4095,10 @@ public struct MainView: View {
             attachError = "Update and connect the Host Mac to create a shared Chromium browser. Existing Local browser tabs remain local."
             return
         }
+        let sourcePaneID = browserSourcePane(sessionName: sessionName, hostID: hostId, windowID: selectedRemoteWindow?.id)
         Task {
             do {
-                let tab = try await RemoteBrowserSession.create(sessionName: sessionName, client: client)
+                let tab = try await RemoteBrowserSession.create(sessionName: sessionName, client: client, sourcePaneID: sourcePaneID)
                 syncHostBrowserTabs(hostId: hostId, sessionName: sessionName, client: client)
                 selectRemoteBrowserTab(tab.id, hostId: hostId, sessionName: sessionName)
             } catch { attachError = error.localizedDescription }

@@ -160,8 +160,8 @@ public final class RemoteBrowserSession {
         }
     }
 
-    public static func create(sessionName: String, client: ViewerRelayClient) async throws -> RemoteBrowserTab {
-        let request = BrowseBrowser(sessionName: sessionName, surfaceID: UUID(), operation: .create)
+    public static func create(sessionName: String, client: ViewerRelayClient, sourcePaneID: String? = nil) async throws -> RemoteBrowserTab {
+        let request = BrowseBrowser(sessionName: sessionName, surfaceID: UUID(), operation: .create, sourcePaneID: sourcePaneID)
         let result = try await client.sendCommand(request, paneId: "", timeout: 10).get()
         guard let tab = result.browser?.tab else { throw ViewerRelayClientError.commandFailed("Host did not return the new browser tab") }
         client.rememberCreatedBrowser(tab)

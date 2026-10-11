@@ -46,6 +46,29 @@ final class TerminalQuickActionEndpoint {
 @MainActor
 @Observable
 final class TerminalQuickActionRouter {
+    struct FocusRequest: Equatable {
+        let id = UUID()
+        let hostID: String?
+        let paneID: String
+    }
+    private(set) var requestedFocus: FocusRequest?
+
+    func requestFocus(hostID: String?, paneID: String) {
+        requestedFocus = FocusRequest(hostID: hostID, paneID: paneID)
+    }
+
+    func applyRequestedFocus(to view: InteractiveTerminalView, hostID: String?, paneID: String, autoFocus: Bool) {
+        guard let request = requestedFocus else { view.autoFocusEnabled = autoFocus; return }
+        let matches = request.hostID == hostID && request.paneID == paneID
+        view.autoFocusEnabled = matches
+        guard matches else { return }
+        Task { @MainActor [weak self, weak view] in
+            guard self?.requestedFocus == request, let view, view.window?.isKeyWindow == true,
+                  !view.isHiddenOrHasHiddenAncestor, !view.isEditorActive else { return }
+            view.focusTerminal()
+        }
+    }
+
     struct Token: Equatable, Sendable {
         let endpointID: UUID
         let focusRevision: UInt64
@@ -67,7 +90,9 @@ final class TerminalQuickActionRouter {
     }
 
     func focus(_ endpoint: TerminalQuickActionEndpoint) {
-        guard endpoint.isMounted, active !== endpoint else { return }
+        guard endpoint.isMounted else { return }
+        requestedFocus = nil
+        guard active !== endpoint else { return }
         focusRevision &+= 1
         active = endpoint
     }

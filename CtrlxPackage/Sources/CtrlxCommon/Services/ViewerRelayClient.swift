@@ -105,6 +105,7 @@ final public class ViewerRelayClient {
     public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
     public private(set) var hostSupportsBrowserSharing = false
+    public private(set) var hostSupportsAgentImageInput = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
 
     func rememberCreatedBrowser(_ tab: RemoteBrowserTab) {
@@ -502,6 +503,8 @@ final public class ViewerRelayClient {
         }
 
         switch command.commandType {
+        case let .sendDroppedFiles(spec) where spec.expectedAgent != nil && !hostSupportsAgentImageInput:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add annotated screenshots to an Agent"))
         case .browseBrowser where !hostSupportsBrowserSharing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
         case .browseFiles where !hostSupportsFileBrowsing:
@@ -1019,6 +1022,7 @@ final public class ViewerRelayClient {
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
+            hostSupportsAgentImageInput = sessionState.supportsAgentImageInput == true
             browserTabs = sessionState.browserTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             onSessionState?(sessionState)
@@ -1481,5 +1485,6 @@ final public class ViewerRelayClient {
 
     private func resetBrowserState() {
         hostSupportsBrowserSharing = false
+        hostSupportsAgentImageInput = false
     }
 }

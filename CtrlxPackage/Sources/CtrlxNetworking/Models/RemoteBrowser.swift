@@ -11,12 +11,15 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
     public let isLoading: Bool
     public let isAgentOwned: Bool
     public let isControlled: Bool
+    public let sourceAgent: AgentImageTarget?
 
     public init(id: UUID, sessionName: String, windowID: String? = nil, parentID: UUID? = nil,
-                title: String, url: String, isLoading: Bool, isAgentOwned: Bool, isControlled: Bool = false) {
+                title: String, url: String, isLoading: Bool, isAgentOwned: Bool, isControlled: Bool = false,
+                sourceAgent: AgentImageTarget? = nil) {
         self.id = id; self.sessionName = sessionName; self.windowID = windowID; self.parentID = parentID
         self.title = title; self.url = url; self.isLoading = isLoading
         self.isAgentOwned = isAgentOwned; self.isControlled = isControlled
+        self.sourceAgent = sourceAgent
     }
 }
 
@@ -31,11 +34,13 @@ public struct BrowseBrowser: CommandSpec, Equatable {
     /// Optional, so older Hosts ignore it and older Viewers keep the legacy size.
     public let frameMaxDimension: Int?
     public let operation: RemoteBrowserOperation
+    public let sourcePaneID: String?
 
     public init(sessionName: String, tabID: UUID? = nil, surfaceID: UUID, controlID: UUID? = nil,
-                generation: UInt64? = nil, frameMaxDimension: Int? = nil, operation: RemoteBrowserOperation) {
+                generation: UInt64? = nil, frameMaxDimension: Int? = nil, operation: RemoteBrowserOperation, sourcePaneID: String? = nil) {
         self.sessionName = sessionName; self.tabID = tabID; self.surfaceID = surfaceID
         self.controlID = controlID; self.generation = generation; self.frameMaxDimension = frameMaxDimension; self.operation = operation
+        self.sourcePaneID = sourcePaneID
     }
     public var commandType: CommandType { .browseBrowser(self) }
 }

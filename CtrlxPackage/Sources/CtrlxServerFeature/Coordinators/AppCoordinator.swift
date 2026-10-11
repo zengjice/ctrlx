@@ -407,6 +407,9 @@
         public func setupAllServices() async {
             guard !isServiceSetupComplete else { return }
             isServiceSetupComplete = true
+            agentBrowser.imageTargetForPane = { [weak windowManager] paneID in
+                windowManager?.paneStates[paneID].flatMap(AgentImageTarget.init(pane:))
+            }
             agentBrowser.start { [tmuxService] pid in
                 try await tmuxService.agentBrowserPane(processID: pid)
             }
@@ -3467,7 +3470,8 @@
                     return await Self.handleSendDroppedFiles(
                         command: command,
                         spec: spec,
-                        tmuxService: tmux
+                        tmuxService: tmux,
+                        currentPane: { winManager.paneStates[$0] }
                     )
                 }
 
@@ -3522,6 +3526,7 @@
                     supportsFileDownloads: true,
                     supportsFileUploads: true,
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
+                    supportsAgentImageInput: true,
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs
                 )
             }
@@ -3935,11 +3940,28 @@
         /// `ctrlx-drop-<UUID>` so concurrent drops can't clobber each
         /// other; the original filename is preserved inside so
         /// downstream readers (Claude Code, vim, etc.) see a useful name.
+        func insertBrowserImage(_ image: ClipboardImage, target: AgentImageTarget) async throws {
+            let spec = SendDroppedFiles(files: [.init(name: "browser-annotation.\(image.format.fileExtension)", data: image.data)], expectedAgent: target)
+            let result = await Self.handleSendDroppedFiles(
+                command: .init(paneId: target.paneID, command: spec.commandType), spec: spec,
+                tmuxService: tmuxService, currentPane: { [windowManager] in windowManager.paneStates[$0] })
+            guard result.success else { throw AgentImageError.message(result.error ?? "Could not add the screenshot.") }
+        }
+
         private static func handleSendDroppedFiles(
             command: CommandMessage,
             spec: SendDroppedFiles,
-            tmuxService: TmuxService
+            tmuxService: TmuxService,
+            currentPane: @MainActor (String) -> PaneState?
         ) async -> CommandResponseMessage {
+            func validateRecipient() throws {
+                if let target = spec.expectedAgent {
+                    guard target.paneID == command.paneId else { throw AgentImageError.message("Image recipient does not match the target pane.") }
+                    try target.validate(currentPane(command.paneId))
+                }
+            }
+            do { try validateRecipient() }
+            catch { return .failure(for: command.id, error: error.localizedDescription) }
             guard !spec.files.isEmpty else {
                 return .failure(for: command.id, error: "No files in drop payload")
             }
@@ -3971,6 +3993,12 @@
             let panes = await tmuxService.refreshPanes()
             guard panes.contains(where: { $0.paneId == command.paneId }) else {
                 return .failure(for: command.id, error: "Pane \(command.paneId) not found")
+            }
+
+            if let target = spec.expectedAgent,
+               !panes.contains(where: { $0.paneId == target.paneID && $0.sessionName == target.sessionName
+                   && ($0.tmuxWindowId ?? "\($0.sessionName):\($0.windowIndex)") == target.windowID }) {
+                return .failure(for: command.id, error: "The Agent pane moved. Choose the recipient again.")
             }
 
             // Save each file under a dedicated subdirectory so duplicate
@@ -4029,9 +4057,11 @@
             do {
                 // Per-drop buffer name — see TerminalContainerView for why
                 // a stable name can lose drops under rapid double-drop.
+                try Task.checkCancellation()
+                try validateRecipient()
                 try await tmuxService.loadAndPasteBuffer(
                     target: command.paneId,
-                    content: content,
+                    content: spec.expectedAgent == nil ? content : " \(content) ",
                     bufferName: "ctrlx-drop-\(UUID().uuidString.prefix(8))"
                 )
                 return .success(for: command.id)

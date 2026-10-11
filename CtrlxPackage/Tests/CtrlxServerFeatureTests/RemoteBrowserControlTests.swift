@@ -120,6 +120,29 @@ struct RemoteBrowserControlTests {
         await service.shutdown()
     }
 
+    @Test func annotationReadsWithoutTakingControlAndManualSourceIsNotAuthority() async throws {
+        let (service, runtime, _) = try await fixture()
+        let source = try #require(AgentImageTarget(pane: PaneState(paneId: "%7", sessionName: "test", tmuxWindowId: "@2",
+            agentSession: AgentSession(paneId: "%7", pluginID: "codex"), claudeSessionID: "source")))
+        service.imageTargetForPane = { $0 == "%7" ? source : nil }
+        let result = try await service.handleBrowser(.init(sessionName: "test", surfaceID: UUID(), operation: .create, sourcePaneID: "%7"), viewerID: "viewer")
+        let tab = try #require(result.tab)
+        #expect(tab.sourceAgent == source)
+        #expect(!tab.isAgentOwned)
+        let state = try #require(service.tabs[tab.id.uuidString])
+        _ = try await service.annotationScreenshot(state)
+        #expect(runtime.requests.last?["action"] as? String == "frame")
+        #expect(runtime.requests.last?["maximumDimension"] as? Int == 2560)
+        #expect(runtime.controls.isEmpty)
+        #expect(state.owner.isEmpty)
+        let childID = UUID()
+        service.browserTabCreated(childID.uuidString, view: NSView(),
+            route: ["workspace": state.workspaceID.uuidString, "manualRoute": try #require(state.manualRouteID)],
+            owner: "", parent: tab.id.uuidString)
+        #expect(service.tabs[childID.uuidString]?.sourceAgent == source)
+        await service.shutdown()
+    }
+
     @Test func validationBeforeNativeBoundary() throws {
         #expect(throws: (any Error).self) { try AgentBrowserService.nativePayload(.text(String(repeating: "文", count: 6000))) }
         #expect(throws: (any Error).self) { try AgentBrowserService.nativePayload(.fit(width: 0, height: 10)) }

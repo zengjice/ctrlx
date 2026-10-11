@@ -44,6 +44,7 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
                         styleMask: .borderless, backing: .buffered, defer: false)
     }()
     var onTabsChanged: (() -> Void)?
+    var imageTargetForPane: (String) -> AgentImageTarget? = { _ in nil }
     private var detachingTabs: Set<String> = []
     private var publishTask: Task<Void, Never>?
     private var routePanes: [PaneInfo] = []
@@ -126,7 +127,7 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         root.addSubview(tab.view)
     }
 
-    func openManualTab(in workspace: AgentBrowserWorkspace, target: ManualBrowserTarget) async throws {
+    func openManualTab(in workspace: AgentBrowserWorkspace, target: ManualBrowserTarget, sourcePaneID: String? = nil) async throws {
         guard !closing, let runtime, workspaces[workspace.id] === workspace else {
             throw ManualBrowserError.unavailable
         }
@@ -138,6 +139,7 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         let routeID = UUID().uuidString
         manualRoutes[routeID] = (workspace.id, target)
         var route = target.route(workspaceID: workspace.id)
+        route["pane"] = sourcePaneID
         route["manualRoute"] = routeID
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -256,6 +258,7 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
             workspaceID: workspaceID, paneID: paneID, owner: owner, service: self,
             manualTarget: manualTarget, manualRouteID: manualRouteID)
         state.sessionName = manualTarget?.sessionName ?? parent.flatMap { tabs[$0]?.sessionName } ?? route["session"] ?? ""
+        state.sourceAgent = parent.flatMap { tabs[$0]?.sourceAgent } ?? imageTargetForPane(paneID)
         state.windowID = parent.flatMap { tabs[$0]?.windowID } ?? route["window"]
         state.parentID = parent.flatMap(UUID.init(uuidString:))
         state.suppressInitialSelection = route["remote"] == "true"
@@ -324,13 +327,14 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         manualRoutes.removeAll()
     }
 
-    func createSharedTab(sessionName: String) async throws -> AgentBrowserTabState {
+    func createSharedTab(sessionName: String, sourcePaneID: String? = nil) async throws -> AgentBrowserTabState {
         guard !closing, let runtime else { throw ManualBrowserError.unavailable }
         let workspaceID = workspaces.values.first { $0.acceptsSession(sessionName) }?.id ?? parkingID
         let target = ManualBrowserTarget(sessionName: sessionName)
         let routeID = UUID().uuidString
         manualRoutes[routeID] = (workspaceID, target)
         var route = target.route(workspaceID: workspaceID)
+        route["pane"] = sourcePaneID
         route["manualRoute"] = routeID
         route["remote"] = "true"
         do {
@@ -397,6 +401,7 @@ final class AgentBrowserTabState {
     var parentID: UUID?
     var suppressInitialSelection = false
     var isRemotelyControlled = false
+    var sourceAgent: AgentImageTarget?
 
     init(id: UUID, identifier: String, view: NSView, workspaceID: UUID, paneID: String,
          owner: String, service: AgentBrowserService, manualTarget: ManualBrowserTarget? = nil, manualRouteID: String? = nil) {

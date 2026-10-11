@@ -913,8 +913,11 @@ public struct SendDroppedFiles: CommandSpec, Equatable {
     /// The dropped files in the order the user dropped them.
     public let files: [DroppedFile]
 
-    public init(files: [DroppedFile]) {
+    public let expectedAgent: AgentImageTarget?
+
+    public init(files: [DroppedFile], expectedAgent: AgentImageTarget? = nil) {
         self.files = files
+        self.expectedAgent = expectedAgent
     }
 
     public var commandType: CommandType {

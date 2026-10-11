@@ -92,6 +92,7 @@ struct TerminalContainerView: NSViewRepresentable {
         coordinator.terminalView.onOpenURL = onOpenURL
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
+        quickActions?.applyRequestedFocus(to: coordinator.terminalView, hostID: nil, paneID: paneState.paneId, autoFocus: autoFocus)
         return coordinator.terminalView
     }
 
@@ -128,6 +129,7 @@ struct TerminalContainerView: NSViewRepresentable {
 
         // Check for dimension changes from pane state (updated after %layout-change)
         coordinator.handleExternalDimensionChange(width: paneState.width, height: paneState.height)
+        quickActions?.applyRequestedFocus(to: nsView, hostID: nil, paneID: paneState.paneId, autoFocus: autoFocus)
     }
 
     static func dismantleNSView(_ nsView: InteractiveTerminalView, coordinator: Coordinator) {

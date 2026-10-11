@@ -68,6 +68,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// Explicit fit preserves the Host window's pane topology and proportions.
     public let supportsTerminalFit: Bool?
     public let supportsBrowserSharing: Bool?
+    public let supportsAgentImageInput: Bool?
     public let browserTabs: [RemoteBrowserTab]?
 
     public init(
@@ -88,6 +89,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsFileDownloads: Bool? = nil,
         supportsFileUploads: Bool? = nil,
         supportsBrowserSharing: Bool? = nil,
+        supportsAgentImageInput: Bool? = nil,
         browserTabs: [RemoteBrowserTab]? = nil
     ) {
         self.pairId = pairId
@@ -107,6 +109,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsTerminalPaste = supportsTerminalPaste
         self.supportsTerminalFit = supportsTerminalFit
         self.supportsBrowserSharing = supportsBrowserSharing
+        self.supportsAgentImageInput = supportsAgentImageInput
         self.browserTabs = browserTabs
     }
 
@@ -133,6 +136,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsFileDownloads: supportsFileDownloads,
             supportsFileUploads: supportsFileUploads,
             supportsBrowserSharing: supportsBrowserSharing,
+            supportsAgentImageInput: supportsAgentImageInput,
             browserTabs: browserTabs
         )
     }

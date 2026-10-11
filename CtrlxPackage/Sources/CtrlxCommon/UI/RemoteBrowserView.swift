@@ -12,6 +12,7 @@ public struct RemoteBrowserView: View {
     @State private var displayedFrame: RemoteBrowserFrame?
     @State private var viewport = CGSize.zero
     @State private var keyboardRequested = false
+    @State private var isAnnotating = false
     @FocusState private var editingAddress: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
@@ -45,7 +46,7 @@ public struct RemoteBrowserView: View {
                 .help("Changes the page viewport on the Host and all Viewers")
             }
             .labelStyle(.iconOnly)
-            .disabled(session.controlID == nil)
+            .disabled(session.controlID == nil || isAnnotating)
             .padding(8)
             HStack {
                 Label("Host · Chromium", symbol: .globe).font(.caption).foregroundStyle(.secondary)
@@ -69,11 +70,25 @@ public struct RemoteBrowserView: View {
                     }
                     .disabled(session.isTakingControl || !client.isHostConnected || session.frame == nil)
                 }
-            }.padding(.horizontal, 8).padding(.bottom, 8)
+            }.disabled(isAnnotating).padding(.horizontal, 8).padding(.bottom, 8)
             Divider()
-            RemoteBrowserCanvas(image: image, frame: displayedFrame,
-                                acceptsInput: session.controlID != nil && !editingAddress,
+            BrowserAnnotationSurface(preferredTarget: session.tab.sourceAgent,
+                requiresRecipientSelection: session.tab.isAgentOwned && session.tab.sourceAgent == nil, capture: {
+                let request = BrowseBrowser(sessionName: session.tab.sessionName, tabID: session.tab.id,
+                                            surfaceID: UUID(), frameMaxDimension: RemoteBrowserFrame.maximumDimension, operation: .frame)
+                let result = try await client.sendCommand(request, paneId: "", timeout: 10).get()
+                guard result.success, let frame = result.browser?.frame, frame.isValid else {
+                    throw AgentImageError.message(result.error ?? "Could not capture the Host page.")
+                }
+                return frame.jpeg
+            }, onEditingChanged: { editing in
+                isAnnotating = editing
+                if editing { keyboardRequested = false; editingAddress = false }
+            }) {
+              RemoteBrowserCanvas(image: image, frame: displayedFrame,
+                                acceptsInput: session.controlID != nil && !editingAddress && !isAnnotating,
                                 keyboardRequested: keyboardRequested) { operation in
+                guard !isAnnotating else { return }
                 if let displayedFrame { session.submit(operation, generation: displayedFrame.generation) }
             }
                 .onGeometryChange(for: CGSize.self) { $0.size } action: {
@@ -87,6 +102,7 @@ public struct RemoteBrowserView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
             if let error = session.error ?? session.frameError {
                 HStack {
                     Text(error).font(.caption)
@@ -101,11 +117,8 @@ public struct RemoteBrowserView: View {
             }
             await session.watch()
         }
-        .task(id: session.frame) {
-            guard let frame = session.frame else { image = nil; displayedFrame = nil; return }
-            let decoded = await BrowserFrameDecoder.decode(frame.jpeg)
-            if !Task.isCancelled { image = decoded; displayedFrame = decoded == nil ? nil : frame }
-        }
+        .modifier(RemoteBrowserFrameDecoding(frame: session.frame, isAnnotating: isAnnotating,
+                                            image: $image, displayedFrame: $displayedFrame))
         .onChange(of: session.tab.url, initial: true) { _, url in
             if !editingAddress { address = url == "about:blank" ? "" : url }
         }
@@ -125,6 +138,30 @@ public struct RemoteBrowserView: View {
     private func updateFrameResolution() {
         let page = session.frame.map { CGSize(width: $0.width, height: $0.height) } ?? viewport
         session.frameMaxDimension = RemoteBrowserGeometry.frameMaxDimension(viewSize: viewport, pageSize: page, displayScale: displayScale)
+    }
+}
+
+/// Keep task identity tied to presentation as well as received frames: polling
+/// may deduplicate the latest frame after annotation ends.
+@MainActor
+struct RemoteBrowserFrameDecoding: ViewModifier {
+    let frame: RemoteBrowserFrame?
+    let isAnnotating: Bool
+    @Binding var image: CGImage?
+    @Binding var displayedFrame: RemoteBrowserFrame?
+
+    private struct TaskID: Equatable {
+        let frame: RemoteBrowserFrame?
+        let isAnnotating: Bool
+    }
+
+    func body(content: Content) -> some View {
+        content.task(id: TaskID(frame: frame, isAnnotating: isAnnotating)) {
+            guard !isAnnotating else { return }
+            guard let frame else { image = nil; displayedFrame = nil; return }
+            let decoded = await BrowserFrameDecoder.decode(frame.jpeg)
+            if !Task.isCancelled { image = decoded; displayedFrame = decoded == nil ? nil : frame }
+        }
     }
 }
 

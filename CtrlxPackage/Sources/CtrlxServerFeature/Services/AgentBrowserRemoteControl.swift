@@ -29,7 +29,7 @@ extension AgentBrowserService {
         RemoteBrowserTab(id: tab.id, sessionName: tab.manualTarget?.sessionName ?? tab.sessionName,
                          windowID: tab.windowID, parentID: tab.parentID, title: String(tab.title.prefix(256)), url: String(tab.url.prefix(8192)),
                          isLoading: tab.isLoading, isAgentOwned: !tab.owner.isEmpty,
-                         isControlled: remoteControls[tab.id] != nil)
+                         isControlled: remoteControls[tab.id] != nil, sourceAgent: tab.sourceAgent)
     }
 
     func releaseBrowserControl(_ tabID: UUID) {
@@ -65,7 +65,9 @@ extension AgentBrowserService {
         try Task.checkCancellation()
         expireBrowserControls()
         if request.operation == .create {
-            let tab = try await createSharedTab(sessionName: request.sessionName)
+            let source = request.sourcePaneID.flatMap(imageTargetForPane)
+            let tab = try await createSharedTab(sessionName: request.sessionName,
+                sourcePaneID: source?.sessionName == request.sessionName ? source?.paneID : nil)
             return RemoteBrowserResponse(tab: descriptor(tab))
         }
         guard let tabID = request.tabID, let tab = tabs[tabID.uuidString], !tab.isClosed,
@@ -140,6 +142,18 @@ extension AgentBrowserService {
         lease.expires = .now.advanced(by: .seconds(20))
         remoteControls[id] = lease
         return lease
+    }
+
+    func annotationScreenshot(_ tab: AgentBrowserTabState) async throws -> Data {
+        guard !tab.isClosed else { throw RemoteBrowserError.message("This browser tab was closed.") }
+        guard remoteCaptures.count < 4 else { throw RemoteBrowserError.message("Browser capture is busy. Try again shortly.") }
+        let captureID = UUID()
+        remoteCaptures.insert(captureID)
+        defer { remoteCaptures.remove(captureID) }
+        let data = try await nativeBrowserRequest(tab.id, payload: ["action": "frame", "maximumDimension": RemoteBrowserFrame.maximumDimension])
+        let frame = try JSONDecoder().decode(RemoteBrowserFrame.self, from: data)
+        guard frame.isValid else { throw RemoteBrowserError.message("Invalid browser screenshot.") }
+        return frame.jpeg
     }
 
     private func nativeBrowserRequest(_ tabID: UUID, payload: [String: Any]) async throws -> Data {
