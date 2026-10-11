@@ -7,6 +7,35 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.56 — Linked files and interactive browser workflows
+
+- Open underlined terminal file paths directly in the source session's Files
+  tabs on Mac Host, Mac Viewer and iOS. Reuse existing directory tabs, resolve
+  relative paths on the Host, and preserve web-link precedence, wrapped/CJK
+  text and decoded filenames. File checks happen on activation, not hover.
+- Add folder creation and file uploads to Files on all clients. Upload from
+  coordinated file snapshots, show progress/cancellation, verify bounded chunks
+  and publish atomically without overwriting existing files. Remote uploads
+  require updated Host and Viewer capabilities; the Relay remains unchanged.
+- Improve Viewer browser clarity with display-size/scale-aware, bounded JPEGs
+  while retaining Host geometry, remote-click accuracy and legacy peer support.
+  Full adaptive quality requires updated Host and Viewer builds.
+- Annotate browser screenshots in place and attach them to the corresponding
+  Agent input without auto-submission. Resume the latest remote frame after
+  annotation ends; preserve recipient identity and control-lease checks.
+- Recognize additional textual/symbolic Shift+Left Codex question footers and
+  recover idle Codex Fork identity from the active process's rollout files.
+- iOS source also adds next-Window right swipes and clarifies custom-button
+  auto-send versus insert-only behavior. Those changes need a separate iOS
+  installation; physical swipe acceptance is still pending.
+- Validation: 2,667 serial Swift tests passed; two unavailable Apple Intelligence
+  evaluations were excluded. Brand/technical boundaries, website build, 131
+  script tests, 19 publisher tests, 13 installer tests and native browser image
+  geometry/budget tests passed. The iOS compile and UIKit test-source typecheck
+  passed; these do not replace physical-device gesture acceptance.
+- Release scope: Mac package only from this linked worktree. No Relay
+  deployment, iOS publication or local App replacement.
+
 ## 3.0.55 — Stable Host browser capture and accurate remote clicks
 
 - Capture the existing Host browser surface without CDP clip/scale, avoiding

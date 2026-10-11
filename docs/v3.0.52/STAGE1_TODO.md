@@ -126,3 +126,16 @@ browser-specific update.
   or WAN measurements. No production application was replaced and no release
   was published. Full adaptive quality requires updated Host and Viewer builds;
   older peers retain the legacy frame contract. Relay deployment is unchanged.
+
+## Mac 3.0.56 release preflight (2026-10-11)
+
+- 2,667 serial Swift tests pass; two Apple Intelligence evaluations are excluded
+  because the local model reports `deviceNotEligible`.
+- Brand/technical boundaries, website build, 131 script tests, 19 publisher
+  tests and 13 installer tests pass. Native adaptive-image geometry/budget
+  regressions pass against the release sources.
+- Logs: `/tmp/ctrlx-3.0.56-{unit-tests,website-build,script-tests,publisher-tests,installer-tests,native-frame-tests}.log`.
+- iOS compile and UIKit test-source typechecking pass. No simulator or physical
+  iPhone gesture run is claimed; the iOS right-swipe feature awaits device testing.
+- Publication is Mac-only; full adaptive quality needs both updated Host and
+  Viewer builds. No Relay deployment or local App replacement is included.
