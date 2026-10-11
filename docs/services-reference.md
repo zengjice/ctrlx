@@ -456,8 +456,15 @@ mismatched window or Agent, and multiple independent matching processes fail
 closed. A cached helper PID cannot substitute for the main process. Restoration
 does not replay old working, approval, telemetry, or notification state; recovered
 identities are rechecked during reconciliation and Fork preparation. Legacy correlation files
-without process identity are not trusted for restoration: a fresh native Agent
-event is required to establish the binding. Writes are serialized per pane and
+without process identity are not trusted for restoration. When a Codex pane has
+no valid cached identity (notably a newly forked, idle TUI), the Host inspects only
+its unique main process's writable rollout file via native file-descriptor APIs.
+The bounded first `session_meta` record must identify a CLI conversation and match
+the filename UUID; the same writer and process start identity must still be live
+after reading. Parent IDs in `codex fork` arguments, read-only history files and
+ambiguous writers are never used. Successful recovery uses the same cache, so
+subsequent reconciliations need no further file-descriptor inspection. A native
+event arriving during recovery always takes precedence. Writes are serialized per pane and
 do not block live status/notification delivery.
 
 On iOS, open the window-title menu → **Fork → In Current Directory / In New
