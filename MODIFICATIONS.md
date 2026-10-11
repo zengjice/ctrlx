@@ -7,6 +7,28 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.57 — Reliable terminal file links and iOS window swipes
+
+- Separate Chinese prose punctuation from terminal file paths and reject
+  ambiguous slash commands, ordinary slash-separated words and visibly
+  truncated paths. Do not expose hard-wrapped file URI fragments as independent
+  links; join enclosed continuations before checking split ellipses. Explicit
+  file hyperlink targets remain authoritative, including shortened labels.
+- All three clients share the recognition code and still validate files only
+  on activation against the source Host. Update each viewing client to receive
+  these recognition fixes; no wire protocol or Relay update is needed.
+- iOS swipes now move left to the next Window and right to the previous Window,
+  without wrapping at either end. Native gesture handling preserves terminal
+  input and scrolling; physical-device swipe acceptance has passed.
+- Validation: 82 focused file-link, viewport, URL and Files-workspace tests
+  passed, including the reported 21-column hard-wrap case. The release regression
+  passed 2,690 serial Swift tests, excluding two unavailable Apple Intelligence
+  evaluations. Brand/technical boundaries, 131 script tests, 19 publisher tests
+  and the website build passed. Updated recognition still needs physical-device
+  acceptance after installation.
+- Distribution: Mac package release plus a separately signed local iPhone
+  installation. No Relay deployment or local Mac App replacement.
+
 ## 3.0.56 — Linked files and interactive browser workflows
 
 - Open underlined terminal file paths directly in the source session's Files
