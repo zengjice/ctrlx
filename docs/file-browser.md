@@ -40,6 +40,50 @@ Files rows expose only their own selection/close actions, not terminal operation
 
 ## Supported operations
 
+### Opening paths printed in a terminal
+
+Mac Host, Mac Viewer and iOS recognize output paths such as `/absolute/file`,
+`~/Movies/`, `./output/file`, `../output/file`, `episodes/A01/movie.mp4`, and
+explicit `file://` hyperlinks. Click/tap an underlined path to open Files in the
+same session. A directory opens directly; a file opens its parent directory and
+selects the existing inline preview. Video still waits for Play. An existing
+Files tab at that directory is reused; otherwise a new tab is created. Other
+terminals and Files tabs stay intact, including Mac split placement.
+
+The event captures the source Host and pane. Relative paths use that pane's
+published agent project directory, then its current working directory; `~/`
+is expanded only by the Host. One existing `BrowseFiles.info` request validates
+the destination before switching tabs. Missing files, unavailable pane directories
+and unsupported/offline Hosts report an error without opening a guessed local
+path. Changing windows or leaving the view cancels pending navigation. Historical
+output has no per-line cwd history: use absolute paths or explicit absolute file
+links for durable references, especially if the pane has since changed directory.
+The resolver never tries multiple base directories to guess a match.
+There is no recursive search or filesystem work while scanning
+or hovering, no new wire command, and no Relay update.
+
+Recognition uses actual terminal cell widths for Chinese and wrapped text, with
+bounded visible-row scans. Decorations, hover and clicks share one viewport
+snapshot, refreshed on buffer edits, cursor/mouse-mode changes, scrolling, resize
+and payload updates. They do not independently scan around the clicked row.
+iOS uses the native content-offset/bounds row range, including partially visible
+rows, even when inertial scrolling leaves the terminal's logical display row behind.
+Soft wraps and confidently enclosed near-right-edge hard wraps are joined;
+nested matching brackets are preserved. An incomplete enclosure is skipped only
+through its wrapped fragment, without hiding later independent lines. Ambiguous/truncated wraps
+are not guessed. Spaces need
+quotes/brackets or an explicit file hyperlink; apostrophes inside words such as
+`I've` are not opening quotes. Bare filenames and editor line/
+column suffixes are not inferred. Explicit hyperlinks take precedence, then
+plain web URLs (including their bracketed/query fragments), then file candidates.
+Explicit file links are decoded once. Resolution checks path bounds and control
+characters without reapplying text-recognition rules, so encoded filename characters
+such as apostrophes remain intact in the Host request. Nonlocal file authorities
+are still rejected during link recognition.
+Live input
+rows (including Codex's colored multiline composer), selection, drag and
+double/long-press gestures retain their terminal behavior.
+
 ### Creating folders and adding files
 
 The directory toolbar's **⋯** menu offers **New Folder…** and **Import Files…**
@@ -210,6 +254,13 @@ Focused coverage: `HostFileBrowserTests`, `FileBrowserLayoutTests`,
 `HostFileUploadTests`, `FileBrowserUploadTests`,
 `FileBrowserTabTests`, `FileBrowserTransferTests`, `FileBrowserProtocolTests`, `IOSFileBrowserWorkspaceTests`,
 `LayoutSnapshotMapperTests`, and `TerminalPasteTransportTests`.
+`TerminalFileLinkTests` covers path spellings, Chinese cell hit targets, wrapped
+and truncated text, explicit web/file link precedence, input protection,
+scrollback trimming, Host-only resolution, unavailable files and cancellation.
+`TerminalFileLinkSnapshotTests` checks decoration/activation agreement across a
+seven-row path, reuse on unchanged content, in-place edits, cursor/mouse mode,
+resize, alternate buffers, scrollback trimming and external payload invalidation.
+Workspace tests cover same-directory reuse without disturbing other tabs.
 Tests include fresh source-pane cwd resolution,
 directory pagination/dot-prefixed and system-hidden files and folders, search
 visibility consistency, deferred mount-point metadata, unknown types,

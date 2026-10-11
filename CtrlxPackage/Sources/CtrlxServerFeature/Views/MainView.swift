@@ -27,6 +27,7 @@ public struct MainView: View {
     @State private var selectedRemoteWindowId: String?
     @State private var localSessionRenameRequest: String?
     @State private var attachError: String?
+    @State private var pendingFileLink: TerminalFileLinkRequest?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var projects: [AgentProject] = []
     @State private var isLoadingProjects = false
@@ -135,9 +136,7 @@ public struct MainView: View {
     @State private var lastPersistedRemoteLayouts: [RemoteSessionTabsKey: SavedFolderLayout] = [:]
     @State private var pendingRemoteLayoutSaves: [RemoteSessionTabsKey: Task<Void, Never>] = [:]
 
-    public var body: some View {
-        @Bindable var coordinator = coordinator
-
+    private var fileLinkWorkspace: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarContent
                 .background(settings.theme.sidebarBackgroundColor)
@@ -154,6 +153,20 @@ public struct MainView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .environment(\.terminalQuickActions, terminalQuickActions)
+        .environment(\.openTerminalFileLink, { request in pendingFileLink = request })
+        .task(id: pendingFileLink) {
+            guard let request = pendingFileLink else { return }
+            await openTerminalFile(request)
+        }
+        .onChange(of: selectedWindow?.id) { pendingFileLink = nil }
+        .onChange(of: selectedRemoteWindowId) { pendingFileLink = nil }
+        .onChange(of: selectedRemoteSession) { pendingFileLink = nil }
+    }
+
+    public var body: some View {
+        @Bindable var coordinator = coordinator
+
+        fileLinkWorkspace
         .environment(\.browserAnnotationContext, browserAnnotationContext)
         .background(settings.theme.workspaceBackgroundColor)
         .containerBackground(settings.theme.workspaceBackgroundColor, for: .window)
@@ -3194,6 +3207,66 @@ public struct MainView: View {
         } else {
             tabs.selectedFileTabId = newTab.id
         }
+    }
+
+    /// Bind resolution to the clicked pane, not whichever pane becomes focused later.
+    private func openTerminalFile(_ request: TerminalFileLinkRequest) async {
+        let source: FileBrowserSource
+        let sessionName: String
+        let windowID: String
+        let baseDirectory: String?
+        if let hostID = request.hostID {
+            guard let remote = selectedRemoteSession, remote.hostId == hostID,
+                  let window = selectedRemoteSessionWindows.first(where: { $0.panes.contains { $0.paneId == request.paneID } }),
+                  let pane = window.panes.first(where: { $0.paneId == request.paneID }) else { return }
+            sessionName = remote.sessionName
+            windowID = window.id
+            baseDirectory = pane.agentSession?.detectedProjectPath ?? pane.currentPath
+            source = .remote(hostID: hostID, paneID: request.paneID,
+                             connection: coordinator.viewerConnectionManager?.connection(for: hostID))
+        } else {
+            guard selectedRemoteSession == nil,
+                  let window = tmuxService.windows.first(where: { $0.panes.contains { $0.paneId == request.paneID } }),
+                  window.sessionName == selectedWindow?.sessionName,
+                  let pane = windowManager.paneStates[request.paneID] else { return }
+            sessionName = window.sessionName
+            windowID = window.id
+            baseDirectory = pane.agentSession?.detectedProjectPath ?? pane.currentPath
+            source = .local(paneID: request.paneID, tmux: tmuxService, windows: windowManager)
+        }
+        let initialTabs: SessionFileTabsState?
+        if let hostID = request.hostID { initialTabs = remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: sessionName)] }
+        else { initialTabs = sessionFileTabsStates[sessionName] }
+        let initialSelection = (initialTabs?.selectedFileTabId, initialTabs?.selectedBrowserTabId, initialTabs?.selectedRight)
+        do {
+            let destination = try await TerminalFileDestination.resolve(path: request.path, baseDirectory: baseDirectory, source: source)
+            try Task.checkCancellation()
+            guard pendingFileLink == request else { return }
+            let tabs: SessionFileTabsState?
+            if let hostID = request.hostID {
+                guard selectedRemoteSession?.hostId == hostID, selectedRemoteSession?.sessionName == sessionName,
+                      selectedRemoteSessionWindows.contains(where: { $0.id == windowID && $0.panes.contains { $0.paneId == request.paneID } }) else { return }
+                tabs = remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: sessionName)]
+            } else {
+                guard selectedRemoteSession == nil, selectedWindow?.sessionName == sessionName,
+                      tmuxService.windows.contains(where: { $0.id == windowID && $0.panes.contains { $0.paneId == request.paneID } }) else { return }
+                tabs = sessionFileTabsStates[sessionName]
+            }
+            guard initialSelection == (tabs?.selectedFileTabId, tabs?.selectedBrowserTabId, tabs?.selectedRight) else { return }
+            let tab: FileBrowserTab
+            if let tabs, let existing = tabs.openFileTabs.compactMap({ tabs.directoryTabs[$0.id] }).first(where: { $0.path == destination.directory }) {
+                tab = existing
+                if tabs.rightSide.contains(.file(tab.id)) { tabs.selectedRight = .file(tab.id) }
+                else if request.hostID != nil { tabs.selectedFileTabId = tab.id; tabs.selectedBrowserTabId = nil }
+                else { tabs.selectLeftFileTab(tab.id, windowID: windowID, legacyExplorerWindows: &fileBrowserActiveWindowIds) }
+            } else {
+                tab = openDirectoryTab(sessionName: sessionName, windowID: windowID, hostID: request.hostID,
+                                       paneIDs: [request.paneID], fallbackPaneID: request.paneID, path: destination.directory)
+            }
+            tab.navigate(destination.directory)
+            tab.selectedFile = destination.file
+        } catch is CancellationError { }
+        catch { if pendingFileLink == request { attachError = "Cannot open Host path: \(error.localizedDescription)" } }
     }
 
     /// Captures a pane in the source window as the initial directory and return target.

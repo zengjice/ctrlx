@@ -59,6 +59,17 @@ final class IOSFileBrowserWorkspace {
         selectedID = tab.id
     }
 
+    func open(_ destination: TerminalFileDestination, paneID: String) throws {
+        let existing = tabs.first { $0.path == destination.directory }
+        guard existing != nil || tabs.count < 30 else { throw FileBrowserError.message("Close a Files tab before opening another folder.") }
+        let tab = existing ?? FileBrowserTab(path: destination.directory, sourcePaneID: paneID)
+        if existing == nil { tabs.append(tab) }
+        tab.navigate(destination.directory)
+        tab.selectedFile = destination.file
+        selectedID = tab.id
+        save()
+    }
+
     func closeSelected() {
         guard let selectedID else { return }
         close(selectedID)

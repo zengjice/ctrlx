@@ -8,6 +8,23 @@ import Testing
 @MainActor
 @Suite("iOS Files workspace persistence")
 struct IOSFileBrowserWorkspaceTests {
+    @Test("Terminal file links reuse a matching directory and leave independent tabs intact")
+    func terminalFileLink() throws {
+        try withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let workspace = IOSFileBrowserWorkspace()
+            try workspace.open(.init(directory: "/host/one", file: "/host/one/first.mp4"), paneID: "%1")
+            let first = workspace.selectedID
+            try workspace.open(.init(directory: "/host/two", file: nil), paneID: "%2")
+            try workspace.open(.init(directory: "/host/one", file: "/host/one/second.mp4"), paneID: "%1")
+            #expect(workspace.tabs.count == 2)
+            #expect(workspace.selectedID == first)
+            #expect(workspace.selected?.selectedFile == "/host/one/second.mp4")
+            #expect(workspace.tabs.last?.path == "/host/two")
+        }
+    }
+
     @Test("Closing an unselected Files row preserves selection and other independent tabs")
     func closesSpecificTab() {
         withDependencies {

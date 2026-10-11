@@ -90,6 +90,11 @@
         var telemetry: SessionTelemetry?
 
         @Environment(ViewerRelayClient.self) private var relayClient
+        @Environment(\.openTerminalFileLink) private var openFileLink
+        private var openPathAction: (@MainActor (String) -> Void)? {
+            guard let openFileLink else { return nil }
+            return { path in openFileLink(.init(path: path, paneID: paneId, hostID: hostId)) }
+        }
         @State private var coordinator: StreamCoordinator
 
         /// Whether this standalone terminal requests the software keyboard.
@@ -492,7 +497,8 @@
                                 onTerminalPaste(text)
                             }
                         },
-                        onViewportGridChange: onViewportGridChange
+                        onViewportGridChange: onViewportGridChange,
+                        onOpenPath: openPathAction
                     )
                 } else {
                     ProgressView("Initializing terminal...")
@@ -1351,6 +1357,8 @@
         let onPasteText: @MainActor (String) -> Void
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
 
+        var onOpenPath: (@MainActor (String) -> Void)?
+
         func makeUIView(context: Context) -> UIScrollView {
             // Calculate cell size using FontMetrics (matches SwiftTerm's computeFontDimensions)
             let cellSize = FontMetrics.calculateCellSize(
@@ -1382,6 +1390,7 @@
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
             terminalView.onPasteText = onPasteText
+            terminalView.onOpenPath = onOpenPath
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
@@ -1547,6 +1556,7 @@
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
             terminalView.onPasteText = onPasteText
+            terminalView.onOpenPath = onOpenPath
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID

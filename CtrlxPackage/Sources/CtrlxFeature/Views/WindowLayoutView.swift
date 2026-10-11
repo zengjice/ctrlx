@@ -23,6 +23,7 @@
         /// The currently selected window within the session
         @State private var selectedWindowId: String?
         @State private var fileWorkspace = IOSFileBrowserWorkspace()
+        @State private var pendingFileLink: TerminalFileLinkRequest?
         @State private var selectedBrowserID: UUID?
         @State private var showsWindowTabs = false
         @State private var pendingWindowTabAction: WindowTabAction?
@@ -240,8 +241,20 @@
             fileWorkspace.save()
         }
 
-        private var presentedContent: some View {
+        private var fileLinkContent: some View {
             browserContent
+            .environment(\.openTerminalFileLink, { request in pendingFileLink = request })
+            .task(id: pendingFileLink) {
+                guard let request = pendingFileLink else { return }
+                await openTerminalFile(request)
+            }
+            .onChange(of: window?.id) { pendingFileLink = nil }
+            .onChange(of: fileWorkspace.selectedID) { pendingFileLink = nil }
+            .onChange(of: selectedBrowserID) { pendingFileLink = nil }
+        }
+
+        private var presentedContent: some View {
+            fileLinkContent
             .onChange(of: fileWorkspaceContext, initial: true) { _, context in
                 fileWorkspace.updateContext(context)
             }
@@ -332,6 +345,27 @@
             }
         }
 
+        private func openTerminalFile(_ request: TerminalFileLinkRequest) async {
+            guard request.hostID == hostId, let origin = window,
+                  let pane = origin.panes.first(where: { $0.paneId == request.paneID }) else { return }
+            let source = FileBrowserSource.remote(hostID: hostId, paneID: request.paneID,
+                                                   connection: connectionManager.connection(for: hostId))
+            do {
+                let destination = try await TerminalFileDestination.resolve(
+                    path: request.path, baseDirectory: pane.agentSession?.detectedProjectPath ?? pane.currentPath, source: source
+                )
+                try Task.checkCancellation()
+                guard pendingFileLink == request, window?.id == origin.id,
+                      window?.panes.contains(where: { $0.paneId == request.paneID }) == true,
+                      fileWorkspace.selectedID == nil, selectedBrowserID == nil else { return }
+                try fileWorkspace.open(destination, paneID: request.paneID)
+                cancelCreationFollowUp()
+                isKeyboardActive = false
+                quickActionPresentation.dismiss()
+            } catch is CancellationError { }
+            catch { if pendingFileLink == request { commandError = "Cannot open Host path: \(error.localizedDescription)" } }
+        }
+
         var body: some View {
             presentedContent
             .task {
@@ -360,6 +394,7 @@
                 // A delayed creation reply must not redirect a later visit.
                 cancelCreationFollowUp()
                 pendingWindowTabAction = nil
+                pendingFileLink = nil
                 showsWindowTabs = false
             }
             .onChange(of: activeService?.session?.state) {

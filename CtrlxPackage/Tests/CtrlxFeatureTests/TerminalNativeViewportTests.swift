@@ -94,6 +94,42 @@ struct TerminalNativeViewportTests {
         #expect(fixture.terminal.liveCursorRect == nil)
     }
 
+    @Test("File links follow native content offsets even when yDisp stays behind")
+    func fileLinksAfterNativeScroll() throws {
+        let fixture = makeViewport(rows: 8)
+        defer { fixture.close() }
+        var opened: [String] = []
+        fixture.terminal.onOpenPath = { opened.append($0) }
+        let output = (0..<60).map { "./history/\($0).txt\r\n" }.joined() + "$ "
+        fixture.terminal.feedTerminalData(Array(output.utf8)[...])
+        fixture.terminal.presentCurrentTail()
+        fixture.layout()
+        fixture.terminal.scroll(toPosition: 0)
+        let terminal = fixture.terminal.getTerminal()
+        let cellHeight = fixture.terminal.getOptimalFrameSize().height / CGFloat(terminal.rows)
+        let cellWidth = fixture.terminal.getOptimalFrameSize().width / CGFloat(terminal.cols)
+
+        for firstRow in [12.5, 30.25] {
+            fixture.terminal.setContentOffset(CGPoint(x: 0, y: firstRow * cellHeight), animated: false)
+            fixture.terminal.setNeedsLayout()
+            fixture.terminal.layoutIfNeeded()
+            #expect(terminal.buffer.yDisp == 0)
+            // Include the partially visible final row, not just whole rows.
+            let row = Int(ceil(fixture.terminal.bounds.maxY / cellHeight)) - 1
+            let path = "./history/\(row).txt"
+            #expect(terminal.getScrollInvariantLine(row: row)?.translateToString().hasPrefix(path) == true)
+            #expect(fixture.terminal.layer.sublayers?.contains {
+                abs($0.frame.minY - (CGFloat(row + 1) * cellHeight - 2)) < 0.1 && $0.frame.height == 1
+            } == true)
+            fixture.terminal.handleContentTap(at: CGPoint(
+                x: cellWidth / 2,
+                y: (CGFloat(row) * cellHeight + fixture.terminal.bounds.maxY) / 2
+            ))
+            #expect(opened.last == path)
+        }
+        #expect(opened.count == 2)
+    }
+
     private func makeViewport(rows: Int) -> Fixture {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 414, height: 896))
         window.rootViewController = UIViewController()
