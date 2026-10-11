@@ -1,5 +1,13 @@
 # Push Notifications Implementation Plan
 
+> Mixed design/implementation record: the original setup sections contain old
+> component names and portal instructions, while §6.1 records actionable replies.
+> Current services/configuration are linked from
+> [services](services-reference.md#push-notifications) and [self-hosting](self-hosting.md).
+> Current notifications come from plugin events/presentation metadata, not a
+> shared `CodingAgent` enum or raw HTTP hooks. Verify provider setup against its
+> current instructions before changing signing or APNs configuration.
+
 ## Overview
 
 This document outlines the implementation plan for sending push notifications from the Ctrlx external server to paired iOS devices. Push notifications will alert users to important coding-agent events (Claude Code or Codex CLI) when the iOS app is not actively connected via WebSocket.

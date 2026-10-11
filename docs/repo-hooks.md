@@ -6,6 +6,12 @@ development workflow consistent. They are unrelated to the `ctrlx` plugin hooks
 (`plugin/**/hooks/`), which forward session events to the monitoring app and never
 talk back to the agent.
 
+The tool-independent requirements live in [CONTRIBUTING.md](../CONTRIBUTING.md)
+and the [PR checklist](../.github/PULL_REQUEST_TEMPLATE.md). Other AI tools must
+perform applicable checks explicitly; having `.claude/settings.json` in the
+repository does not prove that a hook ran. Do not duplicate project rules into
+a separate agent-specific instruction file.
+
 ## PostToolUse hooks
 
 ### `Edit|MultiEdit|Write` → swiftformat
@@ -18,9 +24,11 @@ After any file edit, an inline command runs `swiftformat` on the file when it is
 Fires after every `Bash` tool call. When the command that just ran opens a pull
 request (`gh pr create`), the hook prints a `hookSpecificOutput.additionalContext`
 block so the agent finishes the project's post-PR chores before stopping:
-documentation/AGENTS.md updates, CLI + `ctrlx`-skill updates for new features, and
-end-to-end scenarios (with committed baseline screenshots) for new features or bug
-fixes. For every other Bash command it prints nothing and exits 0, so it is a no-op.
+applicable documentation/AGENTS.md updates, CLI + `ctrlx`-skill updates when the
+CLI changes, and targeted end-to-end scenarios for changed app interactions.
+It follows the shared validation rules and does not assume GUI/device permissions
+or authorize extra scope. For every other Bash command it prints nothing and
+exits 0, so it is a no-op.
 
 The checklist text itself lives in `.claude/hooks/pr-checklist.md` (read lazily, only
 when a PR-creating command fires) so the wording can be edited without touching the
@@ -40,7 +48,7 @@ harmless false positive whose only cost is an injected reminder.
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "Use the Task tool to work through these items before stopping: …"
+    "additionalContext": "Complete the applicable PR checks before stopping: …"
   }
 }
 ```

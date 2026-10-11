@@ -42,7 +42,9 @@ class FiresOnPrCreate(unittest.TestCase):
         data = json.loads(out)  # must be valid JSON
         hso = data["hookSpecificOutput"]
         self.assertEqual(hso["hookEventName"], "PostToolUse")
-        self.assertTrue(hso["additionalContext"].startswith("Use the Task tool"))
+        self.assertTrue(hso["additionalContext"].startswith("Complete the applicable PR checks"))
+        self.assertIn("CONTRIBUTING.md", hso["additionalContext"])
+        self.assertIn(".github/PULL_REQUEST_TEMPLATE.md", hso["additionalContext"])
         self.assertIn("end-to-end scenario", hso["additionalContext"])
 
     def test_plain(self):

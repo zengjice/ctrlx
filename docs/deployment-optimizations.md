@@ -1,5 +1,10 @@
 # Deployment Optimizations
 
+> Historical deployment optimization notes. Use [self-hosting](self-hosting.md)
+> and [RELEASE.md](../RELEASE.md) for current build/deployment entry points.
+> Old infrastructure examples and benchmark results below are not instructions
+> to deploy production or evidence of today's timings.
+
 This document describes the deployment optimizations implemented and potential further improvements.
 
 ## Implemented Optimizations

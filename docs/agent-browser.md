@@ -1,4 +1,10 @@
-# Agent Browser (development integration — not release-ready)
+# Agent Browser
+
+Current embedded-browser contract, followed by dated acceptance history. The
+Apple Development-signed runtime is distributed through the private Mac channel;
+this does not mean hardened-runtime/notarized distribution is approved. Formal
+archives remain gated; see [RELEASE.md](../RELEASE.md). Historical statements such
+as “not published” apply only to their recorded checkpoint, not today's channel.
 
 Mac **Settings → Browser → New Browser → Engine** selects **Chromium** (default)
 or **WebKit** for explicit New Browser actions. Chromium uses the same sandboxed

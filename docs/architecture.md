@@ -1,74 +1,152 @@
-# Ctrlx Mac App Architecture
+# CtrlX architecture
 
-Ctrlx is a native macOS application that mirrors tmux panes in dedicated windows, integrates with **Claude Code and OpenAI's Codex CLI** via HTTP hooks, and streams terminal data to paired iOS devices over encrypted WebSocket connections.
+Current architecture overview, checked against source `fa9c977` (3.0.57) on
+2026-10-11. Feature details and acceptance limits live in the
+[topic index](README.md); this is not a claim of complete end-to-end validation.
 
-Coding-agent integration is gated by a `CodingAgent` enum (`.claudeCode` / `.codex`) in `CtrlxNetworking`. Every hook event, session, and project info value carries an `agent` field so the same plumbing serves both backends; the only agent-specific code lives in the project scanners, plugin/hook installers, and command-path resolution.
+## Roles and module boundaries
 
-## Component Overview
+CtrlX mirrors existing tmux sessions. A Mac can be a **Host** for local sessions
+and a **Viewer** of other Macs at the same time. iOS is a Viewer. Both connect
+outbound to a Vapor Relay; application payloads are encrypted between paired
+peers. The Relay routes them without owning terminal, filesystem or browser state.
 
-### Coordination
+| Module / directory | Responsibility |
+|---|---|
+| `CtrlxServerFeature` | Mac UI, Host tmux services, plugin runtime, local Files/browser ownership and Mac Viewer integration |
+| `CtrlxFeature` | iOS UI, terminal gestures/input, session navigation and background monitoring |
+| `CtrlxCommon` | Apple-client shared UI, Viewer connections/stores, input queues, path recognition and system-service clients |
+| `CtrlxNetworking` | Platform-independent Codable/Sendable wire models and compatibility contracts; no AppKit/UIKit |
+| `CtrlxEncryption` | Peer E2EE and key handling |
+| `CtrlxPluginProtocol` | `PluginCore` / `PluginHost`, manifests, ingress and sidecar contracts |
+| `ClaudeCodePluginCore`, `CodexPluginCore` | Built-in agent translation, launch/install/scanning and response delivery |
+| Repository `plugins/` | External sidecar agents and their event bridges |
+| `CtrlxExternalServerLib` | Relay routes, connection hub, pairing persistence, notifications and licensing |
+| `CtrlxExternalServer` | Relay executable entry point |
+| `CtrlxCLI` | Local CLI commands, including owned browser operations |
+| `CtrlxBrowserBridge`, repository `CtrlxPackage/AgentBrowser/` | Swift/native CEF integration and bounded browser automation |
 
-| Component | Type | Responsibility |
-|-----------|------|----------------|
-| **AppCoordinator** | `@Observable @MainActor` | Central service coordinator — creates, wires, and manages all services |
+Swift packages contain the implementation. Xcode app/extension entry points
+remain thin. See [Swift patterns](swift-patterns.md) for data flow and dependency
+injection rather than introducing ViewModels or a second service framework.
 
-### Tmux Layer
+## Mac composition root
 
-| Component | Type | Responsibility |
-|-----------|------|----------------|
-| **TmuxService** | `@Observable @MainActor` | Abstracts all tmux CLI interactions — pane discovery, content capture, session creation |
-| **TmuxControlClient** | `actor` | Ordered control connection for commands, snapshots, live `%output`, and events |
-| **TmuxControlClientManager** | `@Observable @MainActor` | Manages TmuxControlClient instances per tmux session (one client per session) |
-| **PipePaneReader** | `actor` | Persistent per-pane FIFO scanner for OSC notifications, titles, clipboard, and progress only |
-| **PaneStreamManager** | `@Observable @MainActor` | Multiplexes the single ordered control-mode terminal stream and routes scan-only OSC side effects |
+`CtrlxServer/CtrlxServerApp.swift` starts at `CtrlxAppEntry.main()`, prepares
+the browser application runtime, then enters `TmuxPaneMirrorApp`.
+`AppCoordinator` is the main-actor composition root. Synchronous initialization
+creates core services; guarded `setupAllServices()` wires asynchronous services,
+plugins, local API, paired Viewers and remote Hosts.
 
-### Window Management
+Important owners:
 
-| Component | Type | Responsibility |
-|-----------|------|----------------|
-| **MirrorWindowManager** | `@Observable @MainActor` | NSWindow lifecycle, hook event routing, session tracking |
-| **DockIconManager** | `@MainActor` | Toggles dock icon visibility based on open windows |
+- `TmuxService`: discovery, geometry, input and session/window operations.
+- `TmuxControlClientManager`: per-session control connections.
+- `PaneStreamManager`: ordered terminal output and scan-only OSC side effects.
+- `MirrorWindowManager`: local pane/session state and attention.
+- `TerminalStreamService`: per-Viewer terminal subscriptions and batching.
+- `ConnectedViewerManager` / `ConnectedViewer`: Host-side paired connections.
+- `ViewerConnectionManager` / `ViewerConnection` and `SessionStore` in
+  `CtrlxCommon`: Viewer-side connection/state reused by Mac and iOS.
+- `PluginRegistry`, `IngressSocketServer`, `PluginEventDispatcher`:
+  agent integration, owned and wired by the coordinator.
+- `AgentBrowserService`: native page ownership and authorized browser operations.
 
-### Remote Access (iOS Communication)
+## Terminal data and input
 
-| Component | Type | Responsibility |
-|-----------|------|----------------|
-| **ConnectedViewerManager** | `@Observable @MainActor` | Manages connections to all paired Viewer devices |
-| **DeviceConnection** | `@Observable @MainActor` | WebSocket connection to a single paired iOS device |
-| **PairingManager** | `@Observable @MainActor` | Device pairing flow — code generation, server registration, polling |
-| **TerminalStreamService** | `@Observable @MainActor` | Batches and routes terminal data via ConnectedViewerManager |
-| **TmuxCommandExecutor** | `actor` | Executes commands from iOS (keystrokes, cancel, session creation) |
+```text
+tmux → TmuxControlClient (%output + ordered capture boundary)
+     → PaneStreamManager
+       ├─ local SwiftTerm display
+       └─ TerminalStreamService → ConnectedViewer → E2EE Relay
+          → ViewerConnection → Mac/iOS SwiftTerm display
 
-### Hook Integration
+tmux pipe-pane → PipePaneReader → OSC side effects only
+Viewer input → ordered client queue → encrypted command → Host → tmux
+```
 
-| Component | Type | Responsibility |
-|-----------|------|----------------|
-| **HookServerService** | `actor` | HTTP server (dynamic port) receiving hook events from Claude Code and Codex CLI. The `agent` query param (default `.claudeCode`) tags every incoming event |
+Snapshots and live output share one control-mode ordering boundary. The FIFO
+reader never feeds ordinary terminal bytes; doing so would duplicate output.
+Joining Viewers receive a private bootstrap and only subsequent bytes.
+`TerminalStreamService` batches on a 16 ms cadence with an 8 KiB limit and
+tracks Viewer ownership, not an unqualified subscriber count.
 
-### Coding-Agent Integration
+Geometry belongs to the Host. Viewing a pane must not silently resize it;
+explicit Fit and creation-scoped sizing have separate contracts. Input, paste
+and question expansion use ordered queues. Files/browser I/O uses bounded
+separate work so it cannot block keyboard dispatch.
 
-| Component | Type | Responsibility |
-|-----------|------|----------------|
-| **PluginService** | `@Observable @MainActor` | Manages the Claude Code plugin (detection + bundled install) |
-| **CodexPluginInstaller** | `struct` (Dependency) | Installs/uninstalls the bundled `ctrlx` Codex plugin via `codex plugin` commands so Codex forwards hooks to the local hook server |
-| **ClaudeProjectScanner** | `actor` | Scans `~/.claude.json` to discover Claude Code projects |
-| **CodexProjectScanner** | `struct` (Dependency) | Walks `~/.codex/sessions/**/rollout-*.jsonl` (honoring `CODEX_HOME`), reads each rollout's session-meta header to recover `cwd`, and groups by working directory |
-| **ClaudePathDetector** | `enum` (static) | Detects the `claude` CLI path for auto-running in new sessions |
-| **TerminalLauncher** | `@MainActor` | Launches tmux sessions in external terminal apps (Terminal, iTerm2, Warp, etc.) |
+See [streaming](streaming-architecture.md), [Mac sizing](swiftterm-sizing.md),
+[iOS viewport/input](swiftterm-ios-scrolling.md) and
+[rendering investigations](terminal-rendering-investigation.md).
 
-### System Integration
+## Agent events and responses
 
-| Component | Type | Responsibility |
-|-----------|------|----------------|
-| **SleepPreventionManager** | `@MainActor` | Prevents Mac sleep during active sessions via IOKit assertions |
-| **LoginItemService** | `enum` (static) | Manages launch-at-login via SMAppService |
-| **UpdaterController** | `@Observable @MainActor` | Wraps Sparkle updater for SwiftUI |
+```text
+Agent hook/extension bridge
+  → length-prefixed JSON on IngressSocketServer (Unix socket)
+  → PluginRegistry → owning PluginCore.handleIngress
+    ├─ built-in ClaudeCodePluginCore / CodexPluginCore
+    └─ SidecarPluginCore → supervised process, stdio JSON-RPC
+  → PluginEventDispatcher → pane state / notifications / app actions
+  → encrypted agent_session_status + session snapshots → Viewers
 
-### Utilities
+Viewer response → Host request/identity guard → owning core.deliverResponse
+                → plugin-specific terminal input
+Agent OTLP export → loopback OTLPReceiver → per-session telemetry
+```
 
-| Component | Type | Responsibility |
-|-----------|------|----------------|
-| **ProcessRunner** | `actor` | Executes external processes asynchronously |
+`AgentSession.pluginID` and `AgentState` identify the agent and its current
+state. `PluginPresentation` carries display metadata; project lists use
+`AgentProject`. The old shared `CodingAgent` enum and HTTP
+`HookServerService` are removed, not alternate integration paths.
+The local CLI/API server and OTLP HTTP receiver are separate from hook ingress.
+
+Plugin manifests and enabled cores drive available agents. Installation,
+launch arguments, scanners and response translation belong to their core.
+Third-party sidecars use the same app-facing contract, not new branches in
+shared UI. Native Fork is an optional `AgentSessionForking` capability;
+a process match alone does not prove a forkable conversation identity.
+
+Questions have two distinct paths: structured plugin response forms and the
+conservative Codex TUI footer auto-expander. Do not replace one with the other.
+Details: [services](services-reference.md) and
+[sidecar authoring](plugins/sidecar-authoring.md).
+
+## Viewer state and compatibility
+
+A Viewer can connect to multiple Hosts. Connection ownership uses `pairId`;
+pane state uses `PaneKey(pairId, paneId)`, since tmux IDs collide across Hosts.
+A Mac's local pane state and its remote `SessionStore` are distinct.
+
+Peers negotiate version compatibility; optional capabilities in session state
+gate newer commands before transmission. An old Host accepting the handshake
+does not imply support for every newer command. Disconnect/reconnect invalidates
+pending work and capabilities; stale replies must not mutate a new connection.
+
+The Relay owns pairing/routing/presence and encrypted push delivery, not agent
+translation or remote filesystem/CDP access. Platform-independent protocol
+changes belong in `CtrlxNetworking`; server behavior belongs in
+`CtrlxExternalServerLib`. Additive opaque client payloads often need only client
+updates, but verify decoding, capability gating and envelope limits per change.
+
+## Files, browser and workspace ownership
+
+- **Files:** common UI on all clients; paths resolve on the selected Host.
+  `FileBrowserClient` / `HostFileBrowser` provide bounded filesystem work,
+  `HostFileUploads` manages writes, and per-connection file queues keep it
+  outside terminal input. Terminal link recognition runs in shared client code;
+  the Host validates the clicked destination. See [Files](file-browser.md).
+- **Browser:** Host Chromium/CEF pages can be shared with Mac/iOS Viewers.
+  Human New Browser defaults to Chromium, with device-local WebKit optional
+  on Mac. `vercel` / `ctrlx` selects the automation backend, not the rendering
+  engine. Agent authority follows a verified process instance, not the focused
+  pane. Viewer control requires a lease; there is no raw remote CDP gateway.
+  See [browser](agent-browser.md) and [engines](agent-browser-engines.md).
+- **Layouts:** session/window/pane terminal geometry is distinct from private
+  Files/browser tab selection and per-folder workspace persistence. Shared Host
+  terminal layouts do not make every client tab/layout shared. See
+  [layout persistence](folder-layout-persistence-plan.md).
 
 ## Sidebar Session Ordering
 
@@ -89,203 +167,24 @@ Coding-agent integration is gated by a `CodingAgent` enum (`.claudeCode` / `.cod
 - Right-click Local or a remote Host header → **Restore Automatic Order** to
   clear only that section's preference. No ordering is sent to tmux or the Relay.
 
-## App Bootstrap
+## Concurrency and platform services
 
-The app entry point (`TmuxPaneMirrorApp`) creates the coordinator and defines three scenes:
+UI and observable coordinators are main-actor isolated. Control connections,
+process execution, filesystem operations and plugin cores use their declared
+actor/worker boundaries; cross-boundary values are Sendable. Do not infer
+isolation from a service's filename. For example, `DockIconManager.swift`
+exports `DockIconService`, and `SleepPreventionManager.swift` exports
+`SleepPreventionService`, both dependency clients.
 
-```
-@main TmuxPaneMirrorApp
-├── init() → LoggingConfiguration.bootstrap() → AppCoordinator()
-├── Window("Panes") → ContentView + environment injection
-├── Settings → SettingsView
-└── MenuBarExtra → .task { coordinator.setupAllServices() }
-```
+CEF requires its native AppKit message-loop lifecycle; do not replace it with
+a timer pump or run it inside a Swift main-actor job. Its capture workers and
+shutdown ordering are documented in [Browser](agent-browser.md).
 
-**AppCoordinator** has a two-phase initialization:
+## Development and deployment
 
-1. **Synchronous (`init`)** — Creates core services that don't need async:
-   TmuxService, TmuxControlClientManager, PaneStreamManager, MirrorWindowManager,
-   TerminalStreamService, HookServerService, ClaudeProjectScanner, CodexProjectScanner,
-   DockIconManager, SleepPreventionManager, PluginService, CodexPluginInstaller,
-   E2EEService (from Keychain if available)
-
-2. **Async (`setupAllServices`)** — Completes initialization requiring async work:
-   E2EEService (if not loaded), PairingManager, ConnectedViewerManager,
-   TmuxCommandExecutor, hook server start, auto-connect to paired devices,
-   periodic session validation, system wake observer
-
-## Service Wiring
-
-AppCoordinator connects services via callbacks:
-
-```
-HookServerService events → MirrorWindowManager.handleHookEvent()
-                         → ConnectedViewerManager.sendAgentSessionStatusToAll()
-                         → SleepPreventionManager.updateForSessionCount()
-
-TmuxControlClientManager dimension changes → PaneStreamManager.updateDimensions(paneId:width:height:)
-TmuxControlClientManager pane exits       → MirrorWindowManager.updatePaneStates()
-                                          → TerminalStreamService.stopStreamsForClosedPanes()
-                                          → SleepPreventionManager.updateForSessionCount()
-
-TmuxService pane changes → ConnectedViewerManager.pushSessionStateToAll()
-
-iOS commands → TmuxCommandExecutor.execute()
-             → TerminalStreamService.startStreaming() / stopStreaming()
-
-System wake → ConnectedViewerManager.reconnectAllImmediately()
-```
-
-## Data Flow: Tmux Output to Terminal Display
-
-```
-tmux session
-    │
-    ├── tmux -C attach -f ignore-size
-    │      commands + capture responses + ordered live %output + layout events
-    │
-    └── pipe-pane -O "cat > /tmp/ctrlx-pipe-<id>.fifo"
-           scan-only OSC notification/title/clipboard/progress parsing
-    │
-    ▼
-PaneStreamManager (snapshot boundary + multiplexer)
-    │ Routes terminal bytes and side effects to subscribers
-    │
-    ├──→ Mirror Window (SwiftTerm) — immediate display
-    │
-    └──→ TerminalStreamService — batches (8KB / 16ms)
-              │
-              ▼
-         ConnectedViewerManager.sendTerminalStream(_:to:)
-              │ WebSocket per subscribed Viewer, E2EE encrypted
-              │
-              ▼
-         Relay Server → iOS devices
-```
-
-## Hook Event Flow
-
-```
-Claude Code / Codex CLI → POST localhost:<port>/api/hooks?tmux_pane=main:0.1&agent=claude-code|codex
-    │
-    ▼
-HookServerService (actor)
-    │ Parses JSON, creates HookEvent (tagged with `agent`, default `.claudeCode`)
-    │
-    ▼
-AppCoordinator event handler
-    │
-    ├──→ MirrorWindowManager.handleHookEvent()
-    │       SessionStart → add to activeSessions, open mirror window
-    │       SessionEnd   → remove from activeSessions, close window
-    │
-    ├──→ ConnectedViewerManager.sendAgentSessionStatusToAll()
-    │       Forwards to all connected iOS devices (E2EE encrypted)
-    │
-    └──→ SleepPreventionManager.updateForSessionCount()
-```
-
-The same bridge script (`plugin/ctrlx/scripts/hook.py`) backs both agents. Claude Code calls it from `~/.claude/plugins/.../hooks.json` (the bundled Claude plugin); Codex calls it from `~/.codex/plugins/.../hooks.json` after `CodexPluginInstaller` registers the bundled `ctrlx` marketplace and installs the plugin via `codex plugin install`. The script appends `?agent=codex` to the POST when invoked by Codex so the server can tag the event correctly. Notification copy is rendered against `agent.displayName` / `shortName` so toasts read "Claude" or "Codex" as appropriate.
-
-## Multi-Device Terminal Streaming
-
-Multiple iOS devices can watch the same pane simultaneously:
-
-- **TerminalStreamService** uses an idempotent Viewer-ID ownership set per stream
-- First subscriber creates the PaneStreamManager subscription, which enables control-mode terminal output; the FIFO remains scan-only
-- Additional subscribers reuse the existing stream and receive a private initial snapshot plus only post-boundary buffered data
-- The start command succeeds only after the requesting Viewer crosses the ordered bootstrap barrier
-- Each `stopStreaming` removes one owner; the manager subscription and control output are dropped when the owner set becomes empty (the scan-only FIFO stays attached for the pane's full lifetime)
-- System-level cleanups (`stopAllStreams`, `stopStreamsForClosedPanes`) use `force: true` to bypass count
-
-**ConnectedViewerManager** broadcasts shared state but routes terminal bytes:
-- `sendHookEventToAll()` — hook events
-- `sendTerminalStream(_:to:)` — terminal data to explicit subscribers
-- `pushSessionStateToAll()` — session state sync
-
-See `docs/streaming-architecture.md` for the full streaming data flow.
-
-## Concurrency Model
-
-```
-@MainActor (UI thread)                    Actor-Isolated (background)
-─────────────────────                    ─────────────────────────────
-TmuxService                              ProcessRunner
-PaneStreamManager                        TmuxControlClient
-MirrorWindowManager                      PipePaneReader
-TerminalStreamService                    TmuxCommandExecutor
-                                         HookServerService
-                                         ClaudeProjectScanner
-                                         CodexProjectScanner
-ConnectedViewerManager
-DeviceConnection
-PairingManager
-AppCoordinator
-AppSettings
-DockIconManager
-SleepPreventionManager
-PluginService
-All SwiftUI Views
-```
-
-- All UI-bound services are `@MainActor` isolated
-- I/O and process work runs in dedicated actors
-- Cross-isolation uses async/await exclusively (no GCD)
-- All types crossing isolation boundaries are `Sendable`
-
-## File Structure
-
-```
-CtrlxPackage/Sources/CtrlxServerFeature/
-├── Coordinators/
-│   └── AppCoordinator.swift           # Central service coordinator
-├── Hooks/
-│   ├── HookModels.swift               # Event types, ToolInput enum
-│   └── HookServerService.swift        # HTTP server (dynamic port)
-├── Managers/
-│   ├── DockIconManager.swift          # Dock icon visibility
-│   ├── MirrorWindowManager.swift      # Window lifecycle
-│   └── SleepPreventionManager.swift   # IOKit sleep prevention
-├── Models/
-│   ├── PaneInfo.swift                 # Tmux pane representation
-│   └── Settings.swift                 # AppSettings, PairedDevice
-├── Services/
-│   ├── ClaudePathDetector.swift       # Claude CLI path detection
-│   ├── ClaudeProjectScanner.swift     # Project discovery from ~/.claude.json
-│   ├── CodexProjectScanner.swift      # Project discovery from ~/.codex/sessions/**/rollout-*.jsonl
-│   ├── CodexPluginInstaller.swift     # Bundled `ctrlx` Codex plugin install/uninstall via `codex plugin`
-│   ├── DeviceConnection.swift         # Single iOS device WebSocket
-│   ├── ConnectedViewerManager.swift   # Multi-Viewer coordinator
-│   ├── ExternalServerClient.swift     # Legacy single-device client
-│   ├── LoginItemService.swift         # Launch at login (SMAppService)
-│   ├── PairingManager.swift           # Device pairing flow
-│   ├── PaneStreamManager.swift        # Per-pane reader lifecycle + multi-subscriber multiplexer
-│   ├── PipePaneReader.swift           # Per-pane FIFO reader (one per pane, scanOnly/buffering/live modes)
-│   ├── PluginService.swift            # Claude Code plugin management (bundled plugin install)
-│   ├── StreamState.swift              # View-side connection state enum
-│   ├── TerminalLauncher.swift         # External terminal app integration
-│   ├── TerminalStreamService.swift    # iOS streaming with batching
-│   ├── TmuxCommandExecutor.swift      # Remote command execution
-│   ├── TmuxControlClient.swift        # tmux control mode connection
-│   ├── TmuxControlClientManager.swift # Control client per session
-│   ├── TmuxService.swift              # Tmux CLI abstraction
-│   └── UpdaterController.swift        # Sparkle updater wrapper
-├── Utilities/
-│   ├── NotificationNames.swift        # NotificationCenter names
-│   └── ProcessRunner.swift            # Process execution
-├── Views/
-│   ├── CheckForUpdatesView.swift      # Sparkle update UI
-│   ├── InteractiveTerminalView.swift  # Interactive terminal (SwiftTerm)
-│   ├── LaunchAtLoginPromptView.swift  # Login item prompt
-│   ├── MainView.swift                 # Pane list
-│   ├── MenuBarExtraView.swift         # Menu bar dropdown
-│   ├── MirrorWindowView.swift         # Mirror window display
-│   ├── PaneListView.swift             # Pane list items
-│   ├── PluginSettingsView.swift       # Plugin settings
-│   ├── PluginSetupView.swift          # First-launch plugin setup
-│   ├── CodexPluginInstallerRow.swift  # Codex CLI plugin install/uninstall row (Settings)
-│   ├── RemoteAccessSettingsView.swift # Pairing & connection UI
-│   ├── SettingsView.swift             # Settings tabs
-│   └── TerminalContainerView.swift    # SwiftTerm bridge
-└── ContentView.swift                  # Root view
-```
+Use [CONTRIBUTING.md](../CONTRIBUTING.md) for isolated worktrees, focused tests
+and cross-AI handoff. Use [RELEASE.md](../RELEASE.md) for local packaging versus
+publication; a signed build is not proof of installation or runtime acceptance.
+The maintained private Mac channel is Apple Development-signed, not notarized.
+Formal CEF archives remain gated. Production tooling/credentials are external
+and must not be reconstructed from the old distributed deployment plan.

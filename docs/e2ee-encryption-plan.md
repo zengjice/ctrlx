@@ -1,5 +1,13 @@
 # End-to-End Encryption (E2EE) Implementation Plan
 
+> Design and implementation history, not a current exhaustive wire/security
+> specification. In particular, proposed key rotation is not proof of deployed
+> forward secrecy, and old message/service names below must not be reused as APIs.
+> Current primitives and code entry points are in
+> [services](services-reference.md#e2ee-encryption); peer roles and routing are in
+> [architecture](architecture.md#viewer-state-and-compatibility). Verify protocol
+> changes against `CtrlxEncryption` and `CtrlxNetworking` source and tests.
+
 This document outlines the implementation of end-to-end encryption for Ctrlx, ensuring that the relay server cannot decrypt messages exchanged between Mac and iOS devices.
 
 ## Executive Summary

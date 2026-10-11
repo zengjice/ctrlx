@@ -1,14 +1,21 @@
 # Services Reference
 
-Detailed documentation for Ctrlx services. Reference when modifying specific components.
+Current component entry points and selected behavioral contracts. Paths below are
+relative to `CtrlxPackage/Sources/` unless stated otherwise. Read the
+[architecture](architecture.md) first and the [topic index](README.md) for scope.
+Plugin/Viewer entry points were reconciled with `fa9c977` on 2026-10-11;
+dated acceptance paragraphs retain their original test scope, not a fresh run.
 
 ## macOS Services
 
 ### FileBrowserClient / HostFileBrowser
 
-Dependency-injected, read-only Host filesystem operations for Mac Host, Mac Viewer
-and iOS Files tabs. `HostFileBrowser` is an independent I/O actor; per-connection
-`FileBrowserCommandQueue` keeps file requests outside the keyboard receive loop.
+Dependency-injected Host filesystem operations for Mac Host, Mac Viewer and iOS
+Files tabs. Previews/search are bounded reads; explicit folder creation and
+non-overwriting imports/uploads are supported. `HostFileBrowser` is an I/O actor
+in `CtrlxServerFeature/Services/FileBrowserClient.swift`; `HostFileUploads` owns
+upload state. Per-connection `FileBrowserCommandQueue` keeps file requests
+outside the keyboard receive loop.
 See [Host-backed Files tabs](file-browser.md) for capabilities, bounds and tests.
 
 ### AppCoordinator (`CtrlxServerFeature/Coordinators/AppCoordinator.swift`)
@@ -17,7 +24,7 @@ See [Host-backed Files tabs](file-browser.md) for capabilities, bounds and tests
 
 **Responsibilities:**
 - Creates and owns all services
-- Wires callbacks between services (hook events, pane changes, commands)
+- Wires callbacks between services (plugin events, pane changes, commands)
 - Two-phase init: sync (core services) + async (`setupAllServices()` for E2EE, connections)
 - Auto-connects to paired devices on startup
 - Observes system wake for reconnection
@@ -65,6 +72,13 @@ shift + ← to answer` footer immediately above Codex's known empty composer. It
 also accepts the compact `shift+← to answer` hint observed in Codex 0.158.0,
 the no-plus `shift← to answer` hint observed in 0.160.0, and
 the optional question age (`? 1 question · 14s`, including h/m/s duration parts).
+The current recognizer accepts `shift` (case-insensitive) or `⇧`, followed by
+`←` or `Left`, with or without `+` and whitespace. Examples:
+`⇧← to answer`, `Shift + Left to answer`, and `⇧ + ← to answer`.
+Only the complete nearby footer is joined across wrapped rows; modifier/arrow
+order is not arbitrary, and other keys or additional modifiers are rejected.
+Braille animation is ignored only around known footer/empty-composer structure,
+not inside a user's draft. Source: `CtrlxCommon/Models/CodexQuestionPrompt.swift`.
 Age is presentation-only: ticks neither restart the 350 ms stability check nor
 re-arm a dismissed queue. Other shortcuts, arbitrary suffixes, incomplete hints
 and drafts still fail closed. Mac/iOS-side
@@ -235,7 +249,7 @@ tmux ──pipe-pane──→ FIFO ──→ PipePaneReader ──OSC side effec
 `@Observable @MainActor` managing NSWindow lifecycle.
 
 - Tracks sessions and windows by pane target
-- Handles hook events (SessionStart opens window, SessionEnd closes)
+- Applies plugin-owned session state, lifecycle actions and attention updates
 - Respects user-closed state (won't reopen until session ends)
 - Periodic session validation cleans up stale sessions
 - `updatePaneStates(from:)` syncs pane state from tmux, removing stale entries
@@ -248,7 +262,7 @@ tmux ──pipe-pane──→ FIFO ──→ PipePaneReader ──OSC side effec
 
 ### TerminalContainerView (`CtrlxServerFeature/Views/TerminalContainerView.swift`)
 
-`@Observable @MainActor` bridging SwiftTerm to SwiftUI.
+`NSViewRepresentable` bridging native SwiftTerm views to SwiftUI.
 
 - Wraps SwiftTerm's `TerminalView`
 - Uses **FlippedClipView** for top alignment
@@ -256,25 +270,29 @@ tmux ──pipe-pane──→ FIFO ──→ PipePaneReader ──OSC side effec
 - CoreText font metrics for cell size
 - Theme support (DefaultDark/Light, SolarizedDark/Light)
 
-### HookServerService (`CtrlxServerFeature/Hooks/HookServerService.swift`)
+### Plugin ingress and event dispatch
 
-`actor` HTTP server on a dynamically allocated port (written to `~/.ctrlx-port`). Accepts hook events from both Claude Code and Codex CLI.
+- `CtrlxServerFeature/Plugins/IngressSocketServer.swift`: app-owned Unix-domain
+  socket receiving length-prefixed JSON `IngressFrame` values.
+- `CtrlxServerFeature/Plugins/PluginRegistry.swift`: manifests and enabled
+  `PluginCore` actors. Built-in cores live in `ClaudeCodePluginCore/` and
+  `CodexPluginCore/`; external cores use `Plugins/Sidecar/SidecarPluginCore.swift`.
+- `CtrlxServerFeature/Plugins/PluginEventDispatcher.swift`: translates a core's
+  `PluginEvent` into app state, notifications, auto-approval and app actions.
+- `CtrlxServerFeature/Plugins/LivePluginHost.swift`: callback adapter for
+  projects, input, process discovery and plugin logs.
+- `CtrlxServerFeature/Plugins/AgentResponseSubmissionGuard.swift`: validates
+  current request identity before delivering responses.
 
-**Endpoints:**
-- `GET /health` - Health check
-- `POST /api/hooks` - Hook event receiver
+`AppCoordinator.setupPluginRuntime()` wires these services. Shared state uses
+`AgentSession.pluginID` / `AgentState`; agent-specific payload parsing and
+keystroke delivery stay inside the owning core. The legacy HTTP hook service is
+removed. Do not send hooks to `/api/hooks` or introduce a second ingress path.
+The OTLP HTTP receiver below is a separate telemetry channel.
 
-**Query params on `/api/hooks`:**
-- `tmux_pane` - tmux pane target (e.g. `main:0.1`)
-- `agent` - `claude-code` (default) or `codex`. Resolved via `HookQueryParams.resolvedAgent()` and stamped onto the resulting `HookEvent` so downstream UI and notification copy can branch on agent.
-
-**Events:**
-- `SessionStart` - auto-opens mirror window
-- `SessionEnd` - auto-closes window (Claude Code only; Codex has no `SessionEnd` — see `docs/codex-cli-integration-plan.md` §5)
-- `NotificationSend` - notification events
-- `Stop` - stop events
-
-Codex contributes additional events (`PreCompact`/`PostCompact`, `SubagentStart`, `PermissionRequest`); the server accepts any JSON payload of the right shape and does not validate event names against a Claude-specific enum.
+See [sidecar authoring](plugins/sidecar-authoring.md) for manifest and wire casing,
+supervision and distribution, plus [architecture](architecture.md) for the
+end-to-end flow.
 
 ### OTLPReceiver (`CtrlxServerFeature/Telemetry/OTLPReceiver.swift`)
 
@@ -321,25 +339,25 @@ Two **aggregate** consumers built on the same OTEL stream, surfacing data that o
 - Auto-reconnect on system wake
 
 **Broadcasting Methods:**
-- `sendHookEventToAll()` - forward hook events
+- `sendAgentSessionStatusToAll()` - forward plugin session state
 - `sendTerminalStream(_:to:)` - forward terminal data to an explicit Viewer-ID set
 - `pushSessionStateToAll()` - sync session state
 
 **Callbacks (set by AppCoordinator):**
-- `onCommand` - handle commands from any iOS device
+- `onCommand` - handle commands from a paired Mac or iOS Viewer
 - `onSessionStateRequest` - provide current session state
 - `onPartnerKeyReceived` - persist E2EE partner keys
 
 ### ConnectedViewer (`CtrlxServerFeature/Services/ConnectedViewer.swift`)
 
-`@Observable @MainActor` WebSocket connection to a single paired iOS device.
+`@Observable @MainActor` Host-side WebSocket connection to a paired Mac or iOS Viewer.
 
 **States:** `disconnected` → `connecting` → `connected` | `reconnecting(attempt)` | `error`
 
 - Manages WebSocket lifecycle with relay server
 - E2EE encryption per device
 - Auto-reconnects with exponential backoff
-- Sends/receives all message types (hook events, commands, terminal stream, session state)
+- Routes encrypted agent state, commands/responses, terminal streams and session snapshots
 
 ### PairingManager (`CtrlxServerFeature/Services/PairingManager.swift`)
 
@@ -373,30 +391,29 @@ Two **aggregate** consumers built on the same OTEL stream, surfacing data that o
 
 ### TmuxCommandExecutor (`CtrlxServerFeature/Services/TmuxCommandExecutor.swift`)
 
-Actor executing commands from iOS devices.
+Actor executing commands from paired Mac/iOS Viewers.
 
 - Receives `CommandMessage` from `ConnectedViewerManager`
 - Dispatches to `TmuxService` (sendKeys, sendInterrupt, etc.)
 - Returns `CommandResponseMessage` (success/failure)
 
-### PluginService (`CtrlxServerFeature/Services/PluginService.swift`)
+### Plugin installation and settings
 
-`@Observable @MainActor` managing Claude Code plugin detection and installation.
+`PluginCore.install(configRoot:)`, `uninstall` and `installStatus` are the
+shared contract in `CtrlxPluginProtocol/PluginCore.swift`. Built-in cores own
+their CLI installation implementations: `ClaudeCodeCLIInstaller.swift` and
+`CodexCLIInstaller.swift` in their respective core modules. Config roots are
+scoped by the plugin, not hard-coded into shared settings UI.
 
-**States:** `unknown` → `checking` → `installed(version)` | `notInstalled` → `installing` → `installed` | `installationFailed`
+`PluginRegistry` owns enabled cores; `PluginRegistryStore.swift` persists
+registry entries, and `CtrlxPaths` defines the state layout. Per-agent settings
+are decoded by `ClaudeCodeSettings`, `CodexSettings`, or the sidecar's settings
+contract. The old `PluginService` / `CodexPluginInstaller` are not live services.
 
-- Detects plugin at `~/.claude/plugins/`
-- Installs bundled plugin from app resources
-- First-launch setup flow via `PluginSetupView`
-
-### CodexPluginInstaller (`CtrlxServerFeature/Services/CodexPluginInstaller.swift`)
-
-`Sendable struct` (Point-Free `@DependencyClient`) that installs the bundled `ctrlx` Codex plugin so Codex forwards hook events to the local hook server.
-
-- Locates the bundled marketplace under `~/.ctrlx/marketplaces/ctrlx/` (copied out of the app resources at install time so Codex can re-discover it)
-- Registers the marketplace via `codex plugin marketplace add` and installs the plugin via `codex plugin install ctrlx`
-- Writes hooks at the **global layer** (`~/.codex/hooks.json`) to avoid per-project trust prompts on every repo
-- Exposes `install` / `uninstall` / `isInstalled` closures; surfaced in Settings via `CodexPluginInstallerRow`
+External bundle installation/update lives in
+`CtrlxServerFeature/Distribution/`. Installing a CtrlX sidecar bundle and
+installing its event bridge into an agent are distinct operations. See
+[sidecar authoring](plugins/sidecar-authoring.md) and the plugin's own README.
 
 ### Start an agent window in an existing session (Mac and iOS)
 
@@ -619,32 +636,23 @@ Regression coverage: `SessionLaunchRequestTests`, `SessionLaunchAgentTests`,
 `SessionDirectoryListingTests`, `SessionDirectoryBrowseStateTests`,
 `SessionDirectoryCapabilityTests`, and the existing Codex OTEL/launch tests.
 
-### ClaudeProjectScanner (`CtrlxServerFeature/Services/ClaudeProjectScanner.swift`)
+### Agent project discovery and command resolution
 
-Actor scanning for Claude Code projects.
+`ClaudeCodePluginCore/ClaudeCodeScanner.swift` scans Claude's config/project
+roots, including additional configured roots. `CodexPluginCore/CodexScanner.swift`
+reads bounded date-partitioned rollout headers under the selected Codex home and
+groups existing project directories by cwd. Both emit `AgentProject` tagged by
+`pluginID`; their owning core controls scheduling and refresh.
 
-- Reads `~/.claude.json` for project paths
-- Validates projects have `.claude` subdirectory
-- Sorts by most recently used (session timestamps)
-- Tags each result with `agent: .claudeCode`
-- Results merged with `CodexProjectScanner` output by `AppCoordinator.scanProjects()` and sent to iOS for project list display
+Cores push projects through `PluginHost.setProjects`; `AppCoordinator` merges
+per-plugin lists. Sidecar project discovery uses the same contract. There is no
+Host-owned pair of legacy `ClaudeProjectScanner` / `CodexProjectScanner` services.
 
-### CodexProjectScanner (`CtrlxServerFeature/Services/CodexProjectScanner.swift`)
-
-`Sendable struct` (Point-Free `@DependencyClient`) discovering Codex projects.
-
-- Walks `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, honoring `CODEX_HOME` if set (rollouts are date-partitioned, not project-partitioned, so the scanner must read each file's header)
-- Reads each rollout's first JSON line (a `SessionMetaLine`) to recover the working directory. Accepts `cwd`, `working_directory`, or `payload.cwd` because Codex's schema is evolving
-- Groups rollouts by working directory and emits one `ClaudeProjectInfo` per project with `agent: .codex`
-- Output is merged with `ClaudeProjectScanner` results in `AppCoordinator.scanProjects()` and the project-list relay payload, so the iOS picker shows a unified "most recently used" list with a per-row agent badge
-
-### ClaudePathDetector (`CtrlxServerFeature/Services/ClaudePathDetector.swift`)
-
-Static utility detecting the `claude` CLI path.
-
-- Checks common locations (`/usr/local/bin/claude`, homebrew paths, etc.)
-- Used by `TerminalLauncher` for auto-running Claude in new sessions
-- The matching `codex` path is resolved against `AppSettings.codexCommandPath` (default `codex`) rather than auto-detection
+Launch commands come from the owning core's `commandForLaunch` and per-plugin
+settings, with Host login-shell path validation. Ordinary shell launch, explicit
+Agent launch and Fork have different preconditions; see the launch/Fork sections
+above. Do not restore `AppSettings.commandPath(for: CodingAgent)` or infer an
+agent from a window's display name.
 
 ### TerminalLauncher (`CtrlxServerFeature/Services/TerminalLauncher.swift`)
 
@@ -654,9 +662,10 @@ Static utility detecting the `claude` CLI path.
 - Attaches to existing tmux sessions
 - Used from iOS "open in terminal" commands
 
-### DockIconManager (`CtrlxServerFeature/Managers/DockIconManager.swift`)
+### DockIconService (`CtrlxServerFeature/Managers/DockIconManager.swift`)
 
-`@MainActor` managing dock icon visibility and the dock tile badge.
+`@DependencyClient` wrapping a main-actor `LiveDockIconManager`, managing
+dock icon visibility and the dock tile badge.
 
 - App runs as accessory (no dock icon) when no windows visible
 - Switches to regular mode when windows open
@@ -680,9 +689,10 @@ a remote clear updates `SessionStore` and sends the existing `MarkHandled`
 command to its host. Dock totals and task markers continue to derive from these
 same stores. Regression coverage: `VisiblePaneAttentionTests`.
 
-### SleepPreventionManager (`CtrlxServerFeature/Managers/SleepPreventionManager.swift`)
+### SleepPreventionService (`CtrlxServerFeature/Managers/SleepPreventionManager.swift`)
 
-`@MainActor` preventing Mac sleep during active sessions.
+`@DependencyClient` wrapping the `LiveSleepPreventionManager` actor for IOKit
+assertions during active sessions.
 
 - Uses IOKit `IOPMAssertionCreateWithName` assertions
 - Enabled/disabled via settings toggle
@@ -690,7 +700,7 @@ same stores. Regression coverage: `VisiblePaneAttentionTests`.
 
 ### LoginItemService (`CtrlxServerFeature/Services/LoginItemService.swift`)
 
-Static utility for launch-at-login management.
+`@DependencyClient` wrapping launch-at-login management.
 
 - Uses `SMAppService.mainApp` for registration
 - Appears in System Settings > General > Login Items
@@ -786,31 +796,37 @@ last-known layout. See `docs/folder-layout-persistence-plan.md`.
   `persistChangedLayouts()`. `LayoutSnapshotMapper` translates the live
   `SessionFileTabsState` ⇄ the `SavedFolderLayout` snapshot.
 
-## iOS Services
+## Shared Viewer services (Mac and iOS)
 
-### RelayClient (`CtrlxFeature/Services/RelayClient.swift`)
+### ViewerConnectionManager / ViewerConnection (`CtrlxCommon/Services/`)
 
-`@Observable @MainActor` managing WebSocket from iOS to relay server.
+`@Observable @MainActor` connection manager and per-Host connection. These are
+shared by Mac Viewer and iOS, not an iOS-only `RelayClient`.
 
-- Connects via `MacConnection` wrapper per paired Mac
-- Receives session state, hook events, terminal stream data
-- Sends commands (keystroke, cancel, start/stop stream)
-- Auto-reconnects with exponential backoff
+- Own connections by `pairId`, dispatch commands to the selected Host.
+- Handle encrypted session/agent state, terminal streams and command responses.
+- Negotiate peer compatibility and invalidate pending work on connection changes.
+- Expose separate Host-presence and Relay-transport interruption callbacks.
 
-### SessionStore (`CtrlxFeature/Services/SessionStore.swift`)
+### SessionStore (`CtrlxCommon/Services/SessionStore.swift`)
 
-`@Observable @MainActor` tracking sessions from Mac.
+`@Observable @MainActor` state received from multiple Hosts.
 
-- Stores sessions by pane ID
-- Handles hook events
-- Updates on full sync
-- Clears on disconnect
+- Pane identity is `PaneKey(pairId, paneId)`, never a bare tmux pane ID.
+- Tracks per-Host projects, launch choices, capabilities and shared terminal layouts.
+- Applies session snapshots and agent-state updates; disconnect handling clears
+  Host-specific live state/capabilities.
+- Keeps last-turn summaries through the handled-state transition.
+
+The platform UI owns selection and viewport state; this shared store does not
+make every Viewer layout or tab selection global.
 
 ## Utilities
 
-### ProcessRunner (`CtrlxServerFeature/Utilities/ProcessRunner.swift`)
+### ProcessRunner (`CtrlxCommon/Services/ProcessRunner.swift`)
 
-Actor for external processes.
+`@DependencyClient` for asynchronous external processes; macOS provides the live
+implementation, and tests can inject process results without launching commands.
 
 - Async execution, stdout/stderr collection
 - Thread-safe `OutputCollector` with NSLock
@@ -818,22 +834,20 @@ Actor for external processes.
 
 ## Models
 
-### CodingAgent (`CtrlxNetworking/Models/CodingAgent.swift`)
+### AgentSession / AgentState / PluginPresentation
 
-```swift
-public enum CodingAgent: String, Codable, Sendable, CaseIterable, Hashable {
-    case claudeCode = "claude-code"   // Anthropic Claude Code CLI (`claude`)
-    case codex                         // OpenAI Codex CLI (`codex`)
-}
-```
+Current wire types are in `CtrlxNetworking/Models/AgentSession.swift`,
+`AgentState.swift` and `Plugin/PluginPresentation.swift`.
 
-Carries display metadata used to render agent-aware UI:
+- `AgentSession` identifies the pane and owning `pluginID`, with one
+  `AgentState` for lifecycle and open response forms.
+- `isWorking` / `needsAttention` are derived state, not parallel state machines.
+- `PluginPresentation` supplies agent display metadata; `AgentProject` carries
+  discovered project identity.
+- Native conversation IDs used for telemetry/Fork are distinct from a tmux pane ID.
 
-- `displayName` — `"Claude Code"` / `"Codex"` (full notification titles)
-- `shortName` — `"claude"` / `"codex"` (lowercase in the bundled manifests since #691, so project-row agent badges read `claude`/`codex` verbatim with no casing transform in the UI; sidebar badges, compact toasts)
-- `processName` — `"claude"` / `"codex"` (matched against tmux pane process trees in `TmuxService.detectAgentPanes`)
-
-`HookEvent`, `ClaudeSession`, and `ClaudeProjectInfo` all carry an `agent` field that defaults to `.claudeCode` when missing, so older Mac builds and older relay payloads still decode cleanly.
+The former `CodingAgent` enum is removed. Add agents through plugin contracts
+and manifests rather than adding shared enum cases.
 
 ### PaneInfo (`CtrlxServerFeature/Models/PaneInfo.swift`)
 
@@ -849,42 +863,38 @@ command, currentPath, width, height, isActive
 - **Terminal:** fontName, fontSize, scrollbackLines, theme
 - **Behavior:** openPanesWindowOnLaunch, showStatusBar, autoConnectToServer, preventSleepDuringSessions
 - **Tmux:** tmuxPath, tmuxSocket
-- **Remote Access:** externalServerURL, deviceId, pairedDevices
-- **Coding agents:** autoRunClaudeInProjects, claudeCommandPath, codexCommandPath. `commandPath(for: CodingAgent)` returns the right binary path for an agent
+- **Remote Access:** externalServerURL, deviceId, pairedViewers, pairedHosts
+- **Coding agents:** owned by plugin settings/registry, not per-agent fields in AppSettings
 - **Prompt editor (Ctrl-G):** editorOverrideMode (`ask` / `overrideInCtrlxSessions` / `useMyEditor`) — see [Editor Override](#editor-override-ctrl-g)
-- **Plugin:** hasCompletedPluginSetup
 
-### PairedDevice (`CtrlxServerFeature/Models/Settings.swift`)
+### PairedViewer / PairedHost
 
-```swift
-id, deviceName, partnerPublicKey, partnerPublicKeyId, pairedAt, customName
-```
-
-Represents a paired iOS device with E2EE key info.
+`PairedViewer` in `CtrlxServerFeature/Models/Settings.swift` describes a peer
+viewing this Host. `PairedHost` in `CtrlxNetworking/Models/PairedHost.swift`
+describes a Host this client views. Keep role, pair identity and key metadata
+distinct; both peers may be Macs.
 
 ## Push Notifications
 
-**Configuration** (`.env`):
-```bash
-APNS_KEY_PATH=/secrets/AuthKey.p8
-APNS_KEY_ID=XXXXXXXXXX
-APNS_TEAM_ID=XXXXXXXXXX
-APNS_BUNDLE_ID=com.example.app
-APNS_ENVIRONMENT=development  # or "production"
-```
+See [push notifications](push-notifications-plan.md) for design/history and
+actionable replies, and [self-hosting](self-hosting.md) for current configuration.
+Current entry points:
 
-**Key files:**
-- `CtrlxExternalServer/Services/APNsService.swift`
-- `CtrlxExternalServer/Services/PushTokenStore.swift`
-- `CtrlxFeature/Services/PushNotificationService.swift`
+- `CtrlxExternalServerLib/Services/APNsService.swift`: APNs delivery.
+- `CtrlxExternalServerLib/Services/PairingService.swift`: pair persistence,
+  including registered push tokens.
+- `CtrlxFeature/Services/PushNotificationService.swift`: iOS registration.
+- Repository `CtrlxNotificationExtension/NotificationService.swift`: decrypts
+  notification content and attaches supported actions.
+- `CtrlxFeature/Services/NotificationActionService.swift`: submits iOS notification responses.
 
-**Events:** sessionStart, sessionEnd, permissionRequest, stop, notification
-
-**Important:** APNs environment must match build type (Xcode=development, App Store=production)
+APNs bundle/topic, signing entitlements and environment must match the installed
+build. Do not copy a maintainer's keys into Git. Stale permission/question replies
+must fail the Host's current-request check, not inject input into a newer form.
 
 ## E2EE Encryption
 
-See `docs/e2ee-encryption-plan.md` for full design.
+See [E2EE design](e2ee-encryption-plan.md) for primitives and historical implementation planning; current wire cases are in `CtrlxNetworking/Models/WebSocketMessage.swift`.
 
 **Primitives:**
 - Key Exchange: X25519 ECDH
@@ -896,6 +906,8 @@ See `docs/e2ee-encryption-plan.md` for full design.
 - `CtrlxEncryption/KeyManager.swift`
 - `CtrlxNotificationExtension/NotificationService.swift`
 
-**Encrypted types:** hookEvent, sessionState, command, commandResponse, terminalStream
-
-**Unencrypted types:** registerMac/registerIOS, ping/pong, iosConnected/Disconnected, encryptedPush
+Application state, commands/responses, terminal content and plugin messages travel
+inside the peer-encrypted envelope. Registration/presence/heartbeat and routing
+metadata remain Relay-visible. Push content is encrypted separately; the Relay
+can route it without decrypting it. Consult the current wire enum when adding a
+message rather than treating a historical list of cases as exhaustive.

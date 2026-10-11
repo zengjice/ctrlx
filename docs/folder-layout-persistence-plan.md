@@ -1,8 +1,14 @@
 # Folder Layout Persistence Plan
 
-Status: 🚧 **Implemented + E2E-proven** on branch
+Living layout reference with dated implementation history. Start with the
+implemented contracts below and §4.8 for Host-backed Files/Viewer tabs; use
+[Files](file-browser.md#directories-and-lifetime) for current cross-client lifetime
+and restore semantics. Original plan checklists and acceptance apply to their
+recorded revision, not every subsequent release.
+
+Historical status (2026-06-19): **Implemented + E2E-proven** on branch
 `feat/folder-layout-persistence`; flush-on-quit and file-tree expansion still
-pending. Last updated: 2026-06-19
+pending at that checkpoint.
 
 > **Layout is keyed by folder, not by session (revised 2026-06-19).** The first
 > cut keyed records by `host + tmux sessionName` (to give each running session
