@@ -9,6 +9,12 @@ enum WindowSelectionReconciliation: Equatable, Sendable {
     case unchanged
     case select(windowId: String, paneId: String?)
 
+    static func nextWindowID(after windowID: String, in candidates: [WindowSelectionCandidate]) -> String? {
+        guard let index = candidates.firstIndex(where: { $0.windowId == windowID }),
+              index + 1 < candidates.count else { return nil }
+        return candidates[index + 1].windowId
+    }
+
     static func resolve(
         selectedWindowId: String?,
         candidates: [WindowSelectionCandidate],

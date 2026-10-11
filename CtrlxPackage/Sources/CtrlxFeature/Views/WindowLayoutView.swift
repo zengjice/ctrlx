@@ -656,6 +656,14 @@
             }
         }
 
+        private func selectNextWindow(from sourceWindowID: String) {
+            guard window?.id == sourceWindowID, fileWorkspace.selectedID == nil, selectedBrowserID == nil,
+                  !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput,
+                  let nextID = WindowSelectionReconciliation.nextWindowID(after: sourceWindowID, in: windowSelectionCandidates),
+                  let target = sessionWindows.first(where: { $0.id == nextID }) else { return }
+            selectTerminalWindow(target)
+        }
+
         /// Inherit the pane the iPhone is actually controlling, which may not
         /// yet match the Host's active-pane flag during a state round trip.
         private var newWindowDirectory: String {
@@ -846,7 +854,7 @@
                     // Fallback: list panes vertically if layout parsing fails
                     VStack(spacing: 1) {
                         ForEach(window.panes) { pane in
-                            paneTerminal(pane: pane, windowName: window.windowName)
+                            paneTerminal(pane: pane, windowName: window.windowName, windowID: window.id)
                         }
                     }
                 }
@@ -869,7 +877,7 @@
             return ProportionalTileLayout(rects: positioned.map(\.rect)) {
                 ForEach(positioned) { pane in
                     let isSelected = pane.id == activePaneId
-                    paneTerminal(pane: pane.paneState, windowName: window.windowName)
+                    paneTerminal(pane: pane.paneState, windowName: window.windowName, windowID: window.id)
                         .overlay {
                             if isMultiPane {
                                 // Border: accent for selected, subtle for others
@@ -948,7 +956,7 @@
             return terminalCopyActions[activePaneId]
         }
 
-        private func paneTerminal(pane: PaneState, windowName: String) -> some View {
+        private func paneTerminal(pane: PaneState, windowName: String, windowID: String) -> some View {
             LiveTerminalView(
                 paneId: pane.paneId,
                 hostId: hostId,
@@ -1009,7 +1017,8 @@
                     if viewportGrids[pane.paneId] != grid {
                         viewportGrids[pane.paneId] = grid
                     }
-                }
+                },
+                onNextWindow: { selectNextWindow(from: windowID) }
             )
             .environment(relayClient)
         }

@@ -69,6 +69,19 @@ No app installation, signed IPA verification or iPhone profiling was performed.
   active dragging, history momentum and selection. It must not force the inner
   terminal to the bottom on every feed or layout.
 
+### Window right-swipe navigation
+
+In a session's active Terminal or Agent pane, a one-finger right swipe selects
+the next terminal Window in picker order; the last Window does not wrap. The
+native viewport observes this gesture alongside existing pans, without delaying
+vertical scrollback or TUI wheel gestures. The leftmost 32 points of the screen
+remain reserved for system Back; iOS 26's content-area Back waits for the Window
+swipe, without changing the leading-edge recognizer. Selection and a horizontally offset viewport
+disable switching for that touch, so panning back through wide content is safe.
+Keyboard controls, Files and browser tabs are not swipe targets. Selection reuses
+the window picker path (including cancelling pending creation/fit); no terminal
+resizing, extra stream subscription, Host or Relay change is introduced.
+
 ### Quiet Shell first-screen positioning (October 9, 2026)
 
 The outer viewport follows the live cursor in the normal screen, rather than

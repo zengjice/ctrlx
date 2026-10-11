@@ -3,6 +3,25 @@ import Testing
 
 @Suite("Window selection reconciliation")
 struct WindowSelectionReconciliationTests {
+    @Test("A right swipe follows picker order, not IDs or the Host active flag")
+    func nextWindow() {
+        let candidates = [
+            candidate("@8", paneId: "%2"),
+            candidate("@3", paneId: "%7"),
+            candidate("@1", paneId: "%9", isActive: true),
+        ]
+        #expect(WindowSelectionReconciliation.nextWindowID(after: "@8", in: candidates) == "@3")
+        #expect(WindowSelectionReconciliation.nextWindowID(after: "@3", in: candidates) == "@1")
+        #expect(WindowSelectionReconciliation.nextWindowID(after: "@1", in: candidates) == nil)
+        #expect(WindowSelectionReconciliation.nextWindowID(after: "@closed", in: candidates) == nil)
+    }
+
+    @Test("A right swipe never leaves an empty or single-window session")
+    func noNextWindow() {
+        #expect(WindowSelectionReconciliation.nextWindowID(after: "@1", in: []) == nil)
+        #expect(WindowSelectionReconciliation.nextWindowID(after: "@1", in: [candidate("@1", paneId: "%1")]) == nil)
+    }
+
     @Test("New window selection follows its pane even when the state arrives late")
     func createdWindow() {
         let original = candidate("@1", paneId: "%1", isActive: true)

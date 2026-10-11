@@ -84,6 +84,7 @@
         let onCopyActionChange: @MainActor ((@MainActor () -> Void)?) -> Void
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
         let onTerminalPaste: @MainActor (String) -> Void
+        let onNextWindow: (@MainActor () -> Void)?
 
         /// Live OTEL telemetry for this pane's session (issue #597), shown as a
         /// thin meter strip above the terminal (surface C).
@@ -146,7 +147,8 @@
             onExternalInputSenderChange: @escaping @MainActor ((@MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool)?) -> Void = { _ in },
             onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in },
             onCopyActionChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
-            onViewportGridChange: @escaping @MainActor (TerminalViewportSizing.Grid?) -> Void = { _ in }
+            onViewportGridChange: @escaping @MainActor (TerminalViewportSizing.Grid?) -> Void = { _ in },
+            onNextWindow: (@MainActor () -> Void)? = nil
         ) {
             self.paneId = paneId
             self.hostId = hostId
@@ -173,6 +175,7 @@
             self.onTerminalInputReadinessChange = onTerminalInputReadinessChange
             self.onCopyActionChange = onCopyActionChange
             self.onViewportGridChange = onViewportGridChange
+            self.onNextWindow = onNextWindow
             self.onTerminalPaste = onTerminalPaste
             self.coordinator = StreamCoordinator(
                 paneId: paneId,
@@ -498,7 +501,9 @@
                             }
                         },
                         onViewportGridChange: onViewportGridChange,
-                        onOpenPath: openPathAction
+                        onOpenPath: openPathAction,
+                        onNextWindow: isActive && !isInputSuspended && textSnapshot == nil && scenePhase == .active
+                            ? onNextWindow : nil
                     )
                 } else {
                     ProgressView("Initializing terminal...")
@@ -1358,6 +1363,7 @@
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
 
         var onOpenPath: (@MainActor (String) -> Void)?
+        var onNextWindow: (@MainActor () -> Void)?
 
         func makeUIView(context: Context) -> UIScrollView {
             // Calculate cell size using FontMetrics (matches SwiftTerm's computeFontDimensions)
@@ -1471,6 +1477,9 @@
             context.coordinator.widthConstraint = widthConstraint
             context.coordinator.heightConstraint = heightConstraint
             context.coordinator.onViewportGridChange = onViewportGridChange
+            let windowSwipe = TerminalWindowSwipeGesture(viewport: scrollView, terminal: terminalView)
+            windowSwipe.onNextWindow = onNextWindow
+            context.coordinator.windowSwipe = windowSwipe
             scrollView.cursorTop = { [weak terminalView, weak scrollView] in
                 guard let terminalView, let scrollView, let rect = terminalView.liveCursorRect else { return nil }
                 return terminalView.convert(rect, to: scrollView).minY
@@ -1561,6 +1570,7 @@
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
             context.coordinator.onViewportGridChange = onViewportGridChange
+            context.coordinator.windowSwipe?.onNextWindow = onNextWindow
             (scrollView as? BottomAnchoredTerminalScrollView)?.setKeyboardTransitioning(keyboardIsTransitioning)
 
             context.coordinator.updateInteraction(
@@ -1575,6 +1585,7 @@
 
         static func dismantleUIView(_ uiView: UIScrollView, coordinator: Coordinator) {
             coordinator.viewportReportTask?.cancel()
+            coordinator.windowSwipe?.onNextWindow = nil
             coordinator.terminalView?.invalidateInput()
         }
 
@@ -1583,6 +1594,7 @@
             var terminalView: InteractiveTerminalView?
             weak var terminalState: TerminalState?
             weak var outerScrollView: BottomAnchoredTerminalScrollView?
+            var windowSwipe: TerminalWindowSwipeGesture?
             var cellSize: CGSize = .zero
             var widthConstraint: NSLayoutConstraint?
             var heightConstraint: NSLayoutConstraint?

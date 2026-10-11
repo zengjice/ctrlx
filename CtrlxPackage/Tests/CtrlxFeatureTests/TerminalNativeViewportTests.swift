@@ -7,6 +7,68 @@ import UIKit
 @Suite("Terminal native viewport", .serialized)
 @MainActor
 struct TerminalNativeViewportTests {
+    @Test("Window swipes reserve Back, selection and horizontal scrolling")
+    func windowSwipeEligibility() {
+        let fixture = makeViewport(rows: 57)
+        defer { fixture.close() }
+        let swipe = TerminalWindowSwipeGesture(viewport: fixture.viewport, terminal: fixture.terminal)
+        let center = CGPoint(x: 180, y: 200)
+        #expect(!swipe.recognizer.isEnabled)
+        #expect(!swipe.canStart(at: center))
+        swipe.onNextWindow = { }
+        #expect(swipe.canStart(at: center))
+        #expect(!swipe.canStart(at: CGPoint(x: 32, y: 200)))
+        #expect(swipe.recognizer.direction == .right)
+        #expect(swipe.recognizer.numberOfTouchesRequired == 1)
+        #expect(!swipe.recognizer.cancelsTouchesInView)
+
+        fixture.viewport.contentSize.width = 900
+        fixture.viewport.contentOffset.x = 80
+        #expect(!swipe.canStart(at: center))
+        fixture.viewport.contentInset.left = 12
+        fixture.viewport.contentOffset.x = -12
+        #expect(swipe.canStart(at: center))
+
+        fixture.terminal.feedTerminalData(Array("selected text".utf8)[...])
+        fixture.terminal.setSelectionRange(start: .init(col: 0, row: 0), end: .init(col: 8, row: 0))
+        #expect(!swipe.canStart(at: center))
+        #expect(!swipe.gestureRecognizerShouldBegin(swipe.recognizer))
+        swipe.onNextWindow = nil
+        #expect(!swipe.recognizer.isEnabled)
+    }
+
+    @Test("Window swipes coexist only with terminal pans, not navigation or selection gestures")
+    func windowSwipeGestureCoexistence() {
+        let fixture = makeViewport(rows: 57)
+        defer { fixture.close() }
+        let swipe = TerminalWindowSwipeGesture(viewport: fixture.viewport, terminal: fixture.terminal)
+        #expect(swipe.gestureRecognizer(swipe.recognizer, shouldRecognizeSimultaneouslyWith: fixture.viewport.panGestureRecognizer))
+        #expect(swipe.gestureRecognizer(swipe.recognizer, shouldRecognizeSimultaneouslyWith: fixture.terminal.panGestureRecognizer))
+        let back = UIScreenEdgePanGestureRecognizer()
+        fixture.window.addGestureRecognizer(back)
+        #expect(!swipe.gestureRecognizer(swipe.recognizer, shouldRecognizeSimultaneouslyWith: back))
+        let selection = UILongPressGestureRecognizer()
+        fixture.terminal.addGestureRecognizer(selection)
+        #expect(!swipe.gestureRecognizer(swipe.recognizer, shouldRecognizeSimultaneouslyWith: selection))
+    }
+
+    @Test("Window swipes take priority over iOS 26 content Back, but not edge Back")
+    func windowSwipeBackPriority() throws {
+        guard #available(iOS 26.0, *) else { return }
+        let fixture = makeViewport(rows: 57)
+        defer { fixture.close() }
+        let root = try #require(fixture.window.rootViewController)
+        let navigation = UINavigationController(rootViewController: root)
+        fixture.window.rootViewController = navigation
+        let swipe = TerminalWindowSwipeGesture(viewport: fixture.viewport, terminal: fixture.terminal)
+        swipe.onNextWindow = { }
+        let contentBack = try #require(navigation.interactiveContentPopGestureRecognizer)
+        let edgeBack = try #require(navigation.interactivePopGestureRecognizer)
+        #expect(swipe.gestureRecognizer(swipe.recognizer, shouldBeRequiredToFailBy: contentBack))
+        #expect(!swipe.gestureRecognizer(swipe.recognizer, shouldBeRequiredToFailBy: edgeBack))
+        #expect(!swipe.gestureRecognizer(swipe.recognizer, shouldBeRequiredToFailBy: fixture.viewport.panGestureRecognizer))
+    }
+
     @Test("A quiet tall Shell is visible before any drag or additional byte")
     func quietShell() throws {
         let fixture = makeViewport(rows: 57)
