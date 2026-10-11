@@ -60,7 +60,9 @@ public enum TerminalFileLinkDetector {
             previous = row
         }
         excludeWebURLs(in: &units)
-        let delimiters = Set("<>\"'`()[]{}|" as String)
+        // Prose punctuation separates bare paths; enclosed paths and OSC 8
+        // targets retain their literal filename characters.
+        let delimiters = Set("<>\"'`()[]{}|，。；：！？、" as String)
         let pairs: [Character: Character] = ["(": ")", "[": "]", "\"": "\"", "'": "'", "`": "`"]
         func isDelimiter(at index: Int) -> Bool {
             let character = units[index].character
@@ -83,7 +85,12 @@ public enum TerminalFileLinkDetector {
                     index = units[(index + 1)...].firstIndex(where: { $0.character == "\n" && !$0.continuation }) ?? units.count
                     continue
                 }
-                if let link = makeLink(Array(units[(index + 1)..<end]), enclosed: true) {
+                let content = joinedEnclosedContent(Array(units[(index + 1)..<end]))
+                if isTruncated(String(content.map(\.character))) {
+                    index = end + 1
+                    continue
+                }
+                if let link = makeLink(content) {
                     result.append(link)
                     index = end + 1
                     continue
@@ -98,10 +105,41 @@ public enum TerminalFileLinkDetector {
                 index += 1
             }
             var token = Array(units[start..<index])
+            if let end = incompleteFileURLEnd(in: units, token: token, end: index) {
+                index = end
+                continue
+            }
+            // Check before stripping punctuation: an ASCII ellipsis is not a period.
+            guard !isTruncated(String(token.map(\.character))) else { continue }
             while let last = token.last, ".,;:!?。，；：！？".contains(last.character) { token.removeLast() }
-            if let link = makeLink(token, enclosed: false) { result.append(link) }
+            if let link = makeLink(token) { result.append(link) }
         }
         return result
+    }
+
+    /// Bare hard breaks carry no link target. Suppress a likely split URI and
+    /// its continuation lines instead of making each fragment independently clickable.
+    private static func incompleteFileURLEnd(in units: [Unit], token: [Unit], end: Int) -> Int? {
+        guard token.starts(with: Array("file://"), by: { $0.character == $1 }) else { return nil }
+        var end = end
+        var last = token.last?.character
+        var foundContinuation = false
+        while end < units.count {
+            var newline = end
+            while newline < units.count, units[newline].character.isWhitespace, units[newline].character != "\n" { newline += 1 }
+            guard newline < units.count, units[newline].character == "\n",
+                  last == "/" || last == "-" || units[newline].continuation else { break }
+            let lineEnd = units[(newline + 1)...].firstIndex(where: { $0.character == "\n" }) ?? units.count
+            let text = String(units[(newline + 1)..<lineEnd].map(\.character)).trimmingCharacters(in: .whitespaces)
+            // A new explicitly rooted path or prose line is independent, not a tail.
+            guard let first = text.first, first.isLetter || first.isNumber || first == "_",
+                  !text.contains(where: { $0.isWhitespace || ":<>\"'`()[]{}|，。；：！？、".contains($0) }),
+                  text.contains("/") || text.contains(".") || text.hasSuffix("-") else { break }
+            foundContinuation = true
+            last = text.last
+            end = lineEnd
+        }
+        return foundContinuation ? end : nil
     }
 
     private static func closingIndex(in units: [Unit], from start: Int, close: Character) -> Int? {
@@ -143,13 +181,13 @@ public enum TerminalFileLinkDetector {
         }
     }
 
-    private static func makeLink(_ units: [Unit], enclosed: Bool) -> TerminalFileLink? {
-        guard units.count <= 4096, !units.contains(where: \.isWebURL) else { return nil }
+    /// closingIndex has already checked the enclosure's hard-wrap boundaries.
+    /// Truncation checks and link creation must use the same joined characters.
+    private static func joinedEnclosedContent(_ units: [Unit]) -> [Unit] {
         var content: [Unit] = []
         var skipsIndent = false
         for unit in units {
             if unit.character == "\n" {
-                guard enclosed, unit.continuation else { return nil }
                 while content.last?.character.isWhitespace == true { content.removeLast() }
                 skipsIndent = true
             } else if skipsIndent && unit.character.isWhitespace {
@@ -161,7 +199,13 @@ public enum TerminalFileLinkDetector {
         }
         while content.first?.character.isWhitespace == true { content.removeFirst() }
         while content.last?.character.isWhitespace == true { content.removeLast() }
-        guard let path = path(String(content.map(\.character))) else { return nil }
+        return content
+    }
+
+    private static func makeLink(_ content: [Unit]) -> TerminalFileLink? {
+        guard content.count <= 4096, !content.contains(where: \.isWebURL) else { return nil }
+        let text = String(content.map(\.character))
+        guard !isTruncated(text), let path = path(text), isConfidentTextPath(text) else { return nil }
         var spans: [TerminalFileLink.Span] = []
         for unit in content {
             if let last = spans.last, last.row == unit.row {
@@ -169,6 +213,24 @@ public enum TerminalFileLinkDetector {
             } else { spans.append(.init(row: unit.row, columns: unit.columns)) }
         }
         return .init(path: path, spans: spans)
+    }
+
+    private static func isTruncated(_ text: String) -> Bool {
+        text.contains("…") || text.contains("...")
+    }
+
+    /// Text needs path-specific evidence; explicit OSC 8 targets bypass this heuristic.
+    private static func isConfidentTextPath(_ text: String) -> Bool {
+        if text.hasPrefix("file://") || text.hasPrefix("~/") || text.hasPrefix("./") || text.hasPrefix("../") { return true }
+        if text.hasPrefix("/") {
+            // /review and similar single-component slash commands are ambiguous.
+            return text.dropFirst().contains("/") || !(text as NSString).pathExtension.isEmpty
+        }
+        if text.hasPrefix(".") { return true } // Explicit hidden directory, e.g. .build-local/.
+        let name = (text as NSString).lastPathComponent
+        guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return false }
+        let suffix = name[name.index(after: dot)...]
+        return !text.hasSuffix("/") && !suffix.isEmpty && suffix.allSatisfy { $0.isLetter || $0.isNumber }
     }
 
     public static func path(_ text: String) -> String? {

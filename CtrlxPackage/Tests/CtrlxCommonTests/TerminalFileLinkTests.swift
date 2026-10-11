@@ -33,6 +33,113 @@ struct TerminalFileLinkTests {
         #expect(TerminalFileLinkDetector.links(rows: [row(text)], columns: 160).isEmpty)
     }
 
+    @Test("Slash commands and ordinary slash-separated prose are not inferred paths", arguments: [
+        "/review", "/resume", "crayon/gouache", "central/lower", "size/", "Host/Viewer", "foo/bar/",
+    ])
+    func ambiguousText(text: String) {
+        let links = TerminalFileLinkDetector.links(rows: [row("Tip: \(text) (\(text)) ./output/report.pdf")], columns: 160)
+        #expect(links.map(\.path) == ["./output/report.pdf"])
+    }
+
+    @Test("Rooted paths, hidden directories and relative filenames remain supported", arguments: [
+        "/etc/hosts", "/tmp/", "/report.pdf", "~/Projects/reel", "./docs/", "../src/Makefile",
+        "docs/report.md", "文档/报告.pdf", ".build-local/agent-simulator-acceptance/20261004-capacity",
+    ])
+    func confidentText(path: String) {
+        #expect(TerminalFileLinkDetector.links(rows: [row(path)], columns: 160).map(\.path) == [path])
+    }
+
+    @Test("Truncated tool paths never turn into clickable prefixes", arguments: [
+        ".build-local/agent-simulator-acceptance/20261004-capac…",
+        ".build-local/agent-simulator-acceptance/20261004-capac...",
+        ".build-local/agent-simulator-acceptance/20261004-capacity/…",
+        "/Users/.../.build-local/script.py", "/Users/…/.build-local/script.py",
+        "file:///tmp/output/…/image.png", "./output/report.pdf...;",
+        "\"./output/my report...pdf\"", "(./output/my report…pdf)",
+    ])
+    func truncatedText(text: String) {
+        let links = TerminalFileLinkDetector.links(rows: [row("\(text) ./later/file.txt")], columns: 160)
+        #expect(links.map(\.path) == ["./later/file.txt"])
+    }
+
+    @Test("Truncation detection follows soft wraps, including split ASCII ellipses")
+    func softWrappedTruncation() {
+        let links = TerminalFileLinkDetector.links(rows: [
+            row(".build-local/capacity."),
+            row("..", number: 1, wrapped: true),
+            row("./later/file.txt", number: 2),
+        ], columns: 21)
+        #expect(links.map(\.path) == ["./later/file.txt"])
+    }
+
+    @Test("Hard-wrapped ellipses suppress the whole enclosure without hiding later paths", arguments: [
+        ("(", ")"), ("[", "]"), ("\"", "\""), ("'", "'"), ("`", "`"),
+    ], [1, 2])
+    func hardWrappedTruncation(enclosure: (String, String), firstDots: Int) {
+        let first = enclosure.0 + "./output/report.pdf" + String(repeating: ".", count: firstDots)
+        let links = TerminalFileLinkDetector.links(rows: [
+            row(first),
+            row("  " + String(repeating: ".", count: 3 - firstDots) + enclosure.1, number: 1),
+            row("./later/file.txt", number: 2),
+        ], columns: first.count)
+        #expect(links.map(\.path) == ["./later/file.txt"])
+        #expect(links.first?.spans == [.init(row: 2, columns: 0..<16)])
+    }
+
+    @Test("Joining enclosed paths preserves meaningful interior spaces")
+    func enclosedDotsSeparatedBySpaces() {
+        let path = "./output/report. .pdf"
+        let links = TerminalFileLinkDetector.links(rows: [row("(\(path))")], columns: 80)
+        #expect(links.map(\.path) == [path])
+    }
+
+    @Test("Bare hard-wrapped file URIs do not expose directory or filename fragments")
+    func bareHardWrappedFileURI() {
+        let links = TerminalFileLinkDetector.links(rows: [
+            row("  └ Saved to: file:///Users/zengjice/.codex/"),
+            row("generated_images/01a10b9d-5efd-72e1-850f-6b6374f064bd/exec-92e06f4d-", number: 1),
+            row("a8ca-43f6-b0cc-98bf59fd7983.png", number: 2),
+            row("./later/file.txt", number: 3),
+        ], columns: 69)
+        #expect(links.map(\.path) == ["./later/file.txt"])
+        #expect(links.first?.spans == [.init(row: 3, columns: 0..<16)])
+    }
+
+    @Test("A split file URI cannot expose a tail that looks like a complete relative file")
+    func fileURITailWithExtension() {
+        let links = TerminalFileLinkDetector.links(rows: [
+            row("Saved to: file:///tmp/output/"),
+            row("    nested/report.pdf", number: 1),
+            row("./later/file.txt", number: 2),
+        ], columns: 80)
+        #expect(links.map(\.path) == ["./later/file.txt"])
+    }
+
+    @Test("Complete file URIs remain links before independently rooted paths or prose", arguments: [
+        "./next/report.pdf", "/next/report.pdf", "~/next/report.pdf", "../next/report.pdf",
+        ".build-local/script.py", "file:///next/report.pdf", "Saved docs/report.md",
+    ])
+    func independentLineAfterFileURI(next: String) {
+        let links = TerminalFileLinkDetector.links(rows: [row("file:///tmp/"), row(next, number: 1)], columns: 80)
+        let expected = next.hasPrefix("file://") ? "/next/report.pdf" : next.replacingOccurrences(of: "Saved ", with: "")
+        #expect(links.map(\.path) == ["/tmp/", expected])
+    }
+
+    @Test("Soft-wrapped and enclosed hard-wrapped file URIs retain the complete target")
+    func completeWrappedFileURI() {
+        let uri = "file:///tmp/generated_images/image.png"
+        let soft = TerminalFileLinkDetector.links(rows: [
+            row("file:///tmp/generated_"), row("images/image.png", number: 1, wrapped: true),
+        ], columns: 21)
+        #expect(soft.map(\.path) == ["/tmp/generated_images/image.png"])
+        #expect(soft.first?.spans.count == 2)
+        let hard = TerminalFileLinkDetector.links(rows: [
+            row("(file:///tmp/generated_"), row("  images/image.png)", number: 1),
+        ], columns: 22)
+        #expect(hard.map(\.path) == ["/tmp/generated_images/image.png"])
+        #expect(TerminalFileLinkDetector.path(uri) == hard.first?.path)
+    }
+
     @Test("Plain web URLs never expose their parenthesized paths as file links", arguments: [
         "https://example.com/api(foo/bar)",
         "https://example.com/api(foo/bar)/next/file.txt",
@@ -67,6 +174,58 @@ struct TerminalFileLinkTests {
     @Test func quotedSpacesAndTrailingPunctuation() {
         let links = TerminalFileLinkDetector.links(rows: [row("\"/host/my movie.mp4\"; ./output/movie.mp4。 (my folder/video.mp4)")], columns: 160)
         #expect(links.map(\.path) == ["/host/my movie.mp4", "./output/movie.mp4", "my folder/video.mp4"])
+    }
+
+    @Test("Chinese prose punctuation bounds unquoted paths without requiring spaces", arguments: [
+        "：", "，", "。", "；", "！", "？", "、",
+    ], ["docs/report.md", "文档/报告.md", "./out/report.pdf", "../out/report.pdf", "/host/out/report.pdf", "~/Movies/report.mp4"])
+    func chineseProseBoundaries(separator: String, path: String) {
+        let links = TerminalFileLinkDetector.links(rows: [row("结果\(separator)\(path)\(separator)已生成")], columns: 100)
+        #expect(links.map(\.path) == [path])
+        let pathCells = row(path).cells
+        let width = pathCells.last.map { $0.column + $0.width } ?? 0
+        #expect(links.first?.spans == [.init(row: 0, columns: 6..<(6 + width))])
+        #expect(links.first?.contains(column: 4, row: 0) == false)
+        #expect(links.first?.contains(column: 6 + width, row: 0) == false)
+    }
+
+    @Test("The reported Codex label sends only the file path to the Host")
+    func codexChineseLabelResolution() async throws {
+        let path = "docs/swiftterm-ios-scrolling.md"
+        let links = TerminalFileLinkDetector.links(rows: [
+            row("• 点击这个文件路径试试：\(path) (docs/"),
+            row("  swiftterm-ios-scrolling.md)", number: 1),
+        ], columns: 69)
+        let link = try #require(links.first { $0.contains(column: 24, row: 0) })
+        #expect(link.path == path)
+        #expect(link.spans == [.init(row: 0, columns: 24..<(24 + path.count))])
+
+        var requests: [String] = []
+        let source = FileBrowserSource(id: "host", paneID: "%18") { operation in
+            guard case let .info(path) = operation else { throw FileBrowserError.message("Unexpected operation") }
+            requests.append(path)
+            return .info(.init(path: path, name: "swiftterm-ios-scrolling.md", kind: .markdown, size: 1, revision: "1"))
+        }
+        let destination = try await TerminalFileDestination.resolve(path: link.path, baseDirectory: "/host/project", source: source)
+        #expect(requests == ["/host/project/\(path)"])
+        #expect(destination == .init(directory: "/host/project/docs", file: "/host/project/\(path)"))
+    }
+
+    @Test("Enclosed filenames preserve Chinese punctuation literally", arguments: [
+        ("\"", "\""), ("'", "'"), ("`", "`"), ("(", ")"), ("[", "]"),
+    ])
+    func enclosedChinesePunctuation(open: String, close: String) {
+        let path = "./报告：最终，确认；版本！？、。/文件.md"
+        let links = TerminalFileLinkDetector.links(rows: [row("结果：\(open)\(path)\(close)")], columns: 100)
+        #expect(links.map(\.path) == [path])
+    }
+
+    @Test("Chinese punctuation inside a web URL cannot expose file fragments")
+    func chinesePunctuationInWebURL() {
+        let links = TerminalFileLinkDetector.links(rows: [
+            row("https://example.com/结果：foo/bar，next/file ./out/report.pdf"),
+        ], columns: 100)
+        #expect(links.map(\.path) == ["./out/report.pdf"])
     }
 
     @Test("Apostrophes inside prose do not swallow a following path", arguments: [
@@ -203,6 +362,9 @@ struct TerminalFileLinkTests {
         ("file:///tmp/%3Creport%3E%60.pdf", "/tmp/<report>`.pdf"),
         ("file:///tmp/literal%2527.pdf", "/tmp/literal%27.pdf"),
         ("file:///tmp/literal%250A.pdf", "/tmp/literal%0A.pdf"),
+        ("file:///tmp/report%EF%BC%9Afinal%EF%BC%8Cok.pdf", "/tmp/report：final，ok.pdf"),
+        ("file:///tmp/report...pdf", "/tmp/report...pdf"),
+        ("file:///tmp/report%E2%80%A6pdf", "/tmp/report…pdf"),
     ])
     func decodedOSC8Resolution(uri: String, expected: String) async throws {
         let delegate = Delegate()
@@ -331,6 +493,47 @@ struct TerminalFileLinkTests {
         func send(source: Terminal, data: ArraySlice<UInt8>) { }
     }
 
+    @Test("A 21-column terminal never exposes a prefix of a hard-wrapped truncated path")
+    func nativeHardWrappedTruncation() {
+        let delegate = Delegate()
+        let terminal = Terminal(delegate: delegate, options: .init(cols: 21, rows: 6))
+        terminal.feed(text: "(./output/report.pdf.\r\n  ..)\r\n./later/file.txt\r\n$ ")
+        let links = TerminalFileLinkDetector.links(terminal: terminal, rows: 0..<6, cellPayload: { _, _ in nil })
+        #expect(links.map(\.path) == ["./later/file.txt"])
+        #expect(links.first?.spans == [.init(row: 2, columns: 0..<16)])
+        withExtendedLifetime(delegate) { }
+    }
+
+    @Test("OSC 8 uses its complete target even when the visible label is shortened or command-like", arguments: [
+        ".build-local/agent-simulator-acceptance/20261004-capac…", "/review", "crayon/gouache",
+    ])
+    func explicitTargetWithAmbiguousLabel(label: String) {
+        let delegate = Delegate()
+        let terminal = Terminal(delegate: delegate, options: .init(cols: 80, rows: 4))
+        terminal.feed(text: "\u{1b}]8;;file:///tmp/report.pdf\u{1b}\\\(label)\u{1b}]8;;\u{1b}\\\r\n$ ")
+        let links = TerminalFileLinkDetector.links(terminal: terminal, rows: 0..<4, cellPayload: { _, _ in nil })
+        #expect(links.map(\.path) == ["/tmp/report.pdf"])
+        #expect(links.first?.spans == [.init(row: 0, columns: 0..<label.count)])
+        withExtendedLifetime(delegate) { }
+    }
+
+    @Test("Real terminal screenshot text has no false file hit targets")
+    func nativeScreenshotFalsePositives() {
+        let delegate = Delegate()
+        let terminal = Terminal(delegate: delegate, options: .init(cols: 69, rows: 12))
+        terminal.feed(text: "crayon/gouache central/lower size/\r\n"
+            + "Tip: Run /review to get a code review\r\n"
+            + "  └ Saved to: file:///Users/zengjice/.codex/\r\n"
+            + "generated_images/01a10b9d-5efd-72e1-850f-6b6374f064bd/exec-92e06f4d-\r\n"
+            + "a8ca-43f6-b0cc-98bf59fd7983.png\r\n"
+            + "Ran python3 .build-local/agent-simulator-acceptance/20261004-capac…\r\n"
+            + "./output/report.pdf\r\n$ ")
+        let links = TerminalFileLinkDetector.links(terminal: terminal, rows: 0..<12, cellPayload: { _, _ in nil })
+        #expect(links.map(\.path) == ["./output/report.pdf"])
+        #expect(links.first?.spans == [.init(row: 6, columns: 0..<19)])
+        withExtendedLifetime(delegate) { }
+    }
+
     @Test("Real SwiftTerm wide/soft-wrapped cells are clickable, but the live input row is not")
     func nativeCells() throws {
         let delegate = Delegate()
@@ -342,6 +545,20 @@ struct TerminalFileLinkTests {
         #expect(link.spans.count == 2)
         #expect(link.contains(column: 5, row: 0))
         #expect(!links.contains { $0.path == "./editing/path" })
+        withExtendedLifetime(delegate) { }
+    }
+
+    @Test("Chinese prose is excluded from real underlined, soft-wrapped path hit targets")
+    func nativeChineseLabel() throws {
+        let delegate = Delegate()
+        let terminal = Terminal(delegate: delegate, options: .init(cols: 40, rows: 5))
+        let path = "docs/swiftterm-ios-scrolling.md"
+        terminal.feed(text: "• 点击这个文件路径试试：\u{1b}[4m\(path)\u{1b}[24m\r\n$ ")
+        let links = TerminalFileLinkDetector.links(terminal: terminal, rows: 0..<5, cellPayload: { _, _ in nil })
+        let link = try #require(links.first)
+        #expect(links.map(\.path) == [path])
+        #expect(link.spans == [.init(row: 0, columns: 24..<40), .init(row: 1, columns: 0..<(path.count - 16))])
+        #expect(!link.contains(column: 22, row: 0))
         withExtendedLifetime(delegate) { }
     }
 

@@ -74,7 +74,24 @@ through its wrapped fragment, without hiding later independent lines. Ambiguous/
 are not guessed. Spaces need
 quotes/brackets or an explicit file hyperlink; apostrophes inside words such as
 `I've` are not opening quotes. Bare filenames and editor line/
-column suffixes are not inferred. Explicit hyperlinks take precedence, then
+column suffixes are not inferred. Chinese prose punctuation (`，。；：！？、`)
+separates unquoted paths even without spaces, so `结果：docs/report.md` links
+only `docs/report.md`. Filenames containing those punctuation marks require an
+enclosed path or an explicit file hyperlink; both preserve them literally.
+Plain text needs path-specific evidence: a rooted path, a dot-prefixed hidden
+directory such as `.build-local/`, or a relative filename with an extension.
+Single-component slash commands (`/review`), ordinary slash-separated prose
+(`crayon/gouache`) and ambiguous bare directories (`size/`) are not inferred;
+write `./size/` to make a directory explicit. Visible paths containing `…` or
+`...` are skipped, including truncated tool-command output: expand it to obtain
+the full path. Enclosed hard wraps are joined before checking for truncation;
+an ellipsis split across rows suppresses the entire enclosure, not just its tail.
+Bare hard-wrapped `file://` URIs with apparent continuation lines
+are skipped as a group rather than linking incomplete prefixes/tails. Complete
+URIs, terminal soft wraps and enclosed near-edge hard wraps remain supported.
+Explicit OSC 8 targets bypass these text heuristics, including literal ellipses
+in filenames; they never need to guess a target from a shortened label.
+Explicit hyperlinks take precedence, then
 plain web URLs (including their bracketed/query fragments), then file candidates.
 Explicit file links are decoded once. Resolution checks path bounds and control
 characters without reapplying text-recognition rules, so encoded filename characters
