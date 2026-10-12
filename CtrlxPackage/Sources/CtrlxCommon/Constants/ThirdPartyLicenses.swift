@@ -54,6 +54,8 @@ public extension ThirdPartyLicense {
         ThirdPartyLicense(name: "SwiftTerm", license: "MIT", url: URL(staticString: "https://github.com/migueldeicaza/SwiftTerm")),
         ThirdPartyLicense(name: "agent-browser", license: "Apache-2.0", url: URL(staticString: "https://github.com/vercel-labs/agent-browser")),
         ThirdPartyLicense(name: "Chromium Embedded Framework", license: "BSD-3-Clause / Chromium third-party licenses", url: URL(staticString: "https://github.com/chromiumembedded/cef")),
+        ThirdPartyLicense(name: "idb simulator transport", license: "MIT", url: URL(staticString: "https://github.com/facebook/idb")),
+        ThirdPartyLicense(name: "simslim", license: "MIT", url: URL(staticString: "https://github.com/MobAI-App/simslim")),
         ThirdPartyLicense(name: "Sparkle", license: "MIT", url: URL(staticString: "https://github.com/sparkle-project/Sparkle")),
         ThirdPartyLicense(name: "Vapor", license: "MIT", url: URL(staticString: "https://github.com/vapor/vapor")),
         ThirdPartyLicense(name: "vapor/apns (APNSwift)", license: "MIT / Apache-2.0", url: URL(staticString: "https://github.com/vapor/apns")),

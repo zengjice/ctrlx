@@ -29,6 +29,8 @@ struct BrowserTab: Identifiable, Equatable {
     /// Native Chromium tabs (agent-owned or human-only) are transient. Never
     /// restore them as WebKit pages or grant a new Codex control over old tabs.
     var isAgentBrowser: Bool = false
+    var isSimulator: Bool = false
+    var isTransient: Bool { isAgentBrowser || isSimulator }
 
     init(
         id: UUID = UUID(),

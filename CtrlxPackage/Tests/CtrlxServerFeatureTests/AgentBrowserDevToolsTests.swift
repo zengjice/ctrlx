@@ -12,6 +12,8 @@ struct AgentBrowserDevToolsTests {
         var inspected: [String] = []
         var closed: [String] = []
         func start(with delegate: any CXBrowserHostDelegate, profile: String, state: String) throws {}
+        func isReady() -> Bool { true }
+        func startupError() -> String? { nil }
         func openManualTab(route: [String: String], url: String, completion: @escaping (String?) -> Void) { completion(nil) }
         func navigateTab(_ identifier: String, url: String) {}
         func goBack(_ identifier: String) {}

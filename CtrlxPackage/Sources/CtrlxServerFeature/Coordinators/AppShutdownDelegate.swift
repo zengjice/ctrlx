@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import CtrlxBrowserBridge
     import Dependencies
     import Foundation
     import Logging
@@ -7,9 +8,9 @@
     /// NSApplicationDelegate that runs async cleanup before the app terminates.
     ///
     /// AppKit calls `applicationShouldTerminate(_:)` for both interactive Quit
-    /// and AppleScript "quit". We reply `.terminateLater`, run the registered
-    /// async cleanup with a hard timeout, then call
-    /// `NSApplication.reply(toApplicationShouldTerminate:)` so AppKit proceeds.
+    /// and AppleScript "quit". Ordinary AppKit quit uses `.terminateLater`;
+    /// Chromium routes quit here before AppKit enters its modal loop so the
+    /// native message loop can unwind during async cleanup.
     ///
     /// Without this, tmux is left with `cat > FIFO` subprocesses whose reader
     /// (us) has just disappeared. The source pane then stalls until `cat`
@@ -17,7 +18,7 @@
     /// for an idle pane. Wiring this hook lets us send `pipe-pane -t` to tmux
     /// before exit, which terminates the `cat` subprocesses immediately.
     @MainActor
-    final public class AppShutdownDelegate: NSObject, NSApplicationDelegate {
+    final public class AppShutdownDelegate: NSObject, NSApplicationDelegate, @preconcurrency CXBrowserTerminationDelegate {
         /// Async cleanup to run before the app terminates. Set this once at
         /// startup; if `nil` at quit time, AppKit terminates immediately.
         public var onShouldTerminate: (@MainActor () async -> Void)?
@@ -26,6 +27,8 @@
         public let shutdownTimeout: Duration
 
         private var didReply = false
+        private var isCleaningUp = false
+        private var usesModalReply = true
         private let logger = Logger(label: "com.jicezeng.ctrlx.shutdown")
 
         @Dependency(\.continuousClock) private var clock
@@ -37,11 +40,15 @@
             NSApp.reply(toApplicationShouldTerminate: true)
         }
 
+        var terminateHandler: @MainActor () -> Void = {
+            NSApp.terminate(nil)
+        }
+
         /// `@NSApplicationDelegateAdaptor` instantiates via Objective-C `init()`,
         /// which doesn't see Swift default arguments — so we need an explicit
         /// zero-arg initializer.
         public override init() {
-            self.shutdownTimeout = .seconds(5)
+            self.shutdownTimeout = .seconds(30)
             super.init()
         }
 
@@ -50,12 +57,33 @@
             super.init()
         }
 
+        public func installNativeTerminationHandling() {
+            CXBrowserSetTerminationDelegate(self)
+        }
+
+        public func tryToTerminateWithoutModalLoop() -> Bool {
+            guard !didReply, let cleanup = onShouldTerminate else { return false }
+            if !isCleaningUp {
+                usesModalReply = false
+                beginCleanup(cleanup)
+            }
+            return true
+        }
+
         public func applicationShouldTerminate(
             _: NSApplication
         ) -> NSApplication.TerminateReply {
+            guard !didReply else { return .terminateNow }
             guard let cleanup = onShouldTerminate else { return .terminateNow }
+            if !isCleaningUp {
+                usesModalReply = true
+                beginCleanup(cleanup)
+            }
+            return .terminateLater
+        }
 
-            didReply = false
+        private func beginCleanup(_ cleanup: @escaping @MainActor () async -> Void) {
+            isCleaningUp = true
             logger.info("applicationShouldTerminate: running async cleanup")
             // Race the cleanup against a hard deadline. Whichever finishes
             // first calls `replyOnce()`; the second call is a no-op. This
@@ -74,13 +102,16 @@
                 }
                 self.replyOnce()
             }
-            return .terminateLater
         }
 
         private func replyOnce() {
             guard !didReply else { return }
             didReply = true
-            replyHandler()
+            if usesModalReply {
+                replyHandler()
+            } else {
+                terminateHandler()
+            }
         }
     }
 #endif

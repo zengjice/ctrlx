@@ -18,6 +18,12 @@ Sparkle stays disabled in the application until a CtrlX feed URL and EdDSA
 public key are supplied in ignored `Config/Local-macOS.xcconfig`. Gallager's
 feed, key and domains are never fallback values.
 
+The simulator build scripts sign both `CtrlxSimulatorHost` and the pinned
+`simslim` helper with Hardened Runtime. Validate actual display, input,
+accessibility and profile changes in the signed candidate before distribution.
+Full App hardening and notarization still require the Agent Browser archive
+gates described in `docs/agent-browser.md`.
+
 ## Publish only the macOS package
 
 For the existing Qcloud private-distribution channel, follow the sibling

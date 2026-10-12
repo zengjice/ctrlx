@@ -148,4 +148,46 @@ struct AgentBrowserIdentityTests {
             }
         }
     }
+
+    @Test func firstRegistrationActivatesTheSelectedHostBeforeDiscovery() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let owner = process(getppid(), uid: getuid())
+        struct HostUnavailable: Error {}
+        try withDependencies {
+            $0[AgentBrowserProcessClient.self] = client([owner])
+            $0[AgentBrowserHostClient.self] = .init(prepare: { requested in
+                #expect(requested == root)
+                #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("endpoint.json").path))
+                throw HostUnavailable()
+            })
+        } operation: {
+            #expect(throws: HostUnavailable.self) { try AgentBrowserTransport.registeredContext(root: root) }
+        }
+        let saved = try AgentBrowserTransport.withRunContext(for: owner, root: root) { _, value in value }
+        #expect(saved["socket"] == nil)
+        #expect(saved["epoch"] == nil)
+    }
+
+    @Test func registeredGrantsNeverActivateOrRegisterAgainstANewHost() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let owner = process(getppid(), uid: getuid())
+        try AgentBrowserTransport.withRunContext(for: owner, root: root) { url, value in
+            value["socket"] = "/fixture/old-control.sock"
+            value["epoch"] = "old-host"
+            try AgentBrowserTransport.writePrivateJSON(value, to: url)
+        }
+        try withDependencies {
+            $0[AgentBrowserProcessClient.self] = client([owner])
+            $0[AgentBrowserHostClient.self] = .init(prepare: { _ in
+                Issue.record("An existing grant must not bootstrap a different browser host")
+                throw AgentBrowserTransport.Failure("Unexpected startup")
+            })
+        } operation: {
+            let (_, value) = try AgentBrowserTransport.registeredContext(root: root)
+            #expect(value["socket"] as? String == "/fixture/old-control.sock")
+            #expect(value["epoch"] as? String == "old-host")
+        }
+    }
 }

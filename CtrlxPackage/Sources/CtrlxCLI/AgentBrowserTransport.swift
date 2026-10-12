@@ -1,5 +1,6 @@
 import Darwin
 import Dependencies
+import DependenciesMacros
 import Foundation
 
 /// Local-only protocol, independent of Relay and the existing WKWebView browser.
@@ -176,13 +177,16 @@ enum AgentBrowserTransport {
         return try operation(contextURL, &context)
     }
 
-    static func registeredContext() throws -> (URL, [String: Any]) {
+    static func registeredContext(root: URL = stateDirectory) throws -> (URL, [String: Any]) {
         @Dependency(AgentBrowserProcessClient.self) var processes
         let owner = try processes.callingCodex(from: getppid(), uid: getuid())
-        let context = try withRunContext(for: owner) { contextURL, context in
+        let context = try withRunContext(for: owner, root: root) { contextURL, context in
             try processes.validate(owner)
             if context["socket"] == nil {
-                let endpoint = stateDirectory.appendingPathComponent("endpoint.json")
+                @Dependency(AgentBrowserHostClient.self) var host
+                try host.prepare(root)
+                try processes.validate(owner)
+                let endpoint = root.appendingPathComponent("endpoint.json")
                 guard FileManager.default.fileExists(atPath: endpoint.path) else {
                     throw Failure("Open the source session in the current CtrlX app on this Mac first. Its embedded browser is not ready; no separate browser was launched.")
                 }
@@ -219,4 +223,21 @@ enum AgentBrowserTransport {
         for key in ["run", "secret", "epoch"] { request[key] = context[key] }
         return try self.request(request, socketPath: socket)
     }
+}
+
+@DependencyClient
+struct AgentBrowserHostClient: Sendable {
+    var prepare: @Sendable (URL) throws -> Void
+}
+
+extension AgentBrowserHostClient: DependencyKey {
+    static let liveValue = Self(prepare: { state in
+        let response = try SocketClient.send(
+            JSONRPCRequest(id: UUID().uuidString, method: "browser.start",
+                           params: ["state": .string(state.resolvingSymlinksInPath().path)]),
+            timeoutSeconds: 15, responseLimit: 4096)
+        guard response.ok else {
+            throw AgentBrowserTransport.Failure(response.error?.message ?? "Browser host could not start. No page action was sent.")
+        }
+    })
 }

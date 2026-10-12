@@ -45,6 +45,7 @@
         public let tmuxService: TmuxService
 
         public let agentBrowser = AgentBrowserService()
+        public let agentSimulator = AgentSimulatorService()
 
         /// Pane state and session tracking manager
         public let windowManager: MirrorWindowManager
@@ -407,8 +408,12 @@
         public func setupAllServices() async {
             guard !isServiceSetupComplete else { return }
             isServiceSetupComplete = true
-            agentBrowser.start { [tmuxService] pid in
+            agentBrowser.configure { [tmuxService] pid in
                 try await tmuxService.agentBrowserPane(processID: pid)
+            }
+            agentSimulator.start(root: CtrlxPaths(stateRootOverride: Self.parseCtrlxStateRoot()).stateRoot) { [tmuxService] pid in
+                @Dependency(SimulatorSystemClient.self) var system
+                return try await tmuxService.agentBrowserPane(processID: pid, ancestorPIDs: system.ancestors(of: pid))
             }
 
             // Pre-fill the editor list on first launch with whatever is installed
@@ -505,6 +510,8 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
+            await apiSocketServer.stop()
+            await agentSimulator.shutdown()
             await agentBrowser.shutdown()
             logger.info("App shutdown: disconnecting pane streams and control clients")
             windowManager.stopPeriodicSessionValidation()
@@ -2613,6 +2620,9 @@
                         ).toJSONValue()
                     }
                 },
+                onBrowserStart: { [agentBrowser] state in
+                    try await agentBrowser.prepareForAgentRequests(state: state)
+                },
                 onProjectList: { [weak self] in
                     // Refresh then return the merged per-plugin project list (the
                     // cores own scanning now — spec §12).
@@ -2876,7 +2886,10 @@
             liveRouter = router
 
             // Set the router as the request handler on the socket server
-            await apiSocketServer.setRequestHandler(router.handleRequest)
+            await apiSocketServer.setRequestHandler { [agentSimulator] request in
+                if request.method == "simulator.action" { return await agentSimulator.handle(request) }
+                return await router.handleRequest(request)
+            }
 
             // Start the socket server (use separate path in E2E to avoid conflicts)
             let isE2E = CommandLine.arguments.contains("--e2e-test")

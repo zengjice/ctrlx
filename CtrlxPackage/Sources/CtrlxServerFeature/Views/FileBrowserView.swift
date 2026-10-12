@@ -308,6 +308,7 @@ final class SessionFileTabsState {
     /// switches between tabs/sessions.
     var browserStates: [UUID: BrowserTabState] = [:]
     var agentBrowserStates: [UUID: AgentBrowserTabState] = [:]
+    var simulatorStates: [UUID: SimulatorTabState] = [:]
 
     // MARK: - Split View State (issue #498)
 
@@ -443,6 +444,7 @@ final class SessionFileTabsState {
             state.cancelActiveDownloads()
         }
         for state in agentBrowserStates.values { state.service.close(state) }
+        for state in simulatorStates.values { state.service.close(state) }
     }
 }
 

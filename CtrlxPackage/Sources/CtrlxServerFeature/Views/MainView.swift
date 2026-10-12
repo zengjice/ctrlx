@@ -23,6 +23,7 @@ public struct MainView: View {
     @State private var selectedWindow: LocalTmuxWindow?
     @State private var terminalQuickActions = TerminalQuickActionRouter()
     @State private var agentBrowserWorkspace = AgentBrowserWorkspace()
+    @State private var simulatorWorkspace = SimulatorWorkspace()
     @State private var selectedRemoteSession: RemoteSessionSelection?
     @State private var selectedRemoteWindowId: String?
     @State private var localSessionRenameRequest: String?
@@ -167,8 +168,12 @@ public struct MainView: View {
             toolbarContent
         }
         .background(AgentBrowserWorkspaceAnchor(workspace: agentBrowserWorkspace))
-        .onAppear { registerAgentBrowserWorkspace() }
-        .onDisappear { coordinator.agentBrowser.unregister(agentBrowserWorkspace) }
+        .background(SimulatorWorkspaceAnchor(workspace: simulatorWorkspace))
+        .onAppear { registerAgentBrowserWorkspace(); registerSimulatorWorkspace() }
+        .onDisappear {
+            coordinator.agentBrowser.unregister(agentBrowserWorkspace)
+            coordinator.agentSimulator.unregister(simulatorWorkspace)
+        }
         .task {
             // Initial load only - periodic refresh is handled by MirrorWindowManager
             await refreshPanes()
@@ -1588,7 +1593,10 @@ public struct MainView: View {
         sessionTabs: SessionFileTabsState?,
         selectedBrowserTab: BrowserTab?
     ) -> some View {
-        if let selectedBrowserTab, let state = sessionTabs?.agentBrowserStates[selectedBrowserTab.id] {
+        if let selectedBrowserTab, let state = sessionTabs?.simulatorStates[selectedBrowserTab.id] {
+            SimulatorTabContentView(state: state)
+                .id(selectedBrowserTab.id)
+        } else if let selectedBrowserTab, let state = sessionTabs?.agentBrowserStates[selectedBrowserTab.id] {
             AgentBrowserTabContentView(state: state)
                 .id(selectedBrowserTab.id)
         } else if
@@ -1832,7 +1840,11 @@ public struct MainView: View {
                 .id("right-git")
                 .accessibilityIdentifier("split-right-pane")
         case let .browser(id):
-            if let state = sessionTabs.agentBrowserStates[id] {
+            if let state = sessionTabs.simulatorStates[id] {
+                SimulatorTabContentView(state: state)
+                    .id("right-\(id)")
+                    .accessibilityIdentifier("split-right-pane")
+            } else if let state = sessionTabs.agentBrowserStates[id] {
                 AgentBrowserTabContentView(state: state)
                     .id("right-\(id)")
                     .accessibilityIdentifier("split-right-pane")
@@ -3547,6 +3559,7 @@ public struct MainView: View {
         tabs.browserStates[tabId]?.cancelActiveDownloads()
         tabs.browserStates.removeValue(forKey: tabId)
         if let state = tabs.agentBrowserStates.removeValue(forKey: tabId) { state.service.close(state) }
+        if let state = tabs.simulatorStates.removeValue(forKey: tabId) { state.service.close(state) }
         tabs.rightSide.remove(payload)
         if tabs.selectedRight == payload { tabs.selectedRight = nil }
         reconcileRightPaneSelection(sessionName: sessionName)
@@ -3707,6 +3720,38 @@ public struct MainView: View {
             closeBrowserTab(state.id, sessionName: session)
         }
         coordinator.agentBrowser.register(agentBrowserWorkspace)
+    }
+
+    private func registerSimulatorWorkspace() {
+        simulatorWorkspace.acceptsPane = { pane in tmuxService.windows.contains { $0.id == pane.windowId } }
+        simulatorWorkspace.onCreate = { state in
+            let pane = state.sourcePane
+            let tabs = sessionFileTabsStates[pane.sessionName] ?? SessionFileTabsState()
+            sessionFileTabsStates[pane.sessionName] = tabs
+            var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), displayTitle: state.handle.name, originWindowId: pane.windowId)
+            tab.isSimulator = true
+            tabs.openBrowserTabs.append(tab)
+            tabs.simulatorStates[state.id] = state
+            if tabs.rightSide.contains(.window(pane.windowId)) { tabs.rightSide.insert(.browser(state.id)) }
+        }
+        simulatorWorkspace.onSelect = { state, split in
+            guard let (session, tabs) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }
+            selectedRemoteSession = nil; selectedRemoteWindowId = nil
+            if selectedWindow?.sessionName != session,
+               let window = tmuxService.windows.first(where: { $0.sessionName == session && $0.panes.contains { $0.paneId == state.paneID } }) {
+                selectedWindow = tmuxService.windows.first { $0.sessionName == session && !tabs.rightSide.contains(.window($0.id)) } ?? window
+            }
+            if split, !tabs.rightSide.contains(.browser(state.id)) {
+                toggleSplit(.browser(state.id), sessionName: session, windowId: state.sourcePane.windowId)
+            }
+            selectBrowserTab(state.id, sessionName: session, windowId: state.sourcePane.windowId)
+            simulatorWorkspace.window?.makeKeyAndOrderFront(nil)
+        }
+        simulatorWorkspace.onClose = { state in
+            guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }
+            closeBrowserTab(state.id, sessionName: session)
+        }
+        coordinator.agentSimulator.register(simulatorWorkspace)
     }
 
     // MARK: - Remote Browser Tab Helpers

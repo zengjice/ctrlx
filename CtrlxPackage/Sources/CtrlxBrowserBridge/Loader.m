@@ -17,6 +17,12 @@ BOOL CXBrowserPrepareApplication(void) {
     return YES;
 }
 
+void CXBrowserSetTerminationDelegate(id<CXBrowserTerminationDelegate> delegate) {
+    if (!library || loadError) return;
+    void (*setDelegate)(id<CXBrowserTerminationDelegate>) = dlsym(library, "CXEmbeddedBrowserSetTerminationDelegate");
+    if (setDelegate) setDelegate(delegate);
+}
+
 id<CXBrowserRuntime> CXBrowserCreateRuntime(void) {
     if (!library || loadError) return nil;
     id (*create)(void) = dlsym(library, "CXEmbeddedBrowserCreateRuntime");
