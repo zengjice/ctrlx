@@ -15,6 +15,7 @@ load_project_environment "$PROJECT_ROOT"
 
 [ "$#" -eq 0 ] || log_error "CtrlX release is zero-parameter; edit the selected .env file instead."
 assert_git_worktree
+with_worktree_lock "$@"
 
 require_config() {
     local name="$1"

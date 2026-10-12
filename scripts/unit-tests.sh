@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 PACKAGE_DIR="$PROJECT_ROOT/CtrlxPackage"
 SAVE_SPACE=false
+LOCAL_BUILD_ARGUMENTS=("$@")
 
 # =====================================================
 # PARSE ARGUMENTS
@@ -56,6 +57,10 @@ for argument in "$@"; do
             ;;
     esac
 done
+
+# Share the worktree lock with packaging, installs and destructive cleanup.
+source "$SCRIPT_DIR/common.sh"
+with_worktree_lock "${LOCAL_BUILD_ARGUMENTS[@]}"
 
 # =====================================================
 # HELPERS

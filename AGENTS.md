@@ -152,6 +152,11 @@ signs and verifies the result, and defaults to an optimized Release build:
 - IPA: `dist/CtrlX-<version>.ipa`
 - Integrity metadata: adjacent `.sha256` and `.manifest.json` files
 
+Both platform packaging scripts accept `--app-only` to build/sign/verify without
+creating a DMG/IPA. A successful build records its identity in `CtrlX.app.build.json`
+beside the App; the old record is invalidated before rebuilding. Full local packaging
+validates a staged package before replacing the old package and its sidecars.
+
 Packaging deletes temporary App copies on exit and keeps two local IPA/DMG
 packages per platform/configuration. Successful packaging removes old platform
 indexes, duplicate dependency copies and completed public-download verification
@@ -160,12 +165,26 @@ Packaging warns below 20 GiB free before building. Local Mac/iOS packaging accep
 `--save-space`: only after success, remove that platform's compilation intermediates
 and module/SDK caches, retaining signed installable apps and downloaded dependencies.
 The next build is slower; this mode cannot free space before the current build.
-Default behavior remains incremental. Never run concurrent builds/installs against
-the same DerivedData directory; cleanup never sweeps other worktrees.
+Default behavior remains incremental. Script-managed packaging, native-browser
+preparation, package tests, installation and destructive cleanup share a worktree
+operation lock. Raw Xcode/Swift commands are not covered; never run them concurrently
+against the same caches (or use `python3 scripts/local_build.py run -- <command>`).
+Cleanup never sweeps other worktrees.
 Use `python3 scripts/clean-build.py deep` to preview deep cleanup; add `--yes`
 only when builds and device installs in that worktree are stopped. See `RELEASE.md`.
 Prefer `python3 scripts/clean-build.py idle` for an inactive worktree: it preserves
 signed apps, packages and downloaded dependencies. Both modes stay worktree-local.
+Packaging and `idle` also retain only the two latest **completed** managed browser
+verification copies and local install backups per kind. For disposable
+`.build-local/upstream-browser-proof.*` / `mac-install-backup.*` directories, run
+their full test or authorized install/verify workflow through
+`python3 scripts/clean-build.py use-artifact --path <directory> -- <command>`.
+It locks the directory during use, invalidates prior success on retry, and records
+completion only after a successful command. The command must stop all consumers
+before returning; never use it for detached apps or ongoing simulator state.
+The browser preparation script prints the wrapped command. Preview with
+`python3 scripts/clean-build.py retained`; unmarked legacy copies and failed runs
+are kept, never bulk-adopted. See `RELEASE.md` for supported names and retention.
 
 For same-source performance comparisons, `--configuration Debug` produces
 `Debug-iphoneos/CtrlX.app` and a separate `CtrlX-<version>-Debug.ipa`. Install the
@@ -179,22 +198,28 @@ also match the Relay's APNs configuration for background notifications to work.
 Do not try to install an intermediate app produced with
 `CODE_SIGNING_ALLOWED=NO`; install the script's final, verified `CtrlX.app`.
 
-Discover a connected, trusted, unlocked device and install the exact app that
-was just built:
+Use the unified local installer for build/sign/install/launch and cleanup.
+It supports any worktree and does not publish or deploy the Relay:
 
 ```bash
+python3 scripts/install-local.py macos
 xcrun devicectl list devices
-
-DEVICE_ID='<CoreDevice UUID>'
-APP_PATH='.build-local/DerivedData/iOS/Build/Products/Release-iphoneos/CtrlX.app'
-APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
-
-xcrun devicectl device install app --device "$DEVICE_ID" "$APP_PATH"
-xcrun devicectl device process launch \
-  --device "$DEVICE_ID" \
-  --terminate-existing \
-  "$APP_BUNDLE_ID"
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>'
 ```
+
+By default it calls the existing platform packaging script with `--app-only`;
+`--skip-build` installs the recorded, signed App after checking its bundle ID,
+version, revision and build stamp against the App build record, without requiring
+a DMG/IPA. Older builds without a record need one fresh build. iOS accepts
+`--configuration Debug` (default Release).
+Both platforms accept `--save-space`, applied only after installation and launch
+succeed. Mac uses an exact installed-process check, graceful quit, temporary staging
+and a managed rollback backup; it never force-kills CtrlX or touches tmux sessions.
+Temporary staging is removed on exit; completed backups retain the latest two,
+failed backups remain. iOS installs in place without uninstalling the App or data.
+The nested build defers retention until install/launch succeeds, so cleanup runs
+once. Conflicting script-managed worktree operations are rejected; installation
+also locks the destination App/device across worktrees. See `RELEASE.md`.
 
 Prefer the CoreDevice UUID from `devicectl list devices` over a device name.
 When discovery or installation fails, first verify that the phone is unlocked,

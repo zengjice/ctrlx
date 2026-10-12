@@ -68,6 +68,7 @@ class PackageWorktreeTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             shutil.copy2(SCRIPTS / "clean-build.py", scripts / "clean-build.py")
+            shutil.copy2(SCRIPTS / "local_build.py", scripts / "local_build.py")
             cache = root / ".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o"
             cache.parent.mkdir(parents=True)
             cache.write_text("fixture")
@@ -103,6 +104,7 @@ class PackageWorktreeTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             shutil.copy2(SCRIPTS / "clean-build.py", scripts / "clean-build.py")
+            shutil.copy2(SCRIPTS / "local_build.py", scripts / "local_build.py")
             for relative, collection in (
                 (".build-local/DerivedData/macOS/Build/Intermediates.noindex/object.o", caches),
                 (".build-local/DerivedData/macOS/Build/Products/Release/CtrlX.app/executable", apps),

@@ -30,6 +30,8 @@ class LocalIOSPackageTests(unittest.TestCase):
         (scripts / "common.sh").write_text("""
 log_error() { printf '%s\\n' "$1" >&2; exit 1; }
 assert_git_worktree() { :; }
+with_worktree_lock() { :; }
+invalidate_local_app() { :; }
 get_version() { printf '3.0.40'; }
 get_build_stamp() { printf 'test-stamp'; }
 get_source_revision() { printf 'test-revision'; }
@@ -58,6 +60,11 @@ log_info() {
 
     def test_explicit_release(self):
         self.assert_configuration(["--configuration", "Release"], "Release", "CtrlX-3.0.40.ipa")
+
+    def test_app_only_keeps_configuration_without_creating_payload(self):
+        self.assert_configuration(["--app-only", "--configuration", "Debug"], "Debug", "CtrlX-3.0.40-Debug.ipa")
+        self.assertEqual(list((self.root / ".build-local").glob("package-*")), [])
+        self.assertEqual(list((self.root / "dist").iterdir()), [])
 
     def test_debug_does_not_overwrite_release_artifact(self):
         self.assert_configuration(["--configuration", "Debug"], "Debug", "CtrlX-3.0.40-Debug.ipa")

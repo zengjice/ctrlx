@@ -47,6 +47,7 @@ codesign --force --sign "$PROBE_IDENTITY" "$PROBE_BUILD/CtrlX.app/Contents/Frame
 codesign --force --deep --sign "$PROBE_IDENTITY" "$PROBE_BUILD/CtrlX.app"
 codesign --verify --deep --strict "$PROBE_BUILD/CtrlX.app"
 printf 'Prepared isolated fixture: %s\n' "$PROBE_BUILD"
-printf 'Run: python3 -u %q %q %q %q\n' \
+printf 'Run: python3 %q use-artifact --path %q -- python3 -u %q %q %q %q\n' \
+  "$PROBE_REPO/scripts/clean-build.py" "$PROBE_BUILD" \
   "$PROBE_REPO/CtrlxPackage/AgentBrowser/tests/upstream_probe.py" \
   "$PROBE_BUILD/CtrlX.app" "$PROBE_BUILD/agent-browser" "$PROBE_BUILD/identity"

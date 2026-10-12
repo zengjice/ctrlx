@@ -9,13 +9,17 @@ import json
 import os
 from pathlib import Path
 import shutil
+import select
+import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(SCRIPTS))
 SPEC = importlib.util.spec_from_file_location("clean_build", SCRIPTS / "clean-build.py")
 storage = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(storage)
@@ -62,6 +66,208 @@ class BuildCleanupTests(unittest.TestCase):
     def clean_receipts(self, apply=True):
         with contextlib.ExitStack() as locks:
             return self.clean(storage.receipt_targets(self.root, locks), apply)
+
+    def retained(self, name, timestamp=1, status="completed", root=None):
+        root = root or self.root
+        app = self.file(f".build-local/{name}/CtrlX.app/executable", root)
+        directory = app.parents[1]
+        marker = directory / storage.RETAINED_MARKER
+        marker.write_text(json.dumps({"version": 1, "worktree": str(root),
+                                     "group": storage.retained_group(root, directory), "status": status}))
+        os.utime(marker, (timestamp, timestamp))
+        return directory
+
+    def clean_retained(self, apply=True):
+        with contextlib.ExitStack() as locks:
+            return self.clean(storage.retained_targets(self.root, locks), apply)
+
+    def install_cleanup_cli(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir(exist_ok=True)
+        script = scripts / "clean-build.py"
+        shutil.copy2(SCRIPTS / script.name, script)
+        shutil.copy2(SCRIPTS / "local_build.py", scripts / "local_build.py")
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        return [sys.executable, str(script)]
+
+    def test_retained_copies_keep_two_per_kind_based_on_completion_not_directory_time(self):
+        proofs = [self.retained(f"upstream-browser-proof.copy{i}", i) for i in range(4)]
+        backups = [self.retained(name, i) for i, name in enumerate((
+            "mac-install.old", "macOS-install-backup.middle", "mac-install-backup.new"))]
+        os.utime(proofs[0], (100, 100))
+        self.assertIn("Preview only", self.clean_retained(apply=False))
+        self.assertTrue(all(path.exists() for path in proofs + backups))
+        self.clean_retained()
+        self.assertTrue(all(path.exists() for path in proofs[-2:] + backups[-2:]))
+        self.assertTrue(all(not path.exists() for path in proofs[:-2] + backups[:-2]))
+
+    def test_retention_keeps_failed_unmarked_foreign_and_unrecognized_data(self):
+        old = self.retained("upstream-browser-proof.old")
+        failed = self.retained("upstream-browser-proof.failed", 2, status="incomplete")
+        foreign = self.retained("upstream-browser-proof.foreign", 3)
+        marker = foreign / storage.RETAINED_MARKER
+        record = json.loads(marker.read_text())
+        marker.write_text(json.dumps({**record, "worktree": str(self.other)}))
+        unmanaged = self.file(".build-local/upstream-browser-proof.unmanaged/notes.txt")
+        unknown = self.file(".build-local/agent-simulator-acceptance/evidence.json")
+        source = self.file("source.swift")
+        shared = self.file(".build-local/SourcePackages/checkouts/source.swift")
+        other = self.retained("upstream-browser-proof.other", root=self.other)
+        current = self.retained("upstream-browser-proof.current", 4)
+        self.clean_retained()
+        self.assertTrue(all(path.exists() for path in (old, failed, foreign, unmanaged, unknown,
+                                                       source, shared, other, current)))
+
+    def test_unreadable_marker_is_kept(self):
+        bad = self.retained("upstream-browser-proof.bad")
+        (bad / storage.RETAINED_MARKER).write_text("{interrupted write")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.clean_retained()
+        self.assertTrue(bad.exists())
+
+    def test_active_artifact_is_skipped_and_cleanup_holds_locks_until_deletion(self):
+        active, old, recent, newest = [self.retained(f"upstream-browser-proof.copy{i}", i) for i in range(4)]
+        with (active / storage.RETAINED_MARKER).open("r") as active_lock:
+            fcntl.flock(active_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with contextlib.ExitStack() as locks:
+                targets = storage.retained_targets(self.root, locks)
+                self.assertEqual(targets, [old])
+                with self.assertRaisesRegex(ValueError, "already in use"):
+                    storage.use_artifact(self.root, old, ["true"])
+                self.clean(targets)
+        self.assertTrue(all(path.exists() for path in (active, recent, newest)))
+
+    def test_running_unwrapped_app_is_kept_and_process_check_failure_preserves_all(self):
+        paths = [self.retained(f"upstream-browser-proof.copy{i}", i) for i in range(3)]
+        with mock.patch.object(storage.subprocess, "check_output", return_value=f"123 {paths[0]}/CtrlX.app/Contents/MacOS/CtrlX\n"):
+            self.clean_retained()
+        self.assertTrue(all(path.exists() for path in paths))
+        with mock.patch.object(storage.subprocess, "check_output", side_effect=subprocess.TimeoutExpired("ps", 10)), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.clean_retained()
+        self.assertTrue(all(path.exists() for path in paths))
+
+    def test_artifact_wrapper_invalidates_old_success_before_command_and_preserves_failure(self):
+        path = self.retained("mac-install-backup.fixture")
+        marker = path / storage.RETAINED_MARKER
+        def command(_):
+            self.assertEqual(json.loads(marker.read_text())["status"], "incomplete")
+            with contextlib.ExitStack() as locks:
+                self.assertEqual(storage.retained_targets(self.root, locks), [])
+            return subprocess.CompletedProcess([], 7)
+        with mock.patch.object(storage.subprocess, "run", side_effect=command):
+            self.assertEqual(storage.use_artifact(self.root, path, ["install-and-verify"]), 7)
+        self.assertEqual(json.loads(marker.read_text())["status"], "incomplete")
+        with mock.patch.object(storage.subprocess, "run", side_effect=OSError("cannot start")):
+            with self.assertRaises(OSError):
+                storage.use_artifact(self.root, path, ["missing-command"])
+        self.assertEqual(json.loads(marker.read_text())["status"], "incomplete")
+
+    def test_signal_exit_and_interrupt_do_not_mark_completion(self):
+        path = self.retained("upstream-browser-proof.interrupted")
+        with mock.patch.object(storage.subprocess, "run", return_value=subprocess.CompletedProcess([], -15)):
+            self.assertEqual(storage.use_artifact(self.root, path, ["fixture"]), 143)
+        with mock.patch.object(storage.subprocess, "run", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                storage.use_artifact(self.root, path, ["fixture"])
+        self.assertEqual(json.loads((path / storage.RETAINED_MARKER).read_text())["status"], "incomplete")
+
+    def test_real_runner_and_cleanup_coordinate_across_processes(self):
+        cli = self.install_cleanup_cli()
+        old, recent, newest = [self.retained(f"upstream-browser-proof.copy{i}", i) for i in range(3)]
+        process = subprocess.Popen([*cli, "use-artifact", "--path", str(old), "--", sys.executable, "-c",
+                                    "import sys; print('ready', flush=True); sys.stdin.read(1)"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertTrue(select.select([process.stdout], [], [], 10)[0], "Runner did not become ready")
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            result = subprocess.run([*cli, "retained", "--yes"], text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Skipping active artifact", result.stdout)
+            self.assertTrue(all(path.exists() for path in (old, recent, newest)))
+            output, error = process.communicate("x", timeout=10)
+            self.assertEqual(process.returncode, 0, error)
+            self.assertIn("Completed artifact", output)
+            self.assertTrue(old.exists())
+            self.assertFalse(recent.exists())
+            self.assertTrue(newest.exists())
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+
+    def test_retention_cli_preserves_child_failure_exit_code_and_rejects_unsafe_paths(self):
+        cli = self.install_cleanup_cli()
+        path = self.retained("mac-install-backup.fixture")
+        result = subprocess.run([*cli, "use-artifact", "--path", str(path), "--", sys.executable, "-c", "exit(9)"],
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 9)
+        self.assertEqual(json.loads((path / storage.RETAINED_MARKER).read_text())["status"], "incomplete")
+        for unsafe in (self.root, self.other, self.root / ".build-local/DerivedData", self.root / ".build-local/missing"):
+            with self.subTest(path=unsafe), self.assertRaises(ValueError):
+                storage.use_artifact(self.root, unsafe, ["true"])
+        with self.assertRaises(ValueError):
+            storage.use_artifact(self.root, path, [])
+
+    def test_symlinked_retention_directory_and_marker_cannot_escape_worktree(self):
+        outside = self.retained("upstream-browser-proof.outside", root=self.other)
+        local = self.root / ".build-local/upstream-browser-proof.link"
+        local.parent.mkdir()
+        local.symlink_to(outside)
+        with self.assertRaises(ValueError):
+            self.clean_retained()
+        local.unlink()
+        path = self.retained("upstream-browser-proof.local")
+        marker = path / storage.RETAINED_MARKER
+        marker.unlink()
+        marker.symlink_to(outside / storage.RETAINED_MARKER)
+        with self.assertRaises(ValueError):
+            storage.use_artifact(self.root, path, ["true"])
+        with self.assertRaises(ValueError):
+            self.clean_retained()
+        self.assertTrue(outside.exists())
+
+    def test_packaging_and_idle_cli_also_apply_retention(self):
+        cli = self.install_cleanup_cli()
+        for mode in ("iOS", "macOS", "idle"):
+            with self.subTest(mode=mode):
+                copies = [self.retained(f"upstream-browser-proof.copy{i}", i) for i in range(3)]
+                cache = self.file(f".build-local/DerivedData/{mode}/Build/Intermediates.noindex/object.o")
+                if mode == "idle":
+                    arguments = ["idle", "--yes"]
+                else:
+                    artifact = self.artifact("3.0.3", "ipa" if mode == "iOS" else "dmg")
+                    arguments = ["prune", "--artifact", str(artifact), "--platform", mode, "--yes"]
+                result = subprocess.run([*cli, *arguments], text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(copies[0].exists())
+                self.assertTrue(all(path.exists() for path in copies[1:]))
+                self.assertEqual(cache.exists(), mode != "idle")
+
+    def test_retained_cli_preview_does_not_delete_or_mark_legacy_copies(self):
+        cli = self.install_cleanup_cli()
+        copies = [self.retained(f"upstream-browser-proof.copy{i}", i) for i in range(3)]
+        legacy = self.file(".build-local/upstream-browser-proof.legacy/CtrlX.app/executable").parents[1]
+        result = subprocess.run([*cli, "retained"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Keeping unmanaged artifact", result.stdout)
+        self.assertIn("Would remove: " + str(copies[0]), result.stdout)
+        self.assertTrue(all(path.exists() for path in copies + [legacy]))
+        self.assertFalse((legacy / storage.RETAINED_MARKER).exists())
+
+    def test_browser_preparation_prints_locking_runner_with_quoted_paths(self):
+        source = (SCRIPTS.parent / "CtrlxPackage/AgentBrowser/tests/prepare_upstream_probe.sh").read_text()
+        tail = source[source.index("printf 'Prepared isolated fixture:"):]
+        build = self.root / ".build-local/upstream-browser-proof.fixture"
+        result = subprocess.run(["bash", "-c", 'PROBE_REPO="$1"; PROBE_BUILD="$2";\n' + tail,
+                                 "probe-command-test", str(self.root), str(build)], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = next(line[5:] for line in result.stdout.splitlines() if line.startswith("Run: "))
+        self.assertEqual(shlex.split(command), [
+            "python3", str(self.root / "scripts/clean-build.py"), "use-artifact", "--path", str(build), "--",
+            "python3", "-u", str(self.root / "CtrlxPackage/AgentBrowser/tests/upstream_probe.py"),
+            str(build / "CtrlX.app"), str(build / "agent-browser"), str(build / "identity"),
+        ])
 
     def test_keeps_current_and_newest_other_package_with_metadata(self):
         for extension in ("ipa", "dmg"):
@@ -529,6 +735,7 @@ class BuildCleanupTests(unittest.TestCase):
         scripts.mkdir()
         script = scripts / "clean-build.py"
         shutil.copy2(SCRIPTS / "clean-build.py", script)
+        shutil.copy2(SCRIPTS / "local_build.py", script.parent / "local_build.py")
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         cache = self.file(".build-local/DerivedData/cached.bin")
         result = subprocess.run(["python3", str(script), "deep"], text=True, capture_output=True)
@@ -541,6 +748,7 @@ class BuildCleanupTests(unittest.TestCase):
         scripts.mkdir()
         script = scripts / "clean-build.py"
         shutil.copy2(SCRIPTS / "clean-build.py", script)
+        shutil.copy2(SCRIPTS / "local_build.py", script.parent / "local_build.py")
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         old = self.artifact("3.0.1", timestamp=1)
         self.artifact("3.0.2", timestamp=2)
@@ -583,16 +791,21 @@ class BuildCleanupTests(unittest.TestCase):
                                          ("release.sh", "DMG_PATH", "")):
             with self.subTest(script=name):
                 script = (SCRIPTS / name).read_text()
-                self.assertIn(f'write_artifact_metadata "${variable}"\nprune_local_artifacts "${variable}"{platform}\n', script)
+                staged = "STAGED_IPA" if variable == "IPA_PATH" else "STAGED_DMG"
+                expected = (f'write_artifact_metadata "${variable}"\n' if name == "release.sh" else
+                            f'write_artifact_metadata "${staged}"\npublish_local_package "${staged}" "${variable}"\n')
+                self.assertIn(expected + f'prune_local_artifacts "${variable}"{platform}\n', script)
 
     def test_space_saving_packaging_tail_only_cleans_after_success(self):
         scripts = self.root / "scripts"
         scripts.mkdir()
         shutil.copy2(SCRIPTS / "clean-build.py", scripts / "clean-build.py")
+        shutil.copy2(SCRIPTS / "local_build.py", scripts / "local_build.py")
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         for platform, variable, extension in (("iOS", "IPA_PATH", "ipa"), ("macOS", "DMG_PATH", "dmg")):
             script = (SCRIPTS / f"package-local-{platform.lower()}.sh").read_text()
-            tail = script[script.index(f'write_artifact_metadata "${variable}"'):script.index('\nlog_success "', script.index('write_artifact_metadata'))]
+            staged = "STAGED_IPA" if platform == "iOS" else "STAGED_DMG"
+            tail = script[script.index('write_artifact_metadata'):script.index('\nlog_success "', script.index('write_artifact_metadata'))]
             for save_space in ("false", "true"):
                 for status in (0, 7):
                     with self.subTest(platform=platform, save_space=save_space, status=status):
@@ -600,8 +813,8 @@ class BuildCleanupTests(unittest.TestCase):
                         intermediate = self.file(f".build-local/DerivedData/{platform}/Build/Intermediates.noindex/object.o")
                         app = self.file(f".build-local/DerivedData/{platform}/Build/Products/CtrlX.app/executable")
                         commands = 'set -euo pipefail\nSCRIPT_DIR="$1/scripts"\nsource "$2"\n' \
-                            + f'{variable}="$3"\n' + 'SAVE_SPACE="$4"\nMETADATA_STATUS="$5"\n' \
-                            + 'write_artifact_metadata() { return "$METADATA_STATUS"; }\n' + tail
+                            + f'{variable}="$3"\n{staged}="$3"\n' + 'SAVE_SPACE="$4"\nMETADATA_STATUS="$5"\n' \
+                            + 'write_artifact_metadata() { return "$METADATA_STATUS"; }\npublish_local_package() { :; }\n' + tail
                         result = subprocess.run(["bash", "-c", commands, "packaging-test", str(self.root),
                                                  str(SCRIPTS / "common.sh"), str(current), save_space, str(status)],
                                                 text=True, capture_output=True)
@@ -615,6 +828,7 @@ class BuildCleanupTests(unittest.TestCase):
         scripts.mkdir()
         script = scripts / "clean-build.py"
         shutil.copy2(SCRIPTS / "clean-build.py", script)
+        shutil.copy2(SCRIPTS / "local_build.py", script.parent / "local_build.py")
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         old = self.artifact("3.0.1")
         self.artifact("3.0.2")
@@ -661,7 +875,7 @@ class BuildCleanupTests(unittest.TestCase):
     def test_packaging_traps_clean_temporary_copies_on_success_and_failure(self):
         for platform in ("ios", "macos"):
             script = (SCRIPTS / f"package-local-{platform}.sh").read_text()
-            start = script.index('PACKAGE_ROOT="$(/usr/bin/mktemp')
+            start = script.index('PACKAGE_ROOT=""')
             end = script.index(" EXIT\n", start) + len(" EXIT\n")
             setup = script[start:end]
             for status in (0, 7):
@@ -669,7 +883,8 @@ class BuildCleanupTests(unittest.TestCase):
                     build = self.root / f"build-{platform}-{status}"
                     build.mkdir()
                     app = self.file(f"build-{platform}-{status}/DerivedData/CtrlX.app/executable")
-                    commands = 'LOCAL_BUILD_ROOT="$1"\n' + setup + '\nprintf "%s\\n" "$PACKAGE_ROOT"\n'
+                    creation = next(line for line in script.splitlines() if line.startswith('PACKAGE_ROOT="$(/usr/bin/mktemp'))
+                    commands = 'LOCAL_BUILD_ROOT="$1"\n' + setup + creation + '\nprintf "%s\\n" "$PACKAGE_ROOT"\n'
                     if platform == "ios":
                         commands += 'PROFILE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/profiles.XXXXXX")"\nprintf "%s\\n" "$PROFILE_ROOT"\n'
                     commands += 'exit "$2"\n'

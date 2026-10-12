@@ -2,6 +2,9 @@
 # Pinned, unmodified upstream engine; no npm, runtime install or latest lookup.
 set -euo pipefail
 ENGINE_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$ENGINE_REPO/scripts"
+source "$SCRIPT_DIR/common.sh"
+with_worktree_lock "$@"
 ENGINE_VERSION=0.38.1
 ENGINE_SHA=2e61287259053ea964d39e77002c6a34af0e589e55ccff25e659efae7e892e0d
 ENGINE_CACHE="$ENGINE_REPO/.build-local/agent-browser-engine/$ENGINE_VERSION"

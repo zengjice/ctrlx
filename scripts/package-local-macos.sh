@@ -11,14 +11,21 @@ LOCAL_MAC_CONFIG="$PROJECT_ROOT/Config/Local-macOS.xcconfig"
 source "$SCRIPT_DIR/common.sh"
 
 SAVE_SPACE=false
+APP_ONLY=false
+LOCAL_BUILD_ARGUMENTS=("$@")
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --app-only)
+            APP_ONLY=true
+            shift
+            ;;
         --save-space)
             SAVE_SPACE=true
             shift
             ;;
         --help|-h)
-            printf '%s\n' 'Usage: package-local-macos.sh [--save-space]' \
+            printf '%s\n' 'Usage: package-local-macos.sh [--app-only] [--save-space]' \
+                '--app-only: build and verify the signed App without producing a DMG.' \
                 '--save-space: after success, remove compilation caches; keep App, DMG and downloads. Next build is slower.'
             exit 0
             ;;
@@ -27,6 +34,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 assert_git_worktree
+with_worktree_lock "${LOCAL_BUILD_ARGUMENTS[@]}"
 [ -f "$LOCAL_MAC_CONFIG" ] \
     || log_error 'Missing Config/Local-macOS.xcconfig. Copy Config/Local-macOS.xcconfig.example and configure your personal team.'
 
@@ -51,13 +59,14 @@ if [ "$SAVE_SPACE" = true ]; then
     log_warning 'Space-saving mode: compilation caches are removed only after success. App and downloads are kept; the next build is slower.'
 fi
 mkdir -p "$DERIVED_DATA" "$SOURCE_PACKAGES" "$DIST_DIR"
-PACKAGE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/package-macos.XXXXXX")"
+PACKAGE_ROOT=""
 
 cleanup_macos_workspace() {
-    /bin/rm -rf -- "$PACKAGE_ROOT"
+    [ -z "$PACKAGE_ROOT" ] || /bin/rm -rf -- "$PACKAGE_ROOT"
 }
 trap cleanup_macos_workspace EXIT
 
+invalidate_local_app macos Release
 CTRLX_AGENT_BROWSER_SIGN_IDENTITY="$SIGNING_IDENTITY" bash "$SCRIPT_DIR/build-agent-browser.sh"
 
 log_info "Building CtrlX $VERSION from $PROJECT_ROOT"
@@ -81,30 +90,28 @@ log_info "Building CtrlX $VERSION from $PROJECT_ROOT"
     OTHER_CODE_SIGN_FLAGS=--timestamp=none \
     build
 
-[ -d "$APP_PATH" ] || log_error "Build did not produce $APP_PATH"
-/usr/bin/codesign --verify --deep --strict "$APP_PATH" \
-    || log_error 'Built app signature is invalid.'
+record_local_app macos Release
+if [ "$APP_ONLY" = true ]; then
+    prune_local_artifacts "" macOS "$SAVE_SPACE"
+    log_success "App: $APP_PATH"
+    exit 0
+fi
 
-[ "$(/usr/libexec/PlistBuddy -c 'Print :CtrlXBuildStamp' "$APP_PATH/Contents/Info.plist")" = "$BUILD_STAMP" ] \
-    || log_error 'Built app is missing the expected build stamp.'
-[ "$(/usr/libexec/PlistBuddy -c 'Print :CtrlXSourceRevision' "$APP_PATH/Contents/Info.plist")" = "$SOURCE_REVISION" ] \
-    || log_error 'Built app is missing the expected source revision.'
-
+PACKAGE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/package-macos.XXXXXX")"
+STAGED_DMG="$PACKAGE_ROOT/$(basename "$DMG_PATH")"
 mkdir -p "$PACKAGE_ROOT/root"
 /usr/bin/ditto "$APP_PATH" "$PACKAGE_ROOT/root/CtrlX.app"
 /bin/ln -s /Applications "$PACKAGE_ROOT/root/Applications"
 
-if [ -e "$DMG_PATH" ]; then
-    /bin/rm -f -- "$DMG_PATH"
-fi
 /usr/bin/hdiutil create \
     -volname CtrlX \
     -srcfolder "$PACKAGE_ROOT/root" \
     -format UDZO \
     -ov \
-    "$DMG_PATH"
-/usr/bin/hdiutil verify "$DMG_PATH" >/dev/null
-write_artifact_metadata "$DMG_PATH"
+    "$STAGED_DMG"
+/usr/bin/hdiutil verify "$STAGED_DMG" >/dev/null
+write_artifact_metadata "$STAGED_DMG"
+publish_local_package "$STAGED_DMG" "$DMG_PATH"
 prune_local_artifacts "$DMG_PATH" macOS "$SAVE_SPACE"
 
 log_success "DMG: $DMG_PATH"

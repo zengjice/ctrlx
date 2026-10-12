@@ -19,7 +19,7 @@ class UnitTestScriptTests(unittest.TestCase):
         self.root = Path(directory.name).resolve() / "worktree with spaces"
         scripts = self.root / "scripts"
         scripts.mkdir(parents=True)
-        for name in ("unit-tests.sh", "clean-build.py"):
+        for name in ("unit-tests.sh", "clean-build.py", "common.sh", "local_build.py"):
             shutil.copy2(SCRIPTS / name, scripts / name)
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         (self.root / "CtrlxPackage").mkdir()
