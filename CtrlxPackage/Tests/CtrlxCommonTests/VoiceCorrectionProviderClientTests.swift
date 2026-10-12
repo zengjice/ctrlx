@@ -1,6 +1,6 @@
-@testable import CtrlxFeature
 import Foundation
 import Testing
+@testable import CtrlxCommon
 
 #if canImport(FoundationNetworking)
     import FoundationNetworking
@@ -23,7 +23,7 @@ struct VoiceCorrectionProviderClientTests {
     @Test("Benchmarks realistic context without embedding the target sentence")
     func benchmarkContexts() throws {
         let contextualSamples = VoiceCorrectionBenchmark.samples.filter {
-            $0.terminalContext != nil
+            $0.id == "ctrlx-introduction" || $0.id == "model-comparison-request"
         }
 
         #expect(contextualSamples.count == 2)
@@ -48,7 +48,7 @@ struct VoiceCorrectionProviderClientTests {
         )
 
         let corrected = VoiceCorrectionBenchmark.score(
-            "CtrlX 由曾计策开发，语音输入通过 Voice 按钮触发。",
+            sample.referenceTranscript,
             for: sample
         )
         let uncorrected = VoiceCorrectionBenchmark.score(
@@ -68,7 +68,7 @@ struct VoiceCorrectionProviderClientTests {
             VoiceCorrectionBenchmark.samples.first(where: { $0.id == "model-comparison-request" })
         )
         let clean = VoiceCorrectionBenchmark.score(
-            "切换到豆包 2.0 Pro。CtrlX 由曾计策开发，通过 Voice 按钮触发。",
+            sample.referenceTranscript,
             for: sample
         )
         let residualErrors = VoiceCorrectionBenchmark.score(
@@ -214,6 +214,104 @@ struct VoiceCorrectionProviderClientTests {
                 )
             )
         }
+    }
+
+    @Test("Rejects partial text even when the provider returned HTTP 200", arguments: [
+        #"{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output_text":"先提交"}"#,
+        #"{"status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"先提交"}]}]}"#,
+        #"{"status":"completed","output":[{"type":"message","status":"incomplete","content":[{"type":"output_text","text":"先提交"}]}]}"#,
+        #"{"status":"failed","output_text":"先提交"}"#,
+        #"{"incomplete_details":{"reason":"content_filter"},"output_text":"先提交"}"#,
+    ])
+    func incompleteOutput(_ payload: String) async throws {
+        let client = VoiceCorrectionProviderClient { request in
+            (Data(payload.utf8), Self.response(for: request, statusCode: 200))
+        }
+        let selection = try #require(VoiceCorrectionSelection(provider: .volcengineArk, modelID: "test-model"))
+        do {
+            _ = try await client.correct(
+                recognition: VoiceRecognitionResult(primaryTranscript: "先提交，但不要发布"),
+                terminalContext: nil, contextualTerms: [], localeIdentifier: "zh-Hans-CN",
+                selection: selection, apiKey: "test-key"
+            )
+            Issue.record("A partial correction must never become terminal input")
+        } catch let error as VoiceCorrectionProviderError {
+            guard case .incompleteResponse = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+        }
+    }
+
+    @Test("Long utterances receive a larger output budget, not a truncated input")
+    func longTranscriptBudget() async throws {
+        let original = String(repeating: "检查每个会话是否正常。", count: 60) + "不要发布。"
+        let client = VoiceCorrectionProviderClient { request in
+            let data = try #require(request.httpBody)
+            let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect((body["max_output_tokens"] as? Int ?? 0) > 512)
+            #expect((body["input"] as? String)?.contains(original) == true)
+            let response = try JSONSerialization.data(withJSONObject: ["status": "completed", "output_text": original])
+            return (response, Self.response(for: request, statusCode: 200))
+        }
+        let selection = try #require(VoiceCorrectionSelection(provider: .volcengineArk, modelID: "test-model"))
+        #expect(try await client.correct(
+            recognition: VoiceRecognitionResult(primaryTranscript: original),
+            terminalContext: nil, contextualTerms: [], localeIdentifier: "zh-Hans-CN",
+            selection: selection, apiKey: "test-key"
+        ) == original)
+    }
+
+    @Test("Oversized utterances skip the provider without sending a shortened transcript")
+    func oversizedTranscript() async throws {
+        let client = VoiceCorrectionProviderClient { _ in
+            Issue.record("Must not perform a request for an over-budget utterance")
+            throw CancellationError()
+        }
+        let selection = try #require(VoiceCorrectionSelection(provider: .volcengineArk, modelID: "test-model"))
+        await #expect(throws: VoiceCorrectionProviderError.inputTooLong) {
+            try await client.correct(
+                recognition: VoiceRecognitionResult(primaryTranscript: String(repeating: "测试", count: 5_000)),
+                terminalContext: nil, contextualTerms: [], localeIdentifier: "zh-Hans-CN",
+                selection: selection, apiKey: "test-key"
+            )
+        }
+    }
+
+    @Test("Keyword lists cannot receive full marks", arguments: VoiceCorrectionBenchmark.samples)
+    func keywordOnlyScoring(_ sample: VoiceCorrectionBenchmarkSample) {
+        let output = sample.requiredTerms.joined(separator: "，")
+        let score = VoiceCorrectionBenchmark.score(output, for: sample)
+        #expect(score.value < sample.requiredTerms.count * 10)
+        #expect(VoiceCorrectionBenchmark.score(sample.referenceTranscript, for: sample).value == sample.requiredTerms.count * 10)
+    }
+
+    @Test("Correct keywords cannot conceal lost intent or clauses")
+    func intentScoring() throws {
+        let sample = try #require(VoiceCorrectionBenchmark.samples.first { $0.id == "negation-and-condition" })
+        #expect(VoiceCorrectionBenchmark.score("提交并发布，测试通过。", for: sample).value <= 0)
+        let long = try #require(VoiceCorrectionBenchmark.samples.first { $0.id == "long-utterance-completeness" })
+        #expect(VoiceCorrectionBenchmark.score(String(long.referenceTranscript.dropLast(12)), for: long).value <= 0)
+    }
+
+    @Test("Benchmarking does not reward an unsafe model for a safe production fallback")
+    func scoresRawModelOutput() async throws {
+        let client = VoiceCorrectionProviderClient { request in
+            let data = try #require(request.httpBody)
+            let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let input = try #require(body["input"] as? String)
+            let sample = try #require(VoiceCorrectionBenchmark.samples.first {
+                input.contains("Primary draft:\n" + $0.recognition.primaryTranscript)
+            })
+            let candidate = sample.referenceTranscript.replacingOccurrences(of: "8080", with: "8081")
+            let response = try JSONSerialization.data(withJSONObject: ["status": "completed", "output_text": candidate])
+            return (response, Self.response(for: request, statusCode: 200))
+        }
+        let result = try await VoiceCorrectionBenchmark.evaluate(
+            modelID: "test-model", provider: .volcengineArk, apiKey: "test-key", client: client
+        )
+        #expect(result.score < result.maximumScore)
+        #expect(result.sampleCount == VoiceCorrectionBenchmark.samples.count)
     }
 
     private static func response(

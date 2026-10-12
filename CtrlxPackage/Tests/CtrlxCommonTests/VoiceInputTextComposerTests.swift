@@ -1,5 +1,5 @@
-@testable import CtrlxFeature
 import Testing
+@testable import CtrlxCommon
 
 @Suite("Voice input vocabulary")
 struct VoiceInputVocabularyTests {
@@ -234,6 +234,8 @@ struct VoiceTranscriptCorrectionPromptTests {
         #expect(instructions.contains("correct \"Wise button\" to \"Voice button\""))
         #expect(instructions.contains("explicitly code-shaped"))
         #expect(instructions.contains("`--verbose`"))
+        #expect(instructions.contains("negation, restriction and condition"))
+        #expect(instructions.contains("不要发布"))
     }
 
     @Test("Keeps recent pane context bounded for semantic correction")

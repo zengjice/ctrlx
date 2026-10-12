@@ -55,6 +55,87 @@ height across the live terminal. The animation never wraps the terminal or keybo
 fade only, and Reduce Transparency uses an opaque, legible surface. The phrase
 editor hides its Form background so it does not obscure the shared material.
 
+## Context-aware voice input
+
+The Mac status bar also has a microphone, for both Local and Viewer terminal
+panes. One click starts on-device recognition; a second click, or **Stop and
+Insert** in the live-preview popover, finishes correction and inserts one literal
+text batch **without Return**. Esc, dismissing the preview, switching targets,
+typing in the terminal, disconnection or leaving the view cancels that recording.
+The Mac preview owns its dismissal: clicking the microphone remains a normal
+button action, while outside clicks, Esc and application deactivation cancel.
+Finishing keeps the preview visible through correction; closing it after insertion
+does not cancel the completed result.
+The result is tied to the focused native endpoint and its focus/input revisions;
+switching away and back does not revive it. Ordinary shells are supported.
+Pending agent forms and external editors disable dictation into the terminal.
+There is no global hotkey, clipboard replacement or extra Host/Relay command.
+
+`CtrlxCommon` owns `VoiceInputController`, the SpeechAnalyzer/legacy recognizers,
+vocabulary, candidate assembly, correction prompts/policy/provider client and
+`VoiceCorrectionSettingsSection`. iOS retains its existing live-input adapter;
+Mac previews partial text and inserts only the final result through
+`TerminalQuickActionRouter` and the existing keyboard queue. App-wide recording
+ownership prevents two windows from racing the microphone, including asynchronous
+analyzer cleanup. iOS alone configures `AVAudioSession`; Mac uses its local audio
+input and declares microphone/speech usage plus the hardened-runtime audio-input
+entitlement.
+
+Both clients snapshot context once at recording start: session/window names,
+command, current path and recent text from the focused terminal buffer. The shared
+extractor copies at most 512 tail rows, preserves soft wraps and limits the final
+context to 12,000 characters. It does not poll, copy full scrollback, request
+additional Host history or read the Viewer's filesystem.
+
+The shared vocabulary adds at most eight short, deduplicated terms from the captured
+session/window names and the current directory's basename. It never mines arbitrary
+terminal output or scans files. Live recognition, the accurate second pass and
+correction use the same per-recording vocabulary; switching sessions cannot carry
+old project terms into a new recording.
+
+On iOS/macOS 26+, SpeechAnalyzer uses SpeechTranscriber where available, otherwise
+DictationTranscriber; older systems retain on-device SFSpeechRecognizer support.
+Correction tries the configured provider, then the on-device model when available,
+then preserves the recognition result. Terminal insertion flattens newlines and
+removes control characters. Speech models may require a first-use asset download.
+
+Correction reserves room for the complete original utterance and its output before
+adding optional evidence. The on-device route uses the model's context size and,
+on 26.4+, its tokenizer; 26.0–26.3 use a conservative UTF-8 byte budget. It trims
+older terminal context first (retaining metadata when possible), then drops optional
+phonetic hints. If the original cannot fit, it stays unchanged. Provider output
+budgets grow with transcript size up to 8,192 tokens; oversized requests are skipped,
+not shortened. Explicitly incomplete/failed provider responses are never inserted.
+
+Shared validation rejects altered literal numbers, versions, addresses, prefixed
+paths, flags, assignments and backtick-delimited code. Prompts additionally require
+preserving all clauses, negations and conditions. These are conservative checks,
+not a semantic guarantee: natural-language homophone correction remains model-based.
+
+Mac **Settings → Voice Input** and the existing iOS settings use the same component
+for provider credentials, model choices and bundled-sample model tests. Existing
+iOS preference keys (`voiceCorrectionProvider`, `voiceCorrectionModelID`,
+`voiceCorrectionTestedModelIDsByProvider`) and Keychain accounts are unchanged.
+Settings and credentials stay device-local; no credential sync is added. If a
+provider is configured, transcript candidates and bounded terminal context are
+sent directly to it for correction; microphone audio is not uploaded.
+
+Bundled model tests include already-correct input, negation/conditions, literals,
+irrelevant or instruction-like context and long utterances. Scores penalize differences
+from complete reference transcripts, not just missing/incorrect keywords; unchanged
+and intent-sensitive fixtures require a full match apart from punctuation, spacing
+and letter case. Scores are fixture checks, not a general measure of semantic accuracy.
+They evaluate the model's actual output: a rejected correction does not earn credit
+for the production pipeline's safe fallback to the original draft.
+
+Regression coverage lives in `CtrlxCommonTests/Voice*`,
+`CtrlxServerFeatureTests/TerminalVoiceInputRequestTests.swift`,
+`CtrlxServerFeatureTests/MacVoiceInputPopoverTests.swift` and the existing iOS
+phase/input tests. `python3 scripts/tests/test_mac_voice_input_popover.py` exercises
+native mouse dispatch in an isolated AppKit process with fake recognition (no
+microphone, credentials or terminal input). Real microphone, permission prompts
+and recognition quality remain Mac/iPhone device acceptance checks.
+
 ## iOS custom input buttons
 
 The first input row's horizontal scroll area ends with `$`, device-local custom

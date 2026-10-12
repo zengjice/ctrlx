@@ -98,6 +98,28 @@ struct TerminalQuickActionButtons: View {
             guard var captured = commandPanel else { return }
             commandPanel = captured.updateCommand(commandContext, terminal: phraseContext) ? captured : nil
         }
+
+        MacVoiceInputButton(
+            router: router, settings: settings.voiceCorrection,
+            context: phraseContext, targetLabel: presentation.label,
+            isSuspended: commandPanel != nil || phrasePanel != nil,
+            contextProvider: voiceInputContext,
+            willStart: {
+                commandPanel = nil
+                phrasePanel = nil
+            }
+        )
+    }
+
+    private func voiceInputContext() -> String? {
+        guard let pane else { return nil }
+        return VoiceInputContext.makeTerminalContext(
+            terminalText: router.active?.terminalText(),
+            metadata: VoiceInputContext.paneMetadata(
+                sessionName: pane.sessionName, windowName: pane.windowName,
+                command: pane.command, currentPath: pane.currentPath
+            )
+        )
     }
 
     private var pane: PaneState? {

@@ -1324,16 +1324,10 @@
 
             var metadata: [String] = []
             if let pane = window?.panes.first(where: { $0.paneId == activePaneId }) {
-                metadata.append("Session: \(sessionName)")
-                if !pane.windowName.isEmpty {
-                    metadata.append("Window: \(pane.windowName)")
-                }
-                if let command = pane.command, !command.isEmpty {
-                    metadata.append("Running command: \(command)")
-                }
-                if let currentPath = pane.currentPath, !currentPath.isEmpty {
-                    metadata.append("Current path: \(currentPath)")
-                }
+                metadata = VoiceInputContext.paneMetadata(
+                    sessionName: sessionName, windowName: pane.windowName,
+                    command: pane.command, currentPath: pane.currentPath
+                )
             }
 
             return VoiceInputContext.makeTerminalContext(

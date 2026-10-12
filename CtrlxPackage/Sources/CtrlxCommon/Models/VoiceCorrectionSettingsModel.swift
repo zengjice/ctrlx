@@ -1,4 +1,4 @@
-#if os(iOS)
+#if os(iOS) || os(macOS)
     import CtrlxEncryption
     import Dependencies
     import Foundation
@@ -23,11 +23,9 @@
         @ObservationIgnored
         @Dependency(SecretsService.self) private var secrets
 
-        @ObservationIgnored
-        private let client: VoiceCorrectionProviderClient
+        @ObservationIgnored private let client: VoiceCorrectionProviderClient
 
-        @ObservationIgnored
-        private var preparedProvider: VoiceCorrectionProvider?
+        @ObservationIgnored private var preparedProvider: VoiceCorrectionProvider?
 
         var isBusy: Bool {
             isLoading || isTesting
@@ -42,9 +40,9 @@
             self.client = client
         }
 
-        func prepare(settings: IOSSettings) async {
+        func prepare(settings: VoiceCorrectionSettings) async {
             guard !isBusy else { return }
-            let provider = settings.voiceCorrectionProvider
+            let provider = settings.provider
             if preparedProvider != provider {
                 apiKeyDraft = ""
                 clearMessages()
@@ -65,13 +63,13 @@
             }
         }
 
-        func saveAPIKey(settings: IOSSettings) async {
+        func saveAPIKey(settings: VoiceCorrectionSettings) async {
             guard !isLoading else { return }
             clearMessages()
             isLoading = true
             defer { isLoading = false }
 
-            let provider = settings.voiceCorrectionProvider
+            let provider = settings.provider
             let account = VoiceCorrectionCredentials.apiKeyAccount(
                 for: provider
             )
@@ -92,7 +90,7 @@
             }
         }
 
-        func testModels(settings: IOSSettings) async {
+        func testModels(settings: VoiceCorrectionSettings) async {
             guard !isBusy else { return }
             clearMessages()
             isTesting = true
@@ -101,7 +99,7 @@
             testResults = []
             defer { isTesting = false }
 
-            let provider = settings.voiceCorrectionProvider
+            let provider = settings.provider
             let account = VoiceCorrectionCredentials.apiKeyAccount(for: provider)
             do {
                 guard let apiKey = try await secrets.loadSecret(account), !apiKey.isEmpty else {
@@ -117,7 +115,7 @@
                 let candidateModelIDs = VoiceCorrectionBenchmark.candidateModelIDs(
                     for: provider,
                     from: availableModelIDs,
-                    selectedModelID: settings.voiceCorrectionModelID
+                    selectedModelID: settings.modelID
                 )
                 guard !candidateModelIDs.isEmpty else {
                     errorMessage = "No supported text models are available for this provider."
@@ -160,36 +158,36 @@
             }
         }
 
-        func saveTopModels(settings: IOSSettings) {
+        func saveTopModels(settings: VoiceCorrectionSettings) {
             clearMessages()
             guard !testResults.isEmpty else { return }
             let count = min(max(1, topModelCount), testResults.count)
             let modelIDs = testResults.prefix(count).map(\.modelID)
-            settings.saveTestedVoiceCorrectionModelIDs(
+            settings.saveTestedModelIDs(
                 modelIDs,
-                for: settings.voiceCorrectionProvider
+                for: settings.provider
             )
             models = modelIDs
             hasTestedModels = true
-            settings.voiceCorrectionModelID = modelIDs[0]
+            settings.modelID = modelIDs[0]
             statusMessage = "Saved the top \(count) tested models."
         }
 
-        func restoreRecommendedModels(settings: IOSSettings) {
+        func restoreRecommendedModels(settings: VoiceCorrectionSettings) {
             clearMessages()
-            settings.resetTestedVoiceCorrectionModelIDs(for: settings.voiceCorrectionProvider)
+            settings.resetTestedModels(for: settings.provider)
             applySavedOrRecommendedModels(settings: settings)
             statusMessage = "Restored the built-in recommended models."
         }
 
-        func removeAPIKey(settings: IOSSettings) async {
+        func removeAPIKey(settings: VoiceCorrectionSettings) async {
             guard !isLoading else { return }
             clearMessages()
             isLoading = true
             defer { isLoading = false }
 
             let account = VoiceCorrectionCredentials.apiKeyAccount(
-                for: settings.voiceCorrectionProvider
+                for: settings.provider
             )
             do {
                 try await secrets.deleteSecret(account)
@@ -206,12 +204,12 @@
             errorMessage = nil
         }
 
-        private func applySavedOrRecommendedModels(settings: IOSSettings) {
-            let provider = settings.voiceCorrectionProvider
-            models = settings.voiceCorrectionModelIDs(for: provider)
-            hasTestedModels = settings.hasTestedVoiceCorrectionModels(for: provider)
-            if !models.contains(settings.voiceCorrectionModelID) {
-                settings.voiceCorrectionModelID = models.first ?? ""
+        private func applySavedOrRecommendedModels(settings: VoiceCorrectionSettings) {
+            let provider = settings.provider
+            models = settings.modelIDs(for: provider)
+            hasTestedModels = settings.hasTestedModels(for: provider)
+            if !models.contains(settings.modelID) {
+                settings.modelID = models.first ?? ""
             }
         }
     }

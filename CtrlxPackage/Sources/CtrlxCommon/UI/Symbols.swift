@@ -55,6 +55,7 @@ public enum Symbols: String {
     case folderBadgePlus = "folder.badge.plus"
     case folderFill = "folder.fill"
     case forkKnife = "fork.knife"
+    case gaugeWithDotsNeedle50percent = "gauge.with.dots.needle.50percent"
     case gearshape
     case gearshapeFill = "gearshape.fill"
     case globe

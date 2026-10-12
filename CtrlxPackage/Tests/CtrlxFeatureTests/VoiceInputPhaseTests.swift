@@ -1,4 +1,5 @@
 import Testing
+@testable import CtrlxCommon
 @testable import CtrlxFeature
 
 @Suite("Tap-to-toggle voice input")

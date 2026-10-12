@@ -803,7 +803,7 @@
         }
 
         func voiceInputContext() -> String? {
-            terminalState?.makeTextSnapshot?()?.text
+            terminalState?.makeVoiceInputContext?()
         }
 
         var isReadyForToolbarInput: Bool {
@@ -1266,6 +1266,7 @@
 
         /// Captures the local SwiftTerm buffer without a host or relay request.
         var makeTextSnapshot: (() -> TerminalTextSnapshot?)?
+        var makeVoiceInputContext: (() -> String?)?
 
         var cancelCursorNavigation: (() -> Void)?
         var cancelQuestionCheck: (() -> Void)?
@@ -1533,6 +1534,10 @@
 
             terminalState.makeTextSnapshot = { [weak terminalView] in
                 terminalView?.makeTextSnapshot()
+            }
+            terminalState.makeVoiceInputContext = { [weak terminalView] in
+                guard let terminalView else { return nil }
+                return VoiceInputContext.recentTerminalText(terminalView.getTerminal())
             }
             terminalState.cancelCursorNavigation = { [weak terminalView] in
                 terminalView?.cancelCursorNavigation()

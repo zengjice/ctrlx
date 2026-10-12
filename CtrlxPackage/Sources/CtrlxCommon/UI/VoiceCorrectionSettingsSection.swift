@@ -1,13 +1,17 @@
-#if os(iOS)
+#if os(iOS) || os(macOS)
     import SwiftUI
 
-    struct VoiceCorrectionSettingsSection: View {
-        @Bindable var settings: IOSSettings
-        @Bindable var model: VoiceCorrectionSettingsModel
+    public struct VoiceCorrectionSettingsSection: View {
+        @Bindable private var settings: VoiceCorrectionSettings
+        @State private var model = VoiceCorrectionSettingsModel()
 
-        var body: some View {
+        public init(settings: VoiceCorrectionSettings) {
+            self.settings = settings
+        }
+
+        public var body: some View {
             Section {
-                Picker("Provider", selection: $settings.voiceCorrectionProvider) {
+                Picker("Provider", selection: $settings.provider) {
                     ForEach(VoiceCorrectionProvider.allCases) { provider in
                         Text(provider.displayName).tag(provider)
                     }
@@ -18,7 +22,9 @@
                     model.hasStoredAPIKey ? "Replace saved API key" : "API key",
                     text: $model.apiKeyDraft
                 )
+                #if os(iOS)
                 .textInputAutocapitalization(.never)
+                #endif
                 .autocorrectionDisabled()
                 .textContentType(.password)
                 .privacySensitive()
@@ -41,8 +47,8 @@
                 .disabled(
                     model.isBusy
                         || model.apiKeyDraft
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                            .isEmpty
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty
                 )
 
                 LabeledContent("Model List") {
@@ -51,7 +57,7 @@
                 }
 
                 if !model.models.isEmpty {
-                    Picker("Model", selection: $settings.voiceCorrectionModelID) {
+                    Picker("Model", selection: $settings.modelID) {
                         ForEach(model.models, id: \.self) { modelID in
                             Text(modelID).tag(modelID)
                         }
@@ -70,7 +76,7 @@
                             Text(model.testProgressText)
                         }
                     } else {
-                        Label("Test Provider Models", systemImage: "gauge.with.dots.needle.50percent")
+                        Label("Test Provider Models", symbol: .gaugeWithDotsNeedle50percent)
                     }
                 }
                 .disabled(model.isBusy || !model.hasStoredAPIKey)
@@ -138,8 +144,13 @@
                     "Each provider starts with five built-in recommended models. Testing fetches "
                         + "the current provider's compatible models and sends the bundled voice samples "
                         + "for correction, which uses API credits. Save any Top N result as that provider's "
-                        + "model list, or restore the recommendations at any time. API keys stay in Keychain."
+                        + "model list, or restore the recommendations at any time. API keys stay in this device’s Keychain. "
+                        + "When configured, transcript candidates and recent terminal context are sent directly "
+                        + "to the selected provider for correction; microphone audio is not uploaded."
                 )
+            }
+            .task(id: settings.provider) {
+                await model.prepare(settings: settings)
             }
         }
     }
