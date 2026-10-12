@@ -43,6 +43,20 @@ primary checkout remains the default. This path uses
 signature, not notarized), verifies the DMG and atomically updates the Qcloud
 installer. It does not install locally or redeploy the Relay.
 
+By default, the publisher verifies the complete DMG through the same HTTPS URL
+on the cloud host, resolving its domain to loopback to avoid public-IP bandwidth
+limits. TLS hostname/certificate and HTTP routing checks remain enabled; the
+response streams into SHA-256 without a temporary copy.
+The publishing Mac then checks a bounded 64 KiB HTTP Range response against the
+local DMG. Both checks must pass before switching the installer. This verifies
+served content and independent client reachability without downloading the full
+package back to the Mac; it is not a full client-network transfer test.
+
+For explicit end-to-end download troubleshooting, add `--full-download-verify`
+to the publisher's `--yes` command to use the previous full Mac download/hash
+check instead. The publication report records the verification mode. Signature,
+source identity, atomic installer replacement and rollback checks are unchanged.
+
 Mac/iOS local packaging and the formal release script accept any Git worktree
 root. Build caches and artifacts stay in that worktree's `.build-local/` and
 `dist/`; they never write into another worktree. Provision the selected
