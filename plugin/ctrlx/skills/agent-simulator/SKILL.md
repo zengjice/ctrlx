@@ -5,34 +5,34 @@ description: Inspect and operate iOS apps in a native iPhone Simulator embedded 
 
 # CtrlX Agent Simulator
 
-Use `ctrlx simulator` in the calling agent's local CtrlX tmux workbench.
-This workflow targets Codex. Authority uses the socket caller's nearest supported
-agent process, never an environment token or focused tab. Pane-local Codex works
-directly. Use `ctrlx simulator run -- codex` to keep tools in the source terminal.
-It executes Codex with `--no-daemon` (verified with 0.162.1).
-This flag is required; remote endpoints are rejected. Node wrappers may lack
-a recognizable agent executable.
+Use `ctrlx simulator` in the calling Codex's local CtrlX tmux workbench.
+Authority follows the socket caller's nearest supported agent process, never an
+environment token or focused tab. To start a new session from that terminal, use
+`ctrlx simulator run -- codex`; it adds the required `--no-daemon` (verified with
+0.162.1). It launches a new Codex, not a repair for an existing session's identity.
+If caller identification or pane routing fails, report the error and provide this
+terminal launch command; do not launch nested Codex or borrow another pane's identity.
+Remote endpoints are rejected; Node wrappers may lack a recognizable agent executable.
+
+Read [capabilities and limits](references/operations.md#capability-coverage) when assessing
+unsupported tasks, native limitations or validation scope.
+
+Start with `ctrlx simulator identity` and `ctrlx simulator devices`; reuse a suitable
+owned device. Only when another is needed, use `inventory` to choose installed
+`--runtime` / `--device-type` identifiers, then `open`. Use its CtrlX device ID below:
 
 ```sh
-ctrlx simulator inventory
-ctrlx simulator open
-ctrlx simulator devices
-ctrlx simulator status --device <device-id>
+ctrlx simulator status --device <id>
 ctrlx simulator install --device <id> --app /absolute/path/App.app
 ctrlx simulator launch --device <id> --bundle com.example.app
 ctrlx simulator snapshot --device <id>
 ctrlx simulator tap --device <id> --x 196 --y 210
-ctrlx simulator swipe --device <id> --x 196 --y 650 --end-x 196 --end-y 250
-ctrlx simulator key --device <id> --usage 40
 ctrlx simulator paste --device <id> --text '测试文字 🙂'
-ctrlx simulator paste --device <id> --via-menu --identifier login.name --text '测试文字 🙂'
-ctrlx simulator button --device <id> --button home
 ctrlx simulator screenshot --device <id> --output /tmp/new-simulator.png
 ctrlx simulator close --device <id>
 ```
 
 `open` returns a CtrlX device ID, scoped to this live agent, and its UDID.
-Choose installed `--runtime` and `--device-type` identifiers from `inventory`.
 CtrlX has a private device set and defaults to two open devices; change the limit
 with `config --max-devices 8`. `resources` reports pressure, reclaimable memory,
 swap and free disk. Boot requires normal pressure and the configured reserves.
@@ -46,7 +46,7 @@ pane. Repeating `--split` preserves that placement.
 `open --profile balanced` applies a fixed service profile before connecting the
 worker. The default is `standard`. Declare required features with `--requires
 push,storekit,widgets,siri`; CtrlX keeps their dependencies and verifies service
-configuration. Feature checks do not replace actual app tests. `metrics --device
+configuration. Test required app features in the selected profile. `metrics --device
 <id>` reports this simulator's process-tree footprint and CPU plus system resources.
 
 Read a fresh snapshot or screenshot before coordinate input. Gestures check
@@ -63,8 +63,6 @@ Writing PNG or reading AX does not prove you saw it. Report unavailable image vi
 controls or keyboard settings can block paste. This does not test per-character
 typing or IME composition. Snapshots omit secure values.
 For `paste --via-menu`, caret movement and iOS 27 secure emoji editing, read operations.
-Human keyboard input uses the iOS hardware-keyboard source; iOS Pinyin was verified.
-Mac marked-text composition and its candidate window are not integrated.
 
 Human touch or keyboard input takes control immediately and cancels agent input.
 If asked to continue, `ctrlx simulator claim --device <id>` explicitly returns

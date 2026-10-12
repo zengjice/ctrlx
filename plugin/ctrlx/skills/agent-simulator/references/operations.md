@@ -1,66 +1,103 @@
-# Elements, gestures and state waits
+# Simulator operations and capability coverage
 
-Use these operations after installing and launching the app on your owned
-CtrlX device. Read current state before selecting a target and verify the
-resulting app behavior. An input acknowledgement proves submission only.
+Operate on your owned CtrlX device. Observe before input and verify app effects;
+an acknowledgement proves submission only. For installed commands, check
+`ctrlx simulator action --help`.
+Requires Xcode, an installed iOS runtime and CoreSimulator 1155.4 or newer.
+
+## Capability coverage
+
+| Area | Supported controls |
+|---|---|
+| Devices | Start with `devices` and reuse a suitable owned device. `inventory` lists installed runtimes/types; `open` creates/reuses a shut-down private device; `status` inspects and `close` shuts it down, preserving data. |
+| Apps | `install` installs/updates a prebuilt simulator `.app`; `launch`, `terminate`, `open-url` start/stop apps or deliver URLs. Launch waits for Scene activation, not loaded content; URLs may need iOS confirmation. |
+| Observe | `snapshot`, `wait`, `screenshot`: AX nodes/references, semantic selectors, visible/absent waits and PNG to a new path. |
+| Touch | `tap`, `swipe`, `long-press`, `drag`: single-contact input, including system edge gestures. |
+| Keys/text | `key`, `button`, `paste`: HID keys/chords; Home, lock, volume buttons; Unicode clipboard/menu paste. |
+| Display | `show`, `show --split`, `rotate`, `display-mode`: local tabs/splits, orientation and presentation mode. |
+| Environment | `location`, `appearance`, `privacy`, `push`: fixed position, light/dark, permissions and simulated notifications. |
+| Resources | `config`, `resources`, `metrics`: device limits/reserves, pressure, CPU and process footprint. |
+| Diagnostics | `logs`, `crashes`: bounded device/app records. |
+| Ownership | `identity` checks the caller; `claim` explicitly hands back control after human takeover; `batch` runs up to 16 actions. `run -- codex` launches a new local Codex with `--no-daemon` from the source terminal; it cannot repair an existing caller's identity. |
+
+`standard` (default) and `balanced` use the same native controls and bundled
+simslim for startup service preparation/checks; they are service profiles.
+`--requires` retains dependencies, not proof of app behavior: test required features
+in the selected profile. Compare both only when evaluating `balanced` or requested.
+The default device limit is two; configuring 1...32 with
+`config --max-devices` does not validate that device count.
+
+### Not provided
+
+- Pinch/multi-touch: sequential single-contact gestures do not emulate simultaneous fingers.
+- Mac marked-text composition/candidate windows: human input uses the iOS hardware-keyboard
+  source; iOS Pinyin was verified. Unicode paste does not test composition or typing.
+- Video recording, remote simulator viewing/control or physical iPhone control.
+- App uninstall; device erase/delete/explicit clone; runtime download/installation;
+  app compilation/signing. Prepare runtimes/builds separately. `close` preserves data,
+  so reopening is not a clean reset; physical-device `.app` builds are not accepted.
+
+These are CtrlX interface gaps, not Apple's capability limits. Do not invent
+CtrlX commands from `simctl` capabilities or claim substitutes provide equivalent coverage.
+
+### Validation boundaries
+
+- Human mouse dragging exists but has not completed real human acceptance; agent
+  `drag` and queue tests do not validate it. `show` does not guarantee Mac foreground activation.
+- Current acceptance: local Mac, iOS 27, internal 120 Hz, two devices. External 60 Hz,
+  mixed 1x/2x displays, four or more devices and other Macs/toolchains/runtimes are
+  not qualified. Command success does not certify performance or compatibility.
+- Common UIKit/SwiftUI/WKWebView fixtures were checked, not every app/control/dialog.
+  Codex is the delivery target; Claude is deferred. Public distribution is separately
+  qualified. Source/tests do not prove the installed signed App includes the changes.
+  Unvalidated does not mean known broken. Operational/native limits follow below.
 
 ## Batches
 
-Write a UTF-8 JSON file containing 1...16 arrays of ordinary simulator arguments
-and run `ctrlx simulator batch --input /absolute/path/actions.json`. For example:
+`ctrlx simulator batch --input /absolute/actions.json` reads UTF-8 JSON with
+1...16 arrays of ordinary simulator arguments:
 
 ```json
 [
   ["tap", "--device", "<id>", "--identifier", "login.submit"],
-  ["wait", "--device", "<id>", "--identifier", "home.title", "--timeout-ms", "5000"],
-  ["snapshot", "--device", "<id>"],
+  ["wait", "--device", "<id>", "--identifier", "home.title"],
   ["screenshot", "--device", "<id>", "--output", "/tmp/new-result.png"]
 ]
 ```
 
-One CLI process sends one socket request. Every entry uses the same validation,
-live process ownership and per-device input queue as an individual command.
-Use semantic selectors when earlier actions invalidate observation references;
-there is no interpolation from previous results. Entries can target different
-owned devices and execute in order. This is not an atomic transaction: other
-requests or human input may interleave, and human takeover still cancels writes.
+One CLI process/request; normal validation, live ownership and input ordering
+apply. Steps may target different owned devices. Use semantic selectors after
+reference-invalidating actions; results are not interpolated. Other requests or
+human takeover may interleave; the batch is not atomic.
 
-The input and prepared request are each limited to 64 KB, the retained response
-to 32 MiB. The host stops admitting new actions after 60 seconds; an already
-started action keeps its ordinary deadline. The CLI transport limit is 310
-seconds. Nested batches, arbitrary shell commands and per-entry `--socket` are
-rejected. One screenshot is allowed as the final entry, using a new output path.
+Limits: input/prepared request each 64 KB, retained response 32 MiB, new steps
+admitted for 60 s, started steps keep normal deadlines, CLI transport 310 s.
+Nested batches, shell commands and per-step `--socket` are rejected. One screenshot
+is allowed as the last step, to a new path.
 
-The JSON result includes `success`, `planned`, `completed`, ordered `results`
-and, on failure, a zero-based `stoppedAt`. Each attempted entry retains its
-result or error; later entries do not run after a failure. Failed batches exit
-nonzero while still printing these results. Nothing rolls back or automatically
-replays. A timeout can leave the last action's effect unknown: observe the app
-before continuing. `action-completed-result-omitted` means the action completed
-but its result exceeded the size limit; `action-completed-artifact-failed` means
-the final screenshot action completed but its local PNG could not be written.
+JSON includes `success`, `planned`, `completed`, `results` and zero-based `stoppedAt`
+on failure. Later steps stop; failure exits nonzero but prints JSON. No rollback
+or replay; observe unknown write outcomes. `action-completed-result-omitted` means
+completed but oversized result; `action-completed-artifact-failed` means completed
+screenshot but failed local PNG write.
 
 ## Display modes
 
-Each new device uses synchronized display. When the user requests it, opt this
-device into low latency, which may show brief screen tearing:
+Devices start synchronized. On request, select low latency, which may briefly tear:
 
 ```sh
 ctrlx simulator display-mode --device <id> --mode low-latency
 ctrlx simulator display-mode --device <id> --mode synchronized
 ```
 
-`status` reports `displayMode`; the same choice is available in the simulator
-tab. This changes presentation only, leaves the service profile intact, and
-does not promise a particular latency. Agent changes require its active writer;
-do not reclaim control automatically after a human takeover.
+The tab UI and `status.displayMode` expose the same choice. It changes presentation,
+not profiles, and guarantees no latency budget. Requires the agent writer; do not reclaim
+automatically after human takeover.
 
 ## Element targets
 
-`snapshot` returns observation-local `ref` strings, logical-point frames,
-native `visible` flags and `visiblePoint` coordinates when available, and
-the actual frontmost application identity. Prefer an app-provided accessibility
-identifier. The following targets are alternatives:
+`snapshot` returns observation-local `ref`, logical-point frames, native `visible`,
+`visiblePoint` when available, and frontmost app identity. Prefer app identifiers:
 
 ```sh
 ctrlx simulator snapshot --device <id> --limit 1000
@@ -69,28 +106,25 @@ ctrlx simulator tap --device <id> --identifier login.submit
 ctrlx simulator tap --device <id> --label 'Continue' --role AXButton
 ```
 
-Do not combine a reference with semantic selectors, or any element target with
-start coordinates. Identifier, label and role selectors match exactly; when
-combined, all must match. Label can match the AX label or title. A write requires
-exactly one matching element with a finite native interaction point within the current display.
-An incomplete AX tree cannot establish uniqueness.
-When present, `partialReason` distinguishes `node-limit`, `depth-limit`,
-`pending-limit`, `deadline`, and `device-response`. `observationError` gives the
-underlying device response error. Inspect a fresh observation before input.
+References, semantic selectors and start coordinates are alternatives. Identifier,
+label/title and role match exactly; combined selectors must all match. Writes
+require one unique element with a finite native interaction point inside the
+current display. Incomplete AX cannot establish uniqueness.
 
-For a partial tree, poll read-only snapshots within a bounded deadline before
-asserting uniqueness, absence or secure-field privacy. Missing secure fields
-prove nothing. Repeat a rejected write only when its error proves no input was
-sent, using a fresh target; never replay a write whose effect is unknown.
+`partialReason`: `node-limit`, `depth-limit`, `pending-limit`, `deadline` or
+`device-response`; `observationError` describes errors. Poll partial trees read-only
+within a deadline before asserting absence, uniqueness or secure-field privacy.
+Missing secure fields prove nothing. Self-drawn Canvas/game content may omit AX:
+inspect screenshots and use fresh coordinates. AX and screenshots are not atomic.
 
-Before an element write, CtrlX reads a fresh AX tree. A reference also requires
-the same app process identity, geometry and control generation. Identifiers
-can survive an element moving or its label changing, but not a switch to
-another app, rotation or human takeover. Missing, ambiguous or stale targets
-fail before sending input. Take a new snapshot after an action or navigation;
-many writes invalidate the previous observation. Node indices alone are not
-persistent targets. Avoid repeatedly clicking after a timeout: the first
-physical input may already have affected the app.
+Element writes refresh AX. Only `--ref` also checks the previous app process,
+geometry and control generation. An identifier-backed ref can survive movement/label
+changes, but not app switches, rotation or takeover. `--identifier`, `--label` and
+`--role` query current AX without that prior binding; confirm the current app/page.
+All writes require the current writer. Missing/ambiguous targets and stale refs
+fail before input. Re-observe after actions/navigation; node indices are not persistent.
+Retry only when the error proves no input was sent, with a fresh target; never replay
+an unknown write.
 
 ## Long press and drag
 
@@ -102,31 +136,26 @@ ctrlx simulator swipe --device <id> --x 196 --y 650 \
   --end-x 196 --end-y 250 --duration-ms 350
 ```
 
-Tap holds down for 20 ms by default. Long press holds down at the target for 650 ms by default. Drag holds for
-500 ms, then moves over 300 ms by default. `--duration-ms` accepts 20...5000;
-`--hold-ms` accepts 0...5000. Drag end coordinates and all coordinate targets
-use logical points from the device's top-left, excluding the letterbox.
-Swipe uses coordinate targets. Human input cancels an agent gesture and revokes
-its writer; reclaim only when the user asks you to continue.
+Defaults: tap holds 20 ms; long press 650 ms; drag holds 500 ms, moves 300 ms.
+`--duration-ms`: 20...5000; `--hold-ms`: 0...5000. Coordinates are logical points
+from the display's top-left, excluding letterbox. Swipe uses coordinates. Human
+input cancels agent gestures/revokes the writer; reclaim only when asked to continue.
 
-For a system edge gesture, explicitly add `--edge top|left|bottom|right` to
-`swipe`. The edge names the gesture's origin on the current displayed screen;
-start one logical point inside that edge and move inward. For example, on a
-393 × 852 point display:
+For system gestures add `--edge top|left|bottom|right`, the current screen's origin
+edge. Start one point inside and move inward; example for a 393 x 852 display:
 
 ```sh
 ctrlx simulator swipe --device <id> --edge bottom --x 196.5 --y 851 \
   --end-x 196.5 --end-y 383.4 --duration-ms 300
 ```
 
-Read the current geometry before choosing coordinates. Rotation transforms both
-the contacts and their origin edge. Verify navigation from a fresh snapshot;
-the app and iOS decide how to handle the gesture.
+Read geometry first: rotation transforms contacts and edges. Verify navigation;
+the app and iOS decide the gesture's effect.
 
 ## Keyboard and selection
 
-`key` sends one complete press and release to the focused iOS responder. Optional
-modifiers are held within that operation and released in reverse order:
+`key` presses/releases to the focused iOS responder; optional modifiers are held
+for that operation, then released in reverse order:
 
 ```sh
 ctrlx simulator key --device <id> --usage 4 --modifiers command
@@ -134,43 +163,34 @@ ctrlx simulator key --device <id> --usage 80 --modifiers shift
 ctrlx simulator key --device <id> --usage 42
 ```
 
-These usages are A, left arrow and backspace. `--modifiers` accepts a comma-separated
-list of `control`, `shift`, `alt`, `command`, each at most once. A modified key uses
-usage 4...223; an unmodified key retains 4...231. Invalid chords fail before input.
-Human takeover or a failed operation releases held input using the existing cancel
-path. Shortcut behavior depends on the focused app and iOS keyboard layout; verify
-the resulting text and selection. Key acknowledgement does not prove that an app
-handled the shortcut. Use explicit paste for arbitrary Unicode text.
+These are A, left arrow, Backspace. `--modifiers`: comma-separated `control`, `shift`,
+`alt`, `command`, each once. Modified usage 4...223; unmodified 4...231. Invalid
+chords fail before input. Takeover/failure releases held input. Verify text/selection:
+shortcuts depend on responder and iOS layout. Use paste for arbitrary Unicode.
 
-iOS paste permission can appear before its buttons. Observe until the actual
-button is actionable, select it once from a fresh, unique target, then verify
-the original pending paste. Do not resend paste while waiting. Native controls
-may adjust spaces automatically; verify the app's editing policy and selection.
+Paste permission can precede its buttons: wait for a fresh, unique, actionable
+button, select once and verify the pending paste; do not resend it. Native editing
+may adjust spaces/selection.
 
-On the tested iOS 27 runtime, Backspace after pasting emoji into a secure field
-can leave half a UTF-16 surrogate pair, even with native deletion. To edit a known
-whole value, focus the field, send Command+A (usage 4), then paste the replacement
-once. To clear it, delete the full selection. Verify through app behavior or test
-instrumentation; snapshots omit secure values.
+On tested iOS 27, emoji Backspace in secure fields can leave half a UTF-16 surrogate
+pair even with native deletion. For a known whole value: focus, Command+A (usage 4),
+paste its replacement once; clear by deleting the full selection. Verify app effects
+or test instrumentation; AX omits secure values.
 
 ## Targeted menu paste
 
 ```sh
 ctrlx simulator paste --device <id> --via-menu --identifier login.name --text '测试文字 🙂'
-ctrlx simulator paste --device <id> --via-menu --ref '@<observation-id>:<node>' --text 'text'
-ctrlx simulator paste --device <id> --via-menu --x 196 --y 414 --text 'Web text'
 ```
 
-This operation focuses the explicit target, writes the simulator clipboard once,
-long-presses the current target and taps a unique Paste item from a fresh, complete
-AX tree. It uses device touch input. Long press may move the caret or change the
-selection. Semantic targets must have AXTextField or AXTextArea roles; other roles
-are rejected before focus and clipboard input. Use coordinates when AX omits the
-editable field. A menu observation failure reports that no Paste tap was sent.
-This is not a promise to preserve an existing insertion point.
-An acknowledgement reports submission; verify the resulting text and app behavior,
-and handle any iOS paste permission prompt from a fresh observation. A missing or
-ambiguous menu fails without keyboard fallback or input replay.
+Alternatively use `--ref '@<observation-id>:<node>'` or `--x 196 --y 414`.
+This focuses the target, writes the simulator clipboard once, long-presses, then
+touches a unique Paste item from fresh, complete AX. Long press may change caret/
+selection; insertion-point preservation is not guaranteed. Semantic targets need
+AXTextField/AXTextArea; others fail before focus/clipboard input. Use coordinates
+if AX omits the field. Menu observation failure reports no Paste tap sent, without
+keyboard fallback or replay. Verify app/text effects and handle iOS paste permission
+from a fresh observation.
 
 ## Rotation
 
@@ -179,33 +199,25 @@ ctrlx simulator rotate --device <id> --orientation landscape-left
 ctrlx simulator rotate --device <id> --orientation portrait
 ```
 
-Allowed orientations are `portrait`, `portrait-upside-down`, `landscape-left`
-and `landscape-right`. The operation waits for reported geometry to change;
-an app that locks orientation can reject the requested result. Read a fresh
-snapshot after rotation and use the new dimensions. Previous references and
-coordinate assumptions are stale.
+Also accepts `portrait-upside-down` and `landscape-right`. Waits for geometry change;
+app orientation locks can reject the result. Refresh observations/dimensions after
+rotation: previous refs and coordinate assumptions are stale.
 
 ## State waits
 
 ```sh
 ctrlx simulator wait --device <id> --identifier loading.indicator \
   --state absent --timeout-ms 10000
-ctrlx simulator wait --device <id> --label 'Welcome' \
-  --state visible --timeout-ms 5000
+ctrlx simulator wait --device <id> --label 'Welcome' --state visible --timeout-ms 5000
 ```
 
-Wait uses semantic selectors, not references. The default state is `visible`
-and the default timeout is 5000 ms, with a supported range of 1...60000 ms.
-It polls fresh AX observations without physical writes. `visible` requires a
-matching element whose native AX visibility is true and whose frame intersects
-the display. Missing native visibility metadata cannot prove visibility.
-This AX state does not prove that the element is enabled, has a usable interaction
-point, or is actually drawn by a custom renderer. `absent` requires a complete tree with no matching element;
-partial trees and failed observations never prove absence. Use screenshots
-for content the app does not expose to accessibility.
+Use semantic selectors, not refs. Defaults: `visible`, 5000 ms; timeout 1...60000 ms.
+Wait polls fresh AX without input. `visible` needs native visibility and a frame
+intersecting the display; missing metadata proves nothing. Visibility does not
+prove enabled/actionable or actually drawn custom content. `absent` needs a
+complete tree with no match; partial/failed reads cannot prove absence. Use
+screenshots for content omitted from AX.
 
-Performance budgets and untested toolchain versions must not be inferred from
-command success. Test the project's required features with both service profiles.
 ## Simulator environment
 
 ```sh
@@ -214,26 +226,22 @@ ctrlx simulator location --device <id> --clear
 ctrlx simulator appearance --device <id> --style dark
 ctrlx simulator appearance --device <id>
 ctrlx simulator privacy --device <id> --action grant --service location --bundle com.example.app
-ctrlx simulator privacy --device <id> --action reset --service location --bundle com.example.app
 ctrlx simulator push --device <id> --bundle com.example.app --payload /absolute/payload.json
 ```
 
-Coordinates set a fixed simulated location; `--clear` stops location simulation.
-Appearance accepts light/dark and returns the observed style. CtrlX does not
-restore environment settings on close; clear location and restore appearance
-and permissions explicitly. A last-known coordinate can remain in the app after
-clear, so verify subsequent location callbacks rather than an unchanged label.
-Privacy accepts grant/revoke/reset and always requires one app bundle, including
-`--service all`. Some permission changes terminate the app; launch it explicitly
-afterward and verify the result. Supported services are those exposed by the
-installed Xcode: calendar, contacts/contacts-limited, location/location-always,
-photos/photos-add, media-library, microphone, motion, reminders, siri and all.
-Push reads a UTF-8 JSON object containing an `aps` object, at most 4096 bytes.
-The explicit bundle overrides any payload target. A successful reply confirms
-simulator submission; verify delivery in the app. It does not test real APNs.
-All environment commands use the device's existing writer ownership. A human
-takeover requires explicit `claim` before another agent write. Timeouts never
-trigger automatic write retries.
+Location is fixed; `--clear` stops simulation but the app may retain its last
+position: check subsequent callbacks. Appearance accepts light/dark and returns
+observed style. Close does not restore location, style or permissions; restore
+explicitly when required.
+
+Privacy accepts grant/revoke/reset and requires one app bundle even for service
+`all`. Some changes terminate apps; relaunch and verify. Services: calendar,
+contacts/contacts-limited, location/location-always, photos/photos-add, media-library,
+microphone, motion, reminders, siri, all; availability depends on installed Xcode.
+Push accepts UTF-8 JSON with an `aps` object, at most 4096 bytes. Explicit bundle
+overrides payload targeting. Success means simulator submission, not delivery
+or real APNs: inspect effects. Writes need the current writer; takeover requires
+explicit `claim` before further writes. Timeouts never trigger write retries.
 
 ## App diagnostics
 
@@ -242,21 +250,16 @@ ctrlx simulator logs --device <id> --bundle com.example.app --last-seconds 30 --
 ctrlx simulator crashes --device <id> --bundle com.example.app --last-seconds 3600 --limit 5
 ```
 
-Logs query the installed app's Mach-O image identity within this device's paths,
-including info and debug messages. This survives unified logging retaining an old
-container path after reinstall. Logs from a different executable build are not
-included. The query preserves the container's original path spelling; complete
-JSON records are checked against its image UUID before messages are returned.
-The time window is 1...300 seconds; each output stream retains the most recent
-at most 1...262144 bytes (default 65536). The query has a 15-second deadline and
-does not start a continuous stream. `truncated` means the result is incomplete.
-An incomplete JSON record is omitted, so a very small byte cap may return no messages.
-Crashes read this device's IPS reports and the Mac's DiagnosticReports directory.
-Both require matching bundle metadata; host reports also require simulator
-platform metadata and this device's exact coalition name, even if paths are redacted.
-They accept 1...86400 seconds and 1...10 reports; all report text shares the byte
-budget. The newest 128 report headers are inspected. Host scope inspection shares
-a separate 1 MiB budget; reports that cannot be fully checked within it are skipped
-and mark the result truncated. Empty results do not prove
-that the app never crashed; a truncated result cannot prove report absence.
-Both operations are read-only, remain owner-scoped and do not claim human control.
+Logs match installed Mach-O image UUID within this device's paths, including
+info/debug. Original container spelling preserves matches to logging's old paths
+after reinstall; different builds are excluded. Only complete matching JSON records
+return. Range 1...300 s; per-stream tail 1...262144 bytes (default 65536); deadline
+15 s, no continuous stream. `truncated` marks incomplete results; tiny caps may
+omit every record.
+
+Crashes inspect device IPS and Mac DiagnosticReports with matching bundle metadata;
+host reports also need simulator platform and exact device coalition, even with
+redacted paths. Range 1...86400 s, 1...10 reports (default 5); text shares the byte
+cap. Inspect at most 128 newest headers, with a separate 1 MiB host inspection cap.
+Unverifiable reports are skipped and mark truncation. Empty/truncated results do
+not prove no crash. Both queries are read-only, owner-scoped and do not claim control.
