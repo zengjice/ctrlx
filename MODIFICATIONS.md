@@ -7,6 +7,34 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.60 — Explicit repository links and pane-bound Host browsers
+
+- Reuse each terminal Window's linked Files tab instead of opening another tab
+  for each clicked file. Replace automatic path detection with explicit
+  `<repo:relative/path>` references, resolved against the current agent worktree
+  and checked on the Host. Ordinary paths, file URLs and slash commands no longer
+  become Files links; repository references avoid disclosing absolute paths.
+- Move Open Browser to Window actions. In-app web links open/reuse the source
+  pane's Chromium page on the Host, including from Viewers; the system-browser
+  choice still opens on the operating device. Preserve existing local WebKit
+  tabs and keep human pages separate from agent-owned pages.
+- Normalize equivalent browser URLs, reject embedded credentials explicitly,
+  respect Viewer control leases and preserve intervening Git/Files selections
+  when an asynchronous browser open completes.
+- Guide agent webpage interaction through the shared CtrlX browser skill by
+  default while honoring explicit external-browser choices. Do not silently
+  switch tools on failure. Add native Claude Code caller discovery alongside
+  Codex, preserving process-instance ownership and nested-agent isolation.
+  Bundle Codex plugin 1.1.4 and Claude Code plugin 1.3.5.
+- Validation: bounded Swift regression (2,688 tests reported, two opt-in probes
+  skipped; Apple Intelligence evaluation suite excluded), 189 script tests,
+  30 publisher tests, browser CLI checks, both boundary checks, website build,
+  and signed iOS device-target build passed. No device UI acceptance in this run.
+- Distribution: Mac package only, using cloud-side full HTTPS artifact checking
+  plus a bounded client download probe. No Relay deployment or local Mac/iPhone
+  installation. Updated iOS behavior requires a separate install; automatic
+  skill selection and the new cross-device UI flows still need live acceptance.
+
 ## 3.0.59 — Worktree-local build, install and cleanup workflows
 
 - Add a unified local Mac/iOS installer that builds, signs, installs and launches
