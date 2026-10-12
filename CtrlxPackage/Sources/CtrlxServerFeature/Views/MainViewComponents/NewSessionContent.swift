@@ -56,8 +56,12 @@ struct NewSessionContent: View {
         return items
     }
 
+    private var contentWidth: CGFloat {
+        showsDirectoryForm ? 420 : 350
+    }
+
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if showsDirectoryForm {
                 DirectorySessionForm(
                     agents: launchAgents,
@@ -70,13 +74,14 @@ struct NewSessionContent: View {
                     onCancel: { showsDirectoryForm = false }
                 )
                 .id(directorySource.id)
-                .padding()
+                .padding(20)
             } else {
                 projectPicker
             }
         }
-        .frame(maxWidth: popover ? 350 : 400)
-        .frame(width: popover ? 350 : nil)
+        .frame(maxWidth: popover ? contentWidth : 400)
+        .frame(width: popover ? contentWidth : nil)
+        .fixedSize(horizontal: false, vertical: popover && showsDirectoryForm)
     }
 
     private var projectPicker: some View {

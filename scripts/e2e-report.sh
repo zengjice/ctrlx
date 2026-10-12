@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 RESULTS_REPO="${RESULTS_REPO_URL:-${RESULTS_REPO:+https://github.com/${RESULTS_REPO}.git}}"
 # Anchor to the main worktree's parent so all worktrees share one results clone.
-MAIN_WORKTREE_ROOT="$(cd "$(git -C "$PROJECT_ROOT" rev-parse --git-common-dir)/.." && pwd)"
+MAIN_WORKTREE_ROOT="$(cd "$(git -C "$PROJECT_ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)"
 RESULTS_DIR="$(dirname "$MAIN_WORKTREE_ROOT")/CtrlxTestResults"
 E2E_TMPDIR="${TMPDIR:-/tmp}/ctrlx-e2e"
 JSON_OUTPUT="$E2E_TMPDIR/e2e-results.json"

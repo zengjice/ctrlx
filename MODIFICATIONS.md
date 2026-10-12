@@ -7,6 +7,281 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.60 — Explicit repository links and pane-bound Host browsers
+
+- Reuse each terminal Window's linked Files tab instead of opening another tab
+  for each clicked file. Replace automatic path detection with explicit
+  `<repo:relative/path>` references, resolved against the current agent worktree
+  and checked on the Host. Ordinary paths, file URLs and slash commands no longer
+  become Files links; repository references avoid disclosing absolute paths.
+- Move Open Browser to Window actions. In-app web links open/reuse the source
+  pane's Chromium page on the Host, including from Viewers; the system-browser
+  choice still opens on the operating device. Preserve existing local WebKit
+  tabs and keep human pages separate from agent-owned pages.
+- Normalize equivalent browser URLs, reject embedded credentials explicitly,
+  respect Viewer control leases and preserve intervening Git/Files selections
+  when an asynchronous browser open completes.
+- Guide agent webpage interaction through the shared CtrlX browser skill by
+  default while honoring explicit external-browser choices. Do not silently
+  switch tools on failure. Add native Claude Code caller discovery alongside
+  Codex, preserving process-instance ownership and nested-agent isolation.
+  Bundle Codex plugin 1.1.4 and Claude Code plugin 1.3.5.
+- Validation: bounded Swift regression (2,688 tests reported, two opt-in probes
+  skipped; Apple Intelligence evaluation suite excluded), 189 script tests,
+  30 publisher tests, browser CLI checks, both boundary checks, website build,
+  and signed iOS device-target build passed. No device UI acceptance in this run.
+- Distribution: Mac package only, using cloud-side full HTTPS artifact checking
+  plus a bounded client download probe. No Relay deployment or local Mac/iPhone
+  installation. Updated iOS behavior requires a separate install; automatic
+  skill selection and the new cross-device UI flows still need live acceptance.
+
+## 3.0.59 — Worktree-local build, install and cleanup workflows
+
+- Add a unified local Mac/iOS installer that builds, signs, installs and launches
+  through the existing platform scripts. App-only builds avoid unnecessary
+  DMG/IPA creation; standalone packaging still produces distributable artifacts.
+- Validate reusable signed Apps against their recorded build identity. Stage
+  package replacements transactionally and retain local Mac rollback backups.
+- Serialize managed builds, tests, installations and cleanup within each
+  worktree. Lock installation destinations across worktrees without sweeping
+  another worktree's caches or touching simulator state.
+- Keep incremental caches by default. Prune completed verification copies and
+  install backups with explicit completion records; preserve unmarked or failed
+  runs. Optional space-saving cleanup runs only after successful workflows.
+- Preserve zero-argument packaging on macOS's system Bash when entering the
+  worktree lock, alongside app-only and space-saving options.
+- Validation: 189 script tests, 9 worktree regressions, 19 publisher tests,
+  brand/technical boundaries and the website build passed. Re-ran 2,705 Swift
+  tests using existing products for unchanged Swift sources, excluding the
+  unavailable Apple Intelligence evaluation suite. The first Xcode build-settings
+  check timed out; the complete script suite passed on rerun.
+- Distribution: Mac package only. No Relay deployment, iPhone installation or
+  replacement of the local running Mac app; application behavior is unchanged.
+
+## 3.0.58 — Wrapped file links and browser annotation handoff
+
+- Recognize enclosed, word-wrapped filename tails when they cannot fit in the
+  preceding row's remaining cells, including Chinese video paths that leave
+  six columns unused. Both rows target the complete file; truncated paths,
+  independent paths and web URLs retain their existing safeguards.
+- Bundle the new `file-links` Skill for Claude Code (plugin 1.3.3) and Codex
+  (plugin 1.1.2): short Markdown labels with complete absolute Host targets,
+  without manual wrapping or truncation. Keep visible-text compatibility because
+  agent terminal renderers do not guarantee explicit file hyperlink metadata.
+  Update the installed agent plugin and begin a new session to discover the Skill.
+- Keep browser annotations visible while the iOS destination terminal prepares,
+  then reveal the ready terminal without a second subscription. Cancellation,
+  disconnects and navigation failures preserve the acknowledged attachment;
+  retrying Open Agent does not submit the same screenshot again.
+- Refresh architecture and contributor documentation for development by
+  different AI agents. Distinguish current contracts from historical plans.
+- Distribution: Mac package only. No Relay deployment, iPhone installation or
+  replacement of the local running Mac app. The iOS handoff requires a separate
+  iPhone build/install and physical-device acceptance.
+
+## 3.0.57 — Reliable terminal file links and iOS window swipes
+
+- Separate Chinese prose punctuation from terminal file paths and reject
+  ambiguous slash commands, ordinary slash-separated words and visibly
+  truncated paths. Do not expose hard-wrapped file URI fragments as independent
+  links; join enclosed continuations before checking split ellipses. Explicit
+  file hyperlink targets remain authoritative, including shortened labels.
+- All three clients share the recognition code and still validate files only
+  on activation against the source Host. Update each viewing client to receive
+  these recognition fixes; no wire protocol or Relay update is needed.
+- iOS swipes now move left to the next Window and right to the previous Window,
+  without wrapping at either end. Native gesture handling preserves terminal
+  input and scrolling; physical-device swipe acceptance has passed.
+- Validation: 82 focused file-link, viewport, URL and Files-workspace tests
+  passed, including the reported 21-column hard-wrap case. The release regression
+  passed 2,690 serial Swift tests, excluding two unavailable Apple Intelligence
+  evaluations. Brand/technical boundaries, 131 script tests, 19 publisher tests
+  and the website build passed. Updated recognition still needs physical-device
+  acceptance after installation.
+- Distribution: Mac package release plus a separately signed local iPhone
+  installation. No Relay deployment or local Mac App replacement.
+
+## 3.0.56 — Linked files and interactive browser workflows
+
+- Open underlined terminal file paths directly in the source session's Files
+  tabs on Mac Host, Mac Viewer and iOS. Reuse existing directory tabs, resolve
+  relative paths on the Host, and preserve web-link precedence, wrapped/CJK
+  text and decoded filenames. File checks happen on activation, not hover.
+- Add folder creation and file uploads to Files on all clients. Upload from
+  coordinated file snapshots, show progress/cancellation, verify bounded chunks
+  and publish atomically without overwriting existing files. Remote uploads
+  require updated Host and Viewer capabilities; the Relay remains unchanged.
+- Improve Viewer browser clarity with display-size/scale-aware, bounded JPEGs
+  while retaining Host geometry, remote-click accuracy and legacy peer support.
+  Full adaptive quality requires updated Host and Viewer builds.
+- Annotate browser screenshots in place and attach them to the corresponding
+  Agent input without auto-submission. Resume the latest remote frame after
+  annotation ends; preserve recipient identity and control-lease checks.
+- Recognize additional textual/symbolic Shift+Left Codex question footers and
+  recover idle Codex Fork identity from the active process's rollout files.
+- iOS source also adds next-Window right swipes and clarifies custom-button
+  auto-send versus insert-only behavior. Those changes need a separate iOS
+  installation; physical swipe acceptance is still pending.
+- Validation: 2,667 serial Swift tests passed; two unavailable Apple Intelligence
+  evaluations were excluded. Brand/technical boundaries, website build, 131
+  script tests, 19 publisher tests, 13 installer tests and native browser image
+  geometry/budget tests passed. The iOS compile and UIKit test-source typecheck
+  passed; these do not replace physical-device gesture acceptance.
+- Release scope: Mac package only from this linked worktree. No Relay
+  deployment, iOS publication or local App replacement.
+
+## 3.0.55 — Stable Host browser capture and accurate remote clicks
+
+- Capture the existing Host browser surface without CDP clip/scale, avoiding
+  transient renderer resizing while Mac/iOS Viewers watch. Resize/compress the
+  bounded JPEG on a CEF worker, coalesce same-page capture requests and wait for
+  image workers during shutdown. Existing control leases and input remain intact.
+- Return CSS dimensions for the complete captured image, including scrollbars,
+  using the physical/CSS viewport ratio and pinch scale before downscaling.
+  This fixes Viewer click offsets without changing the wire protocol or UI.
+- Validation: image bounds/geometry tests, 15 isolated native browser checkpoints,
+  18 managed-engine checkpoints, 23 targeted Swift tests and signed native builds
+  passed. The screenshot-position regression fails against the previous capture
+  runtime and passes with both scrollbars, browser zoom, pinch zoom and Fit.
+  Evidence and pending physical-device/WAN acceptance remain in `docs/v3.0.52/`.
+  The cached serial release regression passed 2,587 Swift tests; two unavailable
+  Apple Intelligence evaluations were excluded. Brand/technical boundaries,
+  website build, 131 script tests, 19 publisher tests and 13 installer tests passed.
+- Release scope: Mac package only from this linked worktree. Update the Host Mac
+  for these fixes; existing Mac/iOS Viewers and the Relay need no update. No Relay
+  deployment, iOS publication or local App replacement.
+
+## 3.0.54 — Codex question footer and shell-wrapper compatibility
+
+- Recognize the no-plus `shift← to answer` footer observed in Codex 0.160.0,
+  alongside the existing spaced/compact hints and optional elapsed time.
+  Mac Host, Mac Viewer and iOS share the same narrow live-screen parser.
+- Verify the actual Codex process when tmux reports its telemetry shell wrapper,
+  using the existing process scanner with a fresh snapshot. Recheck the live
+  composer after inspection; retain draft/cursor/copy-mode guards and Host-wide
+  queue-count deduplication. Duplicate counts do not repeat the process scan,
+  and no background polling is added.
+- Validation: 66 targeted Swift tests passed for footer parsing, native Mac
+  snapshots, iOS scheduling, Host guards, process reconciliation and input FIFO.
+  The release run exercised 2,587 Swift tests; existing cache-TTL, ephemeral-port
+  boundary and tmux refresh timing failures passed isolated reruns. Two unavailable
+  Apple Intelligence evaluations were excluded. Brand/technical boundaries,
+  website build, 131 script tests, 19 publisher tests and 13 installer tests passed.
+  Physical auto-expansion acceptance remains pending an updated installation.
+- Release scope: Mac package only from this linked worktree. Update both Host
+  and viewing Macs for the new footer; iOS requires a separately updated build.
+  No Relay deployment, iOS publication or local App replacement.
+
+## 3.0.53 — Reliable Mac sidebar selection after context menus
+
+- Preserve native sidebar selection for local and remote sessions so cancelling
+  a window's Fork submenu does not leave subsequent session clicks unresponsive.
+  Scope selection identities to the Host so identical names remain distinct.
+- Suppress native selection decoration and retain the existing theme-matched
+  highlight controlled by "Highlight selected session in sidebar", default off.
+  Keep row buttons, double-click rename, context menus and drag handles unchanged.
+- Validation: 61 targeted Swift regressions passed. Isolated production-row UI
+  checks passed for light/dark highlight toggles, first-click navigation after
+  cancelling a Fork submenu, double-click rename and drag reordering.
+  The release regression run and isolated serial Mac rerun passed 2,581 Swift
+  tests after a parallel Mac process SIGPIPE; two unavailable Apple Intelligence
+  evaluations were excluded. Brand/technical boundaries, website build and
+  19 offline publisher tests passed. No iOS source was changed in this release.
+- Release scope: Mac package only, published from this linked worktree. No Relay
+  deployment, iOS publication or local App replacement.
+
+## 3.0.52 — Viewer browser access and reliable workspace navigation
+
+- Share Host Chromium tabs with Mac and iOS Viewers, including manually opened,
+  Agent-owned and popup pages. Keep the Host profile/session, bounded encrypted
+  frames and input, explicit control leases and Agent/human handoff. WebKit tabs
+  stay local; remote audio, system dialogs and remote DevTools are not included.
+  Both Host and Viewer need the updated capability; iOS requires a separate build.
+- Discard queued input when browser control is lost, forward Mac hover events,
+  and repair split selection after a Host browser tab closes.
+- Preserve verified Fork conversation identity while nested Agent helpers run.
+- Keep Home browsing responsive without stat-ing mounted child directories, and
+  restore dot-prefix and macOS system-hidden filtering before pagination.
+- Treat cancelled/obsolete Viewer layout updates as normal window-switch flow,
+  while still reporting current disconnects, timeouts and Host rejections.
+- Validation: 2,576 Swift tests passed across the full run and serial Mac rerun
+  after loaded-run timing failures; two unavailable Apple Intelligence evaluations
+  were excluded. Brand/technical boundaries, website build, 131 script tests and
+  19 publisher tests passed. Native remote-browser and managed-engine evidence,
+  remaining expanded-engine failure, physical Viewer/iPhone UI acceptance and
+  throttled WAN measurements are recorded in `docs/v3.0.52/`.
+- Release scope: Mac package only, published from this linked worktree. No Relay
+  deployment, iOS publication or local App replacement.
+
+## 3.0.51 — Responsive directory browsing and ordered terminal delivery
+
+- Enumerate known directory entries without fetching mounted child metadata,
+  preventing an unresponsive Home mount from blocking Start in Directory.
+  Preserve hidden-folder filtering, path completion, directory links and bounds.
+  Explicitly opening an unresponsive mount still depends on the filesystem.
+- Admit terminal output to each Viewer's encrypted FIFO before suspending,
+  preserving stream order across overlapping Host fan-out calls. The user
+  confirmed the duplicate Shell character was resolved after a local Host update.
+- Include the iOS quiet-Shell viewport and final native fit-measurement fixes
+  in the corresponding source. These require a separately updated iOS app;
+  this Mac publication does not update installed iPhone clients.
+- Validation: directory/launch/capability and terminal-stream regressions passed.
+  The affected Mac's real Home listing returned 14 folders in 13.5 ms. Mac and
+  iOS Release compilation passed; iOS native first-frame/keyboard acceptance
+  remains pending because the package scheme lacks an iOS test host.
+  The full Swift regression run passed after a serial Mac-suite rerun for a
+  process-cache assertion affected by parallel scheduling; two unavailable Apple
+  Intelligence evaluations were excluded. Brand/technical boundaries, website
+  build, 131 script tests and 19 publisher tests passed.
+- Release scope: publish the Mac package on Qcloud from this linked worktree.
+  No Relay deployment, iOS publication or local App replacement.
+
+## 3.0.50 — Reliable Mac session reordering and terminal table rendering
+
+- Fix Mac local and remote session drag reordering with a dedicated native drag
+  handle and explicit insertion feedback. Save once on release, reject drops
+  outside the source group, and preserve selection, rename and context menus.
+- Pin the published SwiftTerm correction for partial wide-character overwrites
+  and continuation attributes, removing white rectangles in sparse table updates.
+  The rendering fix requires an updated display client, including a separate
+  iOS build for iPhone users; no Relay deployment is needed.
+- Keep the Mac New Session directory form inside its popover with explicit
+  padding, sufficient width and vertically expanding explanatory text.
+- Validation: 36 session-order regressions and isolated native mouse interaction
+  checks passed. SwiftTerm's 619 buffer/rendering tests and the real terminal
+  trace replay passed; iPhone runtime acceptance remains separate.
+  The release rerun passed 2,529 Swift tests, excluding two existing Apple
+  Intelligence evaluations unavailable on this device. Brand/technical boundaries,
+  website build, 131 script tests and 19 publisher tests passed.
+- Release scope: publish the Mac package on Qcloud from this linked worktree.
+  No Relay deployment, iOS publication or local App replacement.
+
+## 3.0.49 — Host-backed Files tabs, media previews and iOS launch controls
+
+- Add independent Host-backed Files tabs on Mac Host, Mac Viewer and iOS,
+  opening at the source terminal's directory and restoring per-session layouts.
+  Keep directory/search/preview requests bounded and off keyboard delivery.
+- Restore local media previews; preview Office documents on all clients, offer
+  Download and Open for other remote files, and stream MP4/MOV video with bounded
+  range reads, seeking, and scene-safe pause/cancellation.
+- Start iOS videos muted with an explicit sound button. Share audio ownership
+  across players and protect voice-input cleanup from deactivating video audio.
+- Support manual Mac session ordering and iOS session swipe actions. Scope Files
+  and Fork entry points to window tabs and move iOS copy into the More menu.
+- Fit newly created iOS sessions/windows and Fork windows to the viewport,
+  retaining fit intent until state arrives; expose custom Fork names and use
+  neutral New Terminal session names.
+- Add custom iOS terminal buttons and Host-directory creation, with a full-height
+  directory picker. Keep build caches worktree-local and add idle cleanup.
+- Validation: 2,518 Swift tests passed on serial rerun; two existing Apple
+  Intelligence evaluations were excluded because this device is not eligible.
+  Brand/technical boundaries, website build, 131 script tests and 19 publisher
+  tests passed. Ten repeated native-playback regressions passed; signed
+  development Mac/iOS packages were installed and launched. Actual iPad
+  multi-window audio acceptance remains pending.
+- Release scope: publish the Mac package on Qcloud from this linked worktree.
+  No Relay deployment, iOS publication or further local App replacement.
+
 ## 3.0.48 — Editable quick phrases and iOS session controls
 
 - Edit existing quick phrases on Mac and iOS while preserving their stable

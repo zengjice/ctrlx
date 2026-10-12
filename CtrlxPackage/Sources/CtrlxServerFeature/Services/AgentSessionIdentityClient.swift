@@ -26,10 +26,11 @@ struct AgentSessionIdentityClient: Sendable {
     var load: @Sendable (_ paneID: String) async -> AgentSessionIdentity? = { _ in nil }
     var save: @Sendable (_ identity: AgentSessionIdentity) async -> Bool = { _ in false }
     var runtimeID: @Sendable (_ processID: String) -> String? = { _ in nil }
+    var codexSessionID: @Sendable (_ processID: String, _ runtimeID: String) async -> String? = { _, _ in nil }
 }
 
 extension AgentSessionIdentityClient: DependencyKey {
-    static let previewValue: Self = Self(load: { _ in nil }, save: { _ in false }, runtimeID: { _ in nil })
+    static let previewValue: Self = Self(load: { _ in nil }, save: { _ in false }, runtimeID: { _ in nil }, codexSessionID: { _, _ in nil })
     static let testValue: Self = previewValue
 
     static let liveValue: Self = diskBacked(stateRoot: {
@@ -43,18 +44,22 @@ extension AgentSessionIdentityClient: DependencyKey {
 
     static func diskBacked(stateRoot: URL) -> Self {
         let storage = AgentSessionIdentityStorage(fileURL: stateRoot.appendingPathComponent("agent-session-identities.json"))
+        let codex = CodexProcessSessionReader()
         return Self(
             load: { await storage.load($0) },
             save: { await storage.save($0) },
-            runtimeID: { processID in
-                guard let pid = Int32(processID), pid > 1 else { return nil }
-                var info = proc_bsdinfo()
-                guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout.size(ofValue: info))) == MemoryLayout.size(ofValue: info),
-                      info.pbi_uid == getuid(), info.pbi_start_tvsec > 0
-                else { return nil }
-                return "\(info.pbi_uid):\(pid):\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)"
-            }
+            runtimeID: { processRuntimeID($0) },
+            codexSessionID: { await codex.sessionID(processID: $0, runtimeID: $1) }
         )
+    }
+
+    static func processRuntimeID(_ processID: String) -> String? {
+        guard let pid = Int32(processID), pid > 1 else { return nil }
+        var info = proc_bsdinfo()
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout.size(ofValue: info))) == MemoryLayout.size(ofValue: info),
+              info.pbi_uid == getuid(), info.pbi_start_tvsec > 0
+        else { return nil }
+        return "\(info.pbi_uid):\(pid):\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)"
     }
 }
 

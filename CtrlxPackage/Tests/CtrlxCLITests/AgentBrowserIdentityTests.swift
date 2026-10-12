@@ -17,43 +17,48 @@ struct AgentBrowserIdentityTests {
         })
     }
 
-    @Test func plainCodexThroughToolShellAndHelper() throws {
-        let codex = process(10)
-        let processes = client([codex, process(11, parent: 10, name: "codex-code-mode-host"), process(12, parent: 11, name: "zsh")])
-        #expect(try processes.callingCodex(from: 12, uid: 501) == codex)
+    @Test(arguments: ["codex", "claude", "home/.local/share/claude/versions/2.1.276", "Caskroom/claude-code/2.1.276/claude"])
+    func nativeAgentThroughToolShellAndHelper(_ name: String) throws {
+        let agent = process(10, name: name)
+        let processes = client([agent, process(11, parent: 10, name: "codex-code-mode-host"), process(12, parent: 11, name: "zsh")])
+        #expect(try processes.callingAgent(from: 12, uid: 501) == agent)
+        #expect(agent.agentName == (name == "codex" ? "Codex" : "Claude Code"))
     }
 
-    @Test func nestedCodexUsesNearestNativeProcess() throws {
-        let inner = process(20, parent: 11)
-        let processes = client([process(10), process(11, parent: 10, name: "zsh"), inner, process(21, parent: 20, name: "sh")])
-        #expect(try processes.callingCodex(from: 21, uid: 501) == inner)
+    @Test(arguments: ["codex", "claude"], ["codex", "claude"])
+    func nestedAgentsUseNearestNativeProcess(_ outerName: String, _ innerName: String) throws {
+        let inner = process(20, parent: 11, name: innerName)
+        let processes = client([process(10, name: outerName), process(11, parent: 10, name: "zsh"), inner, process(21, parent: 20, name: "sh")])
+        #expect(try processes.callingAgent(from: 21, uid: 501) == inner)
     }
 
     @Test func independentInstancesDoNotUseSharedShellOrPane() throws {
-        let processes = client([process(9, name: "tmux"), process(10, parent: 9), process(20, parent: 9)])
-        let a = try processes.callingCodex(from: 10, uid: 501)
-        let b = try processes.callingCodex(from: 20, uid: 501)
+        let processes = client([process(9, name: "tmux"), process(10, parent: 9), process(20, parent: 9, name: "claude")])
+        let a = try processes.callingAgent(from: 10, uid: 501)
+        let b = try processes.callingAgent(from: 20, uid: 501)
         #expect(a.runtimeKey != b.runtimeKey)
     }
 
-    @Test(arguments: ["zsh", "codex-code-mode-host", "not-codex", "codex-fake"])
-    func nonCodexNamesDoNotGrantIdentity(_ name: String) {
+    @Test(arguments: ["zsh", "node", "codex-code-mode-host", "not-codex", "codex-fake", "claude-helper", "not-claude", "claude-code",
+                      "other/versions/2.1.276", "claude/versions/helper", "claude/versions/2.1.276/helper", "claude/versions/2x1x276"])
+    func unsupportedExecutablesDoNotGrantIdentity(_ name: String) {
         #expect(throws: AgentBrowserTransport.Failure.self) {
-            try client([process(10, name: name)]).callingCodex(from: 10, uid: 501)
+            try client([process(10, name: name)]).callingAgent(from: 10, uid: 501)
         }
     }
 
     @Test func unknownForeignAndCyclicAncestryFailsClosed() {
-        for processes in [client([]), client([process(10, uid: 502)]), client([process(10, parent: 10, name: "zsh")])] {
-            #expect(throws: AgentBrowserTransport.Failure.self) { try processes.callingCodex(from: 10, uid: 501) }
+        for processes in [client([]), client([process(10, uid: 502)]), client([process(10, name: "claude", uid: 502)]), client([process(10, parent: 10, name: "zsh")])] {
+            #expect(throws: AgentBrowserTransport.Failure.self) { try processes.callingAgent(from: 10, uid: 501) }
         }
         let longChain = (10...74).map { process(Int32($0), parent: Int32($0 + 1), name: "zsh") } + [process(75)]
-        #expect(throws: AgentBrowserTransport.Failure.self) { try client(longChain).callingCodex(from: 10, uid: 501) }
+        #expect(throws: AgentBrowserTransport.Failure.self) { try client(longChain).callingAgent(from: 10, uid: 501) }
     }
 
-    @Test func exitedAndReusedPIDCannotValidateOldOwner() {
-        let old = process(10)
-        for processes in [client([]), client([process(10, start: 101)]), client([process(10, name: "zsh")])] {
+    @Test(arguments: ["codex", "claude"])
+    func exitedAndReusedPIDCannotValidateOldOwner(_ name: String) {
+        let old = process(10, name: name)
+        for processes in [client([]), client([process(10, name: name, start: 101)]), client([process(10, name: "zsh")])] {
             #expect(throws: AgentBrowserTransport.Failure.self) { try processes.validate(old) }
         }
     }
@@ -74,10 +79,11 @@ struct AgentBrowserIdentityTests {
         return root
     }
 
-    @Test func repeatedCallsReusePrivateContextAndPIDReuseIsIsolated() throws {
+    @Test(arguments: ["codex", "claude"])
+    func repeatedCallsReusePrivateContextAndPIDReuseIsIsolated(_ name: String) throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let owner = process(10)
+        let owner = process(10, name: name)
         let first = try AgentBrowserTransport.withRunContext(for: owner, root: root) { url, value in
             try AgentBrowserTransport.privatePath(url.path, type: S_IFREG)
             try AgentBrowserTransport.privatePath(url.deletingLastPathComponent().path, type: S_IFDIR)
@@ -89,7 +95,7 @@ struct AgentBrowserIdentityTests {
         #expect(first["run"] as? String == again["run"] as? String)
         #expect(first["secret"] as? String == again["secret"] as? String)
         #expect(again["epoch"] as? String == "test-registration")
-        for new in [process(11), process(10, start: 101)] {
+        for new in [process(11, name: name), process(10, name: name, start: 101)] {
             let next = try AgentBrowserTransport.withRunContext(for: new, root: root) { _, value in value }
             #expect(first["run"] as? String != next["run"] as? String)
             #expect(first["secret"] as? String != next["secret"] as? String)
@@ -149,10 +155,11 @@ struct AgentBrowserIdentityTests {
         }
     }
 
-    @Test func firstRegistrationActivatesTheSelectedHostBeforeDiscovery() throws {
+    @Test(arguments: ["codex", "claude"])
+    func firstRegistrationActivatesTheSelectedHostBeforeDiscovery(_ name: String) throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let owner = process(getppid(), uid: getuid())
+        let owner = process(getppid(), name: name, uid: getuid())
         struct HostUnavailable: Error {}
         try withDependencies {
             $0[AgentBrowserProcessClient.self] = client([owner])
@@ -169,10 +176,11 @@ struct AgentBrowserIdentityTests {
         #expect(saved["epoch"] == nil)
     }
 
-    @Test func registeredGrantsNeverActivateOrRegisterAgainstANewHost() throws {
+    @Test(arguments: ["codex", "claude"])
+    func registeredGrantsNeverActivateOrRegisterAgainstANewHost(_ name: String) throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let owner = process(getppid(), uid: getuid())
+        let owner = process(getppid(), name: name, uid: getuid())
         try AgentBrowserTransport.withRunContext(for: owner, root: root) { url, value in
             value["socket"] = "/fixture/old-control.sock"
             value["epoch"] = "old-host"

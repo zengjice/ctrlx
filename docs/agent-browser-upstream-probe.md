@@ -64,6 +64,13 @@ Any macOS Keychain authorization is user-operated. A first-load timeout keeps
 the exact test host alive for diagnosis; quit that isolated app manually before
 retrying. Normal completion quits only the acceptance app and its own daemons.
 
+The printed command now uses `scripts/clean-build.py use-artifact` to hold the
+copy's use lock and record completion only after the harness succeeds. Repeat runs
+must use that wrapper too. Two completed copies are retained; older completed,
+inactive copies are pruned after successful use or packaging. Failed/unmarked copies
+and the separate private evidence/state directory are not automatically deleted.
+See [local artifact retention](../RELEASE.md#verification-copies-and-local-install-backups).
+
 ## What must remain CtrlX-owned
 
 The test uses the upstream provider's `directPage: true`: each engine session

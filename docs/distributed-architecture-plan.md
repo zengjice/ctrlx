@@ -1,6 +1,13 @@
 # Ctrlx Distributed Architecture Plan
 
-## Current Status (Updated: January 2026)
+> Historical migration plan, not the current architecture or deployment runbook.
+> The service names, HTTP hook path, iOS-only Viewer assumptions and Hetzner
+> deployment below describe the original system. For today's Host/Mac Viewer/iOS
+> roles and plugin ingress use [architecture](architecture.md) and
+> [services](services-reference.md); for operations use [self-hosting](self-hosting.md)
+> and [RELEASE.md](../RELEASE.md). Do not execute this plan's old deployment steps.
+
+## Historical status (January 2026)
 
 | Phase | Status | Notes |
 |-------|--------|-------|

@@ -38,7 +38,7 @@ struct TerminalPasteTransportTests {
             )
             let viewer = ViewerRelayClient()
             host.onSessionStateRequest = {
-                SessionStateMessage(pairId: "", paneStates: [:], supportsTerminalPaste: true, supportsTerminalFit: true)
+                SessionStateMessage(pairId: "", paneStates: [:], supportsTerminalPaste: true, supportsTerminalFit: true, supportsFileBrowsing: true)
             }
             let (keyGate, releaseKeys) = AsyncStream<Void>.makeStream()
             let (pasteGate, releasePaste) = AsyncStream<Void>.makeStream()
@@ -104,6 +104,28 @@ struct TerminalPasteTransportTests {
                 let draftIndex = try #require(events.firstIndex(of: "draft"))
                 let sendIndex = try #require(events.firstIndex(of: "observed-send"))
                 #expect(draftIndex < sendIndex)
+                // A deliberately slow file read must not hold the socket receive
+                // loop, otherwise subsequent keystrokes cannot even reach the FIFO.
+                try await waitUntil { viewer.hostSupportsFileBrowsing }
+                let (fileGate, releaseFile) = AsyncStream<Void>.makeStream()
+                defer { releaseFile.finish() }
+                events.removeAll()
+                host.onCommand = { command in
+                    if case .browseFiles = command.command {
+                        events.append("file-start")
+                        for await _ in fileGate { break }
+                        events.append("file-end")
+                    } else { events.append("key") }
+                    return .success(for: command.id)
+                }
+                let fileTask = Task { await viewer.sendCommand(BrowseFiles(.info(path: "/Host")), paneId: "%7") }
+                try await waitUntil { events.contains("file-start") }
+                _ = await viewer.sendCommand(SendKeystroke([.text("unblocked")]), paneId: "%7")
+                try await waitUntil { events.contains("key") }
+                #expect(events == ["file-start", "key"])
+                releaseFile.yield()
+                _ = await fileTask.value
+                #expect(events.last == "file-end")
                 #expect(await relay.unexpectedTypes.isEmpty)
                 #expect(await relay.errors.isEmpty)
             } catch {
@@ -154,7 +176,8 @@ struct TerminalPasteTransportTests {
             let receivedState = LockIsolated(false)
             viewer.onSessionState = { _ in receivedState.setValue(true) }
             host.onSessionStateRequest = {
-                SessionStateMessage(pairId: "", paneStates: [:], supportsTerminalPaste: capability, supportsTerminalFit: capability)
+                SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryBrowsing: true,
+                                    supportsDirectoryCreation: capability, supportsTerminalPaste: capability, supportsTerminalFit: capability)
             }
             var commands: [CommandType] = []
             host.onCommand = { command in
@@ -175,6 +198,10 @@ struct TerminalPasteTransportTests {
                 if case .success = fit { Issue.record("Old Host accepted Fit") }
                 let paste = await viewer.sendCommand(PasteTerminalText(text: "one\ntwo"), paneId: "%7")
                 if case .success = paste { Issue.record("Old Host accepted paste") }
+                let create = await viewer.sendCommand(CreateSessionDirectory(parentDirectory: "/Host", name: "child"), paneId: "")
+                if case .success = create { Issue.record("Old Host accepted directory creation") }
+                let browse = await viewer.sendCommand(BrowseFiles(.list(path: nil, offset: 0, includeHidden: false)), paneId: "%7")
+                if case .success = browse { Issue.record("Old Host accepted file browsing") }
                 #expect(ContinuousClock.now - started < .seconds(1))
                 #expect(await relay.encryptedFrames == frameCount)
                 var failures: [String] = []
@@ -191,10 +218,15 @@ struct TerminalPasteTransportTests {
                 // A later capability offer enables the operation, but is never
                 // carried over to a disconnected or replacement Host.
                 host.onSessionStateRequest = {
-                    SessionStateMessage(pairId: "", paneStates: [:], supportsTerminalPaste: true, supportsTerminalFit: true)
+                    SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryCreation: true, supportsTerminalPaste: true, supportsTerminalFit: true, supportsFileBrowsing: true)
                 }
                 await host.pushSessionState()
-                try await waitUntil { viewer.hostSupportsTerminalPaste && viewer.hostSupportsTerminalFit }
+                try await waitUntil { viewer.hostSupportsTerminalPaste && viewer.hostSupportsTerminalFit && viewer.hostSupportsDirectoryCreation && viewer.hostSupportsFileBrowsing }
+                let modernBrowse = await viewer.sendCommand(BrowseFiles(.info(path: "/Host/file")), paneId: "%7")
+                if case .failure(let error) = modernBrowse { Issue.record("Modern file browsing rejected: \(error)") }
+                let modernCreate = await viewer.sendCommand(CreateSessionDirectory(parentDirectory: "/Host", name: "child"), paneId: "")
+                if case .failure(let error) = modernCreate { Issue.record("Modern directory creation rejected: \(error)") }
+                #expect(commands.last == CreateSessionDirectory(parentDirectory: "/Host", name: "child").commandType)
                 let modern = await viewer.sendCommand(PasteTerminalText(text: "one\ntwo"), paneId: "%7")
                 if case .failure(let error) = modern { Issue.record("Modern paste rejected: \(error)") }
                 #expect(commands.last == PasteTerminalText(text: "one\ntwo").commandType)
@@ -211,7 +243,7 @@ struct TerminalPasteTransportTests {
                 try await waitUntil { failures.count == 2 && observed == ["empty-enter"] }
                 #expect(failures.last?.contains("Paste rejected by tmux") == true)
                 await viewer.disconnect()
-                #expect(!viewer.hostSupportsTerminalPaste && !viewer.hostSupportsTerminalFit)
+                #expect(!viewer.hostSupportsTerminalPaste && !viewer.hostSupportsTerminalFit && !viewer.hostSupportsDirectoryCreation)
             } catch {
                 await viewer.disconnect()
                 await host.disconnect()

@@ -409,6 +409,12 @@
         public func setupAllServices() async {
             guard !isServiceSetupComplete else { return }
             isServiceSetupComplete = true
+            agentBrowser.imageTargetForPane = { [weak windowManager] paneID in
+                windowManager?.paneStates[paneID].flatMap(AgentImageTarget.init(pane:))
+            }
+            agentBrowser.resolveSourcePane = { [tmuxService] sessionName, paneID in
+                try await tmuxService.browserSourcePane(sessionName: sessionName, paneID: paneID)
+            }
             agentBrowser.configure { [tmuxService] pid in
                 try await tmuxService.agentBrowserPane(processID: pid)
             }
@@ -2896,7 +2902,11 @@
 
             // Start the socket server (use separate path in E2E to avoid conflicts)
             let isE2E = CommandLine.arguments.contains("--e2e-test")
-            let socketPath = NSTemporaryDirectory() + (isE2E ? "ctrlx-e2e.sock" : "ctrlx.sock")
+            var socketPath = NSTemporaryDirectory() + (isE2E ? "ctrlx-e2e.sock" : "ctrlx.sock")
+            if isE2E, let index = CommandLine.arguments.firstIndex(of: "--e2e-api-socket"),
+               index + 1 < CommandLine.arguments.count {
+                socketPath = CommandLine.arguments[index + 1]
+            }
             do {
                 try await apiSocketServer.start(socketPath)
             } catch {
@@ -3057,7 +3067,11 @@
                 connectionManager: connectionManager,
                 paneStreamManager: paneStreamManager
             )
-            connectionManager.onViewerUnavailable = { [weak terminalStreamService] viewerId in
+            agentBrowser.onTabsChanged = { [weak connectionManager] in
+                Task { await connectionManager?.pushSessionStateToAll() }
+            }
+            connectionManager.onViewerUnavailable = { [weak terminalStreamService, weak self] viewerId in
+                self?.agentBrowser.disconnectBrowserViewer(viewerId)
                 await terminalStreamService?.stopStreams(for: viewerId)
             }
 
@@ -3080,6 +3094,7 @@
 
             // Start notification-only readers for all discovered panes
             let initialPanes = await tmuxService.refreshPanes()
+            agentBrowser.updateBrowserRoutes(initialPanes)
             windowManager.updatePaneStates(from: initialPanes)
             await windowManager.refreshGitBranches()
             await paneStreamManager.startMonitoring(panes: initialPanes)
@@ -3102,6 +3117,7 @@
             controlClientManager.setOnPanesChanged { [weak self] in
                 Task {
                     let panes = await tmuxForCleanup.refreshPanes()
+                    self?.agentBrowser.updateBrowserRoutes(panes)
                     winManager.updatePaneStates(from: panes)
                     await terminalStreaming.stopStreamsForClosedPanes(currentPanes: panes)
                     await paneStreaming.updateMonitoring(panes: panes)
@@ -3121,8 +3137,29 @@
             let tmux = tmuxService
             let editorManager = editorSessionManager
             connectionManager.onCommand = { [weak self, executor, streamService, tmux, winManager, editorManager, paneStreaming, weak connectionManager] viewerId, command in
+                if case let .browseBrowser(spec) = command.command {
+                    guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
+                        return .failure(for: command.id, error: "Session no longer exists.")
+                    }
+                    do {
+                        let result = try await self.agentBrowser.handleBrowser(spec, viewerID: viewerId)
+                        return CommandResponseMessage(commandId: command.id, success: true, browser: result)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .listSessionDirectories(spec) = command.command {
                     return await SessionDirectoryResolver.respond(to: command, request: spec)
+                }
+                if case let .createSessionDirectory(spec) = command.command {
+                    return await SessionDirectoryResolver.respond(to: command, request: spec)
+                }
+                if case let .browseFiles(spec) = command.command {
+                    do {
+                        let source = FileBrowserSource.local(paneID: command.paneId, tmux: tmux, windows: winManager)
+                        let response = try await source.request(spec.operation)
+                        return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
+                    } catch {
+                        return .failure(for: command.id, error: error.localizedDescription)
+                    }
                 }
                 // Handle stream commands
                 if case let .startTerminalStream(spec) = command.command {
@@ -3267,6 +3304,7 @@
                     do {
                         try await tmux.renameSession(from: spec.sessionName, to: spec.newName)
                         let allPanes = await tmux.refreshPanes()
+                        self?.agentBrowser.updateBrowserRoutes(allPanes)
                         winManager.updatePaneStates(from: allPanes)
                         await paneStreaming.updateMonitoring(panes: allPanes)
                         await connectionManager?.pushSessionStateToAll()
@@ -3451,7 +3489,8 @@
                     return await Self.handleSendDroppedFiles(
                         command: command,
                         spec: spec,
-                        tmuxService: tmux
+                        tmuxService: tmux,
+                        currentPane: { winManager.paneStates[$0] }
                     )
                 }
 
@@ -3497,10 +3536,19 @@
                     sidebarSortMode: await self?.settings.sidebarSortMode.rawValue,
                     sharedTerminalLayouts: sharedTerminalLayouts,
                     supportsDirectoryBrowsing: true,
+                    supportsDirectoryCreation: true,
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
                     supportsTerminalPaste: true,
-                    supportsTerminalFit: true
+                    supportsTerminalFit: true,
+                    supportsFileBrowsing: true,
+                    supportsFileDownloads: true,
+                    supportsFileUploads: true,
+                    supportsRepositoryFileLinks: true,
+                    supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
+                    supportsPaneBrowser: await self?.agentBrowser.supportsBrowserSharing,
+                    supportsAgentImageInput: true,
+                    browserTabs: await self?.agentBrowser.sharedBrowserTabs
                 )
             }
 
@@ -3913,11 +3961,28 @@
         /// `ctrlx-drop-<UUID>` so concurrent drops can't clobber each
         /// other; the original filename is preserved inside so
         /// downstream readers (Claude Code, vim, etc.) see a useful name.
+        func insertBrowserImage(_ image: ClipboardImage, target: AgentImageTarget) async throws {
+            let spec = SendDroppedFiles(files: [.init(name: "browser-annotation.\(image.format.fileExtension)", data: image.data)], expectedAgent: target)
+            let result = await Self.handleSendDroppedFiles(
+                command: .init(paneId: target.paneID, command: spec.commandType), spec: spec,
+                tmuxService: tmuxService, currentPane: { [windowManager] in windowManager.paneStates[$0] })
+            guard result.success else { throw AgentImageError.message(result.error ?? "Could not add the screenshot.") }
+        }
+
         private static func handleSendDroppedFiles(
             command: CommandMessage,
             spec: SendDroppedFiles,
-            tmuxService: TmuxService
+            tmuxService: TmuxService,
+            currentPane: @MainActor (String) -> PaneState?
         ) async -> CommandResponseMessage {
+            func validateRecipient() throws {
+                if let target = spec.expectedAgent {
+                    guard target.paneID == command.paneId else { throw AgentImageError.message("Image recipient does not match the target pane.") }
+                    try target.validate(currentPane(command.paneId))
+                }
+            }
+            do { try validateRecipient() }
+            catch { return .failure(for: command.id, error: error.localizedDescription) }
             guard !spec.files.isEmpty else {
                 return .failure(for: command.id, error: "No files in drop payload")
             }
@@ -3949,6 +4014,12 @@
             let panes = await tmuxService.refreshPanes()
             guard panes.contains(where: { $0.paneId == command.paneId }) else {
                 return .failure(for: command.id, error: "Pane \(command.paneId) not found")
+            }
+
+            if let target = spec.expectedAgent,
+               !panes.contains(where: { $0.paneId == target.paneID && $0.sessionName == target.sessionName
+                   && ($0.tmuxWindowId ?? "\($0.sessionName):\($0.windowIndex)") == target.windowID }) {
+                return .failure(for: command.id, error: "The Agent pane moved. Choose the recipient again.")
             }
 
             // Save each file under a dedicated subdirectory so duplicate
@@ -4007,9 +4078,11 @@
             do {
                 // Per-drop buffer name — see TerminalContainerView for why
                 // a stable name can lose drops under rapid double-drop.
+                try Task.checkCancellation()
+                try validateRecipient()
                 try await tmuxService.loadAndPasteBuffer(
                     target: command.paneId,
-                    content: content,
+                    content: spec.expectedAgent == nil ? content : " \(content) ",
                     bufferName: "ctrlx-drop-\(UUID().uuidString.prefix(8))"
                 )
                 return .success(for: command.id)

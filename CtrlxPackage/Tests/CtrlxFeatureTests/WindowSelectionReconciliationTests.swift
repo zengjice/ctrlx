@@ -3,6 +3,33 @@ import Testing
 
 @Suite("Window selection reconciliation")
 struct WindowSelectionReconciliationTests {
+    @Test("Both swipe directions follow picker order, not IDs or the Host active flag")
+    func adjacentWindow() {
+        let candidates = [
+            candidate("@8", paneId: "%2"),
+            candidate("@3", paneId: "%7"),
+            candidate("@1", paneId: "%9", isActive: true),
+        ]
+        #expect(WindowSelectionReconciliation.adjacentWindowID(from: "@8", direction: .next, in: candidates) == "@3")
+        #expect(WindowSelectionReconciliation.adjacentWindowID(from: "@3", direction: .next, in: candidates) == "@1")
+        #expect(WindowSelectionReconciliation.adjacentWindowID(from: "@1", direction: .next, in: candidates) == nil)
+        #expect(WindowSelectionReconciliation.adjacentWindowID(from: "@1", direction: .previous, in: candidates) == "@3")
+        #expect(WindowSelectionReconciliation.adjacentWindowID(from: "@3", direction: .previous, in: candidates) == "@8")
+        #expect(WindowSelectionReconciliation.adjacentWindowID(from: "@8", direction: .previous, in: candidates) == nil)
+        #expect(WindowSelectionReconciliation.adjacentWindowID(from: "@closed", direction: .next, in: candidates) == nil)
+        #expect(WindowSelectionReconciliation.adjacentWindowID(from: "@closed", direction: .previous, in: candidates) == nil)
+    }
+
+    @Test("Neither swipe leaves an empty or single-window session", arguments: [
+        TerminalWindowSwipePolicy.Direction.next, .previous,
+    ])
+    func noAdjacentWindow(direction: TerminalWindowSwipePolicy.Direction) {
+        #expect(WindowSelectionReconciliation.adjacentWindowID(from: "@1", direction: direction, in: []) == nil)
+        #expect(WindowSelectionReconciliation.adjacentWindowID(
+            from: "@1", direction: direction, in: [candidate("@1", paneId: "%1")]
+        ) == nil)
+    }
+
     @Test("New window selection follows its pane even when the state arrives late")
     func createdWindow() {
         let original = candidate("@1", paneId: "%1", isActive: true)

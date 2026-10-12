@@ -1,17 +1,22 @@
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #include "AgentBrowser.h"
 #include "Ownership.h"
 #include "PageActions.h"
 #include "PageKeys.h"
+#include "RemoteBrowserFrame.h"
 #include "EngineServer.h"
+#include <atomic>
 #include <libproc.h>
 #include <sys/proc.h>
 #include <cerrno>
 #include <chrono>
 #include <fcntl.h>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -27,6 +32,7 @@ using Clock = std::chrono::steady_clock;
 constexpr size_t kMaxRequest = 65536;
 constexpr size_t kMaxResponse = 8 * 1024 * 1024;
 int engineServers = 0; // CEF UI RunLoop only, including shutdown completion.
+std::atomic_size_t remoteImageJobs{0};
 
 std::string JSON(id value) {
   NSData* data = [NSJSONSerialization dataWithJSONObject:value
@@ -90,6 +96,10 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Remove(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
+#if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
+    ForgetProbeView(browser->GetIdentifier());
+#endif
+    RemoteForget(browser->GetIdentifier());
     EngineForget(browser);
     std::vector<int> lost;
     for (const auto& [id, client] : clients_)
@@ -105,6 +115,14 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Stop() {
     CEF_REQUIRE_UI_THREAD();
+#if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
+    while (!probeViews_.empty()) ForgetProbeView(probeViews_.begin()->first);
+#endif
+    while (!remoteFrames_.empty()) RemoteFrameFinish(std::get<0>(remoteFrames_.begin()->first), remoteFrames_.begin()->second, nil, @"Browser stopped.");
+    while (!remotePending_.empty()) RemoteFinish(remotePending_.begin()->first, nil, @"Browser stopped.");
+    humanControl_.clear();
+    remotePressedPointers_.clear();
+    remoteViewports_.clear();
     for (const auto& [connection, token] : engineConnections_) EngineDetach(token);
     if (listener_ >= 0) close(listener_);
     listener_ = -1;
@@ -139,6 +157,7 @@ class Bridge final : public CefDevToolsMessageObserver {
   void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_id,
                              bool success, const void* result, size_t size) override {
     CEF_REQUIRE_UI_THREAD();
+    if (RemoteResult(browser, message_id, success, result, size)) return;
     if (EngineResult(browser, message_id, success, result, size)) return;
     auto it = pending_.find({browser->GetIdentifier(), message_id});
     if (it == pending_.end()) return;
@@ -170,6 +189,7 @@ class Bridge final : public CefDevToolsMessageObserver {
   }
 
   void OnDevToolsAgentDetached(CefRefPtr<CefBrowser> browser) override {
+    RemoteForget(browser->GetIdentifier());
     EngineForget(browser);
     std::vector<int> lost;
     for (auto& [id, client] : clients_)
@@ -190,6 +210,7 @@ class Bridge final : public CefDevToolsMessageObserver {
         url.host.length && !url.user && !url.password;
   }
   void Reap() {
+    ReapRemote();
     ReapEngine();
     bool changed = false;
     for (auto& [id, run] : ownership_.runs) {
@@ -200,7 +221,7 @@ class Bridge final : public CefDevToolsMessageObserver {
       for (auto& [id, client] : clients_)
         if (client.busy && ((!client.opening && !ownership_.Owns(client.run, client.tab)) ||
             !ownership_.runs.at(client.run).active)) cancelled.push_back(id);
-      for (int id : cancelled) Reply(id, nil, @"Codex instance ended; control revoked.");
+      for (int id : cancelled) Reply(id, nil, @"Agent instance ended; control revoked.");
       callbacks_.changed();
     }
   }
@@ -209,7 +230,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if (it == clients_.end() || !it->second.busy) return false;
     auto& client = it->second;
     auto tab = tabs_.find(client.tab);
-    if (!ownership_.Owns(client.run, client.tab) || !Alive(ownership_.runs.at(client.run)) ||
+    if (humanControl_.contains(client.tab) || !ownership_.Owns(client.run, client.tab) || !Alive(ownership_.runs.at(client.run)) ||
         tab == tabs_.end() || tab->second.generation != client.generation) {
       Reply(id, nil, @"Tab navigated, closed or changed owner; action cancelled, not retried.");
       return false;
@@ -217,6 +238,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     return true;
   }
 #include "EngineBridge.inc"
+#include "RemoteBrowser.inc"
  public:
   void OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* data, size_t size) override {
     EngineEvent(browser, method, data, size);
@@ -261,7 +283,7 @@ class Bridge final : public CefDevToolsMessageObserver {
   bool Assign(NSString* tab, NSString* run) {
     Reap();
     auto browser = Target(tab);
-    if (!browser || !ownership_.Assign(tab.UTF8String, run.UTF8String, Busy(browser))) return false;
+    if (!browser || humanControl_.contains(tab.UTF8String) || !ownership_.Assign(tab.UTF8String, run.UTF8String, Busy(browser))) return false;
     callbacks_.changed();
     return true;
   }
@@ -468,7 +490,7 @@ class Bridge final : public CefDevToolsMessageObserver {
           [request[@"pid"] intValue], [request[@"startSeconds"] unsignedLongLongValue],
           [request[@"startMicros"] unsignedLongLongValue]};
       if (!Alive(run) || !ownership_.Register(run)) {
-        Reply(id, nil, @"Instance expired or registration conflicts. Launch a new Codex instance."); return;
+        Reply(id, nil, @"Instance expired or registration conflicts. Launch a new agent instance."); return;
       }
       callbacks_.changed();
       Reply(id, @{@"epoch": epoch_}); return;
@@ -478,7 +500,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if (![request[@"epoch"] isEqual:epoch_] ||
         ![run isKindOfClass:NSString.class] || ![secret isKindOfClass:NSString.class] ||
         !ownership_.Authenticate(run.UTF8String, secret.UTF8String)) {
-      Reply(id, nil, @"Instance not authorized or browser restarted. Launch a new Codex instance."); return;
+      Reply(id, nil, @"Instance not authorized or browser restarted. Launch a new agent instance."); return;
     }
     client.run = run.UTF8String;
     if (AttachEngine(id, request)) return;
@@ -527,6 +549,9 @@ class Bridge final : public CefDevToolsMessageObserver {
     }
     if (!ownership_.Owns(client.run, token.UTF8String)) {
       Reply(id, nil, @"Tab belongs to another instance or is manual. Assign it explicitly in the browser UI."); return;
+    }
+    if (humanControl_.contains(token.UTF8String)) {
+      Reply(id, nil, @"A person is controlling this page. Wait for Return to Agent."); return;
     }
     for (auto& [otherID, other] : clients_) {
       if (other.busy && other.tab == token.UTF8String) {
@@ -678,6 +703,12 @@ NSArray* AgentBrowserTabs() { return bridge ? bridge->Tabs() : @[]; }
 CefRefPtr<CefBrowser> AgentBrowserTarget(NSString* tab) { return bridge ? bridge->Target(tab) : nullptr; }
 bool AssignAgentBrowserTab(NSString* tab, NSString* run) { return bridge && bridge->Assign(tab, run); }
 bool AgentBrowserTabBusy(CefRefPtr<CefBrowser> browser) { return bridge && bridge->Busy(browser); }
+bool SetAgentBrowserHumanControl(NSString* tab, NSString* token) { return bridge && bridge->SetHumanControl(tab, token); }
+bool AgentBrowserHumanControlled(CefRefPtr<CefBrowser> browser) { return bridge && bridge->HumanControlled(browser); }
+void RequestRemoteBrowserTab(NSString* tab, NSData* request, void (^completion)(NSData*, NSString*)) {
+  if (bridge) bridge->RemoteRequest(tab, request, completion);
+  else completion(nil, @"Browser stopped.");
+}
 bool AgentBrowserDownloadBegin(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item, CefRefPtr<CefBeforeDownloadCallback> callback) {
   return bridge ? bridge->DownloadBegin(browser, item, callback) : true;
 }
@@ -690,4 +721,4 @@ bool AgentBrowserDialog(CefRefPtr<CefBrowser> browser, cef_jsdialog_type_t type,
 }
 void AgentBrowserDialogReset(CefRefPtr<CefBrowser> browser) { if (bridge) bridge->DialogReset(browser); }
 void StopAgentBrowser() { if (bridge) bridge->Stop(); bridge = nullptr; }
-bool AgentBrowserTransportsStopped() { return engineServers == 0; }
+bool AgentBrowserTransportsStopped() { return engineServers == 0 && remoteImageJobs.load() == 0; }

@@ -726,23 +726,27 @@
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
 
-                    Stepper(
-                        "Width: \(settings.newSessionWidth) columns",
-                        value: $settings.newSessionWidth,
-                        in: 40...300,
-                        step: 10
-                    )
+                    Toggle("Automatically Fit to Screen", isOn: $settings.newSessionAutoFit)
 
-                    Stepper(
-                        "Height: \(settings.newSessionHeight) rows",
-                        value: $settings.newSessionHeight,
-                        in: 10...100,
-                        step: 5
-                    )
+                    if !settings.newSessionAutoFit {
+                        Stepper(
+                            "Width: \(settings.newSessionWidth) columns",
+                            value: $settings.newSessionWidth,
+                            in: 40...300,
+                            step: 10
+                        )
+
+                        Stepper(
+                            "Height: \(settings.newSessionHeight) rows",
+                            value: $settings.newSessionHeight,
+                            in: 10...100,
+                            step: 5
+                        )
+                    }
                 } header: {
                     Text("New Session")
                 } footer: {
-                    Text("Settings for new tmux sessions created from iOS. If a session with this name exists, a number will be appended.")
+                    Text("Automatic sizing fits each new session once using its terminal viewport and font. Hosts without Fit support use 120 × 40. Existing sessions are unchanged. Fit changes the Host and all Viewers. If a session name already exists, a number is appended.")
                 }
 
                 // Server Section

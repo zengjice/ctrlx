@@ -1,7 +1,7 @@
 import CtrlxCommon
 
 /// Browsing quick actions is an overlay, not a terminal focus transition.
-/// Only the phrase editor needs to borrow the keyboard from the terminal.
+/// Only editors need to borrow the keyboard from the terminal.
 struct TerminalQuickActionPresentation: Equatable {
     enum Panel: Equatable {
         case commands(AgentCommandContext)
@@ -9,6 +9,7 @@ struct TerminalQuickActionPresentation: Equatable {
         /// a command catalog from a window title or previously focused pane.
         case commandsUnavailable(TerminalPhraseContext)
         case phrases(TerminalPhraseContext)
+        case addCustomButton(TerminalPhraseContext)
     }
 
     private(set) var panel: Panel?
@@ -16,6 +17,7 @@ struct TerminalQuickActionPresentation: Equatable {
 
     var isPresented: Bool { panel != nil }
     var suspendsTerminalInput: Bool {
+        if case .addCustomButton = panel { return true }
         if case .phrases = panel { return isEditingPhrase }
         return false
     }
@@ -31,7 +33,7 @@ struct TerminalQuickActionPresentation: Equatable {
         switch (self.panel, panel) {
         case (.commands?, .commands), (.commandsUnavailable?, .commands),
              (.commands?, .commandsUnavailable), (.commandsUnavailable?, .commandsUnavailable),
-             (.phrases?, .phrases):
+             (.phrases?, .phrases), (.addCustomButton?, .addCustomButton):
             dismiss()
         default:
             show(panel)
@@ -52,6 +54,8 @@ struct TerminalQuickActionPresentation: Equatable {
         case let .commands(captured) where !captured.hasSameInput(as: commandContext):
             dismiss()
         case let .phrases(captured) where !captured.hasSameInput(as: phraseContext):
+            dismiss()
+        case let .addCustomButton(captured) where !captured.hasSameInput(as: phraseContext):
             dismiss()
         case let .commandsUnavailable(captured):
             guard captured.hasSameInput(as: phraseContext) else {

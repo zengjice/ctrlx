@@ -88,6 +88,9 @@ public enum Symbols: String {
     case pauseCircleFill = "pause.circle.fill"
     case pencil
     case pencilLine = "pencil.line"
+    case annotationRectangle = "rectangle"
+    case annotationArrow = "arrow.up.right"
+    case annotationUndo = "arrow.uturn.backward"
     case photoBadgePlus = "photo.badge.plus"
     case play
     case playFill = "play.fill"
@@ -104,6 +107,8 @@ public enum Symbols: String {
     case rectangleStackBadgeMinus = "rectangle.stack.badge.minus"
     case shield
     case sparkles
+    case speakerSlashFill = "speaker.slash.fill"
+    case speakerWave2Fill = "speaker.wave.2.fill"
     case square
     case squareAndArrowUp = "square.and.arrow.up"
     case squareFill = "square.fill"

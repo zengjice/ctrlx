@@ -69,6 +69,72 @@ No app installation, signed IPA verification or iPhone profiling was performed.
   active dragging, history momentum and selection. It must not force the inner
   terminal to the bottom on every feed or layout.
 
+### Window swipe navigation
+
+In a session's active Terminal or Agent pane, a one-finger swipe to the left selects
+the next terminal Window in picker order; a swipe to the right selects the previous
+Window. Neither end wraps. The
+native viewport uses a one-finger directional pan, rather than a discrete swipe
+competing simultaneously with the nested scroll views. Both scroll-view pans and
+the TUI wheel pan wait only for the direction decision: vertical/diagonal drags
+fail Window navigation at recognition start and retain their existing scrolling
+path. A predominantly horizontal drag switches once on release after 64 points;
+short, cancelled or reversed drags do not switch. The leftmost 32 points of the screen
+remain reserved for system Back; iOS 26's content-area Back waits for the Window
+swipe, without changing the leading-edge recognizer. Selection disables switching.
+Wide content scrolls normally until the corresponding edge: right drags can
+navigate only at the left edge, and left drags only at the right edge (including
+adjusted content insets). Reaching an edge mid-drag does not switch a Window.
+Keyboard controls, Files and browser tabs are not swipe targets. Selection reuses
+the window picker path (including cancelling pending creation/fit); no terminal
+resizing, extra stream subscription, Host or Relay change is introduced.
+Refreshing SwiftUI callbacks does not reset a running recognizer or change its
+captured action; disabling the gesture drops that action. Package tests cover
+direction, distance and both list boundaries; UIKit regression sources cover
+callback/cancellation, horizontal edges and Back priority. Device-SDK compilation
+alone does not prove touch arbitration. Physical iPhone diagnostics confirmed
+that the reported no-op drags reached the recognizer with negative x translation,
+but the previous right-only direction check rejected them; an arbitration failure
+was not established. The user chose the bidirectional mapping above. Temporary
+gesture logging has been removed. The user subsequently confirmed that Window
+swipe navigation works on the physical iPhone.
+Validation: 15 focused package tests passed; the signed iOS Release build and
+UIKit test-source device-SDK typecheck passed. UIKit tests were not executed on
+a Simulator or in a device test runner. Brand/technical boundary checks and
+`git diff --check` passed. Device test build: `20261011-083542` (3.0.56 (1));
+the version label is unchanged from the release, but this build includes the
+bidirectional fix.
+
+### Quiet Shell first-screen positioning (October 9, 2026)
+
+The outer viewport follows the live cursor in the normal screen, rather than
+always showing the bottom of the Host grid. A tall, quiet Terminal can have its
+Shell prompt on row one with only blank rows below it; bottom anchoring hid that
+prompt until a downward drag. Cursor placement uses SwiftTerm's public live-tail
+position and native coordinate conversion, including scrollback and the passive
+canvas. Alternate-screen apps retain bottom anchoring. Deliberate outer or inner
+history scrolling is not overridden, and the Host grid is not changed to reveal
+the cursor.
+
+Fit capacity now comes from the native viewport after deferred input focus and
+keyboard/accessory presentation. Measurement excludes adjusted insets and any
+intersecting keyboard guide; keyboard transitions invalidate queued measurements.
+Publishing is deferred out of native layout and deduplicated by grid size. The
+existing creation-scoped, one-shot fit and its cancellation rules are unchanged;
+there is no timer, output replay, repeated automatic fit or Host/Relay change.
+
+Regression coverage includes quiet 57-row grids, reduced viewports, insets,
+manual scrolling and the fullscreen fallback, plus final-measurement-only fit.
+UIKit regressions additionally cover first-frame placement, native coordinate
+conversion, selection and measurement gating. The package scheme has no iOS test
+action, so UIKit execution and keyboard/first-frame acceptance still require an
+iPhone test; a successful device-SDK compile does not prove those effects.
+Validation: 65 focused package tests passed; the iOS Release app build and the
+five UIKit test sources passed device-SDK typechecking. Typechecking used the
+Release module with test-only access-check bypass, not a runnable test bundle.
+Brand/technical boundary checks and `git diff --check` passed. Logs:
+`/tmp/ctrlx-ios-viewport-{unit,build,typecheck}.log`. No installation was performed.
+
 See `terminal-rendering-investigation.md` for the reproduced 5-row drift and the
 iOS-only regression suite. The sections below retain historical implementation
 examples; old minimum-terminal-height constraints, scroll-blocking flags and
@@ -90,6 +156,36 @@ The Host snapshots the current layout, scales each split proportionally (with
 at least two rows/columns per leaf), and applies the resized grid and layout in
 one tmux command queue. An impossible target fails before changing the window.
 The Viewer enables Fit only when the Host advertises `supportsTerminalFit`.
+
+New sessions created on iOS default to automatic sizing. They start at 120 × 40
+and reuse the same Fit measurement once the new terminal has a usable viewport
+and font cell size. Only the exact pane returned by creation is eligible;
+ordinary navigation and deep links never grant this permission. The session
+list owns the one-shot request and consumes it before sending, even if the
+command fails. Before measurement, leaving the page, disconnecting, manually
+fitting, switching windows or splitting cancels it. There is no fixed delay,
+rendering gate, repeated fitting on rotation/keyboard changes or Relay change.
+Unsupported Hosts keep 120 × 40. Settings → New Session can disable automatic
+sizing and retain explicit rows/columns; migration preserves legacy customized
+fixed sizes and enables automatic sizing for the old 120 × 40 default.
+
+The creation reply is retained before requesting a snapshot. A targeted state
+arrival drives navigation whether it precedes or follows that reply; sending
+`requestSessionState` is not treated as waiting for a response. The returned
+Host/pane identity and captured sizing preference survive a late snapshot.
+Navigation is consumed once, before entering the session. Opening another
+session, Settings or another creation picker, leaving the list, dismissing the
+picker before the reply, or losing the Host connection cancels pending routing;
+an old reply cannot restore it. No snapshot polling or fixed sleep is added.
+
+Fork (both directory modes), New Terminal and New Agent windows reuse this
+creation reconciliation and the captured automatic-sizing preference. The fit
+is armed only after selecting the exact returned pane, never while the source
+window is still displayed. Agent/Fork sheets must be dismissed before measuring
+for dispatch. Each new window is fitted once using its stable window ID; the
+source window is not resized. Manual window selection, Fit, split, disconnect
+and page exit cancel pending selection and fitting, including delayed replies.
+With automatic sizing disabled, the Host's new-window dimensions are preserved.
 
 The iOS system Paste action sends one `PasteTerminalText` operation, not
 `TmuxKey.from(bytes:)`. Both Viewer and Host serialize it with keyboard input.
@@ -725,8 +821,12 @@ follow wide characters; SwiftTerm's generic buffer export does not do that and w
 invisible NUL after Chinese or other double-width glyphs. Alternate-screen applications are
 read from the active alternate buffer rather than stale normal-buffer history.
 
-Only the selected pane contributes the toolbar action in a multi-pane layout. This avoids
-duplicated toolbar items and makes the copied buffer unambiguous. The sheet receives an
+The Window toolbar orders its controls as Copy, Images, Fit, then Agent commands
+(the last control is omitted for non-Agent windows). Each streaming pane supplies
+its existing copy action, and the Window invokes only the selected pane's action;
+panes no longer add their own toolbar Copy item in this layout. Standalone terminals
+retain their original Copy control. This avoids duplicated toolbar items and makes
+the copied buffer unambiguous. The sheet receives an
 immutable value: new terminal output continues normally but cannot move or invalidate the
 user's current selection.
 

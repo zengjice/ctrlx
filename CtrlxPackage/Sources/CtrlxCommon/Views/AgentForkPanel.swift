@@ -188,14 +188,22 @@ public struct AgentForkPanel: View {
                 Text("Opens a new conversation with the saved history. The original Agent keeps running; no prompt is sent automatically.")
                     .font(.callout)
             }
-            TextField("Name", text: $forkName).disabled(isLaunching)
-                .autocorrectionDisabled()
+            VStack(alignment: .leading, spacing: 8) {
                 #if os(iOS)
-                    .textInputAutocapitalization(.never)
+                    Text(configuration.usingWorktree ? "Window / Worktree Name" : "Window Name")
+                        .font(.subheadline.weight(.semibold))
                 #endif
-                .accessibilityIdentifier("agentFork.name")
-            Text(configuration.usingWorktree ? "Used for the window, branch and worktree directory." : "Used for the new window.")
-                .font(.caption).foregroundStyle(.secondary)
+                TextField("Name", text: $forkName).disabled(isLaunching)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                    #endif
+                    .accessibilityLabel("Fork Name")
+                    .accessibilityIdentifier("agentFork.name")
+                Text(configuration.usingWorktree ? "Used for the window, branch and worktree directory." : "Used for the new window.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if configuration.usingWorktree {
                 worktreeFields
             }

@@ -250,10 +250,10 @@
             // Only deactivate audio if this session actually activated it.
             if ownsAudioSession {
                 ownsAudioSession = false
-                try? AVAudioSession.sharedInstance().setActive(
-                    false,
-                    options: .notifyOthersOnDeactivation
-                )
+                let session = AVAudioSession.sharedInstance()
+                if session.category == .playAndRecord, session.mode == .spokenAudio {
+                    try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                }
             }
         }
 

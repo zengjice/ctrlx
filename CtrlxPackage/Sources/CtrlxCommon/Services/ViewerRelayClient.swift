@@ -98,7 +98,25 @@ final public class ViewerRelayClient {
     public private(set) var isHostConnected = false
 
     public private(set) var hostSupportsTerminalPaste = false
+    public private(set) var hostSupportsDirectoryCreation = false
+    public private(set) var hostSupportsFileBrowsing = false
+    public private(set) var hostSupportsRepositoryFileLinks = false
+    public private(set) var hostSupportsFileDownloads = false
+    public private(set) var hostSupportsFileUploads = false
+    public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
+    public private(set) var hostSupportsBrowserSharing = false
+    public private(set) var hostSupportsPaneBrowser = false
+    public private(set) var hostSupportsAgentImageInput = false
+    public private(set) var browserTabs: [RemoteBrowserTab] = []
+
+    func rememberOpenedBrowser(_ tab: RemoteBrowserTab) {
+        if let index = browserTabs.firstIndex(where: { $0.id == tab.id }) {
+            browserTabs[index] = tab
+        } else {
+            browserTabs.append(tab)
+        }
+    }
 
     /// Name of the connected host device (if known)
     public private(set) var connectedHostName: String?
@@ -490,6 +508,28 @@ final public class ViewerRelayClient {
         }
 
         switch command.commandType {
+        case let .sendDroppedFiles(spec) where spec.expectedAgent != nil && !hostSupportsAgentImageInput:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add annotated screenshots to an Agent"))
+        case .browseBrowser where !hostSupportsBrowserSharing:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
+        case let .browseBrowser(spec):
+            if case .openPane = spec.operation, !hostSupportsPaneBrowser {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open a pane's browser"))
+            }
+        case .browseFiles where !hostSupportsFileBrowsing:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to browse files"))
+        case let .browseFiles(spec):
+            if case .repositoryInfo = spec.operation, !hostSupportsRepositoryFileLinks {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open repository file links"))
+            }
+            if case .download = spec.operation, !hostSupportsFileDownloads {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to download files"))
+            }
+            if case .upload = spec.operation, !hostSupportsFileUploads {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to upload files"))
+            }
+        case .createSessionDirectory where !hostSupportsDirectoryCreation:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to create folders"))
         case .pasteTerminalText where !hostSupportsTerminalPaste:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to paste clipboard text"))
         case let .resizeTmuxPane(spec) where spec.userInitiated == true && !hostSupportsTerminalFit:
@@ -520,41 +560,53 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.notConnected)
         }
 
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Result<C.Response, Error>, Never>) in
-            pendingCommands[commandMessage.id] = { result in
-                switch result {
-                case let .success(anyResponse):
-                    if let typedResponse = anyResponse as? C.Response {
-                        continuation.resume(returning: .success(typedResponse))
-                    } else {
-                        continuation.resume(returning: .failure(ViewerRelayClientError.commandFailed("Unexpected response type")))
-                    }
-                case let .failure(error):
-                    continuation.resume(returning: .failure(error))
-                }
-            }
-
-            Task {
-                guard await self.sendEncrypted(
-                    .command(commandMessage),
-                    using: task,
-                    generation: generation
-                ) else {
-                    self.timeoutTasks.removeValue(forKey: commandMessage.id)?.cancel()
-                    if let handler = self.pendingCommands.removeValue(forKey: commandMessage.id) {
-                        handler(.failure(ViewerRelayClientError.commandFailed("Unable to send relay message")))
-                    }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Result<C.Response, Error>, Never>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: .failure(CancellationError()))
                     return
                 }
-            }
-
-            let commandId = commandMessage.id
-            timeoutTasks[commandId] = Task {
-                try? await Task.sleep(for: .seconds(timeout))
-                self.timeoutTasks.removeValue(forKey: commandId)
-                if let handler = self.pendingCommands.removeValue(forKey: commandId) {
-                    handler(.failure(ViewerRelayClientError.timeout))
+                pendingCommands[commandMessage.id] = { result in
+                    switch result {
+                    case let .success(anyResponse):
+                        if let typedResponse = anyResponse as? C.Response {
+                            continuation.resume(returning: .success(typedResponse))
+                        } else {
+                            continuation.resume(returning: .failure(ViewerRelayClientError.commandFailed("Unexpected response type")))
+                        }
+                    case let .failure(error):
+                        continuation.resume(returning: .failure(error))
+                    }
                 }
+
+                Task {
+                    guard self.pendingCommands[commandMessage.id] != nil else { return }
+                    guard await self.sendEncrypted(
+                        .command(commandMessage),
+                        using: task,
+                        generation: generation
+                    ) else {
+                        self.timeoutTasks.removeValue(forKey: commandMessage.id)?.cancel()
+                        if let handler = self.pendingCommands.removeValue(forKey: commandMessage.id) {
+                            handler(.failure(ViewerRelayClientError.commandFailed("Unable to send relay message")))
+                        }
+                        return
+                    }
+                }
+
+                let commandId = commandMessage.id
+                timeoutTasks[commandId] = Task {
+                    try? await Task.sleep(for: .seconds(timeout))
+                    self.timeoutTasks.removeValue(forKey: commandId)
+                    if let handler = self.pendingCommands.removeValue(forKey: commandId) {
+                        handler(.failure(ViewerRelayClientError.timeout))
+                    }
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in
+                self.timeoutTasks.removeValue(forKey: commandMessage.id)?.cancel()
+                self.pendingCommands.removeValue(forKey: commandMessage.id)?(.failure(CancellationError()))
             }
         }
     }
@@ -583,6 +635,12 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .listSessionDirectories(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
+        case let .createSessionDirectory(spec):
+            return (try? await sendCommand(spec, paneId: "").get()) != nil
+        case let .browseFiles(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+        case let .browseBrowser(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .resizeTmuxPane(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .setSharedTerminalLayout(spec):
@@ -971,6 +1029,15 @@ final public class ViewerRelayClient {
         case let .sessionState(sessionState):
             logger.info("Received session state from host")
             hostSupportsTerminalPaste = sessionState.supportsTerminalPaste == true
+            hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
+            hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
+            hostSupportsRepositoryFileLinks = sessionState.supportsRepositoryFileLinks == true
+            hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
+            hostSupportsFileUploads = sessionState.supportsFileUploads == true
+            hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
+            hostSupportsPaneBrowser = sessionState.supportsPaneBrowser == true
+            hostSupportsAgentImageInput = sessionState.supportsAgentImageInput == true
+            browserTabs = sessionState.browserTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             onSessionState?(sessionState)
 
@@ -991,7 +1058,13 @@ final public class ViewerRelayClient {
             terminalStreamHandlers.deliver(streamMessage)
 
         case let .hostConnected(connectedMessage):
+            resetFileUploads()
+            resetBrowserState()
             hostSupportsTerminalPaste = false
+            hostSupportsDirectoryCreation = false
+            hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
+            hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             logger.info("Host device connected")
             hostSubscriptionInactive = false
@@ -1034,7 +1107,13 @@ final public class ViewerRelayClient {
             }
 
         case let .peerHello(peerHello):
+            resetFileUploads()
+            resetBrowserState()
             hostSupportsTerminalPaste = false
+            hostSupportsDirectoryCreation = false
+            hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
+            hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             logger.info(
                 "Received peerHello from host",
@@ -1059,7 +1138,13 @@ final public class ViewerRelayClient {
             quickPhraseSync?.receive(payload)
 
         case .hostDisconnected:
+            resetFileUploads()
+            resetBrowserState()
             hostSupportsTerminalPaste = false
+            hostSupportsDirectoryCreation = false
+            hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
+            hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
             logger.info("Host device disconnected")
@@ -1068,7 +1153,13 @@ final public class ViewerRelayClient {
             await onHostDisconnected?()
 
         case .hostSubscriptionInactive:
+            resetFileUploads()
+            resetBrowserState()
             hostSupportsTerminalPaste = false
+            hostSupportsDirectoryCreation = false
+            hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
+            hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
             logger.info("Host blocked: subscription inactive")
@@ -1364,7 +1455,13 @@ final public class ViewerRelayClient {
     }
 
     private func cleanupConnection() async {
+        resetFileUploads()
+        resetBrowserState()
         hostSupportsTerminalPaste = false
+        hostSupportsDirectoryCreation = false
+        hostSupportsFileBrowsing = false
+        hostSupportsRepositoryFileLinks = false
+        hostSupportsFileDownloads = false
         hostSupportsTerminalFit = false
         quickPhraseSync?.reset()
         connectionGeneration.invalidate()
@@ -1398,5 +1495,16 @@ final public class ViewerRelayClient {
             handler(.failure(ViewerRelayClientError.notConnected))
         }
         pendingCommands.removeAll()
+    }
+
+    private func resetFileUploads() {
+        hostSupportsFileUploads = false
+        fileTransferEpoch = UUID()
+    }
+
+    private func resetBrowserState() {
+        hostSupportsBrowserSharing = false
+        hostSupportsPaneBrowser = false
+        hostSupportsAgentImageInput = false
     }
 }

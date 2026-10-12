@@ -153,6 +153,9 @@ final public class ConnectedViewer: Identifiable {
     /// Serial chain for input commands (keystrokes, raw input, clipboard paste).
     /// Each new command awaits the previous one to preserve WebSocket ordering.
     private var pendingInputCommand: Task<Void, Never>?
+    @ObservationIgnored private let fileRequests = FileBrowserCommandQueue()
+    @ObservationIgnored private var fileUploads = HostFileUploads()
+    @ObservationIgnored private let browserRequests = FileBrowserCommandQueue(limit: 4)
 
     /// Serial chain for outbound encrypted messages. Encrypted sends have multiple
     /// suspension points (E2EE check, encrypt, WebSocket send), so concurrent
@@ -255,6 +258,10 @@ final public class ConnectedViewer: Identifiable {
                 oldest.duration(to: ContinuousClock.now)
             )
         )
+    }
+
+    nonisolated static func canCaptureBrowserFrame(_ queue: TerminalSendQueueSnapshot) -> Bool {
+        queue.depth < 3 && queue.oldestWaitMilliseconds < 100
     }
 
     // MARK: - Connection Management
@@ -503,15 +510,20 @@ final public class ConnectedViewer: Identifiable {
 
     /// Send terminal stream data to viewer (encrypted)
     public func sendTerminalStream(_ streamMessage: TerminalStreamMessage) async {
+        await enqueueTerminalStream(streamMessage)?.value
+    }
+
+    /// Admit bytes before the caller suspends; fan-out tasks must only await delivery.
+    func enqueueTerminalStream(_ streamMessage: TerminalStreamMessage) -> Task<Void, Never>? {
         guard Self.canSendTerminalStream(
             relayConnected: state.isConnected,
             viewerConnected: isViewerConnected
         ) else {
-            return
+            return nil
         }
 
         let message = WebSocketMessage.terminalStream(streamMessage)
-        await sendEncrypted(message)
+        return enqueueEncrypted(message)
     }
 
     /// Send this host's peerHello to the viewer once the E2EE session is up.
@@ -761,6 +773,44 @@ final public class ConnectedViewer: Identifiable {
             }
 
         case let .command(command):
+            if case let .browseBrowser(request) = command.command, let onCommand {
+                // Frames are disposable; terminal output and ordered input are not.
+                if request.operation == .frame, !Self.canCaptureBrowserFrame(terminalSendQueueSnapshot) {
+                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Browser preview paused while the connection catches up.")))
+                    return
+                }
+                let generation = connectionGeneration.current
+                if !browserRequests.enqueue(command, execute: onCommand, reply: { [weak self] response in
+                    guard let self, self.connectionGeneration.isCurrent(generation) else { return }
+                    await self.sendEncrypted(.commandResponse(response))
+                }) {
+                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Too many browser requests.")))
+                }
+                return
+            }
+            let isFileRequest: Bool = switch command.command {
+            case .browseFiles, .createSessionDirectory: true
+            default: false
+            }
+            if isFileRequest, let onCommand {
+                let generation = connectionGeneration.current
+                let uploads = fileUploads
+                if !fileRequests.enqueue(command, execute: { command in
+                    if case let .browseFiles(spec) = command.command, case let .upload(operation) = spec.operation {
+                        do {
+                            let response = try await uploads.request(operation)
+                            return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
+                        } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                    }
+                    return await onCommand(command)
+                }, reply: { [weak self] response in
+                    guard let self, self.connectionGeneration.isCurrent(generation) else { return }
+                    await self.sendEncrypted(.commandResponse(response))
+                }) {
+                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Too many file requests. Please retry.")))
+                }
+                return
+            }
             let logType = if case .pasteTerminalText = command.command { "pasteTerminalText" }
                 else { String(describing: command.command) }
             logger.info("Received command from viewer", metadata: ["type": "\(logType)"])
@@ -1021,6 +1071,10 @@ final public class ConnectedViewer: Identifiable {
     }
 
     private func sendEncrypted(_ message: WebSocketMessage) async {
+        await enqueueEncrypted(message).value
+    }
+
+    private func enqueueEncrypted(_ message: WebSocketMessage) -> Task<Void, Never> {
         let generation = connectionGeneration.current
         let sendId = UUID()
         pendingSendEnqueuedAt[sendId] = ContinuousClock.now
@@ -1041,7 +1095,7 @@ final public class ConnectedViewer: Identifiable {
             self.recordSendQueue()
         }
         pendingSend = task
-        await task.value
+        return task
     }
 
     private func performEncryptedSend(_ message: WebSocketMessage, generation: UInt64) async {
@@ -1164,6 +1218,11 @@ final public class ConnectedViewer: Identifiable {
     }
 
     private func invalidateConnectionWork() {
+        fileRequests.cancelAll()
+        let oldUploads = fileUploads
+        fileUploads = HostFileUploads()
+        Task { await oldUploads.shutdown() }
+        browserRequests.cancelAll()
         quickPhraseSync?.reset()
         connectionGeneration.invalidate()
         pendingInputCommand?.cancel()

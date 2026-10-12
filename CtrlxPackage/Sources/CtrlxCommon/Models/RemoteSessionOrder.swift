@@ -1,10 +1,10 @@
 import Foundation
 
-/// Viewer-local ordering for remote tmux sessions.
+/// Device-local ranking for local or remote tmux session lists.
 ///
-/// The host remains authoritative for the base order. A viewer preference only
-/// ranks session names it has seen; new sessions retain their relative host
-/// order and are appended after the ranked sessions.
+/// The caller supplies the automatic base order. A saved preference only ranks
+/// session names it has seen; new sessions retain their relative base order
+/// and are appended after the ranked sessions.
 public enum RemoteSessionOrder {
     public static func normalized(_ sessionNames: [String]) -> [String] {
         var result: [String] = []

@@ -8,6 +8,7 @@ struct TestStepScopeTests {
         #expect(TestStep.launchIOSApp().failureScope == .ios)
         #expect(TestStep.terminateIOSApp.failureScope == .ios)
         #expect(TestStep.iosTap(.label("foo")).failureScope == .ios)
+        #expect(TestStep.iosSwipeRight(.label("foo")).failureScope == .ios)
         #expect(TestStep.iosWaitForElement(.label("foo")).failureScope == .ios)
         #expect(TestStep.iosScreenshot(label: "x").failureScope == .ios)
         #expect(TestStep.iosLogUI.failureScope == .ios)

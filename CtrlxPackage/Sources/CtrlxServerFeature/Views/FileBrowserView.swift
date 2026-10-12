@@ -53,19 +53,22 @@ struct OpenFileTab: Identifiable, Equatable {
     let directoryPath: String
     var isDeleted: Bool
     var origin: FileTabOrigin?
+    var isDirectory: Bool
 
     init(
         id: UUID = UUID(),
         path: String,
         directoryPath: String,
         isDeleted: Bool = false,
-        origin: FileTabOrigin? = nil
+        origin: FileTabOrigin? = nil,
+        isDirectory: Bool = false
     ) {
         self.id = id
         self.path = path
         self.directoryPath = directoryPath
         self.isDeleted = isDeleted
         self.origin = origin
+        self.isDirectory = isDirectory
     }
 
     var name: String {
@@ -285,9 +288,43 @@ final class FileBrowserState {
 final class SessionFileTabsState {
     /// Files opened as their own tabs via the "Open in New Tab" context menu.
     var openFileTabs: [OpenFileTab] = []
+    var directoryTabs: [UUID: FileBrowserTab] = [:]
+
+    func terminalFilesTab(windowID: String) -> FileBrowserTab? {
+        openFileTabs.compactMap { directoryTabs[$0.id] }.first { $0.terminalLinkWindowID == windowID }
+    }
+
+    func migrateLegacyExplorer(directory: String) {
+        guard tabOrder.contains(.fileExplorer) || rightSide.contains(.fileExplorer) else { return }
+        let browser = FileBrowserTab(path: directory)
+        directoryTabs[browser.id] = browser
+        openFileTabs.append(.init(id: browser.id, path: directory, directoryPath: directory, isDirectory: true))
+        tabOrder = tabOrder.map { $0 == .fileExplorer ? .file(browser.id) : $0 }
+        if rightSide.remove(.fileExplorer) != nil { rightSide.insert(.file(browser.id)) }
+        if selectedRight == .fileExplorer { selectedRight = .file(browser.id) }
+    }
     /// When non-nil, the content area shows this file tab instead of the tree
     /// or terminal. Refers to a tab on the *left* side when split is active.
     var selectedFileTabId: UUID?
+
+    /// Directory tabs own their content; only editor tabs need the legacy tree underneath.
+    func selectLeftFileTab(_ id: UUID, windowID: String, legacyExplorerWindows: inout Set<String>) {
+        if directoryTabs[id] != nil {
+            legacyExplorerWindows.remove(windowID)
+        } else {
+            legacyExplorerWindows.insert(windowID)
+        }
+        selectedFileTabId = id
+        selectedBrowserTabId = nil
+    }
+
+    func selectLeftTerminalWindow(_ stableID: String) -> Bool {
+        guard !rightSide.contains(.window(stableID)) else { return false }
+        selectedFileTabId = nil
+        selectedBrowserTabId = nil
+        return true
+    }
+
     /// Saved vertical scroll offset per open file tab. Lives here (not on
     /// `OpenFileTab` itself) so the `LiveFileContentView` can read/write the
     /// position via a stable binding while the tab struct stays a value type.
@@ -309,6 +346,60 @@ final class SessionFileTabsState {
     var browserStates: [UUID: BrowserTabState] = [:]
     var agentBrowserStates: [UUID: AgentBrowserTabState] = [:]
     var simulatorStates: [UUID: SimulatorTabState] = [:]
+    var remoteBrowserTabs: [UUID: RemoteBrowserTab] = [:]
+
+    /// Returns whether reconciliation collapsed the split, so the view can repair terminal focus.
+    @discardableResult
+    func syncHostBrowserTabs(_ values: [RemoteBrowserTab], sessionWindowIDs: [String]) -> Bool {
+        let live = Set(values.map(\.id))
+        let removed = Set(remoteBrowserTabs.keys).subtracting(live)
+        openBrowserTabs.removeAll { removed.contains($0.id) }
+        for id in removed {
+            remoteBrowserTabs.removeValue(forKey: id)
+            rightSide.remove(.browser(id))
+            if selectedBrowserTabId == id { selectedBrowserTabId = nil }
+            if selectedRight == .browser(id) { selectedRight = nil }
+        }
+        for value in values {
+            remoteBrowserTabs[value.id] = value
+            var tab = BrowserTab(id: value.id, url: URL(string: value.url) ?? URL(staticString: "about:blank"),
+                displayTitle: "\(value.title.isEmpty ? "Browser" : value.title) · Host", originWindowId: value.windowID, parentTabId: value.parentID)
+            tab.isAgentBrowser = true
+            if let index = openBrowserTabs.firstIndex(where: { $0.id == value.id }) {
+                if openBrowserTabs[index] != tab { openBrowserTabs[index] = tab }
+            } else { openBrowserTabs.append(tab) }
+        }
+        for index in openBrowserTabs.indices where !live.contains(openBrowserTabs[index].id) {
+            openBrowserTabs[index].isViewerLocal = true
+        }
+        return reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+    }
+
+    @discardableResult
+    func reconcileRemoteRightPaneSelection(sessionWindowIDs: [String]) -> Bool {
+        if let selectedRight, !rightSide.contains(selectedRight) { self.selectedRight = nil }
+        guard isSplit else { return false }
+
+        let leftEmpty = !sessionWindowIDs.isEmpty
+            && sessionWindowIDs.allSatisfy { rightSide.contains(.window($0)) }
+            && openBrowserTabs.allSatisfy { rightSide.contains(.browser($0.id)) }
+            && openFileTabs.allSatisfy { rightSide.contains(.file($0.id)) }
+        if leftEmpty {
+            rightSide.removeAll()
+            selectedRight = nil
+            return true
+        }
+
+        guard selectedRight == nil else { return false }
+        if let window = rightSide.first(where: { if case .window = $0 { true } else { false } }) {
+            selectedRight = window
+        } else if let browser = openBrowserTabs.last(where: { rightSide.contains(.browser($0.id)) }) {
+            selectedRight = .browser(browser.id)
+        } else if let file = openFileTabs.last(where: { rightSide.contains(.file($0.id)) }) {
+            selectedRight = .file(file.id)
+        }
+        return false
+    }
 
     // MARK: - Split View State (issue #498)
 
@@ -625,6 +716,7 @@ struct FileBrowserView: View {
         let dirPrefix = directoryPath + "/"
         for index in sessionTabs.openFileTabs.indices {
             let tab = sessionTabs.openFileTabs[index]
+            guard !tab.isDirectory else { continue }
             guard tab.path.hasPrefix(dirPrefix) else { continue }
             let shouldBeDeleted = !existingPaths.contains(tab.path)
             if tab.isDeleted != shouldBeDeleted {

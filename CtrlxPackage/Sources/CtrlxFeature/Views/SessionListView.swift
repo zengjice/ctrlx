@@ -21,6 +21,8 @@
         @Environment(IOSSettings.self) private var settings
 
         @State private var creatingSelection: ProjectPickerSelection?
+        @State private var sessionCreation = NewSessionCreation()
+        @State private var initialSessionFit: NewSessionSizing.InitialFit?
         @State private var creationError: String?
         @State private var renameError: String?
         @State private var selectedHostForNewSession: PairedHost?
@@ -44,7 +46,8 @@
                         sessionName: destination.sessionName,
                         hostId: destination.hostId,
                         relayClient: connection.relayClient,
-                        settings: settings
+                        settings: settings,
+                        initialSessionFit: $initialSessionFit
                     )
                 } else {
                     hostDisconnectedView
@@ -53,6 +56,7 @@
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
+                        sessionCreation.cancel()
                         onOpenSettings()
                     } label: {
                         Symbols.gearshape.image
@@ -66,6 +70,19 @@
                     EditButton()
                         .accessibilityIdentifier("remote-session-order-edit-button")
                 }
+            }
+            .onChange(of: navigationPath.count) {
+                sessionCreation.cancel()
+                if navigationPath.isEmpty { initialSessionFit = nil }
+            }
+            .onChange(of: createdSessionName) {
+                navigateToCreatedSessionIfReady()
+            }
+            .onChange(of: creationHostIsConnected) {
+                if !creationHostIsConnected { sessionCreation.cancel() }
+            }
+            .onDisappear {
+                sessionCreation.cancel()
             }
             .alert("Session Creation Failed", isPresented: .init(
                 get: { creationError != nil },
@@ -118,7 +135,11 @@
                     Text(closeError)
                 }
             }
-            .sheet(item: $selectedHostForNewSession) { host in
+            .sheet(item: $selectedHostForNewSession, onDismiss: {
+                // Our success dismissal retains the pane while its snapshot is
+                // in flight. A user dismissal before the reply cancels routing.
+                if sessionCreation.paneID == nil { sessionCreation.cancel() }
+            }) { host in
                 ProjectPickerSheet(
                     host: host,
                     creatingSelection: creatingSelection,
@@ -142,6 +163,7 @@
                         sessions: sessionStore.sessions(for: host.id),
                         showUsername: settings.hasDuplicateHostName(for: host),
                         onNewSession: {
+                            sessionCreation.cancel()
                             selectedHostForNewSession = host
                         },
                         isClosingSession: isClosingSession,
@@ -302,6 +324,28 @@
 
         // MARK: - New Session Creation
 
+        private var createdSessionName: String? {
+            guard let hostID = sessionCreation.hostID, let paneID = sessionCreation.paneID else { return nil }
+            return sessionStore.paneState(for: paneID, hostId: hostID)?.sessionName
+        }
+
+        private var creationHostIsConnected: Bool {
+            guard let hostID = sessionCreation.hostID else { return false }
+            return connectionManager.connection(for: hostID)?.isHostConnected == true
+        }
+
+        private func navigateToCreatedSessionIfReady() {
+            guard navigationPath.isEmpty else {
+                sessionCreation.cancel()
+                return
+            }
+            guard let destination = sessionCreation.takeDestination(
+                paneStates: sessionStore.paneStates, isConnected: creationHostIsConnected
+            ) else { return }
+            initialSessionFit = destination.initialFit
+            navigationPath.append(SessionNavigation(sessionName: destination.sessionName, hostId: destination.hostID))
+        }
+
         private func createNewSession(on host: PairedHost, request: SessionLaunchRequest) async {
             guard creatingSelection == nil else { return }
 
@@ -313,11 +357,16 @@
 
             // Use project name for session name if available, otherwise use default
             let sessionName = project?.name ?? settings.newSessionName
+            let automaticFit = settings.newSessionAutoFit
+            let revision = sessionCreation.begin(hostID: host.id, automaticFit: automaticFit)
+            let grid = NewSessionSizing.creationGrid(
+                automaticFit: automaticFit, width: settings.newSessionWidth, height: settings.newSessionHeight
+            )
 
             let command = CreateTmuxSession(
                 sessionName: sessionName,
-                width: settings.newSessionWidth,
-                height: settings.newSessionHeight,
+                width: grid.columns,
+                height: grid.rows,
                 workingDirectory: project?.path,
                 configDir: project?.configDir,
                 pluginID: project?.pluginID ?? AgentLaunchDefaults.pluginID,
@@ -326,27 +375,27 @@
 
             // paneId is not used for session creation, pass empty string
             let result = await connectionManager.sendCommand(command, paneId: "", hostId: host.id)
+            creatingSelection = nil
+            guard sessionCreation.revision == revision, selectedHostForNewSession?.id == host.id else { return }
 
             switch result {
             case let .success(response):
-                // Session created - dismiss sheet and clear selection
-                creatingSelection = nil
-                selectedHostForNewSession = nil
-
-                // Request a refresh to update the session list
-                await connectionManager.requestSessionState(for: host.id)
-
-                // Navigate to the new terminal if we got a pane ID
-                if
-                    let paneId = response.paneId,
-                    let paneState = sessionStore.paneState(for: paneId, hostId: host.id) {
-                    navigationPath.append(SessionNavigation(sessionName: paneState.sessionName, hostId: host.id))
+                guard let paneID = response.paneId else {
+                    sessionCreation.cancel()
+                    selectedHostForNewSession = nil
+                    return
                 }
+                sessionCreation.receivePaneID(paneID, revision: revision)
+                selectedHostForNewSession = nil
+                // Consume cached state now, or let its arrival drive navigation.
+                // Sending a refresh does not wait for the Host's snapshot.
+                navigateToCreatedSessionIfReady()
+                await connectionManager.requestSessionState(for: host.id)
             case let .failure(error):
+                sessionCreation.cancel()
                 // Include project name in error for context (sheet stays open)
                 let projectContext = project?.name ?? "terminal"
                 creationError = "Failed to create \(projectContext): \(error.localizedDescription)"
-                creatingSelection = nil
             }
         }
     }
@@ -504,40 +553,16 @@
                 }
             }
             .accessibilityValue(cliSessionState?.statusLabel ?? claudePaneInSession?.agentSession?.statusLabel ?? "")
-            .modifier(DescriptionEditingModifier(
-                sessionName: session.sessionName,
-                currentDescription: session.customDescription,
-                currentEmoji: session.customEmoji,
+            .modifier(SessionSwipeActionsModifier(
+                session: session,
                 isDisabled: connection?.isHostConnected != true,
+                isClosingSession: isClosingSession,
                 onRename: onRename,
                 onSetDescription: onSetDescription,
                 onSetEmoji: onSetEmoji,
-                additionalMenu: {
-                    ColorContextMenuButtons(
-                        currentColor: session.customColor,
-                        isDisabled: connection?.isHostConnected != true
-                    ) { newColor in
-                        onSetColor(session.sessionName, newColor)
-                    }
-
-                    StateContextMenuButtons(
-                        currentState: session.displayedState,
-                        hasOverride: session.cliSessionState != nil,
-                        isDisabled: connection?.isHostConnected != true
-                    ) { newState in
-                        onSetState(session.sessionName, newState)
-                    }
-
-                    Divider()
-
-                    Button(role: .destructive) {
-                        onClose(session.sessionName)
-                    } label: {
-                        Label("Close Session", symbol: .rectangleStackBadgeMinus)
-                    }
-                    .disabled(connection?.isHostConnected != true || isClosingSession)
-                    .accessibilityIdentifier("close-session")
-                }
+                onSetColor: onSetColor,
+                onSetState: onSetState,
+                onClose: onClose
             ))
             .listRowInsets(
                 EdgeInsets(top: 15, leading: 0, bottom: 0, trailing: 16)
@@ -888,7 +913,7 @@
         case project(String) // project path as ID
     }
 
-    /// Sheet for selecting a Claude project to create a new session in
+    /// Sheet for launching a session from project history or a Host directory.
     struct ProjectPickerSheet: View {
         let host: PairedHost
         /// The currently selected item (shows spinner), nil if nothing selected yet
@@ -924,7 +949,7 @@
 
         var body: some View {
             NavigationStack {
-                List {
+                let pickerContent = List {
                     Section {
                         if showsDirectoryForm {
                             DirectorySessionForm(
@@ -932,7 +957,8 @@
                                 directorySource: .remote(
                                     hostID: host.id,
                                     connection: connectionManager.connection(for: host.id),
-                                    supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(host.id)
+                                    supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(host.id),
+                                    supportsCreation: sessionStore.hostsSupportingDirectoryCreation.contains(host.id)
                                 ),
                                 isCreating: isCreating,
                                 onStart: onSelect,
@@ -1052,10 +1078,19 @@
                         }
                     }
                 }
-                .searchable(text: $searchText, prompt: "Search projects")
-                .onSubmit(of: .search) {
-                    if !showsDirectoryForm && filteredProjects.count == 1 {
-                        onSelect(.project(filteredProjects[0]))
+                // Directory browsing owns its path field. Do not retain the
+                // project search controller (or its bottom toolbar) in that mode.
+                Group {
+                    if showsDirectoryForm {
+                        pickerContent
+                    } else {
+                        pickerContent
+                            .searchable(text: $searchText, prompt: "Search projects")
+                            .onSubmit(of: .search) {
+                                if filteredProjects.count == 1 {
+                                    onSelect(.project(filteredProjects[0]))
+                                }
+                            }
                     }
                 }
                 .navigationTitle("New Session on \(host.displayName)")
@@ -1069,7 +1104,7 @@
                     }
                 }
             }
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
         }
     }
 

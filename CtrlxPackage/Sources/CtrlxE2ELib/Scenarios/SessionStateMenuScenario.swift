@@ -141,15 +141,15 @@ public enum SessionStateMenuScenario {
         TestStep.iosWaitForElementToDisappear(.valueContains("Waiting for input"), timeout: 20)
         TestStep.macScreenshot(label: "mac-state-automatic-cleared")
 
-        // ── Phase 4: iOS pins "Waiting for input" via long-press menu ───
+        // ── Phase 4: iOS pins "Waiting for input" via swipe actions ───
         //
-        // SwiftUI `.contextMenu { }` opens on a sustained press on iOS; the
-        // "Set State" entry is a SwiftUI `Menu`, so tapping it slides in the
-        // state items. This drives the viewer-initiated `SetSessionState`
+        // Swipe right, then open More and its "Set State" submenu.
+        // This drives the viewer-initiated `SetSessionState`
         // command path the host-driven phases above don't touch.
 
-        TestStep.log("iOS setting StateProject → Waiting for input via long-press context menu")
-        TestStep.iosLongPress(.label("StateProject"), duration: 1)
+        TestStep.log("iOS setting StateProject → Waiting for input via swipe actions")
+        TestStep.iosSwipeRight(.label("StateProject"))
+        TestStep.iosTap(.identifier("session-more-actions"))
         TestStep.wait(seconds: 1)
         TestStep.iosTap(.label("Set State"))
         TestStep.wait(seconds: 1)
@@ -168,7 +168,8 @@ public enum SessionStateMenuScenario {
         // agent's Idle and drop the waiting value from the iOS row.
 
         TestStep.log("iOS clearing StateProject's override via 'Automatic'")
-        TestStep.iosLongPress(.label("StateProject"), duration: 1)
+        TestStep.iosSwipeRight(.label("StateProject"))
+        TestStep.iosTap(.identifier("session-more-actions"))
         TestStep.wait(seconds: 1)
         TestStep.iosTap(.label("Set State"))
         TestStep.wait(seconds: 1)

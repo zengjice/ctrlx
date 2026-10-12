@@ -653,6 +653,7 @@ final public class TmuxService {
         public let path: String
         /// Id of the plugin whose `process_names` matched (spec §6).
         public let pluginID: String
+        /// Outermost matching processes; nested Agent helpers are not new sessions.
         public let processIDs: Set<String>
     }
 
@@ -730,7 +731,10 @@ final public class TmuxService {
                     }
                 }
                 if let winner = matches.keys.min(), let matchedProcesses = matches[winner] {
-                    detected[paneId] = DetectedAgentPane(path: info.path, pluginID: winner, processIDs: matchedProcesses)
+                    detected[paneId] = DetectedAgentPane(
+                        path: info.path, pluginID: winner,
+                        processIDs: tree.outermostProcesses(in: matchedProcesses, from: info.pid)
+                    )
                 }
             }
 
@@ -810,6 +814,18 @@ final public class TmuxService {
             paneInfo: paneInfo,
             processTree: tree
         )
+    }
+
+    func browserSourcePane(sessionName: String, paneID: String) async throws -> PaneInfo {
+        let result = try await runTmuxCommand(["list-panes", "-a", "-F", Self.paneListFormat])
+        guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
+        let matches = result.stdoutString.split(separator: "\n")
+            .compactMap { PaneInfo(fromTmuxOutput: String($0)) }
+            .filter { $0.paneId == paneID }
+        guard matches.count == 1, let pane = matches.first, pane.sessionName == sessionName else {
+            throw TmuxError.commandFailed(message: "The source pane is missing, moved, or linked to multiple sessions.")
+        }
+        return pane
     }
 
     /// Resolve the actual calling Codex, not TMUX_PANE inherited by a child or
@@ -2979,7 +2995,7 @@ final public class TmuxService {
     }
 
     /// Known shell executables that indicate an idle pane.
-    private static let knownShells: Set = [
+    static let knownShells: Set = [
         "bash", "zsh", "sh", "fish", "dash", "csh", "tcsh", "ksh",
     ]
 
@@ -3011,6 +3027,24 @@ final public class TmuxService {
 
         func processName(for pid: String) -> String? {
             names[pid]
+        }
+
+        /// A Codex TUI can spawn another `codex` (e.g. an app-server) through
+        /// tools. Only independent roots identify sessions in this pane.
+        func outermostProcesses(in candidates: Set<String>, from rootPid: String) -> Set<String> {
+            guard candidates.count > 1 else { return candidates }
+            var result: Set<String> = []
+            var seen: Set<String> = []
+            var stack = [rootPid]
+            while let pid = stack.popLast() {
+                guard seen.insert(pid).inserted else { continue }
+                if candidates.contains(pid) {
+                    result.insert(pid)
+                } else {
+                    stack.append(contentsOf: childrenOf[pid, default: []])
+                }
+            }
+            return result
         }
 
         /// Returns all descendant PIDs of the given root (excluding the root itself).

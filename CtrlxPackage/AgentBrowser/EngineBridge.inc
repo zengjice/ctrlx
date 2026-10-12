@@ -177,6 +177,9 @@
       @"Target.getTargetInfo", @"Target.attachToTarget", @"Target.detachFromTarget",
       @"Target.setAutoAttach", @"Browser.setDownloadBehavior"];
     auto& tab = tabs_.at(engineGrants_.at(token).tab);
+    if (humanControl_.contains(engineGrants_.at(token).tab)) {
+      EngineError(connection, wireID, @"A person is controlling this page. Wait for Return to Agent."); return;
+    }
     NSString* session = request[@"sessionId"] ?: @"";
     if (![method isKindOfClass:NSString.class] || ![params isKindOfClass:NSDictionary.class] ||
         ![session isKindOfClass:NSString.class] ||

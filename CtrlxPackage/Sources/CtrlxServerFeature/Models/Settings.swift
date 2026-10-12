@@ -1,5 +1,6 @@
 import AppKit
 import CtrlxCommon
+import CtrlxNetworking
 import Dependencies
 import Foundation
 import SwiftUI
@@ -62,21 +63,7 @@ public enum SettingsTab: String, Sendable {
     case about
 }
 
-/// Device-local engine for the Mac's explicit New Browser action.
-public enum NewBrowserEngine: String, CaseIterable, Identifiable, Sendable {
-    case chromium
-    case webkit
-
-    public var id: String { rawValue }
-    public var displayName: String {
-        switch self {
-        case .chromium: "Chromium"
-        case .webkit: "WebKit"
-        }
-    }
-}
-
-/// Where terminal links open; independent of the New Browser engine choice.
+/// Where terminal links open. Stored values preserve existing domain rules.
 public enum BrowserLinkBehavior: String, CaseIterable, Codable, Identifiable, Sendable {
     /// Show a confirmation dialog with an "Always do this" checkbox.
     case ask
@@ -92,8 +79,8 @@ public enum BrowserLinkBehavior: String, CaseIterable, Codable, Identifiable, Se
     public var displayName: String {
         switch self {
         case .ask: "Ask"
-        case .alwaysInApp: "Always in app"
-        case .alwaysInDefaultBrowser: "Always in default browser"
+        case .alwaysInApp: "Always in Host browser"
+        case .alwaysInDefaultBrowser: "Always in this device's browser"
         }
     }
 }
@@ -304,12 +291,6 @@ final public class AppSettings {
         didSet { preferences.setString(browserLinkBehavior.rawValue, Keys.browserLinkBehavior) }
     }
 
-    /// Engine captured when the user chooses New Browser, never applied to
-    /// existing tabs or agent-owned pages. Local to this Mac, including Viewer UI.
-    public var newBrowserEngine: NewBrowserEngine = .chromium {
-        didSet { preferences.setString(newBrowserEngine.rawValue, Keys.newBrowserEngine) }
-    }
-
     /// Per-domain overrides for ``browserLinkBehavior``.
     ///
     /// Looked up case-insensitively by URL host before the global setting is
@@ -418,6 +399,14 @@ final public class AppSettings {
         didSet { preferences.setString(sidebarSortMode.rawValue, Keys.sidebarSortMode) }
     }
 
+    /// Device-local rank; an empty order uses `sidebarSortMode`.
+    public private(set) var localSessionOrder: [String] = [] {
+        didSet {
+            guard let data = try? JSONEncoder().encode(localSessionOrder) else { return }
+            preferences.setData(data, Keys.localSessionOrder)
+        }
+    }
+
     // MARK: - External Editor Settings
 
     /// External editors the user can pick to open files with.
@@ -488,7 +477,6 @@ final public class AppSettings {
             rawValue: preferences.string(Keys.browserLinkBehavior) ?? ""
         ) ?? Defaults.browserLinkBehavior
         self.browserDomainRules = Self.loadCodable(from: preferences, key: Keys.browserDomainRules)
-        self.newBrowserEngine = NewBrowserEngine(rawValue: preferences.string(Keys.newBrowserEngine) ?? "") ?? .chromium
         self.alwaysOpenLinksInSplit = preferences.optionalBool(Keys.alwaysOpenLinksInSplit) ?? Defaults.alwaysOpenLinksInSplit
         self.reconnectDelay = preferences.optionalInt(Keys.reconnectDelay) ?? Defaults.reconnectDelay
         self.tmuxPath = preferences.string(Keys.tmuxPath) ?? Defaults.tmuxPath
@@ -539,6 +527,7 @@ final public class AppSettings {
         self.sidebarSortMode = SidebarSortMode(
             rawValue: preferences.string(Keys.sidebarSortMode) ?? ""
         ) ?? .statusPriorityIdleFirst
+        self.localSessionOrder = RemoteSessionOrder.normalized(Self.loadCodable(from: preferences, key: .localSessionOrder))
 
         // External Editors
         self.editors = Self.loadCodable(from: preferences, key: Keys.editors)
@@ -594,7 +583,6 @@ final public class AppSettings {
         case openClickedFileInNewTab
         case alwaysOpenFilesInSplit
         case browserLinkBehavior
-        case newBrowserEngine
         case browserDomainRules
         case alwaysOpenLinksInSplit
         case reconnectDelay
@@ -614,6 +602,7 @@ final public class AppSettings {
         case sidebarFields
         case sidebarTerminalFields
         case sidebarSortMode
+        case localSessionOrder
         /// External Editors
         case editors
         case hasSeededEditors
@@ -881,8 +870,30 @@ final public class AppSettings {
         remoteSessionOrderByHost[hostId] ?? []
     }
 
+    public func setLocalSessionOrder(_ sessionNames: [String]) {
+        let normalized = RemoteSessionOrder.normalized(sessionNames)
+        guard normalized != localSessionOrder else { return }
+        localSessionOrder = normalized
+    }
+
+    func reconcileLocalSessionOrder(previousPaneStates: [String: PaneState], panes: [PaneInfo]) {
+        guard !localSessionOrder.isEmpty else { return }
+        let oldPaneIDs = Dictionary(grouping: previousPaneStates.values.filter { !$0.sessionName.isEmpty }, by: \.sessionName)
+            .mapValues { Set($0.map(\.paneId)) }
+        // An empty, uninitialized pane cache must not erase the saved rank on launch.
+        guard !panes.isEmpty || !oldPaneIDs.isEmpty else { return }
+        let newPaneIDs = Dictionary(grouping: panes, by: \.sessionName)
+            .mapValues { Set($0.map(\.paneId)) }
+        var order = localSessionOrder
+        for rename in SessionRenameMapping.detectNames(from: oldPaneIDs, to: newPaneIDs) {
+            order = RemoteSessionOrder.replacing(rename.oldName, with: rename.newName, in: order)
+        }
+        setLocalSessionOrder(RemoteSessionOrder.applying(order, to: newPaneIDs.keys.sorted(), sessionName: { $0 }))
+    }
+
     public func setRemoteSessionOrder(_ sessionNames: [String], for hostId: String) {
         let normalized = RemoteSessionOrder.normalized(sessionNames)
+        guard normalized != remoteSessionOrder(for: hostId) else { return }
         if normalized.isEmpty {
             remoteSessionOrderByHost.removeValue(forKey: hostId)
         } else {

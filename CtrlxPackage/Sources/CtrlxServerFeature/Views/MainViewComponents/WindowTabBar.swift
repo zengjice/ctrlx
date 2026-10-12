@@ -5,8 +5,7 @@ import UniformTypeIdentifiers
 
 /// Horizontal tab bar showing windows in a tmux session.
 /// Always visible, even for single-window sessions. The leading "+" button
-/// pops up a menu for Agent cards, a terminal window (`onNewWindow`), or a
-/// browser tab (`onNewBrowser`). Agents create windows in this same session.
+/// pops up a menu for Agent cards or a terminal window. Browsers belong to panes.
 struct WindowTabBar: View {
     let session: LocalTmuxSession
     let selectedWindow: LocalTmuxWindow
@@ -32,9 +31,7 @@ struct WindowTabBar: View {
     let onNewWindow: () -> Void
     let agentConfiguration: NewAgentTabConfiguration
     let onForkWindow: (LocalTmuxWindow, Bool) -> Void
-    /// Creates a new in-app browser tab (selected, address bar focused). Called
-    /// from the "+" menu's "New Browser" option.
-    let onNewBrowser: () -> Void
+    let onOpenBrowser: (LocalTmuxWindow) -> Void
     let onRenameWindow: (LocalTmuxWindow, String) -> Void
     let onSelectFileBrowser: () -> Void
     /// Activates the Git tab for the current window (issue #258).
@@ -61,6 +58,7 @@ struct WindowTabBar: View {
     let onReorderFileTabs: ([UUID]) -> Void
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
+    let onOpenFiles: (LocalTmuxWindow) -> Void
 
     @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(MarkdownOpenSuggestionStore.self) private var openSuggestionStore
@@ -136,7 +134,8 @@ struct WindowTabBar: View {
             windowIds: session.windows.map(\.stableId),
             fileTabIds: openFileTabs.map(\.id),
             browserTabIds: openBrowserTabs.map(\.id),
-            storedOrder: sessionTabs.tabOrder
+            storedOrder: sessionTabs.tabOrder,
+            includeFileExplorer: false
         )
     }
 
@@ -334,10 +333,9 @@ struct WindowTabBar: View {
 
     private var newWindowButton: some View {
         NewTabMenuButton(
-            helpText: "New agent, terminal or browser in \(session.sessionName)",
+            helpText: "New agent or terminal in \(session.sessionName)",
             agentConfiguration: agentConfiguration,
-            onNewTerminal: onNewWindow,
-            onNewBrowser: onNewBrowser
+            onNewTerminal: onNewWindow
         )
     }
 
@@ -498,6 +496,17 @@ struct WindowTabBar: View {
                     onRenameWindow(window, newName)
                 },
                 additionalMenu: {
+                    Button { onOpenFiles(window) } label: {
+                        Label("Open Files", symbol: .folderBadgePlus)
+                    }
+                    .accessibilityIdentifier("window-open-files-\(window.stableId)")
+
+                    Button { onOpenBrowser(window) } label: {
+                        Label("Open Browser", symbol: .globe)
+                    }
+                    .disabled(window.panes.isEmpty)
+                    .accessibilityIdentifier("window-open-browser-\(window.stableId)")
+
                     AgentForkMenu(
                         sources: window.panes.compactMap { windowManager.paneStates[$0.paneId].flatMap(AgentForkSource.init(pane:)) },
                         unavailableReason: nil,
@@ -554,13 +563,15 @@ struct WindowTabBar: View {
                 onSelectFileTab(tab.id)
             } label: {
                 HStack(spacing: 4) {
-                    Symbols.docPlaintextFill.image
+                    (tab.isDirectory ? Symbols.folder : Symbols.docPlaintextFill).image
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
-                    Text(tab.name)
+                    Text(sessionTabs.directoryTabs[tab.id]?.title ?? tab.name)
                         .font(.system(.caption, design: .monospaced))
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 180, alignment: .leading)
                         .strikethrough(tab.isDeleted, color: .secondary)
                 }
                 .padding(.leading, 12)
@@ -592,11 +603,14 @@ struct WindowTabBar: View {
             DropIndicator(visible: dropIndicator == payload)
         }
         .fileContextMenu(
-            fullPath: tab.path,
-            directoryPath: tab.directoryPath,
-            isDirectory: false,
+            fullPath: sessionTabs.directoryTabs[tab.id]?.path ?? tab.path,
+            directoryPath: sessionTabs.directoryTabs[tab.id]?.path ?? tab.directoryPath,
+            isDirectory: tab.isDirectory,
             onOpenFileInNewTab: nil,
-            onShowInFileExplorer: onShowInFileExplorer
+            onShowInFileExplorer: { path in
+                if tab.isDirectory { onSelectFileTab(tab.id) }
+                else { onShowInFileExplorer(path) }
+            }
         )
         .onHover { hovering in
             hoveredFileTabId = hovering ? tab.id : nil

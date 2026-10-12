@@ -85,7 +85,7 @@ Open `Ctrlx.xcworkspace` and use scheme `CtrlxServer` for macOS or
 is `CtrlX`.
 
 ```bash
-swift test --package-path CtrlxPackage
+./scripts/unit-tests.sh
 
 ./sbin/auto-env.sh
 ./sbin/start_server.sh
@@ -94,6 +94,8 @@ swift test --package-path CtrlxPackage
 See [AGENTS.md](AGENTS.md) for repository conventions and iOS build, package,
 and device-install guidance; see [CONTRIBUTING.md](CONTRIBUTING.md) and
 [RELEASE.md](RELEASE.md) for contribution and release workflows.
+The [technical documentation index](docs/README.md) separates current contracts
+from historical designs and routes each development task to its owning topic.
 
 ## License and origin
 

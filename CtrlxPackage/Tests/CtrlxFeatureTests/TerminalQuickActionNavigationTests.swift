@@ -74,6 +74,26 @@
             XCTAssertTrue(fixture.store.phrases.isEmpty)
         }
 
+        func testCustomButtonEditorStaysInsideSession() async throws {
+            let fixture = try NavigationFixture()
+            let window = try makeWindow(fixture)
+            defer { window.endEditing(true); window.isHidden = true }
+            await settle(window)
+            fixture.path = ["session"]
+            await settle(window)
+            fixture.presentation.toggle(.addCustomButton(fixture.phrase))
+            await settle(window)
+            XCTAssertEqual(fixture.path, ["session"])
+            XCTAssertEqual(navigationControllerCount(window.rootViewController), 1)
+            XCTAssertTrue(fixture.presentation.suspendsTerminalInput)
+            fixture.presentation.toggle(.addCustomButton(fixture.phrase))
+            await settle(window)
+            XCTAssertEqual(fixture.path, ["session"])
+            XCTAssertFalse(fixture.presentation.suspendsTerminalInput)
+            XCTAssertEqual(fixture.terminalDisappearances, 0)
+            XCTAssertTrue(fixture.customButtons.buttons.isEmpty)
+        }
+
         private func makeWindow(_ fixture: NavigationFixture) throws -> UIWindow {
             let app = UIApplication.perform(#selector(getter: UIApplication.shared))?.takeUnretainedValue() as? UIApplication
             let scene = try XCTUnwrap(app?.connectedScenes.compactMap { $0 as? UIWindowScene }.first,
@@ -107,12 +127,14 @@
         var terminalAppearances = 0
         var terminalDisappearances = 0
         let store: QuickPhraseStore
+        let customButtons: TerminalCustomButtonStore
         let phrase = TerminalPhraseContext(hostID: "test", paneID: "%1", inputRevision: 0,
                                            isConnected: true, isInputAvailable: true)
         let command: AgentCommandContext
 
         init() throws {
             store = withDependencies { $0[PreferencesService.self] = .inMemory() } operation: { QuickPhraseStore() }
+            customButtons = withDependencies { $0[PreferencesService.self] = .inMemory() } operation: { TerminalCustomButtonStore() }
             command = try XCTUnwrap(AgentCommandContext(
                 hostID: "test", paneID: "%1", session: AgentSession(paneId: "%1", pluginID: "codex"),
                 isConnected: true, isInputAvailable: true, hasExternalEditor: false, inputRevision: 0
@@ -136,6 +158,7 @@
                             .onDisappear { fixture.terminalDisappearances += 1 }
                             .modifier(TerminalQuickActionOverlay(
                                 presentation: $fixture.presentation, store: fixture.store,
+                                customButtonStore: fixture.customButtons,
                                 phraseContext: fixture.phrase, sendPhrase: { _ in false },
                                 commandContext: fixture.command, sendCommand: { _ in false }
                             ))

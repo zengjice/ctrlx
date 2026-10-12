@@ -41,6 +41,19 @@ struct TerminalQuickActionRouterTests {
         #expect(remote.batches == [AgentQuickCommand.usage.keys])
     }
 
+    @Test("Annotation focus requests are Host-scoped and consumed by native focus")
+    func annotationFocusRequest() {
+        let router = TerminalQuickActionRouter()
+        let view = InteractiveTerminalView(frame: .zero)
+        router.requestFocus(hostID: "office", paneID: "%1")
+        router.applyRequestedFocus(to: view, hostID: nil, paneID: "%1", autoFocus: true)
+        #expect(!view.autoFocusEnabled)
+        router.applyRequestedFocus(to: view, hostID: "office", paneID: "%1", autoFocus: false)
+        #expect(view.autoFocusEnabled)
+        router.focus(Sink().endpoint(host: "office", pane: "%1"))
+        #expect(router.requestedFocus == nil)
+    }
+
     @Test("Status-bar controls belong to the focused window and distinguish identical pane IDs on different hosts")
     func statusBarScope() throws {
         let router = TerminalQuickActionRouter()

@@ -12,6 +12,7 @@ public struct DirectorySessionForm: View {
 
     @State private var path = "~/"
     @State private var selectedAgentID: String?
+    @State private var isCreatingDirectory = false
     @FocusState private var isPathFocused: Bool
 
     public init(
@@ -33,7 +34,7 @@ public struct DirectorySessionForm: View {
     }
 
     private var canStart: Bool {
-        !isCreating && SessionDirectoryPath.isValid(path)
+        !isCreating && !isCreatingDirectory && SessionDirectoryPath.isValid(path)
             && agents.contains(where: { $0.id == agentID })
     }
 
@@ -44,6 +45,10 @@ public struct DirectorySessionForm: View {
             Text("Choose a folder on the Host, or type a path to find it. Opening a folder does not start a session.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                #if os(macOS)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                #endif
             TextField("Directory on Host", text: $path, prompt: Text("~/Projects/my-project"))
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
@@ -54,7 +59,7 @@ public struct DirectorySessionForm: View {
                 .onSubmit { isPathFocused = false }
                 .accessibilityIdentifier("new-session-directory")
 
-            SessionDirectoryBrowser(path: $path, source: directorySource)
+            SessionDirectoryBrowser(path: $path, source: directorySource, isCreatingDirectory: $isCreatingDirectory)
 
             if agents.isEmpty {
                 Text("No agents available from this Host. Check its connection and Settings → Agents.")
@@ -90,7 +95,7 @@ public struct DirectorySessionForm: View {
                     .accessibilityIdentifier("start-directory-session")
             }
         }
-        .disabled(isCreating)
+        .disabled(isCreating || isCreatingDirectory)
     }
 
     private func start() {

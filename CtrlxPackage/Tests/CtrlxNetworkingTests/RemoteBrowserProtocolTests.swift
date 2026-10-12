@@ -1,0 +1,115 @@
+import Foundation
+import Testing
+@testable import CtrlxNetworking
+
+@Suite("Remote browser protocol")
+struct RemoteBrowserProtocolTests {
+    @Test func wireRoundTrip() throws {
+        let operations: [RemoteBrowserOperation] = [.create, .openPane(url: nil), .openPane(url: "http://localhost:3000"), .frame, .takeControl, .releaseControl,
+            .navigate("https://example.com/中文"), .back, .forward, .reload, .close, .fit(width: 390, height: 700),
+            .text("中文\nsecond line"), .key(.init("Enter", keyCode: 13)), .pointer(.init(.down, x: 2, y: 5, button: .left))]
+        for operation in operations {
+            let request = BrowseBrowser(sessionName: "same", tabID: UUID(), surfaceID: UUID(), controlID: UUID(),
+                                        generation: 42, operation: operation)
+            let copy = try JSONDecoder().decode(CommandType.self, from: JSONEncoder().encode(request.commandType))
+            #expect(copy == request.commandType)
+        }
+    }
+
+    @Test func oldHostDoesNotAdvertiseSupport() throws {
+        let data = Data(#"{"pairId":"old","paneStates":{},"homeDirectory":""}"#.utf8)
+        let state = try JSONDecoder().decode(SessionStateMessage.self, from: data)
+        #expect(state.supportsBrowserSharing == nil)
+        #expect(state.supportsPaneBrowser == nil)
+        #expect(state.browserTabs == nil)
+        let tab = RemoteBrowserTab(id: UUID(), sessionName: "s", title: "page", url: "about:blank", isLoading: false, isAgentOwned: true)
+        let updated = SessionStateMessage(pairId: "a", paneStates: [:], supportsBrowserSharing: true, supportsPaneBrowser: true, browserTabs: [tab]).withPairId("b")
+        #expect(updated.supportsBrowserSharing == true)
+        #expect(updated.supportsPaneBrowser == true)
+        #expect(updated.browserTabs == [tab])
+        #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab)).sourcePaneID == nil)
+    }
+
+    @Test func paneAssociationDoesNotRequireAgentIdentity() throws {
+        let tab = RemoteBrowserTab(id: UUID(), sessionName: "s", windowID: "@2", title: "Page", url: "https://example.com",
+            isLoading: false, isAgentOwned: false, sourcePaneID: "%7")
+        let copy = try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab))
+        #expect(copy == tab && copy.sourceAgent == nil && copy.sourcePaneID == "%7")
+    }
+
+    @Test func hostNavigationOnlyAcceptsBoundedWebURLs() throws {
+        for address in ["https://example.com", "http://localhost:3000/中文", "http://127.0.0.1/"] {
+            #expect(BrowserWebURL.isSupported(try #require(URL(string: address))))
+        }
+        for address in ["file:///tmp/a", "javascript:alert(1)", "ftp://example.com", "about:blank", "./page", "https://example.com/" + String(repeating: "x", count: 8192)] {
+            #expect(!BrowserWebURL.isSupported(try #require(URL(string: address))))
+        }
+    }
+
+    @Test(arguments: ["https://user:pass@example.com/path", "https://user@example.com/path",
+                      "https://:pass@example.com/path", "https://@example.com/path",
+                      "https://user%40name:pass@example.com/path"])
+    func hostNavigationRejectsEmbeddedCredentials(_ address: String) throws {
+        let url = try #require(URL(string: address))
+        #expect(!BrowserWebURL.isSupported(url))
+        #expect(BrowserWebURL.normalized(url) == nil)
+    }
+
+    @Test(arguments: [
+        ("http://localhost:3000", "http://localhost:3000/"),
+        ("HTTP://LOCALHOST:3000", "http://localhost:3000/"),
+        ("https://EXAMPLE.com:443", "https://example.com/"),
+        ("http://EXAMPLE.com:80?q=one#two", "http://example.com/?q=one#two"),
+        ("https://EXAMPLE.com:444/a%2Fb?q=a%26b&q=c#part", "https://example.com:444/a%2Fb?q=a%26b&q=c#part")
+    ])
+    func navigationNormalizesOriginSpelling(_ address: String, _ expected: String) throws {
+        let url = try #require(URL(string: address))
+        let normalized = try #require(BrowserWebURL.normalized(url))
+        #expect(normalized.absoluteString == expected)
+        #expect(BrowserWebURL.normalized(normalized) == normalized)
+    }
+
+    @Test(arguments: ["https://example.com/page/", "https://example.com/Page", "https://example.com/page?q=1",
+                      "https://example.com/page#part", "https://example.com:444/page", "http://example.com/page"])
+    func normalizationPreservesDistinctDestinations(_ address: String) throws {
+        let originalURL = try #require(URL(string: "https://example.com/page"))
+        let destinationURL = try #require(URL(string: address))
+        let original = try #require(BrowserWebURL.normalized(originalURL))
+        let destination = try #require(BrowserWebURL.normalized(destinationURL))
+        #expect(original != destination)
+    }
+
+    @Test func adaptiveFrameSizeIsAdditiveForOldHostsAndViewers() throws {
+        struct LegacyRequest: Codable {
+            let sessionName: String
+            let surfaceID: UUID
+            let operation: RemoteBrowserOperation
+        }
+        let legacy = LegacyRequest(sessionName: "s", surfaceID: UUID(), operation: .frame)
+        let decoded = try JSONDecoder().decode(BrowseBrowser.self, from: JSONEncoder().encode(legacy))
+        #expect(decoded.frameMaxDimension == nil)
+        let updated = BrowseBrowser(sessionName: "s", surfaceID: legacy.surfaceID, frameMaxDimension: 2560, operation: .frame)
+        let data = try JSONEncoder().encode(updated)
+        #expect(try JSONDecoder().decode(BrowseBrowser.self, from: data) == updated)
+        #expect(try JSONDecoder().decode(LegacyRequest.self, from: data).operation == .frame)
+        let command = try JSONDecoder().decode(CommandType.self, from: JSONEncoder().encode(updated.commandType))
+        #expect(command == updated.commandType)
+    }
+
+    @Test func frameBudgetFitsEncryptedRelayEnvelope() throws {
+        let frame = RemoteBrowserFrame(jpeg: Data(repeating: 1, count: RemoteBrowserFrame.maximumBytes), width: 1200, height: 700, generation: 1)
+        #expect(frame.isValid)
+        let payload = CommandResponseMessage(commandId: UUID(), success: true, browser: .init(frame: frame))
+        let encoded = try JSONEncoder().encode(payload)
+        // Encryption adds a second base64 envelope, plus authentication/JSON overhead.
+        #expect(encoded.count * 4 / 3 + 8192 < RelayPayloadLimits.maxWebSocketFrameBytes)
+        #expect(!RemoteBrowserFrame(jpeg: frame.jpeg + Data([0]), width: 1200, height: 700, generation: 1).isValid)
+        #expect(!RemoteBrowserFrame(jpeg: Data([0]), width: .nan, height: 700, generation: 1).isValid)
+    }
+
+    @Test func pointerValidation() {
+        #expect(RemoteBrowserPointer(.move, x: 50, y: 40, buttons: 1).isValid)
+        #expect(!RemoteBrowserPointer(.move, x: -.infinity, y: 40).isValid)
+        #expect(!RemoteBrowserPointer(.move, x: 50, y: 40, deltaY: 10_000).isValid)
+    }
+}

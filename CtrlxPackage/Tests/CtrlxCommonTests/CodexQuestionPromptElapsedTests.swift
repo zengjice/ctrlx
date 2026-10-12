@@ -2,9 +2,9 @@ import Testing
 @testable import CtrlxCommon
 
 struct CodexQuestionPromptElapsedTests {
-    private func prompt(countLine: String, composer: String = "› Ask Codex to do anything") -> CodexQuestionPrompt? {
+    private func prompt(countLine: String, composer: String = "› Ask Codex to do anything", hint: String = "shift+← to answer") -> CodexQuestionPrompt? {
         CodexQuestionPrompt(
-            lines: ["• Queued follow-up inputs", countLine, "shift+← to answer", "", composer],
+            lines: ["• Queued follow-up inputs", countLine, hint, "", composer],
             cursorRow: 4, cursorColumn: 2
         )
     }
@@ -27,6 +27,61 @@ struct CodexQuestionPromptElapsedTests {
         let tickOpens = state.observe(tick.count)
         #expect(firstOpens)
         #expect(!tickOpens)
+    }
+
+    @Test("Codex 0.160's no-plus shortcut has the same queue identity as older versions")
+    func noPlusHint() throws {
+        let original = try #require(prompt(countLine: "? 1 question · 14s"))
+        let current = try #require(prompt(countLine: "? 1 question · 15s", hint: "shift← to answer"))
+        #expect(current == original)
+        #expect(prompt(countLine: "? 1 question", composer: "› draft", hint: "shift← to answer") == nil)
+    }
+
+    @Test("Equivalent Shift+Left labels retain the same queue identity", arguments: [
+        "shift + ← to answer", "shift+← to answer", "shift← to answer", "Shift + ← to answer",
+        "SHIFT+LEFT to answer", "Shift Left to answer", "shiftleft to answer",
+        "⇧← to answer", "⇧+← to answer", "⇧ + ← to answer", "⇧ ← to answer", "⇧Left to answer",
+        "Shift\t+\tLeft to answer", "⇧\u{00a0}← to\u{2009}answer",
+    ])
+    func equivalentHint(hint: String) throws {
+        let original = try #require(prompt(countLine: "? 1 question · 14s"))
+        let updated = try #require(prompt(countLine: "? 1 question · 15s", hint: hint))
+        #expect(updated == original)
+        #expect(prompt(countLine: "? 1 question", composer: "› draft", hint: hint) == nil)
+    }
+
+    @Test("Presentation-only wrapping and inline hints keep the footer recognizable", arguments: [
+        ["• Queued follow-up inputs", "? 1 question", "⇧← to answer"],
+        ["• Queued follow-up inputs", "? 1 question ⇧← to answer"],
+        ["• Queued follow-up inputs ? 1 question", "Shift+Left to answer"],
+        ["• Queued follow-up", "inputs", "? 1 question", "⇧← to answer"],
+        ["Queued follow-up inputs", "? 1 question", "⇧←", "to answer"],
+        ["Queued follow-up inputs", "? 1 question", "Shift +", "Left to", "answer"],
+        ["Queued follow-up inputs", "? 1 question · 1m", "02s", "⇧", "← to answer"],
+    ])
+    func footerLayout(footer: [String]) {
+        let lines = ["• Working"] + footer + ["", "› Ask Codex to do anything"]
+        #expect(CodexQuestionPrompt(lines: lines, cursorRow: lines.count - 1, cursorColumn: 2)?.count == 1)
+    }
+
+    @Test("Unknown bindings and incomplete hints remain manual", arguments: [
+        "⇧→ to answer", "⇧←", "⌃⇧← to answer", "Shift+Alt+Left to answer",
+        "shift++← to answer", "left to answer", "press ⇧← to answer", "⇧← to answer later",
+    ])
+    func unknownHint(hint: String) {
+        #expect(prompt(countLine: "? 1 question", hint: hint) == nil)
+    }
+
+    @Test("Unrelated content cannot become part of a wrapped Questions footer")
+    func unrelatedFooterContent() {
+        for footer in [
+            ["• Queued follow-up inputs", "↳ draft", "? 1 question", "⇧← to answer"],
+            ["• Queued follow-up inputs", "? 1 question", "⇧← to answer", "extra output"],
+            ["• Queued follow-up inputs", "⇧← to answer", "? 1 question"],
+        ] {
+            let lines = footer + ["", "› Ask Codex to do anything"]
+            #expect(CodexQuestionPrompt(lines: lines, cursorRow: lines.count - 1, cursorColumn: 2) == nil)
+        }
     }
 
     @Test("Reject arbitrary, malformed and partial suffixes", arguments: [

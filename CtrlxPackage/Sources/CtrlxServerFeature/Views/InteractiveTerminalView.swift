@@ -300,7 +300,8 @@
                 interactive.shouldReportMouseEvent(event),
                 interactive.isClickOnInterceptableURL(
                     at: interactive.convert(event.locationInWindow, from: nil),
-                    allowedSchemes: TerminalURLDetector.defaultAllowedSchemes.union(["file"])
+                    allowedSchemes: TerminalURLDetector.defaultAllowedSchemes,
+                    includePaths: event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty
                 ) {
                 onMouseDown?()
                 return
@@ -360,14 +361,19 @@
 
             if shouldActivateLink, let interactive = interactiveView {
                 let point = interactive.convert(event.locationInWindow, from: nil)
-                let allowed = TerminalURLDetector.defaultAllowedSchemes.union(["file"])
+                if event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty,
+                   let link = interactive.fileLink(at: point) {
+                    scheduleLinkActivation(in: interactive) { $0.onOpenPath?(link.path) }
+                    return
+                }
+                let allowed = TerminalURLDetector.defaultAllowedSchemes
                 if let url = interactive.url(at: point, allowedSchemes: allowed) {
                     // The first mouse-up of a double or triple click also has
                     // clickCount == 1. Stage the action for the system's own
                     // double-click interval; the next mouse-down cancels it.
                     // This keeps link clicks working without stealing word/row
                     // selection gestures.
-                    scheduleLinkActivation(url, in: interactive)
+                    scheduleLinkActivation(in: interactive) { $0.openURL(url) }
                     return
                 }
             }
@@ -395,7 +401,7 @@
             pendingLinkActivationTask = nil
         }
 
-        private func scheduleLinkActivation(_ url: URL, in interactive: InteractiveTerminalView) {
+        private func scheduleLinkActivation(in interactive: InteractiveTerminalView, action: @escaping @MainActor (InteractiveTerminalView) -> Void) {
             cancelPendingLinkActivation()
             pendingLinkActivationTask = Task { @MainActor [weak self, weak interactive] in
                 do {
@@ -405,7 +411,7 @@
                 }
                 guard let self, let interactive else { return }
                 self.pendingLinkActivationTask = nil
-                interactive.openURL(url)
+                action(interactive)
             }
         }
 
@@ -534,6 +540,7 @@
         /// `NSWorkspace.shared.open(_:)`. When the callback is `nil`, all URLs
         /// are forwarded to `NSWorkspace`.
         var onOpenURL: (@MainActor (URL) -> Bool)?
+        var onOpenPath: (@MainActor (String) -> Void)?
 
         /// When false, the terminal won't auto-grab focus on window add or window-becomes-key.
         /// Used in multi-pane layouts where multiple terminals share one window.
@@ -580,6 +587,7 @@
         private var urlHighlightLayer: CALayer?
         private var urlUnderlineLayers: [CALayer] = []
         private var urlRowCache = TerminalURLRowCache()
+        private var fileLinkSnapshot = TerminalFileLinkSnapshot()
         private var cachedCellSize: CGSize?
         private var lastMouseGridPosition: (col: Int, row: Int)?
 
@@ -1377,6 +1385,8 @@
 
         private func extractAndClearPayloads(afterFeeding bytes: ArraySlice<UInt8>) {
             payloadCache.update(from: terminalView.getTerminal(), afterFeeding: bytes)
+            fileLinkSnapshot.invalidate()
+            lastMouseGridPosition = nil
         }
 
         /// Converts a point in this view's coordinate space to a viewport grid position (col, row).
@@ -1408,11 +1418,17 @@
         }
 
         private func handleMouseMoved(_ event: NSEvent) {
-            // When mouse mode is active, the terminal app owns mouse interaction.
-            // Clear any stale highlights and skip URL detection.
+            // In mouse mode only file paths bypass the terminal app.
             if isMouseModeActive {
+                isOverURL = false
                 removeURLHighlight()
                 removeURLPreview()
+                let point = convert(event.locationInWindow, from: nil)
+                if let link = fileLink(at: point) {
+                    showURLPreview(link.path)
+                    isOverURL = true
+                    NSCursor.pointingHand.set()
+                }
                 return
             }
             let point = convert(event.locationInWindow, from: nil)
@@ -1442,6 +1458,12 @@
             lastMouseGridPosition = pos
 
             let terminal = terminalView.getTerminal()
+            if let link = fileLink(at: point), let span = link.spans.first(where: { $0.row == terminal.buffer.yDisp + pos.row }) {
+                showURLHighlight(row: pos.row, startCol: span.columns.lowerBound, endCol: span.columns.upperBound)
+                showURLPreview(link.path)
+                isOverURL = true
+                return
+            }
             let closures = urlClosures(for: terminal)
             let urls = TerminalURLDetector.detectURLs(
                 row: pos.row,
@@ -1543,10 +1565,10 @@
         /// Called by the system's cursor tracking when the cursor enters/moves within the view.
         /// Sets the cursor based on mouse mode and whether the mouse is over a detected URL.
         private func updateCursor(for event: NSEvent) {
-            if shouldReportMouseEvent(event) {
-                NSCursor.arrow.set()
-            } else if isOverURL {
+            if isOverURL {
                 NSCursor.pointingHand.set()
+            } else if shouldReportMouseEvent(event) {
+                NSCursor.arrow.set()
             } else {
                 NSCursor.iBeam.set()
             }
@@ -1554,15 +1576,8 @@
 
         /// Resolves a URL under the given terminal point without opening it.
         ///
-        /// In normal mode `allowedSchemes` is the union of the default
-        /// http/https/ftp set plus `file://`, so OSC 8 file links from the
-        /// local terminal can be routed through `onOpenURL` and open as an
-        /// in-app file tab. Mouse mode uses the same set so TUI applications
-        /// cannot race the configured browser-link policy.
-        ///
-        /// `TerminalURLDetector` still rejects `file://` by default for the
-        /// hover/highlight rendering path (which can run against remote panes
-        /// where opening local files would be unsafe).
+        /// Web URLs use their existing policy. Explicit Host files go through
+        /// the pane-aware snapshot, including its live-input-row exclusion.
         fileprivate func url(at point: NSPoint, allowedSchemes: Set<String>) -> URL? {
             guard let pos = gridPosition(for: point) else { return nil }
             let terminal = terminalView.getTerminal()
@@ -1586,9 +1601,24 @@
         /// `browserLinkBehavior` prompt.
         fileprivate func isClickOnInterceptableURL(
             at point: NSPoint,
-            allowedSchemes: Set<String>
+            allowedSchemes: Set<String>,
+            includePaths: Bool = true
         ) -> Bool {
-            url(at: point, allowedSchemes: allowedSchemes) != nil
+            (includePaths && fileLink(at: point) != nil) || url(at: point, allowedSchemes: allowedSchemes) != nil
+        }
+
+        fileprivate func fileLink(at point: NSPoint) -> TerminalFileLink? {
+            guard onOpenPath != nil, let pos = gridPosition(for: point) else { return nil }
+            let terminal = terminalView.getTerminal()
+            let row = terminal.buffer.yDisp + pos.row
+            return currentFileLinks().first { $0.contains(column: pos.col, row: row) }
+        }
+
+        private func currentFileLinks() -> [TerminalFileLink] {
+            guard onOpenPath != nil else { return [] }
+            return fileLinkSnapshot.links(terminal: terminalView.getTerminal(), cellPayload: {
+                [payloadCache] in payloadCache.cellPayload(col: $0, absoluteRow: $1)
+            })
         }
 
         /// Opens a URL by giving `onOpenURL` first chance to handle it. Falls
@@ -1596,6 +1626,7 @@
         /// production, a file-backed log in E2E tests) when the callback is
         /// absent or declines to handle the URL.
         fileprivate func openURL(_ url: URL) {
+            guard !url.isFileURL else { return }
             if onOpenURL?(url) == true { return }
             @Dependency(URLOpener.self) var urlOpener
             urlOpener.openInDefaultBrowser(url)
@@ -1606,12 +1637,8 @@
         /// Scans visible rows for URLs and draws persistent underline decorations.
         /// Called when terminal content changes or scrolls.
         ///
-        /// When mouse mode is active the underlines are cleared and redrawing
-        /// is skipped: the terminal app owns the click stream for non-file
-        /// URLs, so links shouldn't appear interactive. `file://` links are
-        /// still interceptable (see `mouseUp`/`handleURLClick`), but we
-        /// intentionally don't underline them either — keeping the visual
-        /// behavior uniform across schemes while mouse mode is on.
+        /// File paths remain interactive in mouse mode; ordinary web URLs keep
+        /// the existing terminal-owned mouse behavior.
         ///
         /// Note: this wrapper view doesn't subclass `TerminalView`, so it has no
         /// `mouseModeChanged` override. Existing underlines are cleared on the
@@ -1624,6 +1651,7 @@
             let contentNeedsRefresh = renderedURLContentGeneration != urlContentGeneration
             let layoutNeedsRefresh = renderedURLLayoutSignature != signature
             guard contentNeedsRefresh || layoutNeedsRefresh else { return }
+            lastMouseGridPosition = nil
             renderedURLContentGeneration = urlContentGeneration
             renderedURLLayoutSignature = signature
 
@@ -1632,13 +1660,25 @@
             }
             urlUnderlineLayers.removeAll()
 
-            if isMouseModeActive { return }
-
             guard cellSize.width > 0, cellSize.height > 0 else { return }
-            urlRowCache.retainViewportRows(in: 0..<terminal.rows)
-
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            defer { CATransaction.commit() }
+            if onOpenPath != nil {
+                let start = terminal.buffer.yDisp
+                let links = currentFileLinks()
+                for span in links.flatMap(\.spans) where (start..<(start + terminal.rows)).contains(span.row) {
+                    let underline = CALayer()
+                    underline.backgroundColor = NSColor.linkColor.withAlphaComponent(0.6).cgColor
+                    underline.frame = CGRect(x: CGFloat(span.columns.lowerBound) * cellSize.width - horizontalOffset,
+                                             y: terminalView.frame.height - CGFloat(span.row - start + 1) * cellSize.height,
+                                             width: CGFloat(span.columns.count) * cellSize.width, height: 1)
+                    terminalView.layer?.addSublayer(underline)
+                    urlUnderlineLayers.append(underline)
+                }
+            }
+            if isMouseModeActive { return }
+            urlRowCache.retainViewportRows(in: 0..<terminal.rows)
 
             let closures = urlClosures(for: terminal)
             for row in 0..<terminal.rows {
@@ -1670,7 +1710,6 @@
                 }
             }
 
-            CATransaction.commit()
         }
 
         /// Terminal output changes link decorations, not view geometry. Scheduling

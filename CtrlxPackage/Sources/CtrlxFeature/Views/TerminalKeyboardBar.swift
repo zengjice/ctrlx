@@ -22,9 +22,11 @@
         let sendKeys: ([TmuxKey]) -> Void
         let phraseContext: TerminalPhraseContext
         @Binding var quickActionPresentation: TerminalQuickActionPresentation
+        let customButtonStore: TerminalCustomButtonStore
+        let sendCustomButton: (TerminalCustomButtonRequest) -> Bool
         var agentCommandContext: AgentCommandContext? = nil
 
-        // Editing a phrase disables terminal keystrokes, not the panel toggles.
+        // Editing disables terminal keystrokes, not the panel toggles.
         private var terminalInputEnabled: Bool {
             isEnabled && !quickActionPresentation.suspendsTerminalInput
         }
@@ -152,6 +154,27 @@
                 .opacity(terminalInputEnabled ? 1 : 0.4)
                 .accessibilityLabel("Dollar Sign")
                 .accessibilityIdentifier("terminal-dollar-control")
+
+                ForEach(customButtonStore.buttons) { button in
+                    TerminalCustomButtonControl(
+                        button: button, store: customButtonStore,
+                        context: phraseContext, isInputEnabled: terminalInputEnabled,
+                        send: sendCustomButton
+                    )
+                }
+                .id(phraseContext.target)
+
+                Button {
+                    quickActionPresentation.toggle(.addCustomButton(phraseContext))
+                } label: {
+                    Label("Add Button", symbol: .plus)
+                        .labelStyle(.iconOnly)
+                        .frame(minWidth: 20)
+                        .terminalInputControlStyle()
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("terminal-add-custom-button")
             }
         }
 

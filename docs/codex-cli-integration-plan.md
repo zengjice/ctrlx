@@ -1,5 +1,13 @@
 # Codex CLI Integration Plan
 
+> Historical research and migration record. The shared `CodingAgent` enum,
+> HTTP hook service and old installer/scanner classes discussed below have been
+> replaced by the plugin runtime. Current entry points are in
+> [architecture](architecture.md#agent-events-and-responses),
+> [services](services-reference.md), and `CtrlxPackage/Sources/CodexPluginCore/`.
+> CLI behavior observations apply to the recorded upstream version, not every
+> subsequent Codex release.
+
 Status: ✅ **Shipped** — Phases 0–4 landed via [PR #549](https://github.com/gpambrozio/Gallager/pull/549) on branch `feat/codex-cli-integration`.
 Last updated: 2026-05-22
 
@@ -10,11 +18,11 @@ Last updated: 2026-05-22
 > - `codex-rs/core/src/hooks/` — hook event names, payload shape, exit-code semantics
 >
 > The sections below are kept as the historical research / planning record. For the current code shape, see:
-> - `docs/architecture.md` — `CodingAgent` abstraction in the service overview
-> - `docs/services-reference.md` — `CodingAgent`, `CodexProjectScanner`, `CodexPluginInstaller` reference entries
-> - `CtrlxNetworking/Models/CodingAgent.swift` — the enum itself
+> - [Architecture](architecture.md) — plugin ingress, core and dispatcher
+> - [Services](services-reference.md) — launch, identity recovery, Fork and Questions
+> - `CtrlxPackage/Sources/CodexPluginCore/` — current Codex implementation
 >
-> Implementation notes vs. the plan below:
+> Historical implementation notes from the original integration:
 > - **CodexHookInstaller was renamed to `CodexPluginInstaller`**, and install/uninstall now go through `codex plugin install ctrlx` against a bundled marketplace at `~/.ctrlx/marketplaces/ctrlx/` (instead of writing `~/.codex/hooks.json` directly). The bridge script is shipped via the same `ctrlx` plugin that backs Claude Code.
 > - **Out of scope (deferred):** type renames (`ClaudeProjectInfo` → `AgentProjectInfo` etc.), `codex exec --json` streaming firehose, embedded OpenTelemetry collector, and auto-install on first launch.
 

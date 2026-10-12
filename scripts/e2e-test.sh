@@ -585,6 +585,7 @@ else
     step "Building EchoPluginSidecar (plugin fixture)"
     swift build \
         --package-path "$PACKAGE_ROOT" \
+        --build-system swiftbuild --disable-index-store \
         --product EchoPluginSidecar 2>&1 | xcsift --format toon --executable
     verify_artifact "$SIDECAR_BIN"
 fi

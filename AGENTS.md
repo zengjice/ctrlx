@@ -1,9 +1,16 @@
 # CtrlX Repository Guide
 
-Distributed system for monitoring coding-agent sessions (Anthropic Claude Code and OpenAI Codex CLI, behind a shared `CodingAgent` abstraction in `CtrlxNetworking`). Three components:
-1. **Mac App** - tmux pane mirroring, receives hooks from both agents, forwards to server
-2. **External Server** - Vapor relay (Docker/Linux), device pairing, WebSocket routing
-3. **iOS App** - Remote monitoring, command dispatch
+Tmux-native remote workspaces with plugin-based coding-agent integration.
+
+1. **Mac App** — local Host and remote Viewer; owns tmux, plugin runtime and Host files/browser pages.
+2. **Relay** — Vapor (Docker/Linux), pairing, presence and encrypted message routing.
+3. **iOS App** — Viewer, remote terminal input and agent interaction.
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the cross-AI workflow and
+[docs/README.md](docs/README.md) for current references versus historical plans.
+The current agent seam is `PluginCore` / `PluginHost`, with
+`AgentSession.pluginID` and Unix-socket ingress; the old `CodingAgent` enum
+and HTTP hook service are gone.
 
 **Stack:** Swift 6.3+, SwiftUI (MV pattern), Swift Concurrency, SwiftTerm, Vapor, CryptoKit (E2EE)
 
@@ -12,9 +19,11 @@ Distributed system for monitoring coding-agent sessions (Anthropic Claude Code a
 **Development by platform:**
 - macOS → `CtrlxPackage/Sources/CtrlxServerFeature/`
 - iOS → `CtrlxPackage/Sources/CtrlxFeature/`
-- Shared → `CtrlxPackage/Sources/CtrlxNetworking/`
+- Shared Apple-client UI/services → `CtrlxPackage/Sources/CtrlxCommon/`
+- Shared wire models → `CtrlxPackage/Sources/CtrlxNetworking/`
+- Agent contracts/cores → `CtrlxPackage/Sources/CtrlxPluginProtocol/`, `ClaudeCodePluginCore/`, `CodexPluginCore/`
 - Encryption → `CtrlxPackage/Sources/CtrlxEncryption/`
-- Server → `CtrlxPackage/Sources/CtrlxExternalServer/`
+- Relay implementation → `CtrlxPackage/Sources/CtrlxExternalServerLib/`; executable → `CtrlxPackage/Sources/CtrlxExternalServer/`
 
 ## Critical Rules
 
@@ -45,7 +54,8 @@ Use: `Symbols.starFill.image` or `Label("Text", symbol: .starFill)`
 ### Concurrency
 
 - `@MainActor` for all UI
-- actors for I/O (ProcessRunner, TmuxControlClient)
+- actors for stateful I/O (TmuxControlClient, HostFileBrowser); dependency clients
+  for system wrappers such as ProcessRunner
 - No GCD, Swift Concurrency only
 - All cross-boundary types must be `Sendable`
 
@@ -99,7 +109,11 @@ the `.xcodeproj`, so local packages and shared schemes resolve consistently.
 
 - macOS scheme: `CtrlxServer`
 - iOS scheme: `Ctrlx`
-- Unit tests: `swift test --package-path CtrlxPackage`
+- Unit tests: `./scripts/unit-tests.sh` (pass filters after `--`). Uses Swift's
+  `swiftbuild` backend without indexes; after success, prunes old native-backend
+  outputs and test indexes. Do not alternate backends or build concurrently in
+  the same package cache. Use `--save-space` to remove test compilation caches
+  after success, keeping test products and dependencies.
 
 ### iOS build, package, and device install
 
@@ -138,6 +152,11 @@ signs and verifies the result, and defaults to an optimized Release build:
 - IPA: `dist/CtrlX-<version>.ipa`
 - Integrity metadata: adjacent `.sha256` and `.manifest.json` files
 
+Both platform packaging scripts accept `--app-only` to build/sign/verify without
+creating a DMG/IPA. A successful build records its identity in `CtrlX.app.build.json`
+beside the App; the old record is invalidated before rebuilding. Full local packaging
+validates a staged package before replacing the old package and its sidecars.
+
 Packaging deletes temporary App copies on exit and keeps two local IPA/DMG
 packages per platform/configuration. Successful packaging removes old platform
 indexes, duplicate dependency copies and completed public-download verification
@@ -153,10 +172,26 @@ Packaging warns below 20 GiB free before building. Local Mac/iOS packaging accep
 `--save-space`: only after success, remove that platform's compilation intermediates
 and module/SDK caches, retaining signed installable apps and downloaded dependencies.
 The next build is slower; this mode cannot free space before the current build.
-Default behavior remains incremental. Never run concurrent builds/installs against
-the same DerivedData directory; cleanup never sweeps other worktrees.
+Default behavior remains incremental. Script-managed packaging, native-browser
+preparation, package tests, installation and destructive cleanup share a worktree
+operation lock. Raw Xcode/Swift commands are not covered; never run them concurrently
+against the same caches (or use `python3 scripts/local_build.py run -- <command>`).
+Cleanup never sweeps other worktrees.
 Use `python3 scripts/clean-build.py deep` to preview deep cleanup; add `--yes`
 only when builds and device installs in that worktree are stopped. See `RELEASE.md`.
+Prefer `python3 scripts/clean-build.py idle` for an inactive worktree: it preserves
+signed apps, packages and downloaded dependencies. Both modes stay worktree-local.
+Packaging and `idle` also retain only the two latest **completed** managed browser
+verification copies and local install backups per kind. For disposable
+`.build-local/upstream-browser-proof.*` / `mac-install-backup.*` directories, run
+their full test or authorized install/verify workflow through
+`python3 scripts/clean-build.py use-artifact --path <directory> -- <command>`.
+It locks the directory during use, invalidates prior success on retry, and records
+completion only after a successful command. The command must stop all consumers
+before returning; never use it for detached apps or ongoing simulator state.
+The browser preparation script prints the wrapped command. Preview with
+`python3 scripts/clean-build.py retained`; unmarked legacy copies and failed runs
+are kept, never bulk-adopted. See `RELEASE.md` for supported names and retention.
 
 For same-source performance comparisons, `--configuration Debug` produces
 `Debug-iphoneos/CtrlX.app` and a separate `CtrlX-<version>-Debug.ipa`. Install the
@@ -170,22 +205,28 @@ also match the Relay's APNs configuration for background notifications to work.
 Do not try to install an intermediate app produced with
 `CODE_SIGNING_ALLOWED=NO`; install the script's final, verified `CtrlX.app`.
 
-Discover a connected, trusted, unlocked device and install the exact app that
-was just built:
+Use the unified local installer for build/sign/install/launch and cleanup.
+It supports any worktree and does not publish or deploy the Relay:
 
 ```bash
+python3 scripts/install-local.py macos
 xcrun devicectl list devices
-
-DEVICE_ID='<CoreDevice UUID>'
-APP_PATH='.build-local/DerivedData/iOS/Build/Products/Release-iphoneos/CtrlX.app'
-APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
-
-xcrun devicectl device install app --device "$DEVICE_ID" "$APP_PATH"
-xcrun devicectl device process launch \
-  --device "$DEVICE_ID" \
-  --terminate-existing \
-  "$APP_BUNDLE_ID"
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>'
 ```
+
+By default it calls the existing platform packaging script with `--app-only`;
+`--skip-build` installs the recorded, signed App after checking its bundle ID,
+version, revision and build stamp against the App build record, without requiring
+a DMG/IPA. Older builds without a record need one fresh build. iOS accepts
+`--configuration Debug` (default Release).
+Both platforms accept `--save-space`, applied only after installation and launch
+succeed. Mac uses an exact installed-process check, graceful quit, temporary staging
+and a managed rollback backup; it never force-kills CtrlX or touches tmux sessions.
+Temporary staging is removed on exit; completed backups retain the latest two,
+failed backups remain. iOS installs in place without uninstalling the App or data.
+The nested build defers retention until install/launch succeeds, so cleanup runs
+once. Conflicting script-managed worktree operations are rejected; installation
+also locks the destination App/device across worktrees. See `RELEASE.md`.
 
 Prefer the CoreDevice UUID from `devicectl list devices` over a device name.
 When discovery or installation fails, first verify that the phone is unlocked,
@@ -195,34 +236,78 @@ provisioning profiles before changing build settings.
 
 **Killing Mac app:** Use `osascript -e 'quit app "CtrlX"'` — `pkill`/`killall` don't work reliably.
 
-**Opening a PR:** A `PostToolUse` hook (`.claude/hooks/pr-checklist.py`) fires on `gh pr create` and injects a checklist of post-PR chores (docs, `AGENTS.md`, CLI/`ctrlx` skill, e2e scenarios). Work through it before stopping. See `docs/repo-hooks.md`.
+**Cross-AI workflow:** Follow [CONTRIBUTING.md](CONTRIBUTING.md) regardless of the
+agent in use. Claude Code hooks are optional automation, not the only source of
+formatting, documentation or test requirements. Do not assume another agent ran
+them. See [repo hooks](docs/repo-hooks.md).
+
+## Architectural guardrails
+
+- Live terminal bytes and bootstrap snapshots use the same ordered tmux control
+  connection. `pipe-pane` is scan-only for OSC side effects, never a second feed.
+- Viewer pane identity includes the Host `pairId`; do not key multiple Hosts
+  by tmux pane ID alone. Gate new commands by advertised capabilities.
+- Files and browser requests must not block the keyboard receive loop. Resolve
+  remote paths on the Host, not against the Viewer's filesystem.
+- A recognized agent process is not a verified native conversation ID for Fork.
+  Keep process-instance ownership, conversation identity and display routing separate.
+- Chromium uses CEF's native AppKit message loop. Never restore the external timer
+  pump or enter `CefRunMessageLoop` inside a Swift main-actor job. Close pages/tools,
+  finish transports/cookie flush, quit the loop, then shut down CEF.
+- Use isolated signed E2E apps, private browser profiles and tmux sockets for
+  tests. The user handles Keychain authorization; do not send test input to live
+  tasks or replace the installed app without authorization.
+- SwiftTerm changes need a published fork revision and updated dependency pins
+  before release; changing a sibling checkout does not change the pinned package.
+- Production release tooling and secrets remain outside Git. Missing maintainer
+  tooling is a blocker, not permission to reconstruct deployment commands.
 
 ## Reference Docs
 
-- **Code examples:** `docs/swift-patterns.md` - SwiftUI patterns, Sendable, Dependencies, testing
-- **Services:** `docs/services-reference.md` - TmuxService, PaneStream, CodingAgent, project scanners, etc.
-- **Architecture:** `docs/architecture.md` (Mac app) and `docs/distributed-architecture-plan.md` (Mac/Server/iOS)
-- **Codex CLI integration:** `docs/codex-cli-integration-plan.md` - `CodingAgent` abstraction, hook bridge, project discovery
-- **Folder layout persistence (macOS):** `docs/folder-layout-persistence-plan.md` - Per-folder workbench restore (file/browser tabs, split, sidebar); `LayoutStore`, seed-on-birth, auto-save. Covers local *and* remote/viewer sessions (§4.8 — remote is browser-tabs + split only, keyed by host `pairId`)
-- **Encryption:** `docs/e2ee-encryption-plan.md`
-- **Actionable push notifications (#710):** `docs/push-notifications-plan.md` §6.1 - answer permission requests (Yes/Always/No) and AskUserQuestion forms (one question at a time, option buttons + free-text "Other") straight from iOS notifications. `NotificationActionContext` rides the encrypted `NotificationContent`/`AgentNotificationMessage` (additive optional — relay never sees it); the NSE attaches categories (dynamic per-question ones carry option labels); `NotificationActionService` submits via the live manager or a short-lived connection; the host's `AgentResponseSubmissionGuard` drops blocking answers whose requestId no longer matches the pane's open form (stale lock-screen taps must not inject keystrokes).
-- **E2E testing:** `docs/e2e-testing.md` - Test framework, running tests, writing scenarios, video recording (`--record`, issue #621), in-browser proof-video watching (`scripts/e2e-watch-video.sh <asset|url|scenario>` — resolves the ~1h signed URL via gh and opens the static player `scripts/e2e-video-player.html`; release-asset links otherwise download), automatic proof-video cleanup (daily sweep, 3-day grace after PR close; watch hints struck alongside links), shell-history isolation (every e2e shell runs under a `$ZDOTDIR` shim so typed commands never reach `~/.zsh_history`)
-- **Stop-finality eval (#644):** `docs/stop-finality-eval.md` - Hill-climbing eval for the false-stop judge on Apple's Evaluations framework (macOS 27 beta Mac) + transcript-mining/labeling pipeline (`scripts/stop-finality-dataset.py`) + macOS 26 cross-check (`swift run StopFinalityEval`). Mined dataset lives in `~/.ctrlx/eval/`, never committed.
-- **Self-hosting:** `docs/self-hosting.md` - Zero-parameter Relay setup and configuration priority. `MinClientVersionGate` is controlled by `MIN_CLIENT_VERSION` and `MIN_CLIENT_VERSION_REJECT_UNKNOWN`; `PAIRING_PAUSED_MESSAGE` pauses new registrations. `/health`, `/ready`, `/version` and `/source` expose operational and corresponding-source state. Production secrets stay in the server's ignored `.env.production` and are never copied from the repository.
-- **Hosted-relay licensing (#392):** `docs/superpowers/specs/2026-07-13-hosted-relay-monetization-design.md` (trial-start/UI follow-on: `docs/superpowers/specs/2026-07-15-trial-status-badge-and-pairing-trial-start-design.md`) - Lemon Squeezy subscription gate for host Macs on the hosted relay: `LicensingService` actor (7-day trial keyed by host deviceId — **the trial clock starts when a viewer completes pairing** (`completePairing`→`startTrialIfNeeded`), NOT on register/first-touch; `checkEntitlement` is a pure gate with a `.preTrial` allowed state; license keys with cached verdicts; enforcement/gating at pairing register + host WS connect + daily sweep). Host WS connect *also* starts the trial for pre-existing **ACTIVE** pairs (gated on `getPair`≠nil, pending pairs excluded) — a one-time migration so pairings completed before licensing was enabled aren't grandfathered into permanent free access. UI: Mac License section in Remote Access settings **plus a trial/expired badge in the panes-window toolbar (left of Disconnect, shown only for paired hosts) opening a buy/activate popover** (`TrialStatusToolbarItem`), viewer "subscription expired" states. Entirely disabled unless `LEMONSQUEEZY_STORE_ID`/`LEMONSQUEEZY_PRODUCT_ID` are set — self-hosting needs no config. Enablement gates (LS dashboard setup, real `LicensingLinks` URLs replacing `CHECKOUT-VARIANT-UUID`, `VersionCompatibility` bump) live in the plan's Task 18 checklist (`docs/superpowers/plans/2026-07-13-hosted-relay-monetization.md`)
-- **Release and updates:** `RELEASE.md` - `scripts/release.sh` is zero-parameter, requires a clean tagged Git worktree, signs/notarizes `CtrlX-<version>.dmg`, and emits the appcast, SHA-256 and source manifest. For the existing private-distribution channel, use the external maintainer runbook: `../publish-ctrlx-macos.py --root <worktree>` publishes Mac only from any clean worktree (no local Docker/OrbStack or Relay deployment; HEAD must match pushed main and tag), while `../deploy-ctrlx-qcloud.sh` deploys Relay plus Mac from primary. Production publishing runs on Qcloud; the retired home-Mac path must not be used. Sparkle remains disabled until an owned feed and EdDSA key are configured.
-- **Staging relay:** `docs/staging-relay.md` - isolated data, secrets, APNs and hostname with the generic `caddy/ctrlx-staging.caddy`; no domain is hard-coded.
-- **Emoji search:** `docs/emoji-search.md` - internal `CtrlxEmoji` module (keyword-aware emoji index shared by the Mac/iOS picker and the `ctrlx` CLI). Data is generated by `scripts/generate-emoji-data.py` from CLDR annotations into `EmojiData.swift`.
-- **Repo hooks:** `docs/repo-hooks.md` - Project-scoped Claude Code hooks (swiftformat, PR checklist)
-- **Terminal sizing (macOS):** `docs/swiftterm-sizing.md`
-- **Terminal scrolling (iOS):** `docs/swiftterm-ios-scrolling.md`
-- **Terminal quick actions:** `docs/terminal-quick-actions.md` - Shared iOS/Mac command catalog and local-first phrase library; Settings → Quick Phrase Sync has one bilateral opt-in per peer device (trusted public-key identity), independent of Host/Viewer roles. Mixed legacy per-pair permissions require confirmation; stable IDs/tombstones and v1→v2 migration are preserved. Existing opaque relay needs no deployment. Mac toolbar popovers target the last focused native pane and reuse its keyboard queue.
-- **Agent Browser (development):** `docs/agent-browser.md` - Chromium/CEF child views in the source Codex's local session tabs. Mac Settings → Browser selects the New Browser engine (default Chromium, optional WebKit), including local pages in Viewer workbenches; human Chromium tabs share the profile but have no agent owner and remain transient. Process-instance authority is distinct from pane/session display routing; shared persistent profile, bounded CLI/CDP adapter, no MCP or remote browser control. Build native components with `bash scripts/build-agent-browser.sh` before the Mac workspace build. Enter CEF's native `CefRunMessageLoop` from the AppKit RunLoop, never a Swift main-actor job; call `CefQuitMessageLoop` after pages/tools/transports and cookie flush finish, then `CefShutdown` after the loop returns. Do not restore the external timer pump: it misses CEF's application keep-alive and closing the last DevTools window can kill unrelated Alloy renderers. Validate with an isolated signed E2E app; user operates Keychain authorization. Distribution archives remain gated.
-- **Agent Browser engines:** `docs/agent-browser-engines.md` - Pinned `vercel` backend is default; original `ctrlx` remains selectable on the same owned native tabs/profile. `engine` saves a per-Codex preference; `action --engine` overrides it. `browser command --tab ID -- …` exposes bounded Vercel page operations via JSON stdin, not global argv passthrough; artifacts require non-overwriting `--output` before `--`. Tab lifecycle stays host-owned. Native events stamp the empty directPage session ID; downloads/dialogs use per-tab CEF callbacks, never global browser settings or AppKit modal loops. Build prepares the pinned binary/license. Run `tests/managed_engine.py` and `tests/expanded_capabilities.py` sequentially in an isolated signed app (the latter includes `page_capabilities.py`); `tests/engine_capabilities.py` is a historical raw-engine audit collector, not a pass/fail gate. Fixtures are not real Codex. Bounded WebM/MP4 recording requires local Homebrew ffmpeg; global tracing/state export and external runtimes remain excluded. Remaining gaps and partial support are tracked in `docs/agent-browser-todo.md`, with effect evidence in `docs/agent-browser-capability-audit.md`.
-- **Agent iOS (development):** `docs/agent-simulator-design.md` - Native iOS Simulator tabs owned by the calling Codex process, private device storage, default two-device admission and explicit optional simslim `balanced` profile. The accepted contract and current delivery gaps are at the top; historical experiment results are not current release gates. Read `plugin/ctrlx/skills/agent-ios/SKILL.md` for the CLI contract and `references/operations.md` for supported operations and native limitations. `ctrlx ios run -- codex` supplies the required `--no-daemon` launch mode. Build native components with `bash scripts/build-agent-simulator.sh` before the Mac workspace build. Validate in an isolated signed app; preserve incremental caches and the current fixtures, and reuse unaffected functional evidence after source-impact review. Local candidate acceptance is separate from cross-machine compatibility and public distribution.
-- **Terminal rendering bugs:** `docs/terminal-rendering-investigation.md` - Hypotheses, test results, fix priorities
-- **Sidecar plugin authoring:** `docs/plugins/sidecar-authoring.md` - External contract for v2 sidecar plugins: manifest schema, JSON-RPC vocabulary, spawn env, hook ingress, crash policy, distribution, security model. A manifest `otlp` field (`{namespace, token_event}`, #617) opts a plugin's OTLP log records into the per-session token/cost/latency meter: records named `<namespace>.<token_event>` must mirror Claude's `api_request` attribute keys (additive semantics, `session.id` join); the resolved namespace table is pushed to `OTLPReceiver` whenever the enabled-plugin set changes (`refreshOTLPPluginNamespaces`), and built-in namespaces can't be claimed. Note: sidecar child stderr goes to `~/.ctrlx/state/plugins/<id>/logs/stderr.log` (separate from `host.log()`'s `sidecar.log`). The bundled `ctrlx:create-agent-plugin` skill (`plugin/ctrlx/skills/create-agent-plugin/`) scaffolds one from a Python template + self-contained contract copy. Wire casing trap: `plugin.json` and the ingress *socket* frame are snake_case (`plugin_id`); the stdio *transport* (RPC params/results) is camelCase (`pluginID`, `sessionID`, …). URL-installed plugins auto-update via `PluginUpdateManager` (checks on app-version change + daily, per-plugin toggle + "Check Now" in Settings → Agents, hot-restart + `install` RPC re-invoke when idle, deferred to next launch when busy); a changed bundle host (`sourceChanged`) is never auto-installed and requires the manual trust flow instead.
-- **pi sidecar plugin (real example):** `plugins/pi/` - a complete working sidecar adding pi (`@earendil-works/pi-coding-agent`) support: Python `bin/sidecar` + a pi *extension* bridge (`pi-bridge/ctrlx.ts`, TypeScript via jiti, installed to `~/.pi/agent/extensions/ctrlx.ts`, marker `CtrlXPiBridge`; per-project installs go to `<configRoot>/.pi/extensions/`). pi's event bus is complete — real `session_start` (launch + `/new`//`/resume`//`/fork`) and `session_shutdown` (quit incl. Ctrl+C/Ctrl+D/SIGHUP/SIGTERM) — so **no synthetic lifecycle frames and no WORKING/SEEN state machine** (contrast opencode): `session_start`→idle, `agent_start`→working, `agent_end`→doneWorking (summary = last assistant text, bridge-trimmed to 300 chars; stopReason `error`→errorMessage, `aborted`→"Interrupted"), `session_shutdown reason=quit`→`sessionEnded` keyed by PANE id (other reasons ignored — a `session_start` re-stamps the pane immediately; ending there would flicker the sidebar row). **Telemetry (#617):** the bridge POSTs one OTLP record per assistant `message_end` (event `pi.api_request`, Claude's attribute keys; usage comes complete on pi's AssistantMessage — thinking already folded into `output`; `duration_ms` = wall-clock `message_start`→`message_end`; `session.id` = pi's session UUID from `ctx.sessionManager.getSessionId()`, same id every PluginEvent reports). Projects scan reads `~/.pi/agent/sessions/*/` — dir names are lossy cwd munges, but each session file's FIRST line is a `SessionHeader` with the exact `cwd`; newest file per dir wins, `lastUsed` = mtime. Gotchas: pi's `ps` comm is `node` (a script), so manifest `process_names: ["pi"]` never matches a live pane — bridge events cover detection, but a pi already idle when CtrlX launches stays invisible until its next event; pi quits on *rapid double* Ctrl+C (a lone one clears input); `-ne`/`--no-extensions` also disables provider packages (e.g. `pi-ollama-cloud`) → "No API key" (smoke-test with `-e path/to/ctrlx.ts`, not `-ne -e`). Core pi has no permission gating → no awaiting* forms. Tests: `python3 plugins/pi/tests/test_sidecar.py` (30). `./scripts/dev-install.sh` copies to `~/.ctrlx/plugins/pi/`.
-- **omp sidecar plugin (real example):** `plugins/omp/` - a complete working sidecar adding omp (oh-my-pi, https://omp.sh — can1357's pi fork, native binary so `process_names: ["omp"]` actually matches) support: Python `bin/sidecar` + an omp *extension* bridge (`omp-bridge/ctrlx.ts`, installed to `~/.omp/agent/extensions/ctrlx.ts`; per-project → `<root>/.omp/extensions/`). Event vocabulary diverged from pi (verified v17.1.8): `session_start` = initial load only (no reason); replacement is `session_switch`/`session_branch`/`session_tree` (bridge re-labels them as session_start frames → idle re-stamp); `session_shutdown` = process exit ONLY → always `sessionEnded` (no reason filtering, awaited flush); `agent_end` has `willContinue` (auto-retry continuation — bridge drops it, else spurious "Finished" mid-turn). **Subagents:** omp re-binds the same extensions in-process against a headless runtime per `task` subagent — every bridge handler gates on `ctx.hasUI` (the opencode #670 lesson). **Approval forms:** omp HAS a tool-approval gate (default yolo) with `tool_approval_requested`/`resolved` observability events → `awaitingPermission` (requestID = toolCallId; detail captured from the earlier `tool_call` interception event since the approval event only carries the tool name); answered by KEYSTROKE injection into the TUI's Approve/Deny select (allow → Enter, deny → Down+Enter, deny-feedback typed after as a steer); `isAutoApprovable: false` (never override the user's non-yolo choice). **Ask-tool question forms:** omp's `ask` tool (blocking question dialog) has no dedicated event, but `tool_execution_start`/`end` bracket it with full `questions` in `args` → `awaitingReplies` (requestID = toolCallId, option ids `q<i>-o<j>`, questions cached in the pending map for answer translation) + "Question:" push; answered by keystrokes against the rich ask dialog (cursor starts on `recommended`, Up/Down CLAMP → normalize with Up×rowCount then Down×target; single-select Enter auto-advances, multi Space-toggles then Right, free text = Enter on the Other row + delay + text + Enter, final Enter on the Submit tab when >1 question or any multi); local TUI answers and omp's ask-timeout auto-select clear the form via tool_execution_end. Gotcha: a non-empty prompt draft at dialog-open engages omp's input guard (keys go to the draft editor, injected answers eaten). **Telemetry (#617):** one OTLP record per finalized assistant `message_end` (`omp.api_request`, Claude attribute keys; dedup by `id` ?? `responseId`; `duration_ms` = omp's own `message.duration`, wall-clock fallback; join = omp session UUID via `ctx.sessionManager.getSessionId()`). Projects scan: `~/.omp/agent/sessions/*/` like pi BUT the `cwd`-bearing `type=="session"` header is usually line 2 (a rewritable `title` record precedes it) → scan first lines, and skip per-session artifact SUBdirs (`__advisor.jsonl`). Tests: `python3 plugins/omp/tests/test_sidecar.py` (49). `./scripts/dev-install.sh` copies to `~/.ctrlx/plugins/omp/`.
-- **opencode sidecar plugin (real example):** `plugins/opencode/` - a complete working sidecar adding opencode (sst) support: Python `bin/sidecar` + an opencode `event`-bus bridge plugin (`opencode-bridge/ctrlx.js`, installed to `~/.config/opencode/plugin/`) since opencode removed shell hooks. Maps `session.status`/`session.idle`/`session.error` to working/done/idle (per-session machine so a turn-end `idle` raises attention but a fresh-session `idle` doesn't); `permission.asked` → `awaitingPermission`; `question.asked` → `awaitingReplies` (multi-question + multi-select + free text). **Subagents (#670):** opencode runs each `task`-tool subagent in a child session (`info.parentID` set) that emits its own busy/idle — but `session.status`/`session.idle` OMIT `parentID` (opencode #30043), so the bridge also forwards `session.created`/`session.updated` (the only events carrying it), the sidecar records children in a `CHILD` map (child→parent), and DROPS all lifecycle events (`session.status`/`session.idle`/`session.error`) for child sessions. Only the root session drives the pane, so N subagents → exactly one "Finished working". Child `permission.asked`/`question.asked` are NOT dropped — opencode's TUI shows a child's prompt in the root session's view and blocks the turn — but are re-keyed to the root session (`_root_session` walks the parent chain) so a child id never becomes the pane's session. Ordering: opencode fires plugin `event` hooks without awaiting, so the bridge serializes all ingress frames through a FIFO send chain (awaited in the hook) — `session.created` always beats the child's churn. Bridge change ⇒ existing installs must re-Install for the fix. **Turn summaries:** opencode's idle events carry no text, so at a root session's turn-end idle the bridge fetches `client.session.messages` on the in-process SDK client (reachable in-process despite the unix-socket server that blocks the *sidecar*'s HTTP route), attaches the last assistant message's text (synthetic/ignored parts filtered, 300-char trim) as `properties.ctrlxSummary` — fetched at idle-arrival but awaited INSIDE the FIFO send chain (awaiting in the hook would let a new turn's `busy` overtake the idle frame), 2s self-timeout, never rejects; sidecar surfaces it as `doneWorking(summary)` + notification body, falling back to "Finished — project". **Session lifecycle:** opencode fires NO event on a fresh idle launch or on quit, and the host's 10-second process reconciliation is only a fallback for missing lifecycle signals — so the bridge emits two *synthetic* frames for immediate, authoritative state: `ctrlx.lifecycle.started` (on plugin load ≈ TUI start → sidecar emits `idle`, session appears) and `ctrlx.lifecycle.stopped` (from opencode's `dispose` hook ≈ graceful quit → sidecar emits `AppAction.sessionEnded` keyed by the PANE id → host removes the session). Mirrors Claude's SessionStart/SessionEnd (no notifications); `closePaneEligible` honors `close_pane_on_session_end`. dispose fires on `/exit` AND Ctrl-C (verified v1.17.11); a hard SIGKILL skips it (stale session lingers). **Forms are answered by KEYSTROKE injection** into the pane (opencode's TUI talks to its server over a unix socket — no reachable HTTP endpoint; the sidecar emits `send_keys` and CtrlX just relays, so each agent's keystroke mapping is plugin-owned). opencode's question prompt uses number keys `1`-`9` (jump+toggle/pick) with a tabbed Confirm-submit for multi/multi-question. Projects surface in the sidebar "+" menu by reading opencode's SQLite store (`~/.local/share/opencode/opencode.db`, `project` table). opencode keys a project by its git *repo*, not folder, and stores only the FIRST worktree it saw — so a repo with multiple `git worktree`s would show just one, whichever opencode recorded. The scan expands each stored `worktree` into EVERY worktree of its repo via `git worktree list --porcelain` (so main + linked worktrees are each launchable, deduped across rows; falls back to the raw path for non-git dirs / missing git). The stored worktree keeps opencode's own `name`; other worktrees are labeled by basename. The scan opens the DB `mode=ro` (WAL-aware) not `immutable=1`, so a freshly-created project sitting in the WAL surfaces immediately (WAL readers never block the writer); it falls back to `immutable=1` only when `mode=ro` can't open (stale `-wal`, no `-shm`, no dir write access = opencode not running). **Telemetry (#617):** the bridge POSTs one OTLP/JSON record per *completed* assistant message (`message.updated` with `time.completed`, deduped by message id, never forwarded to the ingress socket) to the receiver's `/v1/logs`, event name `opencode.api_request`, Claude's exact attribute keys (reasoning folded into `output_tokens`), `session.id` = **opencode's `ses_…` session id** — the host re-stamps the pane's join key from every sidecar-reported event, and real opencode events report the ses id (the pane id, reported only by the synthetic launch frame, would stop joining at the first turn); the meter follows the pane's active session, resetting on session switch like `/clear`; the sidecar bakes the endpoint into the bridge at install via `__CTRLX_OTLP_ENDPOINT__` (from initialize's `otlpReceiverEndpoint`; `CTRLX_OTLP_ENDPOINT` env fallback for repo smoke tests; stale if the receiver's port changes → re-Install). Gotcha: `PluginEvent.appActions` is non-optional — a hand-built event JSON MUST include `"appActions": []` (or a populated list) or the host silently drops it. Tests: `python3 plugins/opencode/tests/test_sidecar.py` (42). `./scripts/dev-install.sh` **copies** it into `~/.ctrlx/plugins/` (folder-drop discovery skips symlinks).
-- **Website:** `website/` - Astro static site with no hard-coded production hostname. Configure and publish it only after an owned domain exists; the generic Caddy file is `CtrlxPackage/caddy/website.caddy`.
+Use [the documentation index](docs/README.md) for task routing and history status.
+Read the relevant contract before changing these areas:
+
+- [Architecture](docs/architecture.md) and [services](docs/services-reference.md):
+  Host/Viewer roles, plugin runtime, launch/Fork, Questions, telemetry and input.
+- [Swift patterns](docs/swift-patterns.md): data flow, Sendable, DI and tests.
+- [Streaming](docs/streaming-architecture.md), [Mac sizing](docs/swiftterm-sizing.md),
+  [iOS viewport/input](docs/swiftterm-ios-scrolling.md) and
+  [rendering investigations](docs/terminal-rendering-investigation.md).
+- [Files](docs/file-browser.md) and [workspace persistence](docs/folder-layout-persistence-plan.md):
+  Host-backed tabs, uploads, previews, path links and private layout restoration.
+- [Browser](docs/agent-browser.md), [engines](docs/agent-browser-engines.md),
+  [TODO](docs/agent-browser-todo.md) and [capability audit](docs/agent-browser-capability-audit.md):
+  CEF lifecycle, owned CLI operations, Viewer leases and acceptance limits.
+  Build native components with `bash scripts/build-agent-browser.sh` before
+  direct Mac workspace builds; local packaging does this automatically.
+  Run native engine suites sequentially in an isolated signed app.
+- [Agent iOS](docs/agent-simulator-design.md) and
+  [agent operations](plugin/ctrlx/skills/agent-ios/references/operations.md):
+  Codex-owned native iOS Simulator tabs, private devices, optional simslim profile,
+  recording and input limits. `ctrlx ios run -- codex` supplies `--no-daemon`.
+  Build native components with `bash scripts/build-agent-simulator.sh` before a
+  direct Mac workspace build. Validate in an isolated signed app; preserve caches
+  and reuse unaffected evidence after source-impact review. Local acceptance does
+  not establish cross-machine compatibility or public distribution readiness.
+- [Sidecar contract](docs/plugins/sidecar-authoring.md): manifest, ingress versus
+  stdio wire casing, supervision, distribution and telemetry. Agent-specific
+  lifecycle, subagent filtering, response keystrokes and test commands live in
+  [pi](plugins/pi/README.md), [omp](plugins/omp/README.md) and
+  [opencode](plugins/opencode/README.md), not a shared-agent enum.
+- [Quick actions](docs/terminal-quick-actions.md), [CLI](docs/ctrlx-cli-api.md)
+  and [emoji](docs/emoji-search.md).
+- [E2E](docs/e2e-testing.md), [repo hooks](docs/repo-hooks.md) and
+  [stop-finality evaluations](docs/stop-finality-eval.md): isolation, test
+  prerequisites and evidence; unavailable evaluations are not passing tests.
+- [Self-hosting](docs/self-hosting.md), [staging](docs/staging-relay.md),
+  [monitoring](docs/monitoring.md) and [release](RELEASE.md).
+- [E2EE design](docs/e2ee-encryption-plan.md) and
+  [push notifications](docs/push-notifications-plan.md): consult current source
+  alongside historical design sections. Actionable replies must validate the
+  current request ID before injecting input.
+- Hosted-relay licensing design:
+  [base](docs/superpowers/specs/2026-07-13-hosted-relay-monetization-design.md) and
+  [trial-start follow-up](docs/superpowers/specs/2026-07-15-trial-status-badge-and-pairing-trial-start-design.md).
+  Trial starts on completed pairing, not registration; keep self-hosting free
+  of implicit hosted-service configuration. These are design records, not
+  deployment authorization.

@@ -583,6 +583,12 @@ enum RemoteStreamState: Equatable {
 /// NSViewRepresentable that wraps an InteractiveTerminalView for remote terminal streaming.
 private struct RemoteTerminalNSView: NSViewRepresentable {
     @Environment(\.terminalQuickActions) private var quickActions
+    @Environment(\.openTerminalFileLink) private var openFileLink
+
+    private var openPathAction: (@MainActor (String) -> Void)? {
+        guard let openFileLink else { return nil }
+        return { path in openFileLink(.init(path: path, paneID: paneId, hostID: connection.id)) }
+    }
     let paneId: String
     let connection: ViewerConnection
     let isHostConnected: Bool
@@ -622,7 +628,8 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         )
         coordinator.terminalView.isEditorActive = isEditorActive
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
-        coordinator.terminalView.onOpenURL = onOpenURL
+        coordinator.terminalView.onOpenURL = { url in onOpenURL?(url, paneId) ?? false }
+        coordinator.terminalView.onOpenPath = openPathAction
         // Route image pastes through the SwiftUI parent so the upload state
         // and cancel popover live alongside the terminal view in the body
         // hierarchy. Returning `true` consumes the paste — `Ctrl+V` is sent
@@ -640,6 +647,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             onFileDrop(urls)
         }
 
+        quickActions?.applyRequestedFocus(to: coordinator.terminalView, hostID: connection.id, paneID: paneId, autoFocus: autoFocus)
         return coordinator.terminalView
     }
 
@@ -657,7 +665,8 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         // Re-bind focus, paste and URL-click callbacks so closures captured
         // here reflect the current parent state on every layout pass.
         context.coordinator.bindQuickActions(quickActions, onFocus: onFocus)
-        nsView.onOpenURL = onOpenURL
+        nsView.onOpenURL = { url in onOpenURL?(url, paneId) ?? false }
+        nsView.onOpenPath = openPathAction
         nsView.onImagePaste = { [weak coordinator] image in
             coordinator?.quickActionEndpoint?.recordInput()
             onImagePaste(image)
@@ -675,6 +684,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         if wasEditorActive, !isEditorActive, !nsView.isHidden {
             nsView.focusTerminal()
         }
+        quickActions?.applyRequestedFocus(to: nsView, hostID: connection.id, paneID: paneId, autoFocus: autoFocus)
     }
 
     static func dismantleNSView(_ nsView: InteractiveTerminalView, coordinator: Coordinator) {
@@ -856,6 +866,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             terminalView.onImagePaste = nil
             terminalView.onFileDrop = nil
             terminalView.onOpenURL = nil
+            terminalView.onOpenPath = nil
 
             keystrokeDebouncer?.cancelAll()
             keystrokeDebouncer = nil

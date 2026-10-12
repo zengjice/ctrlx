@@ -10,6 +10,7 @@
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Binding var presentation: TerminalQuickActionPresentation
         let store: QuickPhraseStore
+        let customButtonStore: TerminalCustomButtonStore
         let phraseContext: TerminalPhraseContext
         let sendPhrase: @MainActor (TerminalPhraseRequest) -> Bool
         var commandContext: AgentCommandContext? = nil
@@ -86,6 +87,8 @@
                     close: close,
                     isEditingPhrase: $presentation.isEditingPhrase
                 )
+            case .addCustomButton:
+                TerminalCustomButtonEditor(store: customButtonStore, close: close)
             }
         }
 

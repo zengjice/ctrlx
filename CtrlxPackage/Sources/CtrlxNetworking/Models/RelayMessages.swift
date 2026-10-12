@@ -55,6 +55,11 @@ public struct SessionStateMessage: Codable, Sendable {
     public let sharedTerminalLayouts: [String: SharedTerminalLayout]?
     /// Absent on older hosts: viewers retain manual entry and send no lookup.
     public let supportsDirectoryBrowsing: Bool?
+    public let supportsDirectoryCreation: Bool?
+    public let supportsFileBrowsing: Bool?
+    public let supportsFileDownloads: Bool?
+    public let supportsFileUploads: Bool?
+    public let supportsRepositoryFileLinks: Bool?
     /// Older hosts only create shells; viewers must not send an agent request
     /// until this capability is explicitly advertised.
     public let supportsAgentWindowLaunch: Bool?
@@ -63,6 +68,10 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsTerminalPaste: Bool?
     /// Explicit fit preserves the Host window's pane topology and proportions.
     public let supportsTerminalFit: Bool?
+    public let supportsBrowserSharing: Bool?
+    public let supportsPaneBrowser: Bool?
+    public let supportsAgentImageInput: Bool?
+    public let browserTabs: [RemoteBrowserTab]?
 
     public init(
         pairId: String,
@@ -73,10 +82,19 @@ public struct SessionStateMessage: Codable, Sendable {
         sidebarSortMode: String? = nil,
         sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil,
         supportsDirectoryBrowsing: Bool? = nil,
+        supportsDirectoryCreation: Bool? = nil,
         supportsAgentWindowLaunch: Bool? = nil,
         supportsAgentFork: Bool? = nil,
         supportsTerminalPaste: Bool? = nil,
-        supportsTerminalFit: Bool? = nil
+        supportsTerminalFit: Bool? = nil,
+        supportsFileBrowsing: Bool? = nil,
+        supportsFileDownloads: Bool? = nil,
+        supportsFileUploads: Bool? = nil,
+        supportsRepositoryFileLinks: Bool? = nil,
+        supportsBrowserSharing: Bool? = nil,
+        supportsPaneBrowser: Bool? = nil,
+        supportsAgentImageInput: Bool? = nil,
+        browserTabs: [RemoteBrowserTab]? = nil
     ) {
         self.pairId = pairId
         self.paneStates = paneStates
@@ -86,10 +104,19 @@ public struct SessionStateMessage: Codable, Sendable {
         self.sidebarSortMode = sidebarSortMode
         self.sharedTerminalLayouts = sharedTerminalLayouts
         self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
+        self.supportsDirectoryCreation = supportsDirectoryCreation
+        self.supportsFileBrowsing = supportsFileBrowsing
+        self.supportsFileDownloads = supportsFileDownloads
+        self.supportsFileUploads = supportsFileUploads
+        self.supportsRepositoryFileLinks = supportsRepositoryFileLinks
         self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
         self.supportsAgentFork = supportsAgentFork
         self.supportsTerminalPaste = supportsTerminalPaste
         self.supportsTerminalFit = supportsTerminalFit
+        self.supportsBrowserSharing = supportsBrowserSharing
+        self.supportsPaneBrowser = supportsPaneBrowser
+        self.supportsAgentImageInput = supportsAgentImageInput
+        self.browserTabs = browserTabs
     }
 
     /// Returns a copy with the `pairId` replaced. Centralises the per-connection
@@ -106,10 +133,19 @@ public struct SessionStateMessage: Codable, Sendable {
             sidebarSortMode: sidebarSortMode,
             sharedTerminalLayouts: sharedTerminalLayouts,
             supportsDirectoryBrowsing: supportsDirectoryBrowsing,
+            supportsDirectoryCreation: supportsDirectoryCreation,
             supportsAgentWindowLaunch: supportsAgentWindowLaunch,
             supportsAgentFork: supportsAgentFork,
             supportsTerminalPaste: supportsTerminalPaste,
-            supportsTerminalFit: supportsTerminalFit
+            supportsTerminalFit: supportsTerminalFit,
+            supportsFileBrowsing: supportsFileBrowsing,
+            supportsFileDownloads: supportsFileDownloads,
+            supportsFileUploads: supportsFileUploads,
+            supportsRepositoryFileLinks: supportsRepositoryFileLinks,
+            supportsBrowserSharing: supportsBrowserSharing,
+            supportsPaneBrowser: supportsPaneBrowser,
+            supportsAgentImageInput: supportsAgentImageInput,
+            browserTabs: browserTabs
         )
     }
 }

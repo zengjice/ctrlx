@@ -60,6 +60,27 @@ class PackageWorktreeTests(unittest.TestCase):
                 self.assertNotIn("assert_primary_worktree", script)
                 self.assertIn('PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"', script)
 
+    def test_local_packaging_forwards_empty_and_nonempty_arguments_on_system_bash(self):
+        scripts = self.primary / "scripts"
+        scripts.mkdir()
+        (scripts / "common.sh").write_text('''
+assert_git_worktree() { :; }
+with_worktree_lock() {
+    printf '%s\\n' "$#"
+    for argument do printf '%s\\n' "$argument"; done
+    exit 0
+}
+''')
+        for name in ("package-local-macos.sh", "package-local-ios.sh"):
+            script = scripts / name
+            shutil.copy2(SCRIPTS / name, script)
+            for arguments in ([], ["--app-only"], ["--save-space", "--app-only"]):
+                with self.subTest(script=name, arguments=arguments):
+                    result = subprocess.run(["/bin/bash", str(script), *arguments],
+                                            capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), [str(len(arguments)), *arguments])
+
     def test_save_space_cleanup_stays_in_selected_git_worktree(self):
         caches = []
         apps = []
@@ -68,6 +89,7 @@ class PackageWorktreeTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             shutil.copy2(SCRIPTS / "clean-build.py", scripts / "clean-build.py")
+            shutil.copy2(SCRIPTS / "local_build.py", scripts / "local_build.py")
             cache = root / ".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o"
             cache.parent.mkdir(parents=True)
             cache.write_text("fixture")
@@ -94,6 +116,38 @@ class PackageWorktreeTests(unittest.TestCase):
             if index == 0:
                 self.assertTrue(caches[0].exists())
             self.assertTrue(all(path.exists() for path in apps + artifacts))
+
+    def test_idle_cleanup_is_explicit_and_stays_in_linked_worktree(self):
+        caches = []
+        apps = []
+        downloads = []
+        for root in (self.primary.resolve(), self.linked.resolve()):
+            scripts = root / "scripts"
+            scripts.mkdir()
+            shutil.copy2(SCRIPTS / "clean-build.py", scripts / "clean-build.py")
+            shutil.copy2(SCRIPTS / "local_build.py", scripts / "local_build.py")
+            for relative, collection in (
+                (".build-local/DerivedData/macOS/Build/Intermediates.noindex/object.o", caches),
+                (".build-local/DerivedData/macOS/Build/Products/Release/CtrlX.app/executable", apps),
+                ("CtrlxPackage/.build/checkouts/dependency.swift", downloads),
+            ):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture")
+                collection.append(path)
+        draft = self.primary / "other-agent.txt"
+        draft.write_text("work in progress")
+        arguments = ["python3", str(self.linked / "scripts/clean-build.py"), "idle"]
+        preview = subprocess.run(arguments, text=True, capture_output=True)
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertIn("Preview only", preview.stdout)
+        self.assertTrue(all(path.exists() for path in caches))
+        result = subprocess.run([*arguments, "--yes"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(caches[1].exists())
+        self.assertTrue(caches[0].exists())
+        self.assertTrue(all(path.exists() for path in apps + downloads))
+        self.assertEqual(draft.read_text(), "work in progress")
 
 
 if __name__ == "__main__":

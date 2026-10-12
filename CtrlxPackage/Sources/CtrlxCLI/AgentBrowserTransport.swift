@@ -14,7 +14,7 @@ enum AgentBrowserTransport {
 
     static let stateDirectory: URL = {
         // Allows the existing isolated CtrlX E2E host to be exercised by real
-        // CLI/Codex processes without touching production grants/profile.
+        // CLI/agent processes without touching production grants/profile.
         if let root = ProcessInfo.processInfo.environment["CTRLX_BROWSER_TEST_STATE_ROOT"] {
             return URL(fileURLWithPath: root, isDirectory: true).appendingPathComponent("agent-browser", isDirectory: true)
         }
@@ -61,7 +61,7 @@ enum AgentBrowserTransport {
                 connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard connected == 0 else { throw Failure("Agent Browser disconnected. Old grants are not renewed automatically; start a new Codex instance.") }
+        guard connected == 0 else { throw Failure("Agent Browser disconnected. Old grants are not renewed automatically; start a new agent instance.") }
         var uid: uid_t = 0
         var gid: gid_t = 0
         guard getpeereid(fd, &uid, &gid) == 0, uid == getuid() else { throw Failure("Unexpected browser socket owner.") }
@@ -118,7 +118,7 @@ enum AgentBrowserTransport {
     }
 
     /// Serialize context creation and first registration across all tools of
-    /// one live Codex. PID reuse gets a different directory and random secret.
+    /// one live agent. PID reuse gets a different directory and random secret.
     static func withRunContext<T>(
         for process: AgentBrowserProcess,
         root: URL = stateDirectory,
@@ -160,12 +160,12 @@ enum AgentBrowserTransport {
                   (context["startMicros"] as? NSNumber)?.uint64Value == process.startMicros,
                   let run = context["run"] as? String, UUID(uuidString: run) != nil,
                   let secret = context["secret"] as? String, secret.count == 64 else {
-                throw Failure("Saved browser identity does not match the calling Codex. Refusing to reuse it.")
+                throw Failure("Saved browser identity does not match the calling agent. Refusing to reuse it.")
             }
         } else {
             let run = UUID().uuidString
             let folder = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).lastPathComponent
-            let label = ProcessInfo.processInfo.environment["CTRLX_BROWSER_LABEL"] ?? "\(folder) / Codex"
+            let label = ProcessInfo.processInfo.environment["CTRLX_BROWSER_LABEL"] ?? "\(folder) / \(process.agentName ?? "Agent")"
             context = [
                 "run": run,
                 "secret": (UUID().uuidString + UUID().uuidString).replacingOccurrences(of: "-", with: ""),
@@ -179,7 +179,7 @@ enum AgentBrowserTransport {
 
     static func registeredContext(root: URL = stateDirectory) throws -> (URL, [String: Any]) {
         @Dependency(AgentBrowserProcessClient.self) var processes
-        let owner = try processes.callingCodex(from: getppid(), uid: getuid())
+        let owner = try processes.callingAgent(from: getppid(), uid: getuid())
         let context = try withRunContext(for: owner, root: root) { contextURL, context in
             try processes.validate(owner)
             if context["socket"] == nil {

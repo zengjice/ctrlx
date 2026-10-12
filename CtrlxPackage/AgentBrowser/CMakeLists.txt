@@ -28,10 +28,13 @@ endfunction()
 
 add_library(browser_runtime SHARED EmbeddedBrowser.mm AutomationBridge.mm)
 target_include_directories(browser_runtime PRIVATE "${CEF_ROOT}")
-target_link_libraries(browser_runtime PRIVATE libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+target_link_libraries(browser_runtime PRIVATE libcef_dll_wrapper ${CEF_STANDARD_LIBS} "-framework ImageIO" "-framework CoreGraphics")
 target_compile_options(browser_runtime PRIVATE -fobjc-arc)
 set_target_properties(browser_runtime PROPERTIES OUTPUT_NAME CtrlXAgentBrowser
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Embedded/Frameworks")
+add_executable(remote_browser_frame_tests EXCLUDE_FROM_ALL tests/remote_browser_frame.mm)
+target_compile_options(remote_browser_frame_tests PRIVATE -fobjc-arc -UNDEBUG)
+target_link_libraries(remote_browser_frame_tests PRIVATE "-framework Foundation" "-framework ImageIO" "-framework CoreGraphics")
 # The SDK ships a flat framework; macOS applications need CEF's versioned
 # layout, including Versions/Current and resource/library symlinks.
 set(PROBE_FRAMEWORK "${CMAKE_BINARY_DIR}/Embedded/Frameworks/Chromium Embedded Framework.framework")

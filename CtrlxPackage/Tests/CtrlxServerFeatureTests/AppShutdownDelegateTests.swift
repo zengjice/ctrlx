@@ -19,6 +19,10 @@
         private final class Runtime: NSObject, @preconcurrency CXBrowserRuntime {
             var didFinishShutdown = false
             func start(with delegate: any CXBrowserHostDelegate, profile: String, state: String) throws {}
+            func setHumanControl(_ token: String?, forTab identifier: String) -> Bool { true }
+            func requestBrowserTab(_ identifier: String, request: Data, completion: @escaping (Data?, String?) -> Void) {
+                completion(nil, "Not configured")
+            }
             func isReady() -> Bool { true }
             func startupError() -> String? { nil }
             func openManualTab(route: [String: String], url: String, completion: @escaping (String?) -> Void) { completion(nil) }

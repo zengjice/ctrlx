@@ -1,5 +1,6 @@
 import CtrlxCommon
 import CtrlxNetworking
+import Darwin
 import Dependencies
 import DependenciesMacros
 import Foundation
@@ -8,12 +9,14 @@ import Foundation
 struct SessionDirectoryClient: Sendable {
     var resolve: @Sendable (_ path: String) async throws -> String
     var list: @Sendable (_ request: ListSessionDirectories) async throws -> SessionDirectoryListing
+    var create: @Sendable (_ request: CreateSessionDirectory) async throws -> String
 }
 
 extension SessionDirectoryClient: DependencyKey {
     static let liveValue = Self(
         resolve: { try await SessionDirectoryResolver.shared.resolve($0) },
-        list: { try await SessionDirectoryResolver.shared.list($0) }
+        list: { try await SessionDirectoryResolver.shared.list($0) },
+        create: { try await SessionDirectoryResolver.shared.create($0) }
     )
 }
 
@@ -22,6 +25,32 @@ actor SessionDirectoryResolver {
     static let shared = SessionDirectoryResolver()
     static let maximumResults = 200
     static let maximumEntryBytes = 128 * 1024
+
+    func create(_ request: CreateSessionDirectory) throws -> String {
+        try Task.checkCancellation()
+        guard SessionDirectoryName.isValid(request.name) else { throw DirectoryError.invalidName }
+        guard request.parentDirectory.utf8.count <= 4096 else { throw DirectoryError.invalidPath }
+        let parent = try resolve(request.parentDirectory)
+        let directory = (parent as NSString).appendingPathComponent(request.name)
+        // mkdir is exclusive: an existing directory, file or symlink must fail.
+        // No shell, intermediate parents, or overwriting an existing item.
+        guard mkdir(directory, 0o777) == 0 else {
+            let code = errno
+            if code == EEXIST { throw DirectoryError.alreadyExists(request.name) }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: directory])
+        }
+        return directory
+    }
+
+    static func respond(to command: CommandMessage, request: CreateSessionDirectory) async -> CommandResponseMessage {
+        @Dependency(SessionDirectoryClient.self) var client
+        do {
+            let directory = try await client.create(request)
+            return CommandResponseMessage(commandId: command.id, success: true, createdDirectory: directory)
+        } catch {
+            return .failure(for: command.id, error: error.localizedDescription)
+        }
+    }
 
     func list(_ request: ListSessionDirectories) throws -> SessionDirectoryListing {
         try Task.checkCancellation()
@@ -47,27 +76,30 @@ actor SessionDirectoryResolver {
             prefix = (path as NSString).lastPathComponent
         }
 
-        let urls = try files.contentsOfDirectory(
-            at: URL(fileURLWithPath: directory, isDirectory: true).resolvingSymlinksInPath(),
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-            options: request.includeHidden || prefix.hasPrefix(".") ? [] : [.skipsHiddenFiles]
-        )
+        guard let handle = opendir(directory) else { throw DirectoryError.inaccessible(directory) }
+        defer { closedir(handle) }
+        let descriptor = dirfd(handle)
+        let includeHidden = request.includeHidden || prefix.hasPrefix(".")
         var entries: [SessionDirectoryEntry] = []
-        for url in urls {
+        while true {
             try Task.checkCancellation()
-            let name = url.lastPathComponent
-            guard
-                prefix.isEmpty || name.range(of: prefix, options: [.anchored, .caseInsensitive]) != nil,
-                SessionDirectoryPath.isValid(url.path)
-            else { continue }
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            var childIsDirectory: ObjCBool = false
-            let isFolder = values?.isDirectory == true
-                || (values?.isSymbolicLink == true && files.fileExists(atPath: url.path, isDirectory: &childIsDirectory) && childIsDirectory.boolValue)
-            guard isFolder else { continue }
-            // FileManager may canonicalize /var → /private/var (and symlink
-            // roots). Keep the user's chosen parent so Up reverses a click.
+            errno = 0
+            guard let entry = readdir(handle) else {
+                guard errno == 0 else { throw DirectoryError.inaccessible(directory) }
+                break
+            }
+            let name = withUnsafePointer(to: entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) {
+                    String(cString: $0)
+                }
+            }
             let childPath = (directory as NSString).appendingPathComponent(name)
+            guard
+                name != ".", name != "..", includeHidden || !name.hasPrefix("."),
+                prefix.isEmpty || name.range(of: prefix, options: [.anchored, .caseInsensitive]) != nil,
+                SessionDirectoryPath.isValid(childPath),
+                Self.isDirectoryEntry(type: entry.pointee.d_type, name: name, descriptor: descriptor)
+            else { continue }
             entries.append(.init(name: name, path: childPath))
         }
         entries.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -89,6 +121,15 @@ actor SessionDirectoryResolver {
             entries: bounded,
             isTruncated: entries.count > bounded.count
         )
+    }
+
+    static func isDirectoryEntry(type: UInt8, name: String, descriptor: Int32) -> Bool {
+        // Statting a mount point can wait indefinitely for a broken NFS server.
+        // readdir already provides the type; inspect only links/unknown entries.
+        if type == UInt8(DT_DIR) { return true }
+        guard type == UInt8(DT_LNK) || type == UInt8(DT_UNKNOWN) else { return false }
+        var value = stat()
+        return fstatat(descriptor, name, &value, 0) == 0 && value.st_mode & S_IFMT == S_IFDIR
     }
 
     /// Shared command handler, kept independent of tmux so browsing cannot
@@ -118,14 +159,18 @@ actor SessionDirectoryResolver {
         return path
     }
 
-    enum DirectoryError: Error, LocalizedError {
+    enum DirectoryError: Error, LocalizedError, Equatable {
         case invalidPath
+        case invalidName
+        case alreadyExists(String)
         case notDirectory(String)
         case inaccessible(String)
 
         var errorDescription: String? {
             switch self {
             case .invalidPath: "Enter an absolute Host directory or ~/… without control characters."
+            case .invalidName: "Enter one folder name, without / or control characters."
+            case let .alreadyExists(name): "An item named \(name) already exists in this directory."
             case let .notDirectory(path): "Directory does not exist on the Host: \(path)"
             case let .inaccessible(path): "Directory is not accessible on the Host: \(path)"
             }

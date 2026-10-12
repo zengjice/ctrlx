@@ -4,14 +4,14 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Horizontal tab bar for remote session windows, mirroring `WindowTabBar` for
-/// local sessions but with the file-explorer and file-tab affordances dropped
-/// (remote sessions don't expose the host's filesystem).
+/// local sessions, with Host-backed directory tabs and client-private browser tabs.
 ///
 /// Supports the same affordances as the local bar:
-/// - Leading "+" Menu with "New Agent…", "New Terminal" and "New Browser".
+/// - Leading "+" menu opens Agent, Terminal and Browser tabs.
+/// - Window context menus open Files rooted in that window's pane.
 /// - Drag-to-reorder for tmux windows (pushed to the host via
-///   `MoveTmuxWindows`) and in-app browser tabs.
-/// - Cross-divider drag/split toggle so any window or browser tab can be sent
+///   `MoveTmuxWindows`) and client-private file/browser tabs.
+/// - Cross-divider drag/split toggle so any tab can be sent
 ///   to a right pane and back.
 /// - Trailing drop zone for "drop past the last tab".
 struct RemoteWindowTabBar: View {
@@ -37,9 +37,7 @@ struct RemoteWindowTabBar: View {
     let agentConfiguration: NewAgentTabConfiguration
     let forkUnavailableReason: String?
     let onForkWindow: (TmuxWindow, Bool) -> Void
-    /// Creates a new in-app browser tab (selected, address bar focused). Called
-    /// from the "+" menu's "New Browser" option.
-    let onNewBrowser: () -> Void
+    let onOpenBrowser: (TmuxWindow) -> Void
     let onRenameWindow: (TmuxWindow, String) -> Void
     let onSelectBrowserTab: (UUID) -> Void
     let onCloseBrowserTab: (UUID) -> Void
@@ -51,6 +49,9 @@ struct RemoteWindowTabBar: View {
     let onReorderWindows: (_ stableWindowIds: [String], _ rollbackOrder: [TabDragPayload]) -> Void
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
+    var onSelectFileTab: ((UUID) -> Void)?
+    var onCloseFileTab: ((UUID) -> Void)?
+    let onOpenFiles: (TmuxWindow) -> Void
 
     /// Cached width of the split-mode tab strip. Measured via the background
     /// `onGeometryChange` so the HStack can drive intrinsic height instead of
@@ -102,7 +103,7 @@ struct RemoteWindowTabBar: View {
     private var effectiveTabOrder: [TabDragPayload] {
         TabDragPayload.reconciledOrder(
             windowIds: windows.map(\.stableId),
-            fileTabIds: [],
+            fileTabIds: sessionTabs?.openFileTabs.map(\.id) ?? [],
             browserTabIds: openBrowserTabs.map(\.id),
             storedOrder: sessionTabs?.tabOrder ?? [],
             includeFileExplorer: false,
@@ -262,21 +263,44 @@ struct RemoteWindowTabBar: View {
             if let tab = openBrowserTabs.first(where: { $0.id == id }) {
                 openBrowserTabView(tab)
             }
+        case let .file(id):
+            if let tab = sessionTabs?.directoryTabs[id] { fileTab(tab) }
         case .fileExplorer,
-             .git,
-             .file:
+             .git:
             EmptyView()
         }
     }
 
     private var newWindowButton: some View {
         NewTabMenuButton(
-            helpText: "New agent, terminal or browser tab",
+            helpText: "New agent or terminal tab",
             agentConfiguration: agentConfiguration,
             isTerminalDisabled: !isHostConnected,
-            onNewTerminal: onNewWindow,
-            onNewBrowser: onNewBrowser
+            onNewTerminal: onNewWindow
         )
+    }
+
+    private func fileTab(_ tab: FileBrowserTab) -> some View {
+        let payload = TabDragPayload.file(tab.id)
+        let onRight = isOnRight(payload)
+        let selected = onRight ? selectedRight == payload : sessionTabs?.selectedFileTabId == tab.id
+        return HStack(spacing: 0) {
+            Button { onSelectFileTab?(tab.id) } label: {
+                Label(tab.title, symbol: .folder).lineLimit(1).padding(.horizontal, 10).padding(.vertical, 6)
+            }.buttonStyle(.plain)
+            TabSplitToggleButton(isSplit: isSplit, isOnRight: onRight, tabKind: "file tab", tabName: tab.title,
+                                 action: { onToggleSplit(payload) })
+            TabCloseButton(isVisible: true, accessibilityLabel: "Close \(tab.title)", action: { onCloseFileTab?(tab.id) })
+                .padding(.trailing, 6)
+        }
+        .tabStripItemStyle(isSelected: selected, isOnRightSplit: onRight, isSplit: isSplit)
+        .overlay(alignment: .leading) { DropIndicator(visible: dropIndicator == payload) }
+        .draggable(payload) { TabDragPreview(label: tab.title, symbol: .folder) }
+        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+            handleDrop(payloads: payloads, target: payload)
+        } isTargeted: { targeted in
+            updateDropIndicator(target: targeted ? payload : nil, for: .file)
+        }
     }
 
     private func windowTab(_ window: TmuxWindow) -> some View {
@@ -289,7 +313,7 @@ struct RemoteWindowTabBar: View {
         // right-pane selection points at them.
         let isSelected = tabIsOnRight
             ? selectedRight == payload
-            : window.id == selectedWindow.id && selectedBrowserTabId == nil
+            : window.id == selectedWindow.id && selectedBrowserTabId == nil && sessionTabs?.selectedFileTabId == nil
         let isHovered = hoveredWindowId == window.id
         let windowName = windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
 
@@ -323,6 +347,18 @@ struct RemoteWindowTabBar: View {
                     onRenameWindow(window, newName)
                 },
                 additionalMenu: {
+                    Button { onOpenFiles(window) } label: {
+                        Label("Open Files", symbol: .folderBadgePlus)
+                    }
+                    .disabled(!isHostConnected)
+                    .accessibilityIdentifier("window-open-files-\(window.stableId)")
+
+                    Button { onOpenBrowser(window) } label: {
+                        Label("Open Browser on Host", symbol: .globe)
+                    }
+                    .disabled(!isHostConnected || window.panes.isEmpty)
+                    .accessibilityIdentifier("window-open-browser-\(window.stableId)")
+
                     AgentForkMenu(
                         sources: window.panes.compactMap(AgentForkSource.init(pane:)),
                         unavailableReason: forkUnavailableReason,
@@ -456,6 +492,10 @@ struct RemoteWindowTabBar: View {
     }
 
     private func syncSubsequences(from order: [TabDragPayload], rollbackOrder: [TabDragPayload]) {
+        if let tabs = sessionTabs {
+            let files = Dictionary(uniqueKeysWithValues: tabs.openFileTabs.map { ($0.id, $0) })
+            tabs.openFileTabs = order.compactMap { if case let .file(id) = $0 { files[id] } else { nil } }
+        }
         let windowIds = order.compactMap(\.windowId)
         let browserIds: [UUID] = order.compactMap { ref in
             if case let .browser(id) = ref { return id } else { return nil }

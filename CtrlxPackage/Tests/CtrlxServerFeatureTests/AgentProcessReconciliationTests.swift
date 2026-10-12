@@ -96,6 +96,33 @@
             #expect(calls.value["ps"] == 1)
         }
 
+        @Test("Agent detection ignores nested helpers but keeps independent peers",
+              arguments: ["codex", "claude-code"], ["nested", "exec", "peers"])
+        func outermostAgentProcesses(pluginID: String, shape: String) async throws {
+            let command = pluginID == "codex" ? "codex" : "claude"
+            let mainPID = shape == "exec" ? "100" : "101"
+            var rows = shape == "exec" ? "100 1 \(command)\n" : "100 1 zsh\n101 100 \(command)\n"
+            rows += "201 \(mainPID) node_repl\n202 201 /tools/\(command)\n303 202 \(command)\n"
+            if shape == "peers" { rows += "501 100 zsh\n502 501 \(command)\n503 502 \(command)\n" }
+            // Process listing order must not choose the nested process first.
+            let output = rows.split(separator: "\n").reversed().joined(separator: "\n")
+            try await withDependencies {
+                $0[ProcessRunner.self].run = { executable, arguments, _, _ in
+                    let stdout: String
+                    if executable == "/bin/ps" { stdout = output }
+                    else if arguments.contains("list-panes") { stdout = "%5\(PaneInfo.fieldSeparator)100\(PaneInfo.fieldSeparator)/repo\n" }
+                    else { throw AgentForkError("Unexpected process request") }
+                    return .init(exitCode: 0, stdout: Data(stdout.utf8), stderr: Data())
+                }
+            } operation: {
+                let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
+                let panes = await tmux.detectAgentPanesIfAvailable(processNamesByPlugin: [pluginID: [command]])
+                let detected = try #require(panes?["%5"])
+                #expect(detected.pluginID == pluginID)
+                #expect(detected.processIDs == (shape == "peers" ? [mainPID, "502"] : [mainPID]))
+            }
+        }
+
         @Test("process detection creates, updates, and removes its own session")
         func processOwnedSessionLifecycle() {
             let manager = makeWindowManager()

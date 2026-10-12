@@ -190,6 +190,13 @@ sequenceDiagram
 - Maximum batch size: 8KB
 - Prevents network saturation without starving a continuously updating TUI
 
+**Outbound Ordering:** `ConnectedViewerManager` synchronously admits each terminal
+message to every eligible viewer's existing encrypted FIFO before suspending.
+Fan-out child tasks only await the admitted sends; they must not enqueue bytes,
+because their scheduling order can differ from the stream's call order. Encryption
+and WebSocket I/O remain asynchronous and independent per viewer. Connection
+generation checks still discard work from a disconnected/replaced connection.
+
 **Multi-Viewer Ownership:**
 - `TerminalStreamService` tracks an idempotent set of Viewer IDs per pane
 - The first Viewer creates the PaneStreamManager subscription

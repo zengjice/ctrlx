@@ -1,4 +1,5 @@
 #if os(macOS)
+    import CtrlxCommon
     import Foundation
 
     /// A logical, serializable snapshot of a session's workbench layout — the
@@ -74,6 +75,7 @@
         var id: UUID
         var path: String
         var directoryPath: String
+        var browser: FileBrowserTab.Snapshot? = nil
     }
 
     /// An open browser tab. The live `WKWebView` is not stored — it is recreated

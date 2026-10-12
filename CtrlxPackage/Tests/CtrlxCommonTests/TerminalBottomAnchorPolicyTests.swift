@@ -63,4 +63,38 @@ struct TerminalBottomAnchorPolicyTests {
 
         #expect(policy.targetOffset(maximumOffset: -12) == -12)
     }
+
+    @Test("A first-row Shell prompt is not hidden by a tall grid", arguments: [638.0, 600.0, 400.0])
+    func sparseShell(viewportHeight: Double) {
+        let policy = TerminalBottomAnchorPolicy()
+        let gridHeight = 57.0 * 13
+        let offset = policy.targetOffset(maximumOffset: gridHeight - viewportHeight, cursorTop: 0)
+        #expect(offset == 0)
+    }
+
+    @Test("A low cursor and fullscreen fallback keep the existing bottom position")
+    func lowCursorAndFullscreen() {
+        let policy = TerminalBottomAnchorPolicy()
+        #expect(policy.targetOffset(maximumOffset: 103, cursorTop: 56 * 13) == 103)
+        #expect(policy.targetOffset(maximumOffset: 103, cursorTop: nil) == 103)
+    }
+
+    @Test("Cursor placement uses canvas coordinates and adjusted top insets")
+    func canvasAndInsets() {
+        let policy = TerminalBottomAnchorPolicy()
+        #expect(policy.targetOffset(maximumOffset: 103, cursorTop: 39, topInset: 12) == 27)
+        #expect(policy.targetOffset(maximumOffset: 103, cursorTop: 0, topInset: 12) == -12)
+        #expect(policy.targetOffset(maximumOffset: -12, cursorTop: 80, topInset: 12) == -12)
+    }
+
+    @Test("Layout cannot reveal a cursor while a user owns history or a drag")
+    func cursorDoesNotOverrideUserScrolling() {
+        var policy = TerminalBottomAnchorPolicy()
+        policy.userWillBeginScrolling()
+        #expect(policy.targetOffset(maximumOffset: 103, cursorTop: 0) == nil)
+        policy.userDidEndScrolling(currentOffset: 30, maximumOffset: 103)
+        #expect(policy.targetOffset(maximumOffset: 200, cursorTop: 0) == nil)
+        policy.requestScrollToBottom()
+        #expect(policy.targetOffset(maximumOffset: 200, cursorTop: 0) == 0)
+    }
 }

@@ -74,6 +74,7 @@
             case voiceCorrectionModelID
             case voiceCorrectionTestedModelIDsByProvider
             case newSessionName
+            case newSessionAutoFit
             case newSessionWidth
             case newSessionHeight
         }
@@ -88,6 +89,7 @@
 
         /// Device-local phrase library, independent of sessions and agent plugins.
         let quickPhrases = QuickPhraseStore()
+        let customButtons = TerminalCustomButtonStore()
         @ObservationIgnored private var quickPhrasePairingsLoaded = false
 
         /// Unique device identifier (generated once and persisted)
@@ -198,16 +200,21 @@
         private var voiceCorrectionTestedModelIDsByProvider: [String: [String]] = [:]
 
         /// Base name for new tmux sessions created from iOS
-        public var newSessionName = "session" {
+        public var newSessionName = NewSessionName.defaultValue {
             didSet { preferences.setString(newSessionName, Keys.newSessionName) }
         }
 
-        /// Width (columns) for new tmux sessions
+        /// Fit newly created sessions once after their terminal viewport is measured.
+        public var newSessionAutoFit = true {
+            didSet { preferences.setBool(newSessionAutoFit, Keys.newSessionAutoFit) }
+        }
+
+        /// Manual width (columns) for new tmux sessions
         public var newSessionWidth = 120 {
             didSet { preferences.setInt(newSessionWidth, Keys.newSessionWidth) }
         }
 
-        /// Height (rows) for new tmux sessions
+        /// Manual height (rows) for new tmux sessions
         public var newSessionHeight = 40 {
             didSet { preferences.setInt(newSessionHeight, Keys.newSessionHeight) }
         }
@@ -327,9 +334,18 @@
             }
 
             // New session settings
-            self.newSessionName = preferences.string(Keys.newSessionName) ?? "session"
+            self.newSessionName = NewSessionName.load(from: preferences, forKey: Keys.newSessionName.rawValue)
             self.newSessionWidth = preferences.optionalInt(Keys.newSessionWidth) ?? 120
             self.newSessionHeight = preferences.optionalInt(Keys.newSessionHeight) ?? 40
+            let savedAutoFit = preferences.optionalBool(Keys.newSessionAutoFit)
+            self.newSessionAutoFit = NewSessionSizing.automaticFit(
+                savedPreference: savedAutoFit, width: newSessionWidth, height: newSessionHeight
+            )
+            if savedAutoFit == nil {
+                // Preserve intentional legacy fixed sizes, then persist the mode
+                // so later edits to those dimensions do not change it on launch.
+                preferences.setBool(newSessionAutoFit, Keys.newSessionAutoFit)
+            }
 
             // Load paired hosts
             self.pairedHosts = loadPairedHosts()

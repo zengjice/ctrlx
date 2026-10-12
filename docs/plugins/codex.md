@@ -225,5 +225,23 @@ folds in the pref exactly as the hook path does.
 Identical keystroke mapping to Claude Code (`deliverResponse` → `sendText`/`sendKeys`,
 including the AskUserQuestion arrow-navigation builder).
 
+### Collapsed Questions auto-expansion
+
+Mac Host, Mac Viewer and iOS share the `CodexQuestionPrompt` recognizer. It accepts
+`shift + ←`, `shift+←`, `shift←` and macOS's `⇧←` followed by `to answer`.
+Case, whitespace and an optional single `+` are presentation-only; `Left` is an
+anticipated alias for `←`, not a claim that every Codex version renders it.
+The current platform labels are defined by
+[Codex's key-hint renderer](https://github.com/openai/codex/blob/main/codex-rs/tui/src/key_hint.rs).
+The known queue header, question count/optional age and answer hint may wrap or
+share a line, but must remain in that order within the eight rows before the
+empty live composer. Other bindings, partial hints and unrelated text fail closed.
+
+Existing draft/cursor/focus/scroll guards, 350 ms stability checks and Host-owned
+deduplication still apply; the actual key remains `S-Left`. No polling or extra
+process detection is added. Update both Host and Viewer for the newly supported
+presentation formats; older peers safely leave an unrecognized footer manual.
+No SwiftTerm or Relay change is needed.
+
 ## Crash model (spec §13)
 Rollout-file parsing MUST stay trap-free.

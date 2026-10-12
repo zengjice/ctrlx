@@ -22,18 +22,7 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
         let footer = lines.prefix(cursorRow).suffix(8)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !Self.withoutParticles($0).trimmingCharacters(in: .whitespaces).isEmpty }
-        let tail = Array(footer.suffix(3))
-        if tail.count == 3,
-           ["• Queued follow-up inputs", "Queued follow-up inputs"].contains(tail[0]),
-           // Codex 0.158 renders the chord without spaces. Accept both known
-           // layouts, but keep other shortcuts and partial hints fail-closed.
-           ["shift + ← to answer", "shift+← to answer"].contains(tail[2]) {
-            let words = tail[1].split(separator: " ")
-            guard words.count >= 3, words[0] == "?",
-                  let count = Int(words[1]), (1...999).contains(count),
-                  words[2] == (count == 1 ? "question" : "questions"),
-                  Self.isElapsedSuffix(words.dropFirst(3))
-            else { return nil }
+        if let count = Self.questionCount(in: Array(footer)) {
             self.count = count
         } else {
             // Don't treat a partial/unknown footer as an empty queue. Otherwise
@@ -43,6 +32,33 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
             }) else { return nil }
             self.count = 0
         }
+    }
+
+    private static func questionCount(in footer: [String]) -> Int? {
+        // A complete known footer must end at the composer. Joining only these
+        // nearby rows tolerates wrapping without scanning history or skipping text.
+        for start in footer.indices {
+            var words = footer[start...].joined(separator: " ").split(whereSeparator: \.isWhitespace)
+            if words.first == "•" { words.removeFirst() }
+            guard words.count >= 7, words[0] == "Queued", words[1] == "follow-up", words[2] == "inputs",
+                  words[3] == "?", let count = Int(words[4]), (1...999).contains(count),
+                  words[5] == (count == 1 ? "question" : "questions")
+            else { continue }
+            let suffix = words.dropFirst(6)
+            for ageLength in 0...min(4, suffix.count) {
+                if isElapsedSuffix(suffix.prefix(ageLength)),
+                   isAnswerHint(suffix.dropFirst(ageLength).joined(separator: " ")) {
+                    return count
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func isAnswerHint(_ text: String) -> Bool {
+        let compact = text.lowercased().filter { !$0.isWhitespace }
+            .replacingOccurrences(of: "⇧", with: "shift")
+        return ["shift←toanswer", "shift+←toanswer", "shiftlefttoanswer", "shift+lefttoanswer"].contains(compact)
     }
 
     /// Optional question age, e.g. `· 14s` or `· 1m 02s`. Do not accept

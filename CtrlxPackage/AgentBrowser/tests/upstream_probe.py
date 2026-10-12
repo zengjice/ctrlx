@@ -57,7 +57,7 @@ class Probe:
         self.denied = Counter()
         self.checks = []
         self.keep_host = False
-        self.api = str(Path(tempfile.gettempdir()) / 'ctrlx-e2e.sock')
+        self.api = str(self.root / 'api.sock')
         self.socket = str(self.root / 'tmux.sock')
         self.cli = str(args.app / 'Contents/MacOS/CtrlXCLI')
 
@@ -186,7 +186,7 @@ class Probe:
         (self.root / 'engine').mkdir(mode=0o700)
         log = (self.root / 'host.log').open('wb')
         self.host = subprocess.Popen([str(self.args.app / 'Contents/MacOS/CtrlX'), '--e2e-test',
-            '--tmux-socket', self.socket, '--ctrlx-state-root', str(self.root),
+            '--tmux-socket', self.socket, '--ctrlx-state-root', str(self.root), '--e2e-api-socket', self.api,
             '--zdotdir', str(Path(__file__).resolve().parent / 'shell')],
             stdout=log, stderr=log, start_new_session=True)
         print('Artifacts:', self.root, 'isolated host PID:', self.host.pid, flush=True)
@@ -353,6 +353,19 @@ class Probe:
                         for name in list(self.used):
                             await self.upstream(name, 'close', ok=False)
             self.passed('compatibility proof complete')
+        except Exception:
+            # Preserve only fixture pane/PID diagnostics before cleanup. These
+            # distinguish a missing owner process from a browser regression.
+            panes = subprocess.run(['/opt/homebrew/bin/tmux', '-S', self.socket, 'list-panes', '-a',
+                '-F', '#{pane_id} #{pane_pid} #{session_name} #{pane_current_command}'],
+                capture_output=True, text=True, timeout=5)
+            pids = [str(run['pid']) for run in getattr(self, 'runs', [])]
+            pids += [line.split()[1] for line in panes.stdout.splitlines() if len(line.split()) > 1]
+            if pids:
+                process = subprocess.run(['ps', '-p', ','.join(pids), '-o', 'pid,ppid,comm'],
+                    capture_output=True, text=True, timeout=5)
+                print('Fixture panes:', panes.stdout, 'Fixture processes:', process.stdout, flush=True)
+            raise
         finally:
             # A failed provider attach can leave its CLI daemon alive. Only
             # terminate exact test binaries from this private socket directory.
@@ -364,7 +377,7 @@ class Probe:
             server.shutdown()
             if self.host and self.host.poll() is None and not self.keep_host:
                 result = await asyncio.create_subprocess_exec('osascript', '-e',
-                    'tell application id "com.ctrlx.embedded-acceptance" to quit')
+                    'tell application ' + json.dumps(str(self.args.app)) + ' to quit')
                 await asyncio.wait_for(result.wait(), 15)
                 await asyncio.to_thread(self.host.wait, 20)
                 subprocess.run(['/opt/homebrew/bin/tmux', '-S', self.socket, 'kill-server'], capture_output=True)

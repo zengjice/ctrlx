@@ -1,5 +1,6 @@
 import AppKit
 import CtrlxCommon
+import CtrlxNetworking
 import Dependencies
 import SwiftUI
 @preconcurrency import WebKit
@@ -29,6 +30,7 @@ struct BrowserTab: Identifiable, Equatable {
     /// Native Chromium tabs (agent-owned or human-only) are transient. Never
     /// restore them as WebKit pages or grant a new Codex control over old tabs.
     var isAgentBrowser: Bool = false
+    var isViewerLocal: Bool = false
     var isSimulator: Bool = false
     var isTransient: Bool { isAgentBrowser || isSimulator }
 
@@ -51,6 +53,11 @@ struct BrowserTab: Identifiable, Equatable {
     /// title yet. The truncation keeps long query/fragment URLs from
     /// overflowing the tab strip's max label width.
     var tabLabel: String {
+        let label = baseTabLabel
+        return isViewerLocal ? "\(label) · Local" : label
+    }
+
+    private var baseTabLabel: String {
         if let title = displayTitle, !title.isEmpty {
             return title
         }
@@ -75,6 +82,7 @@ struct BrowserTab: Identifiable, Equatable {
 @Observable
 @MainActor
 final class BrowserTabState {
+    var sourceAgent: AgentImageTarget?
     /// Current URL displayed by the web view (kept in sync with WKWebView KVO).
     var currentURL: URL?
     /// Text shown in the URL field. Diverges from `currentURL` while the user
@@ -336,6 +344,7 @@ final class BrowserTabState {
 /// bar, navigation controls, and the embedded `WKWebView`.
 struct BrowserTabContentView: View {
     @Bindable var state: BrowserTabState
+    @State private var isAnnotating = false
     /// Called when the loaded page's title changes so the parent can update
     /// the tab label without owning a reference to the live web view.
     let onTitleChange: (String?) -> Void
@@ -353,14 +362,22 @@ struct BrowserTabContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            navigationBar
+            navigationBar.disabled(isAnnotating)
             Divider()
             if state.isLoading, state.estimatedProgress > 0, state.estimatedProgress < 1 {
                 ProgressView(value: state.estimatedProgress)
                     .progressViewStyle(.linear)
                     .frame(height: 2)
             }
-            ZStack {
+            BrowserAnnotationSurface(preferredTarget: state.sourceAgent, capture: {
+                let image = try await state.webView.takeSnapshot(configuration: nil)
+                guard let data = image.tiffRepresentation else { throw AgentImageError.message("Could not capture the WebKit page.") }
+                return data
+            }, onEditingChanged: { editing in
+                isAnnotating = editing
+                if editing { state.webView.window?.makeFirstResponder(nil) }
+            }) {
+              ZStack {
                 BrowserWebViewRepresentable(webView: state.webView)
                 if let error = state.navigationError {
                     BrowserNavigationErrorView(
@@ -372,6 +389,7 @@ struct BrowserTabContentView: View {
                         onClose: { onRequestClose() }
                     )
                 }
+              }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if !state.downloads.isEmpty {
@@ -961,6 +979,7 @@ struct PendingBrowserURLPrompt: Identifiable, Equatable {
     let sessionName: String
     let windowId: String
     let hostId: String?
+    let paneID: String
 }
 
 /// User's selection from the confirmation dialog.
@@ -1079,12 +1098,13 @@ struct BrowserURLConfirmationView: View {
             }
 
             HStack {
-                Button("In App") {
+                Button("In Host Browser") {
                     onResolve(.inApp, rememberScope)
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(!BrowserWebURL.isSupported(url))
 
-                Button("In Default Browser") {
+                Button("In This Device's Browser") {
                     onResolve(.defaultBrowser, rememberScope)
                 }
 
@@ -1097,7 +1117,7 @@ struct BrowserURLConfirmationView: View {
             }
         }
         .padding(20)
-        .frame(width: 460)
+        .frame(width: 560)
         .fixedSize(horizontal: false, vertical: true)
     }
 }

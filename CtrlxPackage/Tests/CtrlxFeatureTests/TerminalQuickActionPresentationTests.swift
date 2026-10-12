@@ -263,4 +263,40 @@ struct TerminalQuickActionPresentationTests {
             }
         }
     }
+
+    @Test("Custom button editor suspends input and restores existing keyboard intent", arguments: [false, true])
+    func customButtonEditorFocus(keyboardRequested: Bool) {
+        var presentation = TerminalQuickActionPresentation()
+        presentation.toggle(.addCustomButton(phrase()))
+        #expect(presentation.isPresented)
+        #expect(presentation.suspendsTerminalInput)
+        #expect(TerminalInputPresentation.resolve(
+            keyboardRequested: keyboardRequested, isActive: true, isCopyPresented: false,
+            isInputSuspended: presentation.suspendsTerminalInput
+        ) == .init(inputEnabled: false, keyboardRequested: false))
+        presentation.toggle(.addCustomButton(phrase()))
+        #expect(!presentation.isPresented)
+        #expect(!presentation.suspendsTerminalInput)
+        #expect(TerminalInputPresentation.resolve(
+            keyboardRequested: keyboardRequested, isActive: true, isCopyPresented: false,
+            isInputSuspended: presentation.suspendsTerminalInput
+        ) == .init(inputEnabled: true, keyboardRequested: keyboardRequested))
+    }
+
+    @Test("Custom editor permits offline management but closes on a changed target or draft")
+    func customButtonEditorContext() {
+        var presentation = TerminalQuickActionPresentation()
+        presentation.show(.addCustomButton(phrase()))
+        presentation.validate(phraseContext: phrase(connected: false), commandContext: nil)
+        #expect(presentation.isPresented)
+        #expect(presentation.suspendsTerminalInput)
+        presentation.toggleCommands(context: nil, terminal: phrase())
+        #expect(!presentation.suspendsTerminalInput)
+        for changed in [phrase(host: "other"), phrase(pane: "%2"), phrase(revision: 1)] {
+            presentation.show(.addCustomButton(phrase()))
+            presentation.validate(phraseContext: changed, commandContext: nil)
+            #expect(!presentation.isPresented)
+            #expect(!presentation.suspendsTerminalInput)
+        }
+    }
 }

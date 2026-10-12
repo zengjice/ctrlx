@@ -303,14 +303,14 @@ final public class ConnectedViewerManager {
         _ streamMessage: TerminalStreamMessage,
         to viewerIds: Set<String>
     ) async {
+        // Admission is synchronous on the main actor. Child tasks can run in any
+        // order, so they must not be responsible for enqueueing terminal bytes.
+        let sends = viewerIds.compactMap { viewerId in
+            connections[viewerId]?.enqueueTerminalStream(streamMessage)
+        }
         await withTaskGroup(of: Void.self) { group in
-            for viewerId in viewerIds {
-                guard
-                    let connection = connections[viewerId],
-                    connection.state.isConnected,
-                    connection.isViewerConnected
-                else { continue }
-                group.addTask { await connection.sendTerminalStream(streamMessage) }
+            for send in sends {
+                group.addTask { await send.value }
             }
         }
     }

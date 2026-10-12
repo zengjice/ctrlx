@@ -72,6 +72,8 @@ enum TerminalCursorTapNavigation {
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
         var onPasteText: (@MainActor (String) -> Void)?
+        var onOpenPath: (@MainActor (String) -> Void)?
+        var onOpenHostURL: (@MainActor (URL) -> Void)?
 
         /// Sends a guarded intent through the pane's ordered input queue, never
         /// raw Shift+Left. False means the stream is not currently ready.
@@ -104,6 +106,25 @@ enum TerminalCursorTapNavigation {
         /// When false, tapping the terminal won't show the keyboard.
         /// Use `updateInput(isEnabled:keyboardRequested:)` to control this.
         private(set) var inputEnabled = false
+        var onInputPresentationChange: (() -> Void)?
+
+        var isInputPresentationReady: Bool {
+            !inputFocusUpdates.isInvalidated
+                && (!inputEnabled || (inputProxy.isFirstResponder && inputAccessoryView?.window != nil))
+        }
+
+        /// Content coordinates; converting through UIScrollView accounts for
+        /// inner scrollback and the passive canvas's bottom alignment.
+        var liveCursorRect: CGRect? {
+            let terminal = getTerminal()
+            guard !terminal.isCurrentBufferAlternate, terminal.isCursorVisible,
+                  !canScroll || scrollPosition == 1 else { return nil }
+            // At the live tail, the top visible row is the active screen's
+            // first row. History scrolling deliberately does not follow it.
+            let row = terminal.getTopVisibleRow() + terminal.getCursorLocation().y
+            let cellHeight = getOptimalFrameSize().height / CGFloat(terminal.rows)
+            return CGRect(x: 0, y: CGFloat(row) * cellHeight, width: 1, height: cellHeight)
+        }
 
         private(set) lazy var inputFocusUpdates = TerminalInputFocusUpdates { [weak self] state in
             self?.applyInputPresentation(state) ?? false
@@ -202,6 +223,7 @@ enum TerminalCursorTapNavigation {
         /// Highlight layer shown over detected URL during long-press
         private var urlHighlightLayer: CALayer?
         private var urlUnderlineLayers: [CALayer] = []
+        private var fileLinkSnapshot = TerminalFileLinkSnapshot()
         private var contentTapGesture: UITapGestureRecognizer?
 
         /// Cell size cached on first access to avoid recomputing CoreText
@@ -361,6 +383,7 @@ enum TerminalCursorTapNavigation {
         }
 
         private func applyInputPresentation(_ state: TerminalInputPresentation.State) -> Bool {
+            defer { onInputPresentationChange?() }
             guard let window, inputProxy.window === window else { return false }
             guard state.inputEnabled else {
                 return !inputProxy.isFirstResponder || inputProxy.resignFirstResponder()
@@ -458,6 +481,7 @@ enum TerminalCursorTapNavigation {
 
         private func extractAndClearPayloads(afterFeeding bytes: ArraySlice<UInt8>) {
             payloadCache.update(from: getTerminal(), afterFeeding: bytes)
+            fileLinkSnapshot.invalidate()
         }
 
         private func setupURLLongPress() {
@@ -521,6 +545,11 @@ enum TerminalCursorTapNavigation {
             if let mouseModePanGesture {
                 pan.require(toFail: mouseModePanGesture)
             }
+        }
+
+        func prioritizeWindowSwipe(_ gesture: UIGestureRecognizer) {
+            panGestureRecognizer.require(toFail: gesture)
+            mouseModePanGesture?.require(toFail: gesture)
         }
 
         /// Installs the native shadow editor as a fixed overlay of the outer
@@ -747,7 +776,7 @@ enum TerminalCursorTapNavigation {
             let absoluteRow = Int(point.y / cellSize.height)
 
             // Verify the row is within the buffer
-            guard terminal.getScrollInvariantLine(row: absoluteRow) != nil else { return nil }
+            guard terminal.getScrollInvariantLine(row: absoluteRow + terminal.buffer.totalLinesTrimmed) != nil else { return nil }
             let clampedCol = min(max(0, col), terminal.cols - 1)
 
             return (clampedCol, absoluteRow)
@@ -766,6 +795,11 @@ enum TerminalCursorTapNavigation {
             guard !selectionActive else { return }
             guard let pos = gridPosition(for: point) else { return }
             let terminal = getTerminal()
+            if let onOpenPath, let link = currentFileLinks().first(where: { $0.contains(column: pos.col, row: pos.row) }) {
+                cancelCursorNavigation()
+                onOpenPath(link.path)
+                return
+            }
             let closures = urlClosures(for: terminal)
             let url = TerminalURLDetector.urlAt(
                 col: pos.col, row: pos.row, cols: terminal.cols,
@@ -786,7 +820,7 @@ enum TerminalCursorTapNavigation {
             case .openLink:
                 guard let url else { return }
                 cancelCursorNavigation()
-                UIApplication.shared.open(url)
+                showURLActionSheet(url: url.absoluteString)
             case .mouseClick:
                 guard onRawInput != nil,
                       point.x >= 0, point.x < CGFloat(terminal.cols) * cellSize.width,
@@ -1007,7 +1041,7 @@ enum TerminalCursorTapNavigation {
         }
 
         private func showURLActionSheet(url: String) {
-            guard let nsURL = URL(string: url) else { return }
+            guard let nsURL = URL(string: url), !nsURL.isFileURL else { return }
 
             let alert = UIAlertController(
                 title: "Open Link",
@@ -1015,7 +1049,13 @@ enum TerminalCursorTapNavigation {
                 preferredStyle: .actionSheet
             )
 
-            alert.addAction(UIAlertAction(title: "Open in Safari", style: .default) { [weak self] _ in
+            if BrowserWebURL.isSupported(nsURL), let openHostURL = onOpenHostURL {
+                alert.addAction(UIAlertAction(title: "Open in Host Browser", style: .default) { [weak self] _ in
+                    self?.removeURLHighlight()
+                    openHostURL(nsURL)
+                })
+            }
+            alert.addAction(UIAlertAction(title: "Open in This Device's Browser", style: .default) { [weak self] _ in
                 self?.removeURLHighlight()
                 UIApplication.shared.open(nsURL)
             })
@@ -1054,19 +1094,33 @@ enum TerminalCursorTapNavigation {
 
         // MARK: - URL Underlines
 
+        private var visibleFileLinkRows: Range<Int> {
+            guard cellSize.height > 0, bounds.height > 0 else { return 0..<0 }
+            // Native momentum moves these content coordinates without necessarily updating yDisp.
+            let first = max(0, Int(floor(bounds.minY / cellSize.height)))
+            let end = max(first, Int(ceil(bounds.maxY / cellSize.height)))
+            return first..<end
+        }
+
+        private func currentFileLinks() -> [TerminalFileLink] {
+            guard onOpenPath != nil else { return [] }
+            return fileLinkSnapshot.links(
+                terminal: getTerminal(),
+                visibleRows: visibleFileLinkRows,
+                cellPayload: { [payloadCache] in payloadCache.cellPayload(col: $0, absoluteRow: $1) }
+            )
+        }
+
         /// Scans visible rows for URLs and draws persistent underline decorations.
         /// Positions use absolute content-space coordinates so underlines scroll with text.
         ///
-        /// When mouse mode is active the underlines are cleared and redrawing
-        /// is skipped: the remote terminal app owns taps, so links shouldn't
-        /// appear interactive while their taps are consumed as mouse events.
+        /// File paths remain interactive in mouse mode; ordinary web URLs keep
+        /// the existing terminal-owned mouse behavior.
         private func updateURLUnderlines() {
             for underline in urlUnderlineLayers {
                 underline.removeFromSuperlayer()
             }
             urlUnderlineLayers.removeAll()
-
-            if isMouseModeActive { return }
 
             let terminal = getTerminal()
             guard cellSize.width > 0, cellSize.height > 0 else { return }
@@ -1074,6 +1128,22 @@ enum TerminalCursorTapNavigation {
 
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            defer { CATransaction.commit() }
+
+            if onOpenPath != nil {
+                let links = currentFileLinks()
+                let visibleRows = visibleFileLinkRows
+                for span in links.flatMap(\.spans) where visibleRows.contains(span.row) {
+                    let underline = CALayer()
+                    underline.backgroundColor = UIColor.tintColor.withAlphaComponent(0.6).cgColor
+                    underline.frame = CGRect(x: CGFloat(span.columns.lowerBound) * cellSize.width,
+                                             y: CGFloat(span.row + 1) * cellSize.height - 2,
+                                             width: CGFloat(span.columns.count) * cellSize.width, height: 1)
+                    layer.addSublayer(underline)
+                    urlUnderlineLayers.append(underline)
+                }
+            }
+            if isMouseModeActive { return }
 
             let closures = urlClosures(for: terminal)
             for viewportRow in 0..<terminal.rows {
@@ -1097,7 +1167,6 @@ enum TerminalCursorTapNavigation {
                 }
             }
 
-            CATransaction.commit()
         }
     }
 
@@ -1176,7 +1245,8 @@ enum TerminalCursorTapNavigation {
             // regex-link path SwiftTerm exposes through this delegate.
             guard !isMouseModeActive else { return }
             if let url = URL(string: link) {
-                UIApplication.shared.open(url)
+                guard !url.isFileURL else { return }
+                showURLActionSheet(url: url.absoluteString)
             }
         }
 
