@@ -3,10 +3,10 @@
 ## Long press and drag
 
 ```sh
-ctrlx simulator long-press --device <id> --identifier message.row --duration-ms 700
-ctrlx simulator drag --device <id> --identifier draggable.item \
+ctrlx ios long-press --device <id> --identifier message.row --duration-ms 700
+ctrlx ios drag --device <id> --identifier draggable.item \
   --end-x 260 --end-y 500 --hold-ms 500 --duration-ms 300
-ctrlx simulator swipe --device <id> --x 196 --y 650 \
+ctrlx ios swipe --device <id> --x 196 --y 650 \
   --end-x 196 --end-y 250 --duration-ms 350
 ```
 
@@ -19,7 +19,7 @@ For system gestures add `--edge top|left|bottom|right`, the current screen's ori
 edge. Start one point inside and move inward; example for a 393 x 852 display:
 
 ```sh
-ctrlx simulator swipe --device <id> --edge bottom --x 196.5 --y 851 \
+ctrlx ios swipe --device <id> --edge bottom --x 196.5 --y 851 \
   --end-x 196.5 --end-y 383.4 --duration-ms 300
 ```
 
@@ -29,8 +29,8 @@ the app and iOS decide the gesture's effect.
 ## Basic pinch
 
 ```sh
-ctrlx simulator pinch --device <id> --x 196 --y 400 --scale 2 --duration-ms 500
-ctrlx simulator pinch --device <id> --x 196 --y 400 --scale 0.5
+ctrlx ios pinch --device <id> --x 196 --y 400 --scale 2 --duration-ms 500
+ctrlx ios pinch --device <id> --x 196 --y 400 --scale 0.5
 ```
 
 `--x` / `--y` are the center in current display logical points. `--scale` is

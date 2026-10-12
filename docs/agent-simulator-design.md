@@ -1,4 +1,6 @@
-# Agent Simulator 设计
+# Agent iOS 设计（当前支持 iOS Simulator）
+
+当前源码的对外入口为 `ctrlx ios`，配套技能为 `ctrlx:agent-ios`（`plugin/ctrlx/skills/agent-ios/`）。本次仅统一平台命名，能力范围仍为本地 iOS Simulator；真机及 Android 支持留待后续。内部 `Simulator*` 类型、`simulator.action` 协议和设备存储目录继续沿用。旧 CLI 名称不保留别名，调用脚本与 Skill 应随新版本一同更新；下文历史证据中的 `ctrlx simulator` / `agent-simulator` 保留当时名称，不代表本次改名已经过同样的设备验收。
 
 当前验收以 **2026-10-12 用户最新更新** 为准：本期仅覆盖**内置屏 120 Hz**，外置屏 60 Hz 推迟。默认同步与可选低延迟模式的源帧至对应原生呈现均要求 **p95 ≤100 ms**，帧率 ≥50 FPS；点击至可见响应 **p95 ≤150 ms**，暖恢复 ≤250 ms。用户明确要求“不用重试再验证，直接复用已有证据”，因此本次仅按新门槛复核既有结果，不再启动性能测试、补采区间或扩展设备数；新增能力另做定向功能验证。历史失败记录保持原样，新结论与当时门槛分开保存。本机 P0 / P1 与跨机兼容、公开分发分别验收。
 
@@ -14,7 +16,7 @@
 
 ## 当前能力与边界（开发维护视角）
 
-本节按当前源码说明能力范围；是否已进入签名 App、完成真实效果验证，分别以文首交付状态及下方验收清单为准。面向使用 agent 的 [操作手册](../plugin/ctrlx/skills/agent-simulator/references/operations.md#capability-coverage) 独立列出相同能力范围，并提供参数、操作语义和替代方法。两处均应随接口变化维护；历史实验记录中的计划命令不代表当前接口。
+本节按当前源码说明能力范围；是否已进入签名 App、完成真实效果验证，分别以文首交付状态及下方验收清单为准。面向使用 agent 的 [操作手册](../plugin/ctrlx/skills/agent-ios/references/operations.md#capability-coverage) 独立列出相同能力范围，并提供参数、操作语义和替代方法。两处均应随接口变化维护；历史实验记录中的计划命令不代表当前接口。
 
 ### 已实现并对外提供
 
@@ -38,11 +40,11 @@
 
 设备清理沿用同一 coordinator：`uninstall --device --bundle` 要求当前设备 owner / writer；`storage`、`erase --udid`、`delete --udid` 要求本地 agent 身份，仅访问 CtrlX 私有 device set。存储池包含关闭后保留的设备，因此其范围比当前 agent 的 `devices` 更广。擦除 / 删除必须显式指定一个 UUID，设备须为 Shutdown 且没有活动 handle、启动、关闭或失败关机保留；与启动共用串行入口，等待后再次检查调用进程。退出先取消已登记的启动和存储任务，再等待命令收尾；模拟器清理与浏览器及终端清理独立推进，保留全局 30 秒退出上限。不提供全量删除、强制关闭其他 agent 设备或自动清扫。
 
-`storage.allocatedBytes` 使用有界、按需的 `du` 采样，未知为 null 并报告采样错误，不把目录占用等同于系统物理空间释放量。`canModify` 只是查询时状态，写入前重新检查。重置后用 `open --udid` 重开同一设备，返回新 CtrlX ID；该参数不与 runtime / device type 混用，目标缺失或忙时明确失败，不回退到其他设备。服务配置需重新传入，默认仍为 standard；写入超时不自动重试。使用示例见 [存储操作](../plugin/ctrlx/skills/agent-simulator/references/storage.md)。
+`storage.allocatedBytes` 使用有界、按需的 `du` 采样，未知为 null 并报告采样错误，不把目录占用等同于系统物理空间释放量。`canModify` 只是查询时状态，写入前重新检查。重置后用 `open --udid` 重开同一设备，返回新 CtrlX ID；该参数不与 runtime / device type 混用，目标缺失或忙时明确失败，不回退到其他设备。服务配置需重新传入，默认仍为 standard；写入超时不自动重试。使用示例见 [存储操作](../plugin/ctrlx/skills/agent-ios/references/storage.md)。
 
-基础 `pinch` 复用原有两触点 HID 传输与手势循环，不引入新的输入引擎。`--x` / `--y` 是当前显示逻辑点中的中心，`--scale` 为终点 / 起点指距（0.25...4，排除 1），`--duration-ms` 为 20...5000，默认 500。初始水平指距最多 100 点，按屏幕边界缩小以容纳两端；过近边界的中心明确拒绝。两指同事件按下、移动、抬起，沿用几何版本核验和人工接管取消；不承诺 App 最终缩放比例等于指距比例。参数示例见 [手势](../plugin/ctrlx/skills/agent-simulator/references/gestures.md)。
+基础 `pinch` 复用原有两触点 HID 传输与手势循环，不引入新的输入引擎。`--x` / `--y` 是当前显示逻辑点中的中心，`--scale` 为终点 / 起点指距（0.25...4，排除 1），`--duration-ms` 为 20...5000，默认 500。初始水平指距最多 100 点，按屏幕边界缩小以容纳两端；过近边界的中心明确拒绝。两指同事件按下、移动、抬起，沿用几何版本核验和人工接管取消；不承诺 App 最终缩放比例等于指距比例。参数示例见 [手势](../plugin/ctrlx/skills/agent-ios/references/gestures.md)。
 
-录屏使用 `SimulatorRecorder` actor 管理私有 device set 的 `simctl io recordVideo` 子进程；`SimulatorRecordingClient` 注入创建边界。开始要求 owner / writer；查询和停止仅要求 owner，人工接管后仍可停止。首帧等待最多 10 秒，录制上限由 `--seconds 1...60` 指定（默认 60）；到时或临时文件达到 128 MiB 时发送 SIGINT，最多等 15 秒封装，超时回收进程并丢弃未完成文件。最终文件大于 128 MiB 也拒绝发布。输出卷须满足配置的磁盘保留量加文件预算；这不是磁盘预留。视频在输出目录的私有临时子目录编码，完成后以同卷硬链接原子发布到新 `.mp4` 路径，防止覆盖竞态，随后清理临时目录；强杀宿主仍可能残留录制进程及临时目录。关闭设备、owner 过期及正常退出均先收尾录屏；各设备退出收尾并行。三条命令均可用于 batch，失败不回滚此前的开始。详见 [录屏操作](../plugin/ctrlx/skills/agent-simulator/references/recording.md)。录屏保留原生设备画布，片中旋转可能横置显示；仅在显示更新时取得帧，静止画面的视频可能很短，时长参数是采集的墙钟上限，不保证播放时长。录屏直接取得 guest 画面，无音频、暂停或编辑，不申请 macOS 屏幕录制权限；编码期间存在额外负载，既有无录屏性能证据不扩展为录屏中的帧率保证。
+录屏使用 `SimulatorRecorder` actor 管理私有 device set 的 `simctl io recordVideo` 子进程；`SimulatorRecordingClient` 注入创建边界。开始要求 owner / writer；查询和停止仅要求 owner，人工接管后仍可停止。首帧等待最多 10 秒，录制上限由 `--seconds 1...60` 指定（默认 60）；到时或临时文件达到 128 MiB 时发送 SIGINT，最多等 15 秒封装，超时回收进程并丢弃未完成文件。最终文件大于 128 MiB 也拒绝发布。输出卷须满足配置的磁盘保留量加文件预算；这不是磁盘预留。视频在输出目录的私有临时子目录编码，完成后以同卷硬链接原子发布到新 `.mp4` 路径，防止覆盖竞态，随后清理临时目录；强杀宿主仍可能残留录制进程及临时目录。关闭设备、owner 过期及正常退出均先收尾录屏；各设备退出收尾并行。三条命令均可用于 batch，失败不回滚此前的开始。详见 [录屏操作](../plugin/ctrlx/skills/agent-ios/references/recording.md)。录屏保留原生设备画布，片中旋转可能横置显示；仅在显示更新时取得帧，静止画面的视频可能很短，时长参数是采集的墙钟上限，不保证播放时长。录屏直接取得 guest 画面，无音频、暂停或编辑，不申请 macOS 屏幕录制权限；编码期间存在额外负载，既有无录屏性能证据不扩展为录屏中的帧率保证。
 
 ### 当前未提供
 
@@ -56,7 +58,7 @@
 | Runtime 下载 / 安装 | `inventory` 只列举已安装资源，Xcode 和 runtime 由外部工作流准备 |
 | 编译与签名 App | 接受预先构建的 simulator `.app`，不封装 `xcodebuild` 构建系统，也不接受真机包冒充模拟器包 |
 
-这里描述 CtrlX 接口的缺口，不代表 Apple 工具没有相应能力。不要根据 `simctl` 存在某命令，就宣称 `ctrlx simulator` 已提供该能力。
+这里描述 CtrlX 接口的缺口，不代表 Apple 工具没有相应能力。不要根据 `simctl` 存在某命令，就宣称 `ctrlx ios` 已提供该能力。
 
 ### 已有实现但验收有限
 
@@ -263,9 +265,11 @@ R1044 有界排查：两个既有 Device Hub 进程仍在，官方 Xcode 菜单�
 
 当前可审阅签名候选为 **20261012-213251**，App 位于 `.build-local/DerivedData/macOS-Simulator45/Build/Products/Release/CtrlX.app`。构建、源文件与二进制哈希、签名及验证范围见 `.build-local/simulator-record-shutdown-build.json`；此路径为增量构建产物，后续构建可能更新，使用前核对索引。候选包含此前输入 / 退出审查修复、存储命令、录屏 / pinch 及录屏退出顺序修复；实际设备效果和复用证据范围见文首。R132 和 R125 保留为历史候选，未替换正式 `/Applications/CtrlX.app` 或用户 Codex 插件。
 
-采用候选作为宿主后，在 **Settings → Agents → Codex** 选择所需配置目录，首次使用点 **Install**，已安装则点 **Refresh**。随后在该 CtrlX 本地工作台的新终端运行 `ctrlx simulator run -- codex`；已验证的 Codex 0.162.1 需要原生 `--no-daemon`，该入口自动加入。旧模型会话不会自动重新发现新增技能。帮助入口为 `ctrlx simulator --help` 和 `ctrlx help simulator run`。
+上述签名候选仍使用旧入口 `ctrlx simulator` / `ctrlx:agent-simulator`。使用下述新入口须先构建包含本次改名的 App，并同步其 CLI 与插件；本次源码改名未替换正式 App 或已安装插件。
 
-让新会话使用 [agent-simulator 技能](../plugin/ctrlx/skills/agent-simulator/SKILL.md)，按 `inventory → open → install → launch → snapshot → 操作 → screenshot → close` 完成闭环。`open` 返回的 `device` 是后续命令所需的 CtrlX ID；安装对象必须是 iOS Simulator `.app`。截图保存到新路径后还需实际看图，操作后核对 App 效果。完整参数、文本输入、环境命令和批处理见 [operations](../plugin/ctrlx/skills/agent-simulator/references/operations.md)。
+采用包含新入口的 App 作为宿主后，在 **Settings → Agents → Codex** 选择所需配置目录，首次使用点 **Install**，已安装则点 **Refresh**。随后在该 CtrlX 本地工作台的新终端运行 `ctrlx ios run -- codex`；已验证的 Codex 0.162.1 需要原生 `--no-daemon`，该入口自动加入。旧模型会话不会自动重新发现新增技能。帮助入口为 `ctrlx ios --help` 和 `ctrlx help ios run`。
+
+让新会话使用 [agent-ios 技能](../plugin/ctrlx/skills/agent-ios/SKILL.md)，按 `inventory → open → install → launch → snapshot → 操作 → screenshot → close` 完成闭环。`open` 返回的 `device` 是后续命令所需的 CtrlX ID；安装对象必须是 iOS Simulator `.app`。截图保存到新路径后还需实际看图，操作后核对 App 效果。完整参数、文本输入、环境命令和批处理见 [operations](../plugin/ctrlx/skills/agent-ios/references/operations.md)。
 
 默认配置为两台、`standard` 服务配置及同步显示；`balanced` 与 `display-mode --mode low-latency` 均需显式选择，低延迟模式可能撕裂。当前已验收双开，四台及以上没有联合性能保证。`close` 关机并保留 App / 数据，显式重置或回收使用 `erase` / `delete`；真人接管后，只有再次获准的 agent 操作才能显式 `claim`。
 
@@ -1542,7 +1546,7 @@ Release-24 几何缓存实验：`currentGeometry` 优先读取有效缓存，缓
 
 Release-24 另做约 64 秒隔离宿主栈采样，34 次诊断鼠标点击效果全部正确，其中 28 次处于采样器进程存活区间。调用栈确认 XPC 接收回调内执行 IOSurface 的 Mach-port 导入、IOKit 调用、互斥锁等待、metadata JSON 解析和 Swift Task 创建，但聚合栈没有逐事件对应，不能证明某次慢输入由图像导入导致；重叠输入未复现超过 10 ms 的发送到 worker 接收耗时。profiling 会改变调度，所有诊断输入均排除于性能验收，采样器存活区间也不等于精确栈样本时间范围。下一步验证接收回调耗时与输入等待的关联，再决定是否改变帧导入调度；证据为 `release-24-parent-xpc-profile-37/analysis.json`。16.7 ms 显示、双台输入、完整实际可见响应、精确去重内存峰值及兼容矩阵仍未全部通过；正式 App 未替换。
 
-首版入口为 `ctrlx simulator`，配套 skill 位于 `plugin/ctrlx/skills/agent-simulator/`。Mac 构建会编译、签名并嵌入 `CtrlxSimulatorHost` 及固定提交的 simslim CLI。生命周期使用 CtrlX 专用 device set，默认两台活动设备，新增 `config --max-devices` 可调整为 1...32；这个参数范围不是硬件容量承诺。`open` 复用同 runtime / device type 的空闲已关闭设备，保留应用和数据，同时重新分配 CtrlX ID 与鲜活进程归属。可见页面通过 IOSurface/Metal 呈现，AX 检查使用可单独结束的 Inspector。隐藏页面不持续采集；坐标操作读取当前几何信息并由 worker 检查 epoch 和几何版本。人工输入撤销 agent 写权限，恢复需要显式 `claim`。agent 退出及隐藏空闲十分钟的设备会关闭。
+首版当时的入口为 `ctrlx simulator`，配套 skill 位于 `plugin/ctrlx/skills/agent-simulator/`。Mac 构建会编译、签名并嵌入 `CtrlxSimulatorHost` 及固定提交的 simslim CLI。生命周期使用 CtrlX 专用 device set，默认两台活动设备，新增 `config --max-devices` 可调整为 1...32；这个参数范围不是硬件容量承诺。`open` 复用同 runtime / device type 的空闲已关闭设备，保留应用和数据，同时重新分配 CtrlX ID 与鲜活进程归属。可见页面通过 IOSurface/Metal 呈现，AX 检查使用可单独结束的 Inspector。隐藏页面不持续采集；坐标操作读取当前几何信息并由 worker 检查 epoch 和几何版本。人工输入撤销 agent 写权限，恢复需要显式 `claim`。agent 退出及隐藏空闲十分钟的设备会关闭。
 
 当前保留的基线为 Release-22，新增测试输入的 transport / 客户端入口与 XPC 发送时间戳，未改变调度、输入顺序或显示架构；相关 12 项 Swift 回归、签名包与分发资源核对通过。新包 iPhone 16、SE 3 的 standard / balanced 四组真实操作矩阵均通过，80 个 App 状态效果核对成功。它保留 Release-21 的默认同步显示、纹理缓存、独立 GPU 读租约及首次有效呈现后才允许人工输入的规则。人工按下合并触点取消，触点几何校验不再同步查询 display，原生 worker 在单一串行 I/O 队列处理输入和帧生命周期。Release-18、19 暴露的旋转空缓存问题已修复。
 
@@ -1916,20 +1920,20 @@ Animation Hitches 短诊断分别附着到本次隔离 GUI（20 秒）与实际�
 
 后续发布验收：Apple Device Hub 同条件基线、Release 三轮及耐久测量、输入到实际画面响应、CPU / 内存增量、真实旋转和跨显示器、用户 XCTest 共存。simslim profile、旋转、元素引用及状态等待的新代码仍需设备验收；宿主 Mac IME / 原生 Unicode 提交、公共双指操作、远程流和录像尚未实现。当前输入要求 CoreSimulator ≥1155.4；旧 Indigo 版本明确不支持。以下章节保留完整目标设计，不能据此认为所有命令已经存在。
 
-当前实际命令：
+当前源码命令（采用新的 `ios` 入口）：
 
 ```sh
-ctrlx simulator run -- codex --no-alt-screen  # 使用原生 --no-daemon；已验证 Codex 0.162.1
-ctrlx simulator inventory
-ctrlx simulator open
-ctrlx simulator install --device <id> --app /absolute/App.app
-ctrlx simulator launch --device <id> --bundle com.example.app
-ctrlx simulator snapshot --device <id>
-ctrlx simulator tap --device <id> --x 196 --y 210
-ctrlx simulator swipe --device <id> --x 196 --y 650 --end-x 196 --end-y 250
-ctrlx simulator paste --device <id> --text '测试文字 🙂'
-ctrlx simulator screenshot --device <id> --output /absolute/new.png
-ctrlx simulator close --device <id>
+ctrlx ios run -- codex --no-alt-screen  # 自动添加原生 --no-daemon
+ctrlx ios inventory
+ctrlx ios open
+ctrlx ios install --device <id> --app /absolute/App.app
+ctrlx ios launch --device <id> --bundle com.example.app
+ctrlx ios snapshot --device <id>
+ctrlx ios tap --device <id> --x 196 --y 210
+ctrlx ios swipe --device <id> --x 196 --y 650 --end-x 196 --end-y 250
+ctrlx ios paste --device <id> --text '测试文字 🙂'
+ctrlx ios screenshot --device <id> --output /absolute/new.png
+ctrlx ios close --device <id>
 ```
 
 `open` 返回 CtrlX device ID 和底层 UDID；后续命令使用 `--device` 指定 CtrlX ID。构建继续沿用 agent 的 `xcodebuild` 工作流。
@@ -1953,7 +1957,7 @@ ctrlx simulator close --device <id>
 
 ```mermaid
 flowchart LR
-    A[Agent] --> C[ctrlx simulator CLI]
+    A[Agent] --> C[ctrlx ios CLI]
     C -->|本地 socket| M[SimulatorCoordinator]
     U[CtrlX 会话与手动输入] --> M
     M -->|控制 XPC| W[每设备一个 Simulator Worker]

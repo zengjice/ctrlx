@@ -89,7 +89,7 @@ def main():
         nonlocal counter
         counter += 1
         prefix = output / f"command-{counter:03d}"
-        command = shlex.join([cli, "simulator", *words, "--socket", api])
+        command = shlex.join([cli, "ios", *words, "--socket", api])
         started = time.monotonic()
         send(number, command + f" > {shlex.quote(str(prefix)+'.out')} 2> {shlex.quote(str(prefix)+'.err')}; echo $? > {shlex.quote(str(prefix)+'.exit')}")
         code = int(wait(lambda: Path(str(prefix) + ".exit").read_text().strip()

@@ -211,20 +211,20 @@ struct SimulatorCommandTests {
         ["wait", "--identifier", "ready", "--timeout-ms", "0"],
         ["status", "--timeout-ms", "1000"],
     ]) func invalidReadinessDeadlinesAreRejectedBeforeConnection(_ arguments: [String]) throws {
-        let command = try CtrlxCLI.parseAsRoot(["simulator"] + arguments + ["--device", UUID().uuidString,
+        let command = try CtrlxCLI.parseAsRoot(["ios"] + arguments + ["--device", UUID().uuidString,
             "--socket", "/nonexistent-simulator-test.sock"])
         let action = try #require(command as? SimulatorActionCommand)
         #expect(throws: ValidationError.self) { try action.run() }
     }
 
     @Test(arguments: SimulatorTouchEdge.allCases) func parsesExplicitSwipeEdge(_ edge: SimulatorTouchEdge) throws {
-        let command = try CtrlxCLI.parseAsRoot(["simulator", "swipe", "--device", UUID().uuidString, "--edge", edge.rawValue])
+        let command = try CtrlxCLI.parseAsRoot(["ios", "swipe", "--device", UUID().uuidString, "--edge", edge.rawValue])
         let action = try #require(command as? SimulatorActionCommand)
         #expect(action.edge == edge)
     }
 
     @Test(arguments: ["none", "bottom-right", "3"]) func rejectsUnknownSwipeEdges(_ edge: String) {
-        #expect(throws: (any Error).self) { try CtrlxCLI.parseAsRoot(["simulator", "swipe", "--edge", edge]) }
+        #expect(throws: (any Error).self) { try CtrlxCLI.parseAsRoot(["ios", "swipe", "--edge", edge]) }
     }
 
     @Test(arguments: [
@@ -234,13 +234,13 @@ struct SimulatorCommandTests {
         ["key", "--usage", "4", "--modifiers", "meta"],
         ["key", "--usage", "225", "--modifiers", "shift"],
     ]) func rejectsInvalidKeyModifiersBeforeConnection(_ arguments: [String]) throws {
-        let command = try CtrlxCLI.parseAsRoot(["simulator"] + arguments + ["--device", UUID().uuidString])
+        let command = try CtrlxCLI.parseAsRoot(["ios"] + arguments + ["--device", UUID().uuidString])
         let action = try #require(command as? SimulatorActionCommand)
         #expect(throws: (any Error).self) { try action.run() }
     }
 
     @Test func negativeCoordinatesAreOptionValues() throws {
-        let command = try CtrlxCLI.parseAsRoot(["simulator", "location", "--device", UUID().uuidString,
+        let command = try CtrlxCLI.parseAsRoot(["ios", "location", "--device", UUID().uuidString,
             "--latitude", "-33.8688", "--longitude", "-122.009"])
         let action = try #require(command as? SimulatorActionCommand)
         #expect(action.latitude == -33.8688)
@@ -251,7 +251,7 @@ struct SimulatorCommandTests {
         let captured = Mutex<[String]>([])
         let literal = "literal spaces; $HOME `command`"
         let options = (alreadyLocal ? ["--no-daemon"] : []) + ["--no-alt-screen", literal]
-        let command = try CtrlxCLI.parseAsRoot(["simulator", "run", "--", "codex"] + options)
+        let command = try CtrlxCLI.parseAsRoot(["ios", "run", "--", "codex"] + options)
         let adapter = try #require(command as? SimulatorRunCommand)
         try await withDependencies {
             $0[SimulatorLaunchClient.self].run = { name, arguments in captured.withLock { $0 = [name] + arguments } }
@@ -270,7 +270,7 @@ struct SimulatorCommandTests {
     @Test(arguments: ["--no-daemon", "--remote", "--remote=unix:///tmp/other"])
     func codexAdapterPreservesOptionLikePrompt(_ prompt: String) async throws {
         let captured = Mutex<[String]>([])
-        let command = try CtrlxCLI.parseAsRoot(["simulator", "run", "--", "codex", "--", prompt])
+        let command = try CtrlxCLI.parseAsRoot(["ios", "run", "--", "codex", "--", prompt])
         let adapter = try #require(command as? SimulatorRunCommand)
         try await withDependencies {
             $0[SimulatorLaunchClient.self].run = { name, arguments in captured.withLock { $0 = [name] + arguments } }
@@ -282,7 +282,7 @@ struct SimulatorCommandTests {
 
     @Test(arguments: [["claude"], ["codex", "--remote", "unix:///tmp/other"], ["codex", "--remote=unix:///tmp/other"]])
     func adapterRejectsOtherAgentsAndExternalServers(_ words: [String]) async throws {
-        let command = try CtrlxCLI.parseAsRoot(["simulator", "run", "--"] + words)
+        let command = try CtrlxCLI.parseAsRoot(["ios", "run", "--"] + words)
         let adapter = try #require(command as? SimulatorRunCommand)
         await #expect(throws: ValidationError.self) { try await adapter.run() }
     }
@@ -291,7 +291,7 @@ struct SimulatorCommandTests {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
         try Data("existing".utf8).write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
-        let command = try CtrlxCLI.parseAsRoot(["simulator", "screenshot", "--device", UUID().uuidString, "--output", file.path])
+        let command = try CtrlxCLI.parseAsRoot(["ios", "screenshot", "--device", UUID().uuidString, "--output", file.path])
         let action = try #require(command as? SimulatorActionCommand)
         #expect(throws: ValidationError.self) { try action.run() }
         #expect(try Data(contentsOf: file) == Data("existing".utf8))
@@ -330,7 +330,7 @@ struct SimulatorCommandTests {
         ["logs", "--bundle", "com.example.app", "--limit", "1"],
         ["crashes"],
     ]) func conflictingTargetsOrConfigurationAreRejectedBeforeSending(_ arguments: [String]) throws {
-        let command = try CtrlxCLI.parseAsRoot(["simulator"] + arguments + ["--device", UUID().uuidString])
+        let command = try CtrlxCLI.parseAsRoot(["ios"] + arguments + ["--device", UUID().uuidString])
         let action = try #require(command as? SimulatorActionCommand)
         #expect(throws: ValidationError.self) { try action.run() }
     }
@@ -340,14 +340,14 @@ struct SimulatorCommandTests {
         ["privacy", "--action", "delete", "--service", "location"],
         ["privacy", "--action", "grant", "--service", "camera"],
     ]) func rejectsUnknownEnvironmentValues(_ arguments: [String]) {
-        #expect(throws: (any Error).self) { try CtrlxCLI.parseAsRoot(["simulator"] + arguments) }
+        #expect(throws: (any Error).self) { try CtrlxCLI.parseAsRoot(["ios"] + arguments) }
     }
 
     @Test func oversizedPushIsRejectedBeforeSocketConnection() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         try Data(("{\"aps\":{},\"text\":\"" + String(repeating: "a", count: 4096) + "\"}").utf8).write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
-        let command = try CtrlxCLI.parseAsRoot(["simulator", "push", "--device", UUID().uuidString,
+        let command = try CtrlxCLI.parseAsRoot(["ios", "push", "--device", UUID().uuidString,
             "--bundle", "com.example.app", "--payload", file.path, "--socket", "/nonexistent-simulator-test.sock"])
         let action = try #require(command as? SimulatorActionCommand)
         #expect(throws: SimulatorFailure.self) { try action.run() }
@@ -358,7 +358,7 @@ struct SimulatorCommandTests {
         ["crashes", "--last-seconds", "86401"], ["crashes", "--limit", "11"],
         ["crashes", "--max-bytes", "262145"],
     ]) func invalidDiagnosticBoundsAreRejectedBeforeConnection(_ arguments: [String]) throws {
-        let command = try CtrlxCLI.parseAsRoot(["simulator"] + arguments + ["--device", UUID().uuidString,
+        let command = try CtrlxCLI.parseAsRoot(["ios"] + arguments + ["--device", UUID().uuidString,
             "--bundle", "com.example.app", "--socket", "/nonexistent-simulator-test.sock"])
         let action = try #require(command as? SimulatorActionCommand)
         #expect(throws: SimulatorFailure.self) { try action.run() }

@@ -45,7 +45,7 @@ def execute(client, request):
                 result = {"code": 2, "stdout": "", "stderr": "Expected bounded simulator command argv; no CLI was launched"}
             else:
                 try:
-                    process = subprocess.run([args.cli, "simulator", *words, "--socket", args.api], capture_output=True, text=True, timeout=250)
+                    process = subprocess.run([args.cli, "ios", *words, "--socket", args.api], capture_output=True, text=True, timeout=250)
                     result = {"code": process.returncode, "stdout": process.stdout, "stderr": process.stderr}
                 except subprocess.TimeoutExpired:
                     result = {"code": 124, "stdout": "", "stderr": "CLI timed out; physical operation outcome may be unknown"}

@@ -7,7 +7,7 @@ All commands require the calling local agent's identity.
 ## Uninstall an app
 
 ```sh
-ctrlx simulator uninstall --device <owned-ctrlx-id> --bundle com.example.app
+ctrlx ios uninstall --device <owned-ctrlx-id> --bundle com.example.app
 ```
 
 Requires the same owner and active writer as other app changes. Human takeover
@@ -17,7 +17,7 @@ not a whole-device reset or a reset of remote account data. Observe before any r
 ## Inspect storage
 
 ```sh
-ctrlx simulator storage
+ctrlx ios storage
 ```
 
 Lists guests in CtrlX's private device set, including closed guests retained for
@@ -36,16 +36,16 @@ a promise of physical space freed, especially with shared filesystem blocks.
 If the device is open in your session, first save its UDID and close its CtrlX tab:
 
 ```sh
-ctrlx simulator status --device <owned-ctrlx-id>
-ctrlx simulator close --device <owned-ctrlx-id>
-ctrlx simulator storage
+ctrlx ios status --device <owned-ctrlx-id>
+ctrlx ios close --device <owned-ctrlx-id>
+ctrlx ios storage
 ```
 
 Choose exactly one operation on the intended UDID:
 
-- `ctrlx simulator erase --udid <private-uuid>` removes the device's apps, data and
+- `ctrlx ios erase --udid <private-uuid>` removes the device's apps, data and
   settings, retaining the guest for reuse. It stays shut down.
-- `ctrlx simulator delete --udid <private-uuid>` removes the guest and its data.
+- `ctrlx ios delete --udid <private-uuid>` removes the guest and its data.
 
 These operations require one UUID from the private set, a shut-down guest and no
 active host reservation. They recheck state before changing it and serialize with
@@ -55,7 +55,7 @@ accept `all`, arbitrary paths or system-default devices. No automatic sweeping o
 To reopen the exact guest after erasing it:
 
 ```sh
-ctrlx simulator open --udid <private-uuid>
+ctrlx ios open --udid <private-uuid>
 ```
 
 This returns a new CtrlX device ID. `--udid` cannot be combined with `--device`,

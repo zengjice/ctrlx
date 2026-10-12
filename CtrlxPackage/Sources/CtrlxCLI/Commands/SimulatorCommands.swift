@@ -7,7 +7,7 @@ import Foundation
 
 struct SimulatorCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "simulator", abstract: "Control an iPhone Simulator embedded in this coding agent's CtrlX session",
+        commandName: "ios", abstract: "Control iOS in this coding agent's CtrlX session (currently iOS Simulator only)",
         subcommands: [SimulatorActionCommand.self, SimulatorBatchCommand.self, SimulatorRunCommand.self], defaultSubcommand: SimulatorActionCommand.self)
 }
 
@@ -20,7 +20,7 @@ struct SimulatorRunCommand: AsyncParsableCommand {
     func run() async throws {
         let words = command.first == "--" ? Array(command.dropFirst()) : command
         guard let executable = words.first, URL(fileURLWithPath: executable).lastPathComponent == "codex" else {
-            throw ValidationError("Use ctrlx simulator run -- codex [options]; Codex must support --no-daemon")
+            throw ValidationError("Use ctrlx ios run -- codex [options]; Codex must support --no-daemon")
         }
         var arguments = Array(words.dropFirst())
         let options = arguments.prefix { $0 != "--" }

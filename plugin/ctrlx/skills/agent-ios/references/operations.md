@@ -1,8 +1,9 @@
-# Simulator operations and capability coverage
+# Agent iOS operations and capability coverage
 
-Operate on your owned CtrlX device. Observe before input and verify app effects;
-an acknowledgement proves submission only. For installed commands, check
-`ctrlx simulator action --help`.
+Currently supports iOS Simulator only. Operate on your owned CtrlX device.
+Observe before input and verify app effects; an acknowledgement proves submission only.
+For installed commands, check
+`ctrlx ios action --help`.
 Requires Xcode, an installed iOS runtime and CoreSimulator 1155.4 or newer.
 
 ## Capability coverage
@@ -56,7 +57,7 @@ CtrlX commands from `simctl` capabilities or claim substitutes provide equivalen
 
 ## Batches
 
-`ctrlx simulator batch --input /absolute/actions.json` reads UTF-8 JSON with
+`ctrlx ios batch --input /absolute/actions.json` reads UTF-8 JSON with
 1...16 arrays of ordinary simulator arguments:
 
 ```json
@@ -88,8 +89,8 @@ screenshot but failed local PNG write.
 Devices start synchronized. On request, select low latency, which may briefly tear:
 
 ```sh
-ctrlx simulator display-mode --device <id> --mode low-latency
-ctrlx simulator display-mode --device <id> --mode synchronized
+ctrlx ios display-mode --device <id> --mode low-latency
+ctrlx ios display-mode --device <id> --mode synchronized
 ```
 
 The tab UI and `status.displayMode` expose the same choice. It changes presentation,
@@ -102,10 +103,10 @@ automatically after human takeover.
 `visiblePoint` when available, and frontmost app identity. Prefer app identifiers:
 
 ```sh
-ctrlx simulator snapshot --device <id> --limit 1000
-ctrlx simulator tap --device <id> --ref '@<observation-id>:<node>'
-ctrlx simulator tap --device <id> --identifier login.submit
-ctrlx simulator tap --device <id> --label 'Continue' --role AXButton
+ctrlx ios snapshot --device <id> --limit 1000
+ctrlx ios tap --device <id> --ref '@<observation-id>:<node>'
+ctrlx ios tap --device <id> --identifier login.submit
+ctrlx ios tap --device <id> --label 'Continue' --role AXButton
 ```
 
 References, semantic selectors and start coordinates are alternatives. Identifier,
@@ -139,9 +140,9 @@ See [recording](recording.md) for MP4 start/stop, readiness, limits and cleanup.
 for that operation, then released in reverse order:
 
 ```sh
-ctrlx simulator key --device <id> --usage 4 --modifiers command
-ctrlx simulator key --device <id> --usage 80 --modifiers shift
-ctrlx simulator key --device <id> --usage 42
+ctrlx ios key --device <id> --usage 4 --modifiers command
+ctrlx ios key --device <id> --usage 80 --modifiers shift
+ctrlx ios key --device <id> --usage 42
 ```
 
 These are A, left arrow, Backspace. `--modifiers`: comma-separated `control`, `shift`,
@@ -161,7 +162,7 @@ or test instrumentation; AX omits secure values.
 ## Targeted menu paste
 
 ```sh
-ctrlx simulator paste --device <id> --via-menu --identifier login.name --text '测试文字 🙂'
+ctrlx ios paste --device <id> --via-menu --identifier login.name --text '测试文字 🙂'
 ```
 
 Alternatively use `--ref '@<observation-id>:<node>'` or `--x 196 --y 414`.
@@ -176,8 +177,8 @@ from a fresh observation.
 ## Rotation
 
 ```sh
-ctrlx simulator rotate --device <id> --orientation landscape-left
-ctrlx simulator rotate --device <id> --orientation portrait
+ctrlx ios rotate --device <id> --orientation landscape-left
+ctrlx ios rotate --device <id> --orientation portrait
 ```
 
 Also accepts `portrait-upside-down` and `landscape-right`. Waits for geometry change;
@@ -187,9 +188,9 @@ rotation: previous refs and coordinate assumptions are stale.
 ## State waits
 
 ```sh
-ctrlx simulator wait --device <id> --identifier loading.indicator \
+ctrlx ios wait --device <id> --identifier loading.indicator \
   --state absent --timeout-ms 10000
-ctrlx simulator wait --device <id> --label 'Welcome' --state visible --timeout-ms 5000
+ctrlx ios wait --device <id> --label 'Welcome' --state visible --timeout-ms 5000
 ```
 
 Use semantic selectors, not refs. Defaults: `visible`, 5000 ms; timeout 1...60000 ms.
@@ -202,12 +203,12 @@ screenshots for content omitted from AX.
 ## Simulator environment
 
 ```sh
-ctrlx simulator location --device <id> --latitude 37.3349 --longitude -122.009
-ctrlx simulator location --device <id> --clear
-ctrlx simulator appearance --device <id> --style dark
-ctrlx simulator appearance --device <id>
-ctrlx simulator privacy --device <id> --action grant --service location --bundle com.example.app
-ctrlx simulator push --device <id> --bundle com.example.app --payload /absolute/payload.json
+ctrlx ios location --device <id> --latitude 37.3349 --longitude -122.009
+ctrlx ios location --device <id> --clear
+ctrlx ios appearance --device <id> --style dark
+ctrlx ios appearance --device <id>
+ctrlx ios privacy --device <id> --action grant --service location --bundle com.example.app
+ctrlx ios push --device <id> --bundle com.example.app --payload /absolute/payload.json
 ```
 
 Location is fixed; `--clear` stops simulation but the app may retain its last
@@ -227,8 +228,8 @@ explicit `claim` before further writes. Timeouts never trigger write retries.
 ## App diagnostics
 
 ```sh
-ctrlx simulator logs --device <id> --bundle com.example.app --last-seconds 30 --max-bytes 65536
-ctrlx simulator crashes --device <id> --bundle com.example.app --last-seconds 3600 --limit 5
+ctrlx ios logs --device <id> --bundle com.example.app --last-seconds 30 --max-bytes 65536
+ctrlx ios crashes --device <id> --bundle com.example.app --last-seconds 3600 --limit 5
 ```
 
 Logs match installed Mach-O image UUID within this device's paths, including

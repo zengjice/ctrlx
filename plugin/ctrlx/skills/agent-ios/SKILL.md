@@ -1,14 +1,15 @@
 ---
-name: agent-simulator
-description: Inspect and operate iOS apps in a native iPhone Simulator embedded in the calling agent's local CtrlX session. Requires Xcode and an installed iOS runtime.
+name: agent-ios
+description: Inspect and operate iOS Simulator apps in the calling Codex's local CtrlX session. Requires Xcode and an installed iOS runtime.
 ---
 
-# CtrlX Agent Simulator
+# CtrlX Agent iOS
 
-Use `ctrlx simulator` in the calling Codex's local CtrlX tmux workbench.
+Use `ctrlx ios` in the calling Codex's local CtrlX tmux workbench.
+Currently supports iOS Simulator only.
 Authority follows the socket caller's nearest supported agent process, never an
 environment token or focused tab. To start a new session from that terminal, use
-`ctrlx simulator run -- codex`; it adds the required `--no-daemon` (verified with
+`ctrlx ios run -- codex`; it adds the required `--no-daemon` (verified with
 0.162.1). It launches a new Codex, not a repair for an existing session's identity.
 If caller identification or pane routing fails, report the error and provide this
 terminal launch command; do not launch nested Codex or borrow another pane's identity.
@@ -17,19 +18,19 @@ Remote endpoints are rejected; Node wrappers may lack a recognizable agent execu
 Read [capabilities and limits](references/operations.md#capability-coverage) when assessing
 unsupported tasks, native limitations or validation scope.
 
-Start with `ctrlx simulator identity` and `ctrlx simulator devices`; reuse a suitable
+Start with `ctrlx ios identity` and `ctrlx ios devices`; reuse a suitable
 owned device. Only when another is needed, use `inventory` to choose installed
 `--runtime` / `--device-type` identifiers, then `open`. Use its CtrlX device ID below:
 
 ```sh
-ctrlx simulator status --device <id>
-ctrlx simulator install --device <id> --app /absolute/path/App.app
-ctrlx simulator launch --device <id> --bundle com.example.app
-ctrlx simulator snapshot --device <id>
-ctrlx simulator tap --device <id> --x 196 --y 210
-ctrlx simulator paste --device <id> --text '测试文字 🙂'
-ctrlx simulator screenshot --device <id> --output /tmp/new-simulator.png
-ctrlx simulator close --device <id>
+ctrlx ios status --device <id>
+ctrlx ios install --device <id> --app /absolute/path/App.app
+ctrlx ios launch --device <id> --bundle com.example.app
+ctrlx ios snapshot --device <id>
+ctrlx ios tap --device <id> --x 196 --y 210
+ctrlx ios paste --device <id> --text '测试文字 🙂'
+ctrlx ios screenshot --device <id> --output /tmp/new-simulator.png
+ctrlx ios close --device <id>
 ```
 
 `open` returns a CtrlX device ID, scoped to this live agent, and its UDID.
@@ -66,7 +67,7 @@ typing or IME composition. Snapshots omit secure values.
 For `paste --via-menu`, caret movement and iOS 27 secure emoji editing, read operations.
 
 Human touch or keyboard input takes control immediately and cancels agent input.
-If asked to continue, `ctrlx simulator claim --device <id>` explicitly returns
+If asked to continue, `ctrlx ios claim --device <id>` explicitly returns
 the writer to the agent. Do not automatically claim after a human takeover.
 
 Screenshots require a new path; install requires a simulator `.app`.

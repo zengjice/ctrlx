@@ -256,7 +256,7 @@
                 var pane: PaneInfo
                 do { pane = try await resolvePane(owner.pid) } catch {
                     throw SimulatorFailure(
-                        "Cannot route this agent process to a local CtrlX pane: \(error.localizedDescription). For Codex with a shared daemon, launch it using ctrlx simulator run -- codex"
+                        "Cannot route this agent process to a local CtrlX pane: \(error.localizedDescription). For Codex with a shared daemon, launch it using ctrlx ios run -- codex"
                     )
                 }
                 let candidates = workspaces.values.filter { $0.acceptsPane(pane) }

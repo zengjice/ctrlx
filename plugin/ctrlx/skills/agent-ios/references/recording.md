@@ -5,10 +5,10 @@ the guest display, without audio, desktop capture or macOS screen-recording perm
 Encoding adds work while active; ordinary display and input do not record by default.
 
 ```sh
-ctrlx simulator record-start --device <id> --output /absolute/new.mp4 --seconds 30
-ctrlx simulator pinch --device <id> --x 196 --y 400 --scale 2
-ctrlx simulator record-status --device <id>
-ctrlx simulator record-stop --device <id>
+ctrlx ios record-start --device <id> --output /absolute/new.mp4 --seconds 30
+ctrlx ios pinch --device <id> --x 196 --y 400 --scale 2
+ctrlx ios record-status --device <id>
+ctrlx ios record-stop --device <id>
 ```
 
 Start requires the device's owner and active writer. It waits for the recorder's
