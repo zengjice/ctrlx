@@ -75,6 +75,10 @@ reported without silently switching to Computer Use, another browser client or
 standalone Playwright. Browser switching requires the user's choice. This is
 skill guidance, not a tool-permission sandbox; no global agent settings change.
 
+The shared skill also guides task-based tab creation versus reuse, without a
+one-tab limit or automatic cleanup. See its [owned-tab guidance](../plugin/ctrlx/skills/agent-browser/SKILL.md#owned-tabs).
+The CLI semantics remain unchanged: `open` creates a tab; `navigate` reuses one.
+
 Open CtrlX on the **same Mac** as the terminal agent. Start `codex` or `claude` normally;
 there is no `ctrlx browser run` requirement. On `browser action open`, the CLI
 identifies the real native agent process. The host resolves its fresh process ancestry

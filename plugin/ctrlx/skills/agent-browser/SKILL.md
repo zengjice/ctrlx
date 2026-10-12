@@ -29,14 +29,18 @@ on that Mac with the agent in a local tmux pane. No special launcher or inherite
 On identification failure, stop; never borrow another pane's context, select the
 focused tab, or ask the user to restart with a wrapper command.
 
+`open` creates a tab; `navigate` reuses one. Choose by task and user intent.
+Prefer reuse for a continuing flow or replacing a page; create a tab to keep
+old pages, compare in parallel, or honor an explicit new-tab request.
+Prefer an already-open target; use `tabs` when unsure what is open.
+Do not close pages the user still needs merely to reduce the tab count.
+
 ```sh
 ctrlx browser action tabs
 ctrlx browser action open --url http://localhost:3000
 ctrlx browser action wait --tab <id>
 ctrlx browser action read --tab <returned-id>
 ctrlx browser action click --tab <id> --selector '<selector from read>'
-ctrlx browser action fill --tab <id> --selector '<selector from read>' --text 'replacement'
-ctrlx browser action press --tab <id> --key Enter
 ctrlx browser action screenshot --tab <id> --output /tmp/new-screenshot.png
 ctrlx browser action navigate --tab <id> --url https://example.com
 ctrlx browser action show --tab <id>

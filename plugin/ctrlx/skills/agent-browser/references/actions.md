@@ -24,6 +24,8 @@ printable keys are blocked; use `type`/`fill` for text.
 
 ```sh
 ctrlx browser action type --tab <id> --selector '<observed-selector>' --text 'text'
+ctrlx browser action fill --tab <id> --selector '<observed-selector>' --text 'replacement'
+ctrlx browser action press --tab <id> --key Enter
 ctrlx browser action select --tab <id> --selector '<observed-select>' --value '<observed-option-value>'
 ctrlx browser action check --tab <id> --selector '<observed-checkbox>' --checked true
 ```
