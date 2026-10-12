@@ -132,6 +132,7 @@ check_build_space() {
 }
 
 prune_local_artifacts() {
+    # Success-only housekeeping keeps incremental caches and unmarked diagnostics.
     local arguments=(prune --artifact "$1" --yes)
     if [ "$#" -ge 2 ]; then
         arguments+=(--platform "$2")

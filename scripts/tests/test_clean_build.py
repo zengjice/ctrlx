@@ -301,6 +301,108 @@ class BuildCleanupTests(unittest.TestCase):
         current = self.artifact("3.0.2")
         self.assertEqual(storage.artifact_targets(self.root, current), [])
 
+    def test_housekeeping_only_selects_explicitly_completed_artifacts(self):
+        removed = [self.file(f"{parent}/finished/{storage.COMPLETED_MARKER}")
+                   for parent in storage.COMPLETED_ARTIFACT_DIRS]
+        kept = [self.file(name) for name in (
+            ".build-local/diagnostics/active/output.log",
+            ".build-local/app-backups/retained/CtrlX.app/executable",
+            f".build-local/diagnostics/active/nested/{storage.COMPLETED_MARKER}",
+            f".build-local/DerivedData/{storage.COMPLETED_MARKER}",
+            ".build-local/DerivedData/macOS/CompilationCache.noindex/object.o",
+            ".build-local/DerivedData/iOS/Build/Products/CtrlX.app/executable",
+            ".build-local/SourcePackages/checkouts/dependency.swift",
+            ".build-local/cef-browser-probe/sdk/cef.h",
+            ".build-local/linux-relay-tests/object.o",
+            ".build-local/recovered-profiles/Cookies", "CtrlxPackage/.build/object.o",
+            "Config/Local.xcconfig", "dist/CtrlX-3.0.1.dmg",
+        )]
+        # Age is not evidence that a diagnostic or rollback backup is disposable.
+        os.utime(kept[0].parent, (1, 1))
+        outside = self.file(f".build-local/diagnostics/finished/{storage.COMPLETED_MARKER}", self.other)
+        targets = storage.completed_targets(self.root)
+        self.assertEqual(set(targets), {path.parent for path in removed})
+        self.assertIn("Preview only", self.clean(targets, apply=False))
+        self.assertTrue(all(path.exists() for path in removed))
+        self.clean(targets)
+        self.assertTrue(all(not path.parent.exists() for path in removed))
+        self.assertTrue(all(path.exists() for path in kept + [outside]))
+        self.assertEqual(storage.completed_targets(self.root), [])
+
+    def test_housekeeping_rejects_symlinked_marker_before_any_deletion(self):
+        valid = self.file(f".build-local/app-backups/finished/{storage.COMPLETED_MARKER}")
+        outside = self.file("sentinel", self.other)
+        directory = self.root / ".build-local/diagnostics/finished"
+        directory.mkdir(parents=True)
+        (directory / storage.COMPLETED_MARKER).symlink_to(outside)
+        with self.assertRaises(ValueError):
+            self.clean(storage.completed_targets(self.root))
+        self.assertTrue(valid.exists())
+        self.assertTrue(outside.exists())
+
+    def test_housekeeping_rejects_symlinked_completed_directory(self):
+        outside = self.file(f"finished/{storage.COMPLETED_MARKER}", self.other)
+        parent = self.root / ".build-local/diagnostics"
+        parent.mkdir(parents=True)
+        (parent / "finished").symlink_to(outside.parent, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            storage.completed_targets(self.root)
+        self.assertTrue(outside.exists())
+
+    def test_housekeeping_rejects_symlinked_parent(self):
+        outside = self.file(f"diagnostics/finished/{storage.COMPLETED_MARKER}", self.other)
+        parent = self.root / ".build-local"
+        parent.mkdir()
+        (parent / "diagnostics").symlink_to(outside.parent.parent, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            storage.completed_targets(self.root)
+        self.assertTrue(outside.exists())
+
+    def test_housekeeping_cli_previews_and_preserves_packages_and_receipts(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        script = scripts / "clean-build.py"
+        shutil.copy2(SCRIPTS / script.name, script)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        marker = self.file(f".build-local/diagnostics/finished/{storage.COMPLETED_MARKER}")
+        public, report = self.publication()
+        current = self.artifact("3.0.3", "dmg")
+        previous = self.artifact("3.0.2", "dmg")
+        arguments = ["python3", str(script), "housekeeping"]
+        result = subprocess.run(arguments, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Preview only", result.stdout)
+        self.assertTrue(marker.exists())
+        self.assertTrue(public.exists())
+        result = subprocess.run([*arguments, "--yes"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.parent.exists())
+        self.assertFalse(public.exists())
+        self.assertTrue(all(path.exists() for path in (report, current, previous)))
+        result = subprocess.run([*arguments, "--yes"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Nothing to clean", result.stdout)
+
+    def test_housekeeping_in_linked_worktree_never_sweeps_primary(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(SCRIPTS / "clean-build.py", scripts / "clean-build.py")
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "scripts/clean-build.py"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                        "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], check=True)
+        linked = self.root / ".worktrees/linked"
+        subprocess.run(["git", "-C", str(self.root), "worktree", "add", "-qb", "linked", str(linked)], check=True)
+        primary = self.file(f".build-local/diagnostics/finished/{storage.COMPLETED_MARKER}")
+        completed = self.file(f".build-local/diagnostics/finished/{storage.COMPLETED_MARKER}", linked)
+        cache = self.file("CtrlxPackage/.build/object.o", linked)
+        result = subprocess.run(["python3", str(linked / "scripts/clean-build.py"), "housekeeping", "--yes"],
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(completed.parent.exists())
+        self.assertTrue(primary.exists())
+        self.assertTrue(cache.exists())
+
     def test_preview_never_deletes(self):
         old = self.artifact("3.0.1")
         self.artifact("3.0.2")
@@ -432,11 +534,13 @@ class BuildCleanupTests(unittest.TestCase):
         public, report = self.publication()
         index = self.file(".build-local/DerivedData/iOS/Index.noindex/fixture")
         app = self.file(".build-local/DerivedData/iOS/Build/Products/CtrlX.app/executable")
+        completed = self.file(f".build-local/diagnostics/finished/{storage.COMPLETED_MARKER}")
+        active = self.file(".build-local/diagnostics/active/output.log")
         outside = self.file("dist/qcloud-release/3.0.3/public-CtrlX-3.0.3.dmg", self.other)
         arguments = ["python3", str(script), "prune", "--artifact", str(current), "--platform", "iOS"]
         result = subprocess.run(arguments, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(all(path.exists() for path in (old, public, index)))
+        self.assertTrue(all(path.exists() for path in (old, public, index, completed)))
         # The formal release uses temporary DerivedData, not the local packaging cache.
         result = subprocess.run(arguments[:-2], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -449,8 +553,8 @@ class BuildCleanupTests(unittest.TestCase):
             "cleanup-test", str(self.root), str(SCRIPTS / "common.sh"), str(current),
         ], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(all(not path.exists() for path in (old, public, index)))
-        self.assertTrue(all(path.exists() for path in (current, report, app, outside)))
+        self.assertTrue(all(not path.exists() for path in (old, public, index, completed)))
+        self.assertTrue(all(path.exists() for path in (current, report, app, active, outside)))
 
     def test_packaging_disables_indexing_without_disabling_incremental_compilation(self):
         for name in ("package-local-ios.sh", "package-local-macos.sh", "release.sh"):
@@ -483,6 +587,7 @@ class BuildCleanupTests(unittest.TestCase):
                         current = self.artifact("3.0.3", extension)
                         intermediate = self.file(f".build-local/DerivedData/{platform}/Build/Intermediates.noindex/object.o")
                         app = self.file(f".build-local/DerivedData/{platform}/Build/Products/CtrlX.app/executable")
+                        completed = self.file(f".build-local/diagnostics/finished/{storage.COMPLETED_MARKER}")
                         commands = 'set -euo pipefail\nSCRIPT_DIR="$1/scripts"\nsource "$2"\n' \
                             + f'{variable}="$3"\n' + 'SAVE_SPACE="$4"\nMETADATA_STATUS="$5"\n' \
                             + 'write_artifact_metadata() { return "$METADATA_STATUS"; }\n' + tail
@@ -491,6 +596,7 @@ class BuildCleanupTests(unittest.TestCase):
                                                 text=True, capture_output=True)
                         self.assertEqual(result.returncode, status, result.stderr)
                         self.assertEqual(intermediate.exists(), not (save_space == "true" and status == 0))
+                        self.assertEqual(completed.exists(), status != 0)
                         self.assertTrue(app.exists())
                         self.assertTrue(current.exists())
 

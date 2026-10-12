@@ -142,6 +142,13 @@ Packaging deletes temporary App copies on exit and keeps two local IPA/DMG
 packages per platform/configuration. Successful packaging removes old platform
 indexes, duplicate dependency copies and completed public-download verification
 copies; reusable build/download caches and installable apps remain worktree-local.
+Successful packaging also removes explicitly completed immediate child directories
+under `.build-local/app-backups/` and `.build-local/diagnostics/`: add an empty
+`.ctrlx-cleanup-ready` file only after their processes have stopped and the backup
+or evidence is no longer needed. App backups require a verified replacement and
+a retained rollback package. Unmarked directories and every worktree's incremental
+caches remain. `python3 scripts/clean-build.py housekeeping` previews this cleanup;
+add `--yes` to apply it without rebuilding. See `RELEASE.md`.
 Packaging warns below 20 GiB free before building. Local Mac/iOS packaging accepts
 `--save-space`: only after success, remove that platform's compilation intermediates
 and module/SDK caches, retaining signed installable apps and downloaded dependencies.
