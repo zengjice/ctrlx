@@ -48,7 +48,7 @@ func macOnlyTargetDependencies(for target: String) -> [Target.Dependency] {
         case "CtrlxFeature":
             return [.swiftTerm]
         case "CtrlxServerFeature":
-            return [.target(name: "CtrlxBrowserBridge", condition: .when(platforms: [.macOS])), .swiftTerm, .sparkle, .textual, .projectNavigator, .files, .gitWorkbench, .gitWorkbenchGitKit]
+            return [.target(name: "CtrlxBrowserBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorProtocol", condition: .when(platforms: [.macOS])), .swiftTerm, .sparkle, .textual, .projectNavigator, .files, .gitWorkbench, .gitWorkbenchGitKit]
         case "CtrlxServerFeatureTests":
             return [.swiftTerm]
         case "CtrlxExternalServerTests":
@@ -56,7 +56,7 @@ func macOnlyTargetDependencies(for target: String) -> [Target.Dependency] {
         case "CtrlxE2E":
             return [.argumentParser]
         case "CtrlxCLI":
-            return [.argumentParser, .yams, .dependencies, .dependenciesMacros]
+            return [.argumentParser, .yams, .dependencies, .dependenciesMacros, "CtrlxSimulatorProtocol"]
         default:
             return []
         }
@@ -222,7 +222,7 @@ extension Target.Dependency {
 /// inside the `Package(...)` call exceeds the Linux Swift 6.x type-checker
 /// heuristic and fails the relay's Docker build with "the compiler is unable to
 /// type-check this expression in reasonable time."
-let products: [Product] = [
+var products: [Product] = [
     // Products define the executables and libraries a package produces, making them visible to other packages.
     .library(
         name: "CtrlxNetworking",
@@ -399,6 +399,7 @@ var targets: [Target] = [
             .vapor,
             .dependencies,
             .dependenciesMacros,
+            .clocks,
         ] + macOnlyTargetDependencies(for: "CtrlxServerFeature"),
         resources: [
             .process("Resources"),
@@ -604,7 +605,12 @@ var targets: [Target] = [
 ]
 
 #if os(macOS)
+    products.append(.executable(name: "CtrlxSimulatorHost", targets: ["CtrlxSimulatorHost"]))
     targets.append(.target(name: "CtrlxBrowserBridge"))
+    targets.append(.target(name: "CtrlxSimulatorProtocol"))
+    targets.append(.target(name: "CtrlxSimulatorBridge", exclude: ["ThirdParty"], linkerSettings: [.linkedFramework("Foundation"), .linkedFramework("IOSurface"), .linkedFramework("Metal"), .linkedFramework("CoreGraphics"), .linkedFramework("Accelerate"), .linkedFramework("ImageIO")]))
+    targets.append(.executableTarget(name: "CtrlxSimulatorHost", dependencies: ["CtrlxSimulatorBridge"]))
+    targets.append(.testTarget(name: "CtrlxSimulatorTests", dependencies: ["CtrlxSimulatorProtocol"]))
     targets.append(.testTarget(name: "CtrlxCLITests", dependencies: ["CtrlxCLI", .dependenciesTestSupport]))
 #endif
 

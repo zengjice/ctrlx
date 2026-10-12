@@ -49,7 +49,7 @@ struct AgentBrowserRoutingTests {
     }
 
     nonisolated private static func row(session: String) -> String {
-        ["100", "%1", session, "1", "0", "codex", "/tmp", "80", "24", "1"]
+        ["100", "%1", session, "1", "0", "codex", "/tmp", "80", "24", "1", "@1"]
             .joined(separator: String(PaneInfo.fieldSeparator))
     }
 

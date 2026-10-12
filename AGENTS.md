@@ -156,6 +156,13 @@ Packaging deletes temporary App copies on exit and keeps two local IPA/DMG
 packages per platform/configuration. Successful packaging removes old platform
 indexes, duplicate dependency copies and completed public-download verification
 copies; reusable build/download caches and installable apps remain worktree-local.
+Successful packaging also removes explicitly completed immediate child directories
+under `.build-local/app-backups/` and `.build-local/diagnostics/`: add an empty
+`.ctrlx-cleanup-ready` file only after their processes have stopped and the backup
+or evidence is no longer needed. App backups require a verified replacement and
+a retained rollback package. Unmarked directories and every worktree's incremental
+caches remain. `python3 scripts/clean-build.py housekeeping` previews this cleanup;
+add `--yes` to apply it without rebuilding. See `RELEASE.md`.
 Packaging warns below 20 GiB free before building. Local Mac/iOS packaging accepts
 `--save-space`: only after success, remove that platform's compilation intermediates
 and module/SDK caches, retaining signed installable apps and downloaded dependencies.
@@ -249,6 +256,16 @@ Read the relevant contract before changing these areas:
   Build native components with `bash scripts/build-agent-browser.sh` before
   direct Mac workspace builds; local packaging does this automatically.
   Run native engine suites sequentially in an isolated signed app.
+- [Agent iOS](docs/agent-simulator-design.md): native iOS Simulator tabs owned
+  by the calling Codex process, private device storage, default two-device
+  admission and optional simslim `balanced` profile. Read the accepted contract
+  and delivery gaps at the top; historical experiments are not release gates.
+  The CLI contract is in `plugin/ctrlx/skills/agent-ios/SKILL.md` and its
+  `references/operations.md`; `ctrlx ios run -- codex` supplies `--no-daemon`.
+  Build with `bash scripts/build-agent-simulator.sh` before direct Mac builds.
+  Validate in an isolated signed app, preserve incremental caches and current
+  fixtures, and reuse unaffected evidence after source-impact review. Local
+  acceptance does not establish cross-machine compatibility or distribution.
 - [Sidecar contract](docs/plugins/sidecar-authoring.md): manifest, ingress versus
   stdio wire casing, supervision, distribution and telemetry. Agent-specific
   lifecycle, subagent filtering, response keystrokes and test commands live in

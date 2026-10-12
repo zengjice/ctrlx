@@ -44,7 +44,8 @@
         /// Tmux interaction service
         public let tmuxService: TmuxService
 
-        public let agentBrowser = AgentBrowserService()
+        public let agentBrowser: AgentBrowserService
+        public let agentSimulator = AgentSimulatorService()
 
         /// Pane state and session tracking manager
         public let windowManager: MirrorWindowManager
@@ -290,8 +291,9 @@
         ///
         /// Synchronous initialization sets up core services. Call `setupAllServices()` asynchronously
         /// to complete service initialization and start connections.
-        public init(settings: AppSettings = AppSettings()) {
+        public init(settings: AppSettings = AppSettings(), agentBrowser: AgentBrowserService = AgentBrowserService()) {
             self.settings = settings
+            self.agentBrowser = agentBrowser
             self.licenseManager = LicenseManager(settings: settings)
 
             #if canImport(AppKit) && DEBUG
@@ -410,8 +412,12 @@
             agentBrowser.imageTargetForPane = { [weak windowManager] paneID in
                 windowManager?.paneStates[paneID].flatMap(AgentImageTarget.init(pane:))
             }
-            agentBrowser.start { [tmuxService] pid in
+            agentBrowser.configure { [tmuxService] pid in
                 try await tmuxService.agentBrowserPane(processID: pid)
+            }
+            agentSimulator.start(root: CtrlxPaths(stateRootOverride: Self.parseCtrlxStateRoot()).stateRoot) { [tmuxService] pid in
+                @Dependency(SimulatorSystemClient.self) var system
+                return try await tmuxService.agentBrowserPane(processID: pid, ancestorPIDs: system.ancestors(of: pid))
             }
 
             // Pre-fill the editor list on first launch with whatever is installed
@@ -508,12 +514,15 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
-            await agentBrowser.shutdown()
+            await apiSocketServer.stop()
+            // Simulator commands must not consume the quit deadline before independent cleanup runs.
+            async let simulatorShutdown: Void = agentSimulator.shutdown()
             logger.info("App shutdown: disconnecting pane streams and control clients")
             windowManager.stopPeriodicSessionValidation()
             windowManager.stopPeriodicAgentReconciliation()
             await paneStreamManager.disconnectAll()
             await controlClientManager.disconnectAll()
+            await agentBrowser.shutdown()
 
             // Tear down the in-process plugin runtime: stop accepting ingress
             // frames, then `shutdown()` each active core via the registry.
@@ -524,6 +533,7 @@
                     await registry.disable(id)
                 }
             }
+            await simulatorShutdown
         }
 
         /// Resolves the tmux session name for a pane. Tries `paneStates` first
@@ -2616,6 +2626,9 @@
                         ).toJSONValue()
                     }
                 },
+                onBrowserStart: { [agentBrowser] state in
+                    try await agentBrowser.prepareForAgentRequests(state: state)
+                },
                 onProjectList: { [weak self] in
                     // Refresh then return the merged per-plugin project list (the
                     // cores own scanning now — spec §12).
@@ -2879,7 +2892,10 @@
             liveRouter = router
 
             // Set the router as the request handler on the socket server
-            await apiSocketServer.setRequestHandler(router.handleRequest)
+            await apiSocketServer.setRequestHandler { [agentSimulator] request in
+                if request.method == "simulator.action" { return await agentSimulator.handle(request) }
+                return await router.handleRequest(request)
+            }
 
             // Start the socket server (use separate path in E2E to avoid conflicts)
             let isE2E = CommandLine.arguments.contains("--e2e-test")

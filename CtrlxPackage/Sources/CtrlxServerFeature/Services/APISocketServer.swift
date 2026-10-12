@@ -1,5 +1,6 @@
 #if os(macOS)
     import CtrlxNetworking
+    import CtrlxSimulatorProtocol
     import Dependencies
     import DependenciesMacros
     import Foundation
@@ -97,7 +98,7 @@
                 throw APISocketError.bindFailed
             }
 
-            guard listen(serverFd, 5) == 0 else {
+            guard listen(serverFd, 64) == 0 else {
                 close(serverFd)
                 serverFd = -1
                 throw APISocketError.listenFailed
@@ -188,6 +189,12 @@
             logger: Logger
         ) async {
             defer { close(fd) }
+            do {
+                try configureConnection(fd)
+            } catch {
+                logger.error("Failed to configure API connection: \(error)")
+                return
+            }
 
             // Read messages in a loop (persistent connection)
             while true {
@@ -211,7 +218,17 @@
                 // Decode JSON-RPC request
                 let response: JSONRPCResponse
                 do {
-                    let request = try JSONDecoder().decode(JSONRPCRequest.self, from: data)
+                    var request = try JSONDecoder().decode(JSONRPCRequest.self, from: data)
+                    if request.method == "simulator.action" {
+                        var peerPID: Int32 = 0
+                        var size = socklen_t(MemoryLayout.size(ofValue: peerPID))
+                        guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &peerPID, &size) == 0, peerPID > 0 else {
+                            throw SimulatorFailure("Cannot identify the simulator socket caller")
+                        }
+                        var params = request.params
+                        params["_peerPID"] = .int(Int(peerPID))
+                        request = JSONRPCRequest(id: request.id, method: request.method, params: params)
+                    }
                     if let handler {
                         response = await handler(request)
                     } else {
@@ -226,16 +243,32 @@
                 do {
                     var responseData = try JSONEncoder().encode(response)
                     responseData.append(UInt8(ascii: "\n"))
-                    let written = responseData.withUnsafeBytes { ptr in
-                        Darwin.write(fd, ptr.baseAddress!, ptr.count)
-                    }
-                    if written < 0 {
-                        logger.error("Failed to write response")
-                        break
-                    }
+                    try writeResponse(responseData, to: fd)
                 } catch {
-                    logger.error("Failed to encode response: \(error)")
+                    logger.error("Failed to send response: \(error)")
                     break
+                }
+            }
+        }
+
+        nonisolated static func configureConnection(_ fd: Int32) throws {
+            // A client may close after reaching its response limit or cancelling a request.
+            var noSIGPIPE: Int32 = 1
+            guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSIGPIPE, socklen_t(MemoryLayout.size(ofValue: noSIGPIPE))) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        }
+
+        nonisolated static func writeResponse(_ data: Data, to fd: Int32) throws {
+            try data.withUnsafeBytes { bytes in
+                var offset = 0
+                while offset < bytes.count {
+                    let written = Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+                    if written < 0, errno == EINTR { continue }
+                    guard written > 0 else {
+                        throw POSIXError(written == 0 ? .EIO : POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                    offset += written
                 }
             }
         }

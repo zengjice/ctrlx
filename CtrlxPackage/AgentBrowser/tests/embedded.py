@@ -85,6 +85,12 @@ def main():
         path = root / 'agent-browser/endpoint.json'
         return json.loads(path.read_text()) if path.exists() else None
 
+    def start_browser():
+        subprocess.run([str(cli), 'wait-ready', '--socket', api_socket, '--timeout', '30'], check=True, capture_output=True)
+        call(api_socket, {'id': 'embedded-browser-start', 'method': 'browser.start',
+                          'params': {'state': str(root / 'agent-browser')}})
+        return wait_for(endpoint_ready, 30)
+
     reports = Path.home() / 'Library/Logs/DiagnosticReports'
     known_reports = set(reports.glob('CtrlX*.ips'))
 
@@ -104,9 +110,8 @@ def main():
             time.sleep(.1)
 
     try:
-        endpoint = wait_for(endpoint_ready, 30)
+        endpoint = start_browser()
         print('Embedded endpoint ready', flush=True)
-        subprocess.run([str(cli), 'wait-ready', '--socket', api_socket, '--timeout', '30'], check=True, capture_output=True)
         private = root / 'fixture-grants.json'
         saved = json.loads(private.read_text()) if prior and private.exists() else None
         runs = []
@@ -195,7 +200,7 @@ def main():
                 start_new_session=True)
             (root / 'fixture.json').write_text(json.dumps({'pid': host.pid, 'url': url, 'app': str(app)}))
             print('Restarted isolated host:', host.pid, flush=True)
-            endpoint = wait_for(endpoint_ready, 30)
+            endpoint = start_browser()
             assert endpoint['epoch'] != old_endpoint['epoch']
             request(b, 'tabs', ok=False)
             # Native protocol regression only: register a NEW test grant while

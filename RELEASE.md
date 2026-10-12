@@ -18,6 +18,12 @@ Sparkle stays disabled in the application until a CtrlX feed URL and EdDSA
 public key are supplied in ignored `Config/Local-macOS.xcconfig`. Gallager's
 feed, key and domains are never fallback values.
 
+The simulator build scripts sign both `CtrlxSimulatorHost` and the pinned
+`simslim` helper with Hardened Runtime. Validate actual display, input,
+accessibility and profile changes in the signed candidate before distribution.
+Full App hardening and notarization still require the Agent Browser archive
+gates described in `docs/agent-browser.md`.
+
 ## Publish only the macOS package
 
 For the existing Qcloud private-distribution channel, follow the sibling
@@ -66,6 +72,27 @@ packaging removes only that platform's old `Index.noindex` and duplicate Derived
 By default, build intermediates, compilation/module caches and installable apps
 are kept.
 Do not run concurrent builds or installs against the same DerivedData directory.
+
+Successful packaging also removes completed historical App backups and diagnostic
+directories. Completion is explicit: after the investigation or installation
+verification has finished and no process uses the directory, put an empty
+`.ctrlx-cleanup-ready` file in the immediate child directory of
+`.build-local/app-backups/` or `.build-local/diagnostics/`. Unmarked directories
+are preserved, regardless of age; build caches, signing files, recovered browser
+profiles, source and other worktrees are never selected by this housekeeping.
+Only mark an App backup disposable once the replacement App is verified and a
+rollback package remains in `dist/`. Never mark an active diagnostic directory.
+To run the same housekeeping without rebuilding:
+
+```bash
+python3 scripts/clean-build.py housekeeping        # Preview only
+python3 scripts/clean-build.py housekeeping --yes  # Remove explicitly completed artifacts
+```
+
+It also uses the existing successful-publication receipt and SHA-256 checks for
+public-download copies. Legacy downloads without a valid receipt are preserved;
+migrate a receipt only after verifying the historical release evidence and hash.
+No age-based sweep or automatic cross-worktree cache deletion is performed.
 
 All packaging entrypoints check available disk space before building and warn
 below 20 GiB. This is an advisory threshold, not a guarantee or a hard minimum;

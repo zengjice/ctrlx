@@ -49,6 +49,26 @@ alongside it. The native runtime's distribution archive gate remains in place;
 the upstream binary's complete transitive-license audit and hardened-runtime
 distribution checks are still required before enabling that gate.
 
+## Agent Simulator
+
+The native simulator XPC handshake and DTUHID wire vocabulary are adapted from
+[idb](https://github.com/facebook/idb/tree/45e96c070ce62ee1df14ba21ccd8c07b720a8684)
+(MIT). The copyright and permission notice are retained in
+[`idb-LICENSE`](CtrlxPackage/Sources/CtrlxSimulatorBridge/ThirdParty/idb-LICENSE).
+Native accessibility snapshot attributes and cross-process subtree continuation
+follow [idb revision c11e82a](https://github.com/facebook/idb/tree/c11e82abcca6301b21ac024890e09571835f1a7f)
+under the same MIT notice; CtrlX uses its existing Mac Inspector transport.
+
+Service profiles and resource measurement use the unmodified
+[simslim](https://github.com/MobAI-App/simslim/tree/e752a72898ca69f703c74dc79b7b047a4f2093a3)
+CLI (MIT, copyright Interlap), built from a SHA-256-verified source archive at
+that fixed commit. Its license is bundled in
+`Resources/AgentSimulator/simslim-LICENSE`.
+The Go standard-library license and notices for the modules actually linked into
+the CLI are bundled in `Resources/AgentSimulator/simslim-NOTICES.txt`.
+`simslim-build.json` records the source hash, compiler, signed binary hash and
+each linked module's license classification and notice hashes.
+
 ## Website
 
 | Project | License |
