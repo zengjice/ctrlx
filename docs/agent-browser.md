@@ -190,6 +190,15 @@ not grant browser automation access. The opaque Relay needs no update.
 Annotation coordinates are normalized to the captured image; export flattens the
 red marks into PNG (or a compressed image within the existing 512 KiB budget).
 Screenshot/decode/send failures retain the editor or show an inline error.
+On iOS, after the image is acknowledged, the annotation stays visible with
+“Opening Agent” progress while only the destination window's terminal panes
+bootstrap underneath it. The first usable native layout, not merely a stream
+acknowledgement, releases the overlay. The same mounted terminal views are then
+revealed without another subscription. Hidden panes cannot claim keyboard input
+or expand questions. Leaving, backgrounding, disconnecting or a 15-second timeout
+cancels preparation. An acknowledged image is not resent by **Open Agent** retry;
+it only retries opening the captured recipient. This does not keep all session
+terminals alive or change the Host/Relay protocol.
 
 ## Ownership and data
 

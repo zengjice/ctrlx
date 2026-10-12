@@ -25,6 +25,7 @@
         @State private var fileWorkspace = IOSFileBrowserWorkspace()
         @State private var pendingFileLink: TerminalFileLinkRequest?
         @State private var selectedBrowserID: UUID?
+        @State private var browserHandoff = BrowserTerminalHandoff()
         @State private var showsWindowTabs = false
         @State private var pendingWindowTabAction: WindowTabAction?
 
@@ -165,25 +166,37 @@
             return max(120, barWidth - reservedPerSide * 2)
         }
 
+        private var terminalIsVisible: Bool { selectedBrowser == nil && fileWorkspace.selected == nil }
+
+        private var displayedTerminalWindow: TmuxWindow? {
+            if let request = browserHandoff.request, selectedBrowser?.id == request.browserID {
+                return sessionWindows.first { $0.id == request.windowID }
+            }
+            return terminalIsVisible ? window : nil
+        }
+
         private var browserContent: some View {
-            Group {
+            ZStack {
+                // The destination retains this exact identity when the browser
+                // overlay disappears; no second subscription/bootstrap is needed.
+                if let terminalWindow = displayedTerminalWindow {
+                    windowContent(terminalWindow)
+                        .id(terminalWindow.id)
+                        .allowsHitTesting(terminalIsVisible)
+                        .accessibilityHidden(!terminalIsVisible)
+                }
                 if let tab = selectedBrowser {
                     RemoteBrowserView(tab: tab, client: relayClient)
                         .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
                             targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
-                            didSend: { target in
-                                if let window = sessionWindows.first(where: { $0.stableId == target.windowID }) {
-                                    selectTerminalWindow(window, preferredPaneID: target.paneID)
-                                }
-                            }))
+                            didSend: { target in try await revealAnnotationTarget(target, browserID: tab.id) }))
+                        .background(Color(.systemBackground))
                         .id(tab.id)
                 } else if let tab = fileWorkspace.selected {
                     WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: hostId, paneID: tab.sourcePaneID,
                                                                        connection: connectionManager.connection(for: hostId)))
                         .id(tab.id)
-                } else if let window {
-                    windowContent(window)
-                } else {
+                } else if displayedTerminalWindow == nil {
                     ContentUnavailableView(
                         "Window Not Found",
                         symbol: .exclamationmarkTriangle,
@@ -235,6 +248,27 @@
         }
 
         private var selectedBrowser: RemoteBrowserTab? { sessionBrowsers.first { $0.id == selectedBrowserID } }
+
+        private func revealAnnotationTarget(_ target: AgentImageTarget, browserID: UUID) async throws {
+            guard selectedBrowser?.id == browserID, scenePhase == .active, relayClient.isHostConnected,
+                  let destination = sessionWindows.first(where: { $0.stableId == target.windowID }),
+                  destination.panes.contains(where: target.matches) else {
+                throw AgentImageError.message("The Agent or connection changed. Choose the recipient again.")
+            }
+            let id = try await browserHandoff.prepare(browserID: browserID, windowID: destination.id,
+                                                      paneIDs: Set(destination.panes.map(\.paneId)))
+            defer { browserHandoff.cancel(id: id) }
+            try Task.checkCancellation()
+            guard browserHandoff.isReady(id), selectedBrowser?.id == browserID,
+                  scenePhase == .active, relayClient.isHostConnected,
+                  let current = sessionWindows.first(where: { $0.id == destination.id }),
+                  Set(current.panes.map(\.paneId)) == Set(destination.panes.map(\.paneId)),
+                  current.panes.contains(where: target.matches) else {
+                throw AgentImageError.message("The Agent or connection changed. Try Open Agent again.")
+            }
+            selectTerminalWindow(current, preferredPaneID: target.paneID)
+            browserHandoff.finish(id)
+        }
 
         private func saveFileWorkspace() {
             fileWorkspace.updateContext(fileWorkspaceContext)
@@ -375,6 +409,10 @@
             }
             .task(id: windowSelectionCandidates) {
                 reconcileWindowSelection(candidates: windowSelectionCandidates)
+                if let request = browserHandoff.request,
+                   Set(sessionWindows.first(where: { $0.id == request.windowID })?.panes.map(\.paneId) ?? []) != request.paneIDs {
+                    browserHandoff.cancel(error: AgentImageError.message("The Agent window layout changed. Try Open Agent again."))
+                }
             }
             .onChange(of: viewportGrids) {
                 fitCreatedTerminalIfReady()
@@ -388,11 +426,19 @@
             .onChange(of: relayClient.isHostConnected) {
                 if !relayClient.isHostConnected {
                     cancelCreationFollowUp()
+                    browserHandoff.cancel(error: AgentImageError.message("The Host disconnected. Reconnect and try Open Agent again."))
                 }
+            }
+            .onChange(of: selectedBrowserID) {
+                if let request = browserHandoff.request, selectedBrowserID != request.browserID { browserHandoff.cancel() }
+            }
+            .onChange(of: scenePhase) {
+                if scenePhase != .active { browserHandoff.cancel() }
             }
             .onDisappear {
                 // A delayed creation reply must not redirect a later visit.
                 cancelCreationFollowUp()
+                browserHandoff.cancel()
                 pendingWindowTabAction = nil
                 pendingFileLink = nil
                 showsWindowTabs = false
@@ -410,6 +456,7 @@
                     let activePaneId,
                     let content = clipboardContents[activePaneId],
                     scenePhase == .active,
+                    terminalIsVisible,
                     content != lastWrittenClipboardContent
                 else { return }
                 clipboard.setString(content)
@@ -803,6 +850,7 @@
             VStack(spacing: 0) {
                 // Response view for active pane's Claude session (full width, above layout)
                 if
+                    terminalIsVisible,
                     let activeService,
                     let responseState = activeService.responseState,
                     AgentInputPresentation.showsResponseForm(
@@ -959,7 +1007,8 @@
         }
 
         private func paneTerminal(pane: PaneState, windowName: String, windowID: String) -> some View {
-            LiveTerminalView(
+            let preparationID = browserHandoff.request?.id
+            return LiveTerminalView(
                 paneId: pane.paneId,
                 hostId: hostId,
                 scrollingAgentID: pane.agentSession?.pluginID,
@@ -976,8 +1025,8 @@
                 hideNavigationBar: false,
                 showKeyboardButton: false,
                 showCopyButton: false,
-                isActive: pane.paneId == activePaneId,
-                isInputSuspended: quickActionPresentation.suspendsTerminalInput,
+                isActive: terminalIsVisible && pane.paneId == activePaneId,
+                isInputSuspended: !terminalIsVisible || quickActionPresentation.suspendsTerminalInput,
                 parentKeyboardRequested: isKeyboardActive,
                 settings: settings,
                 telemetry: pane.telemetry,
@@ -1020,7 +1069,13 @@
                         viewportGrids[pane.paneId] = grid
                     }
                 },
-                onSwitchWindow: { selectAdjacentWindow(from: windowID, direction: $0) }
+                onSwitchWindow: { selectAdjacentWindow(from: windowID, direction: $0) },
+                preparationID: preparationID,
+                onPresentationChange: { status in
+                    if let preparationID {
+                        browserHandoff.update(status, paneID: pane.paneId, requestID: preparationID)
+                    }
+                }
             )
             .environment(relayClient)
         }
@@ -1102,7 +1157,7 @@
         }
 
         private func fitCreatedTerminalIfReady() {
-            guard !isResizing, var fit = initialSessionFit,
+            guard terminalIsVisible, !isResizing, var fit = initialSessionFit,
                   fit.matches(hostID: hostId, sessionName: sessionName) else { return }
             let request = fit.takeRequest(
                 isAvailable: relayClient.isHostConnected && relayClient.hostSupportsTerminalFit,
