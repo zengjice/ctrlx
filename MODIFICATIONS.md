@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.58 — Wrapped file links and browser annotation handoff
+
+- Recognize enclosed, word-wrapped filename tails when they cannot fit in the
+  preceding row's remaining cells, including Chinese video paths that leave
+  six columns unused. Both rows target the complete file; truncated paths,
+  independent paths and web URLs retain their existing safeguards.
+- Bundle the new `file-links` Skill for Claude Code (plugin 1.3.3) and Codex
+  (plugin 1.1.2): short Markdown labels with complete absolute Host targets,
+  without manual wrapping or truncation. Keep visible-text compatibility because
+  agent terminal renderers do not guarantee explicit file hyperlink metadata.
+  Update the installed agent plugin and begin a new session to discover the Skill.
+- Keep browser annotations visible while the iOS destination terminal prepares,
+  then reveal the ready terminal without a second subscription. Cancellation,
+  disconnects and navigation failures preserve the acknowledged attachment;
+  retrying Open Agent does not submit the same screenshot again.
+- Refresh architecture and contributor documentation for development by
+  different AI agents. Distinguish current contracts from historical plans.
+- Distribution: Mac package only. No Relay deployment, iPhone installation or
+  replacement of the local running Mac app. The iOS handoff requires a separate
+  iPhone build/install and physical-device acceptance.
+
 ## 3.0.57 — Reliable terminal file links and iOS window swipes
 
 - Separate Chinese prose punctuation from terminal file paths and reject
