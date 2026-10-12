@@ -8,20 +8,81 @@ import Testing
 @MainActor
 @Suite("iOS Files workspace persistence")
 struct IOSFileBrowserWorkspaceTests {
-    @Test("Terminal file links reuse a matching directory and leave independent tabs intact")
+    @Test("Terminal file links reuse their window's tab across directories and panes")
     func terminalFileLink() throws {
         try withDependencies {
             $0[PreferencesService.self] = .inMemory()
         } operation: {
             let workspace = IOSFileBrowserWorkspace()
-            try workspace.open(.init(directory: "/host/one", file: "/host/one/first.mp4"), paneID: "%1")
+            workspace.open(paneID: "%1")
+            let manual = try #require(workspace.selected)
+            manual.navigate("/host/one")
+            try workspace.open(.init(directory: "/host/one", file: "/host/one/first.mp4"), windowID: "@1", paneID: "%1")
             let first = workspace.selectedID
-            try workspace.open(.init(directory: "/host/two", file: nil), paneID: "%2")
-            try workspace.open(.init(directory: "/host/one", file: "/host/one/second.mp4"), paneID: "%1")
-            #expect(workspace.tabs.count == 2)
+            try workspace.open(.init(directory: "/host/one", file: nil), windowID: "@2", paneID: "%2")
+            let otherWindow = try #require(workspace.selected)
+            try workspace.open(.init(directory: "/host/two", file: "/host/two/second.mp4"), windowID: "@1", paneID: "%3")
+            #expect(workspace.tabs.count == 3)
             #expect(workspace.selectedID == first)
-            #expect(workspace.selected?.selectedFile == "/host/one/second.mp4")
-            #expect(workspace.tabs.last?.path == "/host/two")
+            #expect(workspace.selected?.path == "/host/two")
+            #expect(workspace.selected?.selectedFile == "/host/two/second.mp4")
+            #expect(workspace.selected?.sourcePaneID == "%3")
+            #expect(manual.path == "/host/one")
+            #expect(manual.terminalLinkWindowID == nil)
+            #expect(otherWindow.path == "/host/one")
+            #expect(otherWindow.selectedFile == nil)
+
+            workspace.tabs.reverse()
+            try workspace.open(.init(directory: "/host/three", file: nil), windowID: "@1", paneID: "%3")
+            #expect(workspace.selectedID == first)
+            #expect(workspace.selected?.path == "/host/three")
+            #expect(workspace.selected?.selectedFile == nil)
+            workspace.closeSelected()
+            try workspace.open(.init(directory: "/host/four", file: nil), windowID: "@1", paneID: "%3")
+            #expect(workspace.tabs.count == 3)
+            #expect(workspace.selectedID != first)
+            #expect(workspace.tabs.contains { $0 === manual })
+            #expect(workspace.tabs.contains { $0 === otherWindow })
+        }
+    }
+
+    @Test("A full workspace permits window reuse but rejects a new window's link")
+    func terminalLinksAtTabLimit() throws {
+        try withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let workspace = IOSFileBrowserWorkspace()
+            try workspace.open(.init(directory: "/host/one", file: nil), windowID: "@1", paneID: "%1")
+            let first = workspace.selectedID
+            for _ in 0..<29 { workspace.open(paneID: "%1") }
+            try workspace.open(.init(directory: "/host/two", file: nil), windowID: "@1", paneID: "%2")
+            #expect(workspace.selectedID == first)
+            #expect(workspace.selected?.path == "/host/two")
+            #expect(throws: FileBrowserError.self) {
+                try workspace.open(.init(directory: "/host/two", file: nil), windowID: "@2", paneID: "%3")
+            }
+            #expect(workspace.tabs.count == 30)
+            #expect(workspace.selectedID == first)
+        }
+    }
+
+    @Test("Restored tabs keep their contents without reattaching to a recycled window ID")
+    func restoredTerminalLinkIsIndependent() throws {
+        try withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let directory = try context("/host")
+            let workspace = IOSFileBrowserWorkspace()
+            workspace.updateContext(directory)
+            try workspace.open(.init(directory: "/host/one", file: "/host/one/file.md"), windowID: "@1", paneID: "%1")
+            let reopened = IOSFileBrowserWorkspace()
+            reopened.updateContext(directory)
+            let restored = try #require(reopened.tabs.first)
+            #expect(restored.terminalLinkWindowID == nil)
+            try reopened.open(.init(directory: "/host/two", file: nil), windowID: "@1", paneID: "%1")
+            #expect(reopened.tabs.count == 2)
+            #expect(restored.selectedFile == "/host/one/file.md")
+            #expect(reopened.selectedID != restored.id)
         }
     }
 
@@ -171,14 +232,13 @@ struct IOSFileBrowserWorkspaceTests {
         } operation: {
             let office = IOSFileBrowserWorkspace()
             office.updateContext(try context("/shared"))
-            office.open(paneID: "%1")
-            office.selected?.navigate("/shared/office")
-            office.save()
+            try office.open(.init(directory: "/shared/office", file: nil), windowID: "@1", paneID: "%1")
             let home = IOSFileBrowserWorkspace()
             home.updateContext(try context("/shared", hostID: "home"))
             #expect(home.tabs.isEmpty)
-            home.tabs = [FileBrowserTab(path: "/shared/home")]
-            home.save()
+            try home.open(.init(directory: "/shared/home", file: nil), windowID: "@1", paneID: "%1")
+            #expect(office.selected?.path == "/shared/office")
+            #expect(home.selectedID != office.selectedID)
             office.closeSelected()
 
             let reopenedOffice = IOSFileBrowserWorkspace()

@@ -14,7 +14,10 @@ public final class FileBrowserTab: Identifiable {
         public let selectedFile: String?
     }
     public let id: UUID
-    public let sourcePaneID: String?
+    public private(set) var sourcePaneID: String?
+    /// Only link-created tabs participate in reuse. Scoped by the owning Host/session workspace,
+    /// never persisted: restored tabs must not bind to recycled tmux window IDs.
+    public let terminalLinkWindowID: String?
     public private(set) var path: String?
     private var requestedPath: String?
     public var pathInput: String
@@ -38,12 +41,13 @@ public final class FileBrowserTab: Identifiable {
     @ObservationIgnored private var loadID = UUID()
     @ObservationIgnored private var previewID = UUID()
 
-    public init(id: UUID = UUID(), path: String? = nil, sourcePaneID: String? = nil) {
+    public init(id: UUID = UUID(), path: String? = nil, sourcePaneID: String? = nil, terminalLinkWindowID: String? = nil) {
         self.id = id
         self.path = path
         self.requestedPath = path
         self.pathInput = path ?? ""
         self.sourcePaneID = sourcePaneID
+        self.terminalLinkWindowID = terminalLinkWindowID
     }
 
     public var title: String { "Files · \(path.map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? "/" : $0 } ?? "…")" }
@@ -110,6 +114,12 @@ public final class FileBrowserTab: Identifiable {
         listings = [:]
         expanded = []
         refresh += 1
+    }
+
+    public func openTerminalFile(_ destination: TerminalFileDestination, paneID: String) {
+        sourcePaneID = paneID
+        navigate(destination.directory)
+        selectedFile = destination.file
     }
 
     public func load(source: FileBrowserSource) async {

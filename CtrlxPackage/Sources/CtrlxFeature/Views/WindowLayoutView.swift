@@ -392,7 +392,7 @@
                 guard pendingFileLink == request, window?.id == origin.id,
                       window?.panes.contains(where: { $0.paneId == request.paneID }) == true,
                       fileWorkspace.selectedID == nil, selectedBrowserID == nil else { return }
-                try fileWorkspace.open(destination, paneID: request.paneID)
+                try fileWorkspace.open(destination, windowID: origin.stableId, paneID: request.paneID)
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()

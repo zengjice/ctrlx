@@ -290,6 +290,10 @@ final class SessionFileTabsState {
     var openFileTabs: [OpenFileTab] = []
     var directoryTabs: [UUID: FileBrowserTab] = [:]
 
+    func terminalFilesTab(windowID: String) -> FileBrowserTab? {
+        openFileTabs.compactMap { directoryTabs[$0.id] }.first { $0.terminalLinkWindowID == windowID }
+    }
+
     func migrateLegacyExplorer(directory: String) {
         guard tabOrder.contains(.fileExplorer) || rightSide.contains(.fileExplorer) else { return }
         let browser = FileBrowserTab(path: directory)

@@ -3214,6 +3214,7 @@ public struct MainView: View {
         let source: FileBrowserSource
         let sessionName: String
         let windowID: String
+        let stableWindowID: String
         let baseDirectory: String?
         if let hostID = request.hostID {
             guard let remote = selectedRemoteSession, remote.hostId == hostID,
@@ -3221,6 +3222,7 @@ public struct MainView: View {
                   let pane = window.panes.first(where: { $0.paneId == request.paneID }) else { return }
             sessionName = remote.sessionName
             windowID = window.id
+            stableWindowID = window.stableId
             baseDirectory = pane.agentSession?.detectedProjectPath ?? pane.currentPath
             source = .remote(hostID: hostID, paneID: request.paneID,
                              connection: coordinator.viewerConnectionManager?.connection(for: hostID))
@@ -3231,6 +3233,7 @@ public struct MainView: View {
                   let pane = windowManager.paneStates[request.paneID] else { return }
             sessionName = window.sessionName
             windowID = window.id
+            stableWindowID = window.stableId
             baseDirectory = pane.agentSession?.detectedProjectPath ?? pane.currentPath
             source = .local(paneID: request.paneID, tmux: tmuxService, windows: windowManager)
         }
@@ -3254,29 +3257,32 @@ public struct MainView: View {
             }
             guard initialSelection == (tabs?.selectedFileTabId, tabs?.selectedBrowserTabId, tabs?.selectedRight) else { return }
             let tab: FileBrowserTab
-            if let tabs, let existing = tabs.openFileTabs.compactMap({ tabs.directoryTabs[$0.id] }).first(where: { $0.path == destination.directory }) {
+            if let tabs, let existing = tabs.terminalFilesTab(windowID: stableWindowID) {
                 tab = existing
+                if let index = tabs.openFileTabs.firstIndex(where: { $0.id == tab.id }) {
+                    tabs.openFileTabs[index].origin = .terminalWindow(windowID)
+                }
                 if tabs.rightSide.contains(.file(tab.id)) { tabs.selectedRight = .file(tab.id) }
                 else if request.hostID != nil { tabs.selectedFileTabId = tab.id; tabs.selectedBrowserTabId = nil }
                 else { tabs.selectLeftFileTab(tab.id, windowID: windowID, legacyExplorerWindows: &fileBrowserActiveWindowIds) }
             } else {
                 tab = openDirectoryTab(sessionName: sessionName, windowID: windowID, hostID: request.hostID,
-                                       paneIDs: [request.paneID], fallbackPaneID: request.paneID, path: destination.directory)
+                                       paneIDs: [request.paneID], fallbackPaneID: request.paneID, path: destination.directory,
+                                       terminalLinkWindowID: stableWindowID)
             }
-            tab.navigate(destination.directory)
-            tab.selectedFile = destination.file
+            tab.openTerminalFile(destination, paneID: request.paneID)
         } catch is CancellationError { }
         catch { if pendingFileLink == request { attachError = "Cannot open Host path: \(error.localizedDescription)" } }
     }
 
     /// Captures a pane in the source window as the initial directory and return target.
     @discardableResult
-    private func openDirectoryTab(sessionName: String, windowID: String, hostID: String?, paneIDs: [String], fallbackPaneID: String?, path: String? = nil) -> FileBrowserTab {
+    private func openDirectoryTab(sessionName: String, windowID: String, hostID: String?, paneIDs: [String], fallbackPaneID: String?, path: String? = nil, terminalLinkWindowID: String? = nil) -> FileBrowserTab {
         let localWindows = tmuxService.windows.filter { $0.sessionName == sessionName }
         let remoteWindows = hostID.map { remoteSessionWindows(hostId: $0, sessionName: sessionName) } ?? []
         let focused = terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
         let sourcePaneID = FileBrowserTab.sourcePaneID(in: paneIDs, focusedPaneID: focused, activePaneID: fallbackPaneID)
-        let tab = FileBrowserTab(path: path, sourcePaneID: sourcePaneID)
+        let tab = FileBrowserTab(path: path, sourcePaneID: sourcePaneID, terminalLinkWindowID: terminalLinkWindowID)
         let localOrigin = localWindows.first { $0.panes.contains { $0.paneId == tab.sourcePaneID } }
         let remoteOrigin = remoteWindows.first { $0.panes.contains { $0.paneId == tab.sourcePaneID } }
         let originID = hostID == nil ? localOrigin?.id : remoteOrigin?.id

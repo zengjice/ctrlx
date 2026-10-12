@@ -339,6 +339,41 @@ struct HostFileBrowserTests {
 
 @MainActor
 struct FileBrowserLayoutTests {
+    @Test("Terminal links find only the same window's live Files tab, independent of directory and tab order")
+    func terminalLinksAreWindowScoped() throws {
+        let tabs = SessionFileTabsState()
+        let manual = FileBrowserTab(path: "/host/project", sourcePaneID: "%1")
+        let first = FileBrowserTab(path: "/host/project", sourcePaneID: "%1", terminalLinkWindowID: "@1")
+        let second = FileBrowserTab(path: "/host/project", sourcePaneID: "%2", terminalLinkWindowID: "@2")
+        for tab in [manual, first, second] {
+            tabs.directoryTabs[tab.id] = tab
+            tabs.openFileTabs.append(.init(id: tab.id, path: "Files", directoryPath: "", isDirectory: true))
+        }
+        tabs.rightSide = [.file(first.id)]
+        tabs.selectedRight = .file(first.id)
+        tabs.selectedFileTabId = manual.id
+        tabs.openFileTabs.reverse()
+        let reused = try #require(tabs.terminalFilesTab(windowID: "@1"))
+        #expect(reused === first)
+        reused.openTerminalFile(.init(directory: "/host/other", file: "/host/other/report.md"), paneID: "%3")
+        #expect(tabs.terminalFilesTab(windowID: "@1") === first)
+        #expect(tabs.terminalFilesTab(windowID: "@2") === second)
+        #expect(tabs.terminalFilesTab(windowID: "@3") == nil)
+        #expect(reused.sourcePaneID == "%3")
+        #expect(reused.selectedFile == "/host/other/report.md")
+        #expect(manual.path == "/host/project")
+        #expect(second.path == "/host/project")
+        #expect(tabs.rightSide == [.file(first.id)])
+        #expect(tabs.selectedRight == .file(first.id))
+        #expect(tabs.selectedFileTabId == manual.id)
+        #expect(SessionFileTabsState().terminalFilesTab(windowID: "@1") == nil)
+
+        tabs.openFileTabs.removeAll { $0.id == first.id }
+        #expect(tabs.terminalFilesTab(windowID: "@1") == nil)
+        tabs.directoryTabs.removeValue(forKey: first.id)
+        #expect(tabs.terminalFilesTab(windowID: "@2") === second)
+    }
+
     @Test("Selecting a new terminal replaces Files/browser content without closing tabs or disturbing the right pane", arguments: [true, false])
     func newTerminalClearsAuxiliarySelection(fromFiles: Bool) {
         let tabs = SessionFileTabsState()
@@ -453,7 +488,7 @@ struct FileBrowserLayoutTests {
 
     @Test func directoryTabsSurvivePrivateViewerLayoutRoundTrip() throws {
         let tabs = SessionFileTabsState()
-        let first = FileBrowserTab(path: "/host/project1", sourcePaneID: "%42")
+        let first = FileBrowserTab(path: "/host/project1", sourcePaneID: "%42", terminalLinkWindowID: "@1")
         first.expanded = ["/host/project1/src"]
         first.selectedFile = "/host/project1/README.md"
         let second = FileBrowserTab(path: "/host/project2", sourcePaneID: "%43")
@@ -474,6 +509,8 @@ struct FileBrowserLayoutTests {
         #expect(restored.directoryTabs[first.id]?.path == "/host/project1")
         #expect(restored.directoryTabs[first.id]?.expanded == first.expanded)
         #expect(restored.directoryTabs[first.id]?.sourcePaneID == nil)
+        #expect(restored.directoryTabs[first.id]?.terminalLinkWindowID == nil)
+        #expect(restored.terminalFilesTab(windowID: "@1") == nil)
         #expect(restored.selectedFileTabId == first.id)
         #expect(restored.selectedRight == .file(second.id))
         #expect(!restored.tabOrder.contains(.window("@1")))

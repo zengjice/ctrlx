@@ -46,9 +46,19 @@ Mac Host, Mac Viewer and iOS recognize output paths such as `/absolute/file`,
 `~/Movies/`, `./output/file`, `../output/file`, `episodes/A01/movie.mp4`, and
 explicit `file://` hyperlinks. Click/tap an underlined path to open Files in the
 same session. A directory opens directly; a file opens its parent directory and
-selects the existing inline preview. Video still waits for Play. An existing
-Files tab at that directory is reused; otherwise a new tab is created. Other
-terminals and Files tabs stay intact, including Mac split placement.
+selects the existing inline preview. Video still waits for Play. Each source
+terminal window reuses its own link-created Files tab, even across directories
+or panes. The association uses the stable tmux window ID inside that Host/session's
+private workspace; rename/reorder does not create another tab. Different windows
+never share this tab merely because their files are in the same directory.
+Manual **Open Files** tabs stay independent. Closing the link-created tab makes
+the next link create a new one. Reuse updates its source pane to the clicked link's
+pane and preserves its UUID and Mac split placement.
+
+The window association is live-only, like the source pane ID: saved layouts retain
+the directory/selection but not the association. Restored tabs remain independent;
+the first link after workspace restoration creates a new per-window tab rather
+than guessing ownership from a recycled tmux ID or matching directory.
 
 The event captures the source Host and pane. Relative paths use that pane's
 published agent project directory, then its current working directory; `~/`
@@ -309,7 +319,9 @@ scrollback trimming, Host-only resolution, unavailable files and cancellation.
 `TerminalFileLinkSnapshotTests` checks decoration/activation agreement across a
 seven-row path, reuse on unchanged content, in-place edits, cursor/mouse mode,
 resize, alternate buffers, scrollback trimming and external payload invalidation.
-Workspace tests cover same-directory reuse without disturbing other tabs.
+Workspace tests cover cross-directory/per-pane reuse within one window, separate
+windows at the same directory, manual-tab isolation, close/reopen, tab limits,
+Host isolation, split placement and restoration without stale window ownership.
 Tests include fresh source-pane cwd resolution,
 directory pagination/dot-prefixed and system-hidden files and folders, search
 visibility consistency, deferred mount-point metadata, unknown types,
@@ -347,6 +359,12 @@ create a Files tab from each on Mac Host, Mac Viewer and iOS; preview text,
 Markdown, image and PDF; switch tabs during loading; disconnect/reconnect; return
 to a terminal and type while a search is running. Verify Mac tab reorder/split/
 close and that the iOS tab list stays in the session page.
+Click links to two different directories in one terminal window and verify a
+single Files tab changes its directory/preview. Repeat from another pane in the
+same window, then from a different window pointing at the same directory. Move
+the first Files tab to the Mac right split, rename/reorder its source window,
+and repeat the links; keep manually opened Files tabs unchanged. Close the
+link-created tab and click again to verify a fresh tab is created.
 Also preview a local MP4 larger than 8 MiB, open it in the default app, then
 download/open it on Mac Viewer and iOS. Verify Quick Look/share, cancel mid-copy,
 change the source file mid-copy, and test against a Host without download support.
