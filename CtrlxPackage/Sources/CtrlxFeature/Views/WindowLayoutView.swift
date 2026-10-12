@@ -24,6 +24,7 @@
         @State private var selectedWindowId: String?
         @State private var fileWorkspace = IOSFileBrowserWorkspace()
         @State private var pendingFileLink: TerminalFileLinkRequest?
+        @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
         @State private var selectedBrowserID: UUID?
         @State private var browserHandoff = BrowserTerminalHandoff()
         @State private var showsWindowTabs = false
@@ -277,14 +278,19 @@
 
         private var fileLinkContent: some View {
             browserContent
+            .environment(\.openTerminalBrowserLink, { request in pendingBrowserLink = request })
+            .task(id: pendingBrowserLink) {
+                guard let request = pendingBrowserLink else { return }
+                await openTerminalBrowser(request)
+            }
             .environment(\.openTerminalFileLink, { request in pendingFileLink = request })
             .task(id: pendingFileLink) {
                 guard let request = pendingFileLink else { return }
                 await openTerminalFile(request)
             }
-            .onChange(of: window?.id) { pendingFileLink = nil }
-            .onChange(of: fileWorkspace.selectedID) { pendingFileLink = nil }
-            .onChange(of: selectedBrowserID) { pendingFileLink = nil }
+            .onChange(of: window?.id) { pendingFileLink = nil; pendingBrowserLink = nil }
+            .onChange(of: fileWorkspace.selectedID) { pendingFileLink = nil; pendingBrowserLink = nil }
+            .onChange(of: selectedBrowserID) { pendingFileLink = nil; pendingBrowserLink = nil }
         }
 
         private var presentedContent: some View {
@@ -307,7 +313,7 @@
                     selectedBrowserID: selectedBrowserID,
                     isConnected: relayClient.isHostConnected,
                     canOpenFiles: relayClient.isHostConnected && relayClient.hostSupportsFileBrowsing && fileWorkspace.tabs.count < 30,
-                    canOpenBrowser: relayClient.hostSupportsBrowserSharing,
+                    canOpenBrowser: relayClient.hostSupportsPaneBrowser,
                     isCreatingWindow: isCreatingWindow,
                     forkUnavailableReason: agentForkUnavailableReason,
                     onChoose: { action in
@@ -401,6 +407,28 @@
             catch { if pendingFileLink == request { commandError = "Cannot open Host path: \(error.localizedDescription)" } }
         }
 
+        private func openTerminalBrowser(_ request: TerminalBrowserLinkRequest) async {
+            guard request.hostID == hostId,
+                  sessionWindows.contains(where: { $0.panes.contains { $0.paneId == request.paneID } }) else { return }
+            let originWindowID = window?.id
+            do {
+                let tab = try await RemoteBrowserSession.open(sessionName: sessionName,
+                    sourcePaneID: request.paneID, url: request.url, client: relayClient)
+                try Task.checkCancellation()
+                guard pendingBrowserLink == request, window?.id == originWindowID else { return }
+                selectedBrowserID = tab.id
+                fileWorkspace.selectedID = nil
+                cancelCreationFollowUp()
+                isKeyboardActive = false
+                quickActionPresentation.dismiss()
+            } catch is CancellationError { }
+            catch {
+                if pendingBrowserLink == request, !Task.isCancelled {
+                    commandError = "Cannot open Host browser: \(error.localizedDescription)"
+                }
+            }
+        }
+
         var body: some View {
             presentedContent
             .task {
@@ -426,6 +454,7 @@
             }
             .onChange(of: relayClient.isHostConnected) {
                 if !relayClient.isHostConnected {
+                    pendingBrowserLink = nil
                     cancelCreationFollowUp()
                     browserHandoff.cancel(error: AgentImageError.message("The Host disconnected. Reconnect and try Open Agent again."))
                 }
@@ -434,13 +463,14 @@
                 if let request = browserHandoff.request, selectedBrowserID != request.browserID { browserHandoff.cancel() }
             }
             .onChange(of: scenePhase) {
-                if scenePhase != .active { browserHandoff.cancel() }
+                if scenePhase != .active { browserHandoff.cancel(); pendingBrowserLink = nil }
             }
             .onDisappear {
                 // A delayed creation reply must not redirect a later visit.
                 cancelCreationFollowUp()
                 browserHandoff.cancel()
                 pendingWindowTabAction = nil
+                pendingBrowserLink = nil
                 pendingFileLink = nil
                 showsWindowTabs = false
             }
@@ -618,6 +648,14 @@
                     isKeyboardActive = false
                     quickActionPresentation.dismiss()
                     fileWorkspace.open(paneID: paneID)
+                case .openBrowser:
+                    guard let paneID = FileBrowserTab.sourcePaneID(
+                        in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
+                    ) else {
+                        commandError = "This window no longer has a source pane."
+                        return
+                    }
+                    pendingBrowserLink = .init(paneID: paneID, hostID: hostId)
                 case let .fork(usingWorktree):
                     guard !isCreatingWindow else { return }
                     if let reason = agentForkUnavailableReason {
@@ -671,21 +709,6 @@
                     do {
                         try await RemoteBrowserSession.close(tab: tab, client: relayClient)
                         if selectedBrowserID == id { selectedBrowserID = nil }
-                    } catch { commandError = error.localizedDescription }
-                }
-            case .newBrowser:
-                guard relayClient.isHostConnected, relayClient.hostSupportsBrowserSharing, !isCreatingWindow else { return }
-                isCreatingWindow = true
-                let sourcePaneID = activePaneId ?? window?.activePane?.paneId
-                Task {
-                    defer { isCreatingWindow = false }
-                    do {
-                        let tab = try await RemoteBrowserSession.create(sessionName: sessionName, client: relayClient, sourcePaneID: sourcePaneID)
-                        selectedBrowserID = tab.id
-                        fileWorkspace.selectedID = nil
-                        cancelCreationFollowUp()
-                        isKeyboardActive = false
-                        quickActionPresentation.dismiss()
                     } catch { commandError = error.localizedDescription }
                 }
             }

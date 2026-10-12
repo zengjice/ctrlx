@@ -72,12 +72,6 @@
                         }
                         .disabled(!isConnected || isCreatingWindow)
                         .accessibilityIdentifier("new-agent-window")
-                        Button { choose(.newBrowser) } label: {
-                            Label("New Browser on Host", symbol: .globe)
-                        }
-                        .disabled(!isConnected || !canOpenBrowser || isCreatingWindow)
-                        Text("Chromium pages run on the Host. WebKit pages are local-only.")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -106,6 +100,12 @@
                         Label("Open Files", symbol: .folderBadgePlus)
                     }
                     .disabled(!canOpenFiles || window.panes.isEmpty)
+
+                    Button { choose(.window(stableID: window.stableId, operation: .openBrowser)) } label: {
+                        Label("Open Browser on Host", symbol: .globe)
+                    }
+                    .disabled(!isConnected || !canOpenBrowser || window.panes.isEmpty)
+                    .accessibilityIdentifier("window-open-browser-\(window.stableId)")
 
                     AgentForkMenu(
                         sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: nil),

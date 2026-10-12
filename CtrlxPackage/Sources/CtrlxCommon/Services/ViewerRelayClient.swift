@@ -106,12 +106,16 @@ final public class ViewerRelayClient {
     public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
     public private(set) var hostSupportsBrowserSharing = false
+    public private(set) var hostSupportsPaneBrowser = false
     public private(set) var hostSupportsAgentImageInput = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
 
-    func rememberCreatedBrowser(_ tab: RemoteBrowserTab) {
-        guard !browserTabs.contains(where: { $0.id == tab.id }) else { return }
-        browserTabs.append(tab)
+    func rememberOpenedBrowser(_ tab: RemoteBrowserTab) {
+        if let index = browserTabs.firstIndex(where: { $0.id == tab.id }) {
+            browserTabs[index] = tab
+        } else {
+            browserTabs.append(tab)
+        }
     }
 
     /// Name of the connected host device (if known)
@@ -508,6 +512,10 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add annotated screenshots to an Agent"))
         case .browseBrowser where !hostSupportsBrowserSharing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
+        case let .browseBrowser(spec):
+            if case .openPane = spec.operation, !hostSupportsPaneBrowser {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open a pane's browser"))
+            }
         case .browseFiles where !hostSupportsFileBrowsing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to browse files"))
         case let .browseFiles(spec):
@@ -1027,6 +1035,7 @@ final public class ViewerRelayClient {
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
+            hostSupportsPaneBrowser = sessionState.supportsPaneBrowser == true
             hostSupportsAgentImageInput = sessionState.supportsAgentImageInput == true
             browserTabs = sessionState.browserTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
@@ -1495,6 +1504,7 @@ final public class ViewerRelayClient {
 
     private func resetBrowserState() {
         hostSupportsBrowserSharing = false
+        hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false
     }
 }

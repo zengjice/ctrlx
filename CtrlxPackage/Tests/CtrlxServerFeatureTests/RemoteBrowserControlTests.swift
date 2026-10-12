@@ -44,10 +44,11 @@ struct RemoteBrowserControlTests {
         let runtime = Runtime()
         let service = AgentBrowserService(runtime: runtime)
         runtime.delegate = service
+        service.resolveSourcePane = { session, id in PaneBrowserOpeningTests.pane(id, session: session) }
         if agent {
             service.browserTabCreated(UUID().uuidString, view: NSView(),
                 route: ["workspace": UUID().uuidString, "pane": "%1", "session": "test", "window": "@1"], owner: "owner", parent: nil)
-        } else { _ = try await service.createSharedTab(sessionName: "test") }
+        } else { _ = try await service.openPaneBrowser(sessionName: "test", paneID: "%1") }
         return (service, runtime, try #require(service.sharedBrowserTabs.first))
     }
 
@@ -151,7 +152,7 @@ struct RemoteBrowserControlTests {
 
     @Test func renamedSessionUpdatesParkedPagesAndPopupRoutes() async throws {
         let (service, _, tab) = try await fixture()
-        _ = try await service.createSharedTab(sessionName: "test")
+        _ = try await service.openPaneBrowser(sessionName: "test", paneID: "%1")
         func pane(_ session: String) -> PaneInfo {
             PaneInfo(paneId: "%1", target: "\(session):1.0", sessionName: session, windowIndex: 1,
                      paneIndex: 0, command: "codex", currentPath: "/tmp", width: 80, height: 24, isActive: true)

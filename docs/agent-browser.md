@@ -6,30 +6,50 @@ this does not mean hardened-runtime/notarized distribution is approved. Formal
 archives remain gated; see [RELEASE.md](../RELEASE.md). Historical statements such
 as “not published” apply only to their recorded checkpoint, not today's channel.
 
-Mac **Settings → Browser → New Browser → Engine** selects **Chromium** (default)
-or **WebKit** for explicit New Browser actions. Chromium uses the same sandboxed
-CEF runtime as Agent Browser, embedded as native child views in CtrlX's same
-session tab strip and left/right split layout. No standalone browser window, no
-ChatGPT extension, MCP server or browser-wide TCP debugging port is involved.
-Apple Silicon only for the native Host runtime.
+**Open Browser** belongs to a terminal Window, not the global New menu. On Mac,
+right-click its Window tab; on iOS use that Window's action menu. The selected
+pane in that Window (otherwise its active pane) is captured before opening.
+Plain shell panes work without an Agent. All new pages use the source Host's
+Chromium/CEF runtime, including opens from Mac/iOS Viewers. Native child views
+share CtrlX's session tab strip and split layout. The native Host runtime is
+Apple Silicon only; no standalone browser or browser-wide TCP debugging port is
+involved.
 
-This device-local setting affects new human-created local tabs only. New Browser
-in a Mac Viewer session now creates a Chromium page on the Host. Existing
-tabs, restored WebKit tabs, terminal-link rules and Codex automation are unchanged;
-it is unrelated to the `vercel` / `ctrlx` automation-backend selection. iOS has no
-corresponding setting. Chromium tabs share CtrlX's dedicated Chromium profile and
-logins, not WebKit's or system Chrome's. Chromium tabs remain transient and are
-not restored after restarting CtrlX; WebKit layout restoration is unchanged.
-If the native runtime is unavailable, creation reports an error instead of
-silently substituting WebKit.
+Terminal HTTP(S) links offer **Host Browser** or **This Device's Browser**.
+The first opens the same Host page and shows it on the requesting client; the
+second invokes the operating device's default browser, unchanged. Mac global and
+per-domain preferences keep their stored values but “in app” now means Host.
+The existing split-on-link preference is retained. iOS tap and long-press use
+the same destination picker. Unsupported Host URLs fail without local fallback.
 
-Regression coverage: `NewBrowserEngineTests` checks preferences, explicit local /
-Viewer destinations, rename-safe child routing, errors and workspace cleanup;
-`LayoutSnapshotMapperTests` protects existing WebKit restoration. Native
-`tests/ownership.cc` rejects empty-owner human tabs. The isolated signed Mac UI
-check also covers Chromium navigation/input, popup creation and shared test
-cookies, switching the setting to WebKit, both engines side by side without
-reloading existing pages, right-side popup inheritance and normal shutdown.
+The Host has one reusable **human primary page per pane**, shared by all clients.
+Open Browser reveals it without resetting its URL; opening a link navigates that
+page (an identical URL does not reload; origin case, default ports and an empty
+root path are normalized before comparison). URLs with embedded usernames or
+passwords are rejected explicitly before creating or navigating a page. Simultaneous creation coalesces. Agent
+pages and popup children are not primary-page candidates and remain independently
+owned; children inherit the source pane. Pane membership is validated against
+fresh tmux state before opening/navigating, including linked-session ambiguity.
+Session/window moves update the association. If a Viewer holds the primary page's
+control lease, a different URL is rejected until control is released; opening
+does not steal the lease. Cancelled/obsolete UI requests do not switch selection,
+including a switch from the terminal to Git/Files within the same Mac window.
+
+The former New Browser engine preference is retired. Existing/restored WebKit
+tabs stay device-local and usable, including their popups; they are not converted.
+Chromium shares CtrlX's dedicated profile/logins, not WebKit's or system Chrome's.
+Chromium pages remain transient across App restarts. The `vercel` / `ctrlx`
+automation-backend selection is independent. If Chromium is unavailable, report
+an error rather than substituting WebKit or the system browser.
+
+Regression coverage: `PaneBrowserOpeningTests`, `AgentBrowserRoutingTests`,
+`RemoteBrowserProtocolTests` and the connection capability test cover reuse,
+plain panes, source revalidation, ownership/leases, cancellation, parking and
+old-Host gating. `LayoutSnapshotMapperTests` protects WebKit restoration. Native
+`tests/ownership.cc` rejects empty-owner human pages for Agent commands. The new
+Window-menu and URL-picker flows still require isolated Mac / real-iPhone UI
+acceptance; older E2E scenarios that assume global New Browser and Viewer-local
+WebKit do not validate the new contract.
 
 Release preparation for 3.0.41 also passed brand/technical boundary checks,
 10 publisher regressions, the website build and the unsigned iOS device-target
@@ -90,14 +110,19 @@ already mapped by an older process.
 ## Viewer browser surface
 
 Mac Viewer tabs marked **Host** and iOS **Tabs → Browsers on Host** show the same
-Host Chromium pages, including manual, Agent and popup tabs. New Browser on Host
-creates an ownerless human page in that session. Existing Viewer-local tabs are
+Host Chromium pages, including manual, Agent and popup tabs. Open Browser on Host
+opens/reuses an ownerless human primary page bound to its source pane. Existing Viewer-local tabs are
 marked **Local** and are not migrated. WebKit remains device-local. Page DOM,
 login state, local network access and localhost resolution all stay on the Host;
 the Viewer does not load a second copy of the URL or receive browser credentials.
 
 - `supportsBrowserSharing` and optional tab metadata extend session snapshots.
   Older Hosts reject the feature locally before any new command enum is sent.
+  `supportsPaneBrowser` additionally gates `openPane(url:)`; absence means update
+  the Host, never silently open a Viewer-local page. `RemoteBrowserTab.sourcePaneID`
+  is display association, independent of optional `sourceAgent` and Agent authority.
+  The legacy `create` operation remains decodable but also requires a source pane
+  and uses the same Host registry.
   `BrowseBrowser` operations and frame replies use the existing paired E2EE
   command channel; the opaque Relay requires no browser-specific deployment.
 - The native surface exposes only bounded capture/navigation/input operations,

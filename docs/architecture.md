@@ -138,8 +138,11 @@ updates, but verify decoding, capability gating and envelope limits per change.
   outside terminal input. Terminal link recognition runs in shared client code;
   the Host validates the clicked destination. See [Files](file-browser.md).
 - **Browser:** Host Chromium/CEF pages can be shared with Mac/iOS Viewers.
-  Human New Browser defaults to Chromium, with device-local WebKit optional
-  on Mac. `vercel` / `ctrlx` selects the automation backend, not the rendering
+  Window-scoped Open Browser and in-app terminal links open/reuse the source
+  pane's human page on the Host; default-browser links remain device-local.
+  There is no global New Browser or new-page engine picker; existing WebKit tabs
+  remain local. `supportsPaneBrowser` gates the new command on Viewers.
+  `vercel` / `ctrlx` selects the automation backend, not the rendering
   engine. Agent authority follows a verified process instance, not the focused
   pane. Viewer control requires a lease; there is no raw remote CDP gateway.
   See [browser](agent-browser.md) and [engines](agent-browser-engines.md).

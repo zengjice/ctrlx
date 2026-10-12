@@ -5,8 +5,7 @@ import UniformTypeIdentifiers
 
 /// Horizontal tab bar showing windows in a tmux session.
 /// Always visible, even for single-window sessions. The leading "+" button
-/// pops up a menu for Agent cards, a terminal window (`onNewWindow`), or a
-/// browser tab (`onNewBrowser`). Agents create windows in this same session.
+/// pops up a menu for Agent cards or a terminal window. Browsers belong to panes.
 struct WindowTabBar: View {
     let session: LocalTmuxSession
     let selectedWindow: LocalTmuxWindow
@@ -32,9 +31,7 @@ struct WindowTabBar: View {
     let onNewWindow: () -> Void
     let agentConfiguration: NewAgentTabConfiguration
     let onForkWindow: (LocalTmuxWindow, Bool) -> Void
-    /// Creates a new in-app browser tab (selected, address bar focused). Called
-    /// from the "+" menu's "New Browser" option.
-    let onNewBrowser: () -> Void
+    let onOpenBrowser: (LocalTmuxWindow) -> Void
     let onRenameWindow: (LocalTmuxWindow, String) -> Void
     let onSelectFileBrowser: () -> Void
     /// Activates the Git tab for the current window (issue #258).
@@ -336,10 +333,9 @@ struct WindowTabBar: View {
 
     private var newWindowButton: some View {
         NewTabMenuButton(
-            helpText: "New agent, terminal or browser in \(session.sessionName)",
+            helpText: "New agent or terminal in \(session.sessionName)",
             agentConfiguration: agentConfiguration,
-            onNewTerminal: onNewWindow,
-            onNewBrowser: onNewBrowser
+            onNewTerminal: onNewWindow
         )
     }
 
@@ -504,6 +500,12 @@ struct WindowTabBar: View {
                         Label("Open Files", symbol: .folderBadgePlus)
                     }
                     .accessibilityIdentifier("window-open-files-\(window.stableId)")
+
+                    Button { onOpenBrowser(window) } label: {
+                        Label("Open Browser", symbol: .globe)
+                    }
+                    .disabled(window.panes.isEmpty)
+                    .accessibilityIdentifier("window-open-browser-\(window.stableId)")
 
                     AgentForkMenu(
                         sources: window.panes.compactMap { windowManager.paneStates[$0.paneId].flatMap(AgentForkSource.init(pane:)) },

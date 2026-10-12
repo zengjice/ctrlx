@@ -39,11 +39,15 @@ struct FileBrowserConnectionTests {
                 e2eeService: hostEncryption)
             let viewer = ViewerRelayClient()
             let enabled = LockIsolated(false)
+            let paneBrowserEnabled = LockIsolated(false)
             var held: [CheckedContinuation<Void, Never>] = []
             var cancelled = 0
             var input = false
             defer { for continuation in held { continuation.resume() } }
-            host.onSessionStateRequest = { .init(pairId: "", paneStates: [:], supportsBrowserSharing: enabled.value ? true : nil) }
+            host.onSessionStateRequest = {
+                .init(pairId: "", paneStates: [:], supportsBrowserSharing: enabled.value ? true : nil,
+                      supportsPaneBrowser: paneBrowserEnabled.value ? true : nil)
+            }
             host.onCommand = { command in
                 if case let .browseBrowser(spec) = command.command, spec.operation == .frame {
                     await withCheckedContinuation { held.append($0) }
@@ -65,6 +69,14 @@ struct FileBrowserConnectionTests {
                 enabled.setValue(true)
                 await host.pushSessionState()
                 try await waitUntil { viewer.hostSupportsBrowserSharing }
+                let open = BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .openPane(url: nil), sourcePaneID: "%7")
+                let legacyOpen = await viewer.sendCommand(open, paneId: "")
+                if case .success = legacyOpen { Issue.record("Browser-sharing-only Host accepted pane open") }
+                #expect(!viewer.hostSupportsPaneBrowser)
+                paneBrowserEnabled.setValue(true)
+                await host.pushSessionState()
+                try await waitUntil { viewer.hostSupportsPaneBrowser }
+                #expect(try await viewer.sendCommand(open, paneId: "").get().success)
                 let requests = (0..<4).map { _ in Task { await viewer.sendCommand(command, paneId: "") } }
                 defer { requests.forEach { $0.cancel() } }
                 try await waitUntil { held.count == 4 }
@@ -73,6 +85,7 @@ struct FileBrowserConnectionTests {
                 #expect(cancelled == 0, "Keyboard must not wait for browser capture")
                 await viewer.disconnect()
                 #expect(!viewer.hostSupportsBrowserSharing)
+                #expect(!viewer.hostSupportsPaneBrowser)
                 try await waitUntil { !host.isViewerConnected }
                 for request in requests { _ = await request.value }
                 await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)

@@ -28,6 +28,7 @@ public struct MainView: View {
     @State private var localSessionRenameRequest: String?
     @State private var attachError: String?
     @State private var pendingFileLink: TerminalFileLinkRequest?
+    @State private var browserOpenTask: Task<Void, Never>?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var projects: [AgentProject] = []
     @State private var isLoadingProjects = false
@@ -181,7 +182,10 @@ public struct MainView: View {
         .onChange(of: tmuxService.windows.map(\.id)) { _, _ in
             coordinator.agentBrowser.register(agentBrowserWorkspace)
         }
-        .onDisappear { coordinator.agentBrowser.unregister(agentBrowserWorkspace) }
+        .onDisappear {
+            browserOpenTask?.cancel()
+            coordinator.agentBrowser.unregister(agentBrowserWorkspace)
+        }
         .task {
             // Initial load only - periodic refresh is handled by MirrorWindowManager
             await refreshPanes()
@@ -1064,8 +1068,9 @@ public struct MainView: View {
                     onForkWindow: { sourceWindow, usingWorktree in
                         pendingAgentFork = agentForkConfiguration(panes: sourceWindow.panes, hostID: remote.hostId, usingWorktree: usingWorktree)
                     },
-                    onNewBrowser: {
-                        openEmptyRemoteBrowserTab(hostId: remote.hostId, sessionName: remote.sessionName)
+                    onOpenBrowser: { sourceWindow in
+                        openPaneBrowser(hostID: remote.hostId, sessionName: remote.sessionName,
+                            paneID: browserSourcePane(sessionName: remote.sessionName, hostID: remote.hostId, windowID: sourceWindow.id))
                     },
                     onRenameWindow: { windowToRename, newName in
                         Task {
@@ -1220,8 +1225,9 @@ public struct MainView: View {
                             let panes = sourceWindow.panes.compactMap { coordinator.windowManager.paneStates[$0.paneId] }
                             pendingAgentFork = agentForkConfiguration(panes: panes, hostID: nil, usingWorktree: usingWorktree)
                         },
-                        onNewBrowser: {
-                            openEmptyBrowserTab(sessionName: session.sessionName, windowId: window.id)
+                        onOpenBrowser: { sourceWindow in
+                            openPaneBrowser(hostID: nil, sessionName: session.sessionName,
+                                paneID: browserSourcePane(sessionName: session.sessionName, hostID: nil, windowID: sourceWindow.id))
                         },
                         onRenameWindow: { windowToRename, newName in
                             Task {
@@ -1493,12 +1499,13 @@ public struct MainView: View {
                 window: window,
                 connection: connection,
                 settings: settings,
-                onOpenURL: { url in
+                onOpenURL: { url, paneID in
                     handleRemoteTerminalURLClick(
                         url,
                         hostId: remote.hostId,
                         sessionName: remote.sessionName,
-                        windowId: window.id
+                        windowId: window.id,
+                        paneID: paneID
                     )
                 }
             )
@@ -1523,12 +1530,13 @@ public struct MainView: View {
                     window: rightWindow,
                     connection: connection,
                     settings: settings,
-                    onOpenURL: { url in
+                    onOpenURL: { url, paneID in
                         handleRemoteTerminalURLClick(
                             url,
                             hostId: remote.hostId,
                             sessionName: remote.sessionName,
-                            windowId: rightWindow.id
+                            windowId: rightWindow.id,
+                            paneID: paneID
                         )
                     }
                 )
@@ -1730,12 +1738,13 @@ public struct MainView: View {
         } else {
             WindowPaneLayoutView(
                 window: window,
-                onOpenURL: { url in
+                onOpenURL: { url, paneID in
                     handleTerminalURLClick(
                         url,
                         directoryPath: directoryPath,
                         session: session,
-                        window: window
+                        window: window,
+                        paneID: paneID
                     )
                 }
             )
@@ -1867,12 +1876,13 @@ public struct MainView: View {
             }) {
                 WindowPaneLayoutView(
                     window: window,
-                    onOpenURL: { url in
+                    onOpenURL: { url, paneID in
                         handleTerminalURLClick(
                             url,
                             directoryPath: directoryPath,
                             session: tmuxService.sessions.first(where: { $0.sessionName == sessionName }),
-                            window: window
+                            window: window,
+                            paneID: paneID
                         )
                     }
                 )
@@ -3499,7 +3509,7 @@ public struct MainView: View {
     /// - http/https/ftp URL: the destination depends on the effective behavior
     ///   for the URL — a per-domain rule (`settings.browserBehavior(for:)`)
     ///   takes precedence over the global `settings.browserLinkBehavior`.
-    ///   `.alwaysInApp` opens an in-app browser tab and returns `true`.
+    ///   `.alwaysInApp` opens the source pane's Host browser and returns `true`.
     ///   `.alwaysInDefaultBrowser` returns `false` so the click falls through
     ///   to `NSWorkspace.shared.open`. `.ask` shows a confirmation dialog
     ///   (with "remember my choice" toggles) and returns `true` so the system
@@ -3509,7 +3519,8 @@ public struct MainView: View {
         _ url: URL,
         directoryPath: String,
         session: LocalTmuxSession?,
-        window: LocalTmuxWindow
+        window: LocalTmuxWindow,
+        paneID: String
     ) -> Bool {
         if url.isFileURL {
             guard settings.openClickedFileInNewTab, let session else {
@@ -3533,12 +3544,7 @@ public struct MainView: View {
 
         switch effective {
         case .alwaysInApp:
-            openBrowserTab(
-                url: url,
-                sessionName: session.sessionName,
-                windowId: window.id,
-                originWindowId: window.id
-            )
+            openPaneBrowser(hostID: nil, sessionName: session.sessionName, paneID: paneID, url: url)
             return true
         case .alwaysInDefaultBrowser:
             return false
@@ -3547,7 +3553,8 @@ public struct MainView: View {
                 url: url,
                 sessionName: session.sessionName,
                 windowId: window.id,
-                hostId: nil
+                hostId: nil,
+                paneID: paneID
             )
             return true
         }
@@ -3559,13 +3566,14 @@ public struct MainView: View {
     /// in-app/system-browser preference is honoured uniformly across
     /// host types. URLs that require Host-local handling (including
     /// `file://` and scheme-less absolute paths) are consumed here: the
-    /// remote filesystem isn't browsable yet, and passing them to this Mac's
-    /// `NSWorkspace` would target the wrong machine.
+    /// file links have their own Host-backed handler; passing them to this
+    /// Mac's `NSWorkspace` would target the wrong machine.
     private func handleRemoteTerminalURLClick(
         _ url: URL,
         hostId: String,
         sessionName: String,
-        windowId: String
+        windowId: String,
+        paneID: String
     ) -> Bool {
         if RemoteTerminalURLPolicy.shouldConsumeWithoutOpening(url) {
             return true
@@ -3575,12 +3583,7 @@ public struct MainView: View {
 
         switch effective {
         case .alwaysInApp:
-            openRemoteBrowserTab(
-                url: url,
-                hostId: hostId,
-                sessionName: sessionName,
-                originWindowId: windowId
-            )
+            openPaneBrowser(hostID: hostId, sessionName: sessionName, paneID: paneID, url: url)
             return true
         case .alwaysInDefaultBrowser:
             return false
@@ -3589,7 +3592,8 @@ public struct MainView: View {
                 url: url,
                 sessionName: sessionName,
                 windowId: windowId,
-                hostId: hostId
+                hostId: hostId,
+                paneID: paneID
             )
             return true
         }
@@ -3663,40 +3667,6 @@ public struct MainView: View {
         tabs.selectedFileTabId = nil
         fileBrowserActiveWindowIds.remove(windowId)
         gitActiveWindowIds.remove(windowId)
-    }
-
-    /// Opens a fresh, empty browser tab with `about:blank` loaded. The tab is
-    /// appended at the end, selected, and the address bar is asked to take
-    /// keyboard focus so the user can start typing a URL immediately. Used by
-    /// the "+" menu's "New Browser" entry.
-    private func openEmptyBrowserTab(sessionName: String, windowId: String) {
-        if sessionFileTabsStates[sessionName] == nil {
-            sessionFileTabsStates[sessionName] = SessionFileTabsState()
-        }
-        guard let tabs = sessionFileTabsStates[sessionName] else { return }
-        if settings.newBrowserEngine == .chromium {
-            openManualChromiumTab(target: ManualBrowserTarget(sessionName: sessionName),
-                                  sourcePaneID: browserSourcePane(sessionName: sessionName, hostID: nil, windowID: windowId))
-            return
-        }
-        // about:blank gives WKWebView a deterministic, offline starting page
-        // so the new tab doesn't briefly flash a network error before the
-        // user types a real URL.
-        let blank = URL(staticString: "about:blank")
-        let newTab = BrowserTab(url: blank)
-        let state = BrowserTabState(initialURL: blank)
-        state.sourceAgent = browserSourceAgent(sessionName: sessionName, hostID: nil, windowID: windowId)
-        // Clear the URL field text so the user sees an empty input rather
-        // than the literal "about:blank" placeholder when the field gains
-        // focus. The page itself still loads at the blank URL.
-        state.urlFieldText = ""
-        tabs.openBrowserTabs.append(newTab)
-        tabs.browserStates[newTab.id] = state
-        tabs.selectedBrowserTabId = newTab.id
-        tabs.selectedFileTabId = nil
-        fileBrowserActiveWindowIds.remove(windowId)
-        gitActiveWindowIds.remove(windowId)
-        state.urlFieldFocusRequest += 1
     }
 
     /// Commits one optimistic tab reorder to tmux. Stable window ids keep the
@@ -3844,14 +3814,60 @@ public struct MainView: View {
 
     // MARK: - Embedded Agent Browser
 
-    private func openManualChromiumTab(target: ManualBrowserTarget, sourcePaneID: String? = nil) {
-        Task {
+    private func openPaneBrowser(hostID: String?, sessionName: String, paneID: String?, url: URL? = nil) {
+        guard let paneID else {
+            attachError = "This window no longer has a source pane."
+            return
+        }
+        let target = ManualBrowserTarget(hostID: hostID, sessionName: sessionName)
+        let tabs = manualBrowserTabs(for: target)
+        let existingIDs = Set(tabs?.openBrowserTabs.map(\.id) ?? [])
+        let selection = browserOpenSelection(for: target)
+        let isCurrent = { browserOpenSelection(for: target) == selection }
+        let openInSplit = url != nil && settings.alwaysOpenLinksInSplit
+        browserOpenTask?.cancel()
+        browserOpenTask = Task {
             do {
-                try await coordinator.agentBrowser.openManualTab(in: agentBrowserWorkspace, target: target, sourcePaneID: sourcePaneID)
-            } catch {
-                attachError = "Failed to open New Browser: \(error.localizedDescription)"
+                if let hostID {
+                    guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient,
+                          client.isHostConnected, client.hostSupportsPaneBrowser else {
+                        throw RemoteBrowserError.message("Connect and update the Host Mac to open this pane's browser.")
+                    }
+                    let tab = try await RemoteBrowserSession.open(sessionName: sessionName, sourcePaneID: paneID, url: url, client: client)
+                    try Task.checkCancellation()
+                    guard isCurrent() else { return }
+                    syncHostBrowserTabs(hostId: hostID, sessionName: sessionName, client: client)
+                    let sourceWindow = remoteSessionWindows(hostId: hostID, sessionName: sessionName)
+                        .first { $0.panes.contains { $0.paneId == paneID } }
+                    let sourceOnRight = sourceWindow.map {
+                        manualBrowserTabs(for: target)?.rightSide.contains(.window($0.stableId)) == true
+                    } == true
+                    if !existingIDs.contains(tab.id), openInSplit || sourceOnRight {
+                        manualBrowserTabs(for: target)?.rightSide.insert(.browser(tab.id))
+                    }
+                    selectRemoteBrowserTab(tab.id, hostId: hostID, sessionName: sessionName)
+                } else {
+                    let tab = try await coordinator.agentBrowser.openPaneBrowser(sessionName: sessionName, paneID: paneID, url: url)
+                    try Task.checkCancellation()
+                    guard isCurrent() else { return }
+                    if openInSplit, !existingIDs.contains(tab.id) {
+                        manualBrowserTabs(for: target)?.rightSide.insert(.browser(tab.id))
+                    }
+                    selectManualBrowserTab(tab, target: target)
+                }
+            } catch is CancellationError { }
+            catch {
+                if !Task.isCancelled, isCurrent() {
+                    attachError = "Cannot open Host browser: \(error.localizedDescription)"
+                }
             }
         }
+    }
+
+    private func browserOpenSelection(for target: ManualBrowserTarget) -> BrowserOpenSelection {
+        BrowserOpenSelection(localWindowID: selectedWindow?.id, remoteSession: selectedRemoteSession,
+            remoteWindowID: selectedRemoteWindowId, tabs: manualBrowserTabs(for: target),
+            gitActiveWindowIDs: gitActiveWindowIds, fileBrowserActiveWindowIDs: fileBrowserActiveWindowIds)
     }
 
     private func manualBrowserTabs(for target: ManualBrowserTarget) -> SessionFileTabsState? {
@@ -3895,14 +3911,17 @@ public struct MainView: View {
                 }
                 guard let tabs = manualBrowserTabs(for: target) else { return }
                 guard !tabs.openBrowserTabs.contains(where: { $0.id == state.id }) else { return }
-                var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), parentTabId: parent)
+                var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"),
+                    originWindowId: state.windowID, parentTabId: parent)
                 // All native Chromium pages are transient; never restore them as
                 // WebKit or implicitly give a future agent control of a page.
                 tab.isAgentBrowser = true
                 tabs.openBrowserTabs.append(tab)
                 tabs.agentBrowserStates[state.id] = state
                 state.requestsInitialAddressFocus = parent == nil
-                if parent.map({ tabs.rightSide.contains(.browser($0)) }) == true {
+                let sourceWindow = tmuxService.windows.first { $0.panes.contains { $0.paneId == state.paneID } }
+                if parent.map({ tabs.rightSide.contains(.browser($0)) }) == true
+                    || sourceWindow.map({ tabs.rightSide.contains(.window($0.stableId)) }) == true {
                     tabs.rightSide.insert(.browser(state.id))
                 }
                 return
@@ -3929,6 +3948,7 @@ public struct MainView: View {
                       let index = tabs.openBrowserTabs.firstIndex(where: { $0.id == state.id }) else { return }
                 if tabs.openBrowserTabs[index].displayTitle != state.title { tabs.openBrowserTabs[index].displayTitle = state.title }
                 if let url = URL(string: state.url), tabs.openBrowserTabs[index].url != url { tabs.openBrowserTabs[index].url = url }
+                if tabs.openBrowserTabs[index].originWindowId != state.windowID { tabs.openBrowserTabs[index].originWindowId = state.windowID }
                 return
             }
             guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.agentBrowserStates[state.id] != nil }) else { return }
@@ -4162,26 +4182,6 @@ public struct MainView: View {
             // Drop the stale selection so the UI lands on a clean
             // "no window selected" state instead of a phantom id.
             selectedRemoteWindowId = nil
-        }
-    }
-
-    /// Opens a fresh, empty browser tab with `about:blank` loaded in a remote
-    /// session. The tab is appended at the end, selected, and the address bar
-    /// is asked to take keyboard focus so the user can start typing a URL
-    /// immediately. Mirror of `openEmptyBrowserTab` for remote sessions.
-    private func openEmptyRemoteBrowserTab(hostId: String, sessionName: String) {
-        guard let client = coordinator.viewerConnectionManager?.connection(for: hostId)?.relayClient,
-              client.isHostConnected, client.hostSupportsBrowserSharing else {
-            attachError = "Update and connect the Host Mac to create a shared Chromium browser. Existing Local browser tabs remain local."
-            return
-        }
-        let sourcePaneID = browserSourcePane(sessionName: sessionName, hostID: hostId, windowID: selectedRemoteWindow?.id)
-        Task {
-            do {
-                let tab = try await RemoteBrowserSession.create(sessionName: sessionName, client: client, sourcePaneID: sourcePaneID)
-                syncHostBrowserTabs(hostId: hostId, sessionName: sessionName, client: client)
-                selectRemoteBrowserTab(tab.id, hostId: hostId, sessionName: sessionName)
-            } catch { attachError = error.localizedDescription }
         }
     }
 
@@ -4493,21 +4493,7 @@ public struct MainView: View {
         let resolved: BrowserLinkBehavior
         switch choice {
         case .inApp:
-            if let hostId = prompt.hostId {
-                openRemoteBrowserTab(
-                    url: prompt.url,
-                    hostId: hostId,
-                    sessionName: prompt.sessionName,
-                    originWindowId: prompt.windowId
-                )
-            } else {
-                openBrowserTab(
-                    url: prompt.url,
-                    sessionName: prompt.sessionName,
-                    windowId: prompt.windowId,
-                    originWindowId: prompt.windowId
-                )
-            }
+            openPaneBrowser(hostID: prompt.hostId, sessionName: prompt.sessionName, paneID: prompt.paneID, url: prompt.url)
             resolved = .alwaysInApp
         case .defaultBrowser:
             @Dependency(URLOpener.self) var urlOpener

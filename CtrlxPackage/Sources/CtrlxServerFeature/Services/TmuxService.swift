@@ -816,6 +816,18 @@ final public class TmuxService {
         )
     }
 
+    func browserSourcePane(sessionName: String, paneID: String) async throws -> PaneInfo {
+        let result = try await runTmuxCommand(["list-panes", "-a", "-F", Self.paneListFormat])
+        guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
+        let matches = result.stdoutString.split(separator: "\n")
+            .compactMap { PaneInfo(fromTmuxOutput: String($0)) }
+            .filter { $0.paneId == paneID }
+        guard matches.count == 1, let pane = matches.first, pane.sessionName == sessionName else {
+            throw TmuxError.commandFailed(message: "The source pane is missing, moved, or linked to multiple sessions.")
+        }
+        return pane
+    }
+
     /// Resolve the actual calling Codex, not TMUX_PANE inherited by a child or
     /// the focused terminal. A fresh snapshot handles new/split/moved panes.
     func agentBrowserPane(processID: Int32) async throws -> PaneInfo {

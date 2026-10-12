@@ -12,14 +12,17 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
     public let isAgentOwned: Bool
     public let isControlled: Bool
     public let sourceAgent: AgentImageTarget?
+    /// Display association, not an Agent control grant. Also set for plain terminals.
+    public let sourcePaneID: String?
 
     public init(id: UUID, sessionName: String, windowID: String? = nil, parentID: UUID? = nil,
                 title: String, url: String, isLoading: Bool, isAgentOwned: Bool, isControlled: Bool = false,
-                sourceAgent: AgentImageTarget? = nil) {
+                sourceAgent: AgentImageTarget? = nil, sourcePaneID: String? = nil) {
         self.id = id; self.sessionName = sessionName; self.windowID = windowID; self.parentID = parentID
         self.title = title; self.url = url; self.isLoading = isLoading
         self.isAgentOwned = isAgentOwned; self.isControlled = isControlled
         self.sourceAgent = sourceAgent
+        self.sourcePaneID = sourcePaneID
     }
 }
 
@@ -47,6 +50,8 @@ public struct BrowseBrowser: CommandSpec, Equatable {
 
 public enum RemoteBrowserOperation: Codable, Sendable, Equatable {
     case create
+    /// Open/reuse the source pane's human page. Nil URL only reveals it.
+    case openPane(url: String?)
     case frame
     case takeControl
     case releaseControl
@@ -56,6 +61,27 @@ public enum RemoteBrowserOperation: Codable, Sendable, Equatable {
     case text(String)
     case key(RemoteBrowserKey)
     case pointer(RemoteBrowserPointer)
+}
+
+public enum BrowserWebURL {
+    public static func isSupported(_ url: URL) -> Bool {
+        guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return false }
+        return ["http", "https"].contains(parts.scheme?.lowercased() ?? "")
+            && !(parts.host ?? "").isEmpty && parts.user == nil && parts.password == nil
+            && url.absoluteString.utf8.count <= 8192
+    }
+
+    /// Match the browser's origin spelling without changing path/query/fragment semantics.
+    public static func normalized(_ url: URL) -> URL? {
+        guard isSupported(url), var parts = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return nil }
+        parts.scheme = parts.scheme?.lowercased()
+        parts.host = parts.host?.lowercased()
+        if (parts.scheme == "http" && parts.port == 80) || (parts.scheme == "https" && parts.port == 443) {
+            parts.port = nil
+        }
+        if parts.percentEncodedPath.isEmpty { parts.percentEncodedPath = "/" }
+        return parts.url
+    }
 }
 
 public struct RemoteBrowserKey: Codable, Sendable, Equatable {

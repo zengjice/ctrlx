@@ -94,6 +94,11 @@
 
         @Environment(ViewerRelayClient.self) private var relayClient
         @Environment(\.openTerminalFileLink) private var openFileLink
+        @Environment(\.openTerminalBrowserLink) private var openBrowserLink
+        private var openHostURLAction: (@MainActor (URL) -> Void)? {
+            guard let openBrowserLink else { return nil }
+            return { url in openBrowserLink(.init(url: url, paneID: paneId, hostID: hostId)) }
+        }
         private var openPathAction: (@MainActor (String) -> Void)? {
             guard let openFileLink else { return nil }
             return { path in openFileLink(.init(path: path, paneID: paneId, hostID: hostId)) }
@@ -532,6 +537,7 @@
                             presentedTerminal = state
                         },
                         onOpenPath: openPathAction,
+                        onOpenHostURL: openHostURLAction,
                         onSwitchWindow: isActive && !isInputSuspended && textSnapshot == nil && scenePhase == .active
                             ? onSwitchWindow : nil
                     )
@@ -1394,6 +1400,7 @@
         let onInitialPresentation: @MainActor () -> Void
 
         var onOpenPath: (@MainActor (String) -> Void)?
+        var onOpenHostURL: (@MainActor (URL) -> Void)?
         var onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
 
         func makeUIView(context: Context) -> UIScrollView {
@@ -1428,6 +1435,7 @@
             terminalView.onRawInput = onRawInput
             terminalView.onPasteText = onPasteText
             terminalView.onOpenPath = onOpenPath
+            terminalView.onOpenHostURL = onOpenHostURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
@@ -1598,6 +1606,7 @@
             terminalView.onRawInput = onRawInput
             terminalView.onPasteText = onPasteText
             terminalView.onOpenPath = onOpenPath
+            terminalView.onOpenHostURL = onOpenHostURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
@@ -1620,6 +1629,7 @@
             coordinator.viewportReportTask?.cancel()
             coordinator.presentationTask?.cancel()
             coordinator.windowSwipe?.onSwitchWindow = nil
+            coordinator.terminalView?.onOpenHostURL = nil
             coordinator.terminalView?.invalidateInput()
         }
 

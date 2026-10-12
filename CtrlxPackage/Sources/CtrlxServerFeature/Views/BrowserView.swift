@@ -977,6 +977,7 @@ struct PendingBrowserURLPrompt: Identifiable, Equatable {
     let sessionName: String
     let windowId: String
     let hostId: String?
+    let paneID: String
 }
 
 /// User's selection from the confirmation dialog.
@@ -1095,12 +1096,13 @@ struct BrowserURLConfirmationView: View {
             }
 
             HStack {
-                Button("In App") {
+                Button("In Host Browser") {
                     onResolve(.inApp, rememberScope)
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(!BrowserWebURL.isSupported(url))
 
-                Button("In Default Browser") {
+                Button("In This Device's Browser") {
                     onResolve(.defaultBrowser, rememberScope)
                 }
 
@@ -1113,7 +1115,7 @@ struct BrowserURLConfirmationView: View {
             }
         }
         .padding(20)
-        .frame(width: 460)
+        .frame(width: 560)
         .fixedSize(horizontal: false, vertical: true)
     }
 }
