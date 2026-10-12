@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.59 — Worktree-local build, install and cleanup workflows
+
+- Add a unified local Mac/iOS installer that builds, signs, installs and launches
+  through the existing platform scripts. App-only builds avoid unnecessary
+  DMG/IPA creation; standalone packaging still produces distributable artifacts.
+- Validate reusable signed Apps against their recorded build identity. Stage
+  package replacements transactionally and retain local Mac rollback backups.
+- Serialize managed builds, tests, installations and cleanup within each
+  worktree. Lock installation destinations across worktrees without sweeping
+  another worktree's caches or touching simulator state.
+- Keep incremental caches by default. Prune completed verification copies and
+  install backups with explicit completion records; preserve unmarked or failed
+  runs. Optional space-saving cleanup runs only after successful workflows.
+- Preserve zero-argument packaging on macOS's system Bash when entering the
+  worktree lock, alongside app-only and space-saving options.
+- Validation: 189 script tests, 9 worktree regressions, 19 publisher tests,
+  brand/technical boundaries and the website build passed. Re-ran 2,705 Swift
+  tests using existing products for unchanged Swift sources, excluding the
+  unavailable Apple Intelligence evaluation suite. The first Xcode build-settings
+  check timed out; the complete script suite passed on rerun.
+- Distribution: Mac package only. No Relay deployment, iPhone installation or
+  replacement of the local running Mac app; application behavior is unchanged.
+
 ## 3.0.58 — Wrapped file links and browser annotation handoff
 
 - Recognize enclosed, word-wrapped filename tails when they cannot fit in the

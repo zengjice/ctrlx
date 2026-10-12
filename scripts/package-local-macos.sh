@@ -34,7 +34,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 assert_git_worktree
-with_worktree_lock "${LOCAL_BUILD_ARGUMENTS[@]}"
+# Bash 3.2 treats an empty array as unset under nounset.
+with_worktree_lock ${LOCAL_BUILD_ARGUMENTS[@]+"${LOCAL_BUILD_ARGUMENTS[@]}"}
 [ -f "$LOCAL_MAC_CONFIG" ] \
     || log_error 'Missing Config/Local-macOS.xcconfig. Copy Config/Local-macOS.xcconfig.example and configure your personal team.'
 

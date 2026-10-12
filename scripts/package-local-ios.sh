@@ -45,7 +45,8 @@ case "$CONFIGURATION" in
 esac
 
 assert_git_worktree
-with_worktree_lock "${LOCAL_BUILD_ARGUMENTS[@]}"
+# Bash 3.2 treats an empty array as unset under nounset.
+with_worktree_lock ${LOCAL_BUILD_ARGUMENTS[@]+"${LOCAL_BUILD_ARGUMENTS[@]}"}
 [ -f "$LOCAL_CONFIG" ] \
     || log_error 'Missing Config/Local.xcconfig. Copy Config/Local.xcconfig.example and configure your personal team and bundle ID.'
 

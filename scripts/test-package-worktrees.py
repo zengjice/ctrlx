@@ -60,6 +60,27 @@ class PackageWorktreeTests(unittest.TestCase):
                 self.assertNotIn("assert_primary_worktree", script)
                 self.assertIn('PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"', script)
 
+    def test_local_packaging_forwards_empty_and_nonempty_arguments_on_system_bash(self):
+        scripts = self.primary / "scripts"
+        scripts.mkdir()
+        (scripts / "common.sh").write_text('''
+assert_git_worktree() { :; }
+with_worktree_lock() {
+    printf '%s\\n' "$#"
+    for argument do printf '%s\\n' "$argument"; done
+    exit 0
+}
+''')
+        for name in ("package-local-macos.sh", "package-local-ios.sh"):
+            script = scripts / name
+            shutil.copy2(SCRIPTS / name, script)
+            for arguments in ([], ["--app-only"], ["--save-space", "--app-only"]):
+                with self.subTest(script=name, arguments=arguments):
+                    result = subprocess.run(["/bin/bash", str(script), *arguments],
+                                            capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), [str(len(arguments)), *arguments])
+
     def test_save_space_cleanup_stays_in_selected_git_worktree(self):
         caches = []
         apps = []
