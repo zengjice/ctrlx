@@ -62,7 +62,7 @@ class SkillResources(unittest.TestCase):
     def test_entrypoints_stay_small(self):
         skills = list(SKILLS.glob("*/SKILL.md"))
         self.assertEqual({path.parent.name for path in skills},
-                         {"agent-browser", "ctrlx-cli", "create-agent-plugin", "file-links"})
+                         {"agent-browser", "agent-simulator", "ctrlx-cli", "create-agent-plugin", "file-links"})
         for path in skills:
             with self.subTest(skill=path.parent.name):
                 text = path.read_text()

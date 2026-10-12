@@ -32,6 +32,8 @@
         "system.ping",
         "system.capabilities",
         "system.identify",
+        "simulator.action",
+        "browser.start",
         "system.set_env",
         "session.list",
         "session.create",
@@ -170,6 +172,7 @@
         let onEditorOpen: (@Sendable (String, String) async -> Void)?
 
         let onIdentify: (@Sendable (String?) async -> [String: JSONValue]?)?
+        let onBrowserStart: (@Sendable (String) async throws -> Void)?
 
         let onProjectList: (@Sendable () async -> [[String: JSONValue]])?
         /// Parameters: (path, args, pluginID). `pluginID` defaults to
@@ -273,6 +276,7 @@
             onNotify: (@Sendable (String, String, String?, Bool) async -> Void)? = nil,
             onEditorOpen: (@Sendable (String, String) async -> Void)? = nil,
             onIdentify: (@Sendable (String?) async -> [String: JSONValue]?)? = nil,
+            onBrowserStart: (@Sendable (String) async throws -> Void)? = nil,
             onProjectList: (@Sendable () async -> [[String: JSONValue]])? = nil,
             onProjectStart: (@Sendable (String, [String], String) async throws -> [String: JSONValue])? = nil,
             onSetEnvironment: (@Sendable (String, [String: String?]) async throws -> Void)? = nil,
@@ -315,6 +319,7 @@
             self.onNotify = onNotify
             self.onEditorOpen = onEditorOpen
             self.onIdentify = onIdentify
+            self.onBrowserStart = onBrowserStart
             self.onProjectList = onProjectList
             self.onProjectStart = onProjectStart
             self.onSetEnvironment = onSetEnvironment
@@ -353,6 +358,14 @@
                         return JSONRPCResponse(id: id, result: info)
                     }
                     return .internalError(id: id, "Identify not available")
+
+                case "browser.start":
+                    guard let state = params["state"]?.stringValue, state.hasPrefix("/") else {
+                        return .invalidParams(id: id, "Absolute browser state path required")
+                    }
+                    guard let onBrowserStart else { return .internalError(id: id, "Browser host unavailable") }
+                    try await onBrowserStart(state)
+                    return .ok(id: id)
 
                 case "system.set_env":
                     guard let sessionId = params["session_id"]?.stringValue else {

@@ -65,50 +65,114 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     // agent credential. Native popup callbacks inherit it from the parent.
     private var manualRoutes: [String: (workspaceID: UUID, target: ManualBrowserTarget)] = [:]
     private var resolvePane: (@MainActor (Int32) async throws -> PaneInfo)?
+    private let startRuntime: @MainActor (AgentBrowserService) throws -> any CXBrowserRuntime
+    private var startupError: (any Error)?
     private var closing = false
     private let logger = Logger(label: "com.ctrlx.agent-browser")
 
-    public override init() { super.init() }
+    public override init() {
+        startRuntime = Self.createAndStartRuntime
+        super.init()
+    }
 
     // Tests inject the native boundary without starting Chromium or touching a profile.
     init(runtime: any CXBrowserRuntime) {
         self.runtime = runtime
+        startRuntime = Self.createAndStartRuntime
         super.init()
     }
 
-    func start(resolvePane: @escaping @MainActor (Int32) async throws -> PaneInfo) {
-        guard runtime == nil, !closing else { return }
+    init(startRuntime: @escaping @MainActor (AgentBrowserService) throws -> any CXBrowserRuntime) {
+        self.startRuntime = startRuntime
+        super.init()
+    }
+
+    func configure(resolvePane: @escaping @MainActor (Int32) async throws -> PaneInfo) {
+        guard !closing else { return }
         self.resolvePane = resolvePane
+    }
+
+    static func stateDirectory(arguments: [String] = CommandLine.arguments) throws -> URL {
+        if arguments.contains("--e2e-browser-mock-keychain"), !arguments.contains("--e2e-test") {
+            throw ManualBrowserError.creation("Mock keychain requires an isolated E2E host.")
+        }
+        if arguments.contains("--e2e-test") {
+            guard let index = arguments.firstIndex(of: "--ctrlx-state-root"),
+                  index + 1 < arguments.count else { throw ManualBrowserError.unavailable }
+            return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
+                .appendingPathComponent("agent-browser", isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ctrlx/agent-browser", isDirectory: true)
+    }
+
+    private static func createAndStartRuntime(_ service: AgentBrowserService) throws -> any CXBrowserRuntime {
         guard let runtime = CXBrowserCreateRuntime() else {
-            if let error = CXBrowserLoadError() { logger.error("Agent Browser unavailable: \(error)") }
-            return
+            throw ManualBrowserError.creation(CXBrowserLoadError() ?? "The bundled Chromium runtime is unavailable.")
         }
-        do {
-            let fm = FileManager.default
+        let fm = FileManager.default
+        let state = try stateDirectory()
+        let profile: URL
+        if CommandLine.arguments.contains("--e2e-test") {
+            let name = CommandLine.arguments.contains("--e2e-browser-mock-keychain")
+                ? "browser-mock-profile" : "browser-profile"
+            profile = state.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+        } else {
             let support = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            var profile = support.appendingPathComponent("CtrlX/AgentBrowser", isDirectory: true)
-            var state = fm.homeDirectoryForCurrentUser.appendingPathComponent(".ctrlx/agent-browser", isDirectory: true)
-            // Existing E2E isolation must also isolate browser cookies, IPC and
-            // grants. A second test app must never take the user's profile lock.
-            if CommandLine.arguments.contains("--e2e-test") {
-                guard let index = CommandLine.arguments.firstIndex(of: "--ctrlx-state-root"),
-                      index + 1 < CommandLine.arguments.count else { return }
-                let root = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
-                profile = root.appendingPathComponent("browser-profile", isDirectory: true)
-                state = root.appendingPathComponent("agent-browser", isDirectory: true)
-            }
-            for directory in [profile, state] {
-                try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            }
-            // CEF canonicalizes the root itself. Resolve /var ↔ /private/var for
-            // both paths or Chromium silently disables persistent cookies.
-            self.runtime = runtime
-            try runtime.start(with: self, profile: profile.resolvingSymlinksInPath().path,
-                              state: state.resolvingSymlinksInPath().path)
-        } catch {
-            self.runtime = nil
-            logger.error("Agent Browser startup failed: \(error.localizedDescription)")
+            profile = support.appendingPathComponent("CtrlX/AgentBrowser", isDirectory: true)
         }
+        for directory in [profile, state] {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
+        // CEF canonicalizes the root itself. Resolve /var ↔ /private/var for
+        // both paths or Chromium silently disables persistent cookies.
+        try runtime.start(with: service, profile: profile.resolvingSymlinksInPath().path,
+                          state: state.resolvingSymlinksInPath().path)
+        return runtime
+    }
+
+    func prepareForAgentRequests(state: String) async throws {
+        let expected = try Self.stateDirectory().resolvingSymlinksInPath()
+        guard URL(fileURLWithPath: state).resolvingSymlinksInPath().path == expected.path else {
+            throw ManualBrowserError.creation("Browser state belongs to a different CtrlX host. No browser was started.")
+        }
+        try await ensureStarted()
+    }
+
+    func ensureStarted() async throws {
+        try Task.checkCancellation()
+        guard !closing else { throw ManualBrowserError.unavailable }
+        if let startupError { throw startupError }
+        if runtime == nil {
+            guard resolvePane != nil else { throw ManualBrowserError.unavailable }
+            do {
+                runtime = try startRuntime(self)
+            } catch {
+                startupError = error
+                logger.error("Agent Browser startup failed: \(error.localizedDescription)")
+                throw error
+            }
+        }
+        guard let runtime, runtime.responds(to: #selector(CXBrowserRuntime.isReady)),
+            runtime.responds(to: #selector(CXBrowserRuntime.startupError)) else {
+            throw ManualBrowserError.unavailable
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !runtime.isReady() {
+            guard !closing else { throw ManualBrowserError.unavailable }
+            if let message = runtime.startupError() {
+                let error = ManualBrowserError.creation(message)
+                startupError = error
+                logger.error("Agent Browser startup failed: \(message)")
+                throw error
+            }
+            guard ContinuousClock.now < deadline else {
+                throw ManualBrowserError.creation("Chromium startup timed out. No page action was sent.")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try Task.checkCancellation()
+        guard !closing else { throw ManualBrowserError.unavailable }
     }
 
     func register(_ workspace: AgentBrowserWorkspace) {
@@ -131,7 +195,9 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     /// All manual entry points use this Host-owned registry, including local UI.
     /// Coalesce creation only; each caller retains its own navigation intent.
     func openPaneBrowser(sessionName: String, paneID: String, url: URL? = nil) async throws -> AgentBrowserTabState {
-        guard !closing, let runtime, let resolveSourcePane,
+        guard !closing, let resolveSourcePane else { throw ManualBrowserError.unavailable }
+        try await ensureStarted()
+        guard !closing, let runtime,
               runtime.responds(to: #selector(CXBrowserRuntime.openManualTab(route:url:completion:))) else {
             throw ManualBrowserError.unavailable
         }

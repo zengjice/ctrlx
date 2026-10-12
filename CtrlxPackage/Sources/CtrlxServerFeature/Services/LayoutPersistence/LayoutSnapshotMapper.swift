@@ -110,7 +110,7 @@
             let fileTabs = liveFileTabs.map {
                 SavedFileTab(id: $0.id, path: $0.path, directoryPath: $0.directoryPath, browser: tabs.directoryTabs[$0.id]?.snapshot)
             }
-            let browserTabs = tabs.openBrowserTabs.filter { !$0.isAgentBrowser }.map { tab in
+            let browserTabs = tabs.openBrowserTabs.filter { !$0.isTransient }.map { tab in
                 SavedBrowserTab(
                     id: tab.id,
                     url: tab.url,

@@ -399,6 +399,7 @@ struct TmuxPaneMirrorApp: App {
         shutdownDelegate.onShouldTerminate = {
             await coord.shutdown()
         }
+        shutdownDelegate.installNativeTerminationHandling()
     }
 
     var body: some Scene {

@@ -132,7 +132,7 @@ struct BrowserTabStripItem: View {
         HStack(spacing: 0) {
             Button(action: onSelect) {
                 HStack(spacing: 4) {
-                    Symbols.globe.image
+                    (tab.isSimulator ? Symbols.iphone : Symbols.globe).image
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
@@ -148,21 +148,21 @@ struct BrowserTabStripItem: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(tab.url.absoluteString)
-            .accessibilityLabel("Browser tab: \(tab.tabLabel)")
+            .help(tab.isSimulator ? tab.tabLabel : tab.url.absoluteString)
+            .accessibilityLabel("\(tab.isSimulator ? "Simulator" : "Browser") tab: \(tab.tabLabel)")
             .accessibilityValue(isSelected ? "selected" : "")
 
             TabSplitToggleButton(
                 isSplit: isSplit,
                 isOnRight: isOnRight,
-                tabKind: "browser tab",
+                tabKind: tab.isSimulator ? "simulator tab" : "browser tab",
                 tabName: tab.tabLabel,
                 action: onToggleSplit
             )
 
             TabCloseButton(
                 isVisible: isSelected || isHovered,
-                accessibilityLabel: "Close browser tab: \(tab.tabLabel)",
+                accessibilityLabel: "Close \(tab.isSimulator ? "simulator" : "browser") tab: \(tab.tabLabel)",
                 action: onClose
             )
             .padding(.trailing, 6)

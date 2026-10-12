@@ -82,6 +82,7 @@ log_info "Building CtrlX $VERSION from $PROJECT_ROOT"
     -onlyUsePackageVersionsFromResolvedFile \
     -skipMacroValidation \
     -skipPackagePluginValidation \
+    ENABLE_CODE_COVERAGE=NO \
     COMPILER_INDEX_STORE_ENABLE=NO \
     INDEX_ENABLE_DATA_STORE=NO \
     CTRLX_BUILD_STAMP="$BUILD_STAMP" \

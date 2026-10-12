@@ -24,6 +24,8 @@ RETAINED_GROUPS = {
 }
 RETAINED_COUNT = 2
 LOW_SPACE_BYTES = 20 * 1024 ** 3
+COMPLETED_MARKER = ".ctrlx-cleanup-ready"
+COMPLETED_ARTIFACT_DIRS = (".build-local/app-backups", ".build-local/diagnostics")
 COMPILATION_CACHE_DIRS = (
     "Build/Intermediates.noindex",
     "CompilationCache.noindex",
@@ -333,6 +335,23 @@ def deep_targets(root):
     return [path for path in targets if path.exists()]
 
 
+def completed_targets(root):
+    targets = []
+    for name in COMPLETED_ARTIFACT_DIRS:
+        parent = root / name
+        validate_path(root, parent)
+        if not parent.is_dir():
+            continue
+        for directory in sorted(parent.iterdir()):
+            marker = directory / COMPLETED_MARKER
+            if not directory.is_dir() or not marker.is_file():
+                continue
+            validate_path(root, directory)
+            validate_path(root, marker)
+            targets.append(directory)
+    return targets
+
+
 def clean(root, targets, apply):
     # Validate the entire plan before deleting anything.
     for path in targets:
@@ -347,7 +366,7 @@ def clean(root, targets, apply):
     if not targets:
         print("Nothing to clean.")
     elif not apply:
-        print("Preview only. Re-run with --yes to delete these listed files.")
+        print("Preview only. Re-run with --yes to delete these listed paths.")
 
 
 def main():
@@ -365,6 +384,8 @@ def main():
     use = modes.add_parser("use-artifact", help="Run with an artifact use lock; on success, prune to two completed copies per kind")
     use.add_argument("--path", required=True, type=Path, help="Recognized .build-local verification or backup directory")
     use.add_argument("command", nargs=argparse.REMAINDER, help="Command after --; must finish using the artifact before returning")
+    housekeeping = modes.add_parser("housekeeping", help="Clean completed backups/diagnostics and verified downloads; keep build caches")
+    housekeeping.add_argument("--yes", action="store_true", help="Delete the listed completed artifacts")
     deep = modes.add_parser("deep", help="Remove build caches; preserve dist, signing config and user data")
     deep.add_argument("--yes", action="store_true", help="Delete the listed caches")
     tests = modes.add_parser("tests", help="Remove obsolete native backend outputs and test indexes; keep swiftbuild caches")
@@ -415,8 +436,11 @@ def main():
                 targets += derived_cache_targets(root, root / ".build-local/DerivedData" / args.platform, args.save_space)
             targets += receipt_targets(root, locks)
             targets += retained_targets(root, locks)
+            targets += completed_targets(root)
         elif args.mode == "retained":
             targets = retained_targets(root, locks, report_unmanaged=True)
+        elif args.mode == "housekeeping":
+            targets = receipt_targets(root, locks) + completed_targets(root)
         else:
             targets = receipt_targets(root, locks)
         clean(root, targets, args.yes)

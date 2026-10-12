@@ -830,35 +830,57 @@ final public class TmuxService {
 
     /// Resolve the actual calling Codex, not TMUX_PANE inherited by a child or
     /// the focused terminal. A fresh snapshot handles new/split/moved panes.
-    func agentBrowserPane(processID: Int32) async throws -> PaneInfo {
+    func agentBrowserPane(processID: Int32, ancestorPIDs: Set<Int32>? = nil) async throws -> PaneInfo {
         // UI refreshes coalesce and deduplicate linked panes. Neither behavior
         // is valid for routing authority: an in-flight refresh can return stale
         // (initially empty) state, and deduplication hides ambiguous sessions.
-        // Read metadata and shell PIDs together, without publishing UI state.
+        // Read routing fields together. Titles and annotations can contain
+        // newlines and must not become records in this authority snapshot.
         let sep = String(PaneInfo.fieldSeparator)
+        let format = [
+            "#{pane_pid}", "#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
+            "#{pane_current_command}", "#{pane_current_path}", "#{pane_width}", "#{pane_height}",
+            "#{pane_active}", "#{window_id}",
+        ].joined(separator: sep)
         let result = try await runTmuxCommand([
-            "list-panes", "-a", "-F", "#{pane_pid}\(sep)\(Self.paneListFormat)",
+            "list-panes", "-a", "-F", format,
         ])
         guard result.isSuccess else {
             throw TmuxError.commandFailed(message: result.stderrString)
         }
         var current: [(pane: PaneInfo, shellPID: String)] = []
         for line in result.stdoutString.split(separator: "\n") {
-            let fields = line.split(separator: PaneInfo.fieldSeparator, maxSplits: 1,
-                                    omittingEmptySubsequences: false)
-            guard fields.count == 2, Int32(fields[0]) != nil,
-                  let pane = PaneInfo(fromTmuxOutput: String(fields[1])) else {
+            let fields = line.split(separator: PaneInfo.fieldSeparator, omittingEmptySubsequences: false)
+            guard fields.count == 11, let shellPID = Int32(fields[0]),
+                  let windowIndex = Int(fields[3]), let paneIndex = Int(fields[4]),
+                  let width = Int(fields[7]), let height = Int(fields[8]) else {
                 throw TmuxError.commandFailed(message: "Invalid pane metadata while locating Agent Browser source.")
             }
-            current.append((pane, String(fields[0])))
+            let session = String(fields[2])
+            let pane = PaneInfo(
+                paneId: String(fields[1]), target: "\(session):\(windowIndex).\(paneIndex)",
+                sessionName: session, windowIndex: windowIndex,
+                tmuxWindowId: fields[10].isEmpty ? nil : String(fields[10]), paneIndex: paneIndex,
+                command: String(fields[5]), currentPath: String(fields[6]), width: width, height: height,
+                isActive: fields[9] == "1")
+            current.append((pane, String(shellPID)))
         }
-        guard let tree = try await processTree() else {
-            throw AgentBrowserRoutingError.processNotInPane
+        let ids: Set<String>
+        if let ancestorPIDs {
+            guard ancestorPIDs.contains(processID) else { throw AgentBrowserRoutingError.processNotInPane }
+            ids = Set(current.compactMap { info in
+                guard let shellPID = Int32(info.shellPID), ancestorPIDs.contains(shellPID) else { return nil }
+                return info.pane.paneId
+            })
+        } else {
+            guard let tree = try await processTree() else {
+                throw AgentBrowserRoutingError.processNotInPane
+            }
+            let pid = String(processID)
+            ids = Set(current.compactMap { info in
+                info.shellPID == pid || tree.descendants(of: info.shellPID).contains(pid) ? info.pane.paneId : nil
+            })
         }
-        let pid = String(processID)
-        let ids = Set(current.compactMap { info in
-            info.shellPID == pid || tree.descendants(of: info.shellPID).contains(pid) ? info.pane.paneId : nil
-        })
         return try AgentBrowserRouting.resolve(panes: current.map(\.pane), matchingPaneIDs: ids)
     }
 

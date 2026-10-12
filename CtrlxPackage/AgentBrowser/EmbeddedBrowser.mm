@@ -16,6 +16,7 @@
 @interface CXEmbeddedBrowserRuntime : NSObject <CXBrowserRuntime>
 @property(nonatomic, weak) id<CXBrowserHostDelegate> delegate;
 @property(nonatomic) BOOL started;
+@property(nonatomic) BOOL startScheduled;
 @property(nonatomic) BOOL closing;
 @property(nonatomic) BOOL endpointReady;
 @property(nonatomic) BOOL shutdownScheduled;
@@ -23,7 +24,11 @@
 @property(nonatomic) BOOL loopRunning;
 @property(nonatomic) BOOL cookieFlushRequested;
 @property(nonatomic) BOOL cookiesFlushed;
+@property(nonatomic, copy) NSString *shutdownTraceStage;
 @property(nonatomic, copy) NSString *state;
+@property(nonatomic, copy) NSString *profile;
+@property(nonatomic, copy) NSString *initializationError;
+- (void)traceShutdownStage:(NSString *)stage;
 - (void)contextReady;
 - (void)runBrowserLoop;
 - (void)shutdownOnRunLoop;
@@ -86,6 +91,7 @@ class CookieFlushCompletion final : public CefCompletionCallback {
   void OnComplete() override {
     CEF_REQUIRE_UI_THREAD();
     runtime.cookiesFlushed = YES;
+    [runtime traceShutdownStage:@"cookies-flushed"];
   }
  private:
   IMPLEMENT_REFCOUNTING(CookieFlushCompletion);
@@ -253,20 +259,24 @@ static void OpenTab(std::string owner, int pid, std::string url,
 
 class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
  public:
+  explicit EmbeddedApp(bool mockKeychain) : mockKeychain_(mockKeychain) {}
   void OnBeforeCommandLineProcessing(const CefString& process, CefRefPtr<CefCommandLine> command) override {
     // Page-provided tools are opt-in through the bounded CLI, not an MCP server.
     // Match the pinned engine's Chromium launch prerequisites.
     command->AppendSwitchWithValue("enable-features", "WebMCPTesting,DevToolsWebMCPSupport");
+    if (mockKeychain_) command->AppendSwitch("use-mock-keychain");
   }
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
   void OnContextInitialized() override { [runtime contextReady]; }
  private:
+  const bool mockKeychain_;
   IMPLEMENT_REFCOUNTING(EmbeddedApp);
 };
 
 @interface CXBrowserApplication : NSApplication <CefAppProtocol>
 @property(nonatomic) BOOL handlingSendEvent;
 @end
+static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
 @implementation CXBrowserApplication
 - (BOOL)isHandlingSendEvent { return self.handlingSendEvent; }
 - (void)sendEvent:(NSEvent *)event {
@@ -287,24 +297,54 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
   if (runtime.started) { CefScopedSendingEvent scope; [super sendEvent:event]; }
   else [super sendEvent:event];
 }
+- (void)terminate:(id)sender {
+  // AppKit's terminateLater modal loop prevents CEF's native loop from
+  // unwinding. Finish async cleanup before entering AppKit termination.
+  if (runtime.started &&
+      [applicationTerminationDelegate tryToTerminateWithoutModalLoop]) return;
+  [super terminate:sender];
+}
 @end
 
 @implementation CXEmbeddedBrowserRuntime
+- (void)traceShutdownStage:(NSString *)stage {
+  if (![NSProcessInfo.processInfo.arguments containsObject:@"--e2e-test"] ||
+      [self.shutdownTraceStage isEqual:stage]) return;
+  self.shutdownTraceStage = stage;
+  NSLog(@"CtrlX Agent Browser shutdown stage=%@ started=%d loop=%d handlingEvent=%d pages=%zu tools=%zu pendingTools=%zu transportsStopped=%d cookiesRequested=%d cookiesFlushed=%d scheduled=%d",
+        stage, self.started, self.loopRunning, [(id<CefAppProtocol>)NSApp isHandlingSendEvent],
+        browsers.size(), devToolsBrowsers.size(), pendingDevTools.load(), AgentBrowserTransportsStopped(),
+        self.cookieFlushRequested, self.cookiesFlushed, self.shutdownScheduled);
+}
 - (BOOL)startWithDelegate:(id<CXBrowserHostDelegate>)delegate profile:(NSString *)profile state:(NSString *)state error:(NSError **)error {
-  if (self.started) return YES;
+  if (self.started || self.startScheduled) return YES;
+  if (self.closing || self.initializationError) {
+    if (error) *error = [NSError errorWithDomain:@"CtrlXBrowser" code:2 userInfo:@{NSLocalizedDescriptionKey: self.initializationError ?: @"CtrlX is shutting down."}];
+    return NO;
+  }
   self.delegate = delegate;
   char canonicalProfile[PATH_MAX], canonicalState[PATH_MAX];
   if (!realpath(profile.fileSystemRepresentation, canonicalProfile) || !realpath(state.fileSystemRepresentation, canonicalState)) {
     if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
     return NO;
   }
-  profile = @(canonicalProfile);
+  self.profile = @(canonicalProfile);
   self.state = @(canonicalState);
+  self.startScheduled = YES;
+  // Initialization installs RunLoop observers. Enter CEF's loop in the same
+  // AppKit callback, before the outer loop can exit without a matching entry.
+  [self performSelector:@selector(runBrowserLoop) withObject:nil afterDelay:0];
+  return YES;
+}
+- (void)runBrowserLoop {
+  if (!self.startScheduled || self.closing || self.shuttingDown) return;
+  self.startScheduled = NO;
   library = std::make_unique<CefScopedLibraryLoader>();
   if (!library->LoadInMain()) {
-    if (error) *error = [NSError errorWithDomain:@"CtrlXBrowser" code:1 userInfo:@{NSLocalizedDescriptionKey: @"Cannot load the bundled Chromium framework."}];
-    return NO;
+    self.initializationError = @"Cannot load the bundled Chromium framework.";
+    return;
   }
+  NSString *profile = self.profile;
   CefSettings settings;
   // CefRunMessageLoop owns Chromium's application keep-alive. With the external
   // pump that keep-alive is absent: closing the last Chrome-style DevTools
@@ -322,14 +362,24 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
   // Do not feed CtrlX launch flags (or agent-supplied switches) into Chromium.
   const char *name = NSBundle.mainBundle.executablePath.UTF8String;
   char *argv[] = {const_cast<char *>(name), nullptr};
-  if (!CefInitialize(CefMainArgs(1, argv), settings, new EmbeddedApp(), nullptr)) {
-    if (error) *error = [NSError errorWithDomain:@"CtrlXBrowser" code:2 userInfo:@{NSLocalizedDescriptionKey: @"Chromium initialization failed. Close any older Agent Browser using this profile, then restart CtrlX."}];
-    return NO;
+  NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
+  const bool mockKeychain = [arguments containsObject:@"--e2e-test"] &&
+      [arguments containsObject:@"--e2e-browser-mock-keychain"];
+  if (mockKeychain) NSLog(@"CtrlX Agent Browser E2E mock keychain enabled");
+  if (!CefInitialize(CefMainArgs(1, argv), settings, new EmbeddedApp(mockKeychain), nullptr)) {
+    self.initializationError = @"Chromium initialization failed. Close any older Agent Browser using this profile, then restart CtrlX.";
+    return;
   }
   self.started = YES;
-  // Enter from AppKit, never from the Swift main-actor job that initialized us.
-  [self performSelector:@selector(runBrowserLoop) withObject:nil afterDelay:0];
-  return YES;
+  self.loopRunning = YES;
+  [self traceShutdownStage:@"native-loop-enter"];
+  CefRunMessageLoop();
+  self.loopRunning = NO;
+  [self traceShutdownStage:@"native-loop-returned"];
+  CefShutdown();
+  self.started = NO;
+  [self traceShutdownStage:@"native-shutdown-finished"];
+  self.delegate = nil;
 }
 - (void)contextReady {
   self.endpointReady = StartAgentBrowser(self.state, {OpenTab, [](auto browser) {
@@ -340,18 +390,8 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
   }});
   if (!self.endpointReady) NSLog(@"CtrlX embedded browser control endpoint could not start.");
 }
-- (void)runBrowserLoop {
-  if (!self.started || self.shuttingDown) return;
-  self.loopRunning = YES;
-  // CEF's macOS pump dispatches AppKit events and RunLoop sources while NSApp
-  // is already running. Swift UI/I/O jobs remain free to execute in this loop.
-  CefRunMessageLoop();
-  self.loopRunning = NO;
-  // Shutdown only after the native loop has unwound, not from one of its jobs.
-  CefShutdown();
-  self.started = NO;
-  self.delegate = nil;
-}
+- (BOOL)isReady { return self.started && self.endpointReady && !self.closing; }
+- (NSString *)startupError { return self.initializationError; }
 - (void)openManualTabWithRoute:(NSDictionary<NSString *, NSString *> *)route url:(NSString *)url completion:(void (^)(NSString *))completion {
   if (!self.started || !self.endpointReady || self.closing) {
     completion(@"Chromium is not ready. Restart CtrlX and try again."); return;
@@ -405,6 +445,9 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
 }
 - (void)beginShutdown {
   self.closing = YES;
+  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(runBrowserLoop) object:nil];
+  self.startScheduled = NO;
+  [self traceShutdownStage:@"begin"];
   auto copy = browsers;
   StopAgentBrowser();
   for (auto& [id, browser] : copy) { CloseDevToolsFor(browser); browser->GetHost()->CloseBrowser(true); }
@@ -412,38 +455,49 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
   for (auto& [id, browser] : tools) browser->GetHost()->CloseBrowser(true);
 }
 - (BOOL)finishShutdown {
-  if (!self.started) return YES;
-  if (!browsers.empty() || !devToolsBrowsers.empty() || pendingDevTools.load() != 0) return NO;
-  if (!AgentBrowserTransportsStopped()) return NO;
+  if (!self.started) { [self traceShutdownStage:@"finished"]; return YES; }
+  if (!browsers.empty() || !devToolsBrowsers.empty() || pendingDevTools.load() != 0) {
+    [self traceShutdownStage:@"waiting-pages"];
+    return NO;
+  }
+  if (!AgentBrowserTransportsStopped()) {
+    [self traceShutdownStage:@"waiting-transports"];
+    return NO;
+  }
   // Closing the native views does not guarantee Chromium's pending cookie
   // writes reached disk. Keep its pump alive until the cookie-store completion
   // callback, rather than shutting down the network service immediately.
   if (!self.cookieFlushRequested) {
     self.cookieFlushRequested = YES;
+    [self traceShutdownStage:@"request-cookie-flush"];
     auto cookies = CefCookieManager::GetGlobalManager(nullptr);
     if (!cookies || !cookies->FlushStore(new CookieFlushCompletion())) {
       NSLog(@"CtrlX Agent Browser could not flush cookies before shutdown.");
       self.cookiesFlushed = YES; // Do not hang application quit on inaccessible storage.
     }
   }
-  if (!self.cookiesFlushed) return NO;
+  if (!self.cookiesFlushed) { [self traceShutdownStage:@"waiting-cookie-flush"]; return NO; }
   // CefShutdown spins native run loops while joining Chromium threads. Calling
   // it from a Swift main-actor job holds the serial main executor and can block
   // work those threads need. Enter from an AppKit run-loop callback instead.
   if (!self.shutdownScheduled) {
     self.shutdownScheduled = YES;
+    [self traceShutdownStage:@"schedule-native-shutdown"];
     [self performSelector:@selector(shutdownOnRunLoop) withObject:nil afterDelay:0];
   }
+  [self traceShutdownStage:@"waiting-native-loop"];
   return NO;
 }
 - (void)shutdownOnRunLoop {
   self.shuttingDown = YES;
+  [self traceShutdownStage:@"native-stop-loop"];
   if (self.loopRunning) {
     CefQuitMessageLoop();
   } else {
     // Shutdown may race the deferred first entry into the native loop.
     CefShutdown();
     self.started = NO;
+    [self traceShutdownStage:@"native-shutdown-finished"];
     self.delegate = nil;
   }
 }
@@ -487,4 +541,7 @@ extern "C" __attribute__((visibility("default"))) BOOL CXEmbeddedBrowserPrepareA
 extern "C" __attribute__((visibility("default"))) id CXEmbeddedBrowserCreateRuntime() {
   if (!runtime) runtime = [CXEmbeddedBrowserRuntime new];
   return runtime;
+}
+extern "C" __attribute__((visibility("default"))) void CXEmbeddedBrowserSetTerminationDelegate(id<CXBrowserTerminationDelegate> delegate) {
+  applicationTerminationDelegate = delegate;
 }

@@ -345,6 +345,7 @@ final class SessionFileTabsState {
     /// switches between tabs/sessions.
     var browserStates: [UUID: BrowserTabState] = [:]
     var agentBrowserStates: [UUID: AgentBrowserTabState] = [:]
+    var simulatorStates: [UUID: SimulatorTabState] = [:]
     var remoteBrowserTabs: [UUID: RemoteBrowserTab] = [:]
 
     /// Returns whether reconciliation collapsed the split, so the view can repair terminal focus.
@@ -534,6 +535,7 @@ final class SessionFileTabsState {
             state.cancelActiveDownloads()
         }
         for state in agentBrowserStates.values { state.service.close(state) }
+        for state in simulatorStates.values { state.service.close(state) }
     }
 }
 

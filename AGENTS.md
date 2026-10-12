@@ -161,6 +161,13 @@ Packaging deletes temporary App copies on exit and keeps two local IPA/DMG
 packages per platform/configuration. Successful packaging removes old platform
 indexes, duplicate dependency copies and completed public-download verification
 copies; reusable build/download caches and installable apps remain worktree-local.
+Successful packaging also removes explicitly completed immediate child directories
+under `.build-local/app-backups/` and `.build-local/diagnostics/`: add an empty
+`.ctrlx-cleanup-ready` file only after their processes have stopped and the backup
+or evidence is no longer needed. App backups require a verified replacement and
+a retained rollback package. Unmarked directories and every worktree's incremental
+caches remain. `python3 scripts/clean-build.py housekeeping` previews this cleanup;
+add `--yes` to apply it without rebuilding. See `RELEASE.md`.
 Packaging warns below 20 GiB free before building. Local Mac/iOS packaging accepts
 `--save-space`: only after success, remove that platform's compilation intermediates
 and module/SDK caches, retaining signed installable apps and downloaded dependencies.
@@ -274,6 +281,14 @@ Read the relevant contract before changing these areas:
   Build native components with `bash scripts/build-agent-browser.sh` before
   direct Mac workspace builds; local packaging does this automatically.
   Run native engine suites sequentially in an isolated signed app.
+- [Simulator](docs/agent-simulator-design.md) and
+  [agent operations](plugin/ctrlx/skills/agent-simulator/references/operations.md):
+  Codex-owned native iOS Simulator tabs, private devices, optional simslim profile,
+  recording and input limits. `ctrlx simulator run -- codex` supplies `--no-daemon`.
+  Build native components with `bash scripts/build-agent-simulator.sh` before a
+  direct Mac workspace build. Validate in an isolated signed app; preserve caches
+  and reuse unaffected evidence after source-impact review. Local acceptance does
+  not establish cross-machine compatibility or public distribution readiness.
 - [Sidecar contract](docs/plugins/sidecar-authoring.md): manifest, ingress versus
   stdio wire casing, supervision, distribution and telemetry. Agent-specific
   lifecycle, subagent filtering, response keystrokes and test commands live in

@@ -1,4 +1,5 @@
 import CtrlxNetworking
+import Foundation
 import Testing
 @testable import CtrlxServerFeature
 
@@ -29,6 +30,7 @@ func capabilitiesListsMethods() async {
     if case let .array(methods) = response.result?["methods"] {
         let names = methods.compactMap(\.stringValue)
         #expect(names.contains("system.ping"))
+        #expect(names.contains("browser.start"))
         #expect(names.contains("session.list"))
         #expect(names.contains("session.set_title"))
         #expect(names.contains("input.send_text"))
@@ -36,6 +38,32 @@ func capabilitiesListsMethods() async {
     } else {
         Issue.record("Expected methods array")
     }
+}
+
+@Test
+func browserStartupRequiresAStatePathAndPreservesHostErrors() async {
+    let received = LockedValue<String?>(nil)
+    let router = LiveAPIRequestRouter(onBrowserStart: { path in
+        await received.set(path)
+    })
+    let invalidParams: [[String: JSONValue]] = [[:], ["state": .string("relative")], ["state": .int(1)]]
+    for params in invalidParams {
+        let response = await router.handleRequest(.init(id: "browser", method: "browser.start", params: params))
+        #expect(!response.ok)
+        #expect(response.error?.code == "invalid_params")
+        #expect(await received.get() == nil)
+    }
+    let request = JSONRPCRequest(id: "browser", method: "browser.start", params: ["state": .string("/fixture/agent-browser")])
+    #expect(await router.handleRequest(request).ok)
+    #expect(await received.get() == "/fixture/agent-browser")
+    let unavailable = await LiveAPIRequestRouter().handleRequest(request)
+    #expect(!unavailable.ok)
+    let failing = LiveAPIRequestRouter(onBrowserStart: { _ in
+        throw NSError(domain: "BrowserStartupTest", code: 1, userInfo: [NSLocalizedDescriptionKey: "different host"])
+    })
+    let rejected = await failing.handleRequest(request)
+    #expect(!rejected.ok)
+    #expect(rejected.error?.message.contains("different host") == true)
 }
 
 // MARK: - session.create + if_missing

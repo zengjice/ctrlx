@@ -31,6 +31,8 @@ struct BrowserTab: Identifiable, Equatable {
     /// restore them as WebKit pages or grant a new Codex control over old tabs.
     var isAgentBrowser: Bool = false
     var isViewerLocal: Bool = false
+    var isSimulator: Bool = false
+    var isTransient: Bool { isAgentBrowser || isSimulator }
 
     init(
         id: UUID = UUID(),

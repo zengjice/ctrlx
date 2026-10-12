@@ -16,10 +16,15 @@ struct PaneBrowserOpeningTests {
         var navigations: [(String, String)] = []
         var closed: [String] = []
         var failure: String?
+        var ready = true
+        var initializationFailure: String?
+        var shutdowns = 0
         var holdCreation = false
         var pending: (() -> Void)?
 
         func start(with delegate: any CXBrowserHostDelegate, profile: String, state: String) throws {}
+        func isReady() -> Bool { ready }
+        func startupError() -> String? { initializationFailure }
         func openManualTab(route: [String: String], url: String, completion: @escaping (String?) -> Void) {
             requests.append(route)
             let finish = {
@@ -44,7 +49,7 @@ struct PaneBrowserOpeningTests {
             completion(nil, "Not configured")
         }
         func closeTab(_ identifier: String) { closed.append(identifier); delegate?.browserTabClosed(identifier) }
-        func beginShutdown() {}
+        func beginShutdown() { shutdowns += 1 }
         func finishShutdown() -> Bool { true }
     }
 

@@ -2,6 +2,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@protocol CXBrowserTerminationDelegate <NSObject>
+- (BOOL)tryToTerminateWithoutModalLoop;
+@end
+
 // CEF stays in a separately built native library. Swift/SPM clients need only
 // this small AppKit contract, never CEF headers or a downloaded SDK to compile.
 @protocol CXBrowserHostDelegate <NSObject>
@@ -15,6 +19,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @protocol CXBrowserRuntime <NSObject>
 - (BOOL)startWithDelegate:(id<CXBrowserHostDelegate>)delegate profile:(NSString *)profile state:(NSString *)state error:(NSError **)error;
+- (BOOL)isReady;
+- (nullable NSString *)startupError;
 // Human-created tab: explicit local UI route and no agent control grant.
 - (void)openManualTabWithRoute:(NSDictionary<NSString *, NSString *> *)route url:(NSString *)url completion:(void (^)(NSString * _Nullable error))completion NS_SWIFT_NAME(openManualTab(route:url:completion:));
 - (void)navigateTab:(NSString *)identifier url:(NSString *)url;
@@ -33,6 +39,7 @@ NS_ASSUME_NONNULL_BEGIN
 // Call before SwiftUI's App.main creates NSApplication. Absence of the optional
 // native library is supported for ordinary SPM/tests and non-browser builds.
 FOUNDATION_EXPORT BOOL CXBrowserPrepareApplication(void);
+FOUNDATION_EXPORT void CXBrowserSetTerminationDelegate(id<CXBrowserTerminationDelegate> delegate);
 FOUNDATION_EXPORT id<CXBrowserRuntime> _Nullable CXBrowserCreateRuntime(void);
 FOUNDATION_EXPORT NSString * _Nullable CXBrowserLoadError(void);
 NS_ASSUME_NONNULL_END

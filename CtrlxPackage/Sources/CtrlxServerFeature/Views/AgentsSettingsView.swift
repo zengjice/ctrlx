@@ -781,6 +781,15 @@
                     .font(.caption)
                     .foregroundStyle(.green)
 
+                    if pluginID == "codex" {
+                        Button("Refresh") {
+                            Task { await performInstall() }
+                        }
+                        .controlSize(.small)
+                        .accessibilityIdentifier("refreshPlugin-\(pluginID)-\(rowKey)")
+                        .help("Update CtrlX skills for this configuration. Start a new Codex session to use them.")
+                    }
+
                     Button("Uninstall") {
                         Task { await performUninstall() }
                     }

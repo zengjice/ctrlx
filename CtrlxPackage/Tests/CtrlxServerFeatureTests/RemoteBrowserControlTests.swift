@@ -15,6 +15,8 @@ struct RemoteBrowserControlTests {
         var requests: [[String: Any]] = []
         var closed: [String] = []
         func start(with delegate: any CXBrowserHostDelegate, profile: String, state: String) throws {}
+        func isReady() -> Bool { true }
+        func startupError() -> String? { nil }
         func openManualTab(route: [String: String], url: String, completion: @escaping (String?) -> Void) {
             delegate?.browserTabCreated(UUID().uuidString, view: NSView(), route: route, owner: "", parent: nil)
             completion(nil)

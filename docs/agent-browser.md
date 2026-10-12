@@ -97,6 +97,15 @@ Switching tabs reparents the existing native view; it does not reload Chromium.
 Transient Chromium tabs are excluded from WKWebView layout persistence. Browser
 tabs are available to paired Mac/iOS Viewers through the typed remote surface below.
 
+The host leaves CEF stopped until the first manual Chromium tab or a native Codex
+or Claude Code browser operation. On first registration the CLI asks the existing CtrlX API
+socket to start the runtime, then discovers the native browser endpoint. The
+requested state directory must match that host before it initializes Chromium;
+an isolated CLI cannot start the production profile. `browser identity` remains
+read-only, and an existing grant is never registered against a replacement host.
+Simulator-only and terminal-only sessions do not initialize Chromium. Once used,
+the browser runtime stays alive until application shutdown.
+
 The host initializes CEF before use, then enters `CefRunMessageLoop` from a
 deferred AppKit RunLoop callback, never a Swift serial main-actor job. CEF's
 native macOS loop continues to dispatch AppKit events and RunLoop sources and
@@ -423,6 +432,13 @@ alive for manual tab/split/close inspection. Quit only that test app afterwards.
 Its shells use a private `ZDOTDIR` configuration without personal startup files
 or shell history. First-use Keychain prompts are always user-operated;
 `--interactive-setup` permits a supervised unbounded first load.
+For isolated lifecycle tests, pair `--e2e-test` with
+`--e2e-browser-mock-keychain` and an explicit `--ctrlx-state-root`. This maps
+Chromium's [mock keychain test switch](https://github.com/GoogleChrome/chrome-launcher/blob/main/docs/chrome-flags-for-tools.md)
+and selects `browser-mock-profile` beneath that root. The existing
+`browser-profile` is preserved. This mode verifies page/storage/lifecycle
+behavior with test credentials; real Keychain authorization and existing
+login persistence require their own acceptance evidence.
 If the initial authorization outlives a bounded test, `--resume <printed state
 directory>` reuses the exact live host and fixture grants. It refuses to replay
 a run once any page mutations have begun. Never print `fixture-grants.json`:
