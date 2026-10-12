@@ -8,6 +8,7 @@ import Foundation
 @DependencyClient
 struct FileBrowserClient: Sendable {
     var request: @Sendable (FileBrowserOperation) async throws -> FileBrowserResponse
+    var repositoryFile: @Sendable (_ path: String, _ projectDirectory: String) async throws -> FileBrowserEntry
     var localFileURL: @Sendable (FileBrowserEntry) async throws -> URL
 }
 
@@ -16,6 +17,7 @@ extension FileBrowserClient: DependencyKey {
         if case let .upload(operation) = $0 { return try await HostFileUploads.local.request(operation) }
         return try await HostFileBrowser.shared.request($0)
     },
+                                repositoryFile: { try await HostFileBrowser.shared.repositoryFile(path: $0, projectDirectory: $1) },
                                 localFileURL: { try await HostFileBrowser.shared.localFileURL($0) })
 }
 
@@ -29,6 +31,17 @@ extension FileBrowserSource {
             return try await client.localFileURL(info)
         }) { operation in
             @Dependency(FileBrowserClient.self) var client
+            if case let .repositoryInfo(path, context) = operation {
+                @MainActor func isCurrent() -> Bool {
+                    guard let paneID, let pane = windows.paneStates[paneID] else { return false }
+                    return RepositoryFileContext(pane: pane) == context
+                }
+                guard isCurrent() else { throw FileBrowserError.message("The source Agent's workspace changed. Open a link from the current session.") }
+                let entry = try await client.repositoryFile(path, context.projectDirectory)
+                try Task.checkCancellation()
+                guard isCurrent() else { throw FileBrowserError.message("The source Agent's workspace changed. Try again.") }
+                return .info(entry)
+            }
             var request = operation
             if case let .list(nil, offset, hidden) = operation {
                 // Resolve only at open/explicit follow. A later cd must not move an
@@ -69,6 +82,8 @@ actor HostFileBrowser {
         switch request {
         case .upload:
             throw FileBrowserError.message("Uploads require a connection-owned writer.")
+        case .repositoryInfo:
+            throw FileBrowserError.message("Repository links require a current source Agent.")
         case let .list(path, offset, hidden):
             return try .listing(list(path: path ?? "~/", offset: offset, hidden: hidden))
         case let .info(path):
@@ -84,6 +99,25 @@ actor HostFileBrowser {
         case let .search(path, query, mode, hidden):
             return try .search(search(path: resolve(path), query: query, mode: mode, hidden: hidden))
         }
+    }
+
+    func repositoryFile(path: String, projectDirectory: String) async throws -> FileBrowserEntry {
+        guard RepositoryFileLink.isValid(path: path), projectDirectory.hasPrefix("/") else {
+            throw FileBrowserError.message("Invalid repository-relative path.")
+        }
+        @Dependency(ProcessRunner.self) var runner
+        let result = try await runner.run("/usr/bin/git", ["-C", projectDirectory, "rev-parse", "--show-toplevel"], nil, 5)
+        try Task.checkCancellation()
+        let directory = result.stdoutString.trimmingCharacters(in: .newlines)
+        guard result.isSuccess, directory.hasPrefix("/") else {
+            throw FileBrowserError.message("The source Agent's project is not an available Git worktree.")
+        }
+        let root = URL(fileURLWithPath: directory).resolvingSymlinksInPath().standardizedFileURL.path
+        let target = URL(fileURLWithPath: root).appendingPathComponent(path).resolvingSymlinksInPath().standardizedFileURL.path
+        guard target == root || target.hasPrefix(root == "/" ? root : root + "/") else {
+            throw FileBrowserError.message("The file is outside the source Agent's Git worktree.")
+        }
+        return try entry(path: target)
     }
 
     func localFileURL(_ info: FileBrowserEntry) throws -> URL {

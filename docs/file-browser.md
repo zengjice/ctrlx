@@ -40,108 +40,78 @@ Files rows expose only their own selection/close actions, not terminal operation
 
 ## Supported operations
 
-### Opening paths printed in a terminal
+### Explicit terminal file links
 
-Mac Host, Mac Viewer and iOS recognize output paths such as `/absolute/file`,
-`~/Movies/`, `./output/file`, `../output/file`, `episodes/A01/movie.mp4`, and
-explicit `file://` hyperlinks. Click/tap an underlined path to open Files in the
-same session. A directory opens directly; a file opens its parent directory and
-selects the existing inline preview. Video still waits for Play. Each source
-terminal window reuses its own link-created Files tab, even across directories
-or panes. The association uses the stable tmux window ID inside that Host/session's
-private workspace; rename/reorder does not create another tab. Different windows
-never share this tab merely because their files are in the same directory.
-Manual **Open Files** tabs stay independent. Closing the link-created tab makes
-the next link create a new one. Reuse updates its source pane to the clicked link's
-pane and preserves its UUID and Mac split placement.
+Mac Host, Mac Viewer and iOS recognize the literal marker
+`<repo:outputs/report.pdf>`, emitted as inline code to preserve both delimiters.
+This is a lightweight application convention, **not a registered URI standard**.
+There is no private CtrlX URI, CLI generation step, link registry or startup hook.
+Ordinary paths, slash commands, local Markdown targets and `file://`/OSC 8
+file targets are not inferred or opened. Web links retain their own handling.
+Compatibility with previous file-link output is deliberately dropped.
 
-The window association is live-only, like the source pane ID: saved layouts retain
-the directory/selection but not the association. Restored tabs remain independent;
-the first link after workspace restoration creates a new per-window tab rather
-than guessing ownership from a recycled tmux ID or matching directory.
+Paths are relative to the **current source agent's Git worktree root**.
+A nested launch directory resolves to its worktree root, not the primary checkout.
+`<repo:.>` opens the root. No leading `./`, empty components or `..` are accepted.
+Spaces and reserved punctuation use UTF-8 percent encoding; literal percent signs
+must be `%25`. Chinese may remain literal or be encoded. Decoding happens once:
+a filename containing literal `%27` must not become an apostrophe on the Host.
+Complete markers survive soft/hard visual wraps, including a wrap inside the
+prefix or percent escape. Missing delimiters, whitespace, malformed escapes,
+control characters and paths exceeding 4096 UTF-8 bytes are rejected. No filename
+or continuation is guessed.
 
-The event captures the source Host and pane. Relative paths use that pane's
-published agent project directory, then its current working directory; `~/`
-is expanded only by the Host. One existing `BrowseFiles.info` request validates
-the destination before switching tabs. Missing files, unavailable pane directories
-and unsupported/offline Hosts report an error without opening a guessed local
-path. Changing windows or leaving the view cancels pending navigation. Historical
-output has no per-line cwd history: use absolute paths or explicit absolute file
-links for durable references, especially if the pane has since changed directory.
-The resolver never tries multiple base directories to guess a match.
-There is no recursive search or filesystem work while scanning
-or hovering, no new wire command, and no Relay update.
+A click captures the Host, pane and its agent context (plugin ID, conversation ID
+when available, and detected project directory). `BrowseFiles.repositoryInfo`
+runs off the keyboard receive loop. The Host checks that context before and after
+resolution, runs `git rev-parse --show-toplevel`, checks existence and canonical
+symlink containment, and returns the existing file-info response. Missing context,
+non-Git projects, missing files and links outside the worktree fail clearly:
+there is no shell-cwd fallback or alternate-directory search. Remote clients gate
+the operation on `supportsRepositoryFileLinks`; an older Host is not sent an
+undecodable request. No Relay implementation/deployment change is needed.
 
-Recognition uses actual terminal cell widths for Chinese and wrapped text, with
-bounded visible-row scans. Decorations, hover and clicks share one viewport
-snapshot, refreshed on buffer edits, cursor/mouse-mode changes, scrolling, resize
-and payload updates. They do not independently scan around the clicked row.
-iOS uses the native content-offset/bounds row range, including partially visible
-rows, even when inertial scrolling leaves the terminal's logical display row behind.
-Soft wraps and confidently enclosed near-right-edge hard wraps are joined.
-An enclosed filename tail (letters/numbers, dots, underscores or hyphens, followed
-by its closer) also continues when that token cannot fit in the preceding row's
-remaining cells. This covers Codex word wraps such as `完整` / `片.mp4)` that leave
-six columns unused. Indentation is excluded from the width calculation and hit
-targets; this extra rule rejects independently rooted paths, URLs and multiword prose.
-Nested matching brackets are preserved. An incomplete enclosure is skipped only
-through its wrapped fragment, without hiding later independent lines. Ambiguous/truncated wraps
-are not guessed. Spaces need
-quotes/brackets or an explicit file hyperlink; apostrophes inside words such as
-`I've` are not opening quotes. Bare filenames and editor line/
-column suffixes are not inferred. Chinese prose punctuation (`，。；：！？、`)
-separates unquoted paths even without spaces, so `结果：docs/report.md` links
-only `docs/report.md`. Filenames containing those punctuation marks require an
-enclosed path or an explicit file hyperlink; both preserve them literally.
-Plain text needs path-specific evidence: a rooted path, a dot-prefixed hidden
-directory such as `.build-local/`, or a relative filename with an extension.
-Single-component slash commands (`/review`), ordinary slash-separated prose
-(`crayon/gouache`) and ambiguous bare directories (`size/`) are not inferred;
-write `./size/` to make a directory explicit. Visible paths containing `…` or
-`...` are skipped, including truncated tool-command output: expand it to obtain
-the full path. Enclosed hard wraps are joined before checking for truncation;
-an ellipsis split across rows suppresses the entire enclosure, not just its tail.
-Bare hard-wrapped `file://` URIs with apparent continuation lines
-are skipped as a group rather than linking incomplete prefixes/tails. Complete
-URIs, terminal soft wraps and enclosed near-edge hard wraps remain supported.
-Explicit OSC 8 targets bypass these text heuristics, including literal ellipses
-in filenames; they never need to guess a target from a shortened label.
-Explicit hyperlinks take precedence, then
-plain web URLs (including their bracketed/query fragments), then file candidates.
-Explicit file links are decoded once. Resolution checks path bounds and control
-characters without reapplying text-recognition rules, so encoded filename characters
-such as apostrophes remain intact in the Host request. Nonlocal file authorities
-are still rejected during link recognition.
-Live input
-rows (including Codex's colored multiline composer), selection, drag and
-double/long-press gestures retain their terminal behavior.
+The marker intentionally carries no absolute path or repository identity.
+It is not an access grant or proof of provenance. After reusing a pane/session for
+another workspace, old output is interpreted in the **current** agent worktree;
+historical links are not guaranteed to identify the old repository. This is the
+chosen KISS boundary, rather than a per-output provenance registry.
 
-#### Agent output convention
+Click/tap an underlined marker to open Files in the same session. A directory
+opens directly; a file selects its existing inline preview. Video still waits
+for Play. Each source terminal window reuses its own link-created Files tab,
+even across directories or panes. The association uses the stable tmux window ID
+inside that Host/session's private workspace. Different windows never share it
+merely because files are in the same directory. Manual **Open Files** tabs stay
+independent. Closing the link-created tab allows the next link to create a new
+one. Reuse updates the source pane, preserving the tab UUID and Mac split placement.
 
-The bundled `file-links` Skill (`plugin/ctrlx/skills/file-links/SKILL.md`) asks
-agents to deliver files as `[short label](/absolute/Host/path)` on one source line,
-with an angle-bracket target for spaces/parentheses and no truncation or editor
-line suffix. It is packaged for Claude Code and mirrored into the Codex bundle
-by `scripts/sync-codex-skills.sh`; no Relay or wire change is needed. Update the
-installed CtrlX agent plugin and start a new agent session to discover the Skill.
-App-only updates do not prove that an agent's cached plugin has refreshed.
+The window association is live-only: saved layouts retain the directory/selection,
+not that association. Restored tabs remain independent. Changing windows, leaving
+the view or changing the source agent during resolution prevents late navigation.
+The Viewer never resolves a remote path against its own filesystem.
 
-This is a formatting convention, **not** a Markdown-only terminal protocol:
-CtrlX receives terminal cells, not the assistant's original Markdown AST.
-Code inspection on 2026-10-12 found:
+Decorations, hover and activation share one bounded visible-row snapshot,
+refreshed on buffer edits, cursor/mouse-mode changes, scrolling, resize and
+payload updates. iOS supplies actual native visible rows during inertial scrolling.
+The live input/composer, selection, drag and modifier gestures retain their existing
+protection. The scanner performs no filesystem I/O or network work.
 
-- Codex 0.162.1 formats ordinary local links as label plus parenthesized target,
-  possibly cwd-relative, without a general file OSC 8 capability. See the pinned
-  [local-link formatter](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/markdown_render/local_links.rs)
-  and [Markdown renderer](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/markdown_render.rs).
-- The installed Claude Code 2.1.276 renderer's hyperlink branch emits OSC 8 when
-  terminal capabilities permit, otherwise `label (target)`. This was a static
-  inspection, not an end-to-end acceptance test of an active Claude session.
+### Agent output convention and migration
 
-Keep explicit file-target precedence and conservative visible-text detection for
-both renderings, older output and unmodified agents. A Skill cannot force an
-agent to load it, preserve hidden link metadata, or make ambiguous hard wraps
-lossless. The Host remains the authority for path validation at activation time.
+The short independent `file-links` skill remains one of four shared skills.
+Its canonical source is `plugin/ctrlx/skills/file-links/SKILL.md`, packaged for
+Claude Code and mirrored into Codex by `scripts/sync-codex-skills.sh`.
+Bundled skill versions: Codex **1.1.3**, Claude Code **1.3.4**.
+Update the Host and each Mac/iOS Viewer, update the installed agent plugin,
+then start a new agent session. Updating only the App does not refresh a cached
+agent plugin. Both TUIs should receive an inline-code literal marker, never a
+Markdown link target that the renderer can hide or shorten.
+
+Tests cover marker recognition, every soft/hard wrap boundary, inertial viewport
+snapshots, single decoding, source-context changes and actual Git worktree/symlink
+resolution. Device tap/render acceptance still requires a real iPhone; macOS unit
+tests do not run the iOS-only viewport test.
 
 ### Creating folders and adding files
 
@@ -313,11 +283,13 @@ Focused coverage: `HostFileBrowserTests`, `FileBrowserLayoutTests`,
 `HostFileUploadTests`, `FileBrowserUploadTests`,
 `FileBrowserTabTests`, `FileBrowserTransferTests`, `FileBrowserProtocolTests`, `IOSFileBrowserWorkspaceTests`,
 `LayoutSnapshotMapperTests`, and `TerminalPasteTransportTests`.
-`TerminalFileLinkTests` covers path spellings, Chinese cell hit targets, wrapped
-and truncated text, explicit web/file link precedence, input protection,
-scrollback trimming, Host-only resolution, unavailable files and cancellation.
+`TerminalFileLinkTests` covers explicit URI encoding, all hard/soft wrap boundaries,
+truncation and ordinary-path rejection, Chinese OSC 8 hit cells, web precedence,
+input protection, Host-only resolution, unavailable files and cancellation.
+`FileLinkCommandTests` and `FileLinkAPITests` cover CLI worktree resolution,
+Host-only existence checks, file/directory targets, missing files and capabilities.
 `TerminalFileLinkSnapshotTests` checks decoration/activation agreement across a
-seven-row path, reuse on unchanged content, in-place edits, cursor/mouse mode,
+long wrapped link, reuse on unchanged content, in-place edits, cursor/mouse mode,
 resize, alternate buffers, scrollback trimming and external payload invalidation.
 Workspace tests cover cross-directory/per-pane reuse within one window, separate
 windows at the same directory, manual-tab isolation, close/reopen, tab limits,

@@ -1238,10 +1238,7 @@ enum TerminalCursorTapNavigation {
             // regex-link path SwiftTerm exposes through this delegate.
             guard !isMouseModeActive else { return }
             if let url = URL(string: link) {
-                if url.isFileURL {
-                    if let path = TerminalFileLinkDetector.path(link) { onOpenPath?(path) }
-                    return
-                }
+                guard !url.isFileURL else { return }
                 UIApplication.shared.open(url)
             }
         }

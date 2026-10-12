@@ -384,13 +384,14 @@
                   let pane = origin.panes.first(where: { $0.paneId == request.paneID }) else { return }
             let source = FileBrowserSource.remote(hostID: hostId, paneID: request.paneID,
                                                    connection: connectionManager.connection(for: hostId))
+            let fileContext = RepositoryFileContext(pane: pane)
             do {
                 let destination = try await TerminalFileDestination.resolve(
-                    path: request.path, baseDirectory: pane.agentSession?.detectedProjectPath ?? pane.currentPath, source: source
+                    path: request.path, context: fileContext, source: source
                 )
                 try Task.checkCancellation()
                 guard pendingFileLink == request, window?.id == origin.id,
-                      window?.panes.contains(where: { $0.paneId == request.paneID }) == true,
+                      window?.panes.contains(where: { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext }) == true,
                       fileWorkspace.selectedID == nil, selectedBrowserID == nil else { return }
                 try fileWorkspace.open(destination, windowID: origin.stableId, paneID: request.paneID)
                 cancelCreationFollowUp()

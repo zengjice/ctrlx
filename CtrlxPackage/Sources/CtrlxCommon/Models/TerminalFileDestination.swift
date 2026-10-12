@@ -10,23 +10,17 @@ public struct TerminalFileDestination: Sendable, Equatable {
         self.file = file
     }
 
-    /// Resolves an already recognized/decoded Host path, not raw terminal text or a URL.
+    /// The Host resolves against the source agent's Git worktree, never a Viewer filesystem or shell cwd.
     @MainActor
-    public static func resolve(path: String, baseDirectory: String?, source: FileBrowserSource) async throws -> Self {
+    public static func resolve(path: String, context: RepositoryFileContext?, source: FileBrowserSource) async throws -> Self {
         if let reason = source.unavailableReason { throw FileBrowserError.message(reason) }
-        guard !path.isEmpty, path.utf8.count <= 4096,
-              !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
-            throw FileBrowserError.message("Invalid Host file path.")
+        guard RepositoryFileLink.isValid(path: path) else {
+            throw FileBrowserError.message("Invalid repository-relative path.")
         }
-        let absolute: String
-        if path.hasPrefix("/") || path.hasPrefix("~/") { absolute = path }
-        else {
-            guard let baseDirectory, baseDirectory.hasPrefix("/") else {
-                throw FileBrowserError.message("The source pane's directory is unavailable. Use an absolute Host path.")
-            }
-            absolute = (baseDirectory as NSString).appendingPathComponent(path)
+        guard let context else {
+            throw FileBrowserError.message("The source Agent's project directory is unavailable.")
         }
-        guard case let .info(entry) = try await source.request(.info(path: absolute)), entry.path.hasPrefix("/") else {
+        guard case let .info(entry) = try await source.request(.repositoryInfo(path: path, context: context)), entry.path.hasPrefix("/") else {
             throw FileBrowserError.message("The Host returned no file information.")
         }
         try Task.checkCancellation()

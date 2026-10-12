@@ -100,6 +100,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsTerminalPaste = false
     public private(set) var hostSupportsDirectoryCreation = false
     public private(set) var hostSupportsFileBrowsing = false
+    public private(set) var hostSupportsRepositoryFileLinks = false
     public private(set) var hostSupportsFileDownloads = false
     public private(set) var hostSupportsFileUploads = false
     public private(set) var fileTransferEpoch = UUID()
@@ -510,6 +511,9 @@ final public class ViewerRelayClient {
         case .browseFiles where !hostSupportsFileBrowsing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to browse files"))
         case let .browseFiles(spec):
+            if case .repositoryInfo = spec.operation, !hostSupportsRepositoryFileLinks {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open repository file links"))
+            }
             if case .download = spec.operation, !hostSupportsFileDownloads {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to download files"))
             }
@@ -1019,6 +1023,7 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = sessionState.supportsTerminalPaste == true
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
             hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
+            hostSupportsRepositoryFileLinks = sessionState.supportsRepositoryFileLinks == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
@@ -1049,6 +1054,7 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             logger.info("Host device connected")
@@ -1097,6 +1103,7 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             logger.info(
@@ -1127,6 +1134,7 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
@@ -1141,6 +1149,7 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
@@ -1442,6 +1451,7 @@ final public class ViewerRelayClient {
         hostSupportsTerminalPaste = false
         hostSupportsDirectoryCreation = false
         hostSupportsFileBrowsing = false
+        hostSupportsRepositoryFileLinks = false
         hostSupportsFileDownloads = false
         hostSupportsTerminalFit = false
         quickPhraseSync?.reset()

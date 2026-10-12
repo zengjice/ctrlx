@@ -3525,6 +3525,7 @@
                     supportsFileBrowsing: true,
                     supportsFileDownloads: true,
                     supportsFileUploads: true,
+                    supportsRepositoryFileLinks: true,
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
                     supportsAgentImageInput: true,
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs

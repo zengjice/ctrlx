@@ -3215,7 +3215,7 @@ public struct MainView: View {
         let sessionName: String
         let windowID: String
         let stableWindowID: String
-        let baseDirectory: String?
+        let fileContext: RepositoryFileContext?
         if let hostID = request.hostID {
             guard let remote = selectedRemoteSession, remote.hostId == hostID,
                   let window = selectedRemoteSessionWindows.first(where: { $0.panes.contains { $0.paneId == request.paneID } }),
@@ -3223,7 +3223,7 @@ public struct MainView: View {
             sessionName = remote.sessionName
             windowID = window.id
             stableWindowID = window.stableId
-            baseDirectory = pane.agentSession?.detectedProjectPath ?? pane.currentPath
+            fileContext = RepositoryFileContext(pane: pane)
             source = .remote(hostID: hostID, paneID: request.paneID,
                              connection: coordinator.viewerConnectionManager?.connection(for: hostID))
         } else {
@@ -3234,7 +3234,7 @@ public struct MainView: View {
             sessionName = window.sessionName
             windowID = window.id
             stableWindowID = window.stableId
-            baseDirectory = pane.agentSession?.detectedProjectPath ?? pane.currentPath
+            fileContext = RepositoryFileContext(pane: pane)
             source = .local(paneID: request.paneID, tmux: tmuxService, windows: windowManager)
         }
         let initialTabs: SessionFileTabsState?
@@ -3242,17 +3242,18 @@ public struct MainView: View {
         else { initialTabs = sessionFileTabsStates[sessionName] }
         let initialSelection = (initialTabs?.selectedFileTabId, initialTabs?.selectedBrowserTabId, initialTabs?.selectedRight)
         do {
-            let destination = try await TerminalFileDestination.resolve(path: request.path, baseDirectory: baseDirectory, source: source)
+            let destination = try await TerminalFileDestination.resolve(path: request.path, context: fileContext, source: source)
             try Task.checkCancellation()
             guard pendingFileLink == request else { return }
             let tabs: SessionFileTabsState?
             if let hostID = request.hostID {
                 guard selectedRemoteSession?.hostId == hostID, selectedRemoteSession?.sessionName == sessionName,
-                      selectedRemoteSessionWindows.contains(where: { $0.id == windowID && $0.panes.contains { $0.paneId == request.paneID } }) else { return }
+                      selectedRemoteSessionWindows.contains(where: { $0.id == windowID && $0.panes.contains { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext } }) else { return }
                 tabs = remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: sessionName)]
             } else {
                 guard selectedRemoteSession == nil, selectedWindow?.sessionName == sessionName,
-                      tmuxService.windows.contains(where: { $0.id == windowID && $0.panes.contains { $0.paneId == request.paneID } }) else { return }
+                      tmuxService.windows.contains(where: { $0.id == windowID && $0.panes.contains { $0.paneId == request.paneID } }),
+                      let pane = windowManager.paneStates[request.paneID], RepositoryFileContext(pane: pane) == fileContext else { return }
                 tabs = sessionFileTabsStates[sessionName]
             }
             guard initialSelection == (tabs?.selectedFileTabId, tabs?.selectedBrowserTabId, tabs?.selectedRight) else { return }
