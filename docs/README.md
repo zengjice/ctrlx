@@ -23,6 +23,12 @@ to your task; the versioned plans are not an onboarding checklist.
 | Relay operations | [Self-hosting](self-hosting.md), [monitoring](monitoring.md), [staging](staging-relay.md) | `CtrlxExternalServerLib/configure.swift`, repository `sbin/` |
 | CLI or common Swift patterns | [CLI API](ctrlx-cli-api.md), [Swift patterns](swift-patterns.md), [emoji](emoji-search.md) | `CtrlxCLI/`, `CtrlxCommon/`, `CtrlxEmoji/` |
 
+## Active product backlog
+
+See [产品需求 TODO](product-todo.md) for detachable Mac terminal windows,
+argument-aware Agent commands, Agent-side CtrlX plugin update/reinstall UX, and
+file-browser playback cache cleanup. These are pending requirements, not shipped behavior.
+
 ## How to read status and history
 
 - **Current references** above describe the intended present contract. Some also

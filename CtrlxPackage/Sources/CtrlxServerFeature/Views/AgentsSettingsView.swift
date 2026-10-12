@@ -75,6 +75,7 @@
                             addPlugin = .urlPrefilled(url.absoluteString)
                         }
                     )
+                    .id(selectedAgentID)
                 }
 
                 Divider()
@@ -130,6 +131,10 @@
                 Text("This will uninstall the \"\(pluginDisplayName(id))\" plugin and delete its files. This cannot be undone.")
             }
             .task {
+                if let requested = coordinator.agentSettingsSelection {
+                    selectedAgentID = requested
+                    coordinator.agentSettingsSelection = nil
+                }
                 // Set initial selection once (only when empty to avoid overwriting
                 // a user change that races with the first render).
                 if
@@ -141,6 +146,12 @@
             // Auto-select a freshly installed plugin in the picker.
             .onChange(of: coordinator.lastInstalledPluginID) { _, newID in
                 if let newID { selectedAgentID = newID }
+            }
+            .onChange(of: coordinator.agentSettingsSelection) { _, newID in
+                if let newID {
+                    selectedAgentID = newID
+                    coordinator.agentSettingsSelection = nil
+                }
             }
         }
 
@@ -421,24 +432,11 @@
                 // Config folders
                 Section {
                     // Default root row (not removable)
-                    AgentConfigFolderRow(
-                        pluginID: pluginID,
-                        folderPath: defaultConfigRoot,
-                        isRemovable: false,
-                        onRemove: nil
-                    )
+                    configFolderRow(path: defaultConfigRoot, removable: false)
 
                     // Additional folders
                     ForEach(additionalConfigFolders, id: \.self) { folder in
-                        AgentConfigFolderRow(
-                            pluginID: pluginID,
-                            folderPath: folder,
-                            isRemovable: true,
-                            onRemove: {
-                                additionalConfigFolders.removeAll { $0 == folder }
-                                persist()
-                            }
-                        )
+                        configFolderRow(path: folder, removable: true)
                     }
 
                     Button("Add Folder…") {
@@ -486,6 +484,22 @@
         }
 
         // MARK: - Computed helpers
+
+        @ViewBuilder private func configFolderRow(path: String, removable: Bool) -> some View {
+            let remove: (() -> Void)? = removable ? {
+                additionalConfigFolders.removeAll { $0 == path }
+                persist()
+            } : nil
+            if (pluginID == "codex" || pluginID == "claude-code"), let installations = coordinator.agentPluginInstallations {
+                BundledAgentPluginRow(
+                    installations: installations,
+                    location: AgentPluginLocation(pluginID: pluginID, configRoot: removable ? path : nil),
+                    folderPath: path, agentName: agentDisplayName, onRemove: remove
+                )
+            } else {
+                AgentConfigFolderRow(pluginID: pluginID, folderPath: path, isRemovable: removable, onRemove: remove)
+            }
+        }
 
         private var agentDisplayName: String {
             coordinator.agentPluginList().first { $0.id == pluginID }?.name ?? pluginID
@@ -811,6 +825,11 @@
                     .foregroundStyle(.orange)
                     .help("Install the \(pluginID) CLI to enable plugin installation for this folder")
                     .disabled(true)
+            case let .checkFailed(message):
+                Text("Check failed: \(message)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Button("Retry") { Task { await refreshStatus() } }
             }
         }
 

@@ -31,6 +31,8 @@
         /// App settings
         public let settings: AppSettings
 
+        let detachedWindows = DetachedTerminalWindows()
+
         /// Owns the hosted-relay license status and trial-expiry alerting
         /// (Task 14).
         public let licenseManager: LicenseManager
@@ -178,6 +180,10 @@
         /// Orchestrates plugin auto-update checks/installs. Created during plugin
         /// boot; nil only before startup completes.
         public private(set) var pluginUpdateManager: PluginUpdateManager?
+
+        var agentSettingsSelection: String?
+        private(set) var agentPluginInstallations: AgentPluginInstallations?
+        @ObservationIgnored private var agentPluginCheckTask: Task<Void, Never>?
 
         /// The single agent-blind event dispatcher; its sinks are wired to the
         /// local adapter methods (status/notification/app-action) below.
@@ -456,6 +462,7 @@
             // can no longer hot-restart a sidecar under a live-but-undiscovered
             // session.
             pluginUpdateManager?.start()
+            startAgentPluginVersionCheck()
             await setupViewerConnectionManager()
             await autoConnectIfConfigured()
 
@@ -514,6 +521,8 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
+            agentPluginCheckTask?.cancel()
+            agentPluginCheckTask = nil
             await apiSocketServer.stop()
             // Simulator commands must not consume the quit deadline before independent cleanup runs.
             async let simulatorShutdown: Void = agentSimulator.shutdown()
@@ -1555,6 +1564,23 @@
             if isE2ETest { return e2eInstallStatus[e2eInstallKey(id, configRoot)] ?? .notInstalled }
             guard let core = await enabledCore(id) else { return .agentUnavailable }
             return await core.installStatus(configRoot: configRoot)
+        }
+
+        private func startAgentPluginVersionCheck() {
+            guard !isE2ETest, agentPluginInstallations == nil, let registry = pluginRegistry else { return }
+            let installations = AgentPluginInstallations { [weak self] id in
+                await self?.enabledCore(id) as? any AgentPluginMaintenance
+            }
+            agentPluginInstallations = installations
+            // Only check enabled, local built-ins; never enable a disabled plugin
+            // or contact a remote Host as a side effect of startup.
+            let locations = registry.active.keys.sorted().flatMap { id -> [AgentPluginLocation] in
+                guard registry.core(id) is any AgentPluginMaintenance else { return [] }
+                let roots = SidecarPluginSettings.decode(from: pluginSettingsData(id: id)).additionalConfigFolders
+                return [AgentPluginLocation(pluginID: id, configRoot: nil)]
+                    + Array(Set(roots)).sorted().map { AgentPluginLocation(pluginID: id, configRoot: $0) }
+            }
+            agentPluginCheckTask = Task { await installations.checkAtStartup(locations) }
         }
 
         /// Install a plugin for a config root via the enabled core.

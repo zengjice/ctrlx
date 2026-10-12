@@ -3,9 +3,10 @@
 macOS offers **Agent Commands** (`/`) and **Quick Phrases** on the right side of
 the terminal's bottom status bar, for both local and Viewer windows. They follow
 Settings → General → Show status bar. Both open button-grid popovers. Click a
-command or saved phrase to send literal text, a host-side 200 ms pause, and one
-Return. There is no confirmation
-or extra Send step, and existing terminal input is never cleared automatically.
+bare command or saved phrase to send literal text, a host-side 200 ms pause, and
+one Return. Argument-entry commands instead insert the command and a trailing
+space without Return; add arguments and explicitly send from the terminal.
+Existing terminal input is never cleared automatically.
 
 - The target is the last focused native terminal in this panes scene, including
   a pane in the right-hand workbench split. The popover shows its host, session,
@@ -205,7 +206,7 @@ iOS for the always-openable explanation; no Relay deployment is needed.
 Both clients use `AgentQuickCommand.commands(for:)` as the display order and
 send allowlist. Keep the agents' lists independent: matching command names do
 not guarantee matching behavior. The current catalog was checked against Codex
-CLI 0.160.0 and Claude Code 2.1.276 plus their official command references:
+CLI 0.162.1 and Claude Code 2.1.276 plus their official command references:
 [Codex](https://learn.chatgpt.com/docs/developer-commands?surface=cli) and
 [Claude Code](https://code.claude.com/docs/en/commands).
 
@@ -238,8 +239,19 @@ These actions can reset a conversation, remove a transcript, stop work, exit or
 change host credentials. They retain the same target/input/availability checks
 as ordinary commands; `/approve` cannot bypass an open blocking form.
 
-Only include commands with a useful no-argument invocation. Bare `/goal`
-inspects the goal; it does not create one. Codex `/fast` changes the service
+`AgentQuickCommand.submission(for:)` owns the per-agent input policy and
+`AgentCommandRequest.keys` binds it to the captured agent. Mac Local, Mac Viewer
+and iOS all send those keys through their existing ordered queues. In both
+catalogs, **`/goal` inserts `/goal ` without Return**, allowing an objective or
+subcommand to be entered. This is a deliberate button policy: a manually entered
+bare `/goal` still inspects the goal in either agent. All other existing entries
+retain their useful bare invocation (picker, toggle, inspection or action);
+optional inline arguments alone do not force insert-only behavior. No new
+commands are added by this change. Mac hover help and both clients' accessibility
+hints describe the action. Closing the panel retains the terminal's input target
+and focus; pending-form, connection and stale-input guards still apply.
+
+Codex `/fast` changes the service
 tier and can increase usage. Model, account, version and feature flags may still
 limit commands on the actual host; the panel does not discover capabilities or
 promise that every command can execute during a running turn.

@@ -16,6 +16,7 @@ public struct MainView: View {
     @Environment(MarkdownOpenSuggestionStore.self) private var markdownOpenSuggestionStore
     @Environment(\.e2eeService) private var e2eeService: E2EEService?
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     public init() { }
 
@@ -159,6 +160,13 @@ public struct MainView: View {
             guard let request = pendingFileLink else { return }
             await openTerminalFile(request)
         }
+        .task(id: coordinator.detachedWindows.mainRequest?.id) {
+            guard let request = coordinator.detachedWindows.mainRequest else { return }
+            await handleDetachedWindowRequest(request)
+            if coordinator.detachedWindows.mainRequest?.id == request.id {
+                coordinator.detachedWindows.mainRequest = nil
+            }
+        }
         .onChange(of: selectedWindow?.id) { pendingFileLink = nil }
         .onChange(of: selectedRemoteWindowId) { pendingFileLink = nil }
         .onChange(of: selectedRemoteSession) { pendingFileLink = nil }
@@ -168,6 +176,8 @@ public struct MainView: View {
         @Bindable var coordinator = coordinator
 
         fileLinkWorkspace
+        .fileBrowserCacheMaintenance()
+        .safeAreaInset(edge: .top, spacing: 0) { AgentPluginUpdateBanner() }
         .environment(\.browserAnnotationContext, browserAnnotationContext)
         .background(settings.theme.workspaceBackgroundColor)
         .containerBackground(settings.theme.workspaceBackgroundColor, for: .window)
@@ -1020,6 +1030,7 @@ public struct MainView: View {
                     selectedBrowserTabId: remoteTabs?.selectedBrowserTabId,
                     sessionTabs: remoteTabs,
                     onSelectWindow: { newWindow in
+                        if coordinator.detachedWindows.focus(hostID: remote.hostId, windowID: newWindow.stableId) { return }
                         let tabs = remoteSessionTabsStates[tabsKey]
                         let payload = TabDragPayload.window(newWindow.stableId)
                         if tabs?.rightSide.contains(payload) == true {
@@ -1122,6 +1133,9 @@ public struct MainView: View {
                     onOpenFiles: { sourceWindow in
                         openDirectoryTab(sessionName: remote.sessionName, windowID: sourceWindow.id, hostID: remote.hostId,
                                          paneIDs: sourceWindow.panes.map(\.paneId), fallbackPaneID: sourceWindow.activePane?.paneId)
+                    },
+                    onDetachWindow: { sourceWindow, point in
+                        detachTerminal(hostID: remote.hostId, windowID: sourceWindow.stableId, position: point)
                     }
                 )
 
@@ -1180,6 +1194,7 @@ public struct MainView: View {
                         isAnyFileViewActive: isAnyFileViewActive,
                         sessionTabs: sessionTabs,
                         onSelectWindow: { newWindow in
+                            if coordinator.detachedWindows.focus(hostID: nil, windowID: newWindow.stableId) { return }
                             let tabs = sessionFileTabsStates[session.sessionName]
                             let payload = TabDragPayload.window(newWindow.stableId)
                             if tabs?.rightSide.contains(payload) == true {
@@ -1330,6 +1345,9 @@ public struct MainView: View {
                         onOpenFiles: { sourceWindow in
                             openDirectoryTab(sessionName: session.sessionName, windowID: sourceWindow.id, hostID: nil,
                                              paneIDs: sourceWindow.panes.map(\.paneId), fallbackPaneID: sourceWindow.activePane?.paneId)
+                        },
+                        onDetachWindow: { sourceWindow, point in
+                            detachTerminal(hostID: nil, windowID: sourceWindow.stableId, position: point)
                         }
                     )
                 }
@@ -1507,6 +1525,7 @@ public struct MainView: View {
                     )
                 }
             )
+            .modifier(DetachedTerminalPresentation(hostID: remote.hostId, windowID: window.stableId))
         }
     }
 
@@ -1538,6 +1557,7 @@ public struct MainView: View {
                     }
                 )
                 .id("right-remote-\(rightWindow.id)")
+                .modifier(DetachedTerminalPresentation(hostID: remote.hostId, windowID: rightWindow.stableId))
                 .accessibilityIdentifier("split-right-pane")
             } else {
                 rightPanePlaceholder
@@ -1747,6 +1767,7 @@ public struct MainView: View {
                     )
                 }
             )
+            .modifier(DetachedTerminalPresentation(hostID: nil, windowID: window.stableId))
         }
     }
 
@@ -1885,6 +1906,7 @@ public struct MainView: View {
                     }
                 )
                 .id("right-window-\(window.id)")
+                .modifier(DetachedTerminalPresentation(hostID: nil, windowID: window.stableId))
                 .accessibilityIdentifier("split-right-pane")
             } else {
                 rightPanePlaceholder
@@ -2275,7 +2297,7 @@ public struct MainView: View {
         }
 
         let tabs = sessionFileTabsStates[leftWindow.sessionName]
-        return visibleWindows.map { window in
+        return visibleWindows.filter { !coordinator.detachedWindows.contains(hostID: nil, windowID: $0.stableId) }.map { window in
             resizeRequest(
                 windowTarget: window.stableId,
                 width: effectiveTerminalWidth(tabs: tabs, windowId: window.stableId)
@@ -2301,7 +2323,7 @@ public struct MainView: View {
             visibleWindows.append(rightWindow)
         }
 
-        return visibleWindows.map { window in
+        return visibleWindows.filter { !coordinator.detachedWindows.contains(hostID: remote.hostId, windowID: $0.stableId) }.map { window in
             resizeRequest(
                 windowTarget: window.stableId,
                 width: effectiveTerminalWidth(tabs: tabs, windowId: window.stableId)
@@ -2680,6 +2702,92 @@ public struct MainView: View {
         return windowManager.paneStates[paneID].flatMap(AgentImageTarget.init(pane:))
     }
 
+    private func detachTerminal(hostID: String?, windowID: String, position: CGPoint?) {
+        guard let target = DetachedTerminalTarget(hostID: hostID, windowID: windowID) else { return }
+        coordinator.detachedWindows.reserve(target, position: position)
+        openWindow(id: "detached-terminal", value: target)
+    }
+
+    private func fileLinkIsCurrent(_ request: TerminalFileLinkRequest, detachedRequestID: UUID?) -> Bool {
+        if let detachedRequestID { return coordinator.detachedWindows.mainRequest?.id == detachedRequestID }
+        return pendingFileLink == request
+    }
+
+    /// Resolve the captured stable target afresh; never use the main scene's previous selection.
+    private func handleDetachedWindowRequest(_ request: DetachedTerminalWindows.Request) async {
+        let target = request.target
+        let sessionName: String
+        let windowID: String
+        let panes: [PaneState]
+        let activePaneID: String?
+        if let host = target.hostID {
+            guard let window = coordinator.remoteSessionStore?.windows(for: host).first(where: { $0.stableId == target.windowID }),
+                  let connection = coordinator.viewerConnectionManager?.connection(for: host) else {
+                attachError = "The source Host or Window is no longer available."
+                return
+            }
+            sessionName = window.sessionName
+            windowID = window.id
+            panes = window.panes
+            activePaneID = window.activePane?.paneId
+            selectedWindow = nil
+            selectedRemoteSession = RemoteSessionSelection(hostId: host, hostName: connection.hostName, sessionName: sessionName)
+            let tabs = remoteSessionTabsStates[remoteTabsKey(hostId: host, sessionName: sessionName)]
+            selectedRemoteWindowId = DetachedTerminalWindows.mainSelection(
+                target: window.stableId, windows: remoteSessionWindows(hostId: host, sessionName: sessionName).map { ($0.stableId, $0.id) },
+                rightSide: tabs?.rightSideWindowIds ?? []
+            ) ?? window.id
+        } else {
+            guard let window = tmuxService.windows.first(where: { $0.stableId == target.windowID }) else {
+                attachError = "The source Window is no longer available."
+                return
+            }
+            sessionName = window.sessionName
+            windowID = window.id
+            panes = window.panes.compactMap { windowManager.paneStates[$0.paneId] }
+            activePaneID = window.activePane?.paneId
+            selectedRemoteSession = nil
+            selectedRemoteWindowId = nil
+            let selection = DetachedTerminalWindows.mainSelection(
+                target: window.stableId, windows: tmuxService.windows.filter { $0.sessionName == sessionName }.map { ($0.stableId, $0.id) },
+                rightSide: sessionFileTabsStates[sessionName]?.rightSideWindowIds ?? []
+            )
+            selectedWindow = tmuxService.windows.first { $0.id == selection } ?? window
+        }
+        switch request.action {
+        case .show:
+            if let host = target.hostID {
+                let tabs = remoteSessionTabsStates[remoteTabsKey(hostId: host, sessionName: sessionName)]
+                if tabs?.rightSide.contains(.window(target.windowID)) == true { tabs?.selectedRight = .window(target.windowID) }
+                else { _ = tabs?.selectLeftTerminalWindow(target.windowID) }
+            } else {
+                let tabs = sessionFileTabsStates[sessionName]
+                if tabs?.rightSide.contains(.window(target.windowID)) == true { tabs?.selectedRight = .window(target.windowID) }
+                else { _ = tabs?.selectLeftTerminalWindow(target.windowID) }
+                fileBrowserActiveWindowIds.remove(windowID)
+                gitActiveWindowIds.remove(windowID)
+            }
+        case let .files(paneID):
+            // Supplying only the captured pane prevents the main router from choosing a different pane.
+            let source = panes.first(where: { $0.paneId == paneID })?.paneId ?? activePaneID
+            openDirectoryTab(sessionName: sessionName, windowID: windowID, hostID: target.hostID,
+                             paneIDs: source.map { [$0] } ?? [], fallbackPaneID: source)
+        case let .fork(paneID, worktree):
+            pendingAgentFork = agentForkConfiguration(panes: panes, hostID: target.hostID, usingWorktree: worktree, focusedPaneID: paneID)
+        case let .fileLink(link):
+            guard link.hostID == target.hostID, panes.contains(where: { $0.paneId == link.paneID }) else { return }
+            await openTerminalFile(link, detachedRequestID: request.id)
+        case let .url(raw):
+            guard let url = URL(string: raw) else { return }
+            if let host = target.hostID {
+                _ = handleRemoteTerminalURLClick(url, hostId: host, sessionName: sessionName, windowId: windowID)
+            } else if let window = tmuxService.windows.first(where: { $0.stableId == target.windowID }) {
+                _ = handleTerminalURLClick(url, directoryPath: window.activePane?.currentPath ?? "~",
+                                           session: tmuxService.sessions.first { $0.sessionName == sessionName }, window: window)
+            }
+        }
+    }
+
     private func selectTerminalWindow(at index: Int) {
         guard let targetID = TerminalWindowNavigation.windowID(
             at: index,
@@ -2689,6 +2797,7 @@ public struct MainView: View {
     }
 
     private func selectTerminalWindow(stableId: String) {
+        if coordinator.detachedWindows.focus(hostID: selectedRemoteSession?.hostId, windowID: stableId) { return }
         if let remote = selectedRemoteSession {
             guard
                 let target = selectedRemoteSessionWindows.first(where: { $0.stableId == stableId }),
@@ -3222,7 +3331,7 @@ public struct MainView: View {
     }
 
     /// Bind resolution to the clicked pane, not whichever pane becomes focused later.
-    private func openTerminalFile(_ request: TerminalFileLinkRequest) async {
+    private func openTerminalFile(_ request: TerminalFileLinkRequest, detachedRequestID: UUID? = nil) async {
         let source: FileBrowserSource
         let sessionName: String
         let windowID: String
@@ -3253,7 +3362,7 @@ public struct MainView: View {
         do {
             let destination = try await TerminalFileDestination.resolve(path: request.path, baseDirectory: baseDirectory, source: source)
             try Task.checkCancellation()
-            guard pendingFileLink == request else { return }
+            guard fileLinkIsCurrent(request, detachedRequestID: detachedRequestID) else { return }
             let tabs: SessionFileTabsState?
             if let hostID = request.hostID {
                 guard selectedRemoteSession?.hostId == hostID, selectedRemoteSession?.sessionName == sessionName,
@@ -3278,7 +3387,7 @@ public struct MainView: View {
             tab.navigate(destination.directory)
             tab.selectedFile = destination.file
         } catch is CancellationError { }
-        catch { if pendingFileLink == request { attachError = "Cannot open Host path: \(error.localizedDescription)" } }
+        catch { if fileLinkIsCurrent(request, detachedRequestID: detachedRequestID) { attachError = "Cannot open Host path: \(error.localizedDescription)" } }
     }
 
     /// Captures a pane in the source window as the initial directory and return target.
@@ -4837,8 +4946,8 @@ public struct MainView: View {
         return store.agentForkUnavailableReason(hostID: hostID, isConnected: isConnected)
     }
 
-    private func agentForkConfiguration(panes: [PaneState], hostID: String?, usingWorktree: Bool) -> AgentForkConfiguration {
-        let focused = terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
+    private func agentForkConfiguration(panes: [PaneState], hostID: String?, usingWorktree: Bool, focusedPaneID: String? = nil) -> AgentForkConfiguration {
+        let focused = focusedPaneID ?? terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
         let sources = AgentForkConfiguration.orderedSources(panes: panes, focusedPaneID: focused)
         return AgentForkConfiguration(
             sources: sources, usingWorktree: usingWorktree,

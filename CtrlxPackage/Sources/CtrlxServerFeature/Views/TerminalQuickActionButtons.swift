@@ -47,19 +47,22 @@ struct TerminalQuickActionButtons: View {
         .popover(item: $commandPanel) { captured in
             MacAgentCommandPanel(
                 commands: captured.command?.commands ?? [],
+                pluginID: captured.command?.target.pluginID ?? "",
                 targetLabel: captured.label,
                 unavailableReason: commandUnavailableReason,
                 send: { command in
-                    guard let token = captured.token,
-                          let request = AgentCommandRequest(command, in: captured.command),
-                          request.isValid(in: commandContext)
+                    guard
+                        let token = captured.token,
+                        let request = AgentCommandRequest(command, in: captured.command),
+                        request.isValid(in: commandContext)
                     else { return false }
-                    return router.send(command.keys, to: token)
+                    return router.send(request.keys, to: token)
                 }
             )
             .task(id: captured.id) {
-                guard captured.command == nil, captured.phrase.target.hostID == "local",
-                      router.matches(captured.token)
+                guard
+                    captured.command == nil, captured.phrase.target.hostID == "local",
+                    router.matches(captured.token)
                 else { return }
                 await coordinator.refreshAgentCommandIdentity()
             }
@@ -211,6 +214,7 @@ struct TerminalQuickActionStatusBarButtons: View {
 @MainActor
 private struct MacAgentCommandPanel: View {
     let commands: [AgentQuickCommand]
+    let pluginID: String
     let targetLabel: String
     let unavailableReason: String?
     let send: @MainActor (AgentQuickCommand) -> Bool
@@ -243,6 +247,8 @@ private struct MacAgentCommandPanel: View {
                                 } label: {
                                     Text(command.text).monospaced().frame(maxWidth: .infinity, minHeight: 26)
                                 }
+                                .help(command.submission(for: pluginID).hint)
+                                .accessibilityHint(command.submission(for: pluginID).hint)
                                 .accessibilityIdentifier("terminal-agent-command-\(command.id)")
                             }
                         }

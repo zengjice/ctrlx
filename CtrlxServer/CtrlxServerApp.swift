@@ -178,6 +178,14 @@ struct TmuxPaneMirrorApp: App {
             prepareDependencies {
                 $0[PreferencesService.self] = prefs
                 $0[SecretsService.self] = .inMemory()
+                let testRoot: URL
+                if let index = CommandLine.arguments.firstIndex(of: "--ctrlx-state-root"), index + 1 < CommandLine.arguments.count {
+                    testRoot = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                } else {
+                    testRoot = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("ctrlx-e2e-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+                }
+                $0[FileBrowserDownloadClient.self] = .live(root: testRoot.appendingPathComponent("file-download-cache", isDirectory: true))
                 // Project lists now come from the plugin cores via
                 // `PluginHost.setProjects` (the per-agent scanners moved into the
                 // cores). E2E project-list determinism is handled by the plugin
@@ -403,6 +411,8 @@ struct TmuxPaneMirrorApp: App {
     }
 
     var body: some Scene {
+        DetachedTerminalScene(coordinator: coordinator)
+
         // Main sessions window - can be shown via menu bar "Show Sessions"
         Window("Sessions", id: "panes") {
             ContentView()

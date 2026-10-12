@@ -178,7 +178,7 @@ struct ClaudeCodeCLIInstallerTests {
         let calls = await recorder.calls
         #expect(calls.count == 1)
         #expect(calls[0].executable == "/usr/bin/env")
-        #expect(calls[0].arguments == ["claude", "plugin", "uninstall", "ctrlx"])
+        #expect(calls[0].arguments == ["claude", "plugin", "uninstall", "ctrlx@ctrlx", "--scope", "user", "--keep-data"])
         #expect(calls[0].environment == nil)
     }
 
@@ -340,10 +340,10 @@ struct ClaudeCodeCLIInstallerTests {
         #expect(status == .notInstalled)
     }
 
-    @Test("parseStatus: malformed / non-JSON output → .notInstalled")
+    @Test("parseStatus: malformed / non-JSON output reports a check failure")
     func parseStatusMalformed() {
         let status = ClaudeCodeCLIInstaller.parseStatus(from: "not json at all")
-        #expect(status == .notInstalled)
+        #expect(status == .checkFailed(message: "Claude Code returned an invalid plugin list."))
     }
 
     // MARK: - configRoot passed to plugin list

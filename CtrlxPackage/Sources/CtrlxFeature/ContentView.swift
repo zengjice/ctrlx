@@ -59,6 +59,7 @@
             .environment(sessionStore)
             .environment(agentBackgroundMonitoring)
             .preferredColorScheme(settings.appearanceMode.colorScheme)
+            .fileBrowserCacheMaintenance()
             .task {
                 #if DEBUG
                     await VoiceCorrectionBenchmarkRunner.shared.runIfRequested(

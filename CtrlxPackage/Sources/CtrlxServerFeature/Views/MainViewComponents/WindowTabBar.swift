@@ -62,6 +62,7 @@ struct WindowTabBar: View {
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
     let onOpenFiles: (LocalTmuxWindow) -> Void
+    var onDetachWindow: ((LocalTmuxWindow, CGPoint?) -> Void)?
 
     @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(MarkdownOpenSuggestionStore.self) private var openSuggestionStore
@@ -494,12 +495,17 @@ struct WindowTabBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(window.id) \(windowName)")
             .accessibilityValue(isSelected ? "selected" : "")
+            .background(WindowTabDragSource(windowID: window.stableId, label: windowName) { point in
+                onDetachWindow?(window, point)
+            })
             .modifier(WindowRenamingModifier(
                 currentName: window.windowName,
                 onRename: { newName in
                     onRenameWindow(window, newName)
                 },
                 additionalMenu: {
+                    Button("Open in Separate Window") { onDetachWindow?(window, nil) }
+                        .disabled(onDetachWindow == nil || DetachedTerminalTarget(hostID: nil, windowID: window.stableId) == nil)
                     Button { onOpenFiles(window) } label: {
                         Label("Open Files", symbol: .folderBadgePlus)
                     }
@@ -536,9 +542,6 @@ struct WindowTabBar: View {
         }
         .onHover { hovering in
             hoveredWindowId = hovering ? window.id : nil
-        }
-        .draggable(payload) {
-            TabDragPreview(label: windowName, symbol: hasClaude ? .sparkles : .terminal)
         }
         .dropDestination(for: TabDragPayload.self) { payloads, _ in
             handleDrop(payloads: payloads, target: payload)

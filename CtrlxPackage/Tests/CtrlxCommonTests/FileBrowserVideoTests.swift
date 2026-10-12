@@ -606,6 +606,42 @@ struct FileBrowserVideoTests {
         #expect(reader.cachedBytes == 0)
     }
 
+    @Test
+    func closingOneVideoPreviewDoesNotClearAnotherPreviewsCache() async throws {
+        let data = try fixture()
+        let info = info(size: data.count)
+        let source = FileBrowserSource(id: "shared-host", paneID: nil) { operation in
+            guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Expected random read") }
+            return .chunk(.init(
+                path: path,
+                revision: revision,
+                offset: offset,
+                data: data.subdata(in: offset..<min(offset + self.block, data.count))
+            ))
+        }
+        let first = try FileBrowserVideoReader(info: info, source: source)
+        let second = try FileBrowserVideoReader(info: info, source: source)
+        let firstLoader = try FileBrowserVideoResourceLoader(reader: first) { Issue.record("\($0)") }
+        let secondLoader = try FileBrowserVideoResourceLoader(reader: second) { Issue.record("\($0)") }
+        defer { firstLoader.stop()
+            secondLoader.stop()
+        }
+        let firstGenerator = AVAssetImageGenerator(asset: firstLoader.makeAsset())
+        let secondGenerator = AVAssetImageGenerator(asset: secondLoader.makeAsset())
+        _ = try await firstGenerator.image(at: .zero)
+        _ = try await secondGenerator.image(at: .zero)
+        #expect(first.cachedBytes > 0 && second.cachedBytes > 0)
+        let retainedBytes = second.cachedBytes
+        firstLoader.stop()
+        #expect(first.cachedBytes == 0)
+        #expect(second.cachedBytes == retainedBytes)
+        let later = try await secondGenerator.image(at: CMTime(seconds: 3, preferredTimescale: 600))
+        #expect(later.image.width == 1_280)
+        #expect(second.cachedBytes <= FileBrowserVideo.cacheBytes)
+        secondLoader.stop()
+        #expect(second.cachedBytes == 0)
+    }
+
     @Test func suspensionAndStopPreventFurtherRequests() async throws {
         let data = try fixture()
         let info = info(size: data.count)

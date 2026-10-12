@@ -382,6 +382,7 @@
             case let .installed(version): "installed\(version.map { " v\($0)" } ?? "")"
             case .notInstalled: "not-installed"
             case .agentUnavailable: "agent-unavailable"
+            case let .checkFailed(message): "check-failed: \(message)"
             }
         }
 

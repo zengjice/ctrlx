@@ -750,6 +750,24 @@ public actor MacOSDriver {
         }
     }
 
+    public func dragElementOutsideWindow(matching query: ElementQuery) async throws {
+        let pid = try requirePID()
+        MacOSAccessibility.focusApp(appPID: pid)
+        try await Task.sleep(for: .milliseconds(200))
+        guard
+            let source = MacOSAccessibility.visibleFrameOfElement(appPID: pid, matching: query),
+            let window = MacOSAccessibility.firstWindowFrame(appPID: pid),
+            window.minX > 40
+        else {
+            throw MacOSDriverError.elementNotFound("Visible drag source or room outside window: \(query)")
+        }
+        MacOSAccessibility.drag(
+            from: CGPoint(x: source.midX, y: source.midY),
+            to: CGPoint(x: window.minX - 40, y: source.midY),
+            steps: 30
+        )
+    }
+
     /// Get the center point of the app's first visible window.
     private func windowCenter(appPID: pid_t) -> CGPoint? {
         let allWindows = MacOSAccessibility.windows(appPID: appPID)

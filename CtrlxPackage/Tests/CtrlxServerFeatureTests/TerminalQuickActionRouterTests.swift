@@ -8,7 +8,7 @@ import Testing
 @Suite("Mac terminal quick-action routing")
 struct TerminalQuickActionRouterTests {
     @MainActor
-    private final class Sink {
+    final private class Sink {
         var batches: [[TmuxKey]] = []
         var visible = true
 
@@ -32,13 +32,36 @@ struct TerminalQuickActionRouterTests {
         router.focus(leftPane)
         let old = try #require(router.token)
         router.focus(rightPane)
-        #expect(!router.send(AgentQuickCommand.status.keys, to: old))
-        #expect(router.send(AgentQuickCommand.model.keys, to: try #require(router.token)))
+        #expect(!router.send(AgentQuickCommand.status.keys(for: "codex"), to: old))
+        #expect(try router.send(AgentQuickCommand.model.keys(for: "codex"), to: #require(router.token)))
         router.focus(remotePane)
-        #expect(router.send(AgentQuickCommand.usage.keys, to: try #require(router.token)))
+        #expect(try router.send(AgentQuickCommand.usage.keys(for: "codex"), to: #require(router.token)))
         #expect(left.batches.isEmpty)
-        #expect(right.batches == [AgentQuickCommand.model.keys])
-        #expect(remote.batches == [AgentQuickCommand.usage.keys])
+        #expect(right.batches == [AgentQuickCommand.model.keys(for: "codex")])
+        #expect(remote.batches == [AgentQuickCommand.usage.keys(for: "codex")])
+    }
+
+    @Test("Local and Viewer goal insertion waits for explicit submission and rejects duplicate actions")
+    func goalInsertion() throws {
+        for host: String? in [nil, "host-b"] {
+            for plugin in ["codex", "claude-code"] {
+                let router = TerminalQuickActionRouter()
+                let sink = Sink()
+                router.focus(sink.endpoint(host: host))
+                let captured = try #require(router.token)
+                let context = try #require(AgentCommandContext(
+                    hostID: host ?? "local", paneID: "%1",
+                    session: AgentSession(paneId: "%1", pluginID: plugin),
+                    isConnected: true, isInputAvailable: true, hasExternalEditor: false, inputRevision: 0
+                ))
+                let request = try #require(AgentCommandRequest(.goal, in: context))
+                #expect(router.send(request.keys, to: captured))
+                #expect(!router.send(request.keys, to: captured))
+                #expect(sink.batches == [[.text("/goal ")]])
+                #expect(try router.send([.text("finish tests"), .enter], to: #require(router.token)))
+                #expect(sink.batches == [[.text("/goal ")], [.text("finish tests"), .enter]])
+            }
+        }
     }
 
     @Test("Annotation focus requests are Host-scoped and consumed by native focus")
@@ -100,7 +123,7 @@ struct TerminalQuickActionRouterTests {
         router.focus(first)
         #expect(!router.matches(old))
         router.focus(sink.endpoint())
-        #expect(!router.send(AgentQuickCommand.status.keys, to: old))
+        #expect(!router.send(AgentQuickCommand.status.keys(for: "codex"), to: old))
         #expect(sink.batches.isEmpty)
     }
 
@@ -115,7 +138,7 @@ struct TerminalQuickActionRouterTests {
         router.focus(endpoint)
         #expect(router.matches(captured))
         endpoint.recordInput()
-        #expect(!router.send(AgentQuickCommand.status.keys, to: captured))
+        #expect(!router.send(AgentQuickCommand.status.keys(for: "codex"), to: captured))
         #expect(sink.batches.isEmpty)
     }
 
@@ -127,7 +150,7 @@ struct TerminalQuickActionRouterTests {
         router.focus(endpoint)
         let captured = try #require(router.token)
         endpoint.invalidate()
-        #expect(!router.send(AgentQuickCommand.status.keys, to: captured))
+        #expect(!router.send(AgentQuickCommand.status.keys(for: "codex"), to: captured))
         let next = sink.endpoint(pane: "%2")
         router.focus(next)
         router.retire(endpoint) // Late cleanup must not clear the new focus.
@@ -145,12 +168,12 @@ struct TerminalQuickActionRouterTests {
         let captured = try #require(router.token)
         endpoint.isReady = false
         #expect(router.token == captured)
-        #expect(!router.send(AgentQuickCommand.status.keys, to: captured))
+        #expect(!router.send(AgentQuickCommand.status.keys(for: "codex"), to: captured))
         endpoint.isReady = true
         sink.visible = false
-        #expect(!router.send(AgentQuickCommand.status.keys, to: captured))
+        #expect(!router.send(AgentQuickCommand.status.keys(for: "codex"), to: captured))
         sink.visible = true
-        #expect(router.send(AgentQuickCommand.status.keys, to: captured))
+        #expect(router.send(AgentQuickCommand.status.keys(for: "codex"), to: captured))
     }
 
     @Test("A phrase is one ordered batch, with one Return and no draft-clearing keys or duplicate submission")
@@ -171,7 +194,7 @@ struct TerminalQuickActionRouterTests {
         let sink = Sink()
         first.focus(sink.endpoint())
         second.focus(sink.endpoint())
-        #expect(!second.send(AgentQuickCommand.status.keys, to: try #require(first.token)))
+        #expect(try !second.send(AgentQuickCommand.status.keys(for: "codex"), to: #require(first.token)))
         #expect(sink.batches.isEmpty)
     }
 
@@ -188,7 +211,7 @@ struct TerminalQuickActionRouterTests {
         router.focus(endpoint)
         coalescer.enqueue([.escape])
         coalescer.enqueue([.backspace])
-        let keys = AgentQuickCommand.status.keys
+        let keys = AgentQuickCommand.status.keys(for: "codex")
         if let captured = router.token {
             #expect(router.send(keys, to: captured))
         } else {

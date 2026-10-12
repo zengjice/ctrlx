@@ -1,7 +1,7 @@
 import CtrlxNetworking
 
 /// A curated command catalog, not runtime capability discovery. Entries have a
-/// useful bare invocation; session/account actions appear in a separate section.
+/// useful invocation; session/account actions appear in a separate section.
 package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
     case model
     case status
@@ -100,9 +100,34 @@ package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
 
     package var id: String { rawValue }
     package var text: String { "/\(rawValue)" }
-    /// Keep Return outside the TUI's rapid-input/paste window. Like the reply
-    /// composer, send the pause to the host so network batching cannot remove it.
-    package var keys: [TmuxKey] { [.text(text), .delay(200), .enter] }
+    package enum Submission: Sendable {
+        case execute
+        case insertArguments
+
+        package var hint: String {
+            switch self {
+            case .execute: "Run this command"
+            case .insertArguments: "Insert command, then add arguments and send"
+            }
+        }
+    }
+
+    /// A command's bare behavior can differ between agents. Goal buttons are
+    /// intentionally for entering an objective, not inspecting the current goal.
+    package func submission(for pluginID: String) -> Submission {
+        switch (pluginID, self) {
+        case ("codex", .goal), ("claude-code", .goal): .insertArguments
+        default: .execute
+        }
+    }
+
+    package func keys(for pluginID: String) -> [TmuxKey] {
+        switch submission(for: pluginID) {
+        case .insertArguments: [.text(text + " ")]
+        // Keep Return outside the TUI's rapid-input/paste window on the Host.
+        case .execute: [.text(text), .delay(200), .enter]
+        }
+    }
 
     package var isSessionAction: Bool {
         switch self {
@@ -112,7 +137,7 @@ package enum AgentQuickCommand: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// The panel's display order is also the send allowlist. Do not give other
-    /// agents the Codex catalog. Checked against Codex 0.160.0 / Claude 2.1.276;
+    /// agents the Codex catalog. Checked against Codex 0.162.1 / Claude 2.1.276;
     /// aliases, removed entries and required-inline-argument commands stay out.
     package static func commands(for pluginID: String) -> [Self] {
         switch pluginID {
@@ -219,11 +244,14 @@ package struct AgentCommandContext: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Selecting an item submits immediately. Capture its target so a stale panel
+/// Selecting an item inserts or executes it. Capture its target so a stale panel
 /// action cannot silently type into a different pane or agent.
 package struct AgentCommandRequest: Equatable, Sendable {
     package let command: AgentQuickCommand
     package let context: AgentCommandContext
+
+    package var keys: [TmuxKey] { command.keys(for: context.target.pluginID) }
+    package var submission: AgentQuickCommand.Submission { command.submission(for: context.target.pluginID) }
 
     package init?(_ command: AgentQuickCommand, in context: AgentCommandContext?) {
         guard let context, context.canSend, context.commands.contains(command) else { return nil }

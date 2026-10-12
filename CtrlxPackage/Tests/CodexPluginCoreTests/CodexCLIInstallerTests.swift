@@ -369,7 +369,7 @@ struct CodexCLIInstallerTests {
         #expect(calls[0].environment?["CODEX_HOME"] == "/some/dir")
     }
 
-    @Test("installStatus returns .notInstalled when listing fails with non-127 exit")
+    @Test("installStatus reports listing failure instead of guessing not installed")
     func installStatusNotInstalledOnNon127Failure() async throws {
         let configRoot = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("ctrlx-codex-status-\(UUID().uuidString)")
@@ -386,7 +386,7 @@ struct CodexCLIInstallerTests {
         )
 
         let status = await installer.installStatus(configRoot: configRoot.path)
-        #expect(status == .notInstalled)
+        #expect(status == .checkFailed(message: "internal error"))
     }
 
     @Test("installStatus falls back to config.toml when another marketplace breaks listing")

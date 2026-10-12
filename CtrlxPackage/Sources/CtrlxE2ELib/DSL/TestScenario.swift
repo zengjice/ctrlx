@@ -415,6 +415,8 @@ public enum TestStep: Sendable {
     /// CGEvent drag events, so scenarios don't have to compute screen
     /// coordinates by hand to test SwiftUI drag-and-drop (e.g. tab reorder).
     case macDragElement(from: ElementQuery, to: ElementQuery, instance: Int = 0)
+    /// Drag a visible element past the left edge of its window. Position the window at x > 40 first.
+    case macDragElementOutsideWindow(ElementQuery, instance: Int = 0)
     /// Take a macOS screenshot, optionally comparing against a stored baseline
     /// Default tolerance of 2% because sometimes the image needs to be normalized
     /// and in this case some pixels will differ.

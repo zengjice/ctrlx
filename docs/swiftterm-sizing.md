@@ -288,6 +288,38 @@ The window adds **110px vertical padding** for:
 - Status bar: ~28px
 - Buffer: ~16px
 
+## Detached terminal windows (Mac Local and Viewer)
+
+Terminal Window labels can be dragged outside the native main window, or opened
+with **Open in Separate Window** in their context menu. This creates a native
+`DetachedTerminalScene`, not another tmux Window or an Agent fork. Files and
+Browser tabs are not detachable in this first implementation.
+
+`DetachedTerminalWindows` reserves presentation ownership using the Host pair ID
+(nil for Local) plus tmux's stable `@window_id`. Older Host snapshots that only
+provide `session:index` cannot detach. Main-view terminal tiles become a
+placeholder while their independent scene is open; their tab entries still
+focus that scene. Closing the native window (including Cmd-W) releases only
+presentation ownership, and **Return to Main Window** also selects its entry.
+There is no cross-launch restoration of detached scenes.
+
+Each scene has its own `TerminalQuickActionRouter`, while pane state, ordered
+terminal streaming and Viewer connections remain shared. Existing pane layouts,
+Questions and editor overlays are reused. Files, Fork and terminal-link actions
+carry the captured Host / stable Window / pane context back to the main
+workbench; they do not consult whichever tab was previously selected there.
+
+The explicit-Fit rule also applies here: moving, enlarging or entering fullscreen
+does not implicitly resize tmux. **Fit Terminal** uses the independent scene's
+geometry. Main-window Fit excludes detached Windows, preventing two presentations
+from competing over the same tmux dimensions. AppKit handles the native window's
+screen / backing-scale changes; focusing an off-screen window recenters it.
+
+Native tab dragging exports the existing `TabDragPayload` representation so
+in-strip ordering and split drop targets keep their existing behavior. Only an
+unclaimed mouse release outside the source native window detaches; Escape,
+accepted drops and releases within that window do not.
+
 ## References
 
 ### SwiftTerm Source Files

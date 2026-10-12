@@ -16,7 +16,7 @@ import CtrlxPluginProtocol
 /// (`~/.claude.json`, transcripts) and hook payloads, so it must never trap —
 /// `do/try/catch` around every decode, no force-unwraps, skip-and-log malformed
 /// entries.
-public actor ClaudeCodePluginCore: AgentSessionForking {
+public actor ClaudeCodePluginCore: AgentSessionForking, AgentPluginMaintenance {
     public static let pluginID = "claude-code"
 
     private var host: (any PluginHost)?
@@ -273,6 +273,14 @@ public actor ClaudeCodePluginCore: AgentSessionForking {
 
     public func installStatus(configRoot: String?) async -> PluginInstallStatus {
         await cliInstaller().installStatus(configRoot: configRoot)
+    }
+
+    public func bundledPluginVersion() async throws -> String {
+        try await cliInstaller().bundledVersion()
+    }
+
+    public func reinstall(configRoot: String?) async throws -> PluginInstallStatus {
+        try await cliInstaller().reinstall(configRoot: configRoot)
     }
 
     // MARK: - Settings

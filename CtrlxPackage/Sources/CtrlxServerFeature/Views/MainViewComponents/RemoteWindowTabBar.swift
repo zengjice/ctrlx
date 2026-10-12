@@ -54,6 +54,7 @@ struct RemoteWindowTabBar: View {
     var onSelectFileTab: ((UUID) -> Void)?
     var onCloseFileTab: ((UUID) -> Void)?
     let onOpenFiles: (TmuxWindow) -> Void
+    var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
 
     /// Cached width of the split-mode tab strip. Measured via the background
     /// `onGeometryChange` so the HStack can drive intrinsic height instead of
@@ -343,6 +344,9 @@ struct RemoteWindowTabBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(window.id) \(windowName)")
             .accessibilityValue(isSelected ? "selected" : "")
+            .background(WindowTabDragSource(windowID: window.stableId, label: windowName) { point in
+                onDetachWindow?(window, point)
+            })
             .modifier(WindowRenamingModifier(
                 currentName: window.windowName,
                 isDisabled: !isHostConnected,
@@ -350,6 +354,8 @@ struct RemoteWindowTabBar: View {
                     onRenameWindow(window, newName)
                 },
                 additionalMenu: {
+                    Button("Open in Separate Window") { onDetachWindow?(window, nil) }
+                        .disabled(onDetachWindow == nil || DetachedTerminalTarget(hostID: nil, windowID: window.stableId) == nil)
                     Button { onOpenFiles(window) } label: {
                         Label("Open Files", symbol: .folderBadgePlus)
                     }
@@ -388,9 +394,6 @@ struct RemoteWindowTabBar: View {
         }
         .onHover { hovering in
             hoveredWindowId = hovering ? window.id : nil
-        }
-        .draggable(payload) {
-            TabDragPreview(label: windowName, symbol: window.hasClaude ? .sparkles : .terminal)
         }
         .dropDestination(for: TabDragPayload.self) { payloads, _ in
             handleDrop(payloads: payloads, target: payload)

@@ -297,6 +297,8 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
         KittyKeyboardProtocolScenario.scenario,
         FooterRenderingScenario.scenario,
         MultiWindowTabsScenario.scenario,
+        DetachedTerminalWindowScenario.scenario,
+        DetachedTerminalWindowScenario.macViewer,
         MultiWindowTabsIOSScenario.scenario,
         MultiWindowTabsMacViewerScenario.scenario,
         WindowRenameScenario.scenario,
