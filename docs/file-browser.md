@@ -68,8 +68,13 @@ snapshot, refreshed on buffer edits, cursor/mouse-mode changes, scrolling, resiz
 and payload updates. They do not independently scan around the clicked row.
 iOS uses the native content-offset/bounds row range, including partially visible
 rows, even when inertial scrolling leaves the terminal's logical display row behind.
-Soft wraps and confidently enclosed near-right-edge hard wraps are joined;
-nested matching brackets are preserved. An incomplete enclosure is skipped only
+Soft wraps and confidently enclosed near-right-edge hard wraps are joined.
+An enclosed filename tail (letters/numbers, dots, underscores or hyphens, followed
+by its closer) also continues when that token cannot fit in the preceding row's
+remaining cells. This covers Codex word wraps such as `完整` / `片.mp4)` that leave
+six columns unused. Indentation is excluded from the width calculation and hit
+targets; this extra rule rejects independently rooted paths, URLs and multiword prose.
+Nested matching brackets are preserved. An incomplete enclosure is skipped only
 through its wrapped fragment, without hiding later independent lines. Ambiguous/truncated wraps
 are not guessed. Spaces need
 quotes/brackets or an explicit file hyperlink; apostrophes inside words such as
@@ -100,6 +105,33 @@ are still rejected during link recognition.
 Live input
 rows (including Codex's colored multiline composer), selection, drag and
 double/long-press gestures retain their terminal behavior.
+
+#### Agent output convention
+
+The bundled `file-links` Skill (`plugin/ctrlx/skills/file-links/SKILL.md`) asks
+agents to deliver files as `[short label](/absolute/Host/path)` on one source line,
+with an angle-bracket target for spaces/parentheses and no truncation or editor
+line suffix. It is packaged for Claude Code and mirrored into the Codex bundle
+by `scripts/sync-codex-skills.sh`; no Relay or wire change is needed. Update the
+installed CtrlX agent plugin and start a new agent session to discover the Skill.
+App-only updates do not prove that an agent's cached plugin has refreshed.
+
+This is a formatting convention, **not** a Markdown-only terminal protocol:
+CtrlX receives terminal cells, not the assistant's original Markdown AST.
+Code inspection on 2026-10-12 found:
+
+- Codex 0.162.1 formats ordinary local links as label plus parenthesized target,
+  possibly cwd-relative, without a general file OSC 8 capability. See the pinned
+  [local-link formatter](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/markdown_render/local_links.rs)
+  and [Markdown renderer](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/markdown_render.rs).
+- The installed Claude Code 2.1.276 renderer's hyperlink branch emits OSC 8 when
+  terminal capabilities permit, otherwise `label (target)`. This was a static
+  inspection, not an end-to-end acceptance test of an active Claude session.
+
+Keep explicit file-target precedence and conservative visible-text detection for
+both renderings, older output and unmodified agents. A Skill cannot force an
+agent to load it, preserve hidden link metadata, or make ambiguous hard wraps
+lossless. The Host remains the authority for path validation at activation time.
 
 ### Creating folders and adding files
 

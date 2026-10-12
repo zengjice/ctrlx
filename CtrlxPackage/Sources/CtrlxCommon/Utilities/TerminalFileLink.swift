@@ -40,7 +40,10 @@ public enum TerminalFileLinkDetector {
         let row: Int
         let columns: Range<Int>
         var continuation = false
+        var filenameContinuation = false
         var isWebURL = false
+
+        var continuesEnclosure: Bool { continuation || filenameContinuation }
     }
 
     public static func links(rows: [Row], columns: Int) -> [TerminalFileLink] {
@@ -51,7 +54,10 @@ public enum TerminalFileLinkDetector {
             if let previous, !row.wrapped {
                 let end = previous.cells.last(where: { !$0.character.isWhitespace })
                 units.append(.init(character: "\n", row: row.number, columns: 0..<0,
-                                   continuation: end.map { $0.column + $0.width >= columns - 4 } ?? false))
+                                   continuation: end.map { $0.column + $0.width >= columns - 4 } ?? false,
+                                   filenameContinuation: end.map {
+                                       filenameTailOverflows(row, remainingColumns: columns - $0.column - $0.width)
+                                   } ?? false))
             }
             for cell in row.cells where cell.width > 0 {
                 units.append(.init(character: cell.character, row: row.number,
@@ -82,7 +88,7 @@ public enum TerminalFileLinkDetector {
             if let close = pairs[units[index].character], isDelimiter(at: index) {
                 guard let end = closingIndex(in: units, from: index, close: close) else {
                     // Drop the incomplete wrapped fragment, not independent lines after it.
-                    index = units[(index + 1)...].firstIndex(where: { $0.character == "\n" && !$0.continuation }) ?? units.count
+                    index = units[(index + 1)...].firstIndex(where: { $0.character == "\n" && !$0.continuesEnclosure }) ?? units.count
                     continue
                 }
                 let content = joinedEnclosedContent(Array(units[(index + 1)..<end]))
@@ -142,12 +148,26 @@ public enum TerminalFileLinkDetector {
         return foundContinuation ? end : nil
     }
 
+    /// Word wrapping can move a filename's final chunk and its closer together,
+    /// leaving more than four cells unused. Do not extend this inference to bare URIs
+    /// or to a new path/list/prose line that merely happens to overflow that space.
+    private static func filenameTailOverflows(_ row: Row, remainingColumns: Int) -> Bool {
+        let token = row.cells.drop(while: { $0.character.isWhitespace })
+            .prefix(while: { !$0.character.isWhitespace })
+        guard let closer = token.last, ")]\"'`".contains(closer.character),
+              token.count > 1,
+              token.dropLast().allSatisfy({
+                  $0.character.isLetter || $0.character.isNumber || "._-…".contains($0.character)
+              }) else { return false }
+        return token.reduce(0) { $0 + $1.width } > remainingColumns
+    }
+
     private static func closingIndex(in units: [Unit], from start: Int, close: Character) -> Int? {
         let open = units[start].character
         var depth = 1
         for index in (start + 1)..<min(units.count, start + 4097) {
             let unit = units[index]
-            if unit.character == "\n", !unit.continuation { return nil }
+            if unit.character == "\n", !unit.continuesEnclosure { return nil }
             if unit.character == close {
                 depth -= 1
                 if depth == 0 { return index }

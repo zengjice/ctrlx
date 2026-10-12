@@ -323,6 +323,49 @@ struct TerminalFileLinkTests {
         #expect(!link.contains(column: 10, row: 1))
     }
 
+    @Test("Codex word wrapping can leave six columns before a Chinese filename tail", arguments: ["A03", "A04"])
+    func chineseWordWrap(episode: String) throws {
+        let first = row("  • 第 3 集 · 71.5 秒 (episodes/\(episode)/story_v5/output/\(episode)_V5_完整")
+        let end = try #require(first.cells.last)
+        #expect(end.column + end.width == 63)
+        let second = row("    片.mp4)", number: 1)
+        let links = TerminalFileLinkDetector.links(rows: [first, second], columns: 69)
+        let link = try #require(links.first)
+        #expect(links.count == 1)
+        #expect(link.path == "episodes/\(episode)/story_v5/output/\(episode)_V5_完整片.mp4")
+        #expect(link.spans == [.init(row: 0, columns: 23..<63), .init(row: 1, columns: 4..<10)])
+        for column in 4..<10 { #expect(link.contains(column: column, row: 1)) }
+        #expect(!link.contains(column: 3, row: 1))
+        #expect(!link.contains(column: 10, row: 1))
+        // The same hard break is ambiguous if the tail could fit on the preceding line.
+        #expect(TerminalFileLinkDetector.links(rows: [first, second], columns: 70).isEmpty)
+    }
+
+    @Test("Word-wrapped enclosures reject truncated tails without losing independent paths", arguments: [
+        ("(", ")"), ("[", "]"), ("\"", "\""), ("'", "'"), ("`", "`"),
+    ], ["..final.pdf", "…final.pdf"])
+    func wordWrappedTruncation(enclosure: (String, String), tail: String) {
+        let first = enclosure.0 + "./output/report."
+        let links = TerminalFileLinkDetector.links(rows: [
+            row(first), row("  " + tail + enclosure.1, number: 1),
+            row("./later/file.txt", number: 2),
+        ], columns: first.count + 6)
+        #expect(links.map(\.path) == ["./later/file.txt"])
+    }
+
+    @Test("Overflow alone cannot join a new path, web URL, list item or prose", arguments: [
+        "./next/report.pdf", "/next/report.pdf", "../next/report.pdf", "~/next/report.pdf",
+        ".build-local/report.pdf", "nested/report.pdf", "https://example.com/report.pdf",
+        "• report.pdf", "An unrelated report.pdf",
+    ])
+    func wordWrapIndependentLines(next: String) {
+        let first = "(./output/report"
+        let second = row("  " + next + ")", number: 1)
+        let expected = TerminalFileLinkDetector.links(rows: [second], columns: 80)
+        let links = TerminalFileLinkDetector.links(rows: [row(first), second], columns: first.count + 6)
+        #expect(links == expected)
+    }
+
     @Test func softWrappedPath() {
         let links = TerminalFileLinkDetector.links(rows: [row("episodes/A01/"), row("opening/完整片.mp4", number: 1, wrapped: true)], columns: 40)
         #expect(links.map(\.path) == ["episodes/A01/opening/完整片.mp4"])
@@ -491,6 +534,34 @@ struct TerminalFileLinkTests {
 
     private final class Delegate: TerminalDelegate {
         func send(source: Terminal, data: ArraySlice<UInt8>) { }
+    }
+
+    @Test("A real 69-column terminal links both rows of the reported Codex filename")
+    func nativeChineseWordWrap() throws {
+        let delegate = Delegate()
+        let terminal = Terminal(delegate: delegate, options: .init(cols: 69, rows: 6))
+        terminal.feed(text: "  • 第 3 集 · 71.5 秒 (episodes/A03/story_v5/output/A03_V5_完整\r\n    片.mp4)\r\n$ ")
+        let links = TerminalFileLinkDetector.links(terminal: terminal, rows: 0..<6, cellPayload: { _, _ in nil })
+        let link = try #require(links.first)
+        #expect(links.count == 1)
+        #expect(link.path == "episodes/A03/story_v5/output/A03_V5_完整片.mp4")
+        #expect(link.spans == [.init(row: 0, columns: 23..<63), .init(row: 1, columns: 4..<10)])
+        withExtendedLifetime(delegate) { }
+    }
+
+    @Test("OSC 8 hard-wrapped labels keep the full target on every row without text inference")
+    func explicitTargetAcrossHardWraps() {
+        let delegate = Delegate()
+        let terminal = Terminal(delegate: delegate, options: .init(cols: 69, rows: 6))
+        let uri = "file:///host/output/episode%20three.mp4"
+        terminal.feed(text: "\u{1b}]8;;\(uri)\u{1b}\\第 3 集\u{1b}]8;;\u{1b}\\\r\n"
+            + "\u{1b}]8;;\(uri)\u{1b}\\完整片\u{1b}]8;;\u{1b}\\\r\n$ ")
+        let links = TerminalFileLinkDetector.links(terminal: terminal, rows: 0..<6, cellPayload: { _, _ in nil })
+        #expect(links.count == 2)
+        #expect(links.allSatisfy { $0.path == "/host/output/episode three.mp4" })
+        #expect(links.contains { $0.contains(column: 0, row: 0) })
+        #expect(links.contains { $0.contains(column: 5, row: 1) })
+        withExtendedLifetime(delegate) { }
     }
 
     @Test("A 21-column terminal never exposes a prefix of a hard-wrapped truncated path")
