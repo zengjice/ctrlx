@@ -86,8 +86,8 @@ struct AgentBrowserRoutingTests {
         }
     }
 
-    @Test("Routing reads live panes while the first UI refresh is still in flight")
-    func duringInitialRefresh() async throws {
+    @Test("Routing reads live panes while the first UI refresh is still in flight", arguments: ["codex", "claude"])
+    func duringInitialRefresh(command: String) async throws {
         let entered = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         defer { release.continuation.finish(); entered.continuation.finish() }
@@ -98,7 +98,7 @@ struct AgentBrowserRoutingTests {
                 return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
             }
             if executable == "/bin/ps" {
-                return ProcessResult(exitCode: 0, stdout: Data(" PID PPID COMM\n100 1 zsh\n200 100 codex\n".utf8), stderr: Data())
+                return ProcessResult(exitCode: 0, stdout: Data(" PID PPID COMM\n100 1 zsh\n200 100 \(command)\n".utf8), stderr: Data())
             }
             let row = Self.row(session: "live")
             let output = arguments.last?.hasPrefix("#{pane_pid}") == true

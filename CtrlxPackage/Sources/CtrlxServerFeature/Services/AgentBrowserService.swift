@@ -28,7 +28,7 @@ struct ManualBrowserTarget: Equatable, Sendable {
 }
 
 /// One Chromium runtime per CtrlX process. Page state outlives SwiftUI tab
-/// representations; authority (Codex run) is distinct from UI routing (pane).
+/// representations; authority (agent run) is distinct from UI routing (pane).
 @MainActor
 public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostDelegate {
     public static func prepareApplication() { _ = CXBrowserPrepareApplication() }

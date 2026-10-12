@@ -6,8 +6,8 @@ enum AgentBrowserRoutingError: Error, LocalizedError {
     case ambiguousPane
     var errorDescription: String? {
         switch self {
-        case .processNotInPane: "This Codex is not inside a local CtrlX tmux pane. No browser tab was opened."
-        case .ambiguousPane: "This Codex belongs to multiple linked tmux sessions. Unlink the duplicate before opening a browser tab."
+        case .processNotInPane: "This agent is not inside a local CtrlX tmux pane. No browser tab was opened."
+        case .ambiguousPane: "This agent belongs to multiple linked tmux sessions. Unlink the duplicate before opening a browser tab."
         }
     }
 }

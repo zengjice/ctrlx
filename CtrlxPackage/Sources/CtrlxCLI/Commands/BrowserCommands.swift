@@ -6,7 +6,7 @@ import Foundation
 struct BrowserCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "browser",
-        abstract: "Control this instance's Chromium tabs embedded in its local CtrlX session (ordinary WebKit tabs are separate)",
+        abstract: "Control this agent instance's Host Chromium tabs in its local CtrlX session (human pages and legacy WebKit tabs are separate)",
         subcommands: [BrowserRunCommand.self, BrowserIdentityCommand.self, BrowserActionCommand.self, BrowserPageCommand.self, BrowserBatchCommand.self, BrowserSetupCommand.self, BrowserRecordCommand.self, BrowserEngineCommand.self, BrowserEngineProviderCommand.self]
     )
 }
@@ -137,24 +137,24 @@ struct BrowserRecordCommand: ParsableCommand {
 
 /// Read-only diagnosis. Does not create credentials or launch the browser.
 struct BrowserIdentityCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "identity", abstract: "Identify the calling Codex without opening the browser (no credentials printed)")
+    static let configuration = CommandConfiguration(commandName: "identity", abstract: "Identify the calling Codex or Claude Code without opening the browser (no credentials printed)")
 
     func run() throws {
         @Dependency(AgentBrowserProcessClient.self) var processes
-        let owner = try processes.callingCodex(from: getppid(), uid: getuid())
+        let owner = try processes.callingAgent(from: getppid(), uid: getuid())
         let json = try JSONSerialization.data(withJSONObject: ["pid": owner.pid, "runtime": owner.runtimeKey], options: [.sortedKeys])
         print(String(decoding: json, as: UTF8.self))
     }
 }
 
 struct BrowserRunCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "run", abstract: "Optional launch convenience; plain codex also discovers its browser identity automatically")
+    static let configuration = CommandConfiguration(commandName: "run", abstract: "Optional launch convenience; plain codex or claude also discovers its browser identity automatically")
     @Option(help: "Human-readable session / window / pane label") var label: String?
     @Argument(parsing: .captureForPassthrough) var command: [String]
 
     func run() throws {
         let words = command.first == "--" ? Array(command.dropFirst()) : command
-        guard let executable = words.first, !executable.isEmpty else { throw ValidationError("Use: ctrlx browser run -- codex [arguments]") }
+        guard let executable = words.first, !executable.isEmpty else { throw ValidationError("Use: ctrlx browser run -- <agent> [arguments] (codex or claude)") }
         if let label { setenv("CTRLX_BROWSER_LABEL", label, 1) }
         // Compatibility convenience only. Identity is discovered at action time,
         // not granted by this command or inherited through environment variables.
@@ -168,7 +168,7 @@ struct BrowserRunCommand: ParsableCommand {
 struct BrowserActionCommand: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "action", abstract: "tabs | open | read | snapshot (vercel) | click | type | fill | press | scroll | wait | select | check | screenshot | navigate | show | close")
     @Argument var operation: String
-    @Option(help: "ctrlx (original) or vercel; overrides this Codex instance's saved engine") var engine: String?
+    @Option(help: "ctrlx (original) or vercel; overrides this agent instance's saved engine") var engine: String?
     @Option var tab: String?
     @Option var url: String?
     @Option var selector: String?
@@ -233,13 +233,13 @@ struct BrowserActionCommand: ParsableCommand {
 }
 
 struct BrowserEngineCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "engine", abstract: "Read/set this Codex instance's engine: vercel (default) or ctrlx; existing tabs and logins are kept")
+    static let configuration = CommandConfiguration(commandName: "engine", abstract: "Read/set this agent instance's engine: vercel (default) or ctrlx; existing tabs and logins are kept")
     @Argument var name: String?
 
     func run() throws {
         if let name { _ = try AgentBrowserEngine.resolve(name, saved: nil) }
         @Dependency(AgentBrowserProcessClient.self) var processes
-        let owner = try processes.callingCodex(from: getppid(), uid: getuid())
+        let owner = try processes.callingAgent(from: getppid(), uid: getuid())
         let selected = try AgentBrowserTransport.withRunContext(for: owner) { url, context in
             try processes.validate(owner)
             if let name {
@@ -248,7 +248,7 @@ struct BrowserEngineCommand: ParsableCommand {
             }
             return try AgentBrowserEngine.resolve(nil, saved: context["engine"] as? String).rawValue
         }
-        print("{\"engine\":\"\(selected)\",\"scope\":\"calling-codex\",\"vercelVersion\":\"\(ManagedAgentBrowser.version)\"}")
+        print("{\"engine\":\"\(selected)\",\"scope\":\"calling-agent\",\"vercelVersion\":\"\(ManagedAgentBrowser.version)\"}")
     }
 }
 

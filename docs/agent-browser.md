@@ -66,9 +66,18 @@ the [capability audit](agent-browser-capability-audit.md).
 
 ## Embedded routing
 
-Open CtrlX on the **same Mac** as the terminal agent. Start `codex` normally;
+The shared `agent-browser` skill (packaged for Codex and Claude Code) defaults
+webpage interaction, localhost UI checks and screenshots to `ctrlx browser` in
+local CtrlX agent sessions. Explicit requests for another browser or its existing
+tabs/login/extensions take precedence; native-app UI and ordinary search/API
+lookups are outside this default. An unavailable/unsupported CtrlX operation is
+reported without silently switching to Computer Use, another browser client or
+standalone Playwright. Browser switching requires the user's choice. This is
+skill guidance, not a tool-permission sandbox; no global agent settings change.
+
+Open CtrlX on the **same Mac** as the terminal agent. Start `codex` or `claude` normally;
 there is no `ctrlx browser run` requirement. On `browser action open`, the CLI
-identifies the real Codex process. The host resolves its fresh process ancestry
+identifies the real native agent process. The host resolves its fresh process ancestry
 to a tmux pane/window/session, then inserts a Chromium tab in that workbench.
 It does not infer the destination from the focused session, working directory,
 or an inherited session-name environment variable. Missing/ambiguous sources
@@ -77,7 +86,7 @@ Routing reads pane metadata and shell PIDs in one live tmux query; it does not
 reuse the UI refresh cache, which may still be loading or have deduplicated
 linked sessions. The process tree is then matched against that live snapshot.
 
-The control owner is the **Codex process instance**; the display location is the
+The control owner is the **agent process instance**; the display location is the
 **source session and split side**. Multiple agents in one session share its tab
 strip, not control grants. Children inherit their opener's owner and location.
 Switching tabs reparents the existing native view; it does not reload Chromium.
@@ -229,21 +238,26 @@ terminals alive or change the Host/Relay protocol.
 
 - One persistent, CtrlX-specific profile per Mac:
   `~/Library/Application Support/CtrlX/AgentBrowser/Default`.
-- On first browser use, one Codex process gets a fresh random control identity;
+- On first browser use, one native agent process gets a fresh random control identity;
   session/window/pane labels are display hints, not credentials.
-- Start Codex normally, including by typing `codex` in an existing terminal.
+- Start Codex/Claude Code normally in an existing terminal.
   `ctrlx browser action` walks its kernel process ancestry to the nearest native
-  `codex` executable. Shells and `codex-code-mode-host` are not agent identities.
-  Existing Codex instances attach on first use without restarting. A bounded
+  `codex` or `claude` executable. Claude's native installer also uses versioned
+  binaries at `claude/versions/<major.minor.patch>`; Homebrew's `claude` is supported.
+  See the [official installation layout](https://code.claude.com/docs/en/setup#auto-updates).
+  Older Node.js-hosted Claude Code is not supported: no argv/title-based identity
+  is inferred. Shells and `codex-code-mode-host` are not agent identities.
+  Existing native instances attach on first use without restarting. A bounded
   ancestry walk fails closed if identity is unavailable; it never uses focus,
   tmux pane labels, or `CTRLX_BROWSER_CONTEXT` as credentials.
 - Contexts live privately in `~/.ctrlx/agent-browser/runs/<pid>-<start-time>/`.
   Their random credentials and initial registration are protected by a file lock,
-  so concurrent tools reuse one group. Nested/sibling Codex instances are separate;
+  so concurrent tools reuse one group. Nested/sibling agents, including mixed
+  Codex/Claude Code ancestry, are separate;
   PID reuse cannot inherit a prior identity. Shared profile/login is unchanged.
   `ctrlx browser identity` diagnoses the owner without opening a browser or
   printing credentials. `browser run` remains only an optional exec convenience;
-  CtrlX project launches no longer wrap or alter the user's Codex command.
+  CtrlX project launches need no browser wrapper around the user's agent command.
 - The local socket checks its peer UID and requires the runtime secret, browser
   epoch, PID/start time and exact tab ownership for operations. There is no
   focused-tab fallback. Same-user processes are trusted; groups are routing
@@ -260,6 +274,14 @@ terminals alive or change the Host/Relay protocol.
   dispatching real input. They never use the currently selected tab as a target.
 - Agent exit revokes its authority but retains pages. Browser restart invalidates
   old grants. This iteration does not restore the old tab layout after restart.
+
+`AgentBrowserIdentityTests` covers both native callers, mixed nested ancestry,
+unsupported executables, UID boundaries, exit/PID reuse and private context reuse.
+`AgentBrowser/tests/cli.py <built-CLI>` exercises real kernel ancestry and engine
+preferences under disposable Codex/Claude-named binaries (no real agent or browser).
+`scripts/tests/test_agent_skills.py` checks both bundles receive identical resources.
+These do not prove automatic skill choice or real-agent browser operation; those
+still require a live acceptance run after updating the Host and agent plugins.
 
 ## Bounded page actions
 

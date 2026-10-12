@@ -14,6 +14,21 @@ struct AgentBrowserProcess: Equatable, Sendable {
 
     var runtimeKey: String { "\(pid)-\(startSeconds)-\(startMicros)" }
 
+    var agentName: String? {
+        let path = URL(fileURLWithPath: executable)
+        switch path.lastPathComponent {
+        case "codex": return "Codex"
+        case "claude": return "Claude Code"
+        default:
+            // Claude's native installer resolves its launcher to claude/versions/<version>.
+            let directory = path.deletingLastPathComponent()
+            guard directory.lastPathComponent == "versions",
+                  directory.deletingLastPathComponent().lastPathComponent == "claude",
+                  path.lastPathComponent.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil else { return nil }
+            return "Claude Code"
+        }
+    }
+
     func isSameRuntime(as other: Self) -> Bool {
         pid == other.pid && uid == other.uid && executable == other.executable
             && startSeconds == other.startSeconds && startMicros == other.startMicros
@@ -24,29 +39,29 @@ struct AgentBrowserProcess: Equatable, Sendable {
 struct AgentBrowserProcessClient: Sendable {
     var inspect: @Sendable (Int32) throws -> AgentBrowserProcess
 
-    /// The nearest native Codex owns the call. A nested Codex must never borrow
+    /// The nearest supported native agent owns the call. A nested agent must never borrow
     /// its parent's group, even if it inherited CTRLX_BROWSER_CONTEXT.
-    func callingCodex(from firstPID: Int32, uid: uid_t) throws -> AgentBrowserProcess {
+    func callingAgent(from firstPID: Int32, uid: uid_t) throws -> AgentBrowserProcess {
         var pid = firstPID
         var visited = Set<Int32>()
         for _ in 0..<64 {
             guard pid > 1, visited.insert(pid).inserted else { break }
             let process = try inspect(pid)
             guard process.pid == pid, process.uid == uid else { break }
-            if URL(fileURLWithPath: process.executable).lastPathComponent == "codex" {
+            if process.agentName != nil {
                 try validate(process)
                 return process
             }
             pid = process.parentPID
         }
         throw AgentBrowserTransport.Failure(
-            "Cannot identify a calling Codex process. Run this browser action from a local Codex tool; no tab was selected or changed."
+            "Cannot identify a calling agent process. Run this browser action from a local native Codex or Claude Code tool; no tab was selected or changed."
         )
     }
 
     func validate(_ process: AgentBrowserProcess) throws {
         guard try process.isSameRuntime(as: inspect(process.pid)) else {
-            throw AgentBrowserTransport.Failure("Calling Codex exited or changed identity. No browser action was sent.")
+            throw AgentBrowserTransport.Failure("Calling agent exited or changed identity. No browser action was sent.")
         }
     }
 }

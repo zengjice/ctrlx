@@ -1,5 +1,5 @@
-// Test fixture only. Build as `codex` to exercise the public CLI's real kernel
-// ancestry walk, not a product identity bypass or a real Codex acceptance.
+// Test fixture only. Build as `codex`/`claude` (or a Claude version path) for
+// the CLI's kernel ancestry walk, not an identity bypass or real-agent acceptance.
 #include <libproc.h>
 #include <unistd.h>
 #include <cstdlib>
