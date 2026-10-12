@@ -18,7 +18,13 @@ public enum RepositoryFileLink {
             !CharacterSet.whitespacesAndNewlines.contains($0)
                 && !CharacterSet.controlCharacters.contains($0)
                 && (!$0.isASCII || "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/%".unicodeScalars.contains($0))
-        }), let path = String(encoded).removingPercentEncoding, isValid(path: path) else { return nil }
+        }), var path = String(encoded).removingPercentEncoding else { return nil }
+        // Accept directory spelling at the marker boundary; keep decoded Host paths canonical.
+        if path.hasSuffix("/") {
+            path.removeLast()
+            guard path != "." else { return nil }
+        }
+        guard isValid(path: path) else { return nil }
         return path
     }
 

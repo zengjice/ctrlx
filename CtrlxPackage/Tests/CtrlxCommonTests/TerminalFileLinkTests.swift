@@ -45,21 +45,55 @@ struct TerminalFileLinkTests {
         #expect(links.first?.spans == [.init(row: 0, columns: 8..<(8 + marker.count))])
     }
 
+    @Test("Directory markers normalize one trailing slash before Host resolution", arguments: [
+        ("<repo:outputs/final_films>", "outputs/final_films"),
+        ("<repo:outputs/final_films/>", "outputs/final_films"),
+        ("<repo:outputs/final_films%2F>", "outputs/final_films"),
+        ("<repo:输出/最终%20成片/>", "输出/最终 成片"),
+        ("<repo:outputs/literal%252F/>", "outputs/literal%2F"),
+    ])
+    func directoryMarkers(marker: String, path: String) async throws {
+        #expect(RepositoryFileLink.path(marker) == path)
+        let links = TerminalFileLinkDetector.links(rows: [row(marker)], columns: 160)
+        let link = try #require(links.first)
+        #expect(links.count == 1)
+        #expect(link.path == path)
+        #expect(link.spans == [.init(row: 0, columns: 0..<marker.count)])
+        #expect(link.contains(column: marker.count - 2, row: 0))
+        #expect(RepositoryFileLink.isValid(path: link.path))
+        var requests: [FileBrowserOperation] = []
+        let directory = "/Host/project/" + path
+        let source = FileBrowserSource(id: "host", paneID: "%1") { operation in
+            requests.append(operation)
+            return .info(.init(path: directory, name: "directory", kind: .directory, size: 0, revision: "1"))
+        }
+        let destination = try await TerminalFileDestination.resolve(path: link.path, context: context, source: source)
+        #expect(destination == .init(directory: directory, file: nil))
+        #expect(requests == [.repositoryInfo(path: path, context: context)])
+    }
+
     @Test("Truncated, malformed and escaping markers fail closed", arguments: [
         "<repo:output/file.pdf", "<repo:>", "<repo:/tmp/file>", "<repo:../file>",
         "<repo:folder/../file>", "<repo:./file>", "<repo:folder//file>", "<repo:~/file>",
         "<repo:%2Ftmp/file>", "<repo:%2e%2e/file>", "<repo:%00file>", "<repo:%0Afile>",
         "<repo:bad%GGfile>", "<repo:bad%file>", "<repo:bad%FFfile>", "<repo:bad file>",
         "<repo:bad?query>", "<repo:bad#fragment>",
+        "<repo:/>", "<repo://>", "<repo:./>", "<repo:../>", "<repo:~/>", "<repo:/tmp/folder/>",
+        "<repo:folder//>", "<repo:folder///>", "<repo:folder//child/>", "<repo:folder/../>", "<repo:folder/./>",
+        "<repo:folder/%2F>", "<repo:folder/%2e%2e/>", "<repo:%2Ftmp/folder/>", "<repo:folder/",
     ])
     func invalidProtocol(marker: String) {
         #expect(RepositoryFileLink.path(marker) == nil)
         #expect(TerminalFileLinkDetector.links(rows: [row(marker)], columns: 160).isEmpty)
     }
 
-    @Test("Every soft/hard wrap boundary preserves the complete marker", arguments: [false, true])
-    func everyWrapBoundary(soft: Bool) throws {
-        let marker = try #require(RepositoryFileLink.marker(path: "输出/第 3 集.mp4"))
+    @Test("Every soft/hard wrap boundary preserves the complete marker", arguments: [false, true], [
+        ("<repo:输出/第%203%20集.mp4>", "输出/第 3 集.mp4"),
+        ("<repo:outputs/final_films/>", "outputs/final_films"),
+        ("<repo:输出/最终%20成片%2F>", "输出/最终 成片"),
+    ])
+    func everyWrapBoundary(soft: Bool, reference: (String, String)) throws {
+        let (marker, path) = reference
         let chars = Array(marker)
         for split in 1..<chars.count {
             let second = String(chars[split...])
@@ -69,7 +103,7 @@ struct TerminalFileLinkTests {
             ], columns: 160)
             let link = try #require(links.first)
             #expect(links.count == 1)
-            #expect(link.path == "输出/第 3 集.mp4")
+            #expect(link.path == path)
             #expect(link.spans == [.init(row: 0, columns: 1..<(split + 1)),
                                    .init(row: 1, columns: 2..<(2 + second.count))])
         }
@@ -147,6 +181,7 @@ struct TerminalFileLinkTests {
 
     @Test("Invalid decoded paths fail before I/O", arguments: [
         "", "/tmp/file", "../file", "~/file", "dir/../file", "bad\0file", "bad\nfile", "bad\tfile", "bad\u{1b}file",
+        "outputs/final_films/", "dir//file",
         String(repeating: "中", count: 1400),
     ])
     func invalidDecodedPaths(path: String) async {

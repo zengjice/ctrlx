@@ -11,6 +11,7 @@ description: Present verified repository files or folders as explicit clickable 
 - Show a root-relative reference as inline code: `<repo:outputs/report.pdf>`.
   Keep both angle brackets and the complete path on one source line. Visual wrapping
   is fine. Use `<repo:.>` for the root; omit leading `./` and never use `..`.
+  For a directory, use `<repo:outputs/final_films>`; a single trailing `/` is also accepted.
 - Encode spaces and reserved characters using UTF-8 percent encoding:
   `<repo:outputs/John%27s%20report.pdf>`. Encode literal `%` as `%25`;
   also encode `< > # ? : " ' \\ ( )`. Chinese can remain literal or be percent-encoded.

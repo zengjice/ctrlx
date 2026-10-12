@@ -52,7 +52,11 @@ Compatibility with previous file-link output is deliberately dropped.
 
 Paths are relative to the **current source agent's Git worktree root**.
 A nested launch directory resolves to its worktree root, not the primary checkout.
-`<repo:.>` opens the root. No leading `./`, empty components or `..` are accepted.
+`<repo:.>` opens the root. A directory marker such as `<repo:outputs/final_films/>`
+accepts one trailing `/`, removed after percent decoding and before validation;
+the Host receives the same canonical path as `<repo:outputs/final_films>`.
+Leading `./`, absolute paths, `..`, and empty components (including repeated
+trailing or interior slashes) remain invalid. Use `<repo:.>`, not `<repo:./>`, for the root.
 Spaces and reserved punctuation use UTF-8 percent encoding; literal percent signs
 must be `%25`. Chinese may remain literal or be encoded. Decoding happens once:
 a filename containing literal `%27` must not become an apostrophe on the Host.
