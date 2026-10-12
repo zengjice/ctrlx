@@ -1,41 +1,58 @@
 # Agent Simulator 设计
 
-当前验收以 **2026-10-12 用户最新更新** 为准：本期仅覆盖**内置屏 120 Hz**，外置屏 60 Hz 推迟。默认同步与可选低延迟模式的源帧至对应原生呈现均要求 **p95 ≤100 ms**，帧率 ≥50 FPS；点击至可见响应 **p95 ≤150 ms**，暖恢复 ≤250 ms。用户明确要求“不用重试再验证，直接复用已有证据”，因此本次仅按新门槛复核既有结果，不再启动测试、补采区间或扩展设备数。历史失败记录保持原样，新结论与当时门槛分开保存。本机 P0 / P1 与跨机兼容、公开分发分别验收。
+当前验收以 **2026-10-12 用户最新更新** 为准：本期仅覆盖**内置屏 120 Hz**，外置屏 60 Hz 推迟。默认同步与可选低延迟模式的源帧至对应原生呈现均要求 **p95 ≤100 ms**，帧率 ≥50 FPS；点击至可见响应 **p95 ≤150 ms**，暖恢复 ≤250 ms。用户明确要求“不用重试再验证，直接复用已有证据”，因此本次仅按新门槛复核既有结果，不再启动性能测试、补采区间或扩展设备数；新增能力另做定向功能验证。历史失败记录保持原样，新结论与当时门槛分开保存。本机 P0 / P1 与跨机兼容、公开分发分别验收。
 
-**代码审查收尾（2026-10-12）：** 原三项 Accepted 及后续五项 P2 输入问题均已在源码修复：退出先取消并等待启动任务及其子进程，失败启动的关机清理使用未取消的任务；人工输入修订号与触摸代次分开，新的人工操作使旧 claim 失效，同时保留连续点击和键盘交错时排队的拖动、抬手；拖动合并不跨越按键或下一轮手势，各段保留自己的坐标；鼠标按下仅在从 agent 接管时请求全量取消，普通人工点击保留用户仍按住的 Shift，越界抬手通过内部 `release-touch` 命令仅释放原生端已有触点，保留按键状态；claim 等待既有人工输入队列收尾，再取消残留输入并授予控制权，两个等待点均校验是否出现新的人工操作；技能入口为 4,922 字节。此前点击回归及本轮左右 Shift 越界抬手用例均在各自修复前复现失败，修复后 66 项定向 Swift 测试全部通过，覆盖正常区域内 / 越界松开后继续输入，以及此前的连续点击、拖动、启动取消和 claim 交接回归；新增用例通过真实服务队列和视图按键事件，使用替代 HID 连接核对发出的请求，原生桥接代码编译通过。未改动的技能复用上一轮 3 项资源检查。最新日志为 `.build-local/simulator-outside-release-before.log` 与 `.build-local/simulator-outside-release-after.log`，此前输入回归日志保留，未重跑模拟器性能采样。R132 是修复前的历史签名候选，尚未重新构建包含这些修复的签名 App，也未替换正式 App 或用户插件；当前交付索引已将候选标为待更新。既有运行证据及当时的验收结论保留。
+**代码审查收尾（2026-10-12）：** 原三项 Accepted 及后续五项 P2 输入问题均已在源码修复：退出先取消并等待启动任务及其子进程，失败启动的关机清理使用未取消的任务；人工输入修订号与触摸代次分开，新的人工操作使旧 claim 失效，同时保留连续点击和键盘交错时排队的拖动、抬手；拖动合并不跨越按键或下一轮手势，各段保留自己的坐标；鼠标按下仅在从 agent 接管时请求全量取消，普通人工点击保留用户仍按住的 Shift，越界抬手通过内部 `release-touch` 命令仅释放原生端已有触点，保留按键状态；claim 等待既有人工输入队列收尾，再取消残留输入并授予控制权，两个等待点均校验是否出现新的人工操作；技能入口为 4,922 字节。此前点击回归及本轮左右 Shift 越界抬手用例均在各自修复前复现失败，修复后 66 项定向 Swift 测试全部通过，覆盖正常区域内 / 越界松开后继续输入，以及此前的连续点击、拖动、启动取消和 claim 交接回归；新增用例通过真实服务队列和视图按键事件，使用替代 HID 连接核对发出的请求，原生桥接代码编译通过。未改动的技能复用上一轮 3 项资源检查。最新日志为 `.build-local/simulator-outside-release-before.log` 与 `.build-local/simulator-outside-release-after.log`，此前输入回归日志保留，未重跑模拟器性能采样。R132 是修复前的历史签名候选，该轮尚未重建签名 App；签名交付已由下述存储能力候选补齐。既有运行证据及当时的验收结论保留。
+
+**存储能力与候选交付（2026-10-12）：** 已实现 `uninstall`、`storage`、`erase --udid`、`delete --udid` 和精确重开的 `open --udid`；普通关闭仍保留数据。CLI、生命周期、启动取消及人工接管的定向回归通过；独立 iOS 27 临时设备实测确认卸载后 App 不存在、擦除后 App / 数据清空、删除后私有清单为空，活动设备删除被拒绝，测试设备及临时目录均已回收。新增精确重开选择、删除与启动互斥、退出等待清理及失败不重试均有回归覆盖。签名 Release 候选 **20261012-184614** 同时包含此前八项审查修复；App、CLI 和两个 helper 的严格签名，以及两套随包技能与源码一致性检查通过。索引为 `.build-local/simulator-storage-build.json`，日志为同目录 `simulator-storage-tests.log`、`simulator-storage-native-fixed.log`、`simulator-storage-workspace.log`。本轮原生效果测试直接调用 coordinator，未重跑签名窗口的真人操作、真实 Codex 会话或性能采样；未受影响的历史证据继续复用。正式 App 和用户插件未替换；SwiftLint 未安装，构建阶段跳过该检查。
+
+**慢存储退出阻塞修复（2026-10-12）：** 已修复本轮 Accepted P2：启动和存储任务在等待前一并取消，继续等待各自命令退出；全局退出并行推进模拟器清理，优先断开终端管道及 control clients，再关闭浏览器，最后汇合模拟器收尾，保留 30 秒退出上限。新增回归在修复前复现浏览器 / 终端清理未执行及存储任务未取消，修复后通过，覆盖 120 秒存储操作、排队取消、延迟回收与全局截止只通知一次。定向 Swift 回归和三项技能资源检查通过；新 Release 签名候选 **20261012-193651** 已生成，严格签名、CLI 与随包技能核对通过，当前索引为 `.build-local/simulator-storage-shutdown-build.json`。前后测试日志为 `.build-local/simulator-storage-shutdown-before.log` / `simulator-storage-shutdown-after.log`；本轮通过虚拟时钟与替代进程 / 浏览器边界验证退出顺序，未重跑真实窗口退出或性能采样，正式 App 未替换。
+
+**按需录屏与基础 pinch（2026-10-12）：** 已实现 `record-start` / `record-status` / `record-stop` 与基础双指 `pinch`，复用 Apple 录屏命令和现有两触点 HID / 手势队列。101 项定向 Swift 测试及 14 项技能检查通过，覆盖延迟封装、时长 / 文件大小上限、取消 / 超时回收和输出不覆盖；此前输入、存储及退出回归通过。签名候选 **20261012-210257** 在独立 iPhone 16 / iOS 27 / standard 设备上验证横竖屏双指放大、缩小，以及手动停止、自动到时、关闭设备、正常退出四种录屏收尾，四个 H.264 MP4 全量严格解码通过，并独立查看录制中的横竖屏帧。测试调用者为 native Codex 身份 fixture，不是真实 Codex / 模型会话；本轮不补采性能或多开矩阵。原生录屏在静止画面下可能仅产生一个短帧，旋转后保留原生画布方向，这些边界已写入操作手册。随后仅补充录屏文档并更新签名包，产品代码输入保持一致，当前可审阅候选为 **20261012-210934**，索引 `.build-local/simulator-record-pinch-build.json`；实际效果证据为 `.build-local/simulator-record-pinch-acceptance/verification.json`，回归日志为 `.build-local/simulator-record-pinch-tests-final.log`。严格签名和两套随包技能核对通过；测试宿主正常退出，专用设备、录制进程和临时设备目录已回收。正式 App 与用户插件未替换，SwiftLint 未安装。
+
+**录屏退出顺序修复（2026-10-12）：** 接受“已有设备关闭任务阻塞其他录制停止”的 P2。服务退出先调用 coordinator 的 `prepareForShutdown()`，立即拒绝新增启动 / 录制、取消已登记的启动和存储任务，并行停止及回收剩余录制，再等待服务层已有关闭任务，最后完成 coordinator 的设备清理；直接调用 coordinator 退出也复用此准备步骤。保留全局 30 秒期限及既有关闭任务的等待。helper 连接创建纳入现有系统依赖边界，以测试真实服务 / coordinator 路径；分别阻塞设备 A 的封装和关机，确认设备 B 在 A 释放前已收到 SIGINT、完成文件并退出。两个用例修复前失败、修复后通过，72 项相关 Swift 回归及 14 项技能检查通过。日志为 `.build-local/simulator-record-shutdown-before.log` / `simulator-record-shutdown-after.log`；本轮不启动真实模拟器、不重复性能采样，未改动的录屏编码和 pinch 原生效果沿用上轮证据。当前签名 Release 候选 **20261012-213251** 的构建、App / CLI / helper 严格签名及两套随包技能核对通过，索引为 `.build-local/simulator-record-shutdown-build.json`。正式 App 与用户插件未替换。
 
 ## 当前能力与边界（开发维护视角）
 
-本节按当前已提交源码说明能力范围；是否已进入签名 App、完成真实效果验证，分别以文首交付状态及下方验收清单为准。面向使用 agent 的 [操作手册](../plugin/ctrlx/skills/agent-simulator/references/operations.md#capability-coverage) 独立列出相同能力范围，并提供参数、操作语义和替代方法。两处均应随接口变化维护；历史实验记录中的计划命令不代表当前接口。
+本节按当前源码说明能力范围；是否已进入签名 App、完成真实效果验证，分别以文首交付状态及下方验收清单为准。面向使用 agent 的 [操作手册](../plugin/ctrlx/skills/agent-simulator/references/operations.md#capability-coverage) 独立列出相同能力范围，并提供参数、操作语义和替代方法。两处均应随接口变化维护；历史实验记录中的计划命令不代表当前接口。
 
 ### 已实现并对外提供
 
 | 领域 | 当前接口 | 行为与边界 |
 |---|---|---|
-| 设备生命周期 | `inventory`、`open`、`devices`、`status`、`close` | 先用 `devices` 查找并复用合适的自有设备；需要另一台时才 `open`，在私有 device set 创建或复用同 runtime / 机型的已关机设备。关闭、agent 退出及隐藏空闲回收会关机，保留 App / 数据；重新打开不等于恢复出厂状态 |
-| 应用生命周期 | `install`、`launch`、`terminate`、`open-url` | 安装或更新预先编译的模拟器 `.app`；启动等待原生 Scene 激活，不代表页面内容已加载。URL 可能触发 iOS 确认，需要观察实际投递 |
+| 设备生命周期 | `inventory`、`open`、`devices`、`status`、`close`、`storage`、`erase`、`delete` | 优先复用自有设备；`open --udid` 精确重开私有设备。关闭仍保留数据；`storage` 列出私有设备、占用与活动状态，`erase` 重置指定闲置设备并保持关机，`delete` 删除指定闲置设备 |
+| 应用生命周期 | `install`、`uninstall`、`launch`、`terminate`、`open-url` | 安装或更新预先编译的模拟器 `.app`，按 bundle 卸载；卸载不等于整机重置。启动等待原生 Scene 激活，不代表页面内容已加载。URL 可能触发 iOS 确认，需要观察实际投递 |
 | 观察与定位 | `snapshot`、`wait`、`screenshot` | 原生 AX 树、观察内元素引用、标识 / 标签 / 角色定位、可见 / 消失等待、PNG 截图。元素写入前刷新 AX 并检查唯一性；仅 `--ref` 绑定此前观察的 App 进程、几何及控制代次，语义选择器查询当前界面，需确认当前 App / 页面 |
-| 触摸 | `tap`、`swipe`、`long-press`、`drag` | 单触点点击、滑动、长按、拖动及显式起始边缘手势；使用模拟器逻辑点，旋转后重新观察 |
+| 触摸 | `tap`、`swipe`、`long-press`、`drag`、`pinch` | 单触点点击、滑动、长按、拖动及显式起始边缘手势；`pinch` 同时发送两个触点，按中心和比例缩放。使用模拟器逻辑点，旋转后重新观察 |
 | 键盘与文本 | `key`、`button`、`paste` | HID 按键及修饰键组合，Home / 锁屏 / 音量键，Unicode 剪贴板粘贴和指定目标的 iOS 菜单粘贴；人工输入采用 iOS 硬件键盘输入源 |
 | 原生显示 | `show`、`show --split`、`rotate`、`display-mode` | 内嵌 Metal 画面、左右分栏、方向切换、默认同步 / 可选低延迟显示。低延迟模式可能撕裂；选择标签不保证 Mac App 自动取得前台 |
 | 环境 | `location`、`appearance`、`privacy`、`push` | 固定定位及清除定位模拟、深浅色、列举权限的 grant / revoke / reset、向指定 App 注入模拟推送；关闭时不自动恢复这些配置 |
 | 资源与服务配置 | `config`、`resources`、`metrics`，`open --profile` / `--requires` | 默认双开，数量可配置为 1...32；检查内存压力和内存 / 磁盘保留量。报告进程 footprint / CPU，支持 standard / balanced 和功能依赖保留；配置上限不等于实测容量 |
 | 诊断 | `logs`、`crashes` | 按设备与 App 身份查询有时间、条数及字节上限的日志和崩溃记录；截断和空结果均不能证明从未出错 |
+| 按需录屏 | `record-start`、`record-status`、`record-stop` | 每个自有设备同时一段，H.264 无声 MP4，最长 60 秒；首帧就绪后返回，完成封装后才发布新文件。默认关闭，关闭设备及正常退出时收尾 |
 | 所有权与编排 | `identity`、`claim`、`batch`、`run -- codex` | 校验本地调用者的进程实例与设备归属；真人输入撤销 agent 写控制权，显式 claim 才交回。每批最多 16 步，失败后停止，不回滚或自动重放；`run` 供来源终端启动新 Codex 并添加 `--no-daemon`，不能修复已运行会话的身份链 |
 
 底层运行时是 Apple CoreSimulator，当前原生传输要求版本 ≥1155.4，并依赖已安装的 Xcode / iOS runtime。CtrlX 自建显示、输入、观察、设备生命周期和所有权层；simslim 用于启动准备、服务配置校验及低频资源测量。`standard` 与 `balanced` 是同一控制实现的两种服务配置，两档都会调用内置 simslim；它们不是两套可切换的控制引擎。`--requires` / doctor 只核对服务配置，不能替代实际 App 功能测试。日常任务仅验证所选配置下的所需功能；评估 `balanced` 或用户要求对照时才比较两档，不把开发验收矩阵套入每次使用。
 
 源码入口：外部命令集合在 `CtrlxSimulatorProtocol/SimulatorBatch.swift`，参数与调用在 `CtrlxCLI/Commands/SimulatorCommands.swift`；服务路由与输入交接在 `AgentSimulatorService.swift`，设备及服务配置在 `SimulatorCoordinator.swift` / `SimulatorSlimProfile.swift`，原生边界在 `CtrlxSimulatorBridge/`，窗口输入与呈现在 `SimulatorMetalView.swift`。
 
+设备清理沿用同一 coordinator：`uninstall --device --bundle` 要求当前设备 owner / writer；`storage`、`erase --udid`、`delete --udid` 要求本地 agent 身份，仅访问 CtrlX 私有 device set。存储池包含关闭后保留的设备，因此其范围比当前 agent 的 `devices` 更广。擦除 / 删除必须显式指定一个 UUID，设备须为 Shutdown 且没有活动 handle、启动、关闭或失败关机保留；与启动共用串行入口，等待后再次检查调用进程。退出先取消已登记的启动和存储任务，再等待命令收尾；模拟器清理与浏览器及终端清理独立推进，保留全局 30 秒退出上限。不提供全量删除、强制关闭其他 agent 设备或自动清扫。
+
+`storage.allocatedBytes` 使用有界、按需的 `du` 采样，未知为 null 并报告采样错误，不把目录占用等同于系统物理空间释放量。`canModify` 只是查询时状态，写入前重新检查。重置后用 `open --udid` 重开同一设备，返回新 CtrlX ID；该参数不与 runtime / device type 混用，目标缺失或忙时明确失败，不回退到其他设备。服务配置需重新传入，默认仍为 standard；写入超时不自动重试。使用示例见 [存储操作](../plugin/ctrlx/skills/agent-simulator/references/storage.md)。
+
+基础 `pinch` 复用原有两触点 HID 传输与手势循环，不引入新的输入引擎。`--x` / `--y` 是当前显示逻辑点中的中心，`--scale` 为终点 / 起点指距（0.25...4，排除 1），`--duration-ms` 为 20...5000，默认 500。初始水平指距最多 100 点，按屏幕边界缩小以容纳两端；过近边界的中心明确拒绝。两指同事件按下、移动、抬起，沿用几何版本核验和人工接管取消；不承诺 App 最终缩放比例等于指距比例。参数示例见 [手势](../plugin/ctrlx/skills/agent-simulator/references/gestures.md)。
+
+录屏使用 `SimulatorRecorder` actor 管理私有 device set 的 `simctl io recordVideo` 子进程；`SimulatorRecordingClient` 注入创建边界。开始要求 owner / writer；查询和停止仅要求 owner，人工接管后仍可停止。首帧等待最多 10 秒，录制上限由 `--seconds 1...60` 指定（默认 60）；到时或临时文件达到 128 MiB 时发送 SIGINT，最多等 15 秒封装，超时回收进程并丢弃未完成文件。最终文件大于 128 MiB 也拒绝发布。输出卷须满足配置的磁盘保留量加文件预算；这不是磁盘预留。视频在输出目录的私有临时子目录编码，完成后以同卷硬链接原子发布到新 `.mp4` 路径，防止覆盖竞态，随后清理临时目录；强杀宿主仍可能残留录制进程及临时目录。关闭设备、owner 过期及正常退出均先收尾录屏；各设备退出收尾并行。三条命令均可用于 batch，失败不回滚此前的开始。详见 [录屏操作](../plugin/ctrlx/skills/agent-simulator/references/recording.md)。录屏保留原生设备画布，片中旋转可能横置显示；仅在显示更新时取得帧，静止画面的视频可能很短，时长参数是采集的墙钟上限，不保证播放时长。录屏直接取得 guest 画面，无音频、暂停或编辑，不申请 macOS 屏幕录制权限；编码期间存在额外负载，既有无录屏性能证据不扩展为录屏中的帧率保证。
+
 ### 当前未提供
 
 | 缺口 | 与已有能力的区别 |
 |---|---|
-| 双指缩放及其他多点手势 | 当前手势是单触点；连续发送两次单指操作不等于多点输入 |
+| 任意多点手势、双指旋转或平移 | 当前双指接口仅提供基础 `pinch`，不暴露任意触点轨迹 |
 | Mac 输入法 marked-text 组合及候选窗 | 已验证 iOS 硬件键盘输入源中的拼音；显式粘贴可以输入 Unicode，但不验证逐字符输入或组合过程 |
-| 录像、模拟器远程画面和远程控制 | 已提供本地显示和 PNG 截图，未提供面向远程 Viewer 的模拟器视频 / 输入通道 |
+| 模拟器远程画面和远程控制 | 已提供本地显示、PNG 截图及有界 MP4 录屏，未提供面向远程 Viewer 的模拟器视频 / 输入通道 |
 | 真机控制 | 当前接口面向 iOS Simulator，不控制物理 iPhone |
-| App 卸载、设备擦除 / 删除 / 显式克隆 | `install` 可安装或更新，`open` 可创建或复用；`close` 保留数据，不能用于清空测试环境 |
+| 设备显式克隆 | 已提供复用、擦除和删除，尚未提供复制一台设备作为另一份并行测试环境 |
 | Runtime 下载 / 安装 | `inventory` 只列举已安装资源，Xcode 和 runtime 由外部工作流准备 |
 | 编译与签名 App | 接受预先构建的 simulator `.app`，不封装 `xcodebuild` 构建系统，也不接受真机包冒充模拟器包 |
 
@@ -227,7 +244,7 @@ R1045 已按新契约完成一次真实 Codex 闭环：签名 R122、原生 Code
 
 R1044 有界排查：两个既有 Device Hub 进程仍在，官方 Xcode 菜单唤起后，精确路径窗口读取继续超时；单次主线程采样为 AppKit 事件等待，原因尚未证明，不重复同一启动流程，也不宣称取得原生基线。隔离 socket 的真实候选 CLI 20 次暖启动，启动至请求接收中位数 17.15 ms、p95 21.85 ms；它只测 CLI 与传输，不覆盖真实宿主、归属校验或 UI，不能从旧暖恢复分位数中直接扣除。离线检查原 26 次暖恢复，首次成功呈现前的 81 次零时间回调均在各自同一呈现代次内；每次仅一次 layout、没有记录到 drawable invalidation 或 stale callback，不支持“反复布局使首帧失效”的修改假设。当时拟分段定位暖恢复；用户随后接受 250 ms 预算，该诊断计划已取消。证据在 R122 `transport1044/`；本轮没有产品改动或模拟器启动，P0 / P1 与 20 ms 门槛保留。
 
-当前状态是“已实现并有签名候选，P0 / P1 尚未完整验收和交付”。下表优先于下方历史试验记录用于判断下一步；历史通过项保留原版本与测量边界，不因总任务未完成而一概重测，也不拼接成当前整包已通过。
+下表保留 R125 阶段的状态和当时门槛，属于历史记录；当前交付状态以文首和“当前本机 P0 / P1 收尾清单”为准。
 
 | 范围 | 已确认状态 | 下一步与停止条件 |
 |---|---|---|
@@ -244,13 +261,13 @@ R1044 有界排查：两个既有 Device Hub 进程仍在，官方 Xcode 菜单�
 
 ## 本机候选与使用入口
 
-当前可审阅候选为 **R125 / 20261011-202501**，App 位于 `/private/tmp/ctrlx-simulator-r125-display-condition1085-20261011/CtrlX.app`。固定的五份二进制、960 项产品输入及构建证据位于 `.build-local/agent-simulator-acceptance/20261004-capacity/release-125-display-condition1085/`；`delivery/candidate.json` 保存当前证据索引。相对 R124 仅三个产品输入改变，涉及 E2E 显示条件记录及测试，渲染与输入行为不变；48 项 Swift 测试、10 项资格检查测试、签名和短时实际回归通过。R124 的 29 份索引证据及签名 App 保留为基线，功能证据按未受影响范围复用，不能将历史显示预算结果升级为两种屏幕的完整资格。正式 `/Applications/CtrlX.app` 和用户 Codex 插件未替换。
+当前可审阅签名候选为 **20261012-213251**，App 位于 `.build-local/DerivedData/macOS-Simulator45/Build/Products/Release/CtrlX.app`。构建、源文件与二进制哈希、签名及验证范围见 `.build-local/simulator-record-shutdown-build.json`；此路径为增量构建产物，后续构建可能更新，使用前核对索引。候选包含此前输入 / 退出审查修复、存储命令、录屏 / pinch 及录屏退出顺序修复；实际设备效果和复用证据范围见文首。R132 和 R125 保留为历史候选，未替换正式 `/Applications/CtrlX.app` 或用户 Codex 插件。
 
 采用候选作为宿主后，在 **Settings → Agents → Codex** 选择所需配置目录，首次使用点 **Install**，已安装则点 **Refresh**。随后在该 CtrlX 本地工作台的新终端运行 `ctrlx simulator run -- codex`；已验证的 Codex 0.162.1 需要原生 `--no-daemon`，该入口自动加入。旧模型会话不会自动重新发现新增技能。帮助入口为 `ctrlx simulator --help` 和 `ctrlx help simulator run`。
 
 让新会话使用 [agent-simulator 技能](../plugin/ctrlx/skills/agent-simulator/SKILL.md)，按 `inventory → open → install → launch → snapshot → 操作 → screenshot → close` 完成闭环。`open` 返回的 `device` 是后续命令所需的 CtrlX ID；安装对象必须是 iOS Simulator `.app`。截图保存到新路径后还需实际看图，操作后核对 App 效果。完整参数、文本输入、环境命令和批处理见 [operations](../plugin/ctrlx/skills/agent-simulator/references/operations.md)。
 
-默认配置为两台、`standard` 服务配置及同步显示；`balanced` 与 `display-mode --mode low-latency` 均需显式选择，低延迟模式可能撕裂。当前尚无满足全部性能门槛的最大容量结论。`close` 关机并保留 App / 数据；真人接管后，只有再次获准的 agent 操作才能显式 `claim`。
+默认配置为两台、`standard` 服务配置及同步显示；`balanced` 与 `display-mode --mode low-latency` 均需显式选择，低延迟模式可能撕裂。当前已验收双开，四台及以上没有联合性能保证。`close` 关机并保留 App / 数据，显式重置或回收使用 `erase` / `delete`；真人接管后，只有再次获准的 agent 操作才能显式 `claim`。
 
 本机已验证 iOS 27。交付限制包括真人鼠标拖动尚未验证、缺少混合 1× / 2× 显示器实测、iOS 27 密码框逐字符删除 emoji 的原生限制，以及不完整的自绘 AX 树。Mac marked-text 输入法组合未集成，现有能力为 iOS 硬件键盘输入源与显式粘贴；密码框可用已验证的整值替换。跨 Mac / 多 Xcode、公开分发与公证单列发布验收，Claude 和 P2 不在本次范围。
 
@@ -1616,7 +1633,7 @@ R150 对四台 standard 的 helper 初始化作独立诊断，四个 open 均成
 - [x] **P0 当前候选稳定性**：R124 / R1073 已完成 1800.25 秒双开混合负载及受控故障恢复，626 组操作逐次核对、64 张 PNG 独立解码通过；三次原生标签隐藏 / 恢复、Inspector 重建、worker 故障后同 UDID 重开、数据保留和旁侧效果均通过。1932 条命令保留原始退出，一条只读 AX 在故障期间拒绝 64，其余退出 0，无未知写入；宿主 / 控制器正常退出 0，四台 Shutdown，960 项输入、五份二进制和 276 份 browser profile 一致。300 次资源记录压力正常、swap 未增长，最低空闲磁盘约 32.85 GiB。功能稳定性范围关闭，不替代显示 / 输入性能资格，也不宣称历史缺栈崩溃根因已修复。证据：`endurance1073/independent-effects-audit.json` 与 `verified-terminal-scope.json`。
 - [x] **P1 常用文本与控件已验子范围**：R124 默认短按 20 ms 的两档 UIKit / SwiftUI / WKWebView 回归完成，70 项检查（68 项状态及两项隐私检查）、四份完整安全 AX 树、四张已实际查看 PNG 均核对；逻辑文本及 UTF-16 与 R1036 已验证值一致。standard / balanced 各 35 项；普通退出、四台 Shutdown、960 项源码 / 276 份 profile 核对通过。balanced 网页截图有系统键盘滑行输入引导，字段内容仍正确，不宣称所有系统弹层均已覆盖。安全字段 emoji 逐字符退格保留原生限制，完整值替换已验证。证据：R124 `text1067/verified-common-text-scope.json`。
 - [x] **P1 功能与隔离完整审计**：R1051 已按第 7 节本次八类能力核对原始效果及源码影响，涵盖通知 / URL / 环境、生命周期、诊断、XCTest 共存、所有权和接管；R1050 / R1052 补当前稳定性与实际跨 Retina 操作。证据及支持边界见 `functional-audit1051/current-functional-requirements.json`；真人鼠标拖动按已确认契约列为限制，性能要求继续由 P0 验收。
-- [ ] **P1 审查修复后的本机签名候选交付**：原三项及后续五项审查修复、66 项定向 Swift 回归已完成，包含修复的签名候选待重建；修复前历史候选为 R132 / 20261012-093841，复用既有 61 项测试、Release 构建、严格签名、自动分栏实际效果及 R1131 双开证据。五份候选二进制和 960 项产品输入与构建记录一致；未受影响的 R124 / R125 功能及性能证据复用。最终索引为 `release-132-cli-split1124/delivery/candidate.json`，新门槛复核为同目录 `accepted-existing-evidence.json`。正式 App 和用户插件未替换，跨机兼容与公开分发另列发布验收。
+- [x] **P1 审查修复后的本机签名候选交付**：签名 Release 候选 20261012-213251 已包含此前审查修复、存储命令、录屏 / pinch 及录屏退出顺序修复。定向回归、严格签名与随包技能核对通过，当前索引为 `.build-local/simulator-record-shutdown-build.json`；iOS 27 原生功能效果的复用范围及 native 身份 fixture 的验证边界见文首。未受影响的历史功能与性能证据复用；R132 新门槛复核仍见 `release-132-cli-split1124/delivery/accepted-existing-evidence.json`。本轮未重跑真人窗口操作或真实 Codex 会话，正式 App 和用户插件未替换；跨机兼容与公开分发另列发布验收。
 
 ### 历史实现与验收记录（旧门槛不驱动当前放行）
 

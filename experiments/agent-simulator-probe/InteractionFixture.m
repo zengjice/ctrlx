@@ -43,6 +43,11 @@ static NSTimeInterval inputDownAt, inputUpAt;
 @property(nonatomic) NSUInteger taps;
 @property(nonatomic) NSUInteger drags;
 @property(nonatomic) CGPoint dragEnd;
+@property(nonatomic, strong) UIView *pinchTarget;
+@property(nonatomic, strong) UILabel *pinchContent;
+@property(nonatomic) NSUInteger pinches;
+@property(nonatomic) CGFloat pinchScale;
+@property(nonatomic) NSUInteger pinchTouches;
 @end
 @implementation InteractionFixture
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
@@ -80,10 +85,29 @@ static NSTimeInterval inputDownAt, inputUpAt;
     self.barcode = [[FixtureBarcode alloc] initWithFrame:CGRectMake(24,530,320,48)];
     self.barcode.accessibilityIdentifier = @"fixture.barcode"; self.barcode.isAccessibilityElement = YES;
     [self.view addSubview:self.barcode];
+    self.pinchTarget = [UIView new]; self.pinchTarget.backgroundColor = UIColor.systemTealColor;
+    self.pinchTarget.accessibilityIdentifier = @"fixture.pinch";
+    self.pinchContent = [UILabel new]; self.pinchContent.text = @"Pinch me";
+    self.pinchContent.textAlignment = NSTextAlignmentCenter; self.pinchContent.backgroundColor = UIColor.systemYellowColor;
+    self.pinchContent.frame = CGRectMake(0,0,80,40); [self.pinchTarget addSubview:self.pinchContent];
+    [self.pinchTarget addGestureRecognizer:[[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(pinch:)]];
+    [self.view addSubview:self.pinchTarget];
     self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(frame)];
     self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60,60,60);
     [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     [self save];
+}
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    self.pinchTarget.frame = CGRectMake(24, MIN(610, self.view.bounds.size.height - 120), self.view.bounds.size.width - 48, 100);
+    self.pinchContent.center = CGPointMake(self.pinchTarget.bounds.size.width / 2, 50);
+}
+- (void)pinch:(UIPinchGestureRecognizer *)gesture {
+    self.pinchTouches = MAX(self.pinchTouches, gesture.numberOfTouches);
+    self.pinchContent.transform = CGAffineTransformMakeScale(gesture.scale, gesture.scale);
+    if (gesture.state == UIGestureRecognizerStateEnded) {
+        self.pinches++; self.pinchScale = gesture.scale; [self save];
+    }
 }
 - (void)tap { self.taps++; self.barcode.tapNumber = (uint8_t)self.taps; [self.barcode setNeedsDisplay]; [self updateStatus]; }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)first shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)second { return YES; }
@@ -119,6 +143,7 @@ static NSTimeInterval inputDownAt, inputUpAt;
         @"dragX":@(self.dragTarget.center.x),@"dragY":@(self.dragTarget.center.y),
         @"dragEndX":@(self.dragEnd.x),@"dragEndY":@(self.dragEnd.y),@"ready":@(!self.ready.hidden),
         @"inputDownAt":@(inputDownAt),@"inputUpAt":@(inputUpAt),
+        @"pinches":@(self.pinches),@"pinchScale":@(self.pinchScale),@"pinchTouches":@(self.pinchTouches),
         @"interfaceOrientation":@(self.view.window.windowScene.interfaceOrientation),
         @"deviceOrientation":@(UIDevice.currentDevice.orientation)};
     NSData *data = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];

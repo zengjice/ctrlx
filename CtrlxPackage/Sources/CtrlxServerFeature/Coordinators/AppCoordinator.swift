@@ -44,7 +44,7 @@
         /// Tmux interaction service
         public let tmuxService: TmuxService
 
-        public let agentBrowser = AgentBrowserService()
+        public let agentBrowser: AgentBrowserService
         public let agentSimulator = AgentSimulatorService()
 
         /// Pane state and session tracking manager
@@ -291,8 +291,9 @@
         ///
         /// Synchronous initialization sets up core services. Call `setupAllServices()` asynchronously
         /// to complete service initialization and start connections.
-        public init(settings: AppSettings = AppSettings()) {
+        public init(settings: AppSettings = AppSettings(), agentBrowser: AgentBrowserService = AgentBrowserService()) {
             self.settings = settings
+            self.agentBrowser = agentBrowser
             self.licenseManager = LicenseManager(settings: settings)
 
             #if canImport(AppKit) && DEBUG
@@ -511,13 +512,14 @@
         /// how this is invoked.
         public func shutdown() async {
             await apiSocketServer.stop()
-            await agentSimulator.shutdown()
-            await agentBrowser.shutdown()
+            // Simulator commands must not consume the quit deadline before independent cleanup runs.
+            async let simulatorShutdown: Void = agentSimulator.shutdown()
             logger.info("App shutdown: disconnecting pane streams and control clients")
             windowManager.stopPeriodicSessionValidation()
             windowManager.stopPeriodicAgentReconciliation()
             await paneStreamManager.disconnectAll()
             await controlClientManager.disconnectAll()
+            await agentBrowser.shutdown()
 
             // Tear down the in-process plugin runtime: stop accepting ingress
             // frames, then `shutdown()` each active core via the registry.
@@ -528,6 +530,7 @@
                     await registry.disable(id)
                 }
             }
+            await simulatorShutdown
         }
 
         /// Resolves the tmux session name for a pane. Tries `paneStates` first

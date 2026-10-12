@@ -51,11 +51,12 @@ struct SimulatorActionCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "action",
         abstract:
-            "inventory | config | resources | identity | devices | open | status | metrics | logs | crashes | show | display-mode | snapshot | wait | tap | swipe | long-press | drag | rotate | key | button | paste | install | launch | terminate | open-url | location | appearance | privacy | push | screenshot | claim | close"
+            "inventory | config | resources | identity | devices | storage | open | erase | delete | status | metrics | logs | crashes | show | display-mode | snapshot | wait | tap | swipe | long-press | drag | pinch | rotate | key | button | paste | install | uninstall | launch | terminate | open-url | location | appearance | privacy | push | screenshot | record-start | record-stop | record-status | claim | close"
     )
     @Argument var operation: String
     @Option var socket: String?
     @Option(help: "CtrlX device ID returned by open, distinct from the simulator UDID") var device: String?
+    @Option(help: "Exact private simulator UUID from storage; open, erase or delete only. Erase/delete require an idle, shut-down device") var udid: String?
     @Option var runtime: String?
     @Option var deviceType: String?
     @Option(help: "standard (default) or balanced; applied before the app starts") var profile: String?
@@ -71,6 +72,8 @@ struct SimulatorActionCommand: ParsableCommand {
     @Option var endY: Double?
     @Option(help: "Origin edge for a system swipe: top, left, bottom or right; swipe only") var edge: SimulatorTouchEdge?
     @Option var durationMs: Int?
+    @Option(help: "Final / initial finger distance, 0.25...4 except 1; pinch only, centered at --x/--y") var scale: Double?
+    @Option(help: "Recording duration limit, 1...60, default 60; record-start only") var seconds: Int?
     @Option(help: "Hold before dragging, default 500 ms") var holdMs: Int?
     @Option(help: "Element reference from the most recent snapshot") var ref: String?
     @Option(help: "Exact accessibility identifier") var identifier: String?
@@ -97,7 +100,7 @@ struct SimulatorActionCommand: ParsableCommand {
     @Option(help: "Recent time range; logs 1...300 (default 30), crashes 1...86400 (default 3600)") var lastSeconds: Int?
     @Option(help: "Retained diagnostic bytes, 1...262144, default 65536; logs/crashes only") var maxBytes: Int?
     @Option(help: "Accessibility nodes, 1...1000, default 200") var limit: Int?
-    @Option(help: "New PNG path, required for screenshot; never overwrites") var output: String?
+    @Option(help: "New PNG path for screenshot, or absolute new MP4 path for record-start; never overwrites") var output: String?
     @Flag(help: "Start a display measurement window in an isolated --e2e-test app; status only") var resetMeasurements = false
 
     func parameters() throws -> [String: JSONValue] {
@@ -114,6 +117,14 @@ struct SimulatorActionCommand: ParsableCommand {
         if split, operation != "show" { throw ValidationError("--split requires show") }
         if modifiers != nil, operation != "key" { throw ValidationError("--modifiers requires key") }
         if edge != nil, operation != "swipe" { throw ValidationError("--edge requires swipe") }
+        if scale != nil, operation != "pinch" { throw ValidationError("--scale requires pinch") }
+        if seconds != nil, operation != "record-start" { throw ValidationError("--seconds requires record-start") }
+        if operation == "pinch" {
+            guard let x, let y, let scale, endX == nil, endY == nil, holdMs == nil else {
+                throw ValidationError("pinch requires --x, --y and --scale; no endpoint or hold options")
+            }
+            _ = try SimulatorPinch(center: SimulatorPoint(x: x, y: y), scale: scale, durationMs: durationMs ?? 500)
+        }
         let keyModifiers = modifiers.map { $0.split(separator: ",", omittingEmptySubsequences: false).map(String.init) } ?? []
         if operation == "key" {
             guard let usage else { throw ValidationError("key requires --usage") }
@@ -122,7 +133,20 @@ struct SimulatorActionCommand: ParsableCommand {
         if viaMenu, ref == nil, identifier == nil, label == nil, role == nil, x == nil || y == nil {
             throw ValidationError("Menu paste requires an element target or both --x and --y")
         }
-        if !["inventory", "config", "resources", "identity", "devices", "open"].contains(operation), device == nil {
+        if let udid {
+            guard ["open", "erase", "delete"].contains(operation), UUID(uuidString: udid) != nil,
+                  device == nil, runtime == nil, deviceType == nil else {
+                throw ValidationError("--udid requires open, erase or delete and one UUID, without --device, --runtime or --device-type")
+            }
+        }
+        if ["erase", "delete"].contains(operation), udid == nil {
+            throw ValidationError("\(operation) requires --udid from storage; close the device first")
+        }
+        if operation == "uninstall" {
+            guard let bundle else { throw ValidationError("uninstall requires --bundle") }
+            try validateSimulatorBundle(bundle)
+        }
+        if !["inventory", "config", "resources", "identity", "devices", "storage", "open", "erase", "delete"].contains(operation), device == nil {
             throw ValidationError("This operation requires --device")
         }
         if operation != "config", maxDevices != nil || memoryReserveMiB != nil || diskReserveMiB != nil {
@@ -191,10 +215,16 @@ struct SimulatorActionCommand: ParsableCommand {
             guard let output, !FileManager.default.fileExists(atPath: output) else {
                 throw ValidationError("screenshot requires --output <new.png>; existing files are preserved")
             }
+        } else if operation == "record-start" {
+            guard let output else { throw ValidationError("record-start requires --output /absolute/new.mp4") }
+            _ = try SimulatorRecordingOptions(output: output, seconds: seconds ?? 60)
         } else if output != nil {
-            throw ValidationError("Only screenshot accepts --output")
+            throw ValidationError("Only screenshot and record-start accept --output")
         }
         var params: [String: JSONValue] = ["command": .string(operation)]
+        if operation == "record-start", let output { params["output"] = .string(output) }
+        if let seconds { params["seconds"] = .int(seconds) }
+        if let scale { params["scale"] = .double(scale) }
         if split { params["split"] = .bool(true) }
         if clear { params["clear"] = .bool(true) }
         if let edge { params["edge"] = .string(edge.rawValue) }
@@ -208,7 +238,7 @@ struct SimulatorActionCommand: ParsableCommand {
         if viaMenu { params["viaMenu"] = .bool(true) }
         if modifiers != nil { params["modifiers"] = .array(keyModifiers.map(JSONValue.string)) }
         for (name, value) in [
-            ("device", device), ("runtime", runtime), ("deviceType", deviceType), ("button", button), ("text", text), ("app", app),
+            ("device", device), ("udid", udid), ("runtime", runtime), ("deviceType", deviceType), ("button", button), ("text", text), ("app", app),
             ("bundle", bundle), ("url", url), ("profile", profile), ("requires", requires), ("mode", mode),
             ("ref", ref), ("identifier", identifier), ("label", label), ("role", role), ("state", state), ("orientation", orientation),
         ] {
@@ -245,7 +275,7 @@ struct SimulatorActionCommand: ParsableCommand {
 
     func saveScreenshot(_ original: [String: JSONValue], requestedAt: Double) throws -> [String: JSONValue] {
         var result = original
-        if let output {
+        if operation == "screenshot", let output {
             guard let encoded = result["data"]?.stringValue, let data = Data(base64Encoded: encoded), data.count <= 6 * 1024 * 1024,
                 data.starts(with: [137, 80, 78, 71, 13, 10, 26, 10])
             else { throw ValidationError("Invalid simulator PNG") }

@@ -5,7 +5,7 @@ APP="${1:-$ROOT/.build-local/agent-simulator-probe/InteractionFixture.app}"
 mkdir -p "$APP"
 SDK_PATH="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 xcrun clang -O2 -fobjc-arc -fblocks -target arm64-apple-ios18.0-simulator -isysroot "$SDK_PATH" \
-  -framework UIKit -framework Foundation -framework QuartzCore \
+  -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics \
   "$ROOT/experiments/agent-simulator-probe/InteractionFixture.m" -o "$APP/InteractionFixture"
 python3 - "$APP/Info.plist" <<'PY'
 import plistlib,sys

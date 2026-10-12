@@ -150,8 +150,9 @@
             let actions = try values.enumerated().map { index, value -> [String: JSONValue] in
                 guard case let .object(action) = value, let command = action["command"]?.stringValue,
                       SimulatorOperation(rawValue: command) != nil,
-                      !action.keys.contains(where: { $0.hasPrefix("_") }), action["output"] == nil else {
-                    throw SimulatorFailure("Batch actions must be simulator operations without authority or output fields")
+                      !action.keys.contains(where: { $0.hasPrefix("_") }),
+                      action["output"] == nil || command == "record-start" else {
+                    throw SimulatorFailure("Batch actions must be simulator operations without authority fields; only record-start accepts output")
                 }
                 guard command != "screenshot" || index == values.count - 1 else {
                     throw SimulatorFailure("A batch can contain one screenshot, as its final action")
@@ -205,6 +206,24 @@
             let traceTap = command == "tap" && CommandLine.arguments.contains("--e2e-test")
             let actionStartedAt = traceTap ? ProcessInfo.processInfo.systemUptime : 0
             try validate(owner)
+            if parameters["scale"] != nil, command != "pinch" { throw SimulatorFailure("scale requires pinch") }
+            if parameters["seconds"] != nil, command != "record-start" { throw SimulatorFailure("seconds requires record-start") }
+            if parameters["output"] != nil, command != "record-start" { throw SimulatorFailure("output requires record-start") }
+            if let udid = parameters["udid"] {
+                guard ["open", "erase", "delete"].contains(command),
+                      let value = udid.stringValue, UUID(uuidString: value) != nil,
+                      parameters["device"] == nil, parameters["runtime"] == nil, parameters["deviceType"] == nil else {
+                    throw SimulatorFailure("udid requires open, erase or delete and one UUID without device, runtime or deviceType")
+                }
+            }
+            if command == "storage" { return try await coordinator.storage() }
+            if command == "erase" || command == "delete" {
+                guard let udid = parameters["udid"]?.stringValue,
+                      let operation = SimulatorOperation(rawValue: command) else {
+                    throw SimulatorFailure("\(command) requires one private device UDID from storage; close the device first")
+                }
+                return try await coordinator.modifyStorage(operation, udid: udid, owner: owner)
+            }
             if let split = parameters["split"], command != "show" || split.boolValue == nil {
                 throw SimulatorFailure("split requires show and a boolean value")
             }
@@ -255,6 +274,7 @@
                 }
                 let handle = try await coordinator.open(
                     runtime: parameters["runtime"]?.stringValue, deviceType: parameters["deviceType"]?.stringValue,
+                    udid: parameters["udid"]?.stringValue,
                     profile: profile, requires: requires,
                     frames: { frame in frames.receive(frame) },
                     errors: { [weak view] message in
@@ -328,6 +348,12 @@
                 return ["closed": .bool(true)]
             }
             if command == "screenshot" { return try await coordinator.screenshot(state.handle) }
+            if command == "record-status" { return await coordinator.recordingStatus(state.handle) }
+            if command == "record-stop" {
+                let result = await coordinator.stopRecording(state.handle)
+                if let error = result["error"]?.stringValue { throw SimulatorFailure(error) }
+                return result
+            }
             if command == "metrics" { return try await coordinator.metrics(state.handle) }
             if command == "logs" {
                 guard let bundle = parameters["bundle"]?.stringValue else { throw SimulatorFailure("logs requires a bundle identifier") }
@@ -406,6 +432,17 @@
             do {
                 var result: [String: JSONValue] = ["accepted": .bool(true)]
                 switch command {
+                case "record-start":
+                    guard let output = parameters["output"]?.stringValue,
+                          parameters["seconds"] == nil || parameters["seconds"]?.intValue != nil else {
+                        throw SimulatorFailure("record-start requires an output path and an integer duration")
+                    }
+                    let options = try SimulatorRecordingOptions(output: output, seconds: parameters["seconds"]?.intValue ?? 60)
+                    result = try await coordinator.startRecording(state.handle, options: options)
+                    do { try checkWriter() } catch {
+                        _ = await coordinator.stopRecording(state.handle)
+                        throw error
+                    }
                 case "display-mode":
                     guard let mode = SimulatorDisplayMode(rawValue: parameters["mode"]?.stringValue ?? "") else {
                         throw SimulatorFailure("display-mode requires synchronized or low-latency")
@@ -418,6 +455,10 @@
                         throw SimulatorFailure("install requires an absolute simulator .app path")
                     }
                     try await coordinator.install(state.handle, app: path)
+                case "uninstall":
+                    guard let bundle = parameters["bundle"]?.stringValue else { throw SimulatorFailure("uninstall requires a bundle identifier") }
+                    state.observation = nil
+                    try await coordinator.uninstall(state.handle, bundle: bundle)
                 case "launch", "terminate":
                     state.observation = nil
                     guard let bundle = parameters["bundle"]?.stringValue, !bundle.isEmpty, bundle.utf8.count <= 255, !bundle.hasPrefix("-")
@@ -570,10 +611,10 @@
                         try await Task.sleep(for: .milliseconds(50))
                     }
                     throw SimulatorFailure("Orientation event was sent, but the interface did not rotate; the app may lock its orientation")
-                case "tap", "swipe", "long-press", "drag":
+                case "tap", "swipe", "long-press", "drag", "pinch":
                     let selected: SimulatorPoint?
                     if parameters["ref"] != nil || parameters["identifier"] != nil || parameters["label"] != nil || parameters["role"] != nil {
-                        guard parameters["x"] == nil, parameters["y"] == nil else {
+                        guard command != "pinch", parameters["x"] == nil, parameters["y"] == nil else {
                             throw SimulatorFailure("Choose an element selector or start coordinates")
                         }
                         selected = try await resolveElement(parameters, state: state, coordinator: coordinator)
@@ -591,17 +632,27 @@
                         default: throw SimulatorFailure("Missing coordinate \(name)")
                         }
                     }
-                    let first = try geometry.normalizedDevicePoint(selected ?? SimulatorPoint(x: number("x"), y: number("y")))
-                    let last =
-                        command == "swipe" || command == "drag"
-                        ? try geometry.normalizedDevicePoint(SimulatorPoint(x: number("endX"), y: number("endY"))) : first
-                    let duration = parameters["durationMs"]?.intValue ?? (command == "tap" ? 20 : command == "long-press" ? 650 : 300)
+                    let duration = parameters["durationMs"]?.intValue ?? (command == "tap" ? 20 : command == "long-press" ? 650 : command == "pinch" ? 500 : 300)
                     guard (20...5000).contains(duration) else { throw SimulatorFailure("Gesture duration must be 20...5000 ms") }
+                    let first: [SimulatorPoint], last: [SimulatorPoint]
+                    if command == "pinch" {
+                        guard parameters["endX"] == nil, parameters["endY"] == nil, parameters["holdMs"] == nil,
+                              parameters["durationMs"] == nil || parameters["durationMs"]?.intValue != nil else {
+                            throw SimulatorFailure("pinch accepts a center, scale and integer duration, without endpoint or hold options")
+                        }
+                        let gesture = try SimulatorPinch(center: SimulatorPoint(x: number("x"), y: number("y")),
+                            scale: number("scale"), durationMs: duration)
+                        (first, last) = try gesture.contacts(in: geometry)
+                    } else {
+                        first = [try geometry.normalizedDevicePoint(selected ?? SimulatorPoint(x: number("x"), y: number("y")))]
+                        last = command == "swipe" || command == "drag"
+                            ? [try geometry.normalizedDevicePoint(SimulatorPoint(x: number("endX"), y: number("endY")))] : first
+                    }
                     let hold = parameters["holdMs"]?.intValue ?? (command == "drag" ? 500 : 0)
                     guard (0...5000).contains(hold) else { throw SimulatorFailure("Gesture hold must be 0...5000 ms") }
                     state.observation = nil
                     let downRequestedAt = traceTap ? ProcessInfo.processInfo.systemUptime : 0
-                    try await touch(state, point: first, phase: 0, geometry: geometry, edge: nativeEdge)
+                    try await touch(state, points: first, phase: 0, geometry: geometry, edge: nativeEdge)
                     let downReturnedAt = traceTap ? ProcessInfo.processInfo.systemUptime : 0
                     if hold > 0 { try await Task.sleep(for: .milliseconds(hold)); try checkWriter() }
                     let steps = command == "tap" || command == "long-press" ? 1 : max(2, duration / 16)
@@ -611,8 +662,10 @@
                             until: movementStarted.advanced(by: .milliseconds(duration * index / steps)), clock: .continuous)
                         try checkWriter()
                         let fraction = Double(index) / Double(steps)
-                        let point = SimulatorPoint(x: first.x + (last.x - first.x) * fraction, y: first.y + (last.y - first.y) * fraction)
-                        try await touch(state, point: point, phase: steps == 1 ? 2 : 1, geometry: geometry, edge: nativeEdge)
+                        let points = zip(first, last).map { start, end in
+                            SimulatorPoint(x: start.x + (end.x - start.x) * fraction, y: start.y + (end.y - start.y) * fraction)
+                        }
+                        try await touch(state, points: points, phase: steps == 1 ? 2 : 1, geometry: geometry, edge: nativeEdge)
                     }
                     if traceTap {
                         result["inputTiming"] = .object([
@@ -631,10 +684,10 @@
                         // Repeat the endpoint within this gesture before lifting.
                         try await Task.sleep(for: .milliseconds(16))
                         try checkWriter()
-                        try await touch(state, point: last, phase: 1, geometry: geometry, edge: nativeEdge)
+                        try await touch(state, points: last, phase: 1, geometry: geometry, edge: nativeEdge)
                         try await Task.sleep(for: .milliseconds(16))
                         try checkWriter()
-                        try await touch(state, point: last, phase: 2, geometry: geometry, edge: nativeEdge)
+                        try await touch(state, points: last, phase: 2, geometry: geometry, edge: nativeEdge)
                     }
                 case "key":
                     guard let usage = parameters["usage"]?.intValue else {
@@ -1059,12 +1112,20 @@
             _ state: SimulatorTabState, point: SimulatorPoint, phase: Int, geometry: SimulatorGeometry,
             edge: Int = 0, receivedAt: Double = 0, cancelBeforeTouch: Bool = false, taskStartedAt: Double = 0
         ) async throws {
+            try await touch(state, points: [point], phase: phase, geometry: geometry, edge: edge,
+                receivedAt: receivedAt, cancelBeforeTouch: cancelBeforeTouch, taskStartedAt: taskStartedAt)
+        }
+
+        private func touch(
+            _ state: SimulatorTabState, points: [SimulatorPoint], phase: Int, geometry: SimulatorGeometry,
+            edge: Int = 0, receivedAt: Double = 0, cancelBeforeTouch: Bool = false, taskStartedAt: Double = 0
+        ) async throws {
             let requestStartedAt = receivedAt > 0 ? ProcessInfo.processInfo.systemUptime : 0
             let result = try await state.handle.worker.request([
                 "command": .string("touch"), "phase": .int(phase), "cancelBeforeTouch": .bool(cancelBeforeTouch),
                 "edge": .int(edge),
                 "epoch": .string(geometry.epoch), "geometryVersion": .int(Int(geometry.geometryVersion)),
-                "points": .array([.object(["x": .double(point.x), "y": .double(point.y)])]),
+                "points": .array(points.map { .object(["x": .double($0.x), "y": .double($0.y)]) }),
             ])
             if CommandLine.arguments.contains("--e2e-test"), case .double(let submittedAt)? = result["submittedAt"],
                 case .double(let enqueuedAt)? = result["enqueuedAt"]
@@ -1251,6 +1312,8 @@
                 state.view.close()
             }
             tabs.removeAll()
+            // Stop every recorder before an existing close can consume the host's exit deadline.
+            await coordinator?.prepareForShutdown()
             while let cleanup = closeTasks.values.first { await cleanup.value }
             await coordinator?.shutdown()
         }

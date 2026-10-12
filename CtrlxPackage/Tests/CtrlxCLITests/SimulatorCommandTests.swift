@@ -8,6 +8,78 @@ import Testing
 @testable import CtrlxCLI
 
 struct SimulatorCommandTests {
+    @Test func recordingAndPinchSurviveBatchEncodingWithoutTreatingVideoAsPNG() throws {
+        let batch = try SimulatorBatchCommand.parse(["--input", "/unused.json"])
+        let prepared = try batch.prepare(JSONEncoder().encode([
+            ["record-start", "--device", "owned", "--output", "/tmp/recording.mp4", "--seconds", "10"],
+            ["pinch", "--device", "owned", "--x", "180", "--y", "300", "--scale", "2", "--duration-ms", "500"],
+            ["record-stop", "--device", "owned"],
+        ]))
+        guard case let .array(rows)? = prepared.parameters["actions"],
+              case let .object(record) = rows[0], case let .object(pinch) = rows[1] else {
+            Issue.record("Missing recording/pinch actions"); return
+        }
+        #expect(record["output"] == .string("/tmp/recording.mp4"))
+        #expect(pinch["scale"] == .double(2))
+        #expect(pinch["durationMs"] == .int(500))
+        let video: [String: JSONValue] = ["state": .string("recording"), "path": .string("/tmp/recording.mp4")]
+        #expect(try prepared.actions[0].saveScreenshot(video, requestedAt: 0) == video)
+    }
+
+    @Test(arguments: [
+        ["record-start", "--device", "d"],
+        ["record-start", "--device", "d", "--output", "relative.mp4"],
+        ["record-start", "--device", "d", "--output", "/tmp/record.mov"],
+        ["record-start", "--device", "d", "--output", "/tmp/record.mp4", "--seconds", "61"],
+        ["record-stop", "--device", "d", "--seconds", "5"],
+        ["pinch", "--device", "d", "--x", "100", "--y", "100"],
+        ["pinch", "--device", "d", "--x", "100", "--y", "100", "--scale", "nan"],
+        ["pinch", "--device", "d", "--x", "100", "--y", "100", "--scale", "1"],
+        ["pinch", "--device", "d", "--x", "100", "--y", "100", "--scale", "2", "--end-x", "200"],
+        ["tap", "--device", "d", "--scale", "2"],
+    ]) func invalidRecordingOrPinchIsRejected(_ arguments: [String]) throws {
+        let command = try SimulatorActionCommand.parse(arguments)
+        #expect(throws: (any Error).self) { try command.parameters() }
+    }
+
+    @Test(arguments: ["open", "erase", "delete"])
+    func storageTargetsSurviveBatchEncoding(_ operation: String) throws {
+        let udid = UUID().uuidString
+        let batch = try SimulatorBatchCommand.parse(["--input", "/unused.json"])
+        let prepared = try batch.prepare(JSONEncoder().encode([[operation, "--udid", udid]]))
+        guard case let .array(actions)? = prepared.parameters["actions"], case let .object(action) = actions[0] else {
+            Issue.record("Missing storage action"); return
+        }
+        #expect(action["command"]?.stringValue == operation)
+        #expect(action["udid"]?.stringValue == udid)
+        #expect(action["device"] == nil)
+    }
+
+    @Test(arguments: [
+        ["erase"], ["delete", "--udid", "all"], ["erase", "--udid", "../outside"],
+        ["status", "--udid", "00000000-0000-0000-0000-000000000001"],
+        ["open", "--udid", "00000000-0000-0000-0000-000000000001", "--runtime", "runtime"],
+        ["delete", "--udid", "00000000-0000-0000-0000-000000000001", "--device", "other"],
+        ["uninstall", "--device", "device"], ["uninstall", "--bundle", "com.example.app"],
+        ["uninstall", "--device", "device", "--bundle", "com.example/other"],
+    ]) func invalidStorageAndUninstallTargetsNeverContactHost(_ arguments: [String]) throws {
+        let calls = Mutex(0)
+        let action = try SimulatorActionCommand.parse(arguments)
+        withDependencies {
+            $0[SimulatorCommandClient.self].send = { _, _, _, _ in
+                calls.withLock { $0 += 1 }
+                throw CLIError.connectionFailed
+            }
+        } operation: { #expect(throws: (any Error).self) { try action.run() } }
+        #expect(calls.withLock { $0 } == 0)
+    }
+
+    @Test func storageListsWithoutDeviceAndUninstallKeepsExactBundle() throws {
+        #expect(try SimulatorActionCommand.parse(["storage"]).parameters() == ["command": .string("storage")])
+        let action = try SimulatorActionCommand.parse(["uninstall", "--device", "owned", "--bundle", "com.example.app"])
+        #expect(try action.parameters() == ["command": .string("uninstall"), "device": .string("owned"), "bundle": .string("com.example.app")])
+    }
+
     @Test func showSplitIsExplicitAndSurvivesBatchEncoding() throws {
         let device = UUID().uuidString
         let normal = try SimulatorActionCommand.parse(["show", "--device", device])

@@ -39,6 +39,7 @@ swap and free disk. Boot requires normal pressure and the configured reserves.
 `close`, agent exit or ten hidden idle minutes shuts down the device, keeping data.
 `open` reuses a shut-down device of the same runtime/type or creates one.
 Reuse preserves apps/data but assigns a new CtrlX ID and live owner.
+Read operations for cleanup, `pinch` and `record-start` / `record-stop`.
 
 `show --device <id>` selects an owned tab; add `--split` to place it in the right
 pane. Repeating `--split` preserves that placement.
@@ -79,5 +80,5 @@ acting. Timed-out writes are never retried automatically.
 
 Current native transport requires CoreSimulator 1155.4 or newer. Simulator
 display/input do not use screen recording, desktop mouse automation or a Relay.
-Read [operations](references/operations.md) for targets, gestures and environment commands. Verify effects.
+Read [operations](references/operations.md) for targets, storage, gestures, recording and environment.
 `batch --input actions.json` runs up to 16 actions; see operations.

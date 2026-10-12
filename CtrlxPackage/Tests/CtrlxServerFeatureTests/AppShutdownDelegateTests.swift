@@ -1,8 +1,12 @@
 #if os(macOS)
     import Clocks
     import ConcurrencyExtras
+    import CtrlxBrowserBridge
     import CtrlxCommon
     import CtrlxEncryption
+    import CtrlxNetworking
+    import CtrlxSimulatorProtocol
+    import Darwin
     import Dependencies
     import Foundation
     import Testing
@@ -11,6 +15,101 @@
     @Suite("AppShutdownDelegate")
     @MainActor
     struct AppShutdownDelegateTests {
+        @MainActor
+        private final class Runtime: NSObject, @preconcurrency CXBrowserRuntime {
+            var didFinishShutdown = false
+            func start(with delegate: any CXBrowserHostDelegate, profile: String, state: String) throws {}
+            func isReady() -> Bool { true }
+            func startupError() -> String? { nil }
+            func openManualTab(route: [String: String], url: String, completion: @escaping (String?) -> Void) { completion(nil) }
+            func navigateTab(_ identifier: String, url: String) {}
+            func goBack(_ identifier: String) {}
+            func goForward(_ identifier: String) {}
+            func reloadTab(_ identifier: String) {}
+            func showDevTools(_ identifier: String) {}
+            func closeTab(_ identifier: String) {}
+            func beginShutdown() {}
+            func finishShutdown() -> Bool { didFinishShutdown = true; return true }
+        }
+
+        @Test("Slow storage cannot delay browser and terminal cleanup past the quit deadline")
+        func slowStorageDoesNotBlockOtherShutdownServices() async throws {
+            try await withMainSerialExecutor {
+                let clock = TestClock()
+                let entered = AsyncStream<Void>.makeStream()
+                let release = AsyncStream<Void>.makeStream()
+                let cleanupFinished = AsyncStream<Void>.makeStream()
+                // The process has received cancellation but has not finished reaping yet.
+                let reap = Task { for await _ in release.stream { break } }
+                let owner = SimulatorOwner(pid: 10, uid: getuid(), startSeconds: 100, startMicros: 1)
+                let udid = UUID().uuidString
+                let inventory = try JSONSerialization.data(withJSONObject: [
+                    "devices": ["runtime": [["udid": udid, "state": "Shutdown"]]],
+                ])
+                let runner = ProcessRunner(run: { _, arguments, _, _ in
+                    if arguments.contains("erase") {
+                        entered.continuation.yield(())
+                        await reap.value
+                        try Task.checkCancellation()
+                    }
+                    return ProcessResult(exitCode: 0, stdout: inventory, stderr: Data())
+                })
+                var system = SimulatorSystemClient()
+                system.createDirectory = { _ in }
+                system.inspect = { _ in SimulatorProcess(owner: owner, parentPID: 1, executable: "/fixture/codex") }
+                let apiStopped = LockIsolated(false)
+                let replies = LockIsolated(0)
+                await withDependencies {
+                    $0.continuousClock = clock
+                    $0[PreferencesService.self] = .inMemory()
+                    $0[SecretsService.self] = .inMemory()
+                    $0[SimulatorSystemClient.self] = system
+                    $0[ProcessRunner.self] = runner
+                    $0[APISocketServer.self] = APISocketServer(stop: { apiStopped.setValue(true) })
+                } operation: { @MainActor in
+                    let runtime = Runtime()
+                    let settings = AppSettings()
+                    settings.tmuxPath = "/nonexistent-ctrlx-shutdown-test"
+                    let coordinator = AppCoordinator(settings: settings, agentBrowser: AgentBrowserService(runtime: runtime))
+                    coordinator.agentSimulator.start(root: URL(fileURLWithPath: "/unused-shutdown-test")) { _ in
+                        throw SimulatorFailure("Storage does not resolve a pane")
+                    }
+                    let storage = Task {
+                        await coordinator.agentSimulator.handle(JSONRPCRequest(id: "erase", method: "simulator.action", params: [
+                            "_peerPID": .int(Int(owner.pid)), "command": .string("erase"), "udid": .string(udid),
+                        ]))
+                    }
+                    for await _ in entered.stream { break }
+                    let delegate = AppShutdownDelegate()
+                    delegate.replyHandler = { replies.withValue { $0 += 1 } }
+                    delegate.onShouldTerminate = {
+                        await coordinator.shutdown()
+                        cleanupFinished.continuation.yield(())
+                    }
+                    #expect(delegate.applicationShouldTerminate(.shared) == .terminateLater)
+                    await Task.megaYield()
+                    await clock.advance(by: .seconds(29))
+                    #expect(apiStopped.value)
+                    #expect(runtime.didFinishShutdown)
+                    #expect(replies.value == 0)
+                    var terminalsClosed = false
+                    do {
+                        _ = try await coordinator.controlClientManager.getClient(for: "must-stay-disconnected")
+                    } catch {
+                        if case TmuxControlError.notConnected = error { terminalsClosed = true }
+                    }
+                    #expect(terminalsClosed)
+                    await clock.advance(by: .seconds(1))
+                    #expect(replies.value == 1)
+                    release.continuation.yield(())
+                    _ = await storage.value
+                    for await _ in cleanupFinished.stream { break }
+                    await Task.megaYield()
+                    #expect(replies.value == 1)
+                }
+            }
+        }
+
         @Test("Coordinator shutdown removes its listening API socket")
         func coordinatorShutdownStopsAPIServer() async throws {
             let server = LiveAPISocketServer()

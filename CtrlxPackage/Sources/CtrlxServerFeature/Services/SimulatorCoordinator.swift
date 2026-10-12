@@ -30,6 +30,8 @@
         var write: @Sendable (Data, URL) throws -> Void
         var remove: @Sendable (URL) throws -> Void
         var isExecutable: @Sendable (URL) -> Bool = { _ in false }
+        var connect: @Sendable (String, @escaping @Sendable (CXSimulatorFrame) -> Void,
+            @escaping @Sendable (String) -> Void) throws -> SimulatorTransport
     }
 
     extension SimulatorSystemClient: DependencyKey {
@@ -99,7 +101,8 @@
                 guard chmod(url.path, 0o600) == 0 else { throw SimulatorFailure("Cannot protect simulator state file") }
             },
             remove: { try FileManager.default.removeItem(at: $0) },
-            isExecutable: { FileManager.default.isExecutableFile(atPath: $0.path) }
+            isExecutable: { FileManager.default.isExecutableFile(atPath: $0.path) },
+            connect: { SimulatorTransport(serviceName: $0, frames: $1, errors: $2) }
         )
     }
 
@@ -207,6 +210,9 @@
         private let helper: URL
         private let hostDiagnostics: URL
         private let resources: SimulatorResourceClient
+        private let recordingClient: SimulatorRecordingClient
+        private var recordings: [UUID: SimulatorRecorder] = [:]
+        private var recordingStarts = Set<UUID>()
         private var savedConfiguration: SimulatorConfiguration?
         private var slimCatalogue: (categories: [SimulatorSlimCategory], features: [SimulatorSlimFeature])?
         static let simslimCommit = "e752a72898ca69f703c74dc79b7b047a4f2093a3"
@@ -217,6 +223,7 @@
         private var workerServices: [UUID: String] = [:]
         private var booting = false
         private var bootTasks: [UUID: Task<SimulatorDeviceHandle, Error>] = [:]
+        private var storageTasks: [UUID: Task<[String: JSONValue], Error>] = [:]
         private var shuttingDown = false
         private var pendingDevices = Set<String>()
         private var failedShutdownDevices = Set<String>()
@@ -235,6 +242,8 @@
             self.system = system
             self.resources = resources
             self.hostDiagnostics = hostDiagnostics
+            @Dependency(SimulatorRecordingClient.self) var recordingClient
+            self.recordingClient = recordingClient
         }
 
         func configuration(maximumDevices: Int? = nil, memoryReserveMiB: Int? = nil, diskReserveMiB: Int? = nil) throws
@@ -439,6 +448,98 @@
             return try JSONDecoder().decode([String: JSONValue].self, from: result.stdout)
         }
 
+        private var reservedDevices: Set<String> {
+            Set(handles.values.map(\.udid)).union(pendingDevices).union(failedShutdownDevices)
+        }
+
+        private func storedDevices(in inventory: [String: JSONValue]) throws -> [[String: JSONValue]] {
+            guard let groups = inventory["devices"]?.objectValue else {
+                throw SimulatorFailure("The private simulator device list is unavailable")
+            }
+            return try groups.keys.sorted().flatMap { runtime -> [[String: JSONValue]] in
+                guard case let .array(values)? = groups[runtime] else { throw SimulatorFailure("Invalid private simulator device list") }
+                return try values.map { value in
+                    guard var row = value.objectValue, let udid = row["udid"]?.stringValue, UUID(uuidString: udid) != nil else {
+                        throw SimulatorFailure("Invalid private simulator UDID")
+                    }
+                    row["runtime"] = .string(runtime)
+                    return row
+                }
+            }
+        }
+
+        func storage() async throws -> [String: JSONValue] {
+            let devices = try storedDevices(in: await inventory())
+            var sizes: [String: Int] = [:]
+            var usageError: String?
+            if !devices.isEmpty {
+                let paths = devices.compactMap { $0["udid"]?.stringValue }.map { deviceSet.appendingPathComponent($0).path }
+                do {
+                    let usage = try await runner.runBounded("/usr/bin/du", ["-sk"] + paths, nil, 15, 65536)
+                    guard usage.isSuccess, !usage.outputTruncated else {
+                        throw SimulatorFailure("Private device disk usage is incomplete: \(usage.stderrString)")
+                    }
+                    for line in usage.stdoutString.split(separator: "\n") {
+                        let fields = line.split(separator: "\t", maxSplits: 1)
+                        guard fields.count == 2, let kib = Int(fields[0]), kib >= 0, kib <= Int.max / 1024 else { continue }
+                        sizes[String(fields[1])] = kib * 1024
+                    }
+                } catch { usageError = error.localizedDescription }
+            }
+            let reserved = reservedDevices
+            let rows = devices.map { device -> JSONValue in
+                var row = device
+                let udid = device["udid"]!.stringValue!
+                row["inUse"] = .bool(reserved.contains(udid))
+                row["canModify"] = .bool(!reserved.contains(udid) && device["state"]?.stringValue == "Shutdown")
+                row["allocatedBytes"] = sizes[deviceSet.appendingPathComponent(udid).path].map(JSONValue.int) ?? .null
+                return .object(row)
+            }
+            var result: [String: JSONValue] = ["devices": .array(rows), "deviceSet": .string(deviceSet.path)]
+            if let usageError { result["diskUsageError"] = .string(usageError) }
+            return result
+        }
+
+        func modifyStorage(_ operation: SimulatorOperation, udid: String, owner: SimulatorOwner) async throws -> [String: JSONValue] {
+            guard operation == .erase || operation == .delete, let uuid = UUID(uuidString: udid) else {
+                throw SimulatorFailure("Storage changes require erase or delete and one private device UUID")
+            }
+            try Task.checkCancellation()
+            guard !shuttingDown else { throw SimulatorFailure("Simulator host is shutting down") }
+            let id = UUID()
+            let task = Task { try await changeStorage(operation, uuid: uuid, owner: owner) }
+            storageTasks[id] = task
+            defer { storageTasks.removeValue(forKey: id) }
+            return try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        }
+
+        private func changeStorage(_ operation: SimulatorOperation, uuid: UUID, owner: SimulatorOwner) async throws -> [String: JSONValue] {
+            // Share boot admission so a shutdown device cannot be reused during erase/delete.
+            await acquireBoot()
+            defer { releaseBoot() }
+            try Task.checkCancellation()
+            guard !shuttingDown else { throw SimulatorFailure("Simulator host is shutting down") }
+            let devices = try storedDevices(in: await inventory())
+            guard let device = devices.first(where: { $0["udid"]?.stringValue.flatMap(UUID.init(uuidString:)) == uuid }),
+                  let target = device["udid"]?.stringValue else {
+                throw SimulatorFailure("The requested device is not in CtrlX's private device set")
+            }
+            guard device["state"]?.stringValue == "Shutdown", !reservedDevices.contains(target) else {
+                throw SimulatorFailure("The device is in use or not shut down; close it before \(operation.rawValue)")
+            }
+            guard !shuttingDown, try system.inspect(owner.pid).owner == owner else {
+                throw SimulatorFailure("The simulator host or calling agent closed before the storage change")
+            }
+            pendingDevices.insert(target)
+            defer { pendingDevices.remove(target) }
+            _ = try await simctl([operation.rawValue, target], timeout: 120)
+            return ["udid": .string(target), operation == .erase ? "erased" : "deleted": .bool(true)]
+        }
+
         private func acquireBoot() async {
             if !booting {
                 booting = true
@@ -451,7 +552,8 @@
         }
 
         func open(
-            runtime requestedRuntime: String?, deviceType requestedType: String?, profile: SimulatorProfile = .standard,
+            runtime requestedRuntime: String?, deviceType requestedType: String?, udid requestedUDID: String? = nil,
+            profile: SimulatorProfile = .standard,
             requires: [String] = [], frames: @escaping @Sendable (CXSimulatorFrame) -> Void,
             errors: @escaping @Sendable (String) -> Void
         ) async throws -> SimulatorDeviceHandle {
@@ -459,7 +561,7 @@
             guard !shuttingDown else { throw SimulatorFailure("Simulator host is shutting down") }
             let id = UUID()
             let task = Task {
-                try await boot(runtime: requestedRuntime, deviceType: requestedType, profile: profile,
+                try await boot(runtime: requestedRuntime, deviceType: requestedType, udid: requestedUDID, profile: profile,
                                requires: requires, frames: frames, errors: errors)
             }
             bootTasks[id] = task
@@ -472,7 +574,7 @@
         }
 
         private func boot(
-            runtime requestedRuntime: String?, deviceType requestedType: String?, profile: SimulatorProfile,
+            runtime requestedRuntime: String?, deviceType requestedType: String?, udid requestedUDID: String?, profile: SimulatorProfile,
             requires: [String], frames: @escaping @Sendable (CXSimulatorFrame) -> Void,
             errors: @escaping @Sendable (String) -> Void
         ) async throws -> SimulatorDeviceHandle {
@@ -490,6 +592,20 @@
                 throw SimulatorFailure("Simulator helper is missing. Build and embed CtrlxSimulatorHost first")
             }
             let inventory = try await inventory()
+            let selected: [String: JSONValue]?
+            if let requestedUDID {
+                guard let uuid = UUID(uuidString: requestedUDID), requestedRuntime == nil, requestedType == nil else {
+                    throw SimulatorFailure("Choose one private device UUID or runtime/device type")
+                }
+                guard let device = try storedDevices(in: inventory).first(where: { $0["udid"]?.stringValue.flatMap(UUID.init(uuidString:)) == uuid }),
+                      let udid = device["udid"]?.stringValue, device["state"]?.stringValue == "Shutdown",
+                      device["isAvailable"]?.boolValue == true, !reservedDevices.contains(udid) else {
+                    throw SimulatorFailure("The requested private simulator is unavailable, in use or not shut down")
+                }
+                selected = device
+            } else { selected = nil }
+            let runtimeSelection = selected?["runtime"]?.stringValue ?? requestedRuntime
+            let typeSelection = selected?["deviceTypeIdentifier"]?.stringValue ?? requestedType
             guard case .array(let rawRuntimes) = inventory["runtimes"] else {
                 throw SimulatorFailure("No simulator runtimes are installed")
             }
@@ -502,7 +618,7 @@
             guard !runtimes.isEmpty else {
                 throw SimulatorFailure("No available iOS Simulator runtime is installed. Install a runtime in Xcode Settings → Platforms")
             }
-            guard let runtime = runtimes.first(where: { requestedRuntime == nil || $0["identifier"]?.stringValue == requestedRuntime }),
+            guard let runtime = runtimes.first(where: { runtimeSelection == nil || $0["identifier"]?.stringValue == runtimeSelection }),
                 let runtimeID = runtime["identifier"]?.stringValue
             else { throw SimulatorFailure("The requested iOS runtime is unavailable") }
             guard case .array(let types) = runtime["supportedDeviceTypes"] else {
@@ -510,16 +626,16 @@
             }
             guard
                 let type = types.compactMap(\.objectValue).first(where: {
-                    $0["productFamily"]?.stringValue == "iPhone" && (requestedType == nil || $0["identifier"]?.stringValue == requestedType)
+                    $0["productFamily"]?.stringValue == "iPhone" && (typeSelection == nil || $0["identifier"]?.stringValue == typeSelection)
                 }),
                 let typeID = type["identifier"]?.stringValue
             else { throw SimulatorFailure("The requested iPhone device type is unsupported by this runtime") }
             let id = UUID()
             let name = "CtrlX · \(type["name"]?.stringValue ?? "iPhone")"
-            let reserved = Set(handles.values.map(\.udid)).union(pendingDevices)
+            let reserved = reservedDevices
             let devices: [JSONValue]
             if case .array(let values) = inventory["devices"]?.objectValue?[runtimeID] { devices = values } else { devices = [] }
-            let existing = devices.compactMap(\.objectValue).first {
+            let existing = selected?["udid"]?.stringValue ?? devices.compactMap(\.objectValue).first {
                     $0["isAvailable"]?.boolValue == true && $0["state"]?.stringValue == "Shutdown"
                         && $0["deviceTypeIdentifier"]?.stringValue == typeID && $0["name"]?.stringValue == name
                         && $0["udid"]?.stringValue.map { !reserved.contains($0) } == true
@@ -540,7 +656,7 @@
                 guard !shuttingDown else { throw SimulatorFailure("Simulator host is shutting down") }
                 try configuration.admit(resourceSnapshot())
                 let service = try await startHelper(udid: udid, role: "worker", id: id)
-                let worker = SimulatorTransport(serviceName: service, frames: frames, errors: errors)
+                let worker = try system.connect(service, frames, errors)
                 do {
                     // Cold CoreSimulator initialization must finish before the input connection deadline starts.
                     _ = try await worker.request([
@@ -685,7 +801,7 @@
                 inspector = cached.transport
             } else {
                 let service = try await startHelper(udid: handle.udid, role: "inspector", id: handle.id)
-                inspector = SimulatorTransport(serviceName: service, frames: { $0.finish() })
+                inspector = try system.connect(service, { $0.finish() }, { _ in })
                 guard handles[handle.id] != nil else {
                     await inspector.invalidate()
                     await stopHelper(service)
@@ -772,8 +888,49 @@
             _ = try await simctl(["install", handle.udid, app], timeout: 120)
         }
 
+        func uninstall(_ handle: SimulatorDeviceHandle, bundle: String) async throws {
+            try validateSimulatorBundle(bundle)
+            _ = try await simctl(["uninstall", handle.udid, bundle], timeout: 120)
+        }
+
+        func startRecording(_ handle: SimulatorDeviceHandle, options: SimulatorRecordingOptions) async throws -> [String: JSONValue] {
+            guard !recordingStarts.contains(handle.id) else { throw SimulatorFailure("Recording is already starting on this device") }
+            recordingStarts.insert(handle.id)
+            defer { recordingStarts.remove(handle.id) }
+            if let recorder = recordings[handle.id] {
+                let state = await recorder.status()["state"]?.stringValue
+                guard state == "completed" || state == "failed" else { throw SimulatorFailure("This device already has an active recording") }
+            }
+            try Task.checkCancellation()
+            guard !shuttingDown, handles[handle.id] != nil else { throw SimulatorFailure("Simulator closed before recording could start") }
+            let reserve = try configuration().diskReserveMiB
+            let available = try resources.read(options.output.deletingLastPathComponent()).freeDiskBytes
+            guard available >= UInt64(reserve) * 1024 * 1024 + UInt64(SimulatorRecordingOptions.maximumBytes) else {
+                throw SimulatorFailure("Not enough recording disk space above the configured reserve")
+            }
+            let recorder = try recordingClient.make(deviceSet, handle.udid, options)
+            recordings[handle.id] = recorder
+            return try await recorder.start()
+        }
+
+        func recordingStatus(_ handle: SimulatorDeviceHandle) async -> [String: JSONValue] {
+            guard let recorder = recordings[handle.id] else { return ["state": .string("idle")] }
+            return await recorder.status()
+        }
+
+        func stopRecording(_ handle: SimulatorDeviceHandle) async -> [String: JSONValue] {
+            guard let recorder = recordings[handle.id] else { return ["state": .string("idle")] }
+            return await recorder.stop()
+        }
+
         func close(_ handle: SimulatorDeviceHandle, shutdown: Bool) async throws {
             guard handles.removeValue(forKey: handle.id) != nil else { return }
+            pendingDevices.insert(handle.udid)
+            defer { pendingDevices.remove(handle.udid) }
+            if let recorder = recordings.removeValue(forKey: handle.id) {
+                let result = await recorder.stop(closing: true)
+                if let error = result["error"]?.stringValue { logger.warning("Simulator recording cleanup: \(error)") }
+            }
             do { _ = try await handle.worker.request(["command": .string("cancel")]) } catch {
                 logger.warning("Simulator input cleanup failed: \(error)")
             }
@@ -815,11 +972,24 @@
             guard failedShutdownDevices.isEmpty else { throw SimulatorFailure("Simulator shutdown recovery is incomplete") }
         }
 
-        func shutdown() async {
+        func prepareForShutdown() async {
             shuttingDown = true
+            for task in bootTasks.values { task.cancel() }
+            for task in storageTasks.values { task.cancel() }
+            // Cancel both groups before waiting: either can be holding the shared admission lock.
+            await withTaskGroup(of: Void.self) { group in
+                for recorder in recordings.values { group.addTask { _ = await recorder.stop(closing: true) } }
+            }
+        }
+
+        func shutdown() async {
             let starting = Array(bootTasks.values)
-            for task in starting { task.cancel() }
+            let changingStorage = Array(storageTasks.values)
+            await prepareForShutdown()
+            for task in changingStorage { _ = await task.result }
             for task in starting { _ = await task.result }
+            await acquireBoot()
+            defer { releaseBoot() }
             let active = Array(handles.values)
             await withTaskGroup(of: Void.self) { group in
                 for handle in active {

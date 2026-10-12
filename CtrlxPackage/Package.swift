@@ -399,6 +399,7 @@ var targets: [Target] = [
             .vapor,
             .dependencies,
             .dependenciesMacros,
+            .clocks,
         ] + macOnlyTargetDependencies(for: "CtrlxServerFeature"),
         resources: [
             .process("Resources"),

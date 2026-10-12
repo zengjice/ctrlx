@@ -9,16 +9,17 @@ Requires Xcode, an installed iOS runtime and CoreSimulator 1155.4 or newer.
 
 | Area | Supported controls |
 |---|---|
-| Devices | Start with `devices` and reuse a suitable owned device. `inventory` lists installed runtimes/types; `open` creates/reuses a shut-down private device; `status` inspects and `close` shuts it down, preserving data. |
-| Apps | `install` installs/updates a prebuilt simulator `.app`; `launch`, `terminate`, `open-url` start/stop apps or deliver URLs. Launch waits for Scene activation, not loaded content; URLs may need iOS confirmation. |
+| Devices | `devices` lists owned tabs; reuse before `open`. `inventory` lists runtimes/types; `open --udid` selects a private guest. `status` inspects; `close` shuts down, keeping data. `storage` lists private guests/bytes; `erase` resets and `delete` removes a specified idle guest. |
+| Apps | `install`, `uninstall`, `launch`, `terminate`, `open-url`: install/remove apps, start/stop or deliver URLs. Install needs a simulator `.app`; launch waits for Scene activation, not page content; URLs may need confirmation. |
 | Observe | `snapshot`, `wait`, `screenshot`: AX nodes/references, semantic selectors, visible/absent waits and PNG to a new path. |
-| Touch | `tap`, `swipe`, `long-press`, `drag`: single-contact input, including system edge gestures. |
+| Touch | `tap`, `swipe`, `long-press`, `drag`: single-contact input and system edge gestures. `pinch`: simultaneous two-contact scaling. |
 | Keys/text | `key`, `button`, `paste`: HID keys/chords; Home, lock, volume buttons; Unicode clipboard/menu paste. |
 | Display | `show`, `show --split`, `rotate`, `display-mode`: local tabs/splits, orientation and presentation mode. |
 | Environment | `location`, `appearance`, `privacy`, `push`: fixed position, light/dark, permissions and simulated notifications. |
 | Resources | `config`, `resources`, `metrics`: device limits/reserves, pressure, CPU and process footprint. |
 | Diagnostics | `logs`, `crashes`: bounded device/app records. |
-| Ownership | `identity` checks the caller; `claim` explicitly hands back control after human takeover; `batch` runs up to 16 actions. `run -- codex` launches a new local Codex with `--no-daemon` from the source terminal; it cannot repair an existing caller's identity. |
+| Recording | `record-start`, `record-status`, `record-stop`: opt-in local silent H.264 MP4, up to 60 seconds per recording; one per owned device. |
+| Ownership | `identity` checks the caller; `claim` returns control after human takeover; `batch` runs up to 16 actions. Terminal launcher `run -- codex` adds `--no-daemon` to a new Codex; it cannot repair an existing caller's identity. |
 
 `standard` (default) and `balanced` use the same native controls and bundled
 simslim for startup service preparation/checks; they are service profiles.
@@ -27,15 +28,16 @@ in the selected profile. Compare both only when evaluating `balanced` or request
 The default device limit is two; configuring 1...32 with
 `config --max-devices` does not validate that device count.
 
+For cleanup scope, disk usage and exact-device reuse, read [device storage](storage.md).
+
 ### Not provided
 
-- Pinch/multi-touch: sequential single-contact gestures do not emulate simultaneous fingers.
+- Arbitrary multi-touch paths, two-finger rotation/pan; `pinch` only scales a horizontal pair.
 - Mac marked-text composition/candidate windows: human input uses the iOS hardware-keyboard
   source; iOS Pinyin was verified. Unicode paste does not test composition or typing.
-- Video recording, remote simulator viewing/control or physical iPhone control.
-- App uninstall; device erase/delete/explicit clone; runtime download/installation;
-  app compilation/signing. Prepare runtimes/builds separately. `close` preserves data,
-  so reopening is not a clean reset; physical-device `.app` builds are not accepted.
+- Remote simulator viewing/control or physical iPhone control.
+- Device cloning, runtime download/installation, app compilation/signing. Prepare
+  runtimes/builds separately; physical-device `.app` builds are not accepted.
 
 These are CtrlX interface gaps, not Apple's capability limits. Do not invent
 CtrlX commands from `simctl` capabilities or claim substitutes provide equivalent coverage.
@@ -126,31 +128,10 @@ fail before input. Re-observe after actions/navigation; node indices are not per
 Retry only when the error proves no input was sent, with a fresh target; never replay
 an unknown write.
 
-## Long press and drag
+## Gestures and recording
 
-```sh
-ctrlx simulator long-press --device <id> --identifier message.row --duration-ms 700
-ctrlx simulator drag --device <id> --identifier draggable.item \
-  --end-x 260 --end-y 500 --hold-ms 500 --duration-ms 300
-ctrlx simulator swipe --device <id> --x 196 --y 650 \
-  --end-x 196 --end-y 250 --duration-ms 350
-```
-
-Defaults: tap holds 20 ms; long press 650 ms; drag holds 500 ms, moves 300 ms.
-`--duration-ms`: 20...5000; `--hold-ms`: 0...5000. Coordinates are logical points
-from the display's top-left, excluding letterbox. Swipe uses coordinates. Human
-input cancels agent gestures/revokes the writer; reclaim only when asked to continue.
-
-For system gestures add `--edge top|left|bottom|right`, the current screen's origin
-edge. Start one point inside and move inward; example for a 393 x 852 display:
-
-```sh
-ctrlx simulator swipe --device <id> --edge bottom --x 196.5 --y 851 \
-  --end-x 196.5 --end-y 383.4 --duration-ms 300
-```
-
-Read geometry first: rotation transforms contacts and edges. Verify navigation;
-the app and iOS decide the gesture's effect.
+See [gestures](gestures.md) for long press, drag, edge swipes and basic `pinch`.
+See [recording](recording.md) for MP4 start/stop, readiness, limits and cleanup.
 
 ## Keyboard and selection
 

@@ -60,7 +60,7 @@ public struct SimulatorPushNotification: Sendable {
     }
 }
 
-func validateSimulatorBundle(_ bundle: String) throws {
+public func validateSimulatorBundle(_ bundle: String) throws {
     guard !bundle.isEmpty, bundle.utf8.count <= 255, !bundle.hasPrefix("-"),
           bundle.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 46 || $0 == 45 }) else {
         throw SimulatorFailure("Provide a bundle identifier using letters, digits, dots or hyphens, up to 255 bytes")
