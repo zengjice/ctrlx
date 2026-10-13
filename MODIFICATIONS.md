@@ -7,6 +7,35 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.61 — Worktree sessions, file annotations and agent iOS tools
+
+- Add a new-branch worktree option to Start in Directory, with branch name,
+  destination and source HEAD preview. Reuse Fork's validation and explicit
+  confirmation for uncommitted changes. Keep subdirectory selection and start
+  the selected agent in the new worktree; gate remote use by Host capability.
+- Annotate supported file previews in place and attach the result to the
+  corresponding agent input. Capture the visible preview, including the paused
+  video frame, and preserve the annotation during terminal handoff. Accept
+  trailing slashes in explicit repository directory links.
+- Add local, Codex-owned iOS Simulator tabs and the `ctrlx ios` CLI / agent-ios
+  skill: native display, input and accessibility, app and device lifecycle,
+  environment settings, optional service profiles, recording and basic pinch.
+  Keep device ownership and human takeover explicit. Physical iPhones and remote
+  simulator control are not supported; Xcode and an installed runtime are needed.
+- Extend worktree-local cleanup to explicitly completed build artifacts and
+  document task-based browser tab reuse.
+- Validation: the bounded serial Swift regression passed with 2,862 tests
+  reported and four opt-in probes skipped; Apple Intelligence evaluations were
+  excluded because the model is unavailable on this Mac. Fixed missing simulator
+  dependency injection in settings tests; initial Sidecar and video-capture
+  failures passed focused and full reruns. Both boundary checks, 195 script tests,
+  30 publisher tests, website build, Mac Release build and iOS Simulator compile
+  passed. The new worktree form also passed isolated UI interaction checks.
+- Distribution: Mac package only through the existing private channel. The
+  simulator's existing local acceptance evidence is retained; cross-Mac and
+  multi-Xcode compatibility remain unverified. No Relay deployment, local Mac
+  replacement or iPhone installation is included.
+
 ## 3.0.60 — Explicit repository links and pane-bound Host browsers
 
 - Reuse each terminal Window's linked Files tab instead of opening another tab
