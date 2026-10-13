@@ -1,7 +1,10 @@
 #if os(iOS)
+    import CtrlxCommon
     import SwiftUI
 
     struct VoiceCorrectionSettingsSection: View {
+        @Environment(\.scenePhase) private var scenePhase
+        @State private var isAPIKeyVisible = false
         @Bindable var settings: IOSSettings
         @Bindable var model: VoiceCorrectionSettingsModel
 
@@ -14,17 +17,36 @@
                 }
                 .disabled(model.isBusy)
 
-                SecureField(
-                    model.hasStoredAPIKey ? "Replace saved API key" : "API key",
-                    text: $model.apiKeyDraft
-                )
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textContentType(.password)
-                .privacySensitive()
+                HStack {
+                    Group {
+                        if isAPIKeyVisible {
+                            TextField("API key", text: $model.apiKeyDraft)
+                        } else {
+                            SecureField("API key", text: $model.apiKeyDraft)
+                        }
+                    }
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textContentType(.password)
+                    .privacySensitive()
+
+                    Button {
+                        isAPIKeyVisible.toggle()
+                    } label: {
+                        Label(
+                            isAPIKeyVisible ? "Hide API Key" : "Show API Key",
+                            symbol: isAPIKeyVisible ? .eyeSlash : .eye
+                        )
+                        .labelStyle(.iconOnly)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                }
                 .disabled(model.isBusy)
 
                 Button {
+                    isAPIKeyVisible = false
                     Task {
                         await model.saveAPIKey(settings: settings)
                     }
@@ -41,8 +63,8 @@
                 .disabled(
                     model.isBusy
                         || model.apiKeyDraft
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                            .isEmpty
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty
                 )
 
                 LabeledContent("Model List") {
@@ -114,6 +136,7 @@
 
                 if model.hasStoredAPIKey {
                     Button("Remove API Key", role: .destructive) {
+                        isAPIKeyVisible = false
                         Task {
                             await model.removeAPIKey(settings: settings)
                         }
@@ -140,6 +163,17 @@
                         + "for correction, which uses API credits. Save any Top N result as that provider's "
                         + "model list, or restore the recommendations at any time. API keys stay in Keychain."
                 )
+            }
+            .onChange(of: settings.voiceCorrectionProvider) {
+                isAPIKeyVisible = false
+            }
+            .onChange(of: scenePhase) {
+                if scenePhase != .active {
+                    isAPIKeyVisible = false
+                }
+            }
+            .onDisappear {
+                isAPIKeyVisible = false
             }
         }
     }
