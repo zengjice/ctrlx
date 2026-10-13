@@ -1,9 +1,9 @@
 #if os(macOS)
     import CtrlxCommon
     import CtrlxEncryption
+    import CtrlxPluginProtocol
     import Dependencies
     import Foundation
-    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 
@@ -24,6 +24,7 @@
             let coordinator = withDependencies {
                 $0[PreferencesService.self] = .inMemory()
                 $0[SecretsService.self] = .inMemory()
+                $0[SimulatorSystemClient.self] = SimulatorSystemClient()
             } operation: {
                 AppCoordinator()
             }
@@ -43,7 +44,7 @@
         }
 
         @Test("setPluginSettings persists bytes that pluginSettingsData reads back verbatim")
-        func settingsRoundTrip() async throws {
+        func settingsRoundTrip() async {
             let (coordinator, root) = makeCoordinator()
             defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
 
@@ -63,6 +64,7 @@
             let coordinator = withDependencies {
                 $0[PreferencesService.self] = .inMemory()
                 $0[SecretsService.self] = .inMemory()
+                $0[SimulatorSystemClient.self] = SimulatorSystemClient()
             } operation: {
                 AppCoordinator()
             }
@@ -72,7 +74,7 @@
         }
 
         @Test("setPluginSettings overwrites an existing file")
-        func settingsOverwrite() async throws {
+        func settingsOverwrite() async {
             let (coordinator, root) = makeCoordinator()
             defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
 

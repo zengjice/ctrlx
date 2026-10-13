@@ -28,7 +28,8 @@ to your task; the versioned plans are not an onboarding checklist.
 
 See [产品需求 TODO](product-todo.md) for detachable Mac terminal windows,
 argument-aware Agent commands, Agent-side CtrlX plugin update/reinstall UX, and
-file-browser playback cache cleanup. These are pending requirements, not shipped behavior.
+file-browser playback cache cleanup. Implemented behavior and deferred acceptance
+are tracked separately; release contents are recorded in [MODIFICATIONS.md](../MODIFICATIONS.md).
 
 ## How to read status and history
 
