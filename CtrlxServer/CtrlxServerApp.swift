@@ -20,6 +20,7 @@ struct TmuxPaneMirrorApp: App {
     @State private var updaterController: UpdaterController
     @NSApplicationDelegateAdaptor private var shutdownDelegate: AppShutdownDelegate
     @Environment(\.openSettings) private var openSettings
+    @FocusedValue(\.workbenchMenuActions) private var workbenchMenuActions
 
     init() {
         let isE2E = CommandLine.arguments.contains("--e2e-test")
@@ -476,9 +477,10 @@ struct TmuxPaneMirrorApp: App {
             // File menu - New Session (⌘N) opens the Local section's popover
             CommandGroup(replacing: .newItem) {
                 Button("New Session") {
-                    NotificationCenter.default.post(name: .newLocalSession, object: nil)
+                    workbenchMenuActions?.newLocalSession?()
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                .disabled(workbenchMenuActions?.newLocalSession == nil)
             }
             CommandGroup(replacing: .saveItem) {}
             CommandGroup(after: .newItem) {
@@ -487,9 +489,10 @@ struct TmuxPaneMirrorApp: App {
 
             CommandGroup(after: .textEditing) {
                 Button("Find in Files") {
-                    NotificationCenter.default.post(name: .openContentSearch, object: nil)
+                    workbenchMenuActions?.openContentSearch()
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(workbenchMenuActions == nil)
             }
 
             // Window menu - tab navigation shortcuts
@@ -499,24 +502,28 @@ struct TmuxPaneMirrorApp: App {
                 Divider()
 
                 Button("Previous Tab") {
-                    NotificationCenter.default.post(name: .selectPreviousTab, object: nil)
+                    workbenchMenuActions?.selectPreviousTab()
                 }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
+                .disabled(workbenchMenuActions == nil)
 
                 Button("Next Tab") {
-                    NotificationCenter.default.post(name: .selectNextTab, object: nil)
+                    workbenchMenuActions?.selectNextTab()
                 }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
+                .disabled(workbenchMenuActions == nil)
 
                 Button("Previous Session") {
-                    NotificationCenter.default.post(name: .selectPreviousSession, object: nil)
+                    workbenchMenuActions?.selectPreviousSession?()
                 }
                 .keyboardShortcut("`", modifiers: [.command, .shift])
+                .disabled(workbenchMenuActions?.selectPreviousSession == nil)
 
                 Button("Next Session") {
-                    NotificationCenter.default.post(name: .selectNextSession, object: nil)
+                    workbenchMenuActions?.selectNextSession?()
                 }
                 .keyboardShortcut("`", modifiers: .command)
+                .disabled(workbenchMenuActions?.selectNextSession == nil)
 
                 Divider()
             }

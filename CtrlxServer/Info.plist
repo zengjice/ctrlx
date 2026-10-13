@@ -26,6 +26,14 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
+			<string>com.jicezeng.ctrlx.workbench-tab</string>
+			<key>UTTypeDescription</key>
+			<string>CtrlX Workbench Tab</string>
+			<key>UTTypeConformsTo</key>
+			<array><string>public.data</string></array>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
 			<string>com.jicezeng.ctrlx.tab-drag</string>
 			<key>UTTypeDescription</key>
 			<string>CtrlX Tab Drag</string>

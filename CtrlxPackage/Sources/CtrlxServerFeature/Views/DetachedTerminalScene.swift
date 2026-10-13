@@ -1,9 +1,8 @@
 import AppKit
 import CtrlxCommon
-import CtrlxNetworking
 import SwiftUI
 
-/// Native scenes share application services, but never the main window's input router.
+/// Independent scenes use the same workbench as the main window, with private tab selection.
 public struct DetachedTerminalScene: Scene {
     private let coordinator: AppCoordinator
 
@@ -12,9 +11,10 @@ public struct DetachedTerminalScene: Scene {
     }
 
     public var body: some Scene {
-        WindowGroup("Terminal", id: "detached-terminal", for: DetachedTerminalTarget.self) { target in
-            if let target = target.wrappedValue {
-                DetachedTerminalContent(target: target)
+        WindowGroup("Workspace", id: "detached-terminal", for: UUID.self) { id in
+            if let id = id.wrappedValue, let workspace = coordinator.detachedWindows.workspaces[id] {
+                MainView(detachedWorkspace: workspace)
+                    .frame(minWidth: 400, minHeight: 250)
                     .environment(coordinator)
                     .environment(coordinator.settings)
                     .environment(coordinator.tmuxService)
@@ -23,6 +23,10 @@ public struct DetachedTerminalScene: Scene {
                     .environment(coordinator.editorSessionManager)
                     .environment(coordinator.remoteEditorContentStore)
                     .environment(coordinator.markdownOpenSuggestionStore)
+                    .environment(coordinator.getOrCreatePairingManager())
+                    .environment(coordinator.licenseManager)
+                    .environment(\.e2eeService, coordinator.e2eeService)
+                    .background(DetachedTerminalRegistration(workspaceID: id, windows: coordinator.detachedWindows))
             }
         }
         .defaultSize(width: 1_000, height: 700)
@@ -31,205 +35,37 @@ public struct DetachedTerminalScene: Scene {
     }
 }
 
-@MainActor
-private struct DetachedTerminalContent: View {
-    let target: DetachedTerminalTarget
-    @Environment(AppCoordinator.self) private var coordinator
-    @Environment(AppSettings.self) private var settings
-    @Environment(\.openWindow) private var openWindow
-    @State private var router = TerminalQuickActionRouter()
-    @State private var contentSize: CGSize = .zero
-    @State private var resizeError: String?
-    @State private var isResizing = false
-
-    private var local: LocalTmuxWindow? {
-        guard target.hostID == nil else { return nil }
-        return coordinator.tmuxService.windows.first { $0.stableId == target.windowID }
-    }
-
-    private var remote: TmuxWindow? {
-        guard let host = target.hostID else { return nil }
-        return coordinator.remoteSessionStore?.windows(for: host).first { $0.stableId == target.windowID }
-    }
-
-    private var connection: ViewerConnection? {
-        target.hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0) }
-    }
-
-    private var panes: [PaneState] {
-        remote?.panes ?? local?.panes.compactMap { coordinator.windowManager.paneStates[$0.paneId] } ?? []
-    }
-
-    private var focusedPaneID: String? {
-        let focused = router.active.flatMap { $0.hostID == target.hostID ? $0.paneID : nil }
-        return FileBrowserTab.sourcePaneID(
-            in: panes.map(\.paneId),
-            focusedPaneID: focused,
-            activePaneID: remote?.activePane?.paneId ?? local?.activePane?.paneId
-        )
-    }
-
-    private var forkUnavailableReason: String? {
-        guard let host = target.hostID else { return nil }
-        guard let store = coordinator.remoteSessionStore else { return "Host is unavailable." }
-        return store.agentForkUnavailableReason(hostID: host, isConnected: connection?.isHostConnected == true)
-    }
-
-    private var windowName: String {
-        windowTabLabel(
-            windowName: remote?.windowName ?? local?.windowName ?? "Terminal",
-            windowIndex: remote?.windowIndex ?? local?.windowIndex ?? 0
-        )
-    }
-
-    private var canOperateTerminal: Bool {
-        !panes.isEmpty && (target.hostID == nil || connection?.isHostConnected == true)
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            tabBar
-            terminal
-                .onGeometryChange(for: CGSize.self, of: { $0.size }) { contentSize = $0 }
-        }
-        .frame(minWidth: 400, minHeight: 250)
-        .background(settings.theme.workspaceBackgroundColor)
-        .preferredColorScheme(settings.theme.workspaceColorScheme)
-        .environment(\.terminalQuickActions, router)
-        .environment(\.openTerminalFileLink) { showInMain(.fileLink($0)) }
-        .navigationTitle(windowName)
-        .background(DetachedTerminalRegistration(target: target, windows: coordinator.detachedWindows))
-        .toolbarBackground(settings.theme.chromeBackgroundColor, for: .windowToolbar)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                if !settings.showStatusBar {
-                    TerminalQuickActionButtons(router: router)
-                }
-                TerminalFitButton(action: resizeToFit)
-                    .disabled(!canOperateTerminal || isResizing)
-            }
-        }
-        .focusedSceneValue(\.closeCurrentTabAction) { coordinator.detachedWindows.close(target) }
-        .alert("Terminal Error", isPresented: Binding(get: { resizeError != nil }, set: { if !$0 { resizeError = nil } })) {
-            Button("OK") { resizeError = nil }
-        } message: { Text(resizeError ?? "") }
-    }
-
-    private var tabBar: some View {
-        HStack(spacing: 0) {
-            TerminalWindowTabLabel(name: windowName, hasAgent: panes.contains { $0.agentSession != nil })
-                .padding(.trailing, 8)
-                .tabStripItemStyle(isSelected: true)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(windowName)
-                .accessibilityValue("selected")
-                .accessibilityIdentifier("detached-window-tab")
-                .contextMenu {
-                    Button { showInMain(.files(paneID: focusedPaneID)) } label: {
-                        Label("Open Files in Main Window", symbol: .folderBadgePlus)
-                    }
-                    .disabled(!canOperateTerminal)
-                    AgentForkMenu(
-                        sources: panes.compactMap(AgentForkSource.init(pane:)),
-                        unavailableReason: forkUnavailableReason,
-                        sourceUnavailableReason: AgentForkSource.unavailableReason(panes: panes),
-                        choose: { showInMain(.fork(paneID: focusedPaneID, worktree: $0)) }
-                    )
-                    Divider()
-                    Button("Return to Main Window") {
-                        showInMain(.show)
-                        coordinator.detachedWindows.close(target)
-                    }
-                }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 8)
-        .background(settings.theme.chromeBackgroundColor)
-        .overlay(alignment: .bottom) {
-            if settings.theme == .anysphereDark {
-                Rectangle().fill(settings.theme.workspaceBorderColor).frame(height: 1)
-            } else {
-                Divider()
-            }
-        }
-    }
-
-    @ViewBuilder private var terminal: some View {
-        if let local {
-            WindowPaneLayoutView(window: local, onOpenURL: openURL)
-        } else if let remote, let connection {
-            RemoteWindowPaneLayoutView(
-                window: remote,
-                connection: connection,
-                settings: settings,
-                onOpenURL: openURL
-            )
-        } else {
-            ContentUnavailableView {
-                Label("Terminal Unavailable", symbol: .terminal)
-            } description: {
-                Text(target.hostID == nil ? "This tmux Window is no longer available." : "Waiting for the Host. You can return to the main window at any time.")
-            }
-        }
-    }
-
-    private func showInMain(_ action: DetachedTerminalWindows.Action) {
-        coordinator.detachedWindows.request(action, from: target)
-        openWindow(id: "panes")
-    }
-
-    private func openURL(_ url: URL, paneID: String) -> Bool {
-        if target.hostID != nil, RemoteTerminalURLPolicy.shouldConsumeWithoutOpening(url) { return true }
-        if url.isFileURL {
-            guard settings.openClickedFileInNewTab else { return false }
-        } else {
-            guard
-                BrowserURLDispatcher.canHandle(url),
-                (settings.browserBehavior(for: url) ?? settings.browserLinkBehavior) != .alwaysInDefaultBrowser else { return false }
-        }
-        showInMain(.url(url.absoluteString, paneID: paneID))
-        return true
-    }
-
-    private func resizeToFit() {
-        guard !isResizing, !panes.isEmpty, contentSize.width > 100, contentSize.height > 100 else { return }
-        let cell = FontMetrics.calculateCellSize(fontName: settings.fontName, fontSize: CGFloat(settings.fontSize))
-        let columns = max(80, min(300, Int((contentSize.width - FontMetrics.horizontalBuffer) / cell.width)))
-        let rows = max(24, min(100, Int((contentSize.height - (settings.showStatusBar ? 40 : 10)) / cell.height)))
-        isResizing = true
-        Task {
-            defer { isResizing = false }
-            do {
-                if let host = target.hostID {
-                    guard let connection = coordinator.viewerConnectionManager?.connection(for: host), connection.isHostConnected else {
-                        throw AgentForkError("Host is offline.")
-                    }
-                    _ = try await connection.sendCommand(ResizeTmuxPane(width: columns, height: rows, userInitiated: true), paneId: target.windowID).get()
-                } else {
-                    try await coordinator.tmuxService.resizePane(target.windowID, width: columns, height: rows)
-                }
-            } catch { resizeError = "Failed to resize: \(error.localizedDescription)" }
-        }
-    }
+extension EnvironmentValues {
+    @Entry var workbenchWindowID: UUID?
 }
 
-/// Observe the actual native close, not SwiftUI disappearance (fullscreen can reparent views).
+/// Native close is authoritative: fullscreen can temporarily detach/reparent SwiftUI content.
 struct DetachedTerminalRegistration: NSViewRepresentable {
-    let target: DetachedTerminalTarget
+    let workspaceID: UUID?
     let windows: DetachedTerminalWindows
 
-    func makeNSView(context: Context) -> RegistrationView {
-        RegistrationView(target: target, windows: windows)
+    init(workspaceID: UUID, windows: DetachedTerminalWindows) {
+        self.workspaceID = workspaceID
+        self.windows = windows
     }
 
-    func updateNSView(_ nsView: RegistrationView, context: Context) { }
+    init(target: DetachedTerminalTarget, windows: DetachedTerminalWindows) {
+        self.workspaceID = windows.workspace(containing: target)?.id
+        self.windows = windows
+    }
+
+    func makeNSView(context: Context) -> RegistrationView {
+        RegistrationView(workspaceID: workspaceID, windows: windows)
+    }
+
+    func updateNSView(_ view: RegistrationView, context: Context) { }
 
     final class RegistrationView: NSView {
-        let target: DetachedTerminalTarget
+        let workspaceID: UUID?
         let windows: DetachedTerminalWindows
 
-        init(target: DetachedTerminalTarget, windows: DetachedTerminalWindows) {
-            self.target = target
+        init(workspaceID: UUID?, windows: DetachedTerminalWindows) {
+            self.workspaceID = workspaceID
             self.windows = windows
             super.init(frame: .zero)
         }
@@ -240,8 +76,7 @@ struct DetachedTerminalRegistration: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            guard let window else { return }
-            windows.attach(window, to: target)
+            if let window, let workspaceID { windows.attach(window, toWorkspace: workspaceID) }
         }
     }
 }
@@ -249,13 +84,18 @@ struct DetachedTerminalRegistration: NSViewRepresentable {
 struct DetachedTerminalPlaceholder: View {
     let target: DetachedTerminalTarget
     @Environment(AppCoordinator.self) private var coordinator
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("This terminal is open in a separate window.")
-            Button("Show Window") { openWindow(id: "detached-terminal", value: target) }
-            Button("Return Here") { coordinator.detachedWindows.close(target) }
+            Text("This terminal is open in another window.")
+            Button("Show Window") {
+                if !coordinator.detachedWindows.focus(hostID: target.hostID, windowID: target.windowID) {
+                    coordinator.detachedWindows.request(.show, from: target)
+                }
+            }
+            if coordinator.detachedWindows.contains(hostID: target.hostID, windowID: target.windowID) {
+                Button("Return Here") { coordinator.detachedWindows.close(target) }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -265,11 +105,12 @@ struct DetachedTerminalPresentation: ViewModifier {
     let hostID: String?
     let windowID: String
     @Environment(AppCoordinator.self) private var coordinator
+    @Environment(\.workbenchWindowID) private var workspaceID
 
     func body(content: Content) -> some View {
         if
             let target = DetachedTerminalTarget(hostID: hostID, windowID: windowID),
-            coordinator.detachedWindows.targets.contains(target) {
+            coordinator.detachedWindows.owner(hostID: hostID, windowID: windowID) != workspaceID {
             DetachedTerminalPlaceholder(target: target)
         } else {
             content

@@ -7,6 +7,170 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct DetachedTerminalWindowsTests {
+    @Test(arguments: [nil, "host"] as [String?])
+    func renameMigratesAllOwnersOnceAndKeepsHostAndSessionIsolation(host: String?) throws {
+        let manager = DetachedTerminalWindows()
+        let sourceTarget = try #require(DetachedTerminalTarget(hostID: host, windowID: "@0"))
+        let otherSessionTarget = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let foreignTarget = try #require(DetachedTerminalTarget(hostID: "foreign", windowID: "@0"))
+        let source = try #require(manager.detach(sourceTarget, position: nil, session: { _ in "old" }))
+        let otherSession = try #require(manager.detach(otherSessionTarget, position: nil, session: { _ in "other" }))
+        let foreign = try #require(manager.detach(foreignTarget, position: nil, session: { _ in "old" }))
+        let sourceTabs = source.tabs.tabs(hostID: host, session: "old")
+        let browser = BrowserTab(url: URL(staticString: "about:blank"), originWindowId: "@0")
+        sourceTabs.openBrowserTabs = [browser]
+        #expect(manager.transfer(
+            .init(workspaceID: source.id, hostID: host, sessionName: "old", tab: .browser(browser.id)),
+            to: nil, session: { _ in "old" }
+        ))
+        let main = manager.mainTabs.tabs(hostID: host, session: "old")
+        main.selectedBrowserTabId = browser.id
+        let unrelatedSession = otherSession.tabs.tabs(hostID: host, session: "other")
+        let unrelatedHost = foreign.tabs.tabs(hostID: "foreign", session: "old")
+        let unrelatedMain = manager.mainTabs.tabs(hostID: "foreign", session: "old")
+        for _ in 0..<3 {
+            manager.renameSession(hostID: host, from: "old", to: "new", windowIDs: ["old:0": "new:0"])
+            #expect(manager.mainTabs.existing(hostID: host, session: "new") === main)
+            #expect(manager.mainTabs.existing(hostID: host, session: "old") == nil)
+            #expect(source.tabs.existing(hostID: host, session: "new") === sourceTabs)
+            #expect(source.tabs.existing(hostID: host, session: "old") == nil)
+            #expect(source.sessionName == "new")
+            #expect(manager.browserOwner(hostID: host, session: "new", id: browser.id, windowID: "@0") == nil)
+            #expect(main.selectedBrowserTabId == browser.id)
+            #expect(otherSession.sessionName == "other")
+            #expect(otherSession.tabs.existing(hostID: host, session: "other") === unrelatedSession)
+            #expect(foreign.sessionName == "old")
+            #expect(foreign.tabs.existing(hostID: "foreign", session: "old") === unrelatedHost)
+            #expect(manager.mainTabs.existing(hostID: "foreign", session: "old") === unrelatedMain)
+        }
+    }
+
+    @Test
+    func multipleTerminalsCanMoveBothWaysOnlyWithinTheirHostAndSession() throws {
+        let manager = DetachedTerminalWindows()
+        let a = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@1"))
+        let b = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@2"))
+        let foreign = try #require(DetachedTerminalTarget(hostID: "remote", windowID: "@2"))
+        let otherSession = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@3"))
+        let session: (DetachedTerminalTarget) -> String? = { $0 == otherSession ? "other" : "work" }
+        manager.reserve(a)
+        let group = try #require(manager.workspace(containing: a))
+        #expect(manager.merge(b, into: group.id, session: session))
+        #expect(group.members == [a, b])
+        #expect(!manager.merge(foreign, into: group.id, session: session))
+        #expect(!manager.merge(otherSession, into: group.id, session: session))
+        #expect(manager.focus(hostID: nil, windowID: "@1"))
+        #expect(group.selection == .window("@1"))
+        let drag = WorkbenchTabDrag(workspaceID: group.id, hostID: nil, sessionName: "work", tab: .window("@1"))
+        #expect(manager.transfer(drag, to: nil, session: session))
+        #expect(group.members == [b])
+        #expect(manager.owner(hostID: nil, windowID: "@1") == nil)
+        // The scene's original terminal can detach again without aliasing the old scene.
+        #expect(manager.reserve(a))
+        #expect(manager.workspace(containing: a)?.id != group.id)
+    }
+
+    @Test
+    func directoryAndBrowserStateMoveWithoutRecreationAndReturnOnNativeClose() throws {
+        _ = NSApplication.shared
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@1"))
+        manager.reserve(target)
+        let group = try #require(manager.workspace(containing: target))
+        let main = manager.mainTabs.tabs(hostID: nil, session: "work")
+        let files = FileBrowserTab(path: "/tmp", sourcePaneID: "%1")
+        files.query = "report"
+        main.openFileTabs = [.init(id: files.id, path: "/tmp", directoryPath: "/tmp", isDirectory: true)]
+        main.directoryTabs[files.id] = files
+        main.selectedFileTabId = files.id
+        main.rightSide = [.file(files.id)]
+        main.selectedRight = .file(files.id)
+        let browser = try BrowserTab(url: #require(URL(string: "about:blank")))
+        let browserState = BrowserTabState(initialURL: browser.url)
+        main.openBrowserTabs = [browser]
+        main.browserStates[browser.id] = browserState
+        let drag = WorkbenchTabDrag(workspaceID: nil, hostID: nil, sessionName: "work", tab: .file(files.id))
+        #expect(manager.transfer(drag, to: group.id, session: { _ in "work" }))
+        let detached = group.tabs.tabs(hostID: nil, session: "work")
+        #expect(detached.directoryTabs[files.id] === files)
+        #expect(detached.directoryTabs[files.id]?.query == "report")
+        #expect(main.directoryTabs.isEmpty && main.selectedFileTabId == nil && main.selectedRight == nil)
+        #expect(manager.transfer(
+            WorkbenchTabDrag(workspaceID: nil, hostID: nil, sessionName: "work", tab: .browser(browser.id)),
+            to: group.id,
+            session: { _ in "work" }
+        ))
+        #expect(detached.browserStates[browser.id] === browserState)
+        #expect(main.browserStates.isEmpty)
+        let native = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: true)
+        native.isReleasedWhenClosed = false
+        manager.attach(native, to: target)
+        manager.didClose(target, window: native)
+        #expect(manager.targets.isEmpty)
+        #expect(main.directoryTabs[files.id] === files)
+        #expect(main.openFileTabs.map(\.id) == [files.id])
+        #expect(main.browserStates[browser.id] === browserState)
+        #expect(main.openBrowserTabs.map(\.id) == [browser.id])
+    }
+
+    @Test
+    func filesOnlyWorkspaceCanAdoptANewTerminal() throws {
+        let manager = DetachedTerminalWindows()
+        let first = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@1"))
+        let created = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@2"))
+        manager.reserve(first)
+        let group = try #require(manager.workspace(containing: first))
+        let tabs = group.tabs.tabs(hostID: nil, session: "work")
+        tabs.openFileTabs = [.init(path: "/tmp", directoryPath: "/tmp", isDirectory: true)]
+        manager.returnToMain(first)
+        #expect(group.members.isEmpty)
+        #expect(manager.merge(created, into: group.id, session: { _ in "work" }))
+        #expect(group.members == [created])
+        #expect(group.selection == .window("@2"))
+    }
+
+    @Test
+    func crossSceneDropRejectsStaleSourcesAndForeignDestinations() throws {
+        let manager = DetachedTerminalWindows()
+        let a = try #require(DetachedTerminalTarget(hostID: "A", windowID: "@1"))
+        let b = try #require(DetachedTerminalTarget(hostID: "B", windowID: "@1"))
+        manager.reserve(a)
+        manager.reserve(b)
+        let one = try #require(manager.workspace(containing: a))
+        let two = try #require(manager.workspace(containing: b))
+        let drag = WorkbenchTabDrag(workspaceID: one.id, hostID: "A", sessionName: "work", tab: .window("@1"))
+        #expect(!manager.transfer(drag, to: two.id, session: { _ in "work" }))
+        let forged = WorkbenchTabDrag(workspaceID: nil, hostID: "A", sessionName: "work", tab: .window("@1"))
+        #expect(!manager.transfer(forged, to: one.id, session: { _ in "work" }))
+        #expect(manager.targets == [a, b])
+    }
+
+    @Test
+    func reorderSubsetPreservesOtherNativeWindows() {
+        #expect(TabDragPayload.mergingWindowOrder(["@3", "@1"], into: ["@1", "@2", "@3", "@4"]) == ["@3", "@2", "@1", "@4"])
+        #expect(TabDragPayload.mergingWindowOrder(["@1", "@1"], into: ["@1", "@2"]) == nil)
+        #expect(TabDragPayload.mergingWindowOrder(["@8"], into: ["@1", "@2"]) == nil)
+    }
+
+    @Test
+    func detachUsesTheSameTransferAndClearsTheSourceSplit() throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@1"))
+        let main = manager.mainTabs.tabs(hostID: nil, session: "work")
+        main.tabOrder = [.window("@1"), .window("@2")]
+        main.rightSide = [.window("@1"), .window("@2")]
+        main.selectedRight = .window("@1")
+        let first = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        #expect(main.rightSide == [.window("@2")])
+        #expect(main.selectedRight == .window("@2"))
+        #expect(first.members == [target])
+        let second = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        #expect(first.id != second.id)
+        #expect(manager.workspaces[first.id] == nil)
+        #expect(manager.owner(hostID: nil, windowID: "@1") == second.id)
+        #expect(manager.presentationRevision == 2)
+    }
+
     @Test
     func stableIdentityIncludesHost() throws {
         let local = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@12"))

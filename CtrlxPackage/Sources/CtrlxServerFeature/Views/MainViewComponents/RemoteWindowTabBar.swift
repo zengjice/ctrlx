@@ -18,7 +18,7 @@ struct RemoteWindowTabBar: View {
     @Environment(AppSettings.self) private var settings
 
     let windows: [TmuxWindow]
-    let selectedWindow: TmuxWindow
+    let selectedWindow: TmuxWindow?
     let isHostConnected: Bool
     /// In-app browser tabs scoped to this remote session. Empty when no
     /// terminal-link click has spawned a tab yet.
@@ -235,7 +235,7 @@ struct RemoteWindowTabBar: View {
                 DropIndicator(visible: isTargeted)
                     .padding(.leading, 4)
             }
-            .dropDestination(for: TabDragPayload.self) { payloads, _ in
+            .workbenchDropDestination(rightSide: section == .right) { payloads, _ in
                 handleEndDrop(payloads: payloads, section: section)
             } isTargeted: { hovering in
                 trailingDropTargetedSection = hovering ? section : (
@@ -296,8 +296,8 @@ struct RemoteWindowTabBar: View {
         }
         .tabStripItemStyle(isSelected: selected, isOnRightSplit: onRight, isSplit: isSplit)
         .overlay(alignment: .leading) { DropIndicator(visible: dropIndicator == payload) }
-        .draggable(payload) { TabDragPreview(label: tab.title, symbol: .folder) }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDraggable(payload) { TabDragPreview(label: tab.title, symbol: .folder) }
+        .workbenchDropDestination(before: payload) { payloads, _ in
             handleDrop(payloads: payloads, target: payload)
         } isTargeted: { targeted in
             updateDropIndicator(target: targeted ? payload : nil, for: .file)
@@ -314,7 +314,7 @@ struct RemoteWindowTabBar: View {
         // right-pane selection points at them.
         let isSelected = tabIsOnRight
             ? selectedRight == payload
-            : window.id == selectedWindow.id && selectedBrowserTabId == nil && sessionTabs?.selectedFileTabId == nil
+            : window.id == selectedWindow?.id && selectedBrowserTabId == nil && sessionTabs?.selectedFileTabId == nil
         let isHovered = hoveredWindowId == window.id
         let windowName = windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
 
@@ -384,7 +384,7 @@ struct RemoteWindowTabBar: View {
         .onHover { hovering in
             hoveredWindowId = hovering ? window.id : nil
         }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDropDestination(before: payload) { payloads, _ in
             handleDrop(payloads: payloads, target: payload)
         } isTargeted: { isTargeted in
             updateDropIndicator(target: isTargeted ? payload : nil, for: .window)

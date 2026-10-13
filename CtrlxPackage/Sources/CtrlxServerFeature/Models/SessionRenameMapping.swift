@@ -1,3 +1,5 @@
+import CtrlxCommon
+import CtrlxNetworking
 import Foundation
 
 /// A tmux session rename inferred from two pane snapshots.
@@ -48,6 +50,48 @@ struct SessionRenameMapping: Equatable, Sendable {
             return (oldName, matchingNewNames[0])
         }
         .sorted { $0.oldName < $1.oldName }
+    }
+}
+
+/// Observe routing identity only; agent activity and pane rendering updates are not layout changes.
+struct RemoteSessionStructure: Equatable {
+    struct Location: Equatable {
+        let sessionName: String
+        let windowID: String
+    }
+
+    let locations: [PaneKey: Location]
+
+    init(panes: [PaneKey: PaneState]) {
+        self.locations = panes.mapValues { Location(sessionName: $0.sessionName, windowID: $0.windowId) }
+    }
+
+    /// The catalog and pane store are delivered separately. Wait for matching routing
+    /// instead of treating a renamed page as deleted during that intermediate render.
+    func canSyncBrowserCatalog(_ catalog: [RemoteBrowserTab], hostID: String, sessionName: String) -> Bool {
+        guard locations.contains(where: { $0.key.pairId == hostID && $0.value.sessionName == sessionName }) else { return false }
+        return catalog.allSatisfy { tab in
+            guard let paneID = tab.sourcePaneID, let location = locations[PaneKey(pairId: hostID, paneId: paneID)] else { return true }
+            return location.sessionName == tab.sessionName
+        }
+    }
+
+    func renames(from previous: Self) -> [(hostID: String, mapping: SessionRenameMapping)] {
+        Set(previous.locations.keys.map(\.pairId)).sorted().flatMap { hostID in
+            let old = previous.locations.filter { $0.key.pairId == hostID }
+            let new = locations.filter { $0.key.pairId == hostID }
+            let oldGroups = Dictionary(grouping: old, by: { $0.value.sessionName })
+                .mapValues { Set($0.map(\.key.paneId)) }
+            let newGroups = Dictionary(grouping: new, by: { $0.value.sessionName })
+                .mapValues { Set($0.map(\.key.paneId)) }
+            return SessionRenameMapping.detectNames(from: oldGroups, to: newGroups).map { oldName, newName in
+                let windowIDs = Dictionary(new.compactMap { key, location -> (String, String)? in
+                    guard location.sessionName == newName, let source = old[key], source.sessionName == oldName else { return nil }
+                    return (source.windowID, location.windowID)
+                }, uniquingKeysWith: { _, latest in latest })
+                return (hostID, SessionRenameMapping(oldName: oldName, newName: newName, windowIDs: windowIDs))
+            }
+        }
     }
 }
 

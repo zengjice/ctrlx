@@ -161,10 +161,10 @@ struct PaneBrowserOpeningTests {
     func delayedOpenRespectsContentSelection(_ content: String) async throws {
         let (service, runtime) = fixture()
         let tabs = SessionFileTabsState()
-        var gitWindows: Set<String> = [], fileWindows: Set<String> = []
+        var fileWindows: Set<String> = []
         let selection = {
             BrowserOpenSelection(localWindowID: "work:1", remoteSession: nil, remoteWindowID: nil,
-                tabs: tabs, gitActiveWindowIDs: gitWindows, fileBrowserActiveWindowIDs: fileWindows)
+                tabs: tabs, fileBrowserActiveWindowIDs: fileWindows)
         }
         let initial = selection()
         runtime.holdCreation = true
@@ -174,7 +174,7 @@ struct PaneBrowserOpeningTests {
         }
         for _ in 0..<100 where runtime.pending == nil { await Task.yield() }
         try #require(runtime.pending != nil)
-        if content == "git" { gitWindows.insert("work:1") }
+        if content == "git" { tabs.selectLeftGit() }
         if content == "files" { fileWindows.insert("work:1") }
         runtime.pending?()
         runtime.pending = nil
@@ -190,7 +190,7 @@ struct PaneBrowserOpeningTests {
         let otherHost = RemoteSessionSelection(hostId: "host-b", hostName: "Mac", sessionName: "work")
         func selection(_ remote: RemoteSessionSelection? = nil) -> BrowserOpenSelection {
             BrowserOpenSelection(localWindowID: nil, remoteSession: remote ?? host, remoteWindowID: "work:1",
-                tabs: tabs, gitActiveWindowIDs: [], fileBrowserActiveWindowIDs: [])
+                tabs: tabs, fileBrowserActiveWindowIDs: [])
         }
         let initial = selection()
         tabs.openBrowserTabs.append(BrowserTab(url: URL(staticString: "https://example.com")))

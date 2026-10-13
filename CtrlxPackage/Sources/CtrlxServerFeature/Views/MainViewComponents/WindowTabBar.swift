@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 /// pops up a menu for Agent cards or a terminal window. Browsers belong to panes.
 struct WindowTabBar: View {
     let session: LocalTmuxSession
-    let selectedWindow: LocalTmuxWindow
+    let selectedWindow: LocalTmuxWindow?
     /// True only when the Files (tree) tab is the active view — i.e. the file browser
     /// is open and no file tab is currently selected.
     let isFileBrowserSelected: Bool
@@ -295,7 +295,7 @@ struct WindowTabBar: View {
                 DropIndicator(visible: isTargeted)
                     .padding(.leading, 4)
             }
-            .dropDestination(for: TabDragPayload.self) { payloads, _ in
+            .workbenchDropDestination(rightSide: section == .right) { payloads, _ in
                 handleEndDrop(payloads: payloads, section: section)
             } isTargeted: { hovering in
                 trailingDropTargetedSection = hovering ? section : (
@@ -376,10 +376,10 @@ struct WindowTabBar: View {
         .overlay(alignment: .leading) {
             DropIndicator(visible: dropIndicator == .fileExplorer)
         }
-        .draggable(TabDragPayload.fileExplorer) {
+        .workbenchDraggable(TabDragPayload.fileExplorer) {
             TabDragPreview(label: "Files", symbol: .folderFill)
         }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDropDestination(before: .fileExplorer) { payloads, _ in
             handleDrop(payloads: payloads, target: .fileExplorer)
         } isTargeted: { isTargeted in
             updateDropIndicator(target: isTargeted ? .fileExplorer : nil, for: .fileExplorer)
@@ -444,10 +444,10 @@ struct WindowTabBar: View {
         .overlay(alignment: .leading) {
             DropIndicator(visible: dropIndicator == .git)
         }
-        .draggable(TabDragPayload.git) {
+        .workbenchDraggable(TabDragPayload.git) {
             TabDragPreview(label: "Git", image: CustomSymbol.gitLogo.image)
         }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDropDestination(before: .git) { payloads, _ in
             handleDrop(payloads: payloads, target: .git)
         } isTargeted: { isTargeted in
             updateDropIndicator(target: isTargeted ? .git : nil, for: .git)
@@ -463,7 +463,7 @@ struct WindowTabBar: View {
         let tabIsOnRight = isOnRight(payload)
         let isSelected = tabIsOnRight
             ? selectedRight == payload
-            : window.id == selectedWindow.id && !isAnyFileViewActive
+            : window.id == selectedWindow?.id && !isAnyFileViewActive
         let isHovered = hoveredWindowId == window.id
         let hasClaude = window.panes.contains { windowManager.paneStates[$0.paneId]?.agentSession != nil }
         let windowName = windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
@@ -531,7 +531,7 @@ struct WindowTabBar: View {
         .onHover { hovering in
             hoveredWindowId = hovering ? window.id : nil
         }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDropDestination(before: payload) { payloads, _ in
             handleDrop(payloads: payloads, target: payload)
         } isTargeted: { isTargeted in
             updateDropIndicator(target: isTargeted ? payload : nil, for: .window)
@@ -604,10 +604,10 @@ struct WindowTabBar: View {
         .onHover { hovering in
             hoveredFileTabId = hovering ? tab.id : nil
         }
-        .draggable(payload) {
+        .workbenchDraggable(payload) {
             TabDragPreview(label: tab.name, symbol: .docPlaintextFill)
         }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDropDestination(before: payload) { payloads, _ in
             handleDrop(payloads: payloads, target: payload)
         } isTargeted: { isTargeted in
             updateDropIndicator(target: isTargeted ? payload : nil, for: .file)
@@ -850,6 +850,14 @@ enum TabDragPayload: Codable, Hashable, Transferable {
     var windowId: String? {
         guard case let .window(id) = self else { return nil }
         return id
+    }
+
+    /// Reorder this native window's subset without moving tabs owned by another scene.
+    static func mergingWindowOrder(_ subset: [String], into all: [String]) -> [String]? {
+        let members = Set(subset)
+        guard members.count == subset.count, members.isSubset(of: Set(all)) else { return nil }
+        var replacement = subset.makeIterator()
+        return all.map { members.contains($0) ? (replacement.next() ?? $0) : $0 }
     }
 
     /// Moves one entry immediately before another. Re-finding the target after

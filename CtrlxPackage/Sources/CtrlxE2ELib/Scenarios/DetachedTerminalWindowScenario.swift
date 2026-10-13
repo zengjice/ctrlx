@@ -35,8 +35,8 @@ public enum DetachedTerminalWindowScenario {
             TestStep.macClickButton(titled: "detached-test", instance: instance)
             TestStep.macWaitForElementQuery(.identifier("terminal-%0"), timeout: 15, instance: instance)
             TestStep.macDragElementOutsideWindow(.labelContains("detached-test:0"), instance: instance)
-            TestStep.macWaitForWindow(titled: "DETACHED_SOURCE", timeout: 10, instance: instance)
-            TestStep.macWaitForElement(titled: "Return Here", timeout: 10, instance: instance)
+            TestStep.macWaitForWindow(titled: "detached-test — Workspace", timeout: 10, instance: instance)
+            TestStep.macWaitForElementQuery(.identifier("terminal-%0"), timeout: 10, instance: instance)
             TestStep.macScreenshot(label: "detached", compare: false, instance: instance)
 
             TestStep.macCGClickElement(query: .identifier("terminal-%0"), instance: instance)
@@ -45,8 +45,9 @@ public enum DetachedTerminalWindowScenario {
             TestStep.tmuxCapturePaneContent(target: "detached-test:1.0", storeAs: "otherWindow")
             TestStep.assertStoredNotContains(key: "otherWindow", substring: "DETACHED_INPUT_ONLY")
 
-            TestStep.macCloseWindow(titled: "DETACHED_SOURCE", instance: instance)
-            TestStep.macWaitForElementQueryToDisappear(.label("Return Here"), timeout: 10, instance: instance)
+            TestStep.macCloseWindow(titled: "detached-test — Workspace", instance: instance)
+            TestStep.macWaitForElementQuery(.labelContains("detached-test:0"), timeout: 10, instance: instance)
+            TestStep.macCGClickElement(query: .labelContains("detached-test:0"), instance: instance)
             TestStep.macWaitForElementQuery(.identifier("terminal-%0"), timeout: 10, instance: instance)
             TestStep.tmuxStoreDisplayMessage(target: "detached-test:0", format: "#{window_id}", storeAs: "restoredWindowID")
             TestStep.assertStoredEqual(key: "originalWindowID", otherKey: "restoredWindowID")

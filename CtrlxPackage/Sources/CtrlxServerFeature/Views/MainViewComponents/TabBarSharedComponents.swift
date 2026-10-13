@@ -196,10 +196,10 @@ struct BrowserTabStripItem: View {
         .onHover { hovering in
             isHovered = hovering
         }
-        .draggable(payload) {
+        .workbenchDraggable(payload) {
             TabDragPreview(label: tab.tabLabel, symbol: .globe)
         }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDropDestination(before: payload) { payloads, _ in
             onDrop(payloads)
         } isTargeted: { isTargeted in
             onTargetedChanged(isTargeted)
