@@ -458,8 +458,6 @@
                     }
                     .accessibilityIdentifier("host-version-mismatch-row")
                 } else if hasContent {
-                    sessionOrderControls
-
                     // Cross-session usage rollup for this host (issue #598).
                     // Renders as its own List rows (header + detail rows when
                     // expanded) and owns their insets/separators internally.
@@ -486,31 +484,13 @@
                     host: host,
                     connection: connection,
                     showUsername: showUsername,
-                    onNewSession: onNewSession
-                )
-            }
-        }
-
-        private var sessionOrderControls: some View {
-            let isManual = !settings.remoteSessionOrder(for: host.id).isEmpty
-            return VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(isManual ? "Manual Order" : "Automatic Order")
-                        .font(.subheadline)
-                    Spacer()
-                    Button("Restore Automatic Order") {
+                    onNewSession: onNewSession,
+                    hasManualSessionOrder: !settings.remoteSessionOrder(for: host.id).isEmpty,
+                    onRestoreAutomaticOrder: {
                         settings.setRemoteSessionOrder([], for: host.id)
                     }
-                    .font(.caption)
-                    .buttonStyle(.borderless)
-                    .disabled(!isManual)
-                    .accessibilityIdentifier("restore-automatic-session-order-\(host.id)")
-                }
-                Text(isManual ? "Drag sessions to change their order." : "Waiting → Working → Idle → Terminal")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                )
             }
-            .padding(.vertical, 4)
         }
 
         @ViewBuilder
@@ -613,13 +593,26 @@
         let connection: ViewerConnection?
         var showUsername = false
         let onNewSession: () -> Void
+        let hasManualSessionOrder: Bool
+        let onRestoreAutomaticOrder: () -> Void
 
         var body: some View {
             HStack {
                 // Host name
                 Text(host.displayName(showUsername: showUsername))
+                    .lineLimit(1)
 
                 Spacer()
+
+                Button(action: onRestoreAutomaticOrder) {
+                    Symbols.arrowClockwise.image
+                        .font(.caption)
+                        .frame(width: 44, height: 44)
+                }
+                .disabled(!hasManualSessionOrder)
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Restore Automatic Order")
+                .accessibilityIdentifier("restore-automatic-session-order-\(host.id)")
 
                 // New session button
                 Button {
@@ -627,6 +620,7 @@
                 } label: {
                     Symbols.plus.image
                         .font(.caption)
+                        .frame(width: 44, height: 44)
                 }
                 .disabled(connection?.isHostConnected != true)
                 .buttonStyle(.borderless)
