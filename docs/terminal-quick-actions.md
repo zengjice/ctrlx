@@ -1,9 +1,17 @@
 # Terminal quick actions
 
-macOS offers **Agent Commands** (`/`) and **Quick Phrases** on the right side of
-the terminal's bottom status bar, for both local and Viewer windows. They follow
-Settings → General → Show status bar. Both open button-grid popovers. Click a
-command or saved phrase to send literal text, a host-side 200 ms pause, and one
+macOS offers **Commands** (`/`) and **Quick Phrases** as labeled, bordered buttons
+on the left side of the terminal's bottom status bar, for both local and Viewer
+windows. The buttons have a 32-point click target including native padding;
+session details and telemetry sit on the right. In narrow splits, labels collapse
+to icons with the same click target and accessible names; details fall back to
+the session/window identifier, then hide together with their spacing if the
+identifier cannot fit. Local and Viewer windows use the same complete status-bar
+component. The status bar keeps the same height across widths
+and focus changes. They follow Settings → General →
+Show status bar. Both open button-grid popovers above their buttons without
+resizing the terminal. Click a command or saved phrase to send literal text,
+a host-side 200 ms pause, and one
 Return. There is no confirmation
 or extra Send step, and existing terminal input is never cleared automatically.
 
