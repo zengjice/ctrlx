@@ -120,6 +120,7 @@
 
         /// Immutable terminal text shown in the native iOS copy surface.
         @State private var textSnapshot: TerminalTextSnapshot?
+        @State private var linkPresentation = TerminalLinkPresentation()
 
         /// Restores toolbar-controlled terminal input after the copy sheet closes.
         /// Parent-controlled multi-pane input is restored by its existing binding.
@@ -302,6 +303,9 @@
             .sheet(item: $textSnapshot, onDismiss: restoreTerminalInputAfterCopy) { snapshot in
                 TerminalTextCopyView(snapshot: snapshot)
             }
+            .sheet(item: $linkPresentation.item, onDismiss: { linkPresentation.didDismiss() }) { item in
+                TerminalLinkSheet(url: item.url, isHostConnected: isConnected, openHostURL: openHostURLAction)
+            }
             .alert("No Terminal Text", isPresented: $showsEmptySnapshotAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -347,6 +351,11 @@
                 onCopyActionChange(nil)
                 coordinator.cancelPendingKeys()
                 Task { await stopStreaming() }
+            }
+            .onChange(of: isActive) { _, active in
+                if !active {
+                    linkPresentation.item = nil
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
                 // The viewport is final now. One deterministic scroll replaces
@@ -441,6 +450,7 @@
         }
 
         private func presentTextSnapshot() {
+            guard !linkPresentation.suspendsTerminalInput else { return }
             guard let snapshot = coordinator.terminalState?.makeTextSnapshot?() else {
                 showsEmptySnapshotAlert = true
                 return
@@ -461,6 +471,16 @@
                 for: nil
             )
             textSnapshot = snapshot
+        }
+
+        private func presentLink(_ url: URL) {
+            guard
+                isActive, !isInputSuspended, textSnapshot == nil,
+                !quickActionPresentation.isPresented, linkPresentation.present(url) else { return }
+            coordinator.terminalState?.cancelCursorNavigation?()
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+            )
         }
 
         private func terminalVoiceInputContext() -> String? {
@@ -497,7 +517,7 @@
 
             case .streaming:
                 if let state = coordinator.terminalState {
-                    // A presented copy sheet always wins over both toolbar and
+                    // A presented sheet always wins over both toolbar and
                     // parent-controlled input. This prevents the underlying
                     // UIKit terminal from reclaiming first responder mid-sheet.
                     let inputPresentation = terminalInputPresentation(
@@ -510,6 +530,7 @@
                         keyboardRequested: inputPresentation.keyboardRequested,
                         keyboardIsTransitioning: keyboardIsTransitioning,
                         questionExpansionEnabled: scenePhase == .active && isConnected && !isInputSuspended
+                            && !linkPresentation.suspendsTerminalInput
                             && coordinator.isReadyForToolbarInput && responseState?.request.isBlocking != true,
                         onExpandCodexQuestions: { count in
                             guard isConnected, relayClient.isHostConnected else { return false }
@@ -541,8 +562,9 @@
                             presentedTerminal = state
                         },
                         onOpenPath: openPathAction,
-                        onOpenHostURL: openHostURLAction,
-                        onSwitchWindow: isActive && !isInputSuspended && textSnapshot == nil && scenePhase == .active
+                        onOpenURL: presentLink,
+                        onSwitchWindow: isActive && !isInputSuspended && textSnapshot == nil
+                            && !linkPresentation.suspendsTerminalInput && scenePhase == .active
                             ? onSwitchWindow : nil
                     )
                 } else {
@@ -602,6 +624,7 @@
                 isActive: isActive,
                 isCopyPresented: isCopyPresented,
                 isInputSuspended: isInputSuspended || quickActionPresentation.suspendsTerminalInput
+                    || linkPresentation.suspendsTerminalInput
             )
         }
 
@@ -1414,7 +1437,7 @@
         let onInitialPresentation: @MainActor () -> Void
 
         var onOpenPath: (@MainActor (String) -> Void)?
-        var onOpenHostURL: (@MainActor (URL) -> Void)?
+        var onOpenURL: (@MainActor (URL) -> Void)?
         var onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
 
         func makeUIView(context: Context) -> UIScrollView {
@@ -1450,7 +1473,7 @@
             terminalView.onPasteText = onPasteText
             terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
-            terminalView.onOpenHostURL = onOpenHostURL
+            terminalView.onOpenURL = onOpenURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
@@ -1626,7 +1649,7 @@
             terminalView.onPasteText = onPasteText
             terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
-            terminalView.onOpenHostURL = onOpenHostURL
+            terminalView.onOpenURL = onOpenURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
@@ -1649,7 +1672,7 @@
             coordinator.viewportReportTask?.cancel()
             coordinator.presentationTask?.cancel()
             coordinator.windowSwipe?.onSwitchWindow = nil
-            coordinator.terminalView?.onOpenHostURL = nil
+            coordinator.terminalView?.onOpenURL = nil
             coordinator.terminalView?.invalidateInput()
         }
 

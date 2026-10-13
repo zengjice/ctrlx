@@ -54,7 +54,7 @@ enum TerminalCursorTapNavigation {
     /// - Implements `TerminalViewDelegate` to capture typed characters
     /// - Converts raw bytes to `TmuxKey` representations for relay transmission
     /// - Lets SwiftTerm preserve its authoritative scrollback position
-    /// - Long-press on URLs opens them in Safari
+    /// - URL taps and long presses ask the containing view to choose a destination
     ///
     /// Usage:
     /// ```swift
@@ -74,7 +74,7 @@ enum TerminalCursorTapNavigation {
         var onPasteText: (@MainActor (String) -> Void)?
         var onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         var onOpenPath: (@MainActor (String) -> Void)?
-        var onOpenHostURL: (@MainActor (URL) -> Void)?
+        var onOpenURL: (@MainActor (URL) -> Void)?
 
         @Dependency(ClipboardClient.self) private var clipboard
 
@@ -824,7 +824,7 @@ enum TerminalCursorTapNavigation {
             case .openLink:
                 guard let url else { return }
                 cancelCursorNavigation()
-                showURLActionSheet(url: url.absoluteString)
+                requestURLActions(url: url.absoluteString)
             case .mouseClick:
                 guard onRawInput != nil,
                       point.x >= 0, point.x < CGFloat(terminal.cols) * cellSize.width,
@@ -1009,9 +1009,9 @@ enum TerminalCursorTapNavigation {
                     return
                 }
 
-                // Show highlight and action sheet
+                // Highlight the pressed link and let SwiftUI own presentation.
                 showURLHighlight(row: pos.row, startCol: detected.startCol, endCol: detected.endCol)
-                showURLActionSheet(url: detected.url)
+                requestURLActions(url: detected.url)
 
             case .ended,
                  .cancelled,
@@ -1052,56 +1052,9 @@ enum TerminalCursorTapNavigation {
             urlHighlightLayer = nil
         }
 
-        private func showURLActionSheet(url: String) {
+        private func requestURLActions(url: String) {
             guard let nsURL = URL(string: url), !nsURL.isFileURL else { return }
-
-            let alert = UIAlertController(
-                title: "Open Link",
-                message: url,
-                preferredStyle: .actionSheet
-            )
-
-            if BrowserWebURL.isSupported(nsURL), let openHostURL = onOpenHostURL {
-                alert.addAction(UIAlertAction(title: "Open in Host Browser", style: .default) { [weak self] _ in
-                    self?.removeURLHighlight()
-                    openHostURL(nsURL)
-                })
-            }
-            alert.addAction(UIAlertAction(title: "Open in This Device's Browser", style: .default) { [weak self] _ in
-                self?.removeURLHighlight()
-                UIApplication.shared.open(nsURL)
-            })
-
-            alert.addAction(UIAlertAction(title: "Copy Link", style: .default) { [weak self] _ in
-                self?.removeURLHighlight()
-                @Dependency(ClipboardClient.self) var clipboard
-                clipboard.setString(url)
-            })
-
-            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
-                self?.removeURLHighlight()
-            })
-
-            // Present from the nearest view controller
-            if let viewController = findViewController() {
-                // For iPad popover support
-                if let popover = alert.popoverPresentationController {
-                    popover.sourceView = self
-                    popover.sourceRect = urlHighlightLayer?.frame ?? bounds
-                }
-                viewController.present(alert, animated: true)
-            }
-        }
-
-        private func findViewController() -> UIViewController? {
-            var responder: UIResponder? = self
-            while let nextResponder = responder?.next {
-                if let viewController = nextResponder as? UIViewController {
-                    return viewController
-                }
-                responder = nextResponder
-            }
-            return nil
+            onOpenURL?(nsURL)
         }
 
         // MARK: - URL Underlines
@@ -1258,7 +1211,7 @@ enum TerminalCursorTapNavigation {
             guard !isMouseModeActive else { return }
             if let url = URL(string: link) {
                 guard !url.isFileURL else { return }
-                showURLActionSheet(url: url.absoluteString)
+                requestURLActions(url: url.absoluteString)
             }
         }
 
