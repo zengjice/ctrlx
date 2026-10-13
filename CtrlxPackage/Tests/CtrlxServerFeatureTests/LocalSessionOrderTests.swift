@@ -55,6 +55,65 @@
             #expect(reloaded.remoteSessionOrder(for: "home") == ["b", "a"])
         }
 
+        @Test("Restoring the default order puts working sessions before idle on local and remote lists")
+        func restoresActivityPriority() {
+            let settings = settings(.inMemory())
+            let names = ["biaozhu", "ux", "window", "credit-hl", "cm", "a-terminal"]
+            let panes = names.enumerated().map { pane("%\($0.offset)", session: $0.element) }
+            let sessions = LocalTmuxSession.groupWindows(LocalTmuxWindow.groupPanes(panes))
+            var states = Dictionary(uniqueKeysWithValues: panes.map { ($0.paneId, $0.makePaneState()) })
+            for paneID in ["%0", "%1"] {
+                states[paneID]?.agentSession = AgentSession(paneId: paneID, state: .idle)
+            }
+            for paneID in ["%2", "%3"] {
+                states[paneID]?.agentSession = AgentSession(paneId: paneID, state: .working)
+            }
+            states["%4"]?.agentSession = AgentSession(paneId: "%4", state: .doneWorking(summary: nil))
+
+            func localOrder() -> [String] {
+                SessionSortData.sortedLocalSessions(
+                    sessions, mode: settings.sidebarSortMode, paneStates: states, lastActivity: { _ in nil },
+                    sidebarFields: SidebarField.defaultFields, sidebarTerminalFields: SidebarField.defaultTerminalFields,
+                    preferredSessionNames: settings.localSessionOrder
+                ).map(\.sessionName)
+            }
+            func remoteOrder() -> [String] {
+                SessionSortData.sortedRemoteSessions(
+                    TmuxSession.groupWindows(TmuxWindow.groupPanes(Array(states.values))),
+                    mode: settings.sidebarSortMode,
+                    sidebarFields: SidebarField.defaultFields, sidebarTerminalFields: SidebarField.defaultTerminalFields,
+                    homeDirectory: nil, preferredSessionNames: settings.remoteSessionOrder(for: "office")
+                ).map(\.sessionName)
+            }
+
+            settings.setLocalSessionOrder(names)
+            settings.setRemoteSessionOrder(names, for: "office")
+            #expect(localOrder() == names)
+            #expect(remoteOrder() == names)
+
+            settings.setLocalSessionOrder([])
+            settings.setRemoteSessionOrder([], for: "office")
+            let expected = ["cm", "credit-hl", "window", "biaozhu", "ux", "a-terminal"]
+            #expect(localOrder() == expected)
+            #expect(remoteOrder() == expected)
+
+            states["%2"]?.cliSessionState = .idle
+            let updated = ["cm", "credit-hl", "biaozhu", "ux", "window", "a-terminal"]
+            #expect(localOrder() == updated)
+            #expect(remoteOrder() == updated)
+        }
+
+        @Test("Saved automatic strategies survive reload and restoring order", arguments: SidebarSortMode.allCases)
+        func preservesSavedSortMode(mode: SidebarSortMode) {
+            let preferences = PreferencesService.inMemory()
+            preferences.setString(mode.rawValue, AppSettings.Keys.sidebarSortMode.rawValue)
+            let settings = settings(preferences)
+            settings.setLocalSessionOrder(["b", "a"])
+            settings.setLocalSessionOrder([])
+            #expect(settings.sidebarSortMode == mode)
+            #expect(self.settings(preferences).sidebarSortMode == mode)
+        }
+
         @Test("Discovery without a manual order keeps automatic sorting")
         func automaticDiscoveryDoesNotSaveRank() {
             let settings = settings(.inMemory())

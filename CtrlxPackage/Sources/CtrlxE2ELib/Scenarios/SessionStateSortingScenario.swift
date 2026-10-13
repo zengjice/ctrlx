@@ -5,8 +5,8 @@ import Foundation
 /// state AND via the manual "Set State" override, on agent sessions and
 /// terminal-only sessions alike (issue #702 follow-on).
 ///
-/// Both sides run the default `statusPriorityIdleFirst` mode (attention >
-/// idle > working > plain terminal, session-name tiebreak): the host sorts
+/// Both sides run the default `statusPriority` mode (attention >
+/// working > idle > plain terminal, session-name tiebreak): the host sorts
 /// with it directly, and iOS mirrors it via the `sidebarSortMode` the host
 /// pushes with its session state, applied through the shared
 /// `SessionSortData.sortedRemoteSessions`.
