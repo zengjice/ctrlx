@@ -251,7 +251,7 @@ public actor MacOSDriver {
     /// Resolves named keys (Tab, Escape, …) and character keys (letters,
     /// digits, common punctuation) into US-keyboard virtual key codes, then
     /// posts a keyDown/keyUp pair through `CGEvent`. The app is focused
-    /// first so the event lands in the right process.
+    /// first, and each event is addressed to that process.
     public func pressKey(_ key: Key, modifiers: KeyboardModifiers = []) async throws {
         let pid = try requirePID()
         // Named keys always resolve; only `.character(_)` cases with an
@@ -268,7 +268,7 @@ public actor MacOSDriver {
         logger.info("Pressing key '\(modifiers)+\(key)' (PID \(pid))")
         MacOSAccessibility.focusApp(appPID: pid)
         try await Task.sleep(for: .milliseconds(200))
-        MacOSAccessibility.pressKey(code: virtualKey, modifiers: modifiers.cgEventFlags)
+        MacOSAccessibility.pressKey(appPID: pid, code: virtualKey, modifiers: modifiers.cgEventFlags)
         try await Task.sleep(for: .milliseconds(200))
     }
 
@@ -405,7 +405,7 @@ public actor MacOSDriver {
             // row-selection re-layout dismissed it). Close anything half-open
             // with Escape and try the whole sequence again.
             if let escape = MacOSAccessibility.virtualKeyCode(for: .escape) {
-                MacOSAccessibility.pressKey(code: escape)
+                MacOSAccessibility.pressKey(appPID: pid, code: escape)
             }
             try await Task.sleep(for: .milliseconds(300))
         }

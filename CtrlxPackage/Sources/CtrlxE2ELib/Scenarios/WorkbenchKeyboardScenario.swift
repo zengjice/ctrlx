@@ -1,0 +1,146 @@
+import Foundation
+
+public enum WorkbenchKeyboardScenario {
+    public static let splitFilesDirectory = CtrlxE2ELib.scenario("Split Files Terminal Directory", tags: ["keyboard", "tabs", "macos-only"]) {
+        TestStep.tmuxCreateSession(name: "split-cwd", width: 100, height: 30)
+        TestStep.tmuxCommand(arguments: ["respawn-pane", "-k", "-t", "split-cwd:0", "-c", "/Users"])
+        TestStep.waitForTmuxDisplayMessage(target: "split-cwd:0", format: "#{pane_current_path}", contains: "/Users")
+        TestStep.storeValue(key: "rightDirectory", value: "/Users")
+        TestStep.storeValue(key: "leftDirectory", value: "/private/tmp")
+        Shortcut.macOnlySetup
+        TestStep.macClickButton(titled: "split-cwd")
+        TestStep.macContextMenuClick(elementTitle: "split-cwd:0", menuItem: "Open Files")
+        TestStep.macWaitForElementQuery(.allOf([.role("AXTextField"), .valueContains("/Users")]), timeout: 10)
+        TestStep.macClickButton(titled: "Open file tab in split: Files")
+        TestStep.macWaitForElement(titled: "Move file tab to left: Files", timeout: 5)
+
+        // Each Files tab keeps its own directory independently of the source terminal.
+        TestStep.tmuxCommand(arguments: ["respawn-pane", "-k", "-t", "split-cwd:0", "-c", "/private/tmp"])
+        TestStep.waitForTmuxDisplayMessage(target: "split-cwd:0", format: "#{pane_current_path}", contains: "/private/tmp")
+        TestStep.macContextMenuClick(elementTitle: "split-cwd:0", menuItem: "Open Files")
+        TestStep.macWaitForElementQuery(.allOf([.role("AXTextField"), .valueContains("/tmp")]), timeout: 10)
+        TestStep.tmuxCommand(arguments: ["respawn-pane", "-k", "-t", "split-cwd:0", "-c", "/"])
+        TestStep.waitForTmuxDisplayMessage(target: "split-cwd:0", format: "#{==:#{pane_current_path},/}", contains: "1")
+
+        TestStep.macCGClickElement(query: .allOf([.role("AXTextField"), .valueContains("/Users")]))
+        TestStep.macPressKey(.character("t"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.labelContains("split-cwd:1"), timeout: 10)
+        TestStep.tmuxStoreDisplayMessage(target: "split-cwd:1", format: "#{pane_current_path}", storeAs: "fromRightFiles")
+        TestStep.assertStoredEqual(key: "fromRightFiles", otherKey: "rightDirectory")
+        TestStep.macWaitForElement(titled: "Move terminal to left: terminal 1", timeout: 5)
+
+        TestStep.macCGClickElement(query: .allOf([.role("AXTextField"), .valueContains("/tmp")]))
+        TestStep.macPressKey(.character("t"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.labelContains("split-cwd:2"), timeout: 10)
+        TestStep.tmuxStoreDisplayMessage(target: "split-cwd:2", format: "#{pane_current_path}", storeAs: "fromLeftFiles")
+        TestStep.assertStoredEqual(key: "fromLeftFiles", otherKey: "leftDirectory")
+        TestStep.macWaitForElement(titled: "Move terminal to left: terminal 1", timeout: 5)
+        TestStep.terminateMacApp()
+    }
+
+    public static let newTerminalDirectory = CtrlxE2ELib.scenario("New Terminal Directory", tags: ["keyboard", "tabs", "macos-only"]) {
+        TestStep.tmuxCreateSession(name: "cwd-test", width: 100, height: 30)
+        TestStep.tmuxCommand(arguments: ["set-option", "-t", "cwd-test", "renumber-windows", "off"])
+        TestStep.tmuxStoreDisplayMessage(target: "cwd-test:0", format: "#{pane_current_path}", storeAs: "defaultDirectory")
+        TestStep.tmuxCommand(arguments: ["respawn-pane", "-k", "-t", "cwd-test:0", "-c", "/private/tmp"])
+        TestStep.waitForTmuxDisplayMessage(target: "cwd-test:0", format: "#{pane_current_path}", contains: "/private/tmp")
+        TestStep.tmuxStoreDisplayMessage(target: "cwd-test:0", format: "#{pane_current_path}", storeAs: "projectDirectory")
+        TestStep.assertStoredNotEqual(key: "projectDirectory", otherKey: "defaultDirectory")
+        TestStep.tmuxCommand(arguments: ["rename-window", "-t", "cwd-test:0", "source"])
+        Shortcut.macOnlySetup
+        TestStep.macClickButton(titled: "cwd-test")
+        TestStep.macContextMenuClick(elementTitle: "cwd-test:0", menuItem: "Open Files")
+        TestStep.macWaitForElementQuery(.labelContains("File tab:"), timeout: 10)
+        TestStep.wait(seconds: 1)
+
+        // Keep Git on the left after moving its last terminal to the right.
+        TestStep.macClickButton(titled: "Git")
+        TestStep.macWaitForElement(titled: "aurora-cli", timeout: 10)
+        TestStep.macClickButton(titled: "Open terminal in split: source")
+        TestStep.macWaitForElement(titled: "Move terminal to left: source", timeout: 5)
+        TestStep.macCGClickElement(query: .label("Git"))
+        TestStep.macPressKey(.character("t"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.labelContains("cwd-test:1"), timeout: 10)
+        TestStep.tmuxStoreDisplayMessage(target: "cwd-test:1", format: "#{pane_current_path}", storeAs: "fromGit")
+        TestStep.assertStoredEqual(key: "fromGit", otherKey: "projectDirectory")
+
+        // Files also retains its directory when the remaining left terminal detaches.
+        TestStep.tmuxCommand(arguments: ["kill-window", "-t", "cwd-test:0"])
+        TestStep.macWaitForElementQueryToDisappear(.labelContains("cwd-test:0"), timeout: 10)
+        TestStep.macMoveWindow(x: 180, y: 100)
+        TestStep.macDragElementOutsideWindow(.labelContains("cwd-test:1"))
+        TestStep.macWaitForWindow(titled: "cwd-test — Workspace", timeout: 10)
+        TestStep.macOpenPanesWindow()
+        TestStep.macCGClickElement(query: .labelContains("File tab:"))
+        TestStep.macClickButton(titled: "New Tab")
+        TestStep.macClickButton(titled: "New Terminal")
+        TestStep.macWaitForElementQuery(.labelContains("cwd-test:0"), timeout: 10)
+        TestStep.tmuxStoreDisplayMessage(target: "cwd-test:0", format: "#{pane_current_path}", storeAs: "fromFiles")
+        TestStep.assertStoredEqual(key: "fromFiles", otherKey: "projectDirectory")
+        TestStep.terminateMacApp()
+    }
+
+    public static let scenario = CtrlxE2ELib.scenario("Workbench Keyboard", tags: ["keyboard", "macos-only"]) {
+        TestStep.tmuxCreateSession(name: "keys123", width: 100, height: 30)
+        TestStep.tmuxCreateSession(name: "keys456", width: 100, height: 30)
+        TestStep.tmuxCommand(arguments: ["rename-window", "-t", "keys456:0", "first"])
+        Shortcut.macOnlySetup
+        TestStep.macClickButton(titled: "keys123")
+        TestStep.macClickButton(titled: "Hide Sidebar")
+        TestStep.macPressKey(.character("n"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.identifier("new-session-custom-directory"), timeout: 5)
+        TestStep.macPressKey(.escape)
+        TestStep.macWaitForElementQueryToDisappear(.identifier("new-session-custom-directory"), timeout: 5)
+        TestStep.macPressKey(.character("n"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.identifier("new-session-custom-directory"), timeout: 5)
+        TestStep.macPressKey(.character("w"), modifiers: .command)
+        TestStep.macWaitForElementQueryToDisappear(.identifier("new-session-custom-directory"), timeout: 5)
+        TestStep.macClickButton(titled: "Show Sidebar")
+
+        TestStep.macPressKey(.character("p"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.identifier("session-switcher-search"), timeout: 5)
+        TestStep.macType(text: "456")
+        TestStep.macWaitForElementQueryToDisappear(.identifier("session-switcher-result-local-keys123"), timeout: 5)
+        TestStep.macPressKey(.return)
+        TestStep.macWaitForElementQueryToDisappear(.identifier("session-switcher-search"), timeout: 5)
+        TestStep.macWaitForElement(titled: "keys456:0 first", timeout: 5)
+
+        TestStep.macPressKey(.character("p"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.identifier("session-switcher-search"), timeout: 5)
+        TestStep.macPressKey(.upArrow)
+        TestStep.macPressKey(.return)
+        TestStep.macWaitForElement(titled: "keys123:0", timeout: 5)
+        TestStep.macClickButton(titled: "keys456")
+
+        TestStep.macPressKey(.character("t"), modifiers: .command)
+        TestStep.wait(seconds: 2)
+        TestStep.tmuxCommand(arguments: ["rename-window", "-t", "keys456:1", "second"])
+        TestStep.macWaitForElement(titled: "keys456:1 second", timeout: 10)
+        TestStep.macPressKey(.character("1"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("keys456:0 first"), .valueContains("selected")]), timeout: 5)
+        TestStep.macPressKey(.character("2"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("keys456:1 second"), .valueContains("selected")]), timeout: 5)
+
+        TestStep.macClickButton(titled: "Open terminal in split: second")
+        TestStep.macWaitForElement(titled: "Move terminal to left: second", timeout: 5)
+        TestStep.macClickAtPoint(x: 850, y: 250)
+        TestStep.macPressKey(.character("t"), modifiers: .command)
+        TestStep.wait(seconds: 2)
+        TestStep.tmuxCommand(arguments: ["rename-window", "-t", "keys456:2", "third"])
+        TestStep.macWaitForElement(titled: "Move terminal to left: third", timeout: 10)
+        TestStep.macPressKey(.character("1"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("keys456:1 second"), .valueContains("selected")]), timeout: 5)
+        TestStep.macPressKey(.character("]"), modifiers: [.command, .shift])
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("keys456:2 third"), .valueContains("selected")]), timeout: 5)
+        TestStep.macPressKey(.character("w"), modifiers: .command)
+        TestStep.macWaitForElementToDisappear(titled: "keys456:2 third", timeout: 10)
+        TestStep.macWaitForElement(titled: "keys456:0 first", timeout: 5)
+
+        TestStep.macPressKey(.character("p"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.identifier("session-switcher-search"), timeout: 5)
+        TestStep.macPressKey(.escape)
+        TestStep.macWaitForElementQueryToDisappear(.identifier("session-switcher-search"), timeout: 5)
+        TestStep.macScreenshot(label: "mac-keyboard-shortcuts", compare: false)
+        TestStep.terminateMacApp()
+    }
+}

@@ -1,5 +1,41 @@
 # Terminal quick actions
 
+## Mac keyboard shortcuts
+
+The File, Edit, View and Window menus show the fixed shortcuts. New-session,
+new-terminal, session-search and voice buttons also show them in their help text.
+Commands target the active workbench
+window. Tab navigation, new terminals and close-tab follow the last focused side
+of its split; voice input follows the focused native terminal endpoint.
+New terminals use the selected Files directory on the focused side, then the
+source terminal's current directory. Local workspaces fall back to the retained
+Git directory, then the home directory, without taking the other side's Files path.
+
+| Shortcut | Action |
+|---|---|
+| Command-N | Open the local New Session picker |
+| Command-T | Create a terminal in the current session and focused split |
+| Command-P | Search local and paired-Host sessions, then switch with Return |
+| Command-1…9 | Select a terminal by its visible order within the focused split |
+| Command-Shift-[ / ] | Select the previous / next tab within that split |
+| Command-W | Close the focused tab, preserving existing terminal close confirmation |
+| Command-Shift-M | Start / stop voice input; stop inserts without submitting |
+| Command-+ / - / 0 | Increase / decrease / reset terminal font size |
+
+Session search follows the sidebar order and matches session names, displayed
+titles and Host names. Up/Down choose a result, Return switches, and Escape
+cancels. Offline Hosts are shown but cannot be selected. The main workspace owns
+session creation/switching; detached workspaces retain their session ownership.
+Command-N opens the existing local session picker in a dialog, including when
+the sidebar is collapsed. Escape or Command-W closes either session picker
+without closing a terminal underneath it.
+Voice input is available with a visible status bar and a usable terminal target.
+Command-backtick is left to macOS window switching. Standard copy/paste and
+Command-comma settings remain, and no application-wide Control or Escape handler
+intercepts ordinary terminal input. Escape remains local to open panels.
+
+## Status bar
+
 macOS offers **Commands** (`/`) and **Quick Phrases** as labeled, bordered buttons
 on the left side of the terminal's bottom status bar, for both local and Viewer
 windows. The buttons keep a 32-point height including native padding;

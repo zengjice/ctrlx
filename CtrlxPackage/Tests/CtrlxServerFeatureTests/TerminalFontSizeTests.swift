@@ -28,6 +28,21 @@
             #expect(settings.fontSize == 13)
         }
 
+        @Test("Reset restores the default and persists it")
+        func resetRestoresDefault() {
+            let preferences = PreferencesService.inMemory()
+            withDependencies {
+                $0[PreferencesService.self] = preferences
+            } operation: {
+                let settings = AppSettings()
+                let defaultSize = settings.fontSize
+                settings.fontSize = AppSettings.maxFontSize
+                settings.resetFontSize()
+                #expect(settings.fontSize == defaultSize)
+                #expect(AppSettings().fontSize == defaultSize)
+            }
+        }
+
         @Test("decreaseFontSize drops by one point")
         func decreaseDropsByOne() {
             let settings = makeSettings()

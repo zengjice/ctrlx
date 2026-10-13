@@ -149,6 +149,41 @@ struct WorkbenchContentContextTests {
         ) == "/home")
     }
 
+    @Test(arguments: [false, true])
+    func selectedFilesDirectoryFollowsSplitSide(isDirectory: Bool) {
+        let tabs = SessionFileTabsState()
+        let leftDirectory = FileBrowserTab(path: "/left/current")
+        let rightDirectory = FileBrowserTab(path: "/right/current")
+        let left = OpenFileTab(id: leftDirectory.id, path: "/left/readme.md", directoryPath: "/left", isDirectory: isDirectory)
+        let right = OpenFileTab(id: rightDirectory.id, path: "/right/readme.md", directoryPath: "/right", isDirectory: isDirectory)
+        tabs.openFileTabs = [left, right]
+        if isDirectory {
+            tabs.directoryTabs[left.id] = leftDirectory
+            tabs.directoryTabs[right.id] = rightDirectory
+        }
+        tabs.selectedFileTabId = left.id
+        tabs.rightSide = [.file(right.id)]
+        tabs.selectedRight = .file(right.id)
+
+        let leftPath = isDirectory ? "/left/current" : "/left"
+        let rightPath = isDirectory ? "/right/current" : "/right"
+        #expect(tabs.selectedDirectoryPath() == leftPath)
+        #expect(tabs.selectedDirectoryPath(onRight: true) == rightPath)
+        #expect(WorkbenchDirectoryContext.resolve(
+            terminalPath: nil, tabs: tabs, retainedGitPath: "/git", homeDirectory: "/home", onRight: true
+        ) == rightPath)
+
+        tabs.selectedRight = .window("@2")
+        #expect(tabs.selectedDirectoryPath(onRight: true) == nil)
+        #expect(WorkbenchDirectoryContext.resolve(
+            terminalPath: nil, tabs: tabs, retainedGitPath: "/git", homeDirectory: "/home", onRight: true
+        ) == "/git")
+        #expect(WorkbenchDirectoryContext.resolve(
+            terminalPath: "/terminal", tabs: tabs, retainedGitPath: "/git", homeDirectory: "/home", onRight: true
+        ) == "/terminal")
+        #expect(tabs.selectedFileTabId == left.id)
+    }
+
     @Test(arguments: [nil, "remote-host"] as [String?])
     func filesOnlySearchReusesSelectedTabWithoutCreatingFromTerminal(host: String?) {
         let store = WorkbenchTabStore()

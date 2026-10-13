@@ -8,6 +8,9 @@ public struct WorkbenchMenuActions {
     public var selectPreviousSession: (@MainActor () -> Void)?
     public var selectNextSession: (@MainActor () -> Void)?
     public var newLocalSession: (@MainActor () -> Void)?
+    public var newTerminal: (@MainActor () -> Void)?
+    public var switchSession: (@MainActor () -> Void)?
+    public var toggleVoiceInput: (@MainActor () -> Void)?
 }
 
 public struct WorkbenchMenuActionsKey: FocusedValueKey {

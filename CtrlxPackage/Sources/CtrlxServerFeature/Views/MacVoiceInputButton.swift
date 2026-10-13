@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 struct MacVoiceInputButton: View {
     let router: TerminalQuickActionRouter
+    var ownsShortcutFocus = true
     let settings: VoiceCorrectionSettings
     let context: TerminalPhraseContext
     let targetLabel: String
@@ -25,7 +26,7 @@ struct MacVoiceInputButton: View {
             }
         }
         .disabled((!context.canSend || isSuspended) && voice.phase == .idle)
-        .help("Voice input for the focused terminal; inserts text without sending")
+        .help("Start / Stop Voice Input (⇧⌘M); inserts text without sending")
         .accessibilityLabel("Voice Input")
         .accessibilityValue(voice.phase.accessibilityValue)
         .accessibilityHint(voice.phase.accessibilityHint)
@@ -51,6 +52,11 @@ struct MacVoiceInputButton: View {
             if voice.phase == .idle, voice.completedTranscript == nil { cancel() }
         }
         .onChange(of: router.token) { cancelIfTargetChanged() }
+        .onChange(of: router.voiceInputRequest) {
+            if ownsShortcutFocus {
+                toggleRecording()
+            }
+        }
         .onChange(of: context) { cancelIfTargetChanged() }
         .onChange(of: isSuspended) {
             if isSuspended { cancel() }
@@ -85,6 +91,7 @@ struct MacVoiceInputButton: View {
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Stop and Insert", action: toggleRecording)
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
                     .disabled(!voice.isRecording)
                     .buttonStyle(.borderedProminent)
             }

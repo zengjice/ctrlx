@@ -183,9 +183,10 @@ public struct MainView: View {
     @State private var isLoadingProjects = false
     @State private var creatingSelection: NewSessionCreatingState?
     @State private var isCreatingAgentTab = false
+    @State private var isCreatingTerminal = false
+    @State private var showingSessionSwitcher = false
     @State private var pendingAgentFork: AgentForkConfiguration?
-    /// Bumped by the ⌘N menu command to open the Local section's new-session popover.
-    @State private var localNewSessionTrigger = 0
+    @State private var showingNewLocalSession = false
     @State private var detailPaneSize: CGSize = .zero
     @State private var automaticTabFit = TerminalTabFit()
     @State private var closeConfirmation: CloseConfirmation?
@@ -354,6 +355,23 @@ public struct MainView: View {
             .navigationTitle(detachedWorkspace == nil ? (selectedSessionTitle ?? "CtrlX") : "\(selectedSessionTitle ?? "CtrlX") — Workspace")
             .toolbar {
                 toolbarContent
+            }
+            .sheet(isPresented: $showingSessionSwitcher) {
+                SessionSwitcherView(items: sessionSwitcherItems, current: sidebarSessionSelection.wrappedValue) { selection in
+                    guard sessionSwitcherItems.contains(where: { $0.id == selection && $0.isAvailable }) else { return }
+                    sidebarSessionSelection.wrappedValue = selection
+                }
+            }
+            .sheet(isPresented: $showingNewLocalSession) {
+                VStack(spacing: 0) {
+                    localNewSessionPopover
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { showingNewLocalSession = false }
+                            .keyboardShortcut(.cancelAction)
+                    }
+                    .padding()
+                }
             }
             .background(AgentBrowserWorkspaceAnchor(workspace: agentBrowserWorkspace))
             .background(SimulatorWorkspaceAnchor(workspace: simulatorWorkspace))
@@ -737,21 +755,52 @@ public struct MainView: View {
             ))
             .focusedSceneValue(\.closeCurrentTabAction, handleCloseCurrentTab)
             .focusedSceneValue(\.terminalWindowNavigationActions, terminalWindowNavigationActions)
+            .onChange(of: terminalQuickActions.active?.id) {
+                guard
+                    let endpoint = terminalQuickActions.active, endpoint.isAvailable,
+                    endpoint.hostID == selectedRemoteSession?.hostId else { return }
+                let windowID: String?
+                if let hostID = endpoint.hostID {
+                    windowID = coordinator.remoteSessionStore?.paneState(for: endpoint.paneID, hostId: hostID)?.stableWindowId
+                } else {
+                    windowID = windowManager.paneStates[endpoint.paneID]?.stableWindowId
+                }
+                if let windowID {
+                    currentSessionTabs?.isRightPaneFocused = currentSessionTabs?.rightSide.contains(.window(windowID)) == true
+                }
+            }
             .modifier(menuCommands)
             .onChange(of: coordinator.pendingMenuBarSelection) {
                 applyPendingMenuBarSelection()
             }
     }
 
+    private func openSessionSwitcher() {
+        showingSessionSwitcher = true
+    }
+
+    private var isPresentingSessionPicker: Bool {
+        showingSessionSwitcher || showingNewLocalSession
+    }
+
     private var menuCommands: MenuCommandsModifier {
-        MenuCommandsModifier(
+        let newTerminal: (@MainActor () -> Void)? = canCreateTerminal && !isPresentingSessionPicker ? createTerminalTab : nil
+        let switchSession: (@MainActor () -> Void)? = detachedWorkspace == nil && !isPresentingSessionPicker ? openSessionSwitcher : nil
+        let voice: (@MainActor () -> Void)? = settings.showStatusBar && terminalQuickActions.active?.isAvailable == true && !isPresentingSessionPicker
+            ? terminalQuickActions.toggleVoiceInput : nil
+        return MenuCommandsModifier(
             onOpenContentSearch: { handleOpenContentSearch() },
             onSelectPreviousTab: { selectAdjacentTab(direction: -1) },
             onSelectNextTab: { selectAdjacentTab(direction: 1) },
             onSelectPreviousSession: { selectAdjacentSession(direction: -1) },
             onSelectNextSession: { selectAdjacentSession(direction: 1) },
-            onNewLocalSession: { localNewSessionTrigger += 1 },
-            allowsSessionNavigation: detachedWorkspace == nil
+            onNewLocalSession: {
+                showingNewLocalSession = true
+            },
+            onNewTerminal: newTerminal,
+            onSwitchSession: switchSession,
+            onToggleVoiceInput: voice,
+            allowsSessionNavigation: detachedWorkspace == nil && !isPresentingSessionPicker
         )
     }
 
@@ -886,8 +935,7 @@ public struct MainView: View {
             SectionHeader(
                 title: "Local",
                 symbol: .house,
-                newSessionButtonIdentifier: "new-session-local",
-                openPopoverTrigger: localNewSessionTrigger
+                newSessionButtonIdentifier: "new-session-local"
             ) {
                 localNewSessionPopover
             }
@@ -911,8 +959,8 @@ public struct MainView: View {
 
     /// The local session that owns `selectedWindow`, or nil when the current
     /// selection is remote or empty. Centralizes the "find the session for the
-    /// selected window" lookup shared by the navigation title, ⌘` / ⌘⇧`
-    /// session cycling, and ⌘⇧F content search so they all resolve it the same
+    /// selected window" lookup shared by the navigation title, session
+    /// cycling, and ⌘⇧F content search so they all resolve it the same
     /// way.
     private func currentLocalSession() -> LocalTmuxSession? {
         guard selectedRemoteSession == nil else { return nil }
@@ -1266,34 +1314,7 @@ public struct MainView: View {
                     onCloseWindow: { windowToClose in
                         requestCloseRemoteWindow(windowToClose, hostId: remote.hostId)
                     },
-                    onNewWindow: {
-                        Task {
-                            let currentPath = window?.activePane?.currentPath
-                            let spec = CreateTmuxWindow(sessionName: remote.sessionName, workingDirectory: currentPath)
-                            let result = await connection.relayClient.sendCommand(spec, paneId: "")
-                            if case let .success(response) = result, let paneId = response.paneId {
-                                await connection.relayClient.requestSessionState()
-                                // Poll for the new window to appear in the session store,
-                                // with a timeout to avoid waiting forever.
-                                for _ in 0..<20 {
-                                    do {
-                                        try await Task.sleep(for: .milliseconds(100))
-                                    } catch {
-                                        return
-                                    }
-                                    guard
-                                        selectedRemoteSession?.hostId == remote.hostId,
-                                        selectedRemoteSession?.sessionName == remote.sessionName else { return }
-                                    let refreshedWindows = selectedRemoteSessionWindows
-                                    if let newWindow = refreshedWindows.first(where: { $0.panes.contains(where: { $0.paneId == paneId }) }) {
-                                        adoptCreatedWindow(hostID: remote.hostId, windowID: newWindow.stableId)
-                                        selectTerminalWindow(stableId: newWindow.stableId)
-                                        return
-                                    }
-                                }
-                            }
-                        }
-                    },
+                    onNewWindow: { createTerminalTab() },
                     agentConfiguration: agentTabConfiguration(
                         sessionName: remote.sessionName,
                         hostID: remote.hostId,
@@ -1380,6 +1401,11 @@ public struct MainView: View {
                     selectedBrowserTab: selectedBrowserTab
                 )
             }
+            .background {
+                if let remoteTabs {
+                    WorkbenchSplitFocus(tabs: remoteTabs)
+                }
+            }
             .id("\(remote.hostId)-\(remote.sessionName)")
         } else if let session = currentLocalSession() {
             let window = selectedWindow
@@ -1432,29 +1458,7 @@ public struct MainView: View {
                         onCloseWindow: { windowToClose in
                             requestCloseWindow(windowToClose)
                         },
-                        onNewWindow: {
-                            Task {
-                                do {
-                                    let paneId = try await tmuxService.newWindow(
-                                        sessionName: session.sessionName,
-                                        workingDirectory: directoryPath
-                                    )
-                                    let newWindow = await PaneSurfaceRetry.localWindow(
-                                        containing: paneId,
-                                        windows: { tmuxService.windows },
-                                        refresh: { _ = await tmuxService.refreshPanes() }
-                                    )
-                                    if let newWindow {
-                                        adoptCreatedWindow(hostID: nil, windowID: newWindow.stableId)
-                                        selectTerminalWindow(stableId: newWindow.stableId)
-                                    } else if !Task.isCancelled {
-                                        attachError = "Window created but didn't appear in time. Try selecting it from the tab bar."
-                                    }
-                                } catch {
-                                    attachError = "Failed to create window: \(error.localizedDescription)"
-                                }
-                            }
-                        },
+                        onNewWindow: { createTerminalTab() },
                         agentConfiguration: agentTabConfiguration(
                             sessionName: session.sessionName,
                             hostID: nil,
@@ -1594,6 +1598,11 @@ public struct MainView: View {
                     sessionTabs: sessionFileTabsStates[session.sessionName],
                     selectedBrowserTab: selectedBrowserTab
                 )
+            }
+            .background {
+                if let sessionTabs {
+                    WorkbenchSplitFocus(tabs: sessionTabs)
+                }
             }
             .id(session.sessionName)
             .task(id: directoryPath) {
@@ -2121,12 +2130,13 @@ public struct MainView: View {
         gitWorkbenchStores[sessionName] = GitStoreEntry(path: directoryPath, store: store)
     }
 
-    private func localDirectoryPath(sessionName: String, window: LocalTmuxWindow?) -> String {
+    private func localDirectoryPath(sessionName: String, window: LocalTmuxWindow?, onRight: Bool = false) -> String {
         WorkbenchDirectoryContext.resolve(
             terminalPath: window?.activePane?.currentPath,
             tabs: sessionFileTabsStates[sessionName],
             retainedGitPath: gitWorkbenchStores[sessionName]?.path,
-            homeDirectory: NSHomeDirectory()
+            homeDirectory: NSHomeDirectory(),
+            onRight: onRight
         )
     }
 
@@ -2277,6 +2287,15 @@ public struct MainView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        if detachedWorkspace == nil {
+            ToolbarItem(placement: .navigation) {
+                Button { showingSessionSwitcher = true } label: {
+                    Label("Switch Session", symbol: .magnifyingglass)
+                }
+                .help("Switch Session (⌘P)")
+                .accessibilityIdentifier("session-switcher-button")
+            }
+        }
         ToolbarItem(placement: .automatic) {
             TrialStatusToolbarItem()
         }
@@ -2964,20 +2983,208 @@ public struct MainView: View {
         }
     }
 
+    private var sessionSwitcherItems: [SessionSwitcherItem] {
+        orderedSidebarSessions().map { entry in
+            switch entry {
+            case let .local(session):
+                SessionSwitcherItem(
+                    id: .local(sessionName: session.sessionName),
+                    name: session.sessionName,
+                    title: localSessionSortData(session).primaryLabel,
+                    host: "This Mac"
+                )
+            case let .remote(hostID, hostName, session):
+                SessionSwitcherItem(
+                    id: .remote(hostID: hostID, sessionName: session.sessionName),
+                    name: session.sessionName,
+                    title: remoteSessionPrimaryLabel(hostId: hostID, sessionName: session.sessionName) ?? session.sessionName,
+                    host: hostName,
+                    isAvailable: coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true
+                )
+            }
+        }
+    }
+
+    private var currentSessionTabs: SessionFileTabsState? {
+        if let remote = selectedRemoteSession {
+            return remoteSessionTabsStates[remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)]
+        }
+        return currentLocalSession().flatMap { sessionFileTabsStates[$0.sessionName] }
+    }
+
+    private var targetsRightPane: Bool {
+        currentSessionTabs?.isSplit == true && currentSessionTabs?.isRightPaneFocused == true
+    }
+
+    private var menuTerminalWindowID: String? {
+        if targetsRightPane {
+            return currentSessionTabs?.selectedRight?.windowId
+        }
+        return selectedRemoteSession == nil ? selectedWindow?.stableId : selectedRemoteWindow?.stableId
+    }
+
+    private func excludedMenuWindowIDs(live: [String], tabs: SessionFileTabsState?) -> Set<String> {
+        let right = tabs?.rightSideWindowIds ?? []
+        return targetsRightPane ? Set(live).subtracting(right) : right
+    }
+
+    private func selectMenuTerminalWindow(_ id: String) {
+        if targetsRightPane {
+            currentSessionTabs?.selectedRight = .window(id)
+            focusRightTerminal(id)
+        } else {
+            selectTerminalWindow(stableId: id)
+        }
+    }
+
+    private func focusRightTerminal(_ id: String) {
+        let paneID: String?
+        if selectedRemoteSession != nil {
+            paneID = selectedRemoteSessionWindows.first { $0.stableId == id }?.activePane?.paneId
+        } else {
+            paneID = currentLocalSession()?.windows.first { $0.stableId == id }?.activePane?.paneId
+        }
+        if let paneID {
+            terminalQuickActions.requestFocus(hostID: selectedRemoteSession?.hostId, paneID: paneID)
+        }
+        requestAutomaticTabFit(windowID: id)
+    }
+
+    private func selectAdjacentRightTab(direction: Int) {
+        guard let tabs = currentSessionTabs else { return }
+        let ids = selectedRemoteSession == nil
+            ? currentLocalSession()?.windows.map(\.stableId) ?? [] : selectedRemoteSessionWindows.map(\.stableId)
+        let entries = TabDragPayload.reconciledOrder(
+            windowIds: ids.filter { ownsTerminal(hostID: selectedRemoteSession?.hostId, windowID: $0) },
+            fileTabIds: tabs.openFileTabs.map(\.id), browserTabIds: tabs.openBrowserTabs.map(\.id),
+            storedOrder: tabs.tabOrder, includeFileExplorer: false, includeGit: selectedRemoteSession == nil
+        ).filter { tabs.rightSide.contains($0) }
+        guard entries.count > 1, let selected = tabs.selectedRight, let index = entries.firstIndex(of: selected) else { return }
+        let next = entries[(index + direction + entries.count) % entries.count]
+        tabs.selectedRight = next
+        if case let .window(id) = next {
+            focusRightTerminal(id)
+        }
+    }
+
+    private func closeRightTab() {
+        guard let selected = currentSessionTabs?.selectedRight else { return }
+        if let remote = selectedRemoteSession {
+            switch selected {
+            case let .window(id):
+                if let window = selectedRemoteSessionWindows.first(where: { $0.stableId == id }) {
+                    requestCloseRemoteWindow(window, hostId: remote.hostId)
+                }
+            case let .file(id): closeRemoteFileTab(id, hostID: remote.hostId, sessionName: remote.sessionName)
+            case let .browser(id): closeRemoteBrowserTab(id, hostId: remote.hostId, sessionName: remote.sessionName)
+            case .fileExplorer,
+                 .git: break
+            }
+        } else if let session = currentLocalSession() {
+            switch selected {
+            case let .window(id):
+                if let window = session.windows.first(where: { $0.stableId == id }) {
+                    requestCloseWindow(window)
+                }
+            case let .file(id): closeOpenFileTab(id, sessionName: session.sessionName)
+            case let .browser(id): closeBrowserTab(id, sessionName: session.sessionName)
+            case .fileExplorer,
+                 .git: break
+            }
+        }
+    }
+
+    private var canCreateTerminal: Bool {
+        guard !isCreatingTerminal else { return false }
+        if let remote = selectedRemoteSession {
+            return coordinator.viewerConnectionManager?.connection(for: remote.hostId)?.isHostConnected == true
+        }
+        return currentLocalSession() != nil
+    }
+
+    private func createTerminalTab() {
+        guard canCreateTerminal, let selection = sidebarSessionSelection.wrappedValue else { return }
+        let hostID = selectedRemoteSession?.hostId
+        let sessionName = selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName ?? ""
+        let onRight = targetsRightPane
+        let tabs = currentSessionTabs
+        let sourceID = menuTerminalWindowID
+        let focused = terminalQuickActions.active
+        let sourcePane = focused.flatMap { endpoint -> PaneState? in
+            guard endpoint.isAvailable, endpoint.hostID == hostID else { return nil }
+            let pane: PaneState?
+            if let hostID {
+                pane = coordinator.remoteSessionStore?.paneState(for: endpoint.paneID, hostId: hostID)
+            } else {
+                pane = windowManager.paneStates[endpoint.paneID]
+            }
+            return pane?.sessionName == sessionName && pane?.stableWindowId == sourceID ? pane : nil
+        }
+        let directory = tabs?.selectedDirectoryPath(onRight: onRight) ?? sourcePane?.currentPath ?? (hostID == nil
+            ? localDirectoryPath(
+                sessionName: sessionName,
+                window: currentLocalSession()?.windows.first { $0.stableId == sourceID },
+                onRight: onRight
+            )
+            : selectedRemoteSessionWindows.first { $0.stableId == sourceID }?.activePane?.currentPath)
+        isCreatingTerminal = true
+        Task {
+            defer { isCreatingTerminal = false }
+            do {
+                let newWindowID: String
+                if let hostID, let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient {
+                    let response = try await client.sendCommand(CreateTmuxWindow(sessionName: sessionName, workingDirectory: directory), paneId: "").get()
+                    guard let paneID = response.paneId else { throw ViewerRelayClientError.commandFailed("The Host did not return the new terminal.") }
+                    await client.requestSessionState()
+                    var found: String?
+                    for _ in 0..<20 {
+                        found = coordinator.remoteSessionStore?.windows(for: hostID).first { $0.panes.contains { $0.paneId == paneID } }?.stableId
+                        if found != nil {
+                            break
+                        }
+                        try await Task.sleep(for: .milliseconds(150))
+                    }
+                    guard let found else { throw ViewerRelayClientError.commandFailed("Terminal created but not visible yet. Select it from the tab bar.") }
+                    newWindowID = found
+                } else if hostID == nil {
+                    let paneID = try await tmuxService.newWindow(sessionName: sessionName, workingDirectory: directory)
+                    guard let window = await PaneSurfaceRetry.localWindow(containing: paneID, windows: { tmuxService.windows }, refresh: { _ = await tmuxService.refreshPanes() }) else {
+                        throw ViewerRelayClientError.commandFailed("Terminal created but not visible yet. Select it from the tab bar.")
+                    }
+                    newWindowID = window.stableId
+                } else {
+                    return
+                }
+                adoptCreatedWindow(hostID: hostID, windowID: newWindowID)
+                guard sidebarSessionSelection.wrappedValue == selection, targetsRightPane == onRight else { return }
+                if onRight {
+                    tabs?.rightSide.insert(.window(newWindowID))
+                    tabs?.selectedRight = .window(newWindowID)
+                    focusRightTerminal(newWindowID)
+                } else {
+                    selectTerminalWindow(stableId: newWindowID)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                attachError = "Failed to create terminal: \(error.localizedDescription)"
+            }
+        }
+    }
+
     // MARK: - Menu Commands
 
     /// Window ids eligible for the window-only menu shortcuts, in the same
-    /// visual order as the tab strip. A split's right side is intentionally
-    /// excluded: keyboard navigation controls the primary terminal surface
-    /// and never replaces content the user pinned on the right.
+    /// visual order as the focused side of the tab strip.
     private var navigableTerminalWindowIDs: [String] {
+        guard !isPresentingSessionPicker else { return [] }
         if let remote = selectedRemoteSession {
             let key = remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)
             let tabs = remoteSessionTabsStates[key]
             return TerminalWindowNavigation.orderedWindowIDs(
                 liveWindowIDs: selectedRemoteSessionWindows.filter { ownsTerminal(hostID: remote.hostId, windowID: $0.stableId) }.map(\.stableId),
                 storedTabOrder: tabs?.tabOrder ?? [],
-                excludedWindowIDs: tabs?.rightSideWindowIds ?? []
+                excludedWindowIDs: excludedMenuWindowIDs(live: selectedRemoteSessionWindows.map(\.stableId), tabs: tabs)
             )
         }
 
@@ -2986,7 +3193,7 @@ public struct MainView: View {
         return TerminalWindowNavigation.orderedWindowIDs(
             liveWindowIDs: session.windows.filter { ownsTerminal(hostID: nil, windowID: $0.stableId) }.map(\.stableId),
             storedTabOrder: tabs?.tabOrder ?? [],
-            excludedWindowIDs: tabs?.rightSideWindowIds ?? []
+            excludedWindowIDs: excludedMenuWindowIDs(live: session.windows.map(\.stableId), tabs: tabs)
         )
     }
 
@@ -3003,14 +3210,14 @@ public struct MainView: View {
 
     private func selectAdjacentTerminalWindow(direction: Int) {
         let orderedIDs = navigableTerminalWindowIDs
-        let currentID = selectedRemoteSession == nil ? selectedWindow?.stableId : selectedRemoteWindow?.stableId
+        let currentID = menuTerminalWindowID
         guard
             let targetID = TerminalWindowNavigation.adjacentWindowID(
                 currentID: currentID,
                 orderedWindowIDs: orderedIDs,
                 direction: direction
             ) else { return }
-        selectTerminalWindow(stableId: targetID)
+        selectMenuTerminalWindow(targetID)
     }
 
     private var browserAnnotationContext: BrowserAnnotationContext? {
@@ -3194,7 +3401,7 @@ public struct MainView: View {
                 at: index,
                 orderedWindowIDs: navigableTerminalWindowIDs
             ) else { return }
-        selectTerminalWindow(stableId: targetID)
+        selectMenuTerminalWindow(targetID)
     }
 
     private func selectTerminalWindow(stableId: String) {
@@ -3244,6 +3451,15 @@ public struct MainView: View {
     /// window. Lifted out so the body's modifier chain stays small enough
     /// for the type checker to handle.
     private func handleCloseCurrentTab() {
+        if isPresentingSessionPicker {
+            showingSessionSwitcher = false
+            showingNewLocalSession = false
+            return
+        }
+        if targetsRightPane {
+            closeRightTab()
+            return
+        }
         if let remote = selectedRemoteSession {
             // If a remote browser tab is selected, Cmd-W closes that tab
             // first — mirrors the local "tab over window" precedence.
@@ -3289,8 +3505,13 @@ public struct MainView: View {
 
     /// Cmd-Shift-[ / Cmd-Shift-] handler. Walks the active session's tab
     /// strip in visual order, even when only Files / Browser tabs remain.
-    /// Wraps at both ends and leaves the right split's selection untouched.
+    /// Wraps at both ends within the focused split.
     private func selectAdjacentTab(direction: Int) {
+        guard !isPresentingSessionPicker else { return }
+        if targetsRightPane {
+            selectAdjacentRightTab(direction: direction)
+            return
+        }
         if let remote = selectedRemoteSession {
             cycleRemoteWindowTab(remote: remote, direction: direction)
             return
@@ -3505,7 +3726,7 @@ public struct MainView: View {
     /// Selects a local session for the left pane, skipping any window the user
     /// has parked on the right side so the two panes don't end up showing the
     /// same terminal after a session round-trip. Shared by the sidebar row
-    /// button and ⌘` / ⌘⇧` session cycling.
+    /// button and session navigation.
     private func selectLocalSession(_ session: LocalTmuxSession) {
         selectedRemoteSession = nil
         selectedRemoteWindowId = nil
@@ -3516,7 +3737,7 @@ public struct MainView: View {
     }
 
     /// One entry in the sidebar's combined, ordered session list — a local
-    /// session or a remote host's session — used by ⌘` / ⌘⇧` cycling.
+    /// session or a remote host's session — used by session navigation and search.
     private enum SidebarSessionEntry {
         case local(LocalTmuxSession)
         case remote(hostId: String, hostName: String, session: TmuxSession)
@@ -3581,7 +3802,7 @@ public struct MainView: View {
         return nil
     }
 
-    /// Cmd-` / Cmd-Shift-` handler. Selects the session `direction` steps away
+    /// Selects the session `direction` steps away
     /// from the current one in the sidebar's combined local+remote order,
     /// wrapping around the ends. When nothing is selected yet it steps in from
     /// the leading edge (forward) or trailing edge (backward). No-op when there

@@ -56,6 +56,13 @@ final class TerminalQuickActionEndpoint {
 @MainActor
 @Observable
 final class TerminalQuickActionRouter {
+    private(set) var voiceInputRequest = 0
+
+    func toggleVoiceInput() {
+        guard active?.isAvailable == true else { return }
+        voiceInputRequest &+= 1
+    }
+
     struct FocusRequest: Equatable {
         let id = UUID()
         let hostID: String?

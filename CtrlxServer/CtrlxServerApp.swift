@@ -463,6 +463,7 @@ struct TmuxPaneMirrorApp: App {
             dockIconService.setBadgeCount(newValue)
         }
         .commands {
+            WorkbenchKeyboardCommands(settings: coordinator.settings)
             // App menu - custom About window
             CommandGroup(replacing: .appInfo) {
                 AboutMenuItem()
@@ -474,14 +475,6 @@ struct TmuxPaneMirrorApp: App {
                 InstallCLIMenuItem()
             }
 
-            // File menu - New Session (⌘N) opens the Local section's popover
-            CommandGroup(replacing: .newItem) {
-                Button("New Session") {
-                    workbenchMenuActions?.newLocalSession?()
-                }
-                .keyboardShortcut("n", modifiers: .command)
-                .disabled(workbenchMenuActions?.newLocalSession == nil)
-            }
             CommandGroup(replacing: .saveItem) {}
             CommandGroup(after: .newItem) {
                 CloseTabMenuItem()
@@ -516,13 +509,11 @@ struct TmuxPaneMirrorApp: App {
                 Button("Previous Session") {
                     workbenchMenuActions?.selectPreviousSession?()
                 }
-                .keyboardShortcut("`", modifiers: [.command, .shift])
                 .disabled(workbenchMenuActions?.selectPreviousSession == nil)
 
                 Button("Next Session") {
                     workbenchMenuActions?.selectNextSession?()
                 }
-                .keyboardShortcut("`", modifiers: .command)
                 .disabled(workbenchMenuActions?.selectNextSession == nil)
 
                 Divider()
@@ -541,31 +532,6 @@ struct TmuxPaneMirrorApp: App {
                     NSApp.sendAction(#selector(TerminalActions.copyWithControlSequences), to: nil, from: nil)
                 }
                 .keyboardShortcut("c", modifiers: [.command, .control])
-            }
-
-            // View menu - replace default toolbar items (removes Enter Full Screen)
-            CommandGroup(replacing: .toolbar) {
-                Button("Increase Font Size") {
-                    coordinator.settings.increaseFontSize()
-                }
-                .keyboardShortcut("+", modifiers: .command)
-
-                Button("Decrease Font Size") {
-                    coordinator.settings.decreaseFontSize()
-                }
-                .keyboardShortcut("-", modifiers: .command)
-
-                Divider()
-
-                Button("Refresh Sessions") {
-                    NotificationCenter.default.post(name: .refreshPaneList, object: nil)
-                }
-                .keyboardShortcut("r", modifiers: .command)
-
-                Divider()
-
-                Toggle("Show Status Bar", isOn: Bindable(coordinator.settings).showStatusBar)
-                    .keyboardShortcut("s", modifiers: [.command, .shift])
             }
 
             // Help menu - CLI API Reference

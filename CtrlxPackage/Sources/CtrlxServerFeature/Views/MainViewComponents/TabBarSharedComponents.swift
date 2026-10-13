@@ -122,7 +122,7 @@ struct NewTabMenuButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .fixedSize()
-        .help(helpText)
+        .help("\(helpText) · New Terminal: ⌘T")
         .accessibilityLabel("New Tab")
         .popover(item: $presentedAgents) { configuration in
             NewAgentTabPanel(configuration: configuration)

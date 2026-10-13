@@ -568,6 +568,10 @@ final public class AppSettings {
         fontSize = max(fontSize - 1, Self.minFontSize)
     }
 
+    public func resetFontSize() {
+        fontSize = Defaults.fontSize
+    }
+
     // MARK: - Keys
 
     public enum Keys: String {

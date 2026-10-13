@@ -497,17 +497,16 @@ enum MacOSAccessibility {
         rightClick(appPID: appPID, matching: .anyTextMatches(titled))
     }
 
-    /// Post a CGEvent key press for the given virtual key code.
-    static func pressKey(code: UInt16, modifiers: CGEventFlags = []) {
+    /// Deliver keys to the isolated test app, without invoking global shortcuts.
+    static func pressKey(appPID: pid_t, code: UInt16, modifiers: CGEventFlags = []) {
         let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)
-        if !modifiers.isEmpty {
-            keyDown?.flags = modifiers
-            keyUp?.flags = modifiers
-        }
-        keyDown?.post(tap: .cghidEventTap)
+        // Clear inherited flags too: Return after Command-P must not become Command-Return.
+        keyDown?.flags = modifiers
+        keyUp?.flags = modifiers
+        keyDown?.postToPid(appPID)
         usleep(50_000)
-        keyUp?.post(tap: .cghidEventTap)
+        keyUp?.postToPid(appPID)
     }
 
     /// Translate a ``Key`` into its US-keyboard virtual key code.

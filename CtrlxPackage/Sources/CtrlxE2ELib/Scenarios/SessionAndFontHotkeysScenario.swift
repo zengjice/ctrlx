@@ -1,38 +1,7 @@
 import Foundation
 
-/// E2E scenario: the ⌘` / ⌘⇧` session-cycling and ⌘+ / ⌘- font-size hotkeys
-/// added for issue #648.
-///
-/// Two local tmux sessions (`hkalpha`, `hkbeta`) are created. Because there are
-/// exactly two, "next session" from one always lands on the other regardless of
-/// the sidebar sort order, which keeps the assertions order-independent.
-///
-/// Selection is proven via the window-tab strip: only the *selected* session's
-/// windows render there, and the active window tab carries an AX value of
-/// "selected" (its label is `<session>:0 …`). So the mere appearance of a
-/// `hkbeta:0` selected tab after ⌘` proves the session switched.
-///
-/// Font size is proven visually — the same session is screenshotted at the
-/// default 12 pt, enlarged with six ⌘+ presses (to 18 pt, safely under the
-/// 24 pt cap so it never clamps), then returned to 12 pt with six matching ⌘-
-/// presses. The symmetric restore leaves the *persisted* font size untouched
-/// so later scenarios' baselines are unaffected.
-///
-/// The font phase asserts that font changes alone leave tmux untouched, then
-/// uses the explicit fit button to apply the new cell geometry. Restoring the
-/// font similarly requires another click and returns to the original rows and
-/// columns.
-///
-/// The font-demo session (`hkalpha`) is deliberately filled with many lines of
-/// text so a font-size change moves a large fraction of the on-screen pixels.
-/// That keeps the baseline comparison sensitive: if the ⌘+/⌘- hotkeys silently
-/// stopped changing the font, the "increased" shot would look like the default
-/// one and the comparison would fail loudly. A single line of output would only
-/// nudge a handful of pixels and could slip under the comparison tolerance.
-///
-/// Note: `⌘+` is physically `⌘⇧=` (the `=`/`+` key), matching how the menu item
-/// is bound and displayed; the driver's US key table gained `` ` `` (backtick,
-/// key code 50) so this scenario can press it.
+/// Exercises session switching through Command-P and terminal font shortcuts.
+/// Font changes remain presentation-only until the explicit fit action.
 public enum SessionAndFontHotkeysScenario {
     public static let scenario = CtrlxE2ELib.scenario(
         "Session And Font Hotkeys",
@@ -78,38 +47,18 @@ public enum SessionAndFontHotkeysScenario {
         )
         TestStep.macScreenshot(label: "mac-hotkeys-alpha-selected")
 
-        // ── ⌘` cycles to the next session (hkbeta) ───────────────────
-        TestStep.log("Cmd-` selects the next session — hkbeta")
+        for target in ["hkbeta", "hkalpha", "hkbeta", "hkalpha"] {
+            TestStep.macPressKey(.character("p"), modifiers: .command)
+            TestStep.macWaitForElementQuery(.identifier("session-switcher-search"), timeout: 5)
+            TestStep.macPressKey(.downArrow)
+            TestStep.macPressKey(.return)
+            TestStep.macWaitForElementQuery(
+                .allOf([.labelContains("\(target):0"), .valueContains("selected")]), timeout: 10
+            )
+        }
+        // With one workbench, the system's window shortcut must not cycle sessions.
         TestStep.macPressKey(.character("`"), modifiers: .command)
-        TestStep.macWaitForElementQuery(
-            .allOf([.labelContains("hkbeta:0"), .valueContains("selected")]),
-            timeout: 10
-        )
-        TestStep.macScreenshot(label: "mac-hotkeys-next-session-beta")
-
-        // ── ⌘` again wraps back to hkalpha ───────────────────────────
-        TestStep.log("Cmd-` again wraps forward back to hkalpha")
-        TestStep.macPressKey(.character("`"), modifiers: .command)
-        TestStep.macWaitForElementQuery(
-            .allOf([.labelContains("hkalpha:0"), .valueContains("selected")]),
-            timeout: 10
-        )
-
-        // ── ⌘⇧` steps to the previous session (hkbeta, wrapping) ──────
-        TestStep.log("Cmd-Shift-` selects the previous session — hkbeta")
-        TestStep.macPressKey(.character("`"), modifiers: [.command, .shift])
-        TestStep.macWaitForElementQuery(
-            .allOf([.labelContains("hkbeta:0"), .valueContains("selected")]),
-            timeout: 10
-        )
-        TestStep.macScreenshot(label: "mac-hotkeys-prev-session-beta")
-
-        // Return to hkalpha for the font-size demonstration.
-        TestStep.macPressKey(.character("`"), modifiers: [.command, .shift])
-        TestStep.macWaitForElementQuery(
-            .allOf([.labelContains("hkalpha:0"), .valueContains("selected")]),
-            timeout: 10
-        )
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("hkalpha:0"), .valueContains("selected")]), timeout: 5)
 
         // ── ⌘+ / ⌘- change the terminal font size ────────────────────
         // Font changes are presentation-only until the explicit fit button is
@@ -158,10 +107,12 @@ public enum SessionAndFontHotkeysScenario {
         TestStep.macWaitForElement(titled: "${fontIncreasedWidth}x${fontIncreasedHeight}", timeout: 5)
         TestStep.macScreenshot(label: "mac-hotkeys-font-increased")
 
-        TestStep.log("Cmd-- shrinks the terminal font back to the default")
+        TestStep.log("Cmd-- shrinks the terminal font; Cmd-0 restores its default")
         for _ in 0..<6 {
             TestStep.macPressKey(.character("-"), modifiers: .command)
         }
+        TestStep.macPressKey(.character("="), modifiers: [.command, .shift])
+        TestStep.macPressKey(.character("0"), modifiers: .command)
         TestStep.wait(seconds: 1)
         TestStep.tmuxStorePaneDimensions(
             target: "hkalpha:0",

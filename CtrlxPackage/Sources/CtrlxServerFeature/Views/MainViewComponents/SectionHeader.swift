@@ -10,10 +10,6 @@ struct SectionHeader<Trailing: View, Popover: View>: View {
     let popover: Popover
     let hasPopover: Bool
     let newSessionButtonIdentifier: String?
-    /// Incrementing this from the parent opens the popover programmatically
-    /// (e.g. via the ⌘N menu command). Ignored when the header has no popover.
-    var openPopoverTrigger = 0
-
     @State private var showingPopover = false
 
     var body: some View {
@@ -39,7 +35,7 @@ struct SectionHeader<Trailing: View, Popover: View>: View {
                 .disabled(isNewSessionDisabled)
                 .accessibilityLabel("Create new session")
                 .accessibilityIdentifier(newSessionButtonIdentifier ?? "")
-                .help("Create new session")
+                .help(newSessionButtonIdentifier == "new-session-local" ? "Create new session (⌘N)" : "Create new session")
                 .popover(isPresented: $showingPopover) {
                     popover
                 }
@@ -51,9 +47,6 @@ struct SectionHeader<Trailing: View, Popover: View>: View {
         .padding(.top, 8)
         .padding(.bottom, 4)
         .padding(.trailing, 8)
-        .onChange(of: openPopoverTrigger) {
-            showingPopover = true
-        }
     }
 }
 
@@ -77,7 +70,6 @@ extension SectionHeader where Trailing == EmptyView {
         symbol: Symbols,
         isNewSessionDisabled: Bool = false,
         newSessionButtonIdentifier: String? = nil,
-        openPopoverTrigger: Int = 0,
         @ViewBuilder popover: () -> Popover
     ) {
         self.title = title
@@ -87,7 +79,6 @@ extension SectionHeader where Trailing == EmptyView {
         self.popover = popover()
         self.hasPopover = true
         self.newSessionButtonIdentifier = newSessionButtonIdentifier
-        self.openPopoverTrigger = openPopoverTrigger
     }
 }
 

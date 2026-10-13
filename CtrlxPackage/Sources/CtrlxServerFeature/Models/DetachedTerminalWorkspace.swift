@@ -105,8 +105,15 @@ enum WorkspaceTerminalSelection {
 }
 
 extension SessionFileTabsState {
-    var selectedDirectoryPath: String? {
-        guard let id = selectedFileTabId else { return nil }
+    func selectedDirectoryPath(onRight: Bool = false) -> String? {
+        let id: UUID
+        if onRight {
+            guard case let .file(rightID) = selectedRight else { return nil }
+            id = rightID
+        } else {
+            guard let selectedFileTabId else { return nil }
+            id = selectedFileTabId
+        }
         return directoryTabs[id]?.path
             ?? openFileTabs.first(where: { $0.id == id && !$0.isDirectory })?.directoryPath
     }
@@ -189,8 +196,9 @@ extension SessionFileTabsState {
 enum WorkbenchDirectoryContext {
     @MainActor
     static func resolve(
-        terminalPath: String?, tabs: SessionFileTabsState?, retainedGitPath: String?, homeDirectory: String
+        terminalPath: String?, tabs: SessionFileTabsState?, retainedGitPath: String?, homeDirectory: String,
+        onRight: Bool = false
     ) -> String {
-        terminalPath ?? tabs?.selectedDirectoryPath ?? retainedGitPath ?? homeDirectory
+        terminalPath ?? tabs?.selectedDirectoryPath(onRight: onRight) ?? retainedGitPath ?? homeDirectory
     }
 }

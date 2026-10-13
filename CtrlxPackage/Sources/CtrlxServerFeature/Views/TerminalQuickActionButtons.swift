@@ -7,6 +7,7 @@ import SwiftUI
 @MainActor
 struct TerminalQuickActionButtons: View {
     let router: TerminalQuickActionRouter
+    var ownsShortcutFocus = true
     @Environment(AppSettings.self) private var settings
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(MirrorWindowManager.self) private var windowManager
@@ -113,7 +114,7 @@ struct TerminalQuickActionButtons: View {
         }
 
         MacVoiceInputButton(
-            router: router, settings: settings.voiceCorrection,
+            router: router, ownsShortcutFocus: ownsShortcutFocus, settings: settings.voiceCorrection,
             context: phraseContext, targetLabel: presentation.label,
             isSuspended: commandPanel != nil || phrasePanel != nil,
             contextProvider: voiceInputContext,
@@ -210,7 +211,7 @@ struct TerminalQuickActionStatusBarButtons: View {
         if let router {
             let ownsFocus = router.containsFocus(hostID: hostID, paneIDs: paneIDs)
             HStack(spacing: 2) {
-                TerminalQuickActionButtons(router: router)
+                TerminalQuickActionButtons(router: router, ownsShortcutFocus: ownsFocus)
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)

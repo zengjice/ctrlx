@@ -10,6 +10,9 @@ struct MenuCommandsModifier: ViewModifier {
     let onSelectPreviousSession: @MainActor () -> Void
     let onSelectNextSession: @MainActor () -> Void
     let onNewLocalSession: @MainActor () -> Void
+    let onNewTerminal: (@MainActor () -> Void)?
+    let onSwitchSession: (@MainActor () -> Void)?
+    let onToggleVoiceInput: (@MainActor () -> Void)?
     let allowsSessionNavigation: Bool
 
     func body(content: Content) -> some View {
@@ -20,7 +23,10 @@ struct MenuCommandsModifier: ViewModifier {
                 selectNextTab: onSelectNextTab,
                 selectPreviousSession: allowsSessionNavigation ? onSelectPreviousSession : nil,
                 selectNextSession: allowsSessionNavigation ? onSelectNextSession : nil,
-                newLocalSession: allowsSessionNavigation ? onNewLocalSession : nil
+                newLocalSession: allowsSessionNavigation ? onNewLocalSession : nil,
+                newTerminal: onNewTerminal,
+                switchSession: onSwitchSession,
+                toggleVoiceInput: onToggleVoiceInput
             ))
     }
 }

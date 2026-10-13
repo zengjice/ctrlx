@@ -286,6 +286,9 @@ final class FileBrowserState {
 @Observable
 @MainActor
 final class SessionFileTabsState {
+    /// Device-local keyboard target; never persisted or sent to the Host.
+    var isRightPaneFocused = false
+
     static func migrateSession(_ rename: SessionRenameMapping, in sessions: inout [String: SessionFileTabsState]) {
         guard let tabs = sessions.removeValue(forKey: rename.oldName) else { return }
         tabs.remapWindowIDs(rename.windowIDs)

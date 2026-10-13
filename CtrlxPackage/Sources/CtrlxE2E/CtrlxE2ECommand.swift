@@ -254,6 +254,9 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
     }
 
     private static let allScenarios: [TestScenario] = [
+        WorkbenchKeyboardScenario.scenario,
+        WorkbenchKeyboardScenario.newTerminalDirectory,
+        WorkbenchKeyboardScenario.splitFilesDirectory,
         NewTerminalScenario.scenario,
         UnpairFromIOSScenario.scenario,
         UnpairFromMacOSScenario.scenario,
