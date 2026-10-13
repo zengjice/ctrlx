@@ -13,6 +13,7 @@
 
         let paneId: String?
         let relayClient: ViewerRelayClient
+        @Binding var clipboardPaste: TerminalImagePasteRequest?
 
         @Dependency(ClipboardClient.self) private var clipboard
 
@@ -100,6 +101,12 @@
                 selectedPhotos = []
                 loadPhotos(items)
             }
+            .onChange(of: clipboardPaste?.id) { _, _ in
+                guard let request = clipboardPaste else { return }
+                clipboardPaste = nil
+                guard canStartInput, request.paneId == paneId, captureTargetPane() else { return }
+                prepareClipboardImage(request.image)
+            }
             .onDisappear(perform: handleDisappear)
             .alert("Image Input Failed", isPresented: .init(
                 get: { sourceErrorMessage != nil },
@@ -137,7 +144,11 @@
 
         private func pasteImage() {
             guard captureTargetPane() else { return }
-            guard let image = clipboard.getImage() else {
+            prepareClipboardImage(clipboard.getImage())
+        }
+
+        private func prepareClipboardImage(_ image: ClipboardImage?) {
+            guard let image else {
                 targetPaneId = nil
                 sourceErrorMessage = ImageUploadError.noClipboardImage.localizedDescription
                 return
@@ -360,6 +371,7 @@
         }
 
         private func handleDisappear() {
+            clipboardPaste = nil
             guard
                 !isPhotoPickerPresented,
                 !isFileImporterPresented,
@@ -376,6 +388,14 @@
             draftImages = []
             targetPaneId = nil
         }
+    }
+
+    /// Captures the clipboard at the explicit paste action, before presenting UI.
+    /// A nil image lets the existing source-error alert report an unreadable paste.
+    struct TerminalImagePasteRequest: Identifiable {
+        let id = UUID()
+        let paneId: String
+        let image: ClipboardImage?
     }
 
     private struct ImageUploadSource: Sendable {

@@ -204,7 +204,15 @@ and page exit cancel pending selection and fitting, including delayed replies.
 With automatic sizing disabled, the Host's new-window dimensions are preserved
 on creation; a later explicit return to that tab fits it normally.
 
-The iOS system Paste action sends one `PasteTerminalText` operation, not
+The iOS terminal's system Paste action also accepts clipboard images. It captures
+the image when Paste is selected and opens the same preview/confirmation flow as
+the toolbar's Paste Image action. An image takes priority over any accompanying
+text representation; plain text retains its normal paste path. Confirming sends
+the image to the pane captured at paste time through `SendDroppedFiles`, without
+an extra Enter. Clipboard content is read only after an explicit Paste action;
+an unreadable image uses the existing image-input error presentation.
+
+For text, the iOS system Paste action sends one `PasteTerminalText` operation, not
 `TmuxKey.from(bytes:)`. Both Viewer and Host serialize it with keyboard input.
 The Host loads a unique tmux buffer and uses `paste-buffer -p -r -d`: tmux checks
 the receiving app's bracketed-paste flag; LF, CRLF, Unicode and trailing line

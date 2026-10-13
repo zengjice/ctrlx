@@ -77,6 +77,7 @@
 
         /// Latest clipboard content from each pane, keyed by pane ID
         @State private var clipboardContents: [String: String] = [:]
+        @State private var clipboardImagePaste: TerminalImagePasteRequest?
 
         /// The last value this view wrote to the system pasteboard.
         ///
@@ -690,7 +691,8 @@
                 ToolbarItem(placement: .topBarTrailing) {
                     ImageUploadToolbarButton(
                         paneId: activePaneId,
-                        relayClient: relayClient
+                        relayClient: relayClient,
+                        clipboardPaste: $clipboardImagePaste
                     )
                 }
 
@@ -1233,6 +1235,10 @@
                 onTerminalPaste: { text in
                     guard settings.agentBackgroundMonitoringEnabled, relayClient.isHostConnected else { return }
                     backgroundMonitoring.handleTerminalPaste(text, hostId: hostId, paneId: pane.paneId)
+                },
+                onPasteImage: { image in
+                    guard terminalIsVisible, activePaneId == pane.paneId else { return }
+                    clipboardImagePaste = TerminalImagePasteRequest(paneId: pane.paneId, image: image)
                 },
                 onVoiceInputContextProviderChange: { provider in
                     if let provider {
