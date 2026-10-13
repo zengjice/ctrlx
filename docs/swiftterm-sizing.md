@@ -288,6 +288,118 @@ The window adds **110px vertical padding** for:
 - Status bar: ~28px
 - Buffer: ~16px
 
+## Detached terminal windows (Mac Local and Viewer)
+
+Terminal Window labels can be dragged away from the tab strip, or opened
+with **Open in Separate Window** in their context menu. This creates a native
+`DetachedTerminalScene`, not another tmux Window or an Agent fork. A detached
+scene reuses `MainView` without the session sidebar; it is a multi-tab workbench
+for exactly one Host and Session.
+
+`DetachedTerminalWindows` reserves presentation ownership using the Host pair ID
+(nil for Local) plus tmux's stable `@window_id`. Older Host snapshots that only
+provide `session:index` cannot detach. Each terminal appears in only its owning
+native window's tab strip. Terminal, Files and Browser tabs can move between the
+main workbench and detached workbenches for the same Host and Session, or reorder
+within them. Cross-Host/session drops cannot merge workspaces. Git remains a
+per-workbench utility; Simulator tabs are not transferable. Local simulator views
+and read-only Host simulator tabs remain in the main workbench, without being
+duplicated into every detached scene.
+
+Closing the native window returns its terminal ownership and live Files/Browser
+state to the main workbench without terminating tmux or reloading native browser
+pages. Cmd-W retains the main workbench's explicit close-current-tab behavior.
+There is no cross-launch restoration of detached scenes. While a session has
+detached tabs, main-window persistence must not save its partial tab set over a
+complete saved workspace; normal persistence resumes when tabs return.
+
+Each scene has its own `TerminalQuickActionRouter`, while pane state, ordered
+terminal streaming and Viewer connections remain shared. Existing pane layouts,
+Questions and editor overlays are reused. New Terminal/Agent, Fork, Open Files,
+Open Browser and terminal-link actions stay in the workbench that initiated
+them. Each scene has its own selection and tab state; browser presentation can
+move without changing the owning agent or native page identity. The toolbar and
+tab menus are the same components as the main window, including icon-only Fit.
+
+Workbench menu actions use scene-focused values, as Cmd-W already does; tab
+navigation and Find in Files never broadcast to other native windows. Session
+navigation and New Session are enabled only in the main workbench that owns the
+sidebar. Previous/Next Tab follow the left tab strip's order, excluding right-side
+tabs, and remain available when only Files/Browser tabs survive. Host browser
+catalog removals repair a lost left selection even when no split was collapsed,
+without stealing a still-valid selection or choosing a right-side tab.
+Viewer-local browser closes perform the same selection repair only after removing
+the tab and applying parent/origin return, so cleanup cannot erase the fallback.
+Find in Files reuses the selected directory tab before requiring a source terminal
+to create one. With no left terminal, Git takes the selected Files directory and
+then retains its existing store path across tab changes; mouse and keyboard
+selection use the same directory resolver. A live terminal's cwd still takes
+precedence. Moving an existing Git tab between split sides retains its store;
+only a missing store needs the shared directory resolver, never an empty window
+ID lookup that falls back to Home. Git's left-side selection belongs to the workbench's session tab
+state, not a terminal ID. Pane metadata refresh and terminal reindexing cannot
+clear it or select a Files fallback over it. Explicit left-side Terminal, Files
+or Browser selection leaves Git; selecting a right-side terminal does not.
+
+Terminal selection is scoped to the owning native window and excludes that
+window's right-side tabs. Split moves, detach/transfer, session selection and
+terminal removal use the same left-selection rule; closing a terminal rechecks
+ownership, including after process inspection. The session context survives an
+empty terminal selection, so Files/Browser tabs and the New Tab menu remain
+available after the last owned terminal exits while the tmux session still
+exists elsewhere. New terminals and compatible drops can rejoin that workbench
+without resolving its now-dead original pane. Session rename migrates both the
+tab dictionaries and retained session names, even without a selected terminal;
+remote migrations also match the Host ID. Files/Browser selection and live
+content are retained; if needed, the first remaining left-side private tab is
+selected. Fit can still target a right-side terminal when the left side has no
+terminal. Terminal file links likewise validate the source pane against the
+current session and native-window ownership before and after resolution, not
+against a required left terminal selection.
+
+Every Mac Viewer scene observes the Host's pane/session/window routing identity.
+It infers renames with the same complete-pane-set rule as Local. Before any scene
+reconciles the renamed browser catalog, `DetachedTerminalWindows` synchronously
+migrates all tab stores and detached-workspace names for that Host / Session,
+including the main window's store. This preserves explicit browser ownership
+after a tab moves between windows, regardless of which scene observes the rename
+first. Local renames use the same shared migration; repeated calls are idempotent,
+and other Hosts / Sessions are untouched. Each scene still migrates its own
+selection and persistence bookkeeping before pruning stale entries. The rename-command
+callback no longer migrates only its initiating scene. Agent activity, titles,
+cwd and dimensions do not change this structural identity; disconnects and
+partial window moves are not guessed to be renames.
+The same observer reconciles Host browser and simulator catalogs after migration, using the
+current session selection rather than a detail-view callback captured before
+the rename. Catalog and pane delivery may span separate renders: reconciliation
+waits when a source pane's session disagrees with either descriptor. Both
+split surfaces include the descriptor's session name in their view identity so
+a late catalog cannot leave an owned remote browser or simulator session targeting the old
+name. Browser tab IDs, ordering, split placement and selection remain unchanged.
+
+The explicit-Fit rule also applies here: moving, enlarging or entering fullscreen
+does not implicitly resize tmux. The **Fit** button uses the independent scene's
+terminal area, excluding its tab strip. Main-window Fit excludes detached Windows,
+preventing two presentations
+from competing over the same tmux dimensions. AppKit handles the native window's
+screen / backing-scale changes; focusing an off-screen window recenters it.
+
+Native tab dragging exports a `WorkbenchTabDrag` envelope containing the source
+scene, Host and Session plus the existing `TabDragPayload`; the receiving
+workbench checks the scope before transferring state. The legacy payload is
+also exported for isolated tab-strip consumers. In-strip ordering and split drop
+targets keep their existing behavior. Only an
+unclaimed mouse release more than 24 points above/below the source tab row or
+beyond the source window's horizontal edge detaches. Dropping over the terminal
+inside a maximized main window therefore works. The row extends across the
+window for this test so horizontal reordering, including empty slots and the
+other split's tabs, never detaches. Escape, accepted drops, and small vertical
+movements do not detach. The source records the mouse-up event's location,
+converted through that event's window (windowless events already use screen
+coordinates), never the current global pointer position. A delayed AppKit
+completion must not mistake a later mouse-move for cancellation
+or use its location as the drop point.
+
 ## References
 
 ### SwiftTerm Source Files

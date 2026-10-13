@@ -329,7 +329,23 @@ final class SessionFileTabsState {
 
     /// When non-nil, the content area shows this file tab instead of the tree
     /// or terminal. Refers to a tab on the *left* side when split is active.
-    var selectedFileTabId: UUID?
+    var selectedFileTabId: UUID? {
+        didSet {
+            if selectedFileTabId != nil {
+                isGitSelected = false
+            }
+        }
+    }
+
+    /// Git belongs to this workbench's session, including when no terminal remains on the left.
+    var isGitSelected = false
+
+    func selectLeftGit() {
+        guard !rightSide.contains(.git) else { return }
+        selectedFileTabId = nil
+        selectedBrowserTabId = nil
+        isGitSelected = true
+    }
 
     /// Directory tabs own their content; only editor tabs need the legacy tree underneath.
     func selectLeftFileTab(_ id: UUID, windowID: String, legacyExplorerWindows: inout Set<String>) {
@@ -346,6 +362,7 @@ final class SessionFileTabsState {
         guard !rightSide.contains(.window(stableID)) else { return false }
         selectedFileTabId = nil
         selectedBrowserTabId = nil
+        isGitSelected = false
         return true
     }
 
@@ -363,7 +380,14 @@ final class SessionFileTabsState {
     /// When non-nil, the content area shows this browser tab. Mutually
     /// exclusive with `selectedFileTabId` and the file browser flag — only one
     /// kind of detail content is rendered at a time on the left side.
-    var selectedBrowserTabId: UUID?
+    var selectedBrowserTabId: UUID? {
+        didSet {
+            if selectedBrowserTabId != nil {
+                isGitSelected = false
+            }
+        }
+    }
+
     /// Live web-view state per browser tab. Kept separate from the tab struct
     /// so SwiftUI can compare tabs cheaply while WKWebView state survives
     /// switches between tabs/sessions.
@@ -398,6 +422,7 @@ final class SessionFileTabsState {
     func syncHostBrowserTabs(_ values: [RemoteBrowserTab], sessionWindowIDs: [String]) -> HostBrowserTabSyncResult {
         let live = Set(values.map(\.id))
         let removed = Set(remoteBrowserTabs.keys).subtracting(live)
+        let removedSelectedLeft = selectedBrowserTabId.map { removed.contains($0) } ?? false
         let closedByUser = removed.intersection(closingHostBrowserTabIDs)
         let closedLeft = selectedBrowserTabId.map { closedByUser.contains($0) } == true
         let closedRight: Bool = if case let .browser(id) = selectedRight {
@@ -439,12 +464,16 @@ final class SessionFileTabsState {
             openBrowserTabs[index].isViewerLocal = true
         }
         let restoreLeftWindow = reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+        let hasLeftTerminal = sessionWindowIDs.contains { !rightSide.contains(.window($0)) }
+        if removedSelectedLeft || restoreLeftWindow {
+            repairLeftContent(hasTerminal: hasLeftTerminal)
+        }
         let automaticFit: HostBrowserTabSyncResult.TerminalFit?
-        if closedLeft, selectedFileTabId == nil, selectedBrowserTabId == nil {
+        if closedLeft, hasLeftTerminal, !isGitSelected, selectedFileTabId == nil, selectedBrowserTabId == nil {
             automaticFit = .left
         } else if closedRight, case let .window(id) = selectedRight {
             automaticFit = .right(id)
-        } else if closedRight, !isSplit, selectedFileTabId == nil, selectedBrowserTabId == nil {
+        } else if closedRight, !isSplit, hasLeftTerminal, !isGitSelected, selectedFileTabId == nil, selectedBrowserTabId == nil {
             automaticFit = .left
         } else {
             automaticFit = nil
@@ -456,6 +485,7 @@ final class SessionFileTabsState {
     func syncHostSimulatorTabs(_ values: [RemoteSimulatorTab], sessionWindowIDs: [String]) -> Bool {
         let live = Set(values.map(\.id))
         let removed = Set(remoteSimulatorTabs.keys).subtracting(live)
+        let removedSelectedLeft = selectedBrowserTabId.map { removed.contains($0) } ?? false
         openBrowserTabs.removeAll { removed.contains($0.id) }
         for id in removed {
             remoteSimulatorTabs.removeValue(forKey: id)
@@ -485,7 +515,11 @@ final class SessionFileTabsState {
                 openBrowserTabs.append(tab)
             }
         }
-        return reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+        let collapsed = reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+        if removedSelectedLeft || collapsed {
+            repairLeftContent(hasTerminal: sessionWindowIDs.contains { !rightSide.contains(.window($0)) })
+        }
+        return collapsed
     }
 
     @discardableResult
@@ -495,7 +529,7 @@ final class SessionFileTabsState {
         }
         guard isSplit else { return false }
 
-        let leftEmpty = !sessionWindowIDs.isEmpty
+        let leftEmpty = (!sessionWindowIDs.isEmpty || !openFileTabs.isEmpty || !openBrowserTabs.isEmpty)
             && sessionWindowIDs.allSatisfy { rightSide.contains(.window($0)) }
             && openBrowserTabs.allSatisfy { rightSide.contains(.browser($0.id)) }
             && openFileTabs.allSatisfy { rightSide.contains(.file($0.id)) }

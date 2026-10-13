@@ -39,6 +39,7 @@ public actor TestOrchestrator {
     private let stageLayout: StageLayout?
     private let reporter: (any TestProgressReporter)?
     private var screenshotCounter = 0
+    private var isolateAPISockets = false
     /// Paths of scripts copied to TMPDIR via `injectScript`, cleaned up after each scenario.
     private var injectedScriptPaths: [String] = []
 
@@ -158,6 +159,7 @@ public actor TestOrchestrator {
         )
 
         context.clear()
+        isolateAPISockets = scenario.tags.contains("isolated-api")
         screenshotCounter = 0
         injectedScriptPaths.removeAll()
 
@@ -702,6 +704,10 @@ public actor TestOrchestrator {
             // scenarios see a stable set (the in-memory scanners that used to
             // do this were deleted in the plugin-system flip). Honoured only in
             // `--e2e-test` + DEBUG builds.
+            if isolateAPISockets {
+                // Opt in: existing CLI fixtures explicitly use the legacy socket.
+                arguments += ["--e2e-api-socket", stateRoot + "/api.sock"]
+            }
             arguments += ["--e2e-seed-projects"]
             // Pin the advertised device name so screenshots are portable across
             // machines whose real `ComputerName` differs. "MacMini" matches the
@@ -963,6 +969,9 @@ public actor TestOrchestrator {
 
         case let .macDragElement(fromQuery, toQuery, instance):
             try await macDriver(for: instance).dragElement(from: fromQuery, to: toQuery)
+
+        case let .macDragElementOutsideWindow(query, instance):
+            try await macDriver(for: instance).dragElementOutsideWindow(matching: query)
 
         case let .macScreenshot(label, compare, tolerance, perPixelThreshold, instance):
             let numberedLabel = nextScreenshotLabel(label)

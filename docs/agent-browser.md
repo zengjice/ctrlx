@@ -97,8 +97,10 @@ Switching tabs reparents the existing native view; it does not reload Chromium.
 Transient Chromium tabs are excluded from WKWebView layout persistence. Browser
 tabs are available to paired Mac/iOS Viewers through the typed remote surface below.
 
-The host leaves CEF stopped until the first manual Chromium tab or a native Codex
-or Claude Code browser operation. On first registration the CLI asks the existing CtrlX API
+The host leaves CEF stopped until the first local or Viewer-created Chromium tab
+or a native Codex or Claude Code browser operation. Browser-sharing capability is advertised before
+startup; Viewer creation waits for the same on-demand initialization and reports
+startup failures without silently falling back. On first registration the CLI asks the existing CtrlX API
 socket to start the runtime, then discovers the native browser endpoint. The
 requested state directory must match that host before it initializes Chromium;
 an isolated CLI cannot start the production profile. `browser identity` remains

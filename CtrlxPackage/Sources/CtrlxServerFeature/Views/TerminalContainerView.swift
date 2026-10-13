@@ -280,6 +280,10 @@ struct TerminalContainerView: NSViewRepresentable {
                     guard let view = self?.terminalView else { return false }
                     return view.window != nil && !view.isHiddenOrHasHiddenAncestor
                 },
+                terminalText: { [weak self] in
+                    guard let self else { return nil }
+                    return VoiceInputContext.recentTerminalText(self.terminalView.getTerminal())
+                },
                 enqueue: { [weak self] keys in
                     guard let self else { return }
                     self.keyCoalescer.enqueueImmediately(keys)

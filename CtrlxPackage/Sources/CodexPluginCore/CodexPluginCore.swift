@@ -16,7 +16,7 @@ import CtrlxPluginProtocol
 /// `docs/plugins/codex.md`.
 ///
 /// Defensive by mandate (spec §13): never trap on hostile on-disk data.
-public actor CodexPluginCore: AgentSessionForking {
+public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
     public static let pluginID = "codex"
 
     private var host: (any PluginHost)?
@@ -452,6 +452,14 @@ public actor CodexPluginCore: AgentSessionForking {
 
     public func installStatus(configRoot: String?) async -> PluginInstallStatus {
         await cliInstaller().installStatus(configRoot: configRoot)
+    }
+
+    public func bundledPluginVersion() async throws -> String {
+        try await cliInstaller().bundledVersion()
+    }
+
+    public func reinstall(configRoot: String?) async throws -> PluginInstallStatus {
+        try await cliInstaller().reinstall(configRoot: configRoot)
     }
 
     // MARK: - Settings

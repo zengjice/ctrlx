@@ -405,6 +405,30 @@ their CLI installation implementations: `ClaudeCodeCLIInstaller.swift` and
 `CodexCLIInstaller.swift` in their respective core modules. Config roots are
 scoped by the plugin, not hard-coded into shared settings UI.
 
+The built-in cores also expose the local-only `AgentPluginMaintenance`
+capability. It reads the **Agent-side** manifest shipped in this app
+(`plugin/codex/ctrlx/.codex-plugin/plugin.json` or
+`plugin/ctrlx/.claude-plugin/plugin.json`), not the sidecar manifest version.
+After startup, `AgentPluginInstallations` checks enabled local agents and their
+configured roots asynchronously. Known older installed versions produce a
+dismissible banner linking to that agent's settings. The check runs once per
+launch; unknown versions and query failures are not classified as up to date.
+No remote Host or Agent process is changed by checking.
+
+Settings shows each configuration folder's installed and bundled versions,
+Check, Install/Reinstall, and Uninstall. Operations are serialized per folder
+across settings views. Reinstall validates the marketplace source first and
+verifies the installed version afterward. Codex 0.162.1 `plugin add` refreshes
+even a same-version cache; an `already installed` response is not treated as a
+reinstall. Claude Code 2.1.276 has no force flag: refresh the local marketplace,
+uninstall the exact user-scoped `ctrlx@ctrlx` with `--keep-data`, then install
+and verify it. If the install fails after removal, the error explicitly reports
+the partial operation and settings re-queries the remaining state for retry.
+Other plugins, authentication and running Agent sessions are not removed or
+restarted. Successful changes display a reminder to restart the corresponding
+Agent sessions, not the CtrlX app. Older CLIs that reject these commands fail
+visibly rather than falling back to editing agent configuration files.
+
 `PluginRegistry` owns enabled cores; `PluginRegistryStore.swift` persists
 registry entries, and `CtrlxPaths` defines the state layout. Per-agent settings
 are decoded by `ClaudeCodeSettings`, `CodexSettings`, or the sidecar's settings

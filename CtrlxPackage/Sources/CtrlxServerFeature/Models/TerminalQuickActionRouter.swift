@@ -15,20 +15,30 @@ final class TerminalQuickActionEndpoint {
     private(set) var inputRevision: UInt64 = 0
     @ObservationIgnored private(set) var isMounted = true
     private let isVisible: @MainActor () -> Bool
+    let terminalText: @MainActor () -> String?
     private let enqueue: @MainActor ([TmuxKey]) -> Void
 
-    init(hostID: String?, paneID: String,
-         isVisible: @escaping @MainActor () -> Bool,
-         enqueue: @escaping @MainActor ([TmuxKey]) -> Void) {
+    init(
+        hostID: String?,
+        paneID: String,
+        isVisible: @escaping @MainActor () -> Bool,
+        terminalText: @escaping @MainActor () -> String? = { nil },
+        enqueue: @escaping @MainActor ([TmuxKey]) -> Void
+    ) {
         self.hostID = hostID
         self.paneID = paneID
         self.isVisible = isVisible
+        self.terminalText = terminalText
         self.enqueue = enqueue
     }
 
-    var isAvailable: Bool { isMounted && isVisible() }
+    var isAvailable: Bool {
+        isMounted && isVisible()
+    }
 
-    func recordInput() { inputRevision &+= 1 }
+    func recordInput() {
+        inputRevision &+= 1
+    }
 
     func invalidate() {
         // Synchronous guard, without publishing SwiftUI state during dismantle.

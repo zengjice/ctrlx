@@ -323,7 +323,7 @@ involved; the existing Mac modified-key handling is reused.
 
 ### Tap-to-toggle voice input
 
-The shared `VoiceInputButton` is a native SwiftUI `Button`, not a zero-distance
+The iOS `VoiceInputButton` is a native SwiftUI `Button`, not a zero-distance
 drag gesture. One tap starts dictation; the microphone turns red when recording.
 A second tap finishes recognition/correction; it never sends Return. `Send`
 remains a separate explicit action. A tap while preparing cancels preparation;
@@ -336,8 +336,10 @@ leaving the view/app, or opening the toolbar's phrase/command panel cancels inpu
 without deleting text already entered. Modern speech startup checks cancellation
 after async preparation, and late callbacks are checked against the current
 session. A cancelled session that never activated audio cannot deactivate a new
-one. No speech model, correction prompt, terminal rendering, or send protocol
-changes are involved. `VoiceInputPhaseTests` covers tap routing, accessibility,
+one. Recognition, context extraction, correction and provider settings now live
+in `CtrlxCommon` and are also used by Mac; iOS retains its live-input adapter.
+See [shared voice behavior](terminal-quick-actions.md#context-aware-voice-input).
+`VoiceInputPhaseTests` covers tap routing, accessibility,
 and preservation of existing terminal input; device audio remains a manual check.
 
 ### Custom quick phrases

@@ -57,6 +57,7 @@ public enum SettingsTab: String, Sendable {
     case remoteAccess
     case remoteHosts
     case quickPhraseSync
+    case voiceInput
     case sidebarLayout
     case editors
     case agents
@@ -177,6 +178,7 @@ public struct PairedViewer: Codable, Identifiable, Sendable, Hashable {
 final public class AppSettings {
     /// Device-local library shared by all panes scenes, including remote viewers.
     let quickPhrases = QuickPhraseStore()
+    let voiceCorrection = VoiceCorrectionSettings()
     @ObservationIgnored private var quickPhrasePairingsLoaded = false
 
     // MARK: - Dependencies

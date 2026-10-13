@@ -47,7 +47,7 @@ struct TerminalQuickActionButtons: View {
             } icon: {
                 Text("/").font(.system(.body, design: .monospaced).bold())
             }
-            .frame(minWidth: 24, minHeight: 24)
+            .frame(minWidth: 16, minHeight: 24)
         }
         .help("Agent commands for the focused terminal")
         .accessibilityLabel("Agent Commands")
@@ -55,6 +55,7 @@ struct TerminalQuickActionButtons: View {
         .popover(item: $commandPanel, arrowEdge: .bottom) { captured in
             MacAgentCommandPanel(
                 commands: captured.command?.commands ?? [],
+                pluginID: captured.command?.target.pluginID ?? "",
                 targetLabel: captured.label,
                 unavailableReason: commandUnavailableReason,
                 send: { command in
@@ -63,7 +64,7 @@ struct TerminalQuickActionButtons: View {
                         let request = AgentCommandRequest(command, in: captured.command),
                         request.isValid(in: commandContext)
                     else { return false }
-                    return router.send(command.keys, to: token)
+                    return router.send(request.keys, to: token)
                 }
             )
             .task(id: captured.id) {
@@ -80,7 +81,7 @@ struct TerminalQuickActionButtons: View {
             phrasePanel = presentation
         } label: {
             Label("Quick Phrases", symbol: .textBubbleFill)
-                .frame(minWidth: 24, minHeight: 24)
+                .frame(minWidth: 16, minHeight: 24)
         }
         .help("Quick phrases for the focused terminal")
         .accessibilityLabel("Quick Phrases")
@@ -110,6 +111,28 @@ struct TerminalQuickActionButtons: View {
             guard var captured = commandPanel else { return }
             commandPanel = captured.updateCommand(commandContext, terminal: phraseContext) ? captured : nil
         }
+
+        MacVoiceInputButton(
+            router: router, settings: settings.voiceCorrection,
+            context: phraseContext, targetLabel: presentation.label,
+            isSuspended: commandPanel != nil || phrasePanel != nil,
+            contextProvider: voiceInputContext,
+            willStart: {
+                commandPanel = nil
+                phrasePanel = nil
+            }
+        )
+    }
+
+    private func voiceInputContext() -> String? {
+        guard let pane else { return nil }
+        return VoiceInputContext.makeTerminalContext(
+            terminalText: router.active?.terminalText(),
+            metadata: VoiceInputContext.paneMetadata(
+                sessionName: pane.sessionName, windowName: pane.windowName,
+                command: pane.command, currentPath: pane.currentPath
+            )
+        )
     }
 
     private var pane: PaneState? {
@@ -186,7 +209,7 @@ struct TerminalQuickActionStatusBarButtons: View {
     var body: some View {
         if let router {
             let ownsFocus = router.containsFocus(hostID: hostID, paneIDs: paneIDs)
-            HStack(spacing: 8) {
+            HStack(spacing: 2) {
                 TerminalQuickActionButtons(router: router)
             }
             .buttonStyle(.bordered)
@@ -217,6 +240,7 @@ private struct TerminalQuickActionLabelStyle: LabelStyle {
 @MainActor
 private struct MacAgentCommandPanel: View {
     let commands: [AgentQuickCommand]
+    let pluginID: String
     let targetLabel: String
     let unavailableReason: String?
     let send: @MainActor (AgentQuickCommand) -> Bool
@@ -249,6 +273,8 @@ private struct MacAgentCommandPanel: View {
                                 } label: {
                                     Text(command.text).monospaced().frame(maxWidth: .infinity, minHeight: 26)
                                 }
+                                .help(command.submission(for: pluginID).hint)
+                                .accessibilityHint(command.submission(for: pluginID).hint)
                                 .accessibilityIdentifier("terminal-agent-command-\(command.id)")
                             }
                         }

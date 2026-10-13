@@ -56,6 +56,38 @@
   multi-Xcode compatibility remain unverified. No Relay deployment, local Mac
   replacement or iPhone installation is included.
 
+## 3.0.61 (macinput build) — Detached Mac windows, contextual voice and preview annotations
+
+- Drag Mac terminal Window tabs out of their tab strip into independent native
+  windows, including within the same screen. Keep one terminal presentation per
+  client, reuse the main window's Fit control and route Files, Fork and links to
+  the captured source pane. Closing a detached window returns its presentation
+  without terminating the tmux Window.
+- Add Mac voice input using the same contextual recognition and correction core
+  as iOS. Bound context and correction work, preserve the captured input target,
+  and insert without sending. Clicking the microphone again stops and inserts;
+  cancelling the preview discards the recording explicitly.
+- Keep parameter-requiring Codex and Claude Code `/goal` shortcuts in the input
+  field for completion instead of sending Enter. Check installed Agent-side
+  CtrlX plugin versions on Mac startup and provide per-configuration reinstall
+  controls with a reminder to restart Agent sessions.
+- Annotate supported file previews in place and attach the captured image to
+  the source Agent, including image, PDF, Office and paused video previews.
+  Reject unavailable or protected captures instead of attaching a blank image.
+  Accept a trailing slash in explicit repository directory references.
+- Add bounded download-cache maintenance on startup and foreground activation,
+  protecting active previews and transfers. Enforce size and free-space limits;
+  stream video without keeping an application-owned full-file download.
+- Include Codex-owned local iOS Simulator tabs and the `ctrlx ios` CLI/skill,
+  with input, observation, bounded recording, pinch and explicit storage actions.
+  Simulator display and input retain their documented Xcode/runtime limits;
+  this is not physical-iPhone or remote-Viewer simulator control. Bundle Codex
+  plugin 1.1.6 and Claude Code plugin 1.3.7.
+- Distribution: Mac package only, Apple Development signed and not notarized.
+  No Relay deployment or local Mac/iPhone installation. iOS UI changes require
+  a separate install; deferred device, multi-display and cross-Mac acceptance
+  remain listed in the product TODO and simulator design.
+
 ## 3.0.60 — Explicit repository links and pane-bound Host browsers
 
 - Reuse each terminal Window's linked Files tab instead of opening another tab

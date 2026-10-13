@@ -1,9 +1,9 @@
-#if os(iOS)
+#if os(iOS) || os(macOS)
     import AVFoundation
     import Foundation
     import Speech
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     @MainActor
     final class SpeechAnalyzerVoiceSession {
         typealias UpdateHandler = @MainActor @Sendable (String) -> Void
@@ -38,17 +38,19 @@
                 id: diagnosticID
             )
 
-            if let installationRequest = try await AssetInventory.assetInstallationRequest(
-                supporting: modules
-            ) {
+            if
+                let installationRequest = try await AssetInventory.assetInstallationRequest(
+                    supporting: modules
+                ) {
                 try Task.checkCancellation()
                 try await installationRequest.downloadAndInstall()
             }
             try Task.checkCancellation()
 
-            guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
-                compatibleWith: modules
-            ) else {
+            guard
+                let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
+                    compatibleWith: modules
+                ) else {
                 throw SpeechAnalyzerVoiceSessionError.compatibleAudioFormatUnavailable
             }
 
@@ -122,9 +124,9 @@
                     }
                 }
 
-                if recognitionResult.bestAvailableTranscript.isEmpty,
-                   let resultError = accurateResultError ?? liveResultError
-                {
+                if
+                    recognitionResult.bestAvailableTranscript.isEmpty,
+                    let resultError = accurateResultError ?? liveResultError {
                     throw resultError
                 }
 
@@ -204,20 +206,23 @@
             analyzerFormat: AVAudioFormat,
             inputContinuation: AsyncStream<AnalyzerInput>.Continuation
         ) throws {
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playAndRecord, mode: .spokenAudio, options: .duckOthers)
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-            ownsAudioSession = true
+            #if os(iOS)
+                let audioSession = AVAudioSession.sharedInstance()
+                try audioSession.setCategory(.playAndRecord, mode: .spokenAudio, options: .duckOthers)
+                try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+                ownsAudioSession = true
+            #endif
 
             let inputNode = audioEngine.inputNode
             let inputFormat = inputNode.outputFormat(forBus: 0)
             guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
                 throw SpeechAnalyzerVoiceSessionError.microphoneUnavailable
             }
-            guard let converter = AnalyzerAudioBufferConverter(
-                inputFormat: inputFormat,
-                outputFormat: analyzerFormat
-            ) else {
+            guard
+                let converter = AnalyzerAudioBufferConverter(
+                    inputFormat: inputFormat,
+                    outputFormat: analyzerFormat
+                ) else {
                 throw SpeechAnalyzerVoiceSessionError.audioConverterUnavailable
             }
             let audioRecorder = try VoiceAudioRecorder(format: inputFormat)
@@ -248,13 +253,15 @@
             }
             // A cancelled preparation can finish after a new recording starts.
             // Only deactivate audio if this session actually activated it.
-            if ownsAudioSession {
-                ownsAudioSession = false
-                let session = AVAudioSession.sharedInstance()
-                if session.category == .playAndRecord, session.mode == .spokenAudio {
-                    try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            #if os(iOS)
+                if ownsAudioSession {
+                    ownsAudioSession = false
+                    let session = AVAudioSession.sharedInstance()
+                    if session.category == .playAndRecord, session.mode == .spokenAudio {
+                        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                    }
                 }
-            }
+            #endif
         }
 
         private func transcribeRecordedAudio(
@@ -270,9 +277,10 @@
                 id: diagnosticID
             )
 
-            if let installationRequest = try await AssetInventory.assetInstallationRequest(
-                supporting: modules
-            ) {
+            if
+                let installationRequest = try await AssetInventory.assetInstallationRequest(
+                    supporting: modules
+                ) {
                 try await installationRequest.downloadAndInstall()
             }
 
@@ -320,7 +328,7 @@
         }
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private extension ModernSpeechTranscriber {
         static func preferred(for locale: Locale) async throws -> Self {
             let speechLocale: Locale?
@@ -353,9 +361,9 @@
         }
 
         static func accurate(for locale: Locale) async throws -> Self {
-            if SpeechTranscriber.isAvailable,
-               let speechLocale = await SpeechTranscriber.supportedLocale(equivalentTo: locale)
-            {
+            if
+                SpeechTranscriber.isAvailable,
+                let speechLocale = await SpeechTranscriber.supportedLocale(equivalentTo: locale) {
                 return .speech(
                     SpeechTranscriber(
                         locale: speechLocale,
@@ -408,7 +416,7 @@
         }
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private enum ModernSpeechTranscriber {
         case speech(SpeechTranscriber)
         case dictation(DictationTranscriber)
@@ -441,8 +449,8 @@
         }
     }
 
-    @available(iOS 26.0, *)
-    private final class AnalyzerAudioBufferConverter: @unchecked Sendable {
+    @available(iOS 26.0, macOS 26.0, *)
+    final private class AnalyzerAudioBufferConverter: @unchecked Sendable {
         private let inputFormat: AVAudioFormat
         private let outputFormat: AVAudioFormat
         private let converter: AVAudioConverter?
@@ -453,7 +461,7 @@
             self.outputFormat = outputFormat
 
             if inputFormat == outputFormat {
-                converter = nil
+                self.converter = nil
             } else {
                 guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
                     return nil
@@ -470,10 +478,11 @@
                 let frameCapacity = AVAudioFrameCount(
                     ceil(Double(buffer.frameLength) * sampleRateRatio) + 1
                 )
-                guard let outputBuffer = AVAudioPCMBuffer(
-                    pcmFormat: outputFormat,
-                    frameCapacity: frameCapacity
-                ) else { return nil }
+                guard
+                    let outputBuffer = AVAudioPCMBuffer(
+                        pcmFormat: outputFormat,
+                        frameCapacity: frameCapacity
+                    ) else { return nil }
 
                 var conversionError: NSError?
                 var suppliedInput = false
@@ -501,17 +510,17 @@
         }
     }
 
-    @available(iOS 26.0, *)
-    private final class VoiceAudioRecorder: @unchecked Sendable {
+    @available(iOS 26.0, macOS 26.0, *)
+    final private class VoiceAudioRecorder: @unchecked Sendable {
         private let url: URL
         private let lock = NSLock()
         private var audioFile: AVAudioFile?
         private var hasFailed = false
 
         init(format: AVAudioFormat) throws {
-            url = FileManager.default.temporaryDirectory
+            self.url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ctrlx-voice-\(UUID().uuidString).caf")
-            audioFile = try AVAudioFile(forWriting: url, settings: format.settings)
+            self.audioFile = try AVAudioFile(forWriting: url, settings: format.settings)
         }
 
         func append(_ buffer: AVAudioPCMBuffer) {
@@ -542,7 +551,7 @@
         }
     }
 
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macOS 26.0, *)
     private enum SpeechAnalyzerVoiceSessionError: LocalizedError {
         case audioConverterUnavailable
         case compatibleAudioFormatUnavailable

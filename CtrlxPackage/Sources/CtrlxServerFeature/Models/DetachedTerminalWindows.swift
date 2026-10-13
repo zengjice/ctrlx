@@ -1,0 +1,306 @@
+import AppKit
+import CtrlxCommon
+import Observation
+
+/// Presentation identity, independent of session names and tmux window indices.
+public struct DetachedTerminalTarget: Hashable, Codable, Sendable {
+    let hostID: String?
+    let windowID: String
+
+    init?(hostID: String?, windowID: String) {
+        // An old Host without stable window IDs cannot safely support detachment.
+        guard windowID.first == "@", Int(windowID.dropFirst()) != nil else { return nil }
+        self.hostID = hostID
+        self.windowID = windowID
+    }
+}
+
+@MainActor
+@Observable
+final class DetachedTerminalWindows {
+    enum Action: Equatable {
+        case show
+        case files(paneID: String?)
+        case fork(paneID: String?, worktree: Bool)
+        case fileLink(TerminalFileLinkRequest)
+        case url(String, paneID: String)
+    }
+
+    struct Request: Identifiable, Equatable {
+        let id = UUID()
+        let target: DetachedTerminalTarget
+        let action: Action
+    }
+
+    private(set) var workspaces: [UUID: DetachedTerminalWorkspace] = [:]
+    let mainTabs = WorkbenchTabStore()
+    private(set) var presentationRevision = 0
+    var targets: Set<DetachedTerminalTarget> {
+        Set(workspaces.values.flatMap(\.members))
+    }
+
+    var mainRequest: Request?
+    @ObservationIgnored private var windows: [UUID: NSWindow] = [:]
+    @ObservationIgnored private var positions: [UUID: CGPoint] = [:]
+    @ObservationIgnored private var closeObservers: [UUID: NSObjectProtocol] = [:]
+
+    isolated deinit {
+        for observer in closeObservers.values {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    func contains(hostID: String?, windowID: String) -> Bool {
+        guard let target = DetachedTerminalTarget(hostID: hostID, windowID: windowID) else { return false }
+        return targets.contains(target)
+    }
+
+    /// Reserve ownership before SwiftUI creates the scene, so the main renderer retires first.
+    @discardableResult
+    func reserve(_ target: DetachedTerminalTarget, position: CGPoint? = nil) -> Bool {
+        guard !targets.contains(target) else { return false }
+        let workspace = DetachedTerminalWorkspace(target: target)
+        workspaces[workspace.id] = workspace
+        positions[workspace.id] = position
+        return true
+    }
+
+    func workspace(containing target: DetachedTerminalTarget) -> DetachedTerminalWorkspace? {
+        workspaces.values.first { $0.members.contains(target) }
+    }
+
+    func detach(_ target: DetachedTerminalTarget, position: CGPoint?, session: (DetachedTerminalTarget) -> String?) -> DetachedTerminalWorkspace? {
+        guard let sessionName = session(target) else { return nil }
+        let sourceID = workspace(containing: target)?.id
+        let destination = DetachedTerminalWorkspace(target: target, sessionName: sessionName)
+        destination.members = []
+        workspaces[destination.id] = destination
+        positions[destination.id] = position
+        let drag = WorkbenchTabDrag(
+            workspaceID: sourceID,
+            hostID: target.hostID,
+            sessionName: sessionName,
+            tab: .window(target.windowID)
+        )
+        guard transfer(drag, to: destination.id, session: session) else {
+            workspaces.removeValue(forKey: destination.id)
+            positions.removeValue(forKey: destination.id)
+            return nil
+        }
+        return destination
+    }
+
+    /// Validate against live session metadata, never a drag payload's claimed session name.
+    @discardableResult
+    func merge(
+        _ target: DetachedTerminalTarget,
+        into workspaceID: UUID,
+        session: (DetachedTerminalTarget) -> String?
+    ) -> Bool {
+        guard
+            let destination = workspaces[workspaceID], target.hostID == destination.anchor.hostID,
+            let sourceSession = session(target),
+            destination.resolvedSession(using: session) == sourceSession else { return false }
+        destination.sessionName = sourceSession
+        if let old = workspace(containing: target), old !== destination {
+            old.members.removeAll { $0 == target }
+        }
+        if !destination.members.contains(target) {
+            destination.members.append(target)
+        }
+        destination.select(target)
+        closeEmptyWorkspaces()
+        return true
+    }
+
+    func returnToMain(_ target: DetachedTerminalTarget) {
+        guard let workspace = workspace(containing: target) else { return }
+        workspace.members.removeAll { $0 == target }
+        closeEmptyWorkspaces()
+    }
+
+    func closeEmptyWorkspaces() {
+        for workspace in workspaces.values where workspace.members.isEmpty && workspace.tabs.isEmpty {
+            closeWorkspace(workspace.id)
+        }
+    }
+
+    func store(for workspaceID: UUID?) -> WorkbenchTabStore? {
+        if let workspaceID {
+            return workspaces[workspaceID]?.tabs
+        }
+        return mainTabs
+    }
+
+    /// Migrate every owner before any scene reconciles a renamed browser catalog.
+    func renameSession(hostID: String?, from oldName: String, to newName: String, windowIDs: [String: String]) {
+        mainTabs.renameSession(hostID: hostID, from: oldName, to: newName, windowIDs: windowIDs)
+        for workspace in workspaces.values {
+            workspace.renameSession(hostID: hostID, from: oldName, to: newName, windowIDs: windowIDs)
+        }
+    }
+
+    func owner(hostID: String?, windowID: String) -> UUID? {
+        guard let target = DetachedTerminalTarget(hostID: hostID, windowID: windowID) else { return nil }
+        return workspace(containing: target)?.id
+    }
+
+    func browserOwner(hostID: String?, session: String, id: UUID, windowID: String?) -> UUID? {
+        for workspace in workspaces.values where workspace.anchor.hostID == hostID {
+            if workspace.tabs.existing(hostID: hostID, session: session)?.openBrowserTabs.contains(where: { $0.id == id }) == true {
+                return workspace.id
+            }
+        }
+        if mainTabs.existing(hostID: hostID, session: session)?.openBrowserTabs.contains(where: { $0.id == id }) == true {
+            return nil
+        }
+        return windowID.flatMap { owner(hostID: hostID, windowID: $0) }
+    }
+
+    @discardableResult
+    func transfer(_ drag: WorkbenchTabDrag, to destinationID: UUID?, session: (DetachedTerminalTarget) -> String?) -> Bool {
+        guard
+            drag.workspaceID != destinationID,
+            let sourceStore = store(for: drag.workspaceID), let destinationStore = store(for: destinationID) else { return false }
+        if let destinationID {
+            guard
+                let group = workspaces[destinationID], group.anchor.hostID == drag.hostID,
+                group.resolvedSession(using: session) == drag.sessionName else { return false }
+            group.sessionName = drag.sessionName
+        }
+        let source = sourceStore.tabs(hostID: drag.hostID, session: drag.sessionName)
+        let destination = destinationStore.tabs(hostID: drag.hostID, session: drag.sessionName)
+        if case let .window(id) = drag.tab {
+            guard
+                let target = DetachedTerminalTarget(hostID: drag.hostID, windowID: id),
+                session(target) == drag.sessionName, owner(hostID: drag.hostID, windowID: id) == drag.workspaceID else { return false }
+            if let old = workspace(containing: target) {
+                old.members.removeAll { $0 == target }
+            }
+            if let destinationID {
+                workspaces[destinationID]?.members.append(target)
+            }
+        }
+        guard source.move(drag.tab, to: destination) else { return false }
+        if let destinationID, let group = workspaces[destinationID] {
+            group.selection = drag.tab
+            group.selectionRevision += 1
+        }
+        presentationRevision += 1
+        closeEmptyWorkspaces()
+        return true
+    }
+
+    private func closeWorkspace(_ id: UUID) {
+        if let window = windows[id] {
+            window.performClose(nil)
+        } else if let workspace = workspaces.removeValue(forKey: id) {
+            let close = workspace.onClose
+            workspace.onClose = { }
+            close()
+        }
+    }
+
+    func attach(_ window: NSWindow, to target: DetachedTerminalTarget) {
+        guard let workspace = workspace(containing: target) else { return }
+        attach(window, toWorkspace: workspace.id)
+    }
+
+    func attach(_ window: NSWindow, toWorkspace id: UUID) {
+        guard workspaces[id] != nil, windows[id] !== window else { return }
+        if let observer = closeObservers.removeValue(forKey: id) {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        windows[id] = window
+        closeObservers[id] = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: nil) { [weak self, weak window] _ in
+            MainActor.assumeIsolated {
+                guard let self, let window else { return }
+                self.didCloseWorkspace(id, window: window)
+            }
+        }
+        if let position = positions.removeValue(forKey: id) {
+            let screen = NSScreen.screens.first { $0.frame.contains(position) } ?? window.screen
+            if let screen {
+                let origin = Self.clampedOrigin(
+                    CGPoint(x: position.x - 100, y: position.y - window.frame.height + 20),
+                    size: window.frame.size, visibleFrame: screen.visibleFrame
+                )
+                window.setFrameOrigin(origin)
+            }
+        }
+    }
+
+    func didClose(_ target: DetachedTerminalTarget, window: NSWindow) {
+        guard let workspace = workspace(containing: target) else { return }
+        didCloseWorkspace(workspace.id, window: window)
+    }
+
+    private func didCloseWorkspace(_ id: UUID, window: NSWindow) {
+        guard windows[id] === window else { return }
+        if let observer = closeObservers.removeValue(forKey: id) {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        windows.removeValue(forKey: id)
+        positions.removeValue(forKey: id)
+        guard let workspace = workspaces.removeValue(forKey: id) else { return }
+        for (session, tabs) in workspace.tabs.local {
+            returnTabs(tabs, to: mainTabs.tabs(hostID: nil, session: session))
+        }
+        for (key, tabs) in workspace.tabs.remote {
+            returnTabs(tabs, to: mainTabs.tabs(hostID: key.hostId, session: key.sessionName))
+        }
+        let close = workspace.onClose
+        workspace.onClose = { }
+        close()
+        presentationRevision += 1
+    }
+
+    private func returnTabs(_ source: SessionFileTabsState, to destination: SessionFileTabsState) {
+        for tab in source.openFileTabs {
+            source.move(.file(tab.id), to: destination)
+        }
+        for tab in source.openBrowserTabs {
+            source.move(.browser(tab.id), to: destination)
+        }
+    }
+
+    @discardableResult
+    func focus(hostID: String?, windowID: String) -> Bool {
+        guard
+            let target = DetachedTerminalTarget(hostID: hostID, windowID: windowID),
+            let workspace = workspace(containing: target) else { return false }
+        workspace.select(target)
+        if let window = windows[workspace.id] {
+            // A disconnected display must not strand the window off-screen.
+            if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
+                window.center()
+            }
+            window.deminiaturize(nil)
+            window.makeKeyAndOrderFront(nil)
+        }
+        return true
+    }
+
+    func close(_ target: DetachedTerminalTarget) {
+        returnToMain(target)
+    }
+
+    func request(_ action: Action, from target: DetachedTerminalTarget) {
+        mainRequest = Request(target: target, action: action)
+    }
+
+    static func clampedOrigin(_ origin: CGPoint, size: CGSize, visibleFrame: CGRect) -> CGPoint {
+        CGPoint(
+            x: max(visibleFrame.minX, min(origin.x, visibleFrame.maxX - size.width)),
+            y: max(visibleFrame.minY, min(origin.y, visibleFrame.maxY - size.height))
+        )
+    }
+
+    /// A returning right-side tab must not also become the left renderer.
+    static func mainSelection(target: String, windows: [(stableID: String, id: String)], rightSide: Set<String>) -> String? {
+        if !rightSide.contains(target) {
+            return windows.first { $0.stableID == target }?.id
+        }
+        return windows.first { !rightSide.contains($0.stableID) }?.id
+    }
+}

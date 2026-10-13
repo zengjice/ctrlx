@@ -17,12 +17,19 @@ to your task; the versioned plans are not an onboarding checklist.
 | Browser tabs, Viewer control, annotations | [Browser](agent-browser.md), [engines](agent-browser-engines.md), [remaining work](agent-browser-todo.md) | `CtrlxServerFeature/Services/AgentBrowserService.swift`, `CtrlxCommon/UI/RemoteBrowserView.swift`; native runtime in repository `CtrlxPackage/AgentBrowser/` |
 | iOS Simulator control, pane reuse, Viewer viewing, recording and storage | [Agent iOS design](agent-simulator-design.md), [agent operations](../plugin/ctrlx/skills/agent-ios/references/operations.md) | `CtrlxServerFeature/Services/AgentSimulatorService.swift`, `CtrlxServerFeature/Services/SimulatorCoordinator.swift`, `CtrlxCLI/Commands/SimulatorCommands.swift` |
 | Layout persistence | [Layout contract](folder-layout-persistence-plan.md) | `CtrlxServerFeature/Services/LayoutPersistence/`, `CtrlxFeature/Models/IOSFileBrowserWorkspace.swift` |
-| Quick actions, phrases and custom buttons | [Quick actions](terminal-quick-actions.md) | `CtrlxCommon/` shared models/UI; `CtrlxFeature/` iOS input UI |
+| Quick actions, phrases, voice input and custom buttons | [Quick actions](terminal-quick-actions.md) | `CtrlxCommon/` shared models/UI/voice core; `CtrlxFeature/` iOS and `CtrlxServerFeature/` Mac input UI |
 | Wire compatibility, pairing and encryption | [Architecture](architecture.md), [E2EE design](e2ee-encryption-plan.md), [self-hosting](self-hosting.md) | `CtrlxNetworking/Models/`, `CtrlxEncryption/`, `CtrlxExternalServerLib/` |
 | Notifications and background monitoring | [Push design and actionable replies](push-notifications-plan.md), [iOS monitoring implementation record](v3.1.0/ios-agent-background-monitoring/IMPLEMENTATION_PLAN.md) | `CtrlxCommon/Services/`, `CtrlxFeature/Services/`, `CtrlxExternalServerLib/Services/APNsService.swift` |
 | Build, test, install or publish | [Contributing](../CONTRIBUTING.md), [E2E](e2e-testing.md), [release](../RELEASE.md) | Repository `scripts/`, `Config/`, `Ctrlx.xcworkspace` |
 | Relay operations | [Self-hosting](self-hosting.md), [monitoring](monitoring.md), [staging](staging-relay.md) | `CtrlxExternalServerLib/configure.swift`, repository `sbin/` |
 | CLI or common Swift patterns | [CLI API](ctrlx-cli-api.md), [Swift patterns](swift-patterns.md), [emoji](emoji-search.md) | `CtrlxCLI/`, `CtrlxCommon/`, `CtrlxEmoji/` |
+
+## Active product backlog
+
+See [产品需求 TODO](product-todo.md) for detachable Mac terminal windows,
+argument-aware Agent commands, Agent-side CtrlX plugin update/reinstall UX, and
+file-browser playback cache cleanup. Implemented behavior and deferred acceptance
+are tracked separately; release contents are recorded in [MODIFICATIONS.md](../MODIFICATIONS.md).
 
 ## How to read status and history
 

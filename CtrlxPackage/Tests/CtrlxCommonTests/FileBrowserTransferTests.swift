@@ -10,7 +10,9 @@ struct FileBrowserTransferTests {
         .init(begin: { try await files.begin(name: $0, size: $1) },
               append: { try await files.append($1, to: $0) },
               finish: { try await files.finish($0) },
-              discard: { await files.discard($0) })
+              discard: { await files.discard($0) },
+              retain: { try await files.retain($0) },
+              maintain: { await files.maintain() })
     }
 
     private func root() -> URL {
@@ -127,6 +129,7 @@ struct FileBrowserTransferTests {
         try await files.finish(first)
         try await files.finish(second)
         #expect(try Data(contentsOf: first) == Data([1, 2, 3]), "Finishing must not delete a file still needed by another app")
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-48 * 60 * 60)], ofItemAtPath: first.deletingLastPathComponent().path)
         let third = try await files.begin(name: "third.mp4", size: 0)
         #expect(!FileManager.default.fileExists(atPath: first.path))
         #expect(FileManager.default.fileExists(atPath: second.path))

@@ -1,11 +1,10 @@
-#if os(iOS)
+#if os(iOS) || os(macOS)
     import ConcurrencyExtras
-    import CtrlxCommon
     import CtrlxEncryption
     import Dependencies
     import Foundation
     import Testing
-    @testable import CtrlxFeature
+    @testable import CtrlxCommon
 
     @Suite("Voice correction credential settings")
     @MainActor
@@ -17,8 +16,8 @@
                 $0[SecretsService.self] = .inMemory()
             } operation: {
                 @Dependency(SecretsService.self) var secrets
-                let settings = IOSSettings()
-                let account = VoiceCorrectionCredentials.apiKeyAccount(for: settings.voiceCorrectionProvider)
+                let settings = VoiceCorrectionSettings()
+                let account = VoiceCorrectionCredentials.apiKeyAccount(for: settings.provider)
                 try await secrets.storeSecret("saved-fixture-key", account)
                 let model = VoiceCorrectionSettingsModel()
 
@@ -39,8 +38,8 @@
                 $0[SecretsService.self] = .inMemory()
             } operation: {
                 @Dependency(SecretsService.self) var secrets
-                let settings = IOSSettings()
-                let account = VoiceCorrectionCredentials.apiKeyAccount(for: settings.voiceCorrectionProvider)
+                let settings = VoiceCorrectionSettings()
+                let account = VoiceCorrectionCredentials.apiKeyAccount(for: settings.provider)
                 let model = VoiceCorrectionSettingsModel()
                 await model.prepare(settings: settings)
 
@@ -84,7 +83,7 @@
                 }
                 $0[SecretsService.self] = secrets
             } operation: {
-                let settings = IOSSettings()
+                let settings = VoiceCorrectionSettings()
                 let model = VoiceCorrectionSettingsModel()
                 let pending = Task { await model.prepare(settings: settings) }
                 for await _ in entered.stream {

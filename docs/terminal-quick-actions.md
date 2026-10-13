@@ -2,18 +2,19 @@
 
 macOS offers **Commands** (`/`) and **Quick Phrases** as labeled, bordered buttons
 on the left side of the terminal's bottom status bar, for both local and Viewer
-windows. The buttons have a 32-point click target including native padding;
+windows. The buttons keep a 32-point height including native padding;
 session details and telemetry sit on the right. In narrow splits, labels collapse
-to icons with the same click target and accessible names; details fall back to
+to icons with the same height and accessible names, leaving room for the voice
+input button without widening the terminal; details fall back to
 the session/window identifier, then hide together with their spacing if the
 identifier cannot fit. Local and Viewer windows use the same complete status-bar
 component. The status bar keeps the same height across widths
 and focus changes. They follow Settings → General →
 Show status bar. Both open button-grid popovers above their buttons without
-resizing the terminal. Click a command or saved phrase to send literal text,
-a host-side 200 ms pause, and one
-Return. There is no confirmation
-or extra Send step, and existing terminal input is never cleared automatically.
+resizing the terminal. Click a bare command or saved phrase to send literal text,
+a host-side 200 ms pause, and one Return. Argument-entry commands instead insert
+the command and a trailing space without Return; add arguments and explicitly
+send from the terminal. Existing terminal input is never cleared automatically.
 
 - The target is the last focused native terminal in this panes scene, including
   a pane in the right-hand workbench split. The popover shows its host, session,
@@ -62,6 +63,87 @@ over 0.2 seconds, without an extra shadow layer; it no longer slides its full
 height across the live terminal. The animation never wraps the terminal or keyboard rows. Reduce Motion uses a
 fade only, and Reduce Transparency uses an opaque, legible surface. The phrase
 editor hides its Form background so it does not obscure the shared material.
+
+## Context-aware voice input
+
+The Mac status bar also has a microphone, for both Local and Viewer terminal
+panes. One click starts on-device recognition; a second click, or **Stop and
+Insert** in the live-preview popover, finishes correction and inserts one literal
+text batch **without Return**. Esc, dismissing the preview, switching targets,
+typing in the terminal, disconnection or leaving the view cancels that recording.
+The Mac preview owns its dismissal: clicking the microphone remains a normal
+button action, while outside clicks, Esc and application deactivation cancel.
+Finishing keeps the preview visible through correction; closing it after insertion
+does not cancel the completed result.
+The result is tied to the focused native endpoint and its focus/input revisions;
+switching away and back does not revive it. Ordinary shells are supported.
+Pending agent forms and external editors disable dictation into the terminal.
+There is no global hotkey, clipboard replacement or extra Host/Relay command.
+
+`CtrlxCommon` owns `VoiceInputController`, the SpeechAnalyzer/legacy recognizers,
+vocabulary, candidate assembly, correction prompts/policy/provider client and
+`VoiceCorrectionSettingsSection`. iOS retains its existing live-input adapter;
+Mac previews partial text and inserts only the final result through
+`TerminalQuickActionRouter` and the existing keyboard queue. App-wide recording
+ownership prevents two windows from racing the microphone, including asynchronous
+analyzer cleanup. iOS alone configures `AVAudioSession`; Mac uses its local audio
+input and declares microphone/speech usage plus the hardened-runtime audio-input
+entitlement.
+
+Both clients snapshot context once at recording start: session/window names,
+command, current path and recent text from the focused terminal buffer. The shared
+extractor copies at most 512 tail rows, preserves soft wraps and limits the final
+context to 12,000 characters. It does not poll, copy full scrollback, request
+additional Host history or read the Viewer's filesystem.
+
+The shared vocabulary adds at most eight short, deduplicated terms from the captured
+session/window names and the current directory's basename. It never mines arbitrary
+terminal output or scans files. Live recognition, the accurate second pass and
+correction use the same per-recording vocabulary; switching sessions cannot carry
+old project terms into a new recording.
+
+On iOS/macOS 26+, SpeechAnalyzer uses SpeechTranscriber where available, otherwise
+DictationTranscriber; older systems retain on-device SFSpeechRecognizer support.
+Correction tries the configured provider, then the on-device model when available,
+then preserves the recognition result. Terminal insertion flattens newlines and
+removes control characters. Speech models may require a first-use asset download.
+
+Correction reserves room for the complete original utterance and its output before
+adding optional evidence. The on-device route uses the model's context size and,
+on 26.4+, its tokenizer; 26.0–26.3 use a conservative UTF-8 byte budget. It trims
+older terminal context first (retaining metadata when possible), then drops optional
+phonetic hints. If the original cannot fit, it stays unchanged. Provider output
+budgets grow with transcript size up to 8,192 tokens; oversized requests are skipped,
+not shortened. Explicitly incomplete/failed provider responses are never inserted.
+
+Shared validation rejects altered literal numbers, versions, addresses, prefixed
+paths, flags, assignments and backtick-delimited code. Prompts additionally require
+preserving all clauses, negations and conditions. These are conservative checks,
+not a semantic guarantee: natural-language homophone correction remains model-based.
+
+Mac **Settings → Voice Input** and the existing iOS settings use the same component
+for provider credentials, model choices and bundled-sample model tests. Existing
+iOS preference keys (`voiceCorrectionProvider`, `voiceCorrectionModelID`,
+`voiceCorrectionTestedModelIDsByProvider`) and Keychain accounts are unchanged.
+Settings and credentials stay device-local; no credential sync is added. If a
+provider is configured, transcript candidates and bounded terminal context are
+sent directly to it for correction; microphone audio is not uploaded.
+
+Bundled model tests include already-correct input, negation/conditions, literals,
+irrelevant or instruction-like context and long utterances. Scores penalize differences
+from complete reference transcripts, not just missing/incorrect keywords; unchanged
+and intent-sensitive fixtures require a full match apart from punctuation, spacing
+and letter case. Scores are fixture checks, not a general measure of semantic accuracy.
+They evaluate the model's actual output: a rejected correction does not earn credit
+for the production pipeline's safe fallback to the original draft.
+
+Regression coverage lives in `CtrlxCommonTests/Voice*`,
+`CtrlxServerFeatureTests/TerminalVoiceInputRequestTests.swift`,
+`CtrlxServerFeatureTests/MacVoiceInputPopoverTests.swift` and the existing iOS
+phase/input tests. `python3 scripts/tests/test_mac_voice_input_popover.py` exercises
+native mouse dispatch in an isolated AppKit process with fake recognition (no
+microphone, credentials or terminal input). Real microphone, permission prompts
+and recognition quality remain Mac/iPhone device acceptance checks.
 
 ## iOS custom input buttons
 
@@ -132,7 +214,7 @@ iOS for the always-openable explanation; no Relay deployment is needed.
 Both clients use `AgentQuickCommand.commands(for:)` as the display order and
 send allowlist. Keep the agents' lists independent: matching command names do
 not guarantee matching behavior. The current catalog was checked against Codex
-CLI 0.160.0 and Claude Code 2.1.276 plus their official command references:
+CLI 0.162.1 and Claude Code 2.1.276 plus their official command references:
 [Codex](https://learn.chatgpt.com/docs/developer-commands?surface=cli) and
 [Claude Code](https://code.claude.com/docs/en/commands).
 
@@ -165,8 +247,19 @@ These actions can reset a conversation, remove a transcript, stop work, exit or
 change host credentials. They retain the same target/input/availability checks
 as ordinary commands; `/approve` cannot bypass an open blocking form.
 
-Only include commands with a useful no-argument invocation. Bare `/goal`
-inspects the goal; it does not create one. Codex `/fast` changes the service
+`AgentQuickCommand.submission(for:)` owns the per-agent input policy and
+`AgentCommandRequest.keys` binds it to the captured agent. Mac Local, Mac Viewer
+and iOS all send those keys through their existing ordered queues. In both
+catalogs, **`/goal` inserts `/goal ` without Return**, allowing an objective or
+subcommand to be entered. This is a deliberate button policy: a manually entered
+bare `/goal` still inspects the goal in either agent. All other existing entries
+retain their useful bare invocation (picker, toggle, inspection or action);
+optional inline arguments alone do not force insert-only behavior. No new
+commands are added by this change. Mac hover help and both clients' accessibility
+hints describe the action. Closing the panel retains the terminal's input target
+and focus; pending-form, connection and stale-input guards still apply.
+
+Codex `/fast` changes the service
 tier and can increase usage. Model, account, version and feature flags may still
 limit commands on the actual host; the panel does not discover capabilities or
 promise that every command can execute during a running turn.

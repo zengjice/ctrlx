@@ -10,6 +10,7 @@ final class FileBrowserTransfer {
     private(set) var totalBytes = 0
     @ObservationIgnored @Dependency(FileBrowserDownloadClient.self) private var downloads
     @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var fileLease: FileBrowserDownloadLease?
 
     func fileForOpening(path: String, source: FileBrowserSource,
                         maximumRemoteBytes: Int = FileBrowserLimits.maximumDownloadBytes) async throws -> URL {
@@ -29,6 +30,7 @@ final class FileBrowserTransfer {
         if let localFileURL = source.localFileURL {
             let url = try await localFileURL(info)
             try Task.checkCancellation()
+            fileLease = nil
             return url
         }
         let limit = min(maximumRemoteBytes, FileBrowserLimits.maximumDownloadBytes)
@@ -58,6 +60,12 @@ final class FileBrowserTransfer {
             try Task.checkCancellation()
             try await downloads.finish(url)
             try Task.checkCancellation()
+            let lease = try await downloads.retain(url)
+            if Task.isCancelled {
+                await lease?.release()
+                throw CancellationError()
+            }
+            fileLease = lease
             return url
         } catch {
             await downloads.discard(url)

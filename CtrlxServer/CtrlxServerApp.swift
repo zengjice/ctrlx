@@ -20,6 +20,7 @@ struct TmuxPaneMirrorApp: App {
     @State private var updaterController: UpdaterController
     @NSApplicationDelegateAdaptor private var shutdownDelegate: AppShutdownDelegate
     @Environment(\.openSettings) private var openSettings
+    @FocusedValue(\.workbenchMenuActions) private var workbenchMenuActions
 
     init() {
         let isE2E = CommandLine.arguments.contains("--e2e-test")
@@ -178,6 +179,14 @@ struct TmuxPaneMirrorApp: App {
             prepareDependencies {
                 $0[PreferencesService.self] = prefs
                 $0[SecretsService.self] = .inMemory()
+                let testRoot: URL
+                if let index = CommandLine.arguments.firstIndex(of: "--ctrlx-state-root"), index + 1 < CommandLine.arguments.count {
+                    testRoot = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                } else {
+                    testRoot = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("ctrlx-e2e-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+                }
+                $0[FileBrowserDownloadClient.self] = .live(root: testRoot.appendingPathComponent("file-download-cache", isDirectory: true))
                 // Project lists now come from the plugin cores via
                 // `PluginHost.setProjects` (the per-agent scanners moved into the
                 // cores). E2E project-list determinism is handled by the plugin
@@ -403,6 +412,8 @@ struct TmuxPaneMirrorApp: App {
     }
 
     var body: some Scene {
+        DetachedTerminalScene(coordinator: coordinator)
+
         // Main sessions window - can be shown via menu bar "Show Sessions"
         Window("Sessions", id: "panes") {
             ContentView()
@@ -466,9 +477,10 @@ struct TmuxPaneMirrorApp: App {
             // File menu - New Session (⌘N) opens the Local section's popover
             CommandGroup(replacing: .newItem) {
                 Button("New Session") {
-                    NotificationCenter.default.post(name: .newLocalSession, object: nil)
+                    workbenchMenuActions?.newLocalSession?()
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                .disabled(workbenchMenuActions?.newLocalSession == nil)
             }
             CommandGroup(replacing: .saveItem) {}
             CommandGroup(after: .newItem) {
@@ -477,9 +489,10 @@ struct TmuxPaneMirrorApp: App {
 
             CommandGroup(after: .textEditing) {
                 Button("Find in Files") {
-                    NotificationCenter.default.post(name: .openContentSearch, object: nil)
+                    workbenchMenuActions?.openContentSearch()
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(workbenchMenuActions == nil)
             }
 
             // Window menu - tab navigation shortcuts
@@ -489,24 +502,28 @@ struct TmuxPaneMirrorApp: App {
                 Divider()
 
                 Button("Previous Tab") {
-                    NotificationCenter.default.post(name: .selectPreviousTab, object: nil)
+                    workbenchMenuActions?.selectPreviousTab()
                 }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
+                .disabled(workbenchMenuActions == nil)
 
                 Button("Next Tab") {
-                    NotificationCenter.default.post(name: .selectNextTab, object: nil)
+                    workbenchMenuActions?.selectNextTab()
                 }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
+                .disabled(workbenchMenuActions == nil)
 
                 Button("Previous Session") {
-                    NotificationCenter.default.post(name: .selectPreviousSession, object: nil)
+                    workbenchMenuActions?.selectPreviousSession?()
                 }
                 .keyboardShortcut("`", modifiers: [.command, .shift])
+                .disabled(workbenchMenuActions?.selectPreviousSession == nil)
 
                 Button("Next Session") {
-                    NotificationCenter.default.post(name: .selectNextSession, object: nil)
+                    workbenchMenuActions?.selectNextSession?()
                 }
                 .keyboardShortcut("`", modifiers: .command)
+                .disabled(workbenchMenuActions?.selectNextSession == nil)
 
                 Divider()
             }

@@ -72,12 +72,14 @@ public enum InstallResult: Sendable, Codable {
 }
 
 /// Snapshot of whether the agent's plugin is installed for a given config root.
-/// Transient `installing` / `failed` states are view state, not core state.
+/// Transient `installing` state belongs to the caller. Check errors are explicit
+/// so a failed query cannot be mistaken for an absent or up-to-date installation.
 public enum PluginInstallStatus: Sendable, Codable, Equatable {
     case installed(version: String?)
     case notInstalled
     /// The agent's CLI binary could not be located / run.
     case agentUnavailable
+    case checkFailed(message: String)
 }
 
 /// Result of `applySettings(_:)`. `.error` surfaces inline in the settings form.

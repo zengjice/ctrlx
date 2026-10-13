@@ -17,7 +17,9 @@ enum RemoteBrowserError: LocalizedError {
 @MainActor
 extension AgentBrowserService {
     var supportsBrowserSharing: Bool {
-        runtime?.responds(to: #selector(CXBrowserRuntime.requestBrowserTab(_:request:completion:))) == true
+        // Advertise protocol support before Chromium's first on-demand launch.
+        guard let runtime else { return true }
+        return runtime.responds(to: #selector(CXBrowserRuntime.requestBrowserTab(_:request:completion:)))
     }
 
     var sharedBrowserTabs: [RemoteBrowserTab] {
@@ -62,7 +64,6 @@ extension AgentBrowserService {
     }
 
     func handleBrowser(_ request: BrowseBrowser, viewerID: String) async throws -> RemoteBrowserResponse {
-        guard supportsBrowserSharing, let runtime else { throw RemoteBrowserError.message("Update the Host Mac to share Chromium pages.") }
         try Task.checkCancellation()
         expireBrowserControls()
         switch request.operation {
@@ -81,6 +82,7 @@ extension AgentBrowserService {
             return RemoteBrowserResponse(tab: descriptor(tab))
         default: break
         }
+        guard supportsBrowserSharing, let runtime else { throw RemoteBrowserError.message("Update the Host Mac to share Chromium pages.") }
         guard let tabID = request.tabID, let tab = tabs[tabID.uuidString], !tab.isClosed,
               tab.manualTarget?.hostID == nil, descriptor(tab).sessionName == request.sessionName else {
             throw RemoteBrowserError.message("This Host browser tab is no longer available in the session.")

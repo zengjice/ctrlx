@@ -9,6 +9,10 @@
 	<!-- Apple Events Usage Description - required for AppleScript automation -->
 	<key>NSAppleEventsUsageDescription</key>
 	<string>CtrlX needs to control terminal applications to open tmux sessions.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>CtrlX uses the microphone to turn your speech into terminal input.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>CtrlX recognizes your speech on this Mac to compose terminal input.</string>
 
 	<!-- Sparkle Auto-Update Configuration -->
 	<key>SUFeedURL</key>
@@ -20,6 +24,14 @@
 	<!-- Custom drag types must be registered for native drop destinations. -->
 	<key>UTExportedTypeDeclarations</key>
 	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.jicezeng.ctrlx.workbench-tab</string>
+			<key>UTTypeDescription</key>
+			<string>CtrlX Workbench Tab</string>
+			<key>UTTypeConformsTo</key>
+			<array><string>public.data</string></array>
+		</dict>
 		<dict>
 			<key>UTTypeIdentifier</key>
 			<string>com.jicezeng.ctrlx.tab-drag</string>

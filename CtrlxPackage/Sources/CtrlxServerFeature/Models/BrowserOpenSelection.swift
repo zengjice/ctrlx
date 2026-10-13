@@ -12,15 +12,20 @@ struct BrowserOpenSelection: Equatable {
     private let isFileBrowserActive: Bool
 
     @MainActor
-    init(localWindowID: String?, remoteSession: RemoteSessionSelection?, remoteWindowID: String?,
-         tabs: SessionFileTabsState?, gitActiveWindowIDs: Set<String>, fileBrowserActiveWindowIDs: Set<String>) {
+    init(
+        localWindowID: String?,
+        remoteSession: RemoteSessionSelection?,
+        remoteWindowID: String?,
+        tabs: SessionFileTabsState?,
+        fileBrowserActiveWindowIDs: Set<String>
+    ) {
         self.localWindowID = localWindowID
         self.remoteSession = remoteSession
         self.remoteWindowID = remoteWindowID
-        browserTabID = tabs?.selectedBrowserTabId
-        fileTabID = tabs?.selectedFileTabId
-        rightSelection = tabs?.selectedRight
-        isGitActive = localWindowID.map(gitActiveWindowIDs.contains) ?? false
-        isFileBrowserActive = localWindowID.map(fileBrowserActiveWindowIDs.contains) ?? false
+        self.browserTabID = tabs?.selectedBrowserTabId
+        self.fileTabID = tabs?.selectedFileTabId
+        self.rightSelection = tabs?.selectedRight
+        self.isGitActive = tabs?.isGitSelected == true
+        self.isFileBrowserActive = localWindowID.map(fileBrowserActiveWindowIDs.contains) ?? false
     }
 }

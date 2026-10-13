@@ -54,7 +54,9 @@ struct FileBrowserOfficeDocumentTests {
                 begin: { try await files.begin(name: $0, size: $1) },
                 append: { try await files.append($1, to: $0) },
                 finish: { try await files.finish($0) },
-                discard: { await files.discard($0) })
+                discard: { await files.discard($0) },
+                retain: { try await files.retain($0) },
+                maintain: { await files.maintain() })
         } operation: {
             let transfer = FileBrowserTransfer()
             let url = try await transfer.fileForOpening(path: info.path, source: source,
@@ -147,7 +149,9 @@ struct FileBrowserOfficeDocumentTests {
                 begin: { try await files.begin(name: $0, size: $1) },
                 append: { try await files.append($1, to: $0) },
                 finish: { try await files.finish($0) },
-                discard: { await files.discard($0) })
+                discard: { await files.discard($0) },
+                retain: { try await files.retain($0) },
+                maintain: { await files.maintain() })
         } operation: {
             let transfer = FileBrowserTransfer()
             let task = Task {

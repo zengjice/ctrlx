@@ -10,6 +10,46 @@ import Testing
 @Suite("Embedded Agent Browser routing")
 @MainActor
 struct AgentBrowserRoutingTests {
+    @Test("Native pages move between workspaces without closing or losing their view")
+    func detachedPresentationOwnership() throws {
+        _ = NSApplication.shared
+        let service = AgentBrowserService()
+        let main = AgentBrowserWorkspace()
+        let detached = AgentBrowserWorkspace()
+        var isDetached = false
+        var mainCreates = 0
+        var detachedCreates = 0
+        var detachedRemovals = 0
+        main.acceptsPane = { _ in !isDetached }
+        detached.acceptsPane = { _ in isDetached }
+        main.onCreate = { _, _ in mainCreates += 1 }
+        detached.onCreate = { _, _ in detachedCreates += 1 }
+        main.onDetach = { service.close($0) } // Existing UI callback must not destroy the moved page.
+        detached.onDetach = { _ in detachedRemovals += 1 }
+        service.register(main)
+        service.register(detached)
+        let source = pane("%1", session: "work")
+        service.updateBrowserRoutes([source])
+        let view = NSView()
+        let id = UUID().uuidString
+        service.browserTabCreated(id, view: view,
+            route: ["workspace": main.id.uuidString, "pane": "%1", "session": "work", "window": source.windowId],
+            owner: "agent-run", parent: nil)
+        let state = try #require(service.tabs[id])
+        isDetached = true
+        service.register(detached)
+        #expect(state.workspaceID == detached.id)
+        #expect(state.view === view && !state.isClosed)
+        #expect(mainCreates == 1 && detachedCreates == 1)
+        isDetached = false
+        service.unregister(detached)
+        #expect(state.workspaceID == main.id)
+        #expect(mainCreates == 2 && detachedRemovals == 1)
+        #expect(state.view === view && state.owner == "agent-run" && !state.isClosed)
+        service.browserTabClosed(id)
+        service.unregister(main)
+    }
+
     private func pane(_ id: String, session: String, window: Int = 0, active: Bool = false) -> PaneInfo {
         PaneInfo(paneId: id, target: "\(session):\(window).0", sessionName: session,
                  windowIndex: window, paneIndex: 0, command: "codex", currentPath: "/tmp",

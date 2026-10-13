@@ -1555,11 +1555,16 @@
         private func sendAgentCommand(_ request: AgentCommandRequest) -> Bool {
             guard request.isValid(in: activeAgentCommandContext) else { return false }
 
-            // Same queue as the other toolbar controls. Do not treat a slash
-            // command as a new prompt or arm the background-turn monitor.
+            // Update the draft only after the ordered input succeeds. Executing
+            // a bare command does not arm the background-turn monitor.
+            let windowName = window?.windowName ?? ""
             guard
-                enqueueToolbarKeys(request.command.keys, paneId: request.context.target.paneID, immediately: true, onSent: {
-                    backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
+                enqueueToolbarKeys(request.keys, paneId: request.context.target.paneID, immediately: true, onSent: {
+                    if request.submission == .execute {
+                        backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
+                    } else {
+                        observeTerminalInput(request.keys, paneId: request.context.target.paneID, windowName: windowName)
+                    }
                 })
             else { return false }
             return true
@@ -1598,16 +1603,10 @@
 
             var metadata: [String] = []
             if let pane = window?.panes.first(where: { $0.paneId == activePaneId }) {
-                metadata.append("Session: \(sessionName)")
-                if !pane.windowName.isEmpty {
-                    metadata.append("Window: \(pane.windowName)")
-                }
-                if let command = pane.command, !command.isEmpty {
-                    metadata.append("Running command: \(command)")
-                }
-                if let currentPath = pane.currentPath, !currentPath.isEmpty {
-                    metadata.append("Current path: \(currentPath)")
-                }
+                metadata = VoiceInputContext.paneMetadata(
+                    sessionName: sessionName, windowName: pane.windowName,
+                    command: pane.command, currentPath: pane.currentPath
+                )
             }
 
             return VoiceInputContext.makeTerminalContext(

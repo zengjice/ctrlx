@@ -1,15 +1,18 @@
 /// One button action for both touch and accessibility; no press/release state.
-enum VoiceInputPhase: Equatable {
+public enum VoiceInputPhase: Equatable, Sendable {
     case idle
     case requestingPermission
     case recording
     case finalizing
 
-    enum TapAction: Equatable {
-        case start, cancelPreparation, finish, none
+    public enum TapAction: Equatable, Sendable {
+        case start
+        case cancelPreparation
+        case finish
+        case none
     }
 
-    var tapAction: TapAction {
+    public var tapAction: TapAction {
         switch self {
         case .idle: .start
         case .requestingPermission: .cancelPreparation
@@ -18,7 +21,7 @@ enum VoiceInputPhase: Equatable {
         }
     }
 
-    var accessibilityValue: String {
+    public var accessibilityValue: String {
         switch self {
         case .idle: "Ready"
         case .requestingPermission: "Preparing voice input"
@@ -27,7 +30,7 @@ enum VoiceInputPhase: Equatable {
         }
     }
 
-    var accessibilityHint: String {
+    public var accessibilityHint: String {
         switch self {
         case .idle: "Tap to start dictation"
         case .requestingPermission: "Tap to cancel preparation"

@@ -54,6 +54,53 @@ struct RemoteBrowserControlTests {
         return (service, runtime, try #require(service.sharedBrowserTabs.first))
     }
 
+    @Test func firstViewerTabStartsRuntimeOnDemand() async throws {
+        let runtime = Runtime()
+        var starts = 0
+        let service = AgentBrowserService(startRuntime: { service in
+            starts += 1
+            runtime.delegate = service
+            return runtime
+        })
+        service.configure { _ in throw RemoteBrowserError.message("No agent fixture") }
+        service.resolveSourcePane = { session, id in PaneBrowserOpeningTests.pane(id, session: session) }
+        #expect(service.supportsBrowserSharing)
+        #expect(starts == 0)
+        let request = BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .openPane(url: nil), sourcePaneID: "%1")
+        for _ in 0..<2 {
+            let response = try await service.handleBrowser(request, viewerID: "viewer")
+            let tab = try #require(response.tab)
+            #expect(tab.sessionName == "test")
+            #expect(tab.sourcePaneID == "%1")
+            #expect(!tab.isAgentOwned)
+        }
+        #expect(starts == 1)
+        #expect(service.sharedBrowserTabs.count == 1)
+        await service.shutdown()
+    }
+
+    @Test func viewerStartupFailureIsReportedWithoutRetryingRuntime() async {
+        var starts = 0
+        let service = AgentBrowserService(startRuntime: { _ in
+            starts += 1
+            throw RemoteBrowserError.message("Native runtime unavailable")
+        })
+        service.configure { _ in throw RemoteBrowserError.message("No agent fixture") }
+        service.resolveSourcePane = { session, id in PaneBrowserOpeningTests.pane(id, session: session) }
+        let request = BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .openPane(url: nil), sourcePaneID: "%1")
+        for _ in 0..<2 {
+            do {
+                _ = try await service.handleBrowser(request, viewerID: "viewer")
+                Issue.record("Viewer creation ignored startup failure")
+            } catch {
+                #expect(error.localizedDescription == "Native runtime unavailable")
+            }
+        }
+        #expect(starts == 1)
+        #expect(service.sharedBrowserTabs.isEmpty)
+        await service.shutdown()
+    }
+
     @Test func controllerIsolationAndDisconnect() async throws {
         let (service, runtime, tab) = try await fixture()
         let surface = UUID()

@@ -544,7 +544,8 @@ struct FileBrowserVideoTests {
         }
     }
 
-    @Test func annotationUsesPausedPlayerFrameAndPreservesMute() async throws {
+    @Test
+    func annotationUsesPausedPlayerFrameAndPreservesMute() async throws {
         let data = try fixture()
         let info = info(size: data.count)
         let playback = FileBrowserVideoPlayback(startsMuted: true)
@@ -562,19 +563,81 @@ struct FileBrowserVideoTests {
         let repeated = try await capture.capture()
         #expect(repeated.detail == snapshot.detail)
         #expect(player.rate == 0)
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await capture.capture()
+        }
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
         playback.stop()
         await #expect(throws: FileBrowserError.self) { try await capture.capture() }
     }
 
+    @Test(arguments: ["seek", "resume", "replace", "cancel"])
+    func annotationRejectsPlayerChangesDuringRendering(change: String) async throws {
+        let player = AVPlayer(url: fixtureURL())
+        player.isMuted = true
+        defer { player.pause()
+            player.replaceCurrentItem(with: nil)
+        }
+        var rendered = false
+        let capture = FilePreviewVideoCapture(player: player) { image, time in
+            rendered = true
+            switch change {
+            case "seek":
+                _ = await player.seek(to: CMTime(seconds: 2, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            case "resume":
+                // Even a restart followed by another pause invalidates the frame.
+                player.play()
+                player.pause()
+            case "replace":
+                player.replaceCurrentItem(with: nil)
+            default:
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+            return try await FilePreviewVideoCapture.render(image: image, time: time)
+        }
+        player.play()
+        try await waitUntil { player.timeControlStatus == .playing && CMTimeGetSeconds(player.currentTime()) > 0.15 }
+        let pending = Task { try await capture.capture() }
+        await #expect(throws: CancellationError.self) { try await pending.value }
+        #expect(rendered, "The test must invalidate a frame that was ready to render")
+        #expect(player.isMuted)
+    }
+
+    @Test
+    func annotationAfterSeekCapturesTheNewFrame() async throws {
+        let player = AVPlayer(url: fixtureURL())
+        player.isMuted = true
+        defer { player.pause()
+            player.replaceCurrentItem(with: nil)
+        }
+        let capture = FilePreviewVideoCapture(player: player)
+        player.play()
+        try await waitUntil { player.timeControlStatus == .playing && CMTimeGetSeconds(player.currentTime()) > 0.15 }
+        let first = try await capture.capture()
+        #expect(await player.seek(to: CMTime(seconds: 2, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero))
+        let next = try await capture.capture()
+        #expect(next.detail != first.detail)
+        #expect(next.detail == "Time 00:00:02")
+        #expect(player.rate == 0 && player.isMuted)
+        #expect(try await capture.capture().detail == next.detail)
+    }
+
     private func waitUntil(_ predicate: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
-        while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        while !predicate(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         try #require(predicate(), "Native video playback did not converge")
     }
 
     private func fixture(name: String = "test_video.mp4") throws -> Data {
+        try Data(contentsOf: fixtureURL(name: name))
+    }
+
+    private func fixtureURL(name: String = "test_video.mp4") -> URL {
         let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        return try Data(contentsOf: package.appendingPathComponent("Sources/CtrlxE2ELib/Scenarios/SampleFiles/\(name)"))
+        return package.appendingPathComponent("Sources/CtrlxE2ELib/Scenarios/SampleFiles/\(name)")
     }
 
     @Test(arguments: ["mp4", "mov"])
@@ -626,6 +689,42 @@ struct FileBrowserVideoTests {
         #expect(reader.cachedBytes <= FileBrowserVideo.cacheBytes)
         loader.stop()
         #expect(reader.cachedBytes == 0)
+    }
+
+    @Test
+    func closingOneVideoPreviewDoesNotClearAnotherPreviewsCache() async throws {
+        let data = try fixture()
+        let info = info(size: data.count)
+        let source = FileBrowserSource(id: "shared-host", paneID: nil) { operation in
+            guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Expected random read") }
+            return .chunk(.init(
+                path: path,
+                revision: revision,
+                offset: offset,
+                data: data.subdata(in: offset..<min(offset + self.block, data.count))
+            ))
+        }
+        let first = try FileBrowserVideoReader(info: info, source: source)
+        let second = try FileBrowserVideoReader(info: info, source: source)
+        let firstLoader = try FileBrowserVideoResourceLoader(reader: first) { Issue.record("\($0)") }
+        let secondLoader = try FileBrowserVideoResourceLoader(reader: second) { Issue.record("\($0)") }
+        defer { firstLoader.stop()
+            secondLoader.stop()
+        }
+        let firstGenerator = AVAssetImageGenerator(asset: firstLoader.makeAsset())
+        let secondGenerator = AVAssetImageGenerator(asset: secondLoader.makeAsset())
+        _ = try await firstGenerator.image(at: .zero)
+        _ = try await secondGenerator.image(at: .zero)
+        #expect(first.cachedBytes > 0 && second.cachedBytes > 0)
+        let retainedBytes = second.cachedBytes
+        firstLoader.stop()
+        #expect(first.cachedBytes == 0)
+        #expect(second.cachedBytes == retainedBytes)
+        let later = try await secondGenerator.image(at: CMTime(seconds: 3, preferredTimescale: 600))
+        #expect(later.image.width == 1_280)
+        #expect(second.cachedBytes <= FileBrowserVideo.cacheBytes)
+        secondLoader.stop()
+        #expect(second.cachedBytes == 0)
     }
 
     @Test func suspensionAndStopPreventFurtherRequests() async throws {

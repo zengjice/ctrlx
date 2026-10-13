@@ -18,7 +18,7 @@ struct RemoteWindowTabBar: View {
     @Environment(AppSettings.self) private var settings
 
     let windows: [TmuxWindow]
-    let selectedWindow: TmuxWindow
+    let selectedWindow: TmuxWindow?
     let isHostConnected: Bool
     /// In-app browser tabs scoped to this remote session. Empty when no
     /// terminal-link click has spawned a tab yet.
@@ -52,6 +52,7 @@ struct RemoteWindowTabBar: View {
     var onSelectFileTab: ((UUID) -> Void)?
     var onCloseFileTab: ((UUID) -> Void)?
     let onOpenFiles: (TmuxWindow) -> Void
+    var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
 
     /// Cached width of the split-mode tab strip. Measured via the background
     /// `onGeometryChange` so the HStack can drive intrinsic height instead of
@@ -234,7 +235,7 @@ struct RemoteWindowTabBar: View {
                 DropIndicator(visible: isTargeted)
                     .padding(.leading, 4)
             }
-            .dropDestination(for: TabDragPayload.self) { payloads, _ in
+            .workbenchDropDestination(rightSide: section == .right) { payloads, _ in
                 handleEndDrop(payloads: payloads, section: section)
             } isTargeted: { hovering in
                 trailingDropTargetedSection = hovering ? section : (
@@ -295,8 +296,8 @@ struct RemoteWindowTabBar: View {
         }
         .tabStripItemStyle(isSelected: selected, isOnRightSplit: onRight, isSplit: isSplit)
         .overlay(alignment: .leading) { DropIndicator(visible: dropIndicator == payload) }
-        .draggable(payload) { TabDragPreview(label: tab.title, symbol: .folder) }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDraggable(payload) { TabDragPreview(label: tab.title, symbol: .folder) }
+        .workbenchDropDestination(before: payload) { payloads, _ in
             handleDrop(payloads: payloads, target: payload)
         } isTargeted: { targeted in
             updateDropIndicator(target: targeted ? payload : nil, for: .file)
@@ -313,7 +314,7 @@ struct RemoteWindowTabBar: View {
         // right-pane selection points at them.
         let isSelected = tabIsOnRight
             ? selectedRight == payload
-            : window.id == selectedWindow.id && selectedBrowserTabId == nil && sessionTabs?.selectedFileTabId == nil
+            : window.id == selectedWindow?.id && selectedBrowserTabId == nil && sessionTabs?.selectedFileTabId == nil
         let isHovered = hoveredWindowId == window.id
         let windowName = windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
 
@@ -321,25 +322,14 @@ struct RemoteWindowTabBar: View {
             Button {
                 onSelectWindow(window)
             } label: {
-                HStack(spacing: 4) {
-                    if window.hasClaude {
-                        Symbols.sparkles.image
-                            .font(.caption2)
-                            .foregroundStyle(.purple)
-                    }
-
-                    Text(windowName)
-                        .font(.system(.caption, design: .monospaced))
-                        .lineLimit(1)
-                }
-                .padding(.leading, 12)
-                .padding(.trailing, 4)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
+                TerminalWindowTabLabel(name: windowName, hasAgent: window.hasClaude)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(window.id) \(windowName)")
             .accessibilityValue(isSelected ? "selected" : "")
+            .background(WindowTabDragSource(windowID: window.stableId, label: windowName) { point in
+                onDetachWindow?(window, point)
+            })
             .modifier(WindowRenamingModifier(
                 currentName: window.windowName,
                 isDisabled: !isHostConnected,
@@ -347,6 +337,8 @@ struct RemoteWindowTabBar: View {
                     onRenameWindow(window, newName)
                 },
                 additionalMenu: {
+                    Button("Open in Separate Window") { onDetachWindow?(window, nil) }
+                        .disabled(onDetachWindow == nil || DetachedTerminalTarget(hostID: nil, windowID: window.stableId) == nil)
                     Button { onOpenFiles(window) } label: {
                         Label("Open Files", symbol: .folderBadgePlus)
                     }
@@ -392,10 +384,7 @@ struct RemoteWindowTabBar: View {
         .onHover { hovering in
             hoveredWindowId = hovering ? window.id : nil
         }
-        .draggable(payload) {
-            TabDragPreview(label: windowName, symbol: window.hasClaude ? .sparkles : .terminal)
-        }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDropDestination(before: payload) { payloads, _ in
             handleDrop(payloads: payloads, target: payload)
         } isTargeted: { isTargeted in
             updateDropIndicator(target: isTargeted ? payload : nil, for: .window)

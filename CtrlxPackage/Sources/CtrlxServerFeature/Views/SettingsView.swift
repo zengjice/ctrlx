@@ -49,11 +49,7 @@ public struct SettingsView: View {
             } label: {
                 Label("Remote Hosts", symbol: .laptopcomputer)
             }
-            Tab(value: SettingsTab.quickPhraseSync) {
-                QuickPhraseSyncSettingsView(store: settings.quickPhrases)
-            } label: {
-                Label("Quick Phrase Sync", symbol: .textBubbleFill)
-            }
+            inputTabs
             Tab(value: SettingsTab.agents) {
                 AgentsSettingsView()
             } label: {
@@ -66,6 +62,25 @@ public struct SettingsView: View {
             }
         }
         .frame(minWidth: 900, minHeight: 500)
+    }
+
+    @TabContentBuilder<SettingsTab> private var inputTabs: some TabContent<SettingsTab> {
+        Tab(value: SettingsTab.quickPhraseSync) {
+            QuickPhraseSyncSettingsView(store: settings.quickPhrases)
+        } label: {
+            Label("Quick Phrase Sync", symbol: .textBubbleFill)
+        }
+        Tab(value: SettingsTab.voiceInput) {
+            Form {
+                Section {
+                    Text("Use the microphone beside the terminal quick actions to dictate into the focused pane. Audio is recognized on this Mac. Text is inserted without pressing Enter.")
+                }
+                VoiceCorrectionSettingsSection(settings: settings.voiceCorrection)
+            }
+            .formStyle(.grouped)
+        } label: {
+            Label("Voice Input", symbol: .micFill)
+        }
     }
 }
 

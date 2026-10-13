@@ -1,39 +1,27 @@
 import CtrlxCommon
+import CtrlxNetworking
 import SwiftUI
 
-/// Bundles the global menu-driven notification observers used by the panes
-/// scene (Cmd-N, Cmd-Shift-F, Cmd-Shift-[, Cmd-Shift-], Cmd-`, Cmd-Shift-`) so
-/// the main `body` chain stays under the Swift type checker's complexity
-/// threshold. Cmd-W routes through the scene-scoped `closeCurrentTabAction`
-/// focused value instead — see `MenuCommandFocusedValues.swift`.
+/// Keeps menu routing scene-local, including when several workbenches are visible.
 struct MenuCommandsModifier: ViewModifier {
-    let onOpenContentSearch: () -> Void
-    let onSelectPreviousTab: () -> Void
-    let onSelectNextTab: () -> Void
-    let onSelectPreviousSession: () -> Void
-    let onSelectNextSession: () -> Void
-    let onNewLocalSession: () -> Void
+    let onOpenContentSearch: @MainActor () -> Void
+    let onSelectPreviousTab: @MainActor () -> Void
+    let onSelectNextTab: @MainActor () -> Void
+    let onSelectPreviousSession: @MainActor () -> Void
+    let onSelectNextSession: @MainActor () -> Void
+    let onNewLocalSession: @MainActor () -> Void
+    let allowsSessionNavigation: Bool
 
     func body(content: Content) -> some View {
         content
-            .onReceive(NotificationCenter.default.publisher(for: .openContentSearch)) { _ in
-                onOpenContentSearch()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .selectPreviousTab)) { _ in
-                onSelectPreviousTab()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .selectNextTab)) { _ in
-                onSelectNextTab()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .selectPreviousSession)) { _ in
-                onSelectPreviousSession()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .selectNextSession)) { _ in
-                onSelectNextSession()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .newLocalSession)) { _ in
-                onNewLocalSession()
-            }
+            .focusedSceneValue(\.workbenchMenuActions, WorkbenchMenuActions(
+                openContentSearch: onOpenContentSearch,
+                selectPreviousTab: onSelectPreviousTab,
+                selectNextTab: onSelectNextTab,
+                selectPreviousSession: allowsSessionNavigation ? onSelectPreviousSession : nil,
+                selectNextSession: allowsSessionNavigation ? onSelectNextSession : nil,
+                newLocalSession: allowsSessionNavigation ? onNewLocalSession : nil
+            ))
     }
 }
 
@@ -52,20 +40,32 @@ struct SharedTerminalLayoutSyncModifier<Signal: Equatable>: ViewModifier {
     }
 }
 
-/// Prunes right-side payloads from remote `SessionFileTabsState` whenever
-/// the remote session store's pane count changes — covers windows that the
-/// host removed (user typed `exit`, the X button, `kill-window`, etc.) so the
-/// right pane doesn't strand the split with a dangling reference.
-///
-/// Hoisted into its own modifier so the main `body` chain stays inside
-/// SwiftUI's type-checker budget.
-struct RemoteSplitCleanupModifier: ViewModifier {
-    let paneCount: Int
+/// One observer orders rename, catalog reconciliation and pruning for every scene.
+struct RemoteSessionStructureModifier: ViewModifier {
+    let structure: RemoteSessionStructure
+    var browserCatalogs: [String: [RemoteBrowserTab]] = [:]
+    var simulatorCatalogs: [String: [RemoteSimulatorTab]] = [:]
+    var selection: RemoteSessionSelection?
+    let onRename: (String, SessionRenameMapping) -> Void
+    let onSyncBrowserTabs: () -> Void
     let onPrune: () -> Void
 
+    private struct Snapshot: Equatable {
+        let structure: RemoteSessionStructure
+        let browserCatalogs: [String: [RemoteBrowserTab]]
+        let simulatorCatalogs: [String: [RemoteSimulatorTab]]
+        let selection: RemoteSessionSelection?
+    }
+
     func body(content: Content) -> some View {
-        content.onChange(of: paneCount) {
-            onPrune()
+        content.onChange(of: Snapshot(structure: structure, browserCatalogs: browserCatalogs, simulatorCatalogs: simulatorCatalogs, selection: selection), initial: true) { previous, current in
+            for rename in current.structure.renames(from: previous.structure) {
+                onRename(rename.hostID, rename.mapping)
+            }
+            onSyncBrowserTabs()
+            if previous.structure != current.structure {
+                onPrune()
+            }
         }
     }
 }
@@ -116,7 +116,11 @@ struct AlertsModifier: ViewModifier {
             }
             .alert("Terminal Error", isPresented: .init(
                 get: { attachError != nil },
-                set: { if !$0 { attachError = nil } }
+                set: {
+                    if !$0 {
+                        attachError = nil
+                    }
+                }
             )) {
                 Button("OK") { attachError = nil }
             } message: {
@@ -128,7 +132,11 @@ struct AlertsModifier: ViewModifier {
                 closeConfirmation?.title ?? "Close?",
                 isPresented: .init(
                     get: { closeConfirmation != nil },
-                    set: { if !$0 { closeConfirmation = nil } }
+                    set: {
+                        if !$0 {
+                            closeConfirmation = nil
+                        }
+                    }
                 )
             ) {
                 if let confirmation = closeConfirmation {

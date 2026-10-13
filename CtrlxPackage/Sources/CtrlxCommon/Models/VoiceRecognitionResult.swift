@@ -1,6 +1,6 @@
 import Foundation
 
-struct VoiceRecognitionResult: Sendable {
+struct VoiceRecognitionResult {
     let primaryTranscript: String
     let alternativeTranscripts: [String]
     let liveTranscript: String
@@ -105,10 +105,35 @@ struct VoiceRecognitionCandidateAccumulator {
     }
 }
 
-enum VoiceInputContext {
-    static let maximumTerminalCharacterCount = 12_000
+public enum VoiceInputContext {
+    public static let maximumTerminalCharacterCount = 12_000
+    static let terminalHeader = "Recent terminal text:\n"
 
-    static func terminalExcerpt(
+    static func compacted(_ context: String?, maximumCount: Int) -> String? {
+        guard let context else { return nil }
+        guard let header = context.range(of: terminalHeader) else {
+            return terminalExcerpt(context, maximumCount: maximumCount)
+        }
+        return makeTerminalContext(
+            terminalText: String(context[header.upperBound...]),
+            metadata: [String(context[..<header.lowerBound])],
+            maximumCount: maximumCount
+        )
+    }
+
+    public static func paneMetadata(
+        sessionName: String, windowName: String, command: String?, currentPath: String?
+    ) -> [String] {
+        [
+            ("Session", sessionName),
+            ("Window", windowName),
+            ("Running command", command ?? ""),
+            ("Current path", currentPath ?? ""),
+        ]
+        .compactMap { label, value in value.isEmpty ? nil : "\(label): \(value)" }
+    }
+
+    public static func terminalExcerpt(
         _ text: String?,
         maximumCount: Int = maximumTerminalCharacterCount
     ) -> String? {
@@ -123,7 +148,7 @@ enum VoiceInputContext {
     /// Formats the active pane metadata and recent terminal text under one
     /// shared budget. Metadata remains intact while older terminal output is
     /// discarded first.
-    static func makeTerminalContext(
+    public static func makeTerminalContext(
         terminalText: String?,
         metadata: [String] = [],
         maximumCount: Int = maximumTerminalCharacterCount
@@ -140,7 +165,6 @@ enum VoiceInputContext {
             return terminalExcerpt(metadataText, maximumCount: maximumCount)
         }
 
-        let terminalHeader = "Recent terminal text:\n"
         let fixedText = metadataText.isEmpty
             ? terminalHeader
             : metadataText + "\n" + terminalHeader

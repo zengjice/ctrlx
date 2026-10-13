@@ -1,5 +1,26 @@
 import SwiftUI
 
+/// Menu actions belong to the key workbench, never every open MainView.
+public struct WorkbenchMenuActions {
+    public var openContentSearch: @MainActor () -> Void
+    public var selectPreviousTab: @MainActor () -> Void
+    public var selectNextTab: @MainActor () -> Void
+    public var selectPreviousSession: (@MainActor () -> Void)?
+    public var selectNextSession: (@MainActor () -> Void)?
+    public var newLocalSession: (@MainActor () -> Void)?
+}
+
+public struct WorkbenchMenuActionsKey: FocusedValueKey {
+    public typealias Value = WorkbenchMenuActions
+}
+
+public extension FocusedValues {
+    var workbenchMenuActions: WorkbenchMenuActions? {
+        get { self[WorkbenchMenuActionsKey.self] }
+        set { self[WorkbenchMenuActionsKey.self] = newValue }
+    }
+}
+
 /// Focused-scene action for closing the currently-active tab in the panes
 /// window. Set by `MainView.focusedSceneValue` so the global Cmd-W menu
 /// item routes to the tab-close logic only when the panes scene is the

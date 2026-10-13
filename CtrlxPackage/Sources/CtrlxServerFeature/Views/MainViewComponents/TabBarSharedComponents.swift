@@ -1,6 +1,28 @@
 import CtrlxCommon
 import SwiftUI
 
+struct TerminalWindowTabLabel: View {
+    let name: String
+    let hasAgent: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if hasAgent {
+                Symbols.sparkles.image
+                    .font(.caption2)
+                    .foregroundStyle(.purple)
+            }
+            Text(name)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+    }
+}
+
 /// Identifies which trailing drop zone is being targeted. The single section
 /// is used when the tab bar is not split; left/right correspond to the two
 /// sections of the split-mode bar. Shared by `WindowTabBar` and
@@ -176,10 +198,10 @@ struct BrowserTabStripItem: View {
         .onHover { hovering in
             isHovered = hovering
         }
-        .draggable(payload) {
+        .workbenchDraggable(payload) {
             TabDragPreview(label: tab.tabLabel, symbol: .globe)
         }
-        .dropDestination(for: TabDragPayload.self) { payloads, _ in
+        .workbenchDropDestination(before: payload) { payloads, _ in
             onDrop(payloads)
         } isTargeted: { isTargeted in
             onTargetedChanged(isTargeted)

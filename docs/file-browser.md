@@ -202,7 +202,9 @@ not a thumbnail or a newly rendered first page. It uses application-view capture
 not whole-screen recording, a conversion service or private Quick Look APIs.
 System Office rendering limitations still apply. Video pauses and reads one frame
 from the existing player, preserving mute state and remaining paused afterwards;
-it does not download a second asset or resume automatically. Audio-only previews
+it does not download a second asset or resume automatically. Capture tolerates the
+player clock settling after pause, but a seek, playback restart or item replacement
+during asynchronous rendering discards the pending frame. Audio-only previews
 cannot be annotated. A missing/unready capture fails visibly without opening a
 different file or app.
 
@@ -282,8 +284,29 @@ New viewers fail immediately with the existing upgrade hint on a legacy Host.
 Downloads show byte progress and can be cancelled. Selecting another file,
 leaving the tab or disconnecting cancels pending work. Partial copies are removed;
 successful copies stay in the app's `Caches/CtrlX/FileBrowserDownloads` directory
-so external apps can continue reading. Starting another download cleans copies
-older than 24 hours, never active downloads. Free space is checked before writing.
+so external apps can continue reading. A shared off-main-actor service runs expiry
+maintenance on app startup/foreground (at most once an hour per process) and
+before a new download. Only owned UUID copy directories older than 24 hours are
+removed, including old partial copies left by a crash. Unknown directories,
+symlinks and Host originals are not cleanup targets. Failures are logged and
+retried at a later maintenance opportunity.
+
+The disk cache is capped at 2 GiB. Active downloads reserve their complete expected
+size; low-space checks also reserve their unwritten bytes and leave 256 MiB free.
+Append and finish validate the reserved size. When no expired, unused copies can
+make room, a new download fails visibly rather than evicting recent or active files.
+Each native preview/transfer retains an independent lease on its completed copy;
+closing one preview cannot release another preview's lease. The 24-hour external-app
+grace period restarts at download completion and when the final preview lease ends.
+An external app cannot retain the temporary URL indefinitely; save a personal copy
+when longer availability is needed. Streaming video still uses only the bounded
+in-memory chunk cache and AVFoundation's own buffers, not this disk cache. Playback
+position is not persisted or synchronized by CtrlX.
+
+`FileBrowserCacheTests` covers controlled-clock expiry, restart without downloads,
+crash leftovers, active downloads/preview leases, concurrent quota reservations,
+low space and cleanup boundaries. OS media buffers and physical-device playback
+remain runtime acceptance checks, not assertions about the download cache size.
 
 Editing and remote Chromium control are not part of this change. Existing local
 editor tabs and web-browser ownership remain separate.

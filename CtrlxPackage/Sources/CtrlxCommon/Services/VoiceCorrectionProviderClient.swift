@@ -7,7 +7,9 @@ import Foundation
 public enum VoiceCorrectionProvider: String, CaseIterable, Identifiable, Sendable {
     case volcengineArk
 
-    public var id: String { rawValue }
+    public var id: String {
+        rawValue
+    }
 
     var displayName: String {
         switch self {
@@ -41,11 +43,11 @@ public enum VoiceCorrectionProvider: String, CaseIterable, Identifiable, Sendabl
     }
 }
 
-struct VoiceCorrectionSelection: Equatable, Sendable {
+public struct VoiceCorrectionSelection: Equatable, Sendable {
     let provider: VoiceCorrectionProvider
     let modelID: String
 
-    init?(provider: VoiceCorrectionProvider, modelID: String) {
+    public init?(provider: VoiceCorrectionProvider, modelID: String) {
         let trimmedModelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedModelID.isEmpty else { return nil }
         self.provider = provider
@@ -59,7 +61,7 @@ enum VoiceCorrectionCredentials {
     }
 }
 
-struct VoiceCorrectionProviderClient: Sendable {
+struct VoiceCorrectionProviderClient {
     typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
     private let transport: Transport
@@ -103,6 +105,10 @@ struct VoiceCorrectionProviderClient: Sendable {
         selection: VoiceCorrectionSelection,
         apiKey: String
     ) async throws -> String {
+        guard
+            let maximumResponseTokens = VoiceCorrectionBudget.providerResponseTokens(
+                for: recognition.bestAvailableTranscript
+            ) else { throw VoiceCorrectionProviderError.inputTooLong }
         var request = URLRequest(
             url: selection.provider.baseURL.appending(path: "responses")
         )
@@ -127,13 +133,25 @@ struct VoiceCorrectionProviderClient: Sendable {
                 ))
                 """,
                 thinking: ResponsesThinking(type: "disabled"),
-                maxOutputTokens: 512,
+                maxOutputTokens: maximumResponseTokens,
                 store: false
             )
         )
 
         let data = try await send(request)
         let response = try JSONDecoder().decode(ResponsesResponse.self, from: data)
+        if let status = response.status, status != "completed" {
+            throw VoiceCorrectionProviderError.incompleteResponse(reason: response.incompleteDetails?.reason ?? status)
+        }
+        if let details = response.incompleteDetails {
+            throw VoiceCorrectionProviderError.incompleteResponse(reason: details.reason)
+        }
+        if
+            let unfinished = response.output?.first(where: {
+                $0.type == "message" && $0.status != nil && $0.status != "completed"
+            }) {
+            throw VoiceCorrectionProviderError.incompleteResponse(reason: unfinished.status)
+        }
         let outputText = response.outputText?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let outputText, !outputText.isEmpty {
             return outputText
@@ -215,6 +233,7 @@ private struct ResponsesThinking: Encodable {
 private struct ResponsesResponse: Decodable {
     struct Output: Decodable {
         let type: String?
+        let status: String?
         let content: [Content]?
     }
 
@@ -250,6 +269,8 @@ private struct ProviderErrorResponse: Decodable {
 
 enum VoiceCorrectionProviderError: LocalizedError, Equatable {
     case invalidResponse
+    case inputTooLong
+    case incompleteResponse(reason: String?)
     case missingOutputText(reason: String?)
     case requestFailed(statusCode: Int, message: String?)
 
@@ -257,6 +278,10 @@ enum VoiceCorrectionProviderError: LocalizedError, Equatable {
         switch self {
         case .invalidResponse:
             "The model provider returned an invalid response."
+        case .inputTooLong:
+            "The transcript is too long to correct safely."
+        case let .incompleteResponse(reason):
+            "The model provider did not complete the correction (\(reason ?? "incomplete"))."
         case let .missingOutputText(reason):
             if let reason, !reason.isEmpty {
                 "The model provider returned no corrected text (\(reason))."

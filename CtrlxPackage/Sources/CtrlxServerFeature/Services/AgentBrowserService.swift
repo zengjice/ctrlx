@@ -177,11 +177,42 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
 
     func register(_ workspace: AgentBrowserWorkspace) {
         workspaces[workspace.id] = workspace
+        reconcileWorkspaces()
         for tab in tabs.values where workspaces[tab.workspaceID] == nil && workspace.acceptsSession(tab.sessionName) {
+            guard !routePanes.contains(where: { $0.paneId == tab.paneID }) else { continue }
             tab.workspaceID = workspace.id
             workspace.onCreate(tab, tab.parentID)
             workspace.onChange(tab)
         }
+    }
+
+    /// Display ownership follows the source pane, independently of native page lifetime.
+    private func reconcileWorkspaces() {
+        for tab in tabs.values where tab.manualTarget?.hostID == nil {
+            guard let pane = routePanes.first(where: { $0.paneId == tab.paneID }) else { continue }
+            movePresentation(tab, to: displayWorkspace(for: tab, pane: pane))
+        }
+    }
+
+    private func displayWorkspace(for tab: AgentBrowserTabState, pane: PaneInfo) -> AgentBrowserWorkspace? {
+        workspaces.values.first { $0.acceptsTab?(tab) == true }
+            ?? workspaces.values.first { $0.acceptsTab == nil && $0.acceptsPane(pane) }
+            ?? workspaces.values.first { $0.acceptsTab == nil && $0.acceptsSession(pane.sessionName) }
+    }
+
+    private func movePresentation(_ tab: AgentBrowserTabState, to workspace: AgentBrowserWorkspace?) {
+        let id = workspace?.id ?? parkingID
+        guard tab.workspaceID != id else { return }
+        detachingTabs.insert(tab.identifier)
+        workspaces[tab.workspaceID]?.onDetach(tab)
+        detachingTabs.remove(tab.identifier)
+        tab.workspaceID = id
+        if let routeID = tab.manualRouteID, let route = manualRoutes[routeID] {
+            manualRoutes[routeID] = (id, route.target)
+        }
+        park(tab)
+        workspace?.onCreate(tab, tab.parentID)
+        workspace?.onChange(tab)
     }
 
     func park(_ tab: AgentBrowserTabState) {
@@ -282,7 +313,10 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }
 
     private func updateRoute(_ tab: AgentBrowserTabState, pane: PaneInfo) {
-        guard tab.sessionName != pane.sessionName || tab.windowID != pane.windowId else { return }
+        guard tab.sessionName != pane.sessionName || tab.windowID != pane.windowId else {
+            movePresentation(tab, to: displayWorkspace(for: tab, pane: pane))
+            return
+        }
         let changesSession = tab.sessionName != pane.sessionName
         if changesSession {
             detachingTabs.insert(tab.identifier)
@@ -329,6 +363,7 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
             workspace.onClose(tab)
             runtime?.closeTab(tab.identifier)
         }
+        reconcileWorkspaces()
     }
 
     public func resolveBrowserProcess(_ pid: Int32, completion: @escaping ([String: String]?, String?) -> Void) {
@@ -448,7 +483,8 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     private func createPaneTab(_ pane: PaneInfo) async throws -> AgentBrowserTabState {
         guard !closing, let runtime else { throw ManualBrowserError.unavailable }
         let sessionName = pane.sessionName
-        let workspaceID = workspaces.values.first { $0.acceptsSession(sessionName) }?.id ?? parkingID
+        let workspaceID = (workspaces.values.first { $0.acceptsPane(pane) }
+            ?? workspaces.values.first { $0.acceptsTab == nil && $0.acceptsSession(sessionName) })?.id ?? parkingID
         let target = ManualBrowserTarget(sessionName: sessionName)
         let routeID = UUID().uuidString
         manualRoutes[routeID] = (workspaceID, target)
@@ -492,6 +528,7 @@ final class AgentBrowserWorkspace {
     let id = UUID()
     weak var window: NSWindow?
     var acceptsPane: (PaneInfo) -> Bool = { _ in false }
+    var acceptsTab: ((AgentBrowserTabState) -> Bool)?
     var acceptsSession: (String) -> Bool = { _ in false }
     var onCreate: (AgentBrowserTabState, UUID?) -> Void = { _, _ in }
     var onChange: (AgentBrowserTabState) -> Void = { _ in }

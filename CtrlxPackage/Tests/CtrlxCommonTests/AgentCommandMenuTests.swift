@@ -17,7 +17,7 @@ struct AgentCommandMenuTests {
         )
     }
 
-    @Test("Codex includes common zero-argument commands in stable display order")
+    @Test("Codex includes common commands in stable display order")
     func codexCatalog() {
         #expect(AgentQuickCommand.commands(for: "codex").map(\.text) == [
             "/model", "/status", "/usage",
@@ -31,7 +31,7 @@ struct AgentCommandMenuTests {
         #expect(context()?.canSend == true)
     }
 
-    @Test("Claude includes its own zero-argument commands in stable display order")
+    @Test("Claude includes its own commands in stable display order")
     func claudeCatalog() {
         let claude = context(pluginID: "claude-code")
         #expect(claude?.commands.map(\.text) == [
@@ -77,14 +77,34 @@ struct AgentCommandMenuTests {
     @Test("Claude's expanded catalog submits bare commands without adding action-changing flags")
     func claudeExpandedCommands() throws {
         let claude = try #require(context(pluginID: "claude-code"))
-        for text in ["/effort", "/diff", "/review", "/goal", "/autocompact", "/output-style",
-                     "/branch", "/fork", "/fast", "/rename", "/reload-skills", "/reload-plugins",
-                     "/advisor", "/copy", "/export", "/ide", "/chrome", "/statusline",
-                     "/release-notes", "/login", "/logout", "/clear", "/exit"] {
+        for text in [
+            "/effort",
+            "/diff",
+            "/review",
+            "/autocompact",
+            "/output-style",
+            "/branch",
+            "/fork",
+            "/fast",
+            "/rename",
+            "/reload-skills",
+            "/reload-plugins",
+            "/advisor",
+            "/copy",
+            "/export",
+            "/ide",
+            "/chrome",
+            "/statusline",
+            "/release-notes",
+            "/login",
+            "/logout",
+            "/clear",
+            "/exit",
+        ] {
             let command = try #require(claude.commands.first { $0.text == text })
             let request = try #require(AgentCommandRequest(command, in: claude))
             #expect(request.isValid(in: claude))
-            #expect(request.command.keys == [.text(text), .delay(200), .enter])
+            #expect(request.keys == [.text(text), .delay(200), .enter])
         }
     }
 
@@ -148,7 +168,7 @@ struct AgentCommandMenuTests {
             let current = try #require(context(pluginID: pluginID))
             let request = try #require(AgentCommandRequest(command, in: current))
             #expect(request.isValid(in: current))
-            #expect(request.command.keys == [.text(command.text), .delay(200), .enter])
+            #expect(request.keys == [.text(command.text), .delay(200), .enter])
         }
     }
 
@@ -229,8 +249,8 @@ struct AgentCommandMenuTests {
             #expect(request.isValid(in: working))
             #expect(request.isValid(in: context(pluginID: pluginID, state: .idle)))
             #expect(request.isValid(in: context(pluginID: pluginID, state: .doneWorking(summary: "Finished"))))
-            #expect(request.command.keys == [.text(command.text), .delay(200), .enter])
             let idleRequest = try #require(AgentCommandRequest(command, in: context(pluginID: pluginID)))
+            #expect(request.keys == idleRequest.keys)
             #expect(idleRequest.isValid(in: working))
         }
     }
@@ -273,34 +293,54 @@ struct AgentCommandMenuTests {
         #expect(!request.isValid(in: blocked))
     }
 
-    @Test("Selecting a command immediately supplies text, host-side pause and Return", arguments: ["codex", "claude-code"])
+    @Test("Bare commands keep their original text, host-side pause and Return", arguments: ["codex", "claude-code"])
     func directSubmission(pluginID: String) throws {
         let current = try #require(context(pluginID: pluginID))
-        for command in current.commands {
+        for command in current.commands where command != .goal {
             let request = try #require(AgentCommandRequest(command, in: current))
             #expect(request.isValid(in: current))
-            #expect(request.command.keys == [.text(command.text), .delay(200), .enter])
+            #expect(request.submission == .execute)
+            #expect(request.keys == [.text(command.text), .delay(200), .enter])
         }
     }
 
-    @Test("Commands send one real Return without clearing, interrupting or inserting a literal newline")
-    func submissionDoesNotAlterDraft() {
-        for command in AgentQuickCommand.allCases {
+    @Test("Argument commands insert a trailing space without submitting", arguments: ["codex", "claude-code"])
+    func argumentInsertion(pluginID: String) throws {
+        let request = try #require(AgentCommandRequest(.goal, in: context(pluginID: pluginID)))
+        #expect(request.submission == .insertArguments)
+        #expect(request.keys == [.text("/goal ")])
+        #expect(!request.isValid(in: context(pluginID: pluginID, revision: 1)))
+        #expect(!request.isValid(in: context(paneID: "%13", pluginID: pluginID)))
+    }
+
+    @Test("Commands never clear, interrupt or insert a literal newline", arguments: ["codex", "claude-code"])
+    func submissionDoesNotAlterDraft(pluginID: String) throws {
+        let current = try #require(context(pluginID: pluginID))
+        for command in current.commands {
             #expect(!command.text.contains("\n"))
             #expect(!command.text.contains("\r"))
-            #expect(command.keys.count == 3)
-            #expect(command.keys.filter { $0 == .enter }.count == 1)
-            #expect(command.keys == [.text(command.text), .delay(200), .enter])
+            let request = try #require(AgentCommandRequest(command, in: current))
+            #expect(request.keys == (
+                command == .goal
+                    ? [.text("/goal ")]
+                    : [.text(command.text), .delay(200), .enter]
+            ))
         }
     }
 
     @Test("A panel action is tied to host, pane, agent and local input revision")
     func changedTargetOrInput() throws {
         let request = try #require(AgentCommandRequest(.status, in: context()))
-        for changed in [context(hostID: "host-b"), context(paneID: "%13"),
-                        context(pluginID: "claude-code"), context(revision: 1),
-                        context(connected: false),
-                        context(externalEditor: true), context(ready: false), nil] {
+        for changed in [
+            context(hostID: "host-b"),
+            context(paneID: "%13"),
+            context(pluginID: "claude-code"),
+            context(revision: 1),
+            context(connected: false),
+            context(externalEditor: true),
+            context(ready: false),
+            nil,
+        ] {
             #expect(!request.isValid(in: changed))
         }
     }

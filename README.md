@@ -19,8 +19,8 @@ model.
   Tasks keep running when CtrlX closes or the network drops.
 - **Multi-host roaming:** Control tmux workspaces on Macs at home, at work, or
   on remote networks from one Mac or iPhone.
-- **Session-aware voice input:** iPhone voice input uses the current terminal
-  session as context to correct what you say.
+- **Session-aware voice input:** Mac and iPhone voice input use the focused
+  terminal's recent text and metadata to correct what you say, without auto-sending.
 - **Agent-aware:** Track working, completed, permission, question, and plan
   states for Claude Code, Codex, and agents added through open sidecar plugins.
 - **Secure Relay:** Every device connects outbound; terminal frames remain

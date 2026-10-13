@@ -106,6 +106,7 @@
                                             .minimumScaleFactor(0.75)
                                             .frame(maxWidth: .infinity, minHeight: 36)
                                     }
+                                    .accessibilityHint(command.submission(for: capturedContext.target.pluginID).hint)
                                     .accessibilityIdentifier("terminal-agent-command-\(command.id)")
                                 }
                             }
