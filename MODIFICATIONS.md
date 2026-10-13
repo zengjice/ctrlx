@@ -7,6 +7,32 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.64 — Session directory creation and Codex question notifications
+
+- Add New Folder to the Mac local and remote New Session directory browsers.
+  Create inside the selected Host directory, preserve capability checks for
+  older Hosts, and enter the new folder without starting a session.
+- Rename the agent-history list to Recent Directories on Mac and iOS, explain
+  that selecting a directory starts a new session, and show its last-used time.
+  Align the existing session-picker UI tests with the updated labels.
+- Notify when Codex asks synchronous or asynchronous questions, independently
+  of terminal focus. Deduplicate tool calls per session, include a bounded
+  preview and preserve agent state and existing structured response forms.
+  The shared iOS source also enables foreground question alerts; it requires
+  a separate iOS build/install.
+- Release validation: the bounded serial Swift regression passed with 3,049
+  tests reported and five opt-in probes skipped. Apple Intelligence evaluations
+  were excluded because the model is unavailable on this Mac. Both boundary
+  checks, 63 publisher/COS tests and the website build passed.
+- Validation during merge: 62 focused Swift tests, Mac Debug and arm64 iOS
+  Simulator builds, and the isolated Mac Empty State New Session scenario
+  passed. Mac directory-search UI acceptance failed while the injected query
+  remained in Chinese IME composition; that scenario is not counted as passing.
+  Imported Swift sources retain existing formatting findings and the formatter's
+  MainView `redundantSelf` parser failure; the five adjusted E2E files pass lint.
+- Distribution: Mac package through COS, with source metadata, signature and
+  public-download integrity verified by the publisher before installer promotion.
+
 ## 3.0.63 — Detached workspaces, voice input and direct COS distribution
 
 - Merge the `ux` and `macinput` work into the Mac release. Detach terminal tabs
