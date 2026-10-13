@@ -39,6 +39,7 @@ public struct MainView: View {
     /// Bumped by the ⌘N menu command to open the Local section's new-session popover.
     @State private var localNewSessionTrigger = 0
     @State private var detailPaneSize: CGSize = .zero
+    @State private var automaticTabFit = TerminalTabFit()
     @State private var closeConfirmation: CloseConfirmation?
 
     @State private var showingDisconnectConfirmation = false
@@ -163,6 +164,8 @@ public struct MainView: View {
         .onChange(of: selectedWindow?.id) { pendingFileLink = nil }
         .onChange(of: selectedRemoteWindowId) { pendingFileLink = nil }
         .onChange(of: selectedRemoteSession) { pendingFileLink = nil }
+        .onChange(of: automaticTabFitInput) { fitSelectedTerminalIfReady() }
+        .onDisappear { automaticTabFit.cancel() }
     }
 
     public var body: some View {
@@ -622,6 +625,7 @@ public struct MainView: View {
                 selectedRemoteSession = RemoteSessionSelection(hostId: hostID, hostName: host.displayName, sessionName: name)
                 selectedRemoteWindowId = nil
                 selectedWindow = nil
+                requestAutomaticTabFit()
             }
         }
     }
@@ -760,6 +764,7 @@ public struct MainView: View {
                         selectedRemoteSession = selection
                         selectedRemoteWindowId = nil
                         selectedWindow = nil
+                        requestAutomaticTabFit()
                     },
                     onCreate: { request in
                         Task {
@@ -1030,6 +1035,7 @@ public struct MainView: View {
                             // right pane's selection so the left pane
                             // keeps showing whatever it had.
                             tabs?.selectedRight = payload
+                            requestAutomaticTabFit(windowID: newWindow.stableId)
                             return
                         }
                         selectTerminalWindow(stableId: newWindow.stableId)
@@ -1194,6 +1200,7 @@ public struct MainView: View {
                                 // right pane's selection so the left pane
                                 // keeps showing whatever it had.
                                 tabs?.selectedRight = payload
+                                requestAutomaticTabFit(windowID: newWindow.stableId)
                                 return
                             }
                             selectTerminalWindow(stableId: newWindow.stableId)
@@ -1214,7 +1221,7 @@ public struct MainView: View {
                                         refresh: { _ = await tmuxService.refreshPanes() }
                                     )
                                     if let newWindow {
-                                        selectedWindow = newWindow
+                                        selectTerminalWindow(stableId: newWindow.stableId)
                                     } else if !Task.isCancelled {
                                         attachError = "Window created but didn't appear in time. Try selecting it from the tab bar."
                                     }
@@ -2245,7 +2252,7 @@ public struct MainView: View {
         .help("Resize visible terminals to fit this Mac; affects the Host and all Viewers")
     }
 
-    /// Immutable plan captured by a direct button click. Calculating every
+    /// Immutable plan captured by a Fit action. Calculating every
     /// target before the first await prevents an incoming pane snapshot from
     /// changing which tmux windows the same click resizes halfway through.
     private struct TerminalResizeRequest {
@@ -2254,9 +2261,9 @@ public struct MainView: View {
         let rows: Int
     }
 
-    /// The sole UI entry point for changing tmux rows/columns. Layout geometry,
-    /// activation, selection and font changes only update local presentation.
+    /// Manual Fit also consumes any pending automatic fit for this entry.
     private func resizeVisibleTerminalsToFit() {
+        automaticTabFit.cancel()
         attachError = nil
 
         if let remote = selectedRemoteSession {
@@ -2281,6 +2288,95 @@ public struct MainView: View {
         seedLayoutIfNeeded()
         seedRemoteLayoutIfNeeded()
         scheduleSharedTerminalLayoutSync()
+    }
+
+    private func requestAutomaticTabFit(windowID: String? = nil) {
+        if let remote = selectedRemoteSession {
+            automaticTabFit.request(.init(hostID: remote.hostId, sessionName: remote.sessionName, windowID: windowID))
+        } else if let window = selectedWindow {
+            automaticTabFit.request(.init(hostID: nil, sessionName: window.sessionName, windowID: windowID))
+        }
+    }
+
+    private struct AutomaticTabFitInput: Equatable {
+        let pending: TerminalTabFit.Target
+        let current: TerminalTabFit.Target
+        let request: ResizeTmuxPane?
+        let isAvailable: Bool
+        let isReady: Bool
+        let isVisible: Bool
+    }
+
+    private var automaticTabFitInput: AutomaticTabFitInput? {
+        guard let pending = automaticTabFit.target else { return nil }
+        let hostID = selectedRemoteSession?.hostId
+        let sessionName = selectedRemoteSession?.sessionName ?? selectedWindow?.sessionName ?? ""
+        let tabs: SessionFileTabsState?
+        let windowID: String?
+        let isAvailable: Bool
+        let isSeeded: Bool
+        if let remote = selectedRemoteSession {
+            let key = remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)
+            tabs = remoteSessionTabsStates[key]
+            windowID = selectedRemoteWindow?.stableId
+            let client = coordinator.viewerConnectionManager?.connection(for: remote.hostId)?.relayClient
+            isAvailable = client?.isHostConnected == true && client?.hostSupportsTerminalFit == true
+            isSeeded = seededRemoteSessions.contains(key)
+        } else {
+            tabs = sessionFileTabsStates[sessionName]
+            windowID = selectedWindow?.stableId
+            isAvailable = selectedWindow != nil
+            isSeeded = seededSessions.contains(sessionName)
+        }
+        let selectedRightID: String? = if
+            let tabs, tabs.isSplit,
+            case let .window(id) = tabs.selectedRight {
+            id
+        } else {
+            nil
+        }
+        let targetsRight = selectedRightID != nil && pending.windowID == selectedRightID
+        let pendingRightIsHidden = pending.windowID.map {
+            tabs?.rightSide.contains(.window($0)) == true && selectedRightID != $0
+        } ?? false
+        let targetID = targetsRight ? selectedRightID : windowID
+        let leftIsVisible = tabs?.selectedFileTabId == nil && tabs?.selectedBrowserTabId == nil
+            && (hostID != nil || (!fileBrowserActiveWindowIds.contains(selectedWindow?.id ?? "")
+                    && !gitActiveWindowIds.contains(selectedWindow?.id ?? "")))
+        let width = targetID.flatMap { effectiveTerminalWidth(tabs: tabs, windowId: $0) }
+        let isReady = isSeeded && (width ?? detailPaneSize.width) >= 100 && detailPaneSize.height >= 100
+        let dimensions = calculateOptimalTerminalDimensions(widthOverride: width)
+        return AutomaticTabFitInput(
+            pending: pending,
+            current: .init(hostID: hostID, sessionName: sessionName, windowID: targetID),
+            request: isReady ? ResizeTmuxPane(width: dimensions.columns, height: dimensions.rows, userInitiated: true) : nil,
+            isAvailable: isAvailable,
+            isReady: isReady,
+            isVisible: !pendingRightIsHidden && (targetsRight || leftIsVisible)
+        )
+    }
+
+    private func fitSelectedTerminalIfReady() {
+        guard let input = automaticTabFitInput else { return }
+        guard input.isVisible else {
+            automaticTabFit.cancel()
+            return
+        }
+        guard
+            let request = automaticTabFit.takeRequest(
+                for: input.current,
+                isAvailable: input.isAvailable,
+                isPresentationReady: input.isReady,
+                measuredRequest: input.request
+            ), let windowID = input.current.windowID else { return }
+        let requests = [TerminalResizeRequest(windowTarget: windowID, columns: request.width, rows: request.height)]
+        Task {
+            if let hostID = input.current.hostID {
+                await performRemoteResize(requests, hostId: hostID)
+            } else {
+                await performLocalResize(requests)
+            }
+        }
     }
 
     private func visibleLocalResizeRequests() -> [TerminalResizeRequest] {
@@ -2342,7 +2438,7 @@ public struct MainView: View {
     private func performLocalResize(_ requests: [TerminalResizeRequest]) async {
         for request in requests {
             do {
-                try await tmuxService.resizePane(
+                try await tmuxService.fitWindow(
                     request.windowTarget,
                     width: request.columns,
                     height: request.rows
@@ -2459,6 +2555,7 @@ public struct MainView: View {
                         .sessionName {
                     sessionFileTabsStates[sessionName]?.selectedFileTabId = nil
                 }
+                requestAutomaticTabFit(windowID: window.stableId)
             }
         case let .remote(hostId, hostName, paneId):
             // Find the session name for this pane from the session store
@@ -2469,6 +2566,7 @@ public struct MainView: View {
                     sessionName: paneState.sessionName
                 )
                 selectedRemoteWindowId = paneState.windowId
+                requestAutomaticTabFit(windowID: paneState.stableWindowId)
             }
             selectedWindow = nil
         }
@@ -2655,11 +2753,15 @@ public struct MainView: View {
     }
 
     private func revealAnnotationTarget(_ target: AgentImageTarget, hostID: String?) {
+        // An image handoff can finish after the user has left its session.
+        guard selectedRemoteSession?.hostId == hostID,
+              (selectedRemoteSession?.sessionName ?? selectedWindow?.sessionName) == target.sessionName else { return }
         terminalQuickActions.requestFocus(hostID: hostID, paneID: target.paneID)
         let tabs = hostID.map { remoteSessionTabsStates[remoteTabsKey(hostId: $0, sessionName: target.sessionName)] }
             ?? sessionFileTabsStates[target.sessionName]
         if tabs?.rightSide.contains(.window(target.windowID)) == true {
             tabs?.selectedRight = .window(target.windowID)
+            requestAutomaticTabFit(windowID: target.windowID)
         } else {
             selectTerminalWindow(stableId: target.windowID)
         }
@@ -2714,6 +2816,7 @@ public struct MainView: View {
             guard tabs?.selectLeftTerminalWindow(target.stableId) != false else { return }
 
             selectedRemoteWindowId = target.id
+            requestAutomaticTabFit(windowID: target.stableId)
             Task {
                 _ = await connection.relayClient.sendCommand(
                     SelectTmuxWindow(),
@@ -2734,6 +2837,7 @@ public struct MainView: View {
         fileBrowserActiveWindowIds.remove(current.id)
         gitActiveWindowIds.remove(current.id)
         selectedWindow = target
+        requestAutomaticTabFit(windowID: target.stableId)
         Task {
             try? await tmuxService.selectWindow(target.id)
         }
@@ -2919,6 +3023,7 @@ public struct MainView: View {
             sessionTabs?.selectedFileTabId = nil
             sessionTabs?.selectedBrowserTabId = nil
             selectedWindow = window
+            requestAutomaticTabFit(windowID: window.stableId)
             Task {
                 try? await tmuxService.selectWindow(window.id)
             }
@@ -2999,6 +3104,7 @@ public struct MainView: View {
             tabs?.selectedBrowserTabId = nil
             selectedRemoteWindowId = window.id
             tabs?.selectedFileTabId = nil
+            requestAutomaticTabFit(windowID: window.stableId)
             Task {
                 guard let manager = coordinator.viewerConnectionManager else { return }
                 _ = await manager.sendCommand(
@@ -3030,6 +3136,7 @@ public struct MainView: View {
         }
         selectedRemoteSession = nil
         selectedRemoteWindowId = nil
+        if selectedWindow?.sessionName == session.sessionName { requestAutomaticTabFit() }
     }
 
     /// One entry in the sidebar's combined, ordered session list — a local
@@ -3126,6 +3233,7 @@ public struct MainView: View {
             selectedRemoteWindowId = nil
             selectedWindow = nil
             scrollToWindowId = session.sessionName
+            requestAutomaticTabFit()
         }
     }
 
@@ -3351,6 +3459,12 @@ public struct MainView: View {
     private func closeRemoteFileTab(_ id: UUID, hostID: String, sessionName: String) {
         guard let tabs = remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: sessionName)] else { return }
         let wasSelectedLeft = tabs.selectedFileTabId == id
+        defer {
+            if wasSelectedLeft, selectedRemoteSession?.hostId == hostID,
+               selectedRemoteSession?.sessionName == sessionName {
+                requestAutomaticTabFit()
+            }
+        }
         let origin = tabs.openFileTabs.first(where: { $0.id == id })?.origin
         tabs.openFileTabs.removeAll { $0.id == id }
         tabs.directoryTabs.removeValue(forKey: id)
@@ -3784,6 +3898,11 @@ public struct MainView: View {
         let payload = TabDragPayload.browser(tabId)
         let wasOnRight = tabs.rightSide.contains(payload)
         let wasSelectedLeft = tabs.selectedBrowserTabId == tabId
+        defer {
+            if wasSelectedLeft, selectedRemoteSession == nil, selectedWindow?.sessionName == sessionName {
+                requestAutomaticTabFit()
+            }
+        }
         tabs.openBrowserTabs.remove(at: closedIndex)
         // Cancel in-flight downloads before dropping the state — a
         // deallocated `BrowserTabState` can't clean up its partial files.
@@ -4179,9 +4298,15 @@ public struct MainView: View {
         guard tabs.remoteSimulatorTabs[tabId] == nil else { return }
         if let tab = tabs.remoteBrowserTabs[tabId],
            let client = coordinator.viewerConnectionManager?.connection(for: hostId)?.relayClient {
+            if selectedRemoteSession?.hostId == hostId, selectedRemoteSession?.sessionName == sessionName {
+                tabs.beginClosingHostBrowserTab(tabId)
+            }
             Task {
                 do { try await RemoteBrowserSession.close(tab: tab, client: client) }
-                catch { attachError = error.localizedDescription }
+                catch {
+                    tabs.cancelClosingHostBrowserTab(tabId)
+                    attachError = error.localizedDescription
+                }
             }
             return
         }
@@ -4190,6 +4315,12 @@ public struct MainView: View {
         let payload = TabDragPayload.browser(tabId)
         let wasOnRight = tabs.rightSide.contains(payload)
         let wasSelectedLeft = tabs.selectedBrowserTabId == tabId
+        defer {
+            if wasSelectedLeft, selectedRemoteSession?.hostId == hostId,
+               selectedRemoteSession?.sessionName == sessionName {
+                requestAutomaticTabFit()
+            }
+        }
         tabs.openBrowserTabs.remove(at: closedIndex)
         // Cancel in-flight downloads before dropping the state — a
         // deallocated `BrowserTabState` can't clean up its partial files.
@@ -4243,13 +4374,23 @@ public struct MainView: View {
         remoteSessionTabsStates[key] = tabs
         let values = client.browserTabs.filter { $0.sessionName == sessionName }
         let windows = remoteSessionWindows(hostId: hostId, sessionName: sessionName)
-        let browsersCollapsed = tabs.syncHostBrowserTabs(values, sessionWindowIDs: windows.map(\.stableId))
+        let update = tabs.syncHostBrowserTabs(values, sessionWindowIDs: windows.map(\.stableId))
         let simulatorsCollapsed = tabs.syncHostSimulatorTabs(
             client.simulatorTabs.filter { $0.sessionName == sessionName },
             sessionWindowIDs: windows.map(\.stableId)
         )
-        if browsersCollapsed || simulatorsCollapsed {
+        if update.restoreLeftWindow || simulatorsCollapsed {
             restoreRemoteLeftWindowSelection(hostId: hostId, sessionName: sessionName, sessionWindows: windows)
+        }
+        guard selectedRemoteSession?.hostId == hostId,
+              selectedRemoteSession?.sessionName == sessionName, client.isHostConnected else { return }
+        switch update.automaticFit {
+        case .left:
+            requestAutomaticTabFit()
+        case let .right(windowID):
+            requestAutomaticTabFit(windowID: windowID)
+        case nil:
+            break
         }
     }
 
@@ -4594,6 +4735,11 @@ public struct MainView: View {
         let payload = TabDragPayload.file(tabId)
         let wasOnRight = tabs.rightSide.contains(payload)
         let wasSelectedLeft = tabs.selectedFileTabId == tabId
+        defer {
+            if wasSelectedLeft, selectedRemoteSession == nil, selectedWindow?.sessionName == sessionName {
+                requestAutomaticTabFit()
+            }
+        }
         tabs.openFileTabs.remove(at: closedIndex)
         tabs.directoryTabs.removeValue(forKey: tabId)
         tabs.scrollOffsets.removeValue(forKey: tabId)

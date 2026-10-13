@@ -140,7 +140,7 @@ iOS-only regression suite. The sections below retain historical implementation
 examples; old minimum-terminal-height constraints, scroll-blocking flags and
 fixed-delay presentation snippets are **not** the current implementation.
 
-## Explicit fit and clipboard paste (September 30, 2026)
+## Terminal fit and clipboard paste
 
 The top-right toolbar provides **Fit Terminal to Screen**, next to image upload
 and the other session controls, rather than inside the window-title menu. It measures each
@@ -157,10 +157,26 @@ at least two rows/columns per leaf), and applies the resized grid and layout in
 one tmux command queue. An impossible target fails before changing the window.
 The Viewer enables Fit only when the Host advertises `supportsTerminalFit`.
 
+Entering an existing session or explicitly returning to a terminal tab fits the
+selected window once, including window-picker selection and horizontal swipes.
+This also applies to Mac local and remote tabs, including keyboard navigation and
+right-column tab selection. Automatic Fit waits for a usable viewport (and on Mac
+the restored workbench layout), targets the stable window ID, and is consumed
+before dispatch even if the command fails. File/browser views, passive Host
+selection changes and geometry updates cannot arm it. Disconnecting, leaving the
+page or manually fitting cancels a pending request; reconnecting does not retry.
+Hosts without `supportsTerminalFit` retain their dimensions.
+
+On Mac and iOS, explicitly closing a selected Host browser fits the terminal revealed
+by the resulting browser-catalog update. The close intent is consumed once,
+regardless of command-reply ordering. Passive catalog removals, failed closes,
+and a close that finishes after selecting another tab do not grant a new Fit.
+
 New sessions created on iOS default to automatic sizing. They start at 120 × 40
 and reuse the same Fit measurement once the new terminal has a usable viewport
-and font cell size. Only the exact pane returned by creation is eligible;
-ordinary navigation and deep links never grant this permission. The session
+and font cell size. Only the exact pane returned by creation is eligible for
+this creation-scoped request. The first entry uses that request instead of an
+additional tab-entry fit, including when fixed creation sizing is selected. The session
 list owns the one-shot request and consumes it before sending, even if the
 command fails. Before measurement, leaving the page, disconnecting, manually
 fitting, switching windows or splitting cancels it. There is no fixed delay,
@@ -185,7 +201,8 @@ window is still displayed. Agent/Fork sheets must be dismissed before measuring
 for dispatch. Each new window is fitted once using its stable window ID; the
 source window is not resized. Manual window selection, Fit, split, disconnect
 and page exit cancel pending selection and fitting, including delayed replies.
-With automatic sizing disabled, the Host's new-window dimensions are preserved.
+With automatic sizing disabled, the Host's new-window dimensions are preserved
+on creation; a later explicit return to that tab fits it normally.
 
 The iOS system Paste action sends one `PasteTerminalText` operation, not
 `TmuxKey.from(bytes:)`. Both Viewer and Host serialize it with keyboard input.

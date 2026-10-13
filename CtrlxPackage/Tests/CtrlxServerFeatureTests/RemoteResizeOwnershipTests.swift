@@ -94,9 +94,12 @@
             }
         }
 
-        @Test("Real tmux Fit retains unequal splits, pane IDs, and repeatability",
-              arguments: ["horizontal", "vertical", "nested", "reordered"])
-        func realTmuxFit(kind: String) async throws {
+        @Test(
+            "Local and Viewer tmux Fit retain unequal splits, pane IDs, and repeatability",
+            arguments: ["horizontal", "vertical", "nested", "reordered"],
+            [false, true]
+        )
+        func realTmuxFit(kind: String, local: Bool) async throws {
             let tmuxPath = try #require(TmuxBinaryLocator.liveValue.find())
             let socket = "/tmp/ctrlx-fit-\(UUID().uuidString.prefix(8)).sock"
             let runner = ProcessRunner.liveValue
@@ -116,13 +119,13 @@
                 let tmux = TmuxService(tmuxPath: tmuxPath, socketPath: socket)
                 let created = try await runner.run(tmuxPath, [
                     "-f", "/dev/null", "-S", socket, "new-session", "-d", "-s", "fit",
-                    "-x", "240", "-y", "60", "/bin/cat",
+                    "-x", "160", "-y", "60", "/bin/cat",
                 ], nil, 5)
                 try #require(created.isSuccess)
                 let vertical = kind == "vertical"
                 let split = try await tmux.runTmuxCommand([
                     "split-window", vertical ? "-v" : "-h", "-t", "fit:0",
-                    "-l", vertical ? "15" : "60", "/bin/cat",
+                    "-l", vertical ? "15" : "40", "/bin/cat",
                 ])
                 try #require(split.isSuccess)
                 if kind == "nested" {
@@ -133,19 +136,30 @@
                     try #require(swap.isSuccess)
                 }
                 let height = vertical ? 16 : 44
-                for (width, rows) in [(64, height), (100, 60), (64, height), (60, height), (64, height), (64, height)] {
+                for (width, rows) in [(80, 40), (64, height), (100, 60), (64, height), (60, height), (64, height), (64, height)] {
                     let before = try await tmux.runTmuxCommand(["display-message", "-p", "-t", "fit:0", "#{window_layout}"])
                     let original = try #require(TmuxLayoutParser.parse(before.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    if kind == "horizontal", width == 80, case let .horizontal(children, _, _) = original {
+                        #expect(original.width == 160)
+                        #expect(children.map(\.width) == [119, 40])
+                    }
                     let expectedString = try #require(TmuxWindowFitLayout.layoutString(original, width: width, height: rows))
                     let expected = try #require(TmuxLayoutParser.parse(expectedString))
-                    let response = await TmuxCommandExecutor(tmuxService: tmux).execute(CommandMessage(
-                        paneId: "fit:0", command: ResizeTmuxPane(width: width, height: rows, userInitiated: true).commandType
-                    ))
-                    try #require(response.success, "\(response.error ?? "Fit failed")")
+                    if local {
+                        try await tmux.fitWindow("fit:0", width: width, height: rows)
+                    } else {
+                        let response = await TmuxCommandExecutor(tmuxService: tmux).execute(CommandMessage(
+                            paneId: "fit:0", command: ResizeTmuxPane(width: width, height: rows, userInitiated: true).commandType
+                        ))
+                        try #require(response.success, "\(response.error ?? "Fit failed")")
+                    }
                     let after = try await tmux.runTmuxCommand(["display-message", "-p", "-t", "fit:0", "#{window_layout}"])
                     let actual = try #require(TmuxLayoutParser.parse(after.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)))
                     #expect(actual == expected)
                     #expect(actual.width == width && actual.height == rows)
+                    if kind == "horizontal", width == 80, case let .horizontal(children, _, _) = actual {
+                        #expect(children.map(\.width) == [59, 20])
+                    }
                     if kind == "horizontal", width == 64, case let .horizontal(children, _, _) = actual {
                         #expect(children.map(\.width) == [47, 16])
                     }
@@ -157,10 +171,16 @@
                     }
                 }
                 let beforeInvalid = try await tmux.runTmuxCommand(["display-message", "-p", "-t", "fit:0", "#{window_layout}"])
-                let failed = await TmuxCommandExecutor(tmuxService: tmux).execute(CommandMessage(
-                    paneId: "fit:0", command: ResizeTmuxPane(width: 3, height: 3, userInitiated: true).commandType
-                ))
-                #expect(!failed.success)
+                if local {
+                    await #expect(throws: TmuxError.self) {
+                        try await tmux.fitWindow("fit:0", width: 3, height: 3)
+                    }
+                } else {
+                    let failed = await TmuxCommandExecutor(tmuxService: tmux).execute(CommandMessage(
+                        paneId: "fit:0", command: ResizeTmuxPane(width: 3, height: 3, userInitiated: true).commandType
+                    ))
+                    #expect(!failed.success)
+                }
                 let afterInvalid = try await tmux.runTmuxCommand(["display-message", "-p", "-t", "fit:0", "#{window_layout}"])
                 #expect(afterInvalid.stdout == beforeInvalid.stdout)
             }

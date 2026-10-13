@@ -2237,7 +2237,7 @@ final public class TmuxService {
         await refreshPanes()
     }
 
-    /// Explicit Viewer fit keeps the current split tree and relative sizes.
+    /// Local and Viewer Fit keep the current split tree and relative sizes.
     public func fitWindow(_ target: String, width: Int, height: Int) async throws {
         let snapshot = try await runTmuxCommand([
             "display-message", "-p", "-t", target, "#{window_id}\t#{window_layout}",

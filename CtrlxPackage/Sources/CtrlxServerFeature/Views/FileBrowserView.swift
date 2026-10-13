@@ -319,9 +319,14 @@ final class SessionFileTabsState {
         directoryTabs[browser.id] = browser
         openFileTabs.append(.init(id: browser.id, path: directory, directoryPath: directory, isDirectory: true))
         tabOrder = tabOrder.map { $0 == .fileExplorer ? .file(browser.id) : $0 }
-        if rightSide.remove(.fileExplorer) != nil { rightSide.insert(.file(browser.id)) }
-        if selectedRight == .fileExplorer { selectedRight = .file(browser.id) }
+        if rightSide.remove(.fileExplorer) != nil {
+            rightSide.insert(.file(browser.id))
+        }
+        if selectedRight == .fileExplorer {
+            selectedRight = .file(browser.id)
+        }
     }
+
     /// When non-nil, the content area shows this file tab instead of the tree
     /// or terminal. Refers to a tab on the *left* side when split is active.
     var selectedFileTabId: UUID?
@@ -367,32 +372,84 @@ final class SessionFileTabsState {
     var simulatorStates: [UUID: SimulatorTabState] = [:]
     var remoteBrowserTabs: [UUID: RemoteBrowserTab] = [:]
     var remoteSimulatorTabs: [UUID: RemoteSimulatorTab] = [:]
+    @ObservationIgnored private var closingHostBrowserTabIDs: Set<UUID> = []
 
-    /// Returns whether reconciliation collapsed the split, so the view can repair terminal focus.
+    struct HostBrowserTabSyncResult {
+        enum TerminalFit: Equatable {
+            case left
+            case right(String)
+        }
+
+        let restoreLeftWindow: Bool
+        let automaticFit: TerminalFit?
+    }
+
+    func beginClosingHostBrowserTab(_ id: UUID) {
+        closingHostBrowserTabIDs.insert(id)
+    }
+
+    func cancelClosingHostBrowserTab(_ id: UUID) {
+        closingHostBrowserTabIDs.remove(id)
+    }
+
+    /// A catalog update confirms closure independently of command-reply ordering.
+    /// Only an explicit Close followed by a return to a terminal grants a Fit.
     @discardableResult
-    func syncHostBrowserTabs(_ values: [RemoteBrowserTab], sessionWindowIDs: [String]) -> Bool {
+    func syncHostBrowserTabs(_ values: [RemoteBrowserTab], sessionWindowIDs: [String]) -> HostBrowserTabSyncResult {
         let live = Set(values.map(\.id))
         let removed = Set(remoteBrowserTabs.keys).subtracting(live)
+        let closedByUser = removed.intersection(closingHostBrowserTabIDs)
+        let closedLeft = selectedBrowserTabId.map { closedByUser.contains($0) } == true
+        let closedRight: Bool = if case let .browser(id) = selectedRight {
+            closedByUser.contains(id)
+        } else {
+            false
+        }
+        closingHostBrowserTabIDs.subtract(removed)
         openBrowserTabs.removeAll { removed.contains($0.id) }
         for id in removed {
             remoteBrowserTabs.removeValue(forKey: id)
             rightSide.remove(.browser(id))
-            if selectedBrowserTabId == id { selectedBrowserTabId = nil }
-            if selectedRight == .browser(id) { selectedRight = nil }
+            if selectedBrowserTabId == id {
+                selectedBrowserTabId = nil
+            }
+            if selectedRight == .browser(id) {
+                selectedRight = nil
+            }
         }
         for value in values {
             remoteBrowserTabs[value.id] = value
-            var tab = BrowserTab(id: value.id, url: URL(string: value.url) ?? URL(staticString: "about:blank"),
-                displayTitle: "\(value.title.isEmpty ? "Browser" : value.title) · Host", originWindowId: value.windowID, parentTabId: value.parentID)
+            var tab = BrowserTab(
+                id: value.id,
+                url: URL(string: value.url) ?? URL(staticString: "about:blank"),
+                displayTitle: "\(value.title.isEmpty ? "Browser" : value.title) · Host",
+                originWindowId: value.windowID,
+                parentTabId: value.parentID
+            )
             tab.isAgentBrowser = true
             if let index = openBrowserTabs.firstIndex(where: { $0.id == value.id }) {
-                if openBrowserTabs[index] != tab { openBrowserTabs[index] = tab }
-            } else { openBrowserTabs.append(tab) }
+                if openBrowserTabs[index] != tab {
+                    openBrowserTabs[index] = tab
+                }
+            } else {
+                openBrowserTabs.append(tab)
+            }
         }
         for index in openBrowserTabs.indices where !live.contains(openBrowserTabs[index].id) && remoteSimulatorTabs[openBrowserTabs[index].id] == nil {
             openBrowserTabs[index].isViewerLocal = true
         }
-        return reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+        let restoreLeftWindow = reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+        let automaticFit: HostBrowserTabSyncResult.TerminalFit?
+        if closedLeft, selectedFileTabId == nil, selectedBrowserTabId == nil {
+            automaticFit = .left
+        } else if closedRight, case let .window(id) = selectedRight {
+            automaticFit = .right(id)
+        } else if closedRight, !isSplit, selectedFileTabId == nil, selectedBrowserTabId == nil {
+            automaticFit = .left
+        } else {
+            automaticFit = nil
+        }
+        return HostBrowserTabSyncResult(restoreLeftWindow: restoreLeftWindow, automaticFit: automaticFit)
     }
 
     @discardableResult
@@ -433,7 +490,9 @@ final class SessionFileTabsState {
 
     @discardableResult
     func reconcileRemoteRightPaneSelection(sessionWindowIDs: [String]) -> Bool {
-        if let selectedRight, !rightSide.contains(selectedRight) { self.selectedRight = nil }
+        if let selectedRight, !rightSide.contains(selectedRight) {
+            self.selectedRight = nil
+        }
         guard isSplit else { return false }
 
         let leftEmpty = !sessionWindowIDs.isEmpty
@@ -447,7 +506,14 @@ final class SessionFileTabsState {
         }
 
         guard selectedRight == nil else { return false }
-        if let window = rightSide.first(where: { if case .window = $0 { true } else { false } }) {
+        if
+            let window = rightSide.first(where: {
+                if case .window = $0 {
+                    true
+                } else {
+                    false
+                }
+            }) {
             selectedRight = window
         } else if let browser = openBrowserTabs.last(where: { rightSide.contains(.browser($0.id)) }) {
             selectedRight = .browser(browser.id)
@@ -496,7 +562,11 @@ final class SessionFileTabsState {
     /// left-pane selection candidates without enumerating the whole set.
     var rightSideWindowIds: Set<String> {
         Set(rightSide.compactMap {
-            if case let .window(id) = $0 { id } else { nil }
+            if case let .window(id) = $0 {
+                id
+            } else {
+                nil
+            }
         })
     }
 
@@ -507,7 +577,9 @@ final class SessionFileTabsState {
         openFileTabs.isEmpty
             && openBrowserTabs.isEmpty
             && !rightSide.contains { payload in
-                if case .window = payload { return false }
+                if case .window = payload {
+                    return false
+                }
                 return true
             }
     }
@@ -519,7 +591,9 @@ final class SessionFileTabsState {
         liveWindowIds: Set<String>
     ) {
         rightSide = Set(rightSide.filter {
-            if case .window = $0 { return false }
+            if case .window = $0 {
+                return false
+            }
             return true
         })
 
@@ -590,8 +664,12 @@ final class SessionFileTabsState {
         for state in browserStates.values {
             state.cancelActiveDownloads()
         }
-        for state in agentBrowserStates.values { state.service.close(state) }
-        for state in simulatorStates.values { state.service.close(state) }
+        for state in agentBrowserStates.values {
+            state.service.close(state)
+        }
+        for state in simulatorStates.values {
+            state.service.close(state)
+        }
     }
 }
 
@@ -932,7 +1010,9 @@ struct FileBrowserView: View {
                     return (result, result.name.fileSearchScore(for: query))
                 }
                 .sorted { lhs, rhs in
-                    if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+                    if lhs.1 != rhs.1 {
+                        return lhs.1 > rhs.1
+                    }
                     return lhs.0.relativePath.count < rhs.0.relativePath.count
                 }
                 .prefix(100)
@@ -1505,7 +1585,9 @@ private struct LiveFileContentView: View {
         case .markdown,
              .text:
             text = await fileSystemService.readTextFile(filePath)
-            if text == nil { kind = .unsupported }
+            if text == nil {
+                kind = .unsupported
+            }
         case .pdf,
              .video,
              .html:
@@ -1626,10 +1708,14 @@ private struct PDFViewRepresentable: NSViewRepresentable {
         coordinator.isRestoring = true
         defer { coordinator.isRestoring = false }
         for _ in 0..<10 {
-            if Task.isCancelled { return }
+            if Task.isCancelled {
+                return
+            }
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: target))
             scrollView.reflectScrolledClipView(scrollView.contentView)
-            if abs(scrollView.contentView.bounds.origin.y - target) < 1 { return }
+            if abs(scrollView.contentView.bounds.origin.y - target) < 1 {
+                return
+            }
             try? await Task.sleep(for: .milliseconds(50))
         }
     }
@@ -1688,7 +1774,9 @@ private struct ScrollableWebView: View {
                         position.scrollTo(y: target)
                         try? await Task.sleep(for: .milliseconds(100))
                         guard !Task.isCancelled else { return }
-                        if abs(observedOffsetY - target) <= 2 { break }
+                        if abs(observedOffsetY - target) <= 2 {
+                            break
+                        }
                         // Stop early if the content has finished laying out
                         // *shorter* than the saved offset: once it has begun
                         // scrolling (offset > 0) but the offset stops climbing
@@ -1700,7 +1788,9 @@ private struct ScrollableWebView: View {
                         // whole budget to come in.
                         if observedOffsetY > 2, observedOffsetY <= lastOffset + 2 {
                             stalledTicks += 1
-                            if stalledTicks >= 5 { break }
+                            if stalledTicks >= 5 {
+                                break
+                            }
                         } else {
                             stalledTicks = 0
                         }
@@ -1894,7 +1984,9 @@ private struct ListScrollPreserver: NSViewRepresentable {
                 try? await Task.sleep(for: .milliseconds(50))
                 guard let view, coordinator != nil, !Task.isCancelled else { return }
                 scrollView = Self.findListScrollView(near: view)
-                if scrollView != nil { break }
+                if scrollView != nil {
+                    break
+                }
             }
             guard let coordinator, let scrollView, !Task.isCancelled else { return }
             let target = coordinator.savedScrollY?.wrappedValue ?? 0
@@ -1995,11 +2087,15 @@ private struct ListScrollPreserver: NSViewRepresentable {
     private func restoreScroll(scrollView: NSScrollView, target: CGFloat) async -> Bool {
         guard target > 0 else { return true }
         for _ in 0..<10 {
-            if Task.isCancelled { return false }
+            if Task.isCancelled {
+                return false
+            }
             let clip = scrollView.contentView
             clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: target))
             scrollView.reflectScrolledClipView(clip)
-            if abs(clip.bounds.origin.y - target) < 1 { return true }
+            if abs(clip.bounds.origin.y - target) < 1 {
+                return true
+            }
             try? await Task.sleep(for: .milliseconds(50))
         }
         return false
@@ -2238,7 +2334,9 @@ final private class PlainTextController {
     }
 
     isolated deinit {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 }
 

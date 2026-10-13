@@ -23,6 +23,7 @@
         @State private var creatingSelection: ProjectPickerSelection?
         @State private var sessionCreation = NewSessionCreation()
         @State private var initialSessionFit: NewSessionSizing.InitialFit?
+        @State private var createdSessionDestination: SessionNavigation?
         @State private var creationError: String?
         @State private var renameError: String?
         @State private var selectedHostForNewSession: PairedHost?
@@ -47,7 +48,8 @@
                         hostId: destination.hostId,
                         relayClient: connection.relayClient,
                         settings: settings,
-                        initialSessionFit: $initialSessionFit
+                        initialSessionFit: $initialSessionFit,
+                        automaticallyFitOnEntry: destination != createdSessionDestination
                     )
                 } else {
                     hostDisconnectedView
@@ -73,7 +75,10 @@
             }
             .onChange(of: navigationPath.count) {
                 sessionCreation.cancel()
-                if navigationPath.isEmpty { initialSessionFit = nil }
+                if navigationPath.isEmpty {
+                    initialSessionFit = nil
+                    createdSessionDestination = nil
+                }
             }
             .onChange(of: createdSessionName) {
                 navigateToCreatedSessionIfReady()
@@ -343,7 +348,9 @@
                 paneStates: sessionStore.paneStates, isConnected: creationHostIsConnected
             ) else { return }
             initialSessionFit = destination.initialFit
-            navigationPath.append(SessionNavigation(sessionName: destination.sessionName, hostId: destination.hostID))
+            let navigation = SessionNavigation(sessionName: destination.sessionName, hostId: destination.hostID)
+            createdSessionDestination = navigation
+            navigationPath.append(navigation)
         }
 
         private func createNewSession(on host: PairedHost, request: SessionLaunchRequest) async {

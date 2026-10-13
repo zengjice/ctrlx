@@ -15,6 +15,7 @@
         let relayClient: ViewerRelayClient
         let settings: IOSSettings
         @Binding var initialSessionFit: NewSessionSizing.InitialFit?
+        let automaticallyFitOnEntry: Bool
 
         @Environment(SessionStore.self) private var sessionStore
         @Environment(ViewerConnectionManager.self) private var connectionManager
@@ -25,7 +26,7 @@
         @State private var fileWorkspace = IOSFileBrowserWorkspace()
         @State private var pendingFileLink: TerminalFileLinkRequest?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
-        @State private var selectedBrowserID: UUID?
+        @State private var browserSelection = IOSBrowserTabSelection()
         @State private var selectedSimulatorID: UUID?
         @State private var annotationHandoff = AnnotationTerminalHandoff()
         @State private var showsWindowTabs = false
@@ -57,6 +58,7 @@
         @State private var isSplitting = false
         @State private var isResizing = false
         @State private var viewportGrids: [String: TerminalViewportSizing.Grid] = [:]
+        @State private var automaticTabFit = TerminalTabFit()
 
         @State private var newAgentConfiguration: NewAgentTabConfiguration?
         @State private var agentForkConfiguration: AgentForkConfiguration?
@@ -106,13 +108,15 @@
             hostId: String,
             relayClient: ViewerRelayClient,
             settings: IOSSettings,
-            initialSessionFit: Binding<NewSessionSizing.InitialFit?>
+            initialSessionFit: Binding<NewSessionSizing.InitialFit?>,
+            automaticallyFitOnEntry: Bool = true
         ) {
             self.sessionName = sessionName
             self.hostId = hostId
             self.relayClient = relayClient
             self.settings = settings
             self._initialSessionFit = initialSessionFit
+            self.automaticallyFitOnEntry = automaticallyFitOnEntry
             self._isKeyboardActive = State(initialValue: settings.showTerminalKeyboardOnEntry)
         }
 
@@ -148,8 +152,12 @@
             if let tab = selectedSimulator {
                 return tab.title
             }
-            if let tab = selectedBrowser { return tab.title.isEmpty ? "Browser" : tab.title }
-            if let tab = fileWorkspace.selected { return tab.title }
+            if let tab = selectedBrowser {
+                return tab.title.isEmpty ? "Browser" : tab.title
+            }
+            if let tab = fileWorkspace.selected {
+                return tab.title
+            }
             guard let window else { return sessionName }
             return windowTabLabel(for: window)
         }
@@ -176,8 +184,12 @@
         }
 
         private var annotationSource: AnnotationTerminalHandoff.Source? {
-            if let tab = selectedBrowser { return .browser(tab.id) }
-            if let tab = fileWorkspace.selected { return .file(tab.id) }
+            if let tab = selectedBrowser {
+                return .browser(tab.id)
+            }
+            if let tab = fileWorkspace.selected {
+                return .file(tab.id)
+            }
             return nil
         }
 
@@ -206,17 +218,22 @@
                     RemoteBrowserView(tab: tab, client: relayClient)
                         .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
                             targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
-                            didSend: { target in try await revealAnnotationTarget(target, source: .browser(tab.id)) }))
+                            didSend: { target in try await revealAnnotationTarget(target, source: .browser(tab.id)) }
+                        ))
                         .background(Color(.systemBackground))
                         .id(tab.id)
                 } else if let tab = fileWorkspace.selected {
-                    WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: hostId, paneID: tab.sourcePaneID,
-                                                                       connection: connectionManager.connection(for: hostId)))
-                        .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
-                            targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
-                            didSend: { target in try await revealAnnotationTarget(target, source: .file(tab.id)) }))
-                        .background(Color(.systemBackground))
-                        .id(tab.id)
+                    WorkspaceFileBrowserView(tab: tab, source: .remote(
+                        hostID: hostId,
+                        paneID: tab.sourcePaneID,
+                        connection: connectionManager.connection(for: hostId)
+                    ))
+                    .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
+                        targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
+                        didSend: { target in try await revealAnnotationTarget(target, source: .file(tab.id)) }
+                    ))
+                    .background(Color(.systemBackground))
+                    .id(tab.id)
                 } else if displayedTerminalWindow == nil {
                     ContentUnavailableView(
                         "Window Not Found",
@@ -276,23 +293,30 @@
             sessionSimulators.first { $0.id == selectedSimulatorID }
         }
 
-        private var selectedBrowser: RemoteBrowserTab? { sessionBrowsers.first { $0.id == selectedBrowserID } }
+        private var selectedBrowser: RemoteBrowserTab? {
+            sessionBrowsers.first { $0.id == browserSelection.selectedID }
+        }
 
         private func revealAnnotationTarget(_ target: AgentImageTarget, source: AnnotationTerminalHandoff.Source) async throws {
-            guard annotationSource == source, scenePhase == .active, relayClient.isHostConnected,
-                  let destination = sessionWindows.first(where: { $0.stableId == target.windowID }),
-                  destination.panes.contains(where: target.matches) else {
+            guard
+                annotationSource == source, scenePhase == .active, relayClient.isHostConnected,
+                let destination = sessionWindows.first(where: { $0.stableId == target.windowID }),
+                destination.panes.contains(where: target.matches) else {
                 throw AgentImageError.message("The Agent or connection changed. Choose the recipient again.")
             }
-            let id = try await annotationHandoff.prepare(source: source, windowID: destination.id,
-                                                      paneIDs: Set(destination.panes.map(\.paneId)))
+            let id = try await annotationHandoff.prepare(
+                source: source,
+                windowID: destination.id,
+                paneIDs: Set(destination.panes.map(\.paneId))
+            )
             defer { annotationHandoff.cancel(id: id) }
             try Task.checkCancellation()
-            guard annotationHandoff.isReady(id), annotationSource == source,
-                  scenePhase == .active, relayClient.isHostConnected,
-                  let current = sessionWindows.first(where: { $0.id == destination.id }),
-                  Set(current.panes.map(\.paneId)) == Set(destination.panes.map(\.paneId)),
-                  current.panes.contains(where: target.matches) else {
+            guard
+                annotationHandoff.isReady(id), annotationSource == source,
+                scenePhase == .active, relayClient.isHostConnected,
+                let current = sessionWindows.first(where: { $0.id == destination.id }),
+                Set(current.panes.map(\.paneId)) == Set(destination.panes.map(\.paneId)),
+                current.panes.contains(where: target.matches) else {
                 throw AgentImageError.message("The Agent or connection changed. Try Open Agent again.")
             }
             selectTerminalWindow(current, preferredPaneID: target.paneID)
@@ -306,19 +330,25 @@
 
         private var fileLinkContent: some View {
             browserContent
-            .environment(\.openTerminalBrowserLink, { request in pendingBrowserLink = request })
-            .task(id: pendingBrowserLink) {
-                guard let request = pendingBrowserLink else { return }
-                await openTerminalBrowser(request)
-            }
-            .environment(\.openTerminalFileLink, { request in pendingFileLink = request })
-            .task(id: pendingFileLink) {
-                guard let request = pendingFileLink else { return }
-                await openTerminalFile(request)
-            }
-            .onChange(of: window?.id) { pendingFileLink = nil; pendingBrowserLink = nil }
-            .onChange(of: fileWorkspace.selectedID) { pendingFileLink = nil; pendingBrowserLink = nil }
-            .onChange(of: selectedBrowserID) { pendingFileLink = nil; pendingBrowserLink = nil }
+                .environment(\.openTerminalBrowserLink) { request in pendingBrowserLink = request }
+                .task(id: pendingBrowserLink) {
+                    guard let request = pendingBrowserLink else { return }
+                    await openTerminalBrowser(request)
+                }
+                .environment(\.openTerminalFileLink) { request in pendingFileLink = request }
+                .task(id: pendingFileLink) {
+                    guard let request = pendingFileLink else { return }
+                    await openTerminalFile(request)
+                }
+                .onChange(of: window?.id) { pendingFileLink = nil
+                    pendingBrowserLink = nil
+                }
+                .onChange(of: fileWorkspace.selectedID) { pendingFileLink = nil
+                    pendingBrowserLink = nil
+                }
+                .onChange(of: browserSelection.selectedID) { pendingFileLink = nil
+                    pendingBrowserLink = nil
+                }
                 .onChange(of: selectedSimulatorID) { pendingFileLink = nil
                     pendingBrowserLink = nil
                 }
@@ -326,135 +356,166 @@
 
         private var presentedContent: some View {
             fileLinkContent
-            .onChange(of: fileWorkspaceContext, initial: true) { _, context in
-                fileWorkspace.updateContext(context)
-            }
-            .onChange(of: fileWorkspace.snapshots) { _, _ in saveFileWorkspace() }
+                .onChange(of: fileWorkspaceContext, initial: true) { _, context in
+                    fileWorkspace.updateContext(context)
+                }
+                .onChange(of: fileWorkspace.snapshots) { _, _ in saveFileWorkspace() }
                 .onChange(of: relayClient.simulatorTabs) { _, _ in
                     if let id = selectedSimulatorID, !sessionSimulators.contains(where: { $0.id == id }) {
                         selectedSimulatorID = nil
                     }
                 }
-            .onChange(of: relayClient.browserTabs) { _, _ in
-                if let id = selectedBrowserID, !sessionBrowsers.contains(where: { $0.id == id }) { selectedBrowserID = nil }
-            }
-            .onDisappear(perform: saveFileWorkspace)
-            .sheet(isPresented: $showsWindowTabs, onDismiss: windowTabsDidDismiss) {
-                WindowTabsPanel(
-                    windows: sessionWindows,
-                    files: fileWorkspace.tabs,
-                    browsers: sessionBrowsers,
+                .onChange(of: relayClient.browserTabs) { _, _ in
+                    let shouldFit = browserSelection.syncTabs(Set(sessionBrowsers.map(\.id)))
+                    if shouldFit, terminalIsVisible, relayClient.isHostConnected, scenePhase == .active {
+                        requestAutomaticTabFit()
+                    }
+                }
+                .onDisappear(perform: saveFileWorkspace)
+                .sheet(isPresented: $showsWindowTabs, onDismiss: windowTabsDidDismiss) {
+                    WindowTabsPanel(
+                        windows: sessionWindows,
+                        files: fileWorkspace.tabs,
+                        browsers: sessionBrowsers,
                         simulators: sessionSimulators,
-                    selectedWindowID: window?.stableId,
-                    selectedFileID: fileWorkspace.selectedID,
-                    selectedBrowserID: selectedBrowserID,
+                        selectedWindowID: window?.stableId,
+                        selectedFileID: fileWorkspace.selectedID,
+                        selectedBrowserID: browserSelection.selectedID,
                         selectedSimulatorID: selectedSimulatorID,
-                    isConnected: relayClient.isHostConnected,
-                    canOpenFiles: relayClient.isHostConnected && relayClient.hostSupportsFileBrowsing && fileWorkspace.tabs.count < 30,
-                    canOpenBrowser: relayClient.hostSupportsPaneBrowser,
-                    isCreatingWindow: isCreatingWindow,
-                    forkUnavailableReason: agentForkUnavailableReason,
-                    onChoose: { action in
-                        if pendingWindowTabAction == nil { pendingWindowTabAction = action }
+                        isConnected: relayClient.isHostConnected,
+                        canOpenFiles: relayClient.isHostConnected && relayClient.hostSupportsFileBrowsing && fileWorkspace.tabs.count < 30,
+                        canOpenBrowser: relayClient.hostSupportsPaneBrowser,
+                        isCreatingWindow: isCreatingWindow,
+                        forkUnavailableReason: agentForkUnavailableReason,
+                        onChoose: { action in
+                            if pendingWindowTabAction == nil {
+                                pendingWindowTabAction = action
+                            }
+                        }
+                    )
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                }
+                .sheet(item: $newAgentConfiguration, onDismiss: creationSheetDidDismiss) { configuration in
+                    NewAgentTabPanel(configuration: configuration)
+                        .presentationDetents([.large])
+                }
+                .sheet(item: $agentForkConfiguration, onDismiss: creationSheetDidDismiss) { configuration in
+                    AgentForkPanel(configuration: configuration)
+                        .presentationDetents([.large])
+                }
+                .alert(
+                    "Close Window?",
+                    isPresented: .init(
+                        get: { closeConfirmation != nil },
+                        set: {
+                            if !$0 {
+                                closeConfirmation = nil
+                            }
+                        }
+                    )
+                ) {
+                    if let confirmation = closeConfirmation {
+                        Button("Close Anyway", role: .destructive) {
+                            performCloseWindow(confirmation.target)
+                        }
+                        .keyboardShortcut(.defaultAction)
                     }
-                )
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-            }
-            .sheet(item: $newAgentConfiguration, onDismiss: creationSheetDidDismiss) { configuration in
-                NewAgentTabPanel(configuration: configuration)
-                    .presentationDetents([.large])
-            }
-            .sheet(item: $agentForkConfiguration, onDismiss: creationSheetDidDismiss) { configuration in
-                AgentForkPanel(configuration: configuration)
-                    .presentationDetents([.large])
-            }
-            .alert(
-                "Close Window?",
-                isPresented: .init(
-                    get: { closeConfirmation != nil },
-                    set: { if !$0 { closeConfirmation = nil } }
-                )
-            ) {
-                if let confirmation = closeConfirmation {
-                    Button("Close Anyway", role: .destructive) {
-                        performCloseWindow(confirmation.target)
+                    Button("Cancel", role: .cancel) { closeConfirmation = nil }
+                } message: {
+                    if let confirmation = closeConfirmation {
+                        Text(confirmation.message)
                     }
-                    .keyboardShortcut(.defaultAction)
                 }
-                Button("Cancel", role: .cancel) { closeConfirmation = nil }
-            } message: {
-                if let confirmation = closeConfirmation {
-                    Text(confirmation.message)
-                }
-            }
-            .alert("Error", isPresented: .init(
-                get: { commandError != nil },
-                set: { if !$0 { commandError = nil } }
-            )) {
-                Button("OK") { commandError = nil }
-            } message: {
-                if let error = commandError {
-                    Text(error)
-                }
-            }
-            // Intentionally inline rather than using `WindowRenamingModifier`:
-            // The tab list closes before this enclosing view presents rename.
-            .alert("Rename Window", isPresented: .init(
-                get: { renamingWindow != nil },
-                set: { if !$0 { renamingWindow = nil } }
-            )) {
-                TextField("Window Name", text: $renameWindowText)
-                Button("Save") {
-                    let trimmed = renameWindowText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let target = renamingWindow, !trimmed.isEmpty {
-                        Task {
-                            _ = await relayClient.sendCommand(
-                                SetWindowName(windowId: target.stableId, name: trimmed),
-                                paneId: ""
-                            )
+                .alert("Error", isPresented: .init(
+                    get: { commandError != nil },
+                    set: {
+                        if !$0 {
+                            commandError = nil
                         }
                     }
-                    renamingWindow = nil
+                )) {
+                    Button("OK") { commandError = nil }
+                } message: {
+                    if let error = commandError {
+                        Text(error)
+                    }
                 }
-                Button("Cancel", role: .cancel) { renamingWindow = nil }
-            } message: {
-                Text("Enter a new name for this window")
-            }
+                // Intentionally inline rather than using `WindowRenamingModifier`:
+                // The tab list closes before this enclosing view presents rename.
+                .alert("Rename Window", isPresented: .init(
+                    get: { renamingWindow != nil },
+                    set: {
+                        if !$0 {
+                            renamingWindow = nil
+                        }
+                    }
+                )) {
+                    TextField("Window Name", text: $renameWindowText)
+                    Button("Save") {
+                        let trimmed = renameWindowText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let target = renamingWindow, !trimmed.isEmpty {
+                            Task {
+                                _ = await relayClient.sendCommand(
+                                    SetWindowName(windowId: target.stableId, name: trimmed),
+                                    paneId: ""
+                                )
+                            }
+                        }
+                        renamingWindow = nil
+                    }
+                    Button("Cancel", role: .cancel) { renamingWindow = nil }
+                } message: {
+                    Text("Enter a new name for this window")
+                }
         }
 
         private func openTerminalFile(_ request: TerminalFileLinkRequest) async {
-            guard request.hostID == hostId, let origin = window,
-                  let pane = origin.panes.first(where: { $0.paneId == request.paneID }) else { return }
-            let source = FileBrowserSource.remote(hostID: hostId, paneID: request.paneID,
-                                                   connection: connectionManager.connection(for: hostId))
+            guard
+                request.hostID == hostId, let origin = window,
+                let pane = origin.panes.first(where: { $0.paneId == request.paneID }) else { return }
+            let source = FileBrowserSource.remote(
+                hostID: hostId,
+                paneID: request.paneID,
+                connection: connectionManager.connection(for: hostId)
+            )
             let fileContext = RepositoryFileContext(pane: pane)
             do {
                 let destination = try await TerminalFileDestination.resolve(
                     path: request.path, context: fileContext, source: source
                 )
                 try Task.checkCancellation()
-                guard pendingFileLink == request, window?.id == origin.id,
-                      window?.panes.contains(where: { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext }) == true,
-                    fileWorkspace.selectedID == nil, selectedBrowserID == nil && selectedSimulatorID == nil else { return }
+                guard
+                    pendingFileLink == request, window?.id == origin.id,
+                    window?.panes.contains(where: { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext }) == true,
+                    fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && selectedSimulatorID == nil else { return }
                 try fileWorkspace.open(destination, windowID: origin.stableId, paneID: request.paneID)
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
             } catch is CancellationError { }
-            catch { if pendingFileLink == request { commandError = "Cannot open Host path: \(error.localizedDescription)" } }
+            catch {
+                if pendingFileLink == request {
+                    commandError = "Cannot open Host path: \(error.localizedDescription)"
+                }
+            }
         }
 
         private func openTerminalBrowser(_ request: TerminalBrowserLinkRequest) async {
-            guard request.hostID == hostId,
-                  sessionWindows.contains(where: { $0.panes.contains { $0.paneId == request.paneID } }) else { return }
+            guard
+                request.hostID == hostId,
+                sessionWindows.contains(where: { $0.panes.contains { $0.paneId == request.paneID } }) else { return }
             let originWindowID = window?.id
             do {
-                let tab = try await RemoteBrowserSession.open(sessionName: sessionName,
-                    sourcePaneID: request.paneID, url: request.url, client: relayClient)
+                let tab = try await RemoteBrowserSession.open(
+                    sessionName: sessionName,
+                    sourcePaneID: request.paneID,
+                    url: request.url,
+                    client: relayClient
+                )
                 try Task.checkCancellation()
                 guard pendingBrowserLink == request, window?.id == originWindowID else { return }
-                selectedBrowserID = tab.id
+                browserSelection.selectedID = tab.id
                 selectedSimulatorID = nil
                 fileWorkspace.selectedID = nil
                 cancelCreationFollowUp()
@@ -468,83 +529,114 @@
             }
         }
 
-        var body: some View {
+        private var terminalLifecycleContent: some View {
             presentedContent
-            .task {
-                updateActiveService()
-                // Mark session as handled when navigating into the view
-                await activeService?.markHandledIfNeeded()
-            }
-            .task(id: windowSelectionCandidates) {
-                reconcileWindowSelection(candidates: windowSelectionCandidates)
-                if let request = annotationHandoff.request,
-                   Set(sessionWindows.first(where: { $0.id == request.windowID })?.panes.map(\.paneId) ?? []) != request.paneIDs {
-                    annotationHandoff.cancel(error: AgentImageError.message("The Agent window layout changed. Try Open Agent again."))
+                .task {
+                    if automaticallyFitOnEntry {
+                        requestAutomaticTabFit()
+                    }
+                    updateActiveService()
+                    // Mark session as handled when navigating into the view
+                    await activeService?.markHandledIfNeeded()
                 }
-            }
-            .onChange(of: viewportGrids) {
-                fitCreatedTerminalIfReady()
-            }
-            .onChange(of: window?.windowLayout, initial: true) {
-                fitCreatedTerminalIfReady()
-            }
-            .onChange(of: isResizing) {
-                if !isResizing { fitCreatedTerminalIfReady() }
-            }
-            .onChange(of: relayClient.isHostConnected) {
-                if !relayClient.isHostConnected {
-                    pendingBrowserLink = nil
+                .task(id: windowSelectionCandidates) {
+                    reconcileWindowSelection(candidates: windowSelectionCandidates)
+                    if
+                        let request = annotationHandoff.request,
+                        Set(sessionWindows.first(where: { $0.id == request.windowID })?.panes.map(\.paneId) ?? []) != request.paneIDs {
+                        annotationHandoff.cancel(error: AgentImageError.message("The Agent window layout changed. Try Open Agent again."))
+                    }
+                }
+                .onChange(of: viewportGrids) {
+                    fitTerminalIfReady()
+                }
+                .onChange(of: window?.windowLayout, initial: true) {
+                    fitTerminalIfReady()
+                }
+                .onChange(of: automaticTabFit) {
+                    fitTerminalIfReady()
+                }
+                .onChange(of: terminalIsVisible) {
+                    if !terminalIsVisible {
+                        automaticTabFit.cancel()
+                    }
+                }
+                .onChange(of: isResizing) {
+                    if !isResizing {
+                        fitTerminalIfReady()
+                    }
+                }
+                .onChange(of: relayClient.isHostConnected) {
+                    if !relayClient.isHostConnected {
+                        pendingBrowserLink = nil
+                        browserSelection.cancelPendingCloses()
+                        automaticTabFit.cancel()
+                        cancelCreationFollowUp()
+                        annotationHandoff.cancel(error: AgentImageError.message("The Host disconnected. Reconnect and try Open Agent again."))
+                    }
+                }
+        }
+
+        var body: some View {
+            terminalLifecycleContent
+                .onChange(of: annotationSource) {
+                    if let request = annotationHandoff.request, annotationSource != request.source {
+                        annotationHandoff.cancel()
+                    }
+                }
+                .onChange(of: scenePhase) {
+                    if scenePhase != .active {
+                        browserSelection.cancelPendingCloses()
+                        automaticTabFit.cancel()
+                        annotationHandoff.cancel()
+                        pendingBrowserLink = nil
+                    } else {
+                        fitTerminalIfReady()
+                    }
+                }
+                .onDisappear {
+                    // A delayed creation reply must not redirect a later visit.
                     cancelCreationFollowUp()
-                    annotationHandoff.cancel(error: AgentImageError.message("The Host disconnected. Reconnect and try Open Agent again."))
+                    browserSelection.cancelPendingCloses()
+                    automaticTabFit.cancel()
+                    annotationHandoff.cancel()
+                    pendingWindowTabAction = nil
+                    pendingBrowserLink = nil
+                    pendingFileLink = nil
+                    showsWindowTabs = false
                 }
-            }
-            .onChange(of: annotationSource) {
-                if let request = annotationHandoff.request, annotationSource != request.source { annotationHandoff.cancel() }
-            }
-            .onChange(of: scenePhase) {
-                if scenePhase != .active { annotationHandoff.cancel(); pendingBrowserLink = nil }
-            }
-            .onDisappear {
-                // A delayed creation reply must not redirect a later visit.
-                cancelCreationFollowUp()
-                annotationHandoff.cancel()
-                pendingWindowTabAction = nil
-                pendingBrowserLink = nil
-                pendingFileLink = nil
-                showsWindowTabs = false
-            }
-            .onChange(of: activeService?.session?.state) {
-                if activeSessionHasBlockingForm {
-                    isKeyboardActive = false
+                .onChange(of: activeService?.session?.state) {
+                    if activeSessionHasBlockingForm {
+                        isKeyboardActive = false
+                    }
+                    if activeService?.session?.needsAttention == true {
+                        Task { await activeService?.markHandledIfNeeded() }
+                    }
                 }
-                if activeService?.session?.needsAttention == true {
+                .onChange(of: clipboardContents) {
+                    guard
+                        let activePaneId,
+                        let content = clipboardContents[activePaneId],
+                        scenePhase == .active,
+                        terminalIsVisible,
+                        content != lastWrittenClipboardContent
+                    else { return }
+                    clipboard.setString(content)
+                    lastWrittenClipboardContent = content
+                }
+                .onChange(of: activePaneId) { oldValue, newValue in
+                    terminalInputRevision &+= 1
+                    updateActiveService()
+                    // Mark session as handled when switching to a pane with attention
                     Task { await activeService?.markHandledIfNeeded() }
+                    // Sync pane selection to the tmux session on the host.
+                    // When oldValue is nil, it's the initial assignment from onAppear
+                    // — skip it to avoid redirecting the host's tmux focus on load.
+                    guard oldValue != nil, let newValue else { return }
+                    Task {
+                        await sendCommand(.selectTmuxPane, paneId: newValue)
+                    }
                 }
-            }
-            .onChange(of: clipboardContents) {
-                guard
-                    let activePaneId,
-                    let content = clipboardContents[activePaneId],
-                    scenePhase == .active,
-                    terminalIsVisible,
-                    content != lastWrittenClipboardContent
-                else { return }
-                clipboard.setString(content)
-                lastWrittenClipboardContent = content
-            }
-            .onChange(of: activePaneId) { oldValue, newValue in
-                terminalInputRevision &+= 1
-                updateActiveService()
-                // Mark session as handled when switching to a pane with attention
-                Task { await activeService?.markHandledIfNeeded() }
-                // Sync pane selection to the tmux session on the host.
-                // When oldValue is nil, it's the initial assignment from onAppear
-                // — skip it to avoid redirecting the host's tmux focus on load.
-                guard oldValue != nil, let newValue else { return }
-                Task {
-                    await sendCommand(.selectTmuxPane, paneId: newValue)
-                }
-            }
         }
 
         @ToolbarContentBuilder
@@ -657,7 +749,7 @@
 
         private func windowTabsDidDismiss() {
             guard let action = pendingWindowTabAction else {
-                fitCreatedTerminalIfReady()
+                fitTerminalIfReady()
                 return
             }
             pendingWindowTabAction = nil
@@ -675,12 +767,13 @@
                 case .select:
                     selectTerminalWindow(target)
                 case .openFiles:
-                    selectedBrowserID = nil
+                    browserSelection.selectedID = nil
                     selectedSimulatorID = nil
-                    guard relayClient.hostSupportsFileBrowsing, fileWorkspace.tabs.count < 30,
-                          let paneID = FileBrowserTab.sourcePaneID(
+                    guard
+                        relayClient.hostSupportsFileBrowsing, fileWorkspace.tabs.count < 30,
+                        let paneID = FileBrowserTab.sourcePaneID(
                             in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
-                          ) else {
+                        ) else {
                         commandError = "Files is unavailable for this window. Check the Host and tab limit."
                         return
                     }
@@ -689,9 +782,10 @@
                     quickActionPresentation.dismiss()
                     fileWorkspace.open(paneID: paneID)
                 case .openBrowser:
-                    guard let paneID = FileBrowserTab.sourcePaneID(
-                        in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
-                    ) else {
+                    guard
+                        let paneID = FileBrowserTab.sourcePaneID(
+                            in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
+                        ) else {
                         commandError = "This window no longer has a source pane."
                         return
                     }
@@ -712,7 +806,7 @@
                     requestCloseWindow(target)
                 }
             case let .selectFiles(id):
-                selectedBrowserID = nil
+                browserSelection.selectedID = nil
                 selectedSimulatorID = nil
                 guard fileWorkspace.tabs.contains(where: { $0.id == id }) else { return }
                 cancelCreationFollowUp()
@@ -720,20 +814,21 @@
                 quickActionPresentation.dismiss()
                 fileWorkspace.selectedID = id
             case let .closeFiles(id):
-                if id == fileWorkspace.selectedID,
-                   let sourcePaneID = fileWorkspace.selected?.sourcePaneID,
-                   let sourceWindow = sessionWindows.first(where: { $0.panes.contains { $0.paneId == sourcePaneID } }) {
+                if
+                    id == fileWorkspace.selectedID,
+                    let sourcePaneID = fileWorkspace.selected?.sourcePaneID,
+                    let sourceWindow = sessionWindows.first(where: { $0.panes.contains { $0.paneId == sourcePaneID } }) {
                     selectTerminalWindow(sourceWindow, preferredPaneID: sourcePaneID)
                 }
                 fileWorkspace.close(id)
             case .newTerminal:
-                selectedBrowserID = nil
+                browserSelection.selectedID = nil
                 selectedSimulatorID = nil
                 guard relayClient.isHostConnected, !isCreatingWindow else { return }
                 fileWorkspace.selectedID = nil
                 createTerminalWindow()
             case .newAgent:
-                selectedBrowserID = nil
+                browserSelection.selectedID = nil
                 selectedSimulatorID = nil
                 guard relayClient.isHostConnected, !isCreatingWindow else { return }
                 fileWorkspace.selectedID = nil
@@ -745,7 +840,7 @@
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
                 fileWorkspace.selectedID = nil
-                selectedBrowserID = nil
+                browserSelection.selectedID = nil
                 selectedSimulatorID = id
             case let .selectBrowser(id):
                 guard sessionBrowsers.contains(where: { $0.id == id }) else { return }
@@ -753,21 +848,24 @@
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
                 fileWorkspace.selectedID = nil
-                selectedBrowserID = id
+                browserSelection.selectedID = id
                 selectedSimulatorID = nil
             case let .closeBrowser(id):
                 guard let tab = sessionBrowsers.first(where: { $0.id == id }) else { return }
+                browserSelection.beginClosing(id)
                 Task {
                     do {
                         try await RemoteBrowserSession.close(tab: tab, client: relayClient)
-                        if selectedBrowserID == id { selectedBrowserID = nil }
-                    } catch { commandError = error.localizedDescription }
+                    } catch {
+                        browserSelection.cancelClosing(id)
+                        commandError = error.localizedDescription
+                    }
                 }
             }
         }
 
         private func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String? = nil) {
-            selectedBrowserID = nil
+            browserSelection.selectedID = nil
             selectedSimulatorID = nil
             fileWorkspace.selectedID = nil
             cancelCreationFollowUp()
@@ -775,6 +873,7 @@
             activePaneId = FileBrowserTab.sourcePaneID(
                 in: target.panes.map(\.paneId), focusedPaneID: preferredPaneID, activePaneID: target.activePane?.paneId
             )
+            requestAutomaticTabFit(windowID: target.stableId)
             if relayClient.isHostConnected {
                 Task { await sendCommand(.selectTmuxWindow, paneId: target.stableId) }
             }
@@ -782,12 +881,12 @@
 
         private func selectAdjacentWindow(from sourceWindowID: String, direction: TerminalWindowSwipePolicy.Direction) {
             guard
-                window?.id == sourceWindowID, fileWorkspace.selectedID == nil, selectedBrowserID == nil && selectedSimulatorID == nil,
-                  !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput,
-                  let targetID = WindowSelectionReconciliation.adjacentWindowID(
-                      from: sourceWindowID, direction: direction, in: windowSelectionCandidates
-                  ),
-                  let target = sessionWindows.first(where: { $0.id == targetID }) else { return }
+                window?.id == sourceWindowID, fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && selectedSimulatorID == nil,
+                !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput,
+                let targetID = WindowSelectionReconciliation.adjacentWindowID(
+                    from: sourceWindowID, direction: direction, in: windowSelectionCandidates
+                ),
+                let target = sessionWindows.first(where: { $0.id == targetID }) else { return }
             selectTerminalWindow(target)
         }
 
@@ -835,7 +934,9 @@
                 sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
                 usingWorktree: usingWorktree,
                 prepare: { source in
-                    if let reason = agentForkUnavailableReason { throw AgentForkError(reason) }
+                    if let reason = agentForkUnavailableReason {
+                        throw AgentForkError(reason)
+                    }
                     let response = try await connectionManager.sendCommand(
                         PrepareAgentFork(source: source), paneId: "", hostId: hostId, timeout: 30
                     ).get()
@@ -850,14 +951,19 @@
 
         private func createAgentFork(_ request: ForkAgentSession) async throws {
             guard !isCreatingWindow else { throw AgentForkError("A window is already being created. Please wait.") }
-            if let reason = agentForkUnavailableReason { throw AgentForkError(reason) }
+            if let reason = agentForkUnavailableReason {
+                throw AgentForkError(reason)
+            }
             guard request.source.sessionName == sessionName else { throw AgentForkError("Reopen Fork in the source session.") }
             isCreatingWindow = true
+            automaticTabFit.cancel()
             initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
             let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit)
             defer {
                 isCreatingWindow = false
-                if windowCreation.revision == revision, windowCreation.paneID == nil { windowCreation.cancel() }
+                if windowCreation.revision == revision, windowCreation.paneID == nil {
+                    windowCreation.cancel()
+                }
             }
             let response = try await connectionManager.sendCommand(request, paneId: "", hostId: hostId, timeout: 180).get()
             guard let paneId = response.paneId else {
@@ -871,15 +977,17 @@
         }
 
         private func createWindow(_ request: CreateTmuxWindow) async throws {
+            automaticTabFit.cancel()
             guard !isCreatingWindow else {
                 throw NewAgentTabConfiguration.LaunchError("A window is already being created. Please wait.")
             }
             // Recheck on Start: the Host can disconnect/downgrade while the
             // sheet is open. The Host still validates the plugin and directory.
-            if request.pluginID != nil,
-               let reason = sessionStore.agentWindowLaunchUnavailableReason(
-                   hostID: hostId, isConnected: relayClient.isHostConnected
-               ) {
+            if
+                request.pluginID != nil,
+                let reason = sessionStore.agentWindowLaunchUnavailableReason(
+                    hostID: hostId, isConnected: relayClient.isHostConnected
+                ) {
                 throw NewAgentTabConfiguration.LaunchError(reason)
             }
             isCreatingWindow = true
@@ -887,7 +995,9 @@
             let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit)
             defer {
                 isCreatingWindow = false
-                if windowCreation.revision == revision, windowCreation.paneID == nil { windowCreation.cancel() }
+                if windowCreation.revision == revision, windowCreation.paneID == nil {
+                    windowCreation.cancel()
+                }
             }
             let response = try await relayClient.sendCommand(request, paneId: "").get()
             guard let paneId = response.paneId else {
@@ -914,10 +1024,11 @@
             case let .select(windowId, paneId):
                 selectedWindowId = windowId
                 activePaneId = paneId
-                if let destination = windowCreation.takeWindowDestination(
-                    selectedPaneID: paneId, paneStates: sessionStore.paneStates,
-                    isConnected: relayClient.isHostConnected
-                ) {
+                if
+                    let destination = windowCreation.takeWindowDestination(
+                        selectedPaneID: paneId, paneStates: sessionStore.paneStates,
+                        isConnected: relayClient.isHostConnected
+                    ) {
                     initialSessionFit = destination.initialFit
                     fitCreatedTerminalIfReady()
                 }
@@ -1212,15 +1323,18 @@
         // MARK: - Tmux Controls
 
         private var resizeToFitRequest: ResizeTmuxPane? {
-            guard relayClient.hostSupportsTerminalFit,
-                  let window, let layout = TmuxLayoutParser.parse(window.windowLayout) else { return nil }
+            guard
+                relayClient.hostSupportsTerminalFit,
+                let window, let layout = TmuxLayoutParser.parse(window.windowLayout) else { return nil }
             return TerminalViewportSizing.request(layout: layout, paneGrids: viewportGrids)
         }
 
         private func resizeWindowToFit() {
+            automaticTabFit.cancel()
             cancelCreationFollowUp()
-            guard relayClient.isHostConnected, !isResizing,
-                  let windowID = window?.stableId, let request = resizeToFitRequest else { return }
+            guard
+                relayClient.isHostConnected, !isResizing,
+                let windowID = window?.stableId, let request = resizeToFitRequest else { return }
             resizeWindow(request, windowID: windowID)
         }
 
@@ -1231,12 +1345,30 @@
 
         private func creationSheetDidDismiss() {
             creationSheetIsPresented = false
+            fitTerminalIfReady()
+        }
+
+        private func requestAutomaticTabFit(windowID: String? = nil) {
+            automaticTabFit.request(.init(hostID: hostId, sessionName: sessionName, windowID: windowID))
+        }
+
+        private func fitTerminalIfReady() {
             fitCreatedTerminalIfReady()
+            guard terminalIsVisible, !isResizing else { return }
+            let request = automaticTabFit.takeRequest(
+                for: .init(hostID: hostId, sessionName: sessionName, windowID: window?.stableId),
+                isAvailable: relayClient.isHostConnected && relayClient.hostSupportsTerminalFit,
+                isPresentationReady: !creationSheetIsPresented && !showsWindowTabs && scenePhase == .active,
+                measuredRequest: resizeToFitRequest
+            )
+            guard let request, let windowID = window?.stableId else { return }
+            resizeWindow(request, windowID: windowID)
         }
 
         private func fitCreatedTerminalIfReady() {
-            guard terminalIsVisible, !isResizing, var fit = initialSessionFit,
-                  fit.matches(hostID: hostId, sessionName: sessionName) else { return }
+            guard
+                terminalIsVisible, !isResizing, var fit = initialSessionFit,
+                fit.matches(hostID: hostId, sessionName: sessionName) else { return }
             let request = fit.takeRequest(
                 isAvailable: relayClient.isHostConnected && relayClient.hostSupportsTerminalFit,
                 paneIDs: window?.panes.map(\.paneId),
@@ -1245,8 +1377,11 @@
             )
             // Consume before dispatch, including failures; never retry on later
             // keyboard, rotation, reconnect or geometry changes.
-            if fit != initialSessionFit { initialSessionFit = fit }
+            if fit != initialSessionFit {
+                initialSessionFit = fit
+            }
             guard let request, let windowID = window?.stableId else { return }
+            automaticTabFit.cancel()
             resizeWindow(request, windowID: windowID)
         }
 
@@ -1275,6 +1410,7 @@
                 Button {
                     guard let activePaneId, !isSplitting else { return }
                     cancelCreationFollowUp()
+                    automaticTabFit.cancel()
                     isSplitting = true
                     Task {
                         await sendCommand(.splitTmuxPane(direction: .horizontal), paneId: activePaneId)
@@ -1288,6 +1424,7 @@
                 Button {
                     guard let activePaneId, !isSplitting else { return }
                     cancelCreationFollowUp()
+                    automaticTabFit.cancel()
                     isSplitting = true
                     Task {
                         await sendCommand(.splitTmuxPane(direction: .vertical), paneId: activePaneId)
@@ -1376,21 +1513,24 @@
         }
 
         private func sendPhrase(_ request: TerminalPhraseRequest) -> Bool {
-            guard request.isValid(in: activePhraseContext, savedPhrases: settings.quickPhrases.phrases),
-                  let paneId = request.context.target.paneID
+            guard
+                request.isValid(in: activePhraseContext, savedPhrases: settings.quickPhrases.phrases),
+                let paneId = request.context.target.paneID
             else { return false }
             let windowName = window?.windowName ?? ""
-            guard enqueueToolbarKeys(request.phrase.keys, paneId: paneId, immediately: true, onSent: {
-                // Phrases are ordinary user input; retain normal prompt monitoring.
-                observeTerminalInput(request.phrase.keys, paneId: paneId, windowName: windowName)
-            }) else { return false }
+            guard
+                enqueueToolbarKeys(request.phrase.keys, paneId: paneId, immediately: true, onSent: {
+                    // Phrases are ordinary user input; retain normal prompt monitoring.
+                    observeTerminalInput(request.phrase.keys, paneId: paneId, windowName: windowName)
+                }) else { return false }
             return true
         }
 
         private func sendCustomButton(_ request: TerminalCustomButtonRequest) -> Bool {
-            guard !quickActionPresentation.suspendsTerminalInput,
-                  request.isValid(in: activePhraseContext, savedButtons: settings.customButtons.buttons),
-                  let paneId = request.context.target.paneID else { return false }
+            guard
+                !quickActionPresentation.suspendsTerminalInput,
+                request.isValid(in: activePhraseContext, savedButtons: settings.customButtons.buttons),
+                let paneId = request.context.target.paneID else { return false }
             let keys = request.button.action.keys
             let windowName = window?.windowName ?? ""
             return enqueueToolbarKeys(keys, paneId: paneId, immediately: true, onSent: {
@@ -1417,9 +1557,10 @@
 
             // Same queue as the other toolbar controls. Do not treat a slash
             // command as a new prompt or arm the background-turn monitor.
-            guard enqueueToolbarKeys(request.command.keys, paneId: request.context.target.paneID, immediately: true, onSent: {
-                backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
-            })
+            guard
+                enqueueToolbarKeys(request.command.keys, paneId: request.context.target.paneID, immediately: true, onSent: {
+                    backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
+                })
             else { return false }
             return true
         }
