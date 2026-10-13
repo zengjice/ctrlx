@@ -550,6 +550,26 @@
             #expect(raw.isEmpty)
         }
 
+        @Test("URL taps and delegate opens ask SwiftUI for a destination without presenting native alerts")
+        func linkPresentationRouting() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let url = try #require(URL(string: "https://example.com/page"))
+            var requested: [URL] = []
+            var sentKeys: [TmuxKey] = []
+            var sentBytes: [Data] = []
+            view.onOpenURL = { requested.append($0) }
+            view.onInput = { sentKeys += $0 }
+            view.onRawInput = { sentBytes.append($0) }
+            feed(view, url.absoluteString + "\r\n> input")
+            view.handleContentTap(at: CGPoint(x: 2.5 * view.cellDimension.width, y: 0.5 * view.cellDimension.height))
+            view.requestOpenLink(source: view, link: url.absoluteString, params: [:])
+            view.requestOpenLink(source: view, link: "file:///tmp/report.txt", params: [:])
+            #expect(requested == [url, url])
+            #expect(sentKeys.isEmpty && sentBytes.isEmpty)
+            #expect(window.rootViewController?.presentedViewController == nil)
+        }
+
         private func feed(_ view: InteractiveTerminalView, _ text: String) {
             view.feedTerminalData(Array(text.utf8)[...])
         }

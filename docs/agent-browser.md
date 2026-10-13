@@ -22,6 +22,19 @@ per-domain preferences keep their stored values but “in app” now means Host.
 The existing split-on-link preference is retained. iOS tap and long-press use
 the same destination picker. Unsupported Host URLs fail without local fallback.
 
+On iOS the picker is a SwiftUI sheet, not a popover anchored to the scrollable
+terminal. It shows a bounded URL preview and separate Host / this-device actions
+with destination explanations, plus Copy Link and Cancel. Medium and large
+detents allow scrolling or expansion on short screens and with larger text.
+Terminal keyboard/accessory input, Question auto-expansion and Window swipes stay
+suspended through dismissal; cancelling or copying restores the existing keyboard
+intent without reconnecting or replacing the terminal. Tap, long-press and native
+link-open callbacks share this presentation; file references retain their own route.
+Validation: 29 focused input/presentation tests passed, along with the unsigned
+iOS Debug device-SDK build and device-SDK typechecking of the native link-routing
+regression. The UIKit regression was not executed; keyboard, landscape and iPad
+presentation still require physical-device acceptance. No app was installed.
+
 The Host has one reusable **human primary page per pane**, shared by all clients.
 Open Browser reveals it without resetting its URL; opening a link navigates that
 page (an identical URL does not reload; origin case, default ports and an empty
