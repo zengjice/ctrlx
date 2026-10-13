@@ -2044,7 +2044,7 @@ public struct MainView: View {
                     .help("Open session in terminal app")
                 }
 
-                resizeVisibleTerminalsButton
+                TerminalFitButton(action: resizeVisibleTerminalsToFit)
 
                 Button {
                     requestCloseSession(window.sessionName)
@@ -2083,7 +2083,7 @@ public struct MainView: View {
                     )
                 }
 
-                resizeVisibleTerminalsButton
+                TerminalFitButton(action: resizeVisibleTerminalsToFit)
 
                 Button {
                     requestCloseRemoteSession(remote.sessionName, hostId: remote.hostId)
@@ -2237,16 +2237,6 @@ public struct MainView: View {
                 }
             }
         )
-    }
-
-    private var resizeVisibleTerminalsButton: some View {
-        Button(action: resizeVisibleTerminalsToFit) {
-            Symbols.arrowUpLeftAndArrowDownRight.image
-        }
-        // macOS 26 auto-labels icon-only toolbar Buttons by SF Symbol and can
-        // drop `.help()` from the AX tree, so keep an explicit stable label.
-        .accessibilityLabel("Resize visible terminals to fit this Mac")
-        .help("Resize visible terminals to fit this Mac; affects the Host and all Viewers")
     }
 
     /// Immutable plan captured by a direct button click. Calculating every

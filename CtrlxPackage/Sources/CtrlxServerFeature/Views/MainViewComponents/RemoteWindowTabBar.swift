@@ -325,21 +325,7 @@ struct RemoteWindowTabBar: View {
             Button {
                 onSelectWindow(window)
             } label: {
-                HStack(spacing: 4) {
-                    if window.hasClaude {
-                        Symbols.sparkles.image
-                            .font(.caption2)
-                            .foregroundStyle(.purple)
-                    }
-
-                    Text(windowName)
-                        .font(.system(.caption, design: .monospaced))
-                        .lineLimit(1)
-                }
-                .padding(.leading, 12)
-                .padding(.trailing, 4)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
+                TerminalWindowTabLabel(name: windowName, hasAgent: window.hasClaude)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(window.id) \(windowName)")

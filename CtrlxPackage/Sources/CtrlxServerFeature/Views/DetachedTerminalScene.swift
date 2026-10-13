@@ -75,28 +75,60 @@ private struct DetachedTerminalContent: View {
         return store.agentForkUnavailableReason(hostID: host, isConnected: connection?.isHostConnected == true)
     }
 
+    private var windowName: String {
+        windowTabLabel(
+            windowName: remote?.windowName ?? local?.windowName ?? "Terminal",
+            windowIndex: remote?.windowIndex ?? local?.windowIndex ?? 0
+        )
+    }
+
+    private var canOperateTerminal: Bool {
+        !panes.isEmpty && (target.hostID == nil || connection?.isHostConnected == true)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            tabBar
             terminal
+                .onGeometryChange(for: CGSize.self, of: { $0.size }) { contentSize = $0 }
         }
         .frame(minWidth: 400, minHeight: 250)
-        .onGeometryChange(for: CGSize.self, of: { $0.size }) { contentSize = $0 }
         .background(settings.theme.workspaceBackgroundColor)
         .preferredColorScheme(settings.theme.workspaceColorScheme)
         .environment(\.terminalQuickActions, router)
         .environment(\.openTerminalFileLink) { showInMain(.fileLink($0)) }
-        .navigationTitle(remote?.windowName ?? local?.windowName ?? "Terminal")
+        .navigationTitle(windowName)
         .background(DetachedTerminalRegistration(target: target, windows: coordinator.detachedWindows))
+        .toolbarBackground(settings.theme.chromeBackgroundColor, for: .windowToolbar)
         .toolbar {
-            ToolbarItemGroup {
+            ToolbarItemGroup(placement: .primaryAction) {
                 if !settings.showStatusBar {
                     TerminalQuickActionButtons(router: router)
                 }
-                Button("Fit Terminal", action: resizeToFit)
-                    .disabled(panes.isEmpty || isResizing || (target.hostID != nil && connection?.isHostConnected != true))
-                Menu("Window") {
-                    Button("Open Files in Main Window") { showInMain(.files(paneID: focusedPaneID)) }
-                        .disabled(panes.isEmpty)
+                TerminalFitButton(action: resizeToFit)
+                    .disabled(!canOperateTerminal || isResizing)
+            }
+        }
+        .focusedSceneValue(\.closeCurrentTabAction) { coordinator.detachedWindows.close(target) }
+        .alert("Terminal Error", isPresented: Binding(get: { resizeError != nil }, set: { if !$0 { resizeError = nil } })) {
+            Button("OK") { resizeError = nil }
+        } message: { Text(resizeError ?? "") }
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            TerminalWindowTabLabel(name: windowName, hasAgent: panes.contains { $0.agentSession != nil })
+                .padding(.trailing, 8)
+                .tabStripItemStyle(isSelected: true)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(windowName)
+                .accessibilityValue("selected")
+                .accessibilityIdentifier("detached-window-tab")
+                .contextMenu {
+                    Button { showInMain(.files(paneID: focusedPaneID)) } label: {
+                        Label("Open Files in Main Window", symbol: .folderBadgePlus)
+                    }
+                    .disabled(!canOperateTerminal)
                     AgentForkMenu(
                         sources: panes.compactMap(AgentForkSource.init(pane:)),
                         unavailableReason: forkUnavailableReason,
@@ -109,12 +141,17 @@ private struct DetachedTerminalContent: View {
                         coordinator.detachedWindows.close(target)
                     }
                 }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .background(settings.theme.chromeBackgroundColor)
+        .overlay(alignment: .bottom) {
+            if settings.theme == .anysphereDark {
+                Rectangle().fill(settings.theme.workspaceBorderColor).frame(height: 1)
+            } else {
+                Divider()
             }
         }
-        .focusedSceneValue(\.closeCurrentTabAction) { coordinator.detachedWindows.close(target) }
-        .alert("Terminal Error", isPresented: Binding(get: { resizeError != nil }, set: { if !$0 { resizeError = nil } })) {
-            Button("OK") { resizeError = nil }
-        } message: { Text(resizeError ?? "") }
     }
 
     @ViewBuilder private var terminal: some View {

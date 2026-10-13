@@ -97,14 +97,48 @@ struct DetachedTerminalWindowsTests {
     }
 
     @Test
-    func onlyUnclaimedMouseReleaseOutsideSourceDetaches() {
-        let frame = CGRect(x: 100, y: 100, width: 800, height: 600)
-        let outside = CGPoint(x: 1_100, y: 400)
-        #expect(WindowTabDragSource.shouldDetach(operation: [], cancelled: false, mouseReleased: true, point: outside, sourceFrame: frame))
-        #expect(!WindowTabDragSource.shouldDetach(operation: .move, cancelled: false, mouseReleased: true, point: outside, sourceFrame: frame))
-        #expect(!WindowTabDragSource.shouldDetach(operation: [], cancelled: true, mouseReleased: true, point: outside, sourceFrame: frame))
-        #expect(!WindowTabDragSource.shouldDetach(operation: [], cancelled: false, mouseReleased: false, point: outside, sourceFrame: frame))
-        #expect(!WindowTabDragSource.shouldDetach(operation: [], cancelled: false, mouseReleased: true, point: CGPoint(x: 110, y: 150), sourceFrame: frame))
+    func onlyUnclaimedMouseReleaseAwayFromTabStripDetaches() {
+        let frame = CGRect(x: 100, y: 650, width: 800, height: 26)
+        let belowStrip = CGPoint(x: 500, y: 500)
+        #expect(WindowTabDragSource.shouldDetach(operation: [], cancelled: false, mouseReleased: true, point: belowStrip, tabStripFrame: frame))
+        #expect(!WindowTabDragSource.shouldDetach(operation: .move, cancelled: false, mouseReleased: true, point: belowStrip, tabStripFrame: frame))
+        #expect(!WindowTabDragSource.shouldDetach(operation: .copy, cancelled: false, mouseReleased: true, point: belowStrip, tabStripFrame: frame))
+        #expect(!WindowTabDragSource.shouldDetach(operation: [], cancelled: true, mouseReleased: true, point: belowStrip, tabStripFrame: frame))
+        #expect(!WindowTabDragSource.shouldDetach(operation: [], cancelled: false, mouseReleased: false, point: belowStrip, tabStripFrame: frame))
+    }
+
+    @Test
+    func maximizedWindowCanDetachIntoItsOwnContent() {
+        let windowFrame = CGRect(x: 0, y: 0, width: 1_440, height: 900)
+        let frame = WindowTabDragSource.tabStripFrame(
+            tabFrame: CGRect(x: 240, y: 820, width: 100, height: 26), windowFrame: windowFrame
+        )
+        #expect(frame == CGRect(x: 0, y: 820, width: 1_440, height: 26))
+        let point = CGPoint(x: 300, y: 740)
+        #expect(windowFrame.contains(point))
+        #expect(WindowTabDragSource.shouldDetach(operation: [], cancelled: false, mouseReleased: true, point: point, tabStripFrame: frame))
+    }
+
+    @Test(arguments: [CGPoint(x: 500, y: 663), CGPoint(x: 890, y: 663), CGPoint(x: 500, y: 630), CGPoint(x: 500, y: 696)])
+    func reorderingAndSmallVerticalMovementDoNotDetach(point: CGPoint) {
+        let frame = CGRect(x: 100, y: 650, width: 800, height: 26)
+        #expect(!WindowTabDragSource.shouldDetach(operation: [], cancelled: false, mouseReleased: true, point: point, tabStripFrame: frame))
+    }
+
+    @Test(arguments: [CGPoint(x: 500, y: 620), CGPoint(x: 500, y: 706), CGPoint(x: 70, y: 663), CGPoint(x: 930, y: 663)])
+    func movingBeyondStripMarginDetaches(point: CGPoint) {
+        let frame = CGRect(x: 100, y: 650, width: 800, height: 26)
+        #expect(WindowTabDragSource.shouldDetach(operation: [], cancelled: false, mouseReleased: true, point: point, tabStripFrame: frame))
+    }
+
+    @Test
+    func tabStripCoordinatesSupportAnotherDisplay() {
+        let frame = WindowTabDragSource.tabStripFrame(
+            tabFrame: CGRect(x: -1_300, y: -100, width: 110, height: 26),
+            windowFrame: CGRect(x: -1_600, y: -900, width: 1_600, height: 900)
+        )
+        #expect(frame == CGRect(x: -1_600, y: -100, width: 1_600, height: 26))
+        #expect(WindowTabDragSource.shouldDetach(operation: [], cancelled: false, mouseReleased: true, point: CGPoint(x: -1_200, y: -200), tabStripFrame: frame))
     }
 
     @Test
@@ -112,6 +146,50 @@ struct DetachedTerminalWindowsTests {
         let original = TabDragPayload.window("@23")
         let data = try JSONEncoder().encode(original)
         #expect(try JSONDecoder().decode(TabDragPayload.self, from: data) == original)
+    }
+
+    @Test(arguments: [true, false])
+    func releasePointStaysTiedToMouseUpEvent(releasedInsideStrip: Bool) throws {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: CGRect(x: 100, y: 100, width: 800, height: 600),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let inside = CGPoint(x: 400, y: 563)
+        let outside = CGPoint(x: 400, y: 400)
+        let releaseLocation = releasedInsideStrip ? inside : outside
+        let laterLocation = releasedInsideStrip ? outside : inside
+        let release = try mouseEvent(.leftMouseUp, location: releaseLocation, window: window, timestamp: 1)
+        let laterMove = try mouseEvent(.mouseMoved, location: laterLocation, window: window, timestamp: 2)
+        #expect(release.window === window)
+        let laterPoint = WindowTabDragSource.screenPoint(for: laterMove)
+        let releasePoint = WindowTabDragSource.screenPoint(for: release)
+        #expect(releasePoint == window.convertPoint(toScreen: releaseLocation))
+        #expect(laterPoint == window.convertPoint(toScreen: laterLocation))
+        #expect(releasePoint != laterPoint)
+        let strip = window.convertToScreen(CGRect(x: 0, y: 550, width: 800, height: 26))
+        #expect(WindowTabDragSource.shouldDetach(
+            operation: [], cancelled: false, mouseReleased: true,
+            point: releasePoint, tabStripFrame: strip
+        ) == !releasedInsideStrip)
+    }
+
+    @Test
+    func windowlessReleaseAlreadyUsesScreenCoordinates() throws {
+        let point = CGPoint(x: -1_200, y: 500)
+        let event = try mouseEvent(.leftMouseUp, location: point, window: nil, timestamp: 1)
+        #expect(event.window == nil)
+        #expect(WindowTabDragSource.screenPoint(for: event) == point)
+    }
+
+    private func mouseEvent(_ type: NSEvent.EventType, location: CGPoint, window: NSWindow?, timestamp: TimeInterval) throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(
+            with: type, location: location, modifierFlags: [], timestamp: timestamp,
+            windowNumber: window?.windowNumber ?? 0, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 0
+        ))
     }
 
     @Test

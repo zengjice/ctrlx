@@ -33,9 +33,20 @@ struct WindowTabDragSource: NSViewRepresentable {
         cancelled: Bool,
         mouseReleased: Bool,
         point: CGPoint,
-        sourceFrame: CGRect
+        tabStripFrame: CGRect
     ) -> Bool {
-        operation.isEmpty && !cancelled && mouseReleased && !sourceFrame.insetBy(dx: -12, dy: -12).contains(point)
+        operation.isEmpty && !cancelled && mouseReleased && !tabStripFrame.insetBy(dx: -24, dy: -24).contains(point)
+    }
+
+    static func tabStripFrame(tabFrame: CGRect, windowFrame: CGRect) -> CGRect {
+        // Horizontal movement within the window remains tab reordering, even over an empty slot.
+        CGRect(x: windowFrame.minX, y: tabFrame.minY, width: windowFrame.width, height: tabFrame.height)
+    }
+
+    static func screenPoint(for event: NSEvent) -> CGPoint {
+        let point = event.locationInWindow
+        // Windowless mouse events already carry screen coordinates.
+        return event.window?.convertPoint(toScreen: point) ?? point
     }
 
     final class DragView: NSView, NSDraggingSource {
@@ -45,8 +56,9 @@ struct WindowTabDragSource: NSViewRepresentable {
         private var monitor: Any?
         private var mouseDown: NSEvent?
         private var dragSession: NSDraggingSession?
-        private var sourceFrame = CGRect.zero
+        private var tabStripFrame = CGRect.zero
         private var cancelled = false
+        private var mouseReleasePoint: CGPoint?
 
         override func hitTest(_ point: NSPoint) -> NSView? {
             nil
@@ -79,7 +91,11 @@ struct WindowTabDragSource: NSViewRepresentable {
                 mouseDown = nil
                 return event
             }
-            guard dragSession == nil else { return event }
+            if dragSession != nil {
+                // AppKit can finish the drag after a later mouse-move event has arrived.
+                if event.type == .leftMouseUp { mouseReleasePoint = WindowTabDragSource.screenPoint(for: event) }
+                return event
+            }
             switch event.type {
             case .leftMouseDown:
                 guard
@@ -109,6 +125,7 @@ struct WindowTabDragSource: NSViewRepresentable {
 
         private func beginDrag(_ event: NSEvent) {
             guard let window else { return }
+            mouseReleasePoint = nil
             let item = NSPasteboardItem()
             do {
                 let data = try JSONEncoder().encode(TabDragPayload.window(windowID))
@@ -128,7 +145,9 @@ struct WindowTabDragSource: NSViewRepresentable {
             preview.unlockFocus()
             let draggingItem = NSDraggingItem(pasteboardWriter: item)
             draggingItem.setDraggingFrame(bounds, contents: preview)
-            sourceFrame = window.frame
+            tabStripFrame = WindowTabDragSource.tabStripFrame(
+                tabFrame: window.convertToScreen(convert(bounds, to: nil)), windowFrame: window.frame
+            )
             dragSession = beginDraggingSession(with: [draggingItem], event: event, source: self)
             dragSession?.animatesToStartingPositionsOnCancelOrFail = false
         }
@@ -143,11 +162,11 @@ struct WindowTabDragSource: NSViewRepresentable {
                 WindowTabDragSource.shouldDetach(
                     operation: operation,
                     cancelled: cancelled,
-                    mouseReleased: NSApp.currentEvent?.type == .leftMouseUp,
-                    point: screenPoint,
-                    sourceFrame: sourceFrame
+                    mouseReleased: mouseReleasePoint != nil || NSApp.currentEvent?.type == .leftMouseUp,
+                    point: mouseReleasePoint ?? screenPoint,
+                    tabStripFrame: tabStripFrame
                 ) {
-                detach?(screenPoint)
+                detach?(mouseReleasePoint ?? screenPoint)
             }
         }
     }

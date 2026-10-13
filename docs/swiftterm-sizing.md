@@ -290,7 +290,7 @@ The window adds **110px vertical padding** for:
 
 ## Detached terminal windows (Mac Local and Viewer)
 
-Terminal Window labels can be dragged outside the native main window, or opened
+Terminal Window labels can be dragged away from the tab strip, or opened
 with **Open in Separate Window** in their context menu. This creates a native
 `DetachedTerminalScene`, not another tmux Window or an Agent fork. Files and
 Browser tabs are not detachable in this first implementation.
@@ -303,6 +303,11 @@ focus that scene. Closing the native window (including Cmd-W) releases only
 presentation ownership, and **Return to Main Window** also selects its entry.
 There is no cross-launch restoration of detached scenes.
 
+Each detached scene keeps a single selected tab with the same label and styling
+as the main window. Its tab context menu contains **Open Files in Main Window**,
+**Fork**, and **Return to Main Window**; there is no separate toolbar `Window`
+menu. The toolbar shares the main window's icon-only Fit button and help text.
+
 Each scene has its own `TerminalQuickActionRouter`, while pane state, ordered
 terminal streaming and Viewer connections remain shared. Existing pane layouts,
 Questions and editor overlays are reused. Files, Fork and terminal-link actions
@@ -310,15 +315,24 @@ carry the captured Host / stable Window / pane context back to the main
 workbench; they do not consult whichever tab was previously selected there.
 
 The explicit-Fit rule also applies here: moving, enlarging or entering fullscreen
-does not implicitly resize tmux. **Fit Terminal** uses the independent scene's
-geometry. Main-window Fit excludes detached Windows, preventing two presentations
+does not implicitly resize tmux. The **Fit** button uses the independent scene's
+terminal area, excluding its tab strip. Main-window Fit excludes detached Windows,
+preventing two presentations
 from competing over the same tmux dimensions. AppKit handles the native window's
 screen / backing-scale changes; focusing an off-screen window recenters it.
 
 Native tab dragging exports the existing `TabDragPayload` representation so
 in-strip ordering and split drop targets keep their existing behavior. Only an
-unclaimed mouse release outside the source native window detaches; Escape,
-accepted drops and releases within that window do not.
+unclaimed mouse release more than 24 points above/below the source tab row or
+beyond the source window's horizontal edge detaches. Dropping over the terminal
+inside a maximized main window therefore works. The row extends across the
+window for this test so horizontal reordering, including empty slots and the
+other split's tabs, never detaches. Escape, accepted drops, and small vertical
+movements do not detach. The source records the mouse-up event's location,
+converted through that event's window (windowless events already use screen
+coordinates), never the current global pointer position. A delayed AppKit
+completion must not mistake a later mouse-move for cancellation
+or use its location as the drop point.
 
 ## References
 
