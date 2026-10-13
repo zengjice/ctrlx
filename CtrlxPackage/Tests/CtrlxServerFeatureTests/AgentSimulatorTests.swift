@@ -886,6 +886,57 @@
             #expect(events.map(\.1) == [true, true, false, false])
         }
 
+        @Test
+        func annotationSuppressesNativeKeyboardAndReleasesFocus() throws {
+            _ = NSApplication.shared
+            let view = try SimulatorMetalView(metal: #require(MTLCreateSystemDefaultDevice()))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 400, height: 800),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            defer { view.close()
+                window.close()
+            }
+            #expect(window.makeFirstResponder(view))
+            var events: [Int] = []
+            var cancellations = 0
+            view.onKey = { usage, _ in events.append(usage) }
+            view.onCancelInput = { cancellations += 1 }
+            let down = try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 1, windowNumber: window.windowNumber, context: nil,
+                characters: "B", charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11
+            ))
+            let up = try #require(NSEvent.keyEvent(
+                with: .keyUp, location: .zero, modifierFlags: [], timestamp: 2, windowNumber: window.windowNumber, context: nil,
+                characters: "b", charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11
+            ))
+            let modifier = try #require(NSEvent.keyEvent(
+                with: .flagsChanged, location: .zero, modifierFlags: .shift, timestamp: 3, windowNumber: window.windowNumber, context: nil,
+                characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56
+            ))
+            view.keyDown(with: down)
+            events.removeAll()
+            let generation = view.renderState.generation
+            view.setInputSuppressed(true)
+            #expect(window.firstResponder !== view && view.isInputSuppressed)
+            #expect(cancellations == 1)
+            view.keyUp(with: up)
+            view.keyDown(with: down)
+            view.flagsChanged(with: modifier)
+            view.setInputSuppressed(true)
+            #expect(events.isEmpty && cancellations == 1)
+            #expect(view.renderState.generation == generation)
+            #expect(view.window === window)
+            view.setInputSuppressed(false)
+            view.keyDown(with: down)
+            view.keyUp(with: up)
+            #expect(events == [225, 5, 225, 5])
+        }
+
         @Test func initialUnknownOrientationWaitsForValidGeometry() throws {
             let view = try SimulatorMetalView(metal: #require(MTLCreateSystemDefaultDevice()))
             defer { view.close() }

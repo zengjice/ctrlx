@@ -13,6 +13,7 @@ final class AnnotationTerminalHandoff {
     enum Source: Equatable {
         case browser(UUID)
         case file(UUID)
+        case simulator(UUID)
     }
 
     struct Request: Equatable {

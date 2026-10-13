@@ -2,13 +2,16 @@ import CtrlxNetworking
 import ImageIO
 import SwiftUI
 
-/// Paired clients only observe. No keyboard, gesture or control-lease handlers.
+/// Paired clients only observe or annotate screenshots, without taking simulator control.
 public struct RemoteSimulatorView: View {
     private let tab: RemoteSimulatorTab
     private let client: ViewerRelayClient
     @State private var session: RemoteSimulatorSession
     @State private var image: CGImage?
     @State private var decodingError: String?
+    @State private var captureRequest: UUID?
+    @State private var isAnnotating = false
+    @Environment(\.browserAnnotationContext) private var annotationContext
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
 
@@ -24,31 +27,54 @@ public struct RemoteSimulatorView: View {
                 Label(tab.title, symbol: .iphone).lineLimit(1)
                 Spacer()
                 Text("Host · Read only").font(.caption).foregroundStyle(.secondary)
-            }.padding(8)
+                Button { captureRequest = UUID() } label: {
+                    Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
+                }
+                .disabled(image == nil || !client.isHostConnected || annotationContext?.isAvailable != true)
+                .help("Mark a screenshot and add it to an Agent input")
+                .accessibilityIdentifier("simulator-annotate")
+            }
+            .disabled(isAnnotating)
+            .padding(8)
             Divider()
             if let error = client.isHostConnected ? (session.error ?? decodingError) : "Host disconnected" {
                 Text(error).font(.caption).foregroundStyle(.secondary).padding(6)
             }
-            GeometryReader { geometry in
-                ZStack {
-                    Color.black
-                    if let image {
-                        Image(decorative: image, scale: 1).resizable().scaledToFit()
-                    } else {
-                        ProgressView().tint(.white)
+            BrowserAnnotationSurface(
+                preferredTarget: preferredTarget,
+                requiresRecipientSelection: preferredTarget == nil,
+                capture: { try await session.annotationScreenshot() },
+                onEditingChanged: { editing in
+                    isAnnotating = editing
+                    if editing {
+                        session.stop()
                     }
-                }
-                .onChange(of: geometry.size, initial: true) { _, size in
-                    updateDimension(size)
-                }
-                .onChange(of: displayScale) { _, _ in updateDimension(geometry.size) }
-                .onChange(of: session.frame.map { CGSize(width: $0.width, height: $0.height) }) { _, _ in
-                    updateDimension(geometry.size)
+                },
+                captureRequest: captureRequest,
+                showsCaptureButton: false,
+                identifierPrefix: "simulator"
+            ) {
+                GeometryReader { geometry in
+                    ZStack {
+                        Color.black
+                        if let image {
+                            Image(decorative: image, scale: 1).resizable().scaledToFit()
+                        } else {
+                            ProgressView().tint(.white)
+                        }
+                    }
+                    .onChange(of: geometry.size, initial: true) { _, size in
+                        updateDimension(size)
+                    }
+                    .onChange(of: displayScale) { _, _ in updateDimension(geometry.size) }
+                    .onChange(of: session.frame.map { CGSize(width: $0.width, height: $0.height) }) { _, _ in
+                        updateDimension(geometry.size)
+                    }
                 }
             }
         }
-        .task(id: scenePhase == .active && client.isHostConnected) {
-            guard scenePhase == .active, client.isHostConnected else { session.stop()
+        .task(id: scenePhase == .active && client.isHostConnected && !isAnnotating) {
+            guard scenePhase == .active, client.isHostConnected, !isAnnotating else { session.stop()
                 return
             }
             await session.watch()
@@ -65,6 +91,10 @@ public struct RemoteSimulatorView: View {
         }
         .onDisappear { session.stop() }
         .accessibilityIdentifier("remote-simulator-content")
+    }
+
+    private var preferredTarget: AgentImageTarget? {
+        annotationContext?.targets.first { $0.paneID == tab.sourcePaneID }
     }
 
     private func updateDimension(_ size: CGSize) {

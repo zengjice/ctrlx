@@ -7,7 +7,7 @@ final public class RemoteSimulatorSession {
     public private(set) var frame: RemoteSimulatorFrame?
     public private(set) var error: String?
     public var frameMaxDimension = 1_024
-    @ObservationIgnored private let tab: RemoteSimulatorTab
+    @ObservationIgnored private var tab: RemoteSimulatorTab
     @ObservationIgnored private let send: @MainActor (BrowseSimulator) async throws -> RemoteSimulatorResponse
     @ObservationIgnored private var epoch = UUID()
 
@@ -36,16 +36,9 @@ final public class RemoteSimulatorSession {
         }
         while !Task.isCancelled, epoch == current {
             do {
-                let response = try await send(BrowseSimulator(
-                    sessionName: tab.sessionName,
-                    tabID: tab.id,
-                    frameMaxDimension: frameMaxDimension
-                ))
-                try Task.checkCancellation()
+                let response = try await requestFrame(tab, maxDimension: frameMaxDimension)
                 guard epoch == current else { return }
-                guard response.tab.id == tab.id, response.tab.sessionName == tab.sessionName, response.frame.isValid else {
-                    throw ViewerRelayClientError.commandFailed("Invalid simulator preview")
-                }
+                tab = response.tab
                 frame = response.frame
                 error = nil
             } catch is CancellationError { return }
@@ -60,5 +53,28 @@ final public class RemoteSimulatorSession {
     public func stop() {
         epoch = UUID()
         frame = nil
+    }
+
+    public func annotationScreenshot() async throws -> Data {
+        let source = tab
+        let response = try await requestFrame(source, maxDimension: RemoteSimulatorFrame.maximumDimension)
+        guard response.tab.windowID == source.windowID, response.tab.sourcePaneID == source.sourcePaneID else {
+            throw ViewerRelayClientError.commandFailed("The simulator moved during capture. Try again.")
+        }
+        return response.frame.jpeg
+    }
+
+    private func requestFrame(_ tab: RemoteSimulatorTab, maxDimension: Int) async throws -> RemoteSimulatorResponse {
+        try Task.checkCancellation()
+        let response = try await send(BrowseSimulator(
+            sessionName: tab.sessionName, tabID: tab.id, frameMaxDimension: maxDimension
+        ))
+        try Task.checkCancellation()
+        guard
+            response.tab.id == tab.id, response.tab.sessionName == tab.sessionName,
+            response.frame.isValid else {
+            throw ViewerRelayClientError.commandFailed("The simulator changed or its preview is invalid. Reopen the tab and try again.")
+        }
+        return response
     }
 }
