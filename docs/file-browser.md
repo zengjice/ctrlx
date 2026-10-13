@@ -202,7 +202,9 @@ not a thumbnail or a newly rendered first page. It uses application-view capture
 not whole-screen recording, a conversion service or private Quick Look APIs.
 System Office rendering limitations still apply. Video pauses and reads one frame
 from the existing player, preserving mute state and remaining paused afterwards;
-it does not download a second asset or resume automatically. Audio-only previews
+it does not download a second asset or resume automatically. Capture tolerates the
+player clock settling after pause, but a seek, playback restart or item replacement
+during asynchronous rendering discards the pending frame. Audio-only previews
 cannot be annotated. A missing/unready capture fails visibly without opening a
 different file or app.
 
