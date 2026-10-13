@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.67 — Compact iOS session order controls
+
+- Merge `ux`: move Restore Automatic Order beside the new-session button in
+  each iOS Host header. Remove the separate ordering row and strategy text,
+  keep both controls at 44-point hit targets, and preserve the reset button's
+  accessibility label and disabled state when no manual order is saved.
+- Release validation: the bounded serial Swift regression passed with 3,069
+  tests reported and five opt-in probes skipped. Apple Intelligence evaluations
+  were excluded because the model is unavailable on this Mac. Both boundary
+  checks, 63 publisher/COS tests, the website build, Mac Debug build and arm64
+  iOS Simulator build passed. SwiftFormat passes for the changed range;
+  existing findings elsewhere in the file remain.
+- Distribution: publish the Mac package through COS with signature, source
+  metadata and complete public-download integrity checks, then install the
+  matching iOS release on the paired iPhone. On-device layout and accessibility
+  acceptance remain separate from build, signing and installation checks.
+
 ## 3.0.66 — Mac workspace shortcuts and iOS terminal interactions
 
 - Add common Mac shortcuts for new sessions and terminals, session search,
