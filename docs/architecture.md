@@ -71,8 +71,13 @@ Joining Viewers receive a private bootstrap and only subsequent bytes.
 `TerminalStreamService` batches on a 16 ms cadence with an 8 KiB limit and
 tracks Viewer ownership, not an unqualified subscriber count.
 
-Geometry belongs to the Host. Viewing a pane must not silently resize it;
-explicit Fit and creation-scoped sizing have separate contracts. Input, paste
+Geometry belongs to the Host. Entering a session or explicitly selecting a terminal
+tab fits that window once to the current client's viewport on Mac (local and remote)
+and iOS. Local and remote Fit preserve pane split proportions and affect all Viewers. Passive
+Host selection/layout snapshots, rotation, keyboard and font changes do not arm
+another fit; this prevents clients from competing over window dimensions. Remote
+fitting requires `supportsTerminalFit`. Creation-scoped sizing retains its own
+preference and one-shot request. Input, paste
 and question expansion use ordered queues. Files/browser I/O uses bounded
 separate work so it cannot block keyboard dispatch.
 

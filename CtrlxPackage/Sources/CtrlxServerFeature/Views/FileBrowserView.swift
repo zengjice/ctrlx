@@ -347,12 +347,40 @@ final class SessionFileTabsState {
     var agentBrowserStates: [UUID: AgentBrowserTabState] = [:]
     var simulatorStates: [UUID: SimulatorTabState] = [:]
     var remoteBrowserTabs: [UUID: RemoteBrowserTab] = [:]
+    @ObservationIgnored private var closingHostBrowserTabIDs: Set<UUID> = []
 
-    /// Returns whether reconciliation collapsed the split, so the view can repair terminal focus.
+    struct HostBrowserTabSyncResult {
+        enum TerminalFit: Equatable {
+            case left
+            case right(String)
+        }
+
+        let restoreLeftWindow: Bool
+        let automaticFit: TerminalFit?
+    }
+
+    func beginClosingHostBrowserTab(_ id: UUID) {
+        closingHostBrowserTabIDs.insert(id)
+    }
+
+    func cancelClosingHostBrowserTab(_ id: UUID) {
+        closingHostBrowserTabIDs.remove(id)
+    }
+
+    /// A catalog update confirms closure independently of command-reply ordering.
+    /// Only an explicit Close followed by a return to a terminal grants a Fit.
     @discardableResult
-    func syncHostBrowserTabs(_ values: [RemoteBrowserTab], sessionWindowIDs: [String]) -> Bool {
+    func syncHostBrowserTabs(_ values: [RemoteBrowserTab], sessionWindowIDs: [String]) -> HostBrowserTabSyncResult {
         let live = Set(values.map(\.id))
         let removed = Set(remoteBrowserTabs.keys).subtracting(live)
+        let closedByUser = removed.intersection(closingHostBrowserTabIDs)
+        let closedLeft = selectedBrowserTabId.map { closedByUser.contains($0) } == true
+        let closedRight: Bool = if case let .browser(id) = selectedRight {
+            closedByUser.contains(id)
+        } else {
+            false
+        }
+        closingHostBrowserTabIDs.subtract(removed)
         openBrowserTabs.removeAll { removed.contains($0.id) }
         for id in removed {
             remoteBrowserTabs.removeValue(forKey: id)
@@ -372,7 +400,18 @@ final class SessionFileTabsState {
         for index in openBrowserTabs.indices where !live.contains(openBrowserTabs[index].id) {
             openBrowserTabs[index].isViewerLocal = true
         }
-        return reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+        let restoreLeftWindow = reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+        let automaticFit: HostBrowserTabSyncResult.TerminalFit?
+        if closedLeft, selectedFileTabId == nil, selectedBrowserTabId == nil {
+            automaticFit = .left
+        } else if closedRight, case let .window(id) = selectedRight {
+            automaticFit = .right(id)
+        } else if closedRight, !isSplit, selectedFileTabId == nil, selectedBrowserTabId == nil {
+            automaticFit = .left
+        } else {
+            automaticFit = nil
+        }
+        return HostBrowserTabSyncResult(restoreLeftWindow: restoreLeftWindow, automaticFit: automaticFit)
     }
 
     @discardableResult

@@ -494,7 +494,7 @@ public struct ResizeTmuxPane: CommandSpec, Equatable {
     /// Terminal height in rows
     public let height: Int
 
-    /// `true` only for a direct click on the Viewer's resize-to-fit button.
+    /// `true` for Fit, explicit terminal-tab entry, or creation-scoped sizing.
     /// Missing and `false` values are rejected by current Hosts.
     public let userInitiated: Bool?
 
