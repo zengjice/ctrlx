@@ -377,12 +377,16 @@ split surfaces include the descriptor's session name in their view identity so
 a late catalog cannot leave an owned remote browser or simulator session targeting the old
 name. Browser tab IDs, ordering, split placement and selection remain unchanged.
 
-The explicit-Fit rule also applies here: moving, enlarging or entering fullscreen
-does not implicitly resize tmux. The **Fit** button uses the independent scene's
-terminal area, excluding its tab strip. Main-window Fit excludes detached Windows,
-preventing two presentations
-from competing over the same tmux dimensions. AppKit handles the native window's
-screen / backing-scale changes; focusing an off-screen window recenters it.
+Entering a terminal tab requests one automatic Fit after its viewport is ready,
+including in a detached workspace. Closing Files or a browser back to a terminal
+also fits once; returning to another file/browser tab does not. Passive geometry
+changes, moving, enlarging or entering fullscreen do not schedule another Fit.
+The **Fit** button uses the independent scene's terminal area, excluding its tab
+strip. Both manual and automatic Fit respect terminal ownership, so the main
+window cannot resize detached Windows. Detached workspaces use their transferred
+tab state immediately instead of waiting for main-window layout persistence.
+AppKit handles native screen/backing-scale changes; focusing an off-screen window
+recenters it.
 
 Native tab dragging exports a `WorkbenchTabDrag` envelope containing the source
 scene, Host and Session plus the existing `TabDragPayload`; the receiving

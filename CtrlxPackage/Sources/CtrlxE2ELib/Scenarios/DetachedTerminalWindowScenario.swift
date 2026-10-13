@@ -6,8 +6,7 @@ public enum DetachedTerminalWindowScenario {
     ) {
         setupWindows
         TestStep.launchMacApp()
-        TestStep.macWaitForWindow(titled: "CtrlX", timeout: 10)
-        TestStep.macResizeWindow(width: 1_000, height: 600)
+        Shortcut.openPanesWindow()
         exercise(instance: 0)
     }
 

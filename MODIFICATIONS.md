@@ -7,6 +7,38 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.63 — Detached workspaces, voice input and direct COS distribution
+
+- Merge the `ux` and `macinput` work into the Mac release. Detach terminal tabs
+  into native windows and combine compatible tabs into independent workspaces,
+  preserving terminal ownership, pane input routing and file/browser selection.
+- Fit terminals once when entering their tabs or returning from Files/browser
+  content, including detached workspaces. Keep passive resizing and snapshot
+  updates from repeatedly changing tmux dimensions.
+- Add contextual Mac voice input with the shared iOS recognition/correction core,
+  bounded context, explicit cancellation and insertion without sending. Improve
+  agent command drafts, plugin reinstallation and paused video annotations.
+- Include the previously merged narrow status-bar layout fixes, session ordering,
+  browser reconnection and Host simulator reuse/read-only Viewer previews.
+- Publish packages and the installer directly from the Mac to COS. Verify the
+  complete public package before updating the installer under a publication lock;
+  retain immutable packages, installer backups and guarded rollback.
+- Validation: the bounded serial Swift regression passed with 3,040 tests
+  reported and five opt-in probes skipped; Apple Intelligence evaluations were
+  excluded because the model is unavailable on this Mac. Both boundary checks,
+  196 repository script tests, 63 publisher/COS tests, the website build and the
+  Mac Debug build passed. The isolated local detached-window scenario passed
+  all 33 steps after fixing its missing window-opening setup. Remote Viewer UI
+  acceptance stopped during two-instance pairing setup and remains unverified.
+  Broad SwiftFormat lint still reports existing style findings in the merged
+  branches; the conflict-resolution and integration files pass their focused
+  check (excluding the formatter's `redundantSelf` parser failure).
+  The iOS arm64 Simulator build also passed. Final Release packaging and public
+  download integrity are verified by the Mac publisher before installer promotion.
+- Distribution: Mac package only. Shared iOS changes require a separate iOS
+  release/install; this publication does not deploy Relay or replace the running
+  local app.
+
 ## 3.0.62 — Visible session status in the Mac menu bar
 
 - Keep local and remote session status icons visible in the menu bar dropdown

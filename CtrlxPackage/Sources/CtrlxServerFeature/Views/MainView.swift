@@ -3034,7 +3034,7 @@ public struct MainView: View {
         // An image handoff can finish after the user has left its session.
         guard
             selectedRemoteSession?.hostId == hostID,
-            (selectedRemoteSession?.sessionName ?? selectedWindow?.sessionName) == target.sessionName else { return }
+            (selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName) == target.sessionName else { return }
         terminalQuickActions.requestFocus(hostID: hostID, paneID: target.paneID)
         let tabs = hostID.map { remoteSessionTabsStates[remoteTabsKey(hostId: $0, sessionName: target.sessionName)] }
             ?? sessionFileTabsStates[target.sessionName]
