@@ -1,10 +1,12 @@
 #if os(iOS)
+    import CtrlxCommon
     import CtrlxNetworking
-    @testable import SwiftTerm
+    import Dependencies
     import Testing
     import UIKit
     import XCTest
     @testable import CtrlxFeature
+    @testable import SwiftTerm
 
     @MainActor
     @Suite("Terminal input-row selection routing", .serialized)
@@ -108,7 +110,12 @@
 
         @Test("System paste stays one semantic operation regardless of mirrored bracketed mode", arguments: [false, true])
         func systemPaste(bracketed: Bool) async throws {
-            let (window, view) = await makeView()
+            let text = "first\r\n中🙂\nlast\n"
+            let (window, view) = await withDependencies {
+                $0[ClipboardClient.self].getString = { text }
+            } operation: {
+                await makeView()
+            }
             defer { close(window, view) }
             let proxy = try inputProxy(in: window)
             view.feed(text: bracketed ? "\u{1b}[?2004h> input" : "\u{1b}[?2004l> input")
@@ -118,8 +125,6 @@
             view.onPasteText = { pastes.append($0) }
             view.onInput = { keys += $0 }
             view.onRawInput = { raw.append($0) }
-            let text = "first\r\n中🙂\nlast\n"
-            UIPasteboard.general.string = text
             try sendMenuAction(#selector(view.paste(_:)), from: proxy)
             #expect(pastes == [text])
             #expect(keys.isEmpty)
@@ -132,6 +137,65 @@
             view.invalidateInput()
             view.paste(nil)
             #expect(pastes.count == 1)
+        }
+
+        @Test("System image paste takes priority over text and keeps one captured payload", arguments: [false, true])
+        func systemImagePaste(readable: Bool) async throws {
+            let image = readable ? ClipboardImage(data: Data([1, 2, 3]), format: .png) : nil
+            try await withDependencies {
+                $0[ClipboardClient.self].hasImage = { true }
+                $0[ClipboardClient.self].getImage = { image }
+                $0[ClipboardClient.self].getString = { "image text fallback" }
+            } operation: {
+                let (window, view) = await makeView()
+                defer { close(window, view) }
+                let proxy = try inputProxy(in: window)
+                var images: [ClipboardImage?] = []
+                var text: [String] = []
+                var keys: [TmuxKey] = []
+                var raw: [Data] = []
+                view.onPasteImage = { images.append($0) }
+                view.onPasteText = { text.append($0) }
+                view.onInput = { keys += $0 }
+                view.onRawInput = { raw.append($0) }
+
+                try sendMenuAction(#selector(view.paste(_:)), from: proxy)
+                #expect(images == [image])
+                try sendMenuAction(#selector(view.paste(_:)), from: proxy)
+                #expect(images == [image, image])
+                #expect(text.isEmpty)
+                #expect(keys.isEmpty)
+                #expect(raw.isEmpty)
+                #expect(!view.selectionActive)
+
+                view.updateInput(isEnabled: false, keyboardRequested: false)
+                view.paste(nil)
+                #expect(images.count == 2)
+                view.invalidateInput()
+                #expect(view.onPasteImage == nil)
+                view.paste(nil)
+                #expect(images.count == 2)
+            }
+        }
+
+        @Test("An image-enabled terminal still pastes plain text once")
+        func plainTextWithImageHandler() async throws {
+            let text = "first\r\n中🙂\nlast\n"
+            try await withDependencies {
+                $0[ClipboardClient.self].hasImage = { false }
+                $0[ClipboardClient.self].getString = { text }
+            } operation: {
+                let (window, view) = await makeView()
+                defer { close(window, view) }
+                let proxy = try inputProxy(in: window)
+                var pastes: [String] = []
+                var imageCount = 0
+                view.onPasteText = { pastes.append($0) }
+                view.onPasteImage = { _ in imageCount += 1 }
+                try sendMenuAction(#selector(view.paste(_:)), from: proxy)
+                #expect(pastes == [text])
+                #expect(imageCount == 0)
+            }
         }
 
         @Test("Body double-tap Copy ignores the native shadow editor")
@@ -629,7 +693,11 @@
             try XCTSkipUnless(ProcessInfo.processInfo.environment["CTRLX_MENU_UI_TESTS"] == "1")
             let fixture = TerminalSelectionRoutingTests()
             for tapCount in [2, 3] {
-                let (window, view) = await fixture.makeView()
+                let (window, view) = await withDependencies {
+                    $0[ClipboardClient.self] = .liveValue
+                } operation: {
+                    await fixture.makeView()
+                }
                 defer { fixture.close(window, view) }
                 view.feed(text: "body\r\n> hello world")
                 let proxy = try XCTUnwrap(window.rootViewController?.view.subviews

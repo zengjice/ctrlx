@@ -84,6 +84,7 @@
         let onCopyActionChange: @MainActor ((@MainActor () -> Void)?) -> Void
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
         let onTerminalPaste: @MainActor (String) -> Void
+        let onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         let onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
         let preparationID: UUID?
         let onPresentationChange: @MainActor (TerminalPresentationStatus) -> Void
@@ -148,6 +149,7 @@
             onTerminalInput: @escaping @MainActor ([TmuxKey]) -> Void = { _ in },
             onTerminalInputQueued: @escaping @MainActor () -> Void = { },
             onTerminalPaste: @escaping @MainActor (String) -> Void = { _ in },
+            onPasteImage: (@MainActor (ClipboardImage?) -> Void)? = nil,
             onVoiceInputContextProviderChange: @escaping @MainActor (
                 TerminalVoiceInputContextProvider?
             ) -> Void = { _ in },
@@ -189,6 +191,7 @@
             self.preparationID = preparationID
             self.onPresentationChange = onPresentationChange
             self.onTerminalPaste = onTerminalPaste
+            self.onPasteImage = onPasteImage
             self.coordinator = StreamCoordinator(
                 paneId: paneId,
                 fontName: settings.terminalFontName,
@@ -531,6 +534,7 @@
                                 onTerminalPaste(text)
                             }
                         },
+                        onPasteImage: terminalImagePasteAction,
                         onViewportGridChange: onViewportGridChange,
                         onInitialPresentation: {
                             guard coordinator.terminalState === state else { return }
@@ -575,6 +579,14 @@
                     .buttonStyle(.borderedProminent)
                     .disabled(!isConnected)
                 }
+            }
+        }
+
+        private var terminalImagePasteAction: (@MainActor (ClipboardImage?) -> Void)? {
+            guard let onPasteImage else { return nil }
+            return { image in
+                guard canSendTerminalInput, coordinator.isReadyForToolbarInput else { return }
+                onPasteImage(image)
             }
         }
 
@@ -1397,6 +1409,7 @@
         /// Callback for raw escape sequences (e.g., SGR mouse events) ready for relay transmission
         let onRawInput: @MainActor (Data) -> Void
         let onPasteText: @MainActor (String) -> Void
+        let onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
         let onInitialPresentation: @MainActor () -> Void
 
@@ -1435,6 +1448,7 @@
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
             terminalView.onPasteText = onPasteText
+            terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
             terminalView.onOpenHostURL = onOpenHostURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
@@ -1610,6 +1624,7 @@
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
             terminalView.onPasteText = onPasteText
+            terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
             terminalView.onOpenHostURL = onOpenHostURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions

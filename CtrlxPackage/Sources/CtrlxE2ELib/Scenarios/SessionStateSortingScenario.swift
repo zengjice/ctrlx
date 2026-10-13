@@ -7,9 +7,8 @@ import Foundation
 ///
 /// Both sides run the default `statusPriority` mode (attention >
 /// working > idle > plain terminal, session-name tiebreak): the host sorts
-/// with it directly, and iOS mirrors it via the `sidebarSortMode` the host
-/// pushes with its session state, applied through the shared
-/// `SessionSortData.sortedRemoteSessions`.
+/// with it directly, and iOS uses the activity-first default of the shared
+/// `SessionSortData.sortedRemoteSessions`, independent of Host settings.
 ///
 /// Fixture: two idle agent sessions ("alpha-agent" → AlphaProject,
 /// "beta-agent" → BetaProject) and one plain terminal session ("zed-term").

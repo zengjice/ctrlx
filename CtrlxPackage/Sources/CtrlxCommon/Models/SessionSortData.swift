@@ -5,9 +5,9 @@ import Foundation
 
 /// Data needed to sort a session, extracted uniformly from local or remote
 /// sessions. Lives in CtrlxCommon so the macOS sidebar/menu AND the iOS
-/// session list all order sessions with the same algorithm — iOS mirrors the
-/// host's sorting via the `sidebarSortMode` the host pushes with its session
-/// state. The `LocalTmuxSession` builders live in CtrlxServerFeature
+/// session list all order sessions with the same algorithm. iOS uses the
+/// activity-first default; Mac surfaces use their configured sort mode.
+/// The `LocalTmuxSession` builders live in CtrlxServerFeature
 /// (`SessionFieldsView.swift`); the remote builders are here.
 public struct SessionSortData {
     public let sessionName: String
@@ -128,12 +128,11 @@ public struct SessionSortData {
         )
     }
 
-    /// THE remote per-host session ordering — shared by the Mac viewer's
-    /// `RemoteHostSidebarSection`, the menu bar dropdown, and the iOS session
-    /// list, so every viewer surface orders a host's sessions identically.
+    /// Shared remote ordering. Automatic order defaults to attention, working,
+    /// idle, then plain terminals; Mac callers can supply their configured mode.
     public static func sortedRemoteSessions(
         _ sessions: [TmuxSession],
-        mode: SidebarSortMode,
+        mode: SidebarSortMode = .statusPriority,
         sidebarFields: [SidebarField],
         sidebarTerminalFields: [SidebarField],
         homeDirectory: String?,
@@ -165,18 +164,26 @@ public extension SidebarSortMode {
             case .alphabetical:
                 return a.primaryLabel.localizedCaseInsensitiveCompare(b.primaryLabel) == .orderedAscending
             case .claudeFirst:
-                if a.hasClaude != b.hasClaude { return a.hasClaude }
+                if a.hasClaude != b.hasClaude {
+                    return a.hasClaude
+                }
                 return a.sessionName.localizedCaseInsensitiveCompare(b.sessionName) == .orderedAscending
             case .statusPriority:
-                if a.statusPriority != b.statusPriority { return a.statusPriority < b.statusPriority }
+                if a.statusPriority != b.statusPriority {
+                    return a.statusPriority < b.statusPriority
+                }
                 return a.sessionName.localizedCaseInsensitiveCompare(b.sessionName) == .orderedAscending
             case .statusPriorityIdleFirst:
-                if a.statusPriorityIdleFirst != b.statusPriorityIdleFirst { return a.statusPriorityIdleFirst < b.statusPriorityIdleFirst }
+                if a.statusPriorityIdleFirst != b.statusPriorityIdleFirst {
+                    return a.statusPriorityIdleFirst < b.statusPriorityIdleFirst
+                }
                 return a.sessionName.localizedCaseInsensitiveCompare(b.sessionName) == .orderedAscending
             case .recentActivity:
                 let aTime = a.latestEventTimestamp ?? .distantPast
                 let bTime = b.latestEventTimestamp ?? .distantPast
-                if aTime != bTime { return aTime > bTime }
+                if aTime != bTime {
+                    return aTime > bTime
+                }
                 return a.sessionName.localizedCaseInsensitiveCompare(b.sessionName) == .orderedAscending
             case .sessionName:
                 return a.sessionName.localizedCaseInsensitiveCompare(b.sessionName) == .orderedAscending

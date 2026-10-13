@@ -72,8 +72,11 @@ enum TerminalCursorTapNavigation {
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
         var onPasteText: (@MainActor (String) -> Void)?
+        var onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         var onOpenPath: (@MainActor (String) -> Void)?
         var onOpenHostURL: (@MainActor (URL) -> Void)?
+
+        @Dependency(ClipboardClient.self) private var clipboard
 
         /// Sends a guarded intent through the pane's ordered input queue, never
         /// raw Shift+Left. False means the stream is not currently ready.
@@ -377,6 +380,7 @@ enum TerminalCursorTapNavigation {
             questionExpansion.invalidate()
             onExpandCodexQuestions = nil
             onPasteText = nil
+            onPasteImage = nil
             inputEnabled = false
             inputProxy.inputEnabled = false
             inputFocusUpdates.invalidate()
@@ -878,7 +882,15 @@ enum TerminalCursorTapNavigation {
         }
 
         override func paste(_ sender: Any?) {
-            guard inputEnabled, let text = UIPasteboard.general.string, !text.isEmpty else { return }
+            guard inputEnabled else { return }
+            if let onPasteImage, clipboard.hasImage() {
+                let image = clipboard.getImage()
+                prepareForExternalInput()
+                clearSelection()
+                onPasteImage(image)
+                return
+            }
+            guard let text = clipboard.getString(), !text.isEmpty else { return }
             prepareForExternalInput()
             clearSelection()
             onPasteText?(text)
