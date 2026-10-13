@@ -435,7 +435,7 @@
         private var sortedSessions: [TmuxSession] {
             SessionSortData.sortedRemoteSessions(
                 sessions,
-                mode: sessionStore.sidebarSortMode(for: host.id) ?? .statusPriorityIdleFirst,
+                mode: sessionStore.sidebarSortMode(for: host.id) ?? .statusPriority,
                 sidebarFields: SidebarField.defaultFields,
                 sidebarTerminalFields: SidebarField.defaultTerminalFields,
                 homeDirectory: sessionStore.homeDirectoryByHost[host.id],
@@ -487,6 +487,11 @@
                     showUsername: showUsername,
                     onNewSession: onNewSession
                 )
+                .contentShape(Rectangle())
+                .contextMenu {
+                    Button("Restore Automatic Order") { settings.setRemoteSessionOrder([], for: host.id) }
+                        .disabled(settings.remoteSessionOrder(for: host.id).isEmpty)
+                }
             }
         }
 

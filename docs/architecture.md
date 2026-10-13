@@ -163,12 +163,22 @@ updates, but verify decoding, capability gating and envelope limits per change.
   SwiftUI's `DragGesture` before its end callback.
 - Before the first drag, `sidebarSortMode` determines the order. A drag captures
   the displayed order as a device-local preference; state changes do not re-rank it.
+- The default automatic order is attention → working → idle → plain terminal,
+  with session-name ordering within each group. Saved sort-mode choices are
+  preserved. Mac uses its own sort mode for local and remote sections; iOS uses
+  the mode advertised by each Host, falling back to the same default for older
+  Hosts. Mac Settings → Sidebar → Sort Order changes the strategy.
 - `AppSettings.localSessionOrder` is separate from remote host ranks. Existing
   pane refreshes reconcile local renames by matching pane-ID sets, remove closed
   sessions and append new sessions. Unchanged ranks do not write preferences.
 - The sidebar, menu bar and keyboard session cycling use the same local sorter.
 - Right-click Local or a remote Host header → **Restore Automatic Order** to
-  clear only that section's preference. No ordering is sent to tmux or the Relay.
+  clear only that section's preference. On iOS, long-press the Host section
+  header in the session list → **Restore Automatic Order**. Restoring clears
+  that device's manual rank for the section and resumes its configured automatic
+  strategy; it does not change the strategy. The action is disabled when no
+  manual rank is saved.
+  No manual ordering is sent to tmux or the Relay.
 
 ## Concurrency and platform services
 
