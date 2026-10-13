@@ -88,6 +88,8 @@ public struct MenuBarExtraView: View {
                 }
             }
         }
+        // macOS 27 hides menu images by default; these icons convey session state.
+        .labelStyle(.titleAndIcon)
 
         Divider()
 
