@@ -32,7 +32,7 @@ CtrlX 目前要求 Apple Silicon、macOS 15 或更新版本，并已安装 tmux�
 
 ```bash
 brew install tmux
-curl -fsSL https://ctrlx.zengjice.com:7001/install/mac.sh | bash
+curl -fsSL https://ctrlx-1256844776.cos.ap-guangzhou.myqcloud.com/macos/mac.sh | bash
 ```
 
 安装器会校验安装包并仅替换 `/Applications/CtrlX.app`，已有 tmux session 不会中断。当前

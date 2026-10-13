@@ -36,7 +36,7 @@ CtrlX currently requires Apple Silicon, macOS 15 or later, and tmux:
 
 ```bash
 brew install tmux
-curl -fsSL https://ctrlx.zengjice.com:7001/install/mac.sh | bash
+curl -fsSL https://ctrlx-1256844776.cos.ap-guangzhou.myqcloud.com/macos/mac.sh | bash
 ```
 
 The installer verifies the package and replaces only `/Applications/CtrlX.app`;

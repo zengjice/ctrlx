@@ -45,30 +45,53 @@ python3 /path/to/publish-ctrlx-macos.py --root "$PWD" --yes
 
 `CTRLX_ROOT` remains supported; without either option, the maintainer's usual
 primary checkout remains the default. This path uses
-`scripts/package-local-macos.sh` (Apple Development
-signature, not notarized), verifies the DMG and atomically updates the Qcloud
-installer. It does not install locally or redeploy the Relay.
+`scripts/package-local-macos.sh` (Apple Development signature, not notarized).
+The publishing Mac uploads directly to COS using its exported `COS_SECRET_ID`
+and `COS_SECRET_KEY`. Neither publication nor installer/package downloads require
+SSH, SCP or the Qcloud host. Publication does not install locally or deploy the Relay.
 
-By default, the publisher verifies the complete DMG through the same HTTPS URL
-on the cloud host, resolving its domain to loopback to avoid public-IP bandwidth
-limits. TLS hostname/certificate and HTTP routing checks remain enabled; the
-response streams into SHA-256 without a temporary copy.
-The publishing Mac then checks a bounded 64 KiB HTTP Range response against the
-local DMG. Both checks must pass before switching the installer. This verifies
-served content and independent client reachability without downloading the full
-package back to the Mac; it is not a full client-network transfer test.
+The sibling maintainer files `publish-ctrlx-macos.py`, `ctrlx-cos.py` and
+`install-ctrlx-macos.sh` must be kept together, outside this public repository.
+The local installer template is rendered with the release's version, build, source
+revision, build stamp and DMG SHA-256. Its stable COS entrypoint is `macos/mac.sh`;
+DMGs and content-addressed installer backups also live under `macos/`.
+The old host's installer is a legacy entrypoint and is not updated by this flow.
 
-For explicit end-to-end download troubleshooting, add `--full-download-verify`
-to the publisher's `--yes` command to use the previous full Mac download/hash
-check instead. The publication report records the verification mode. Signature,
-source identity, atomic installer replacement and rollback checks are unchanged.
+`--check-cos` checks local credentials and bucket versioning without requiring
+release-ready source. Keys and signed request headers are never put in arguments,
+logs or reports. The sibling runbook defines the bucket and CAM permissions.
+DMGs use a bounded single PUT with Content-MD5 and `x-cos-forbid-overwrite`;
+bucket versioning must never have been enabled. The publisher checks this before
+building and again before uploading. Packages over 5 GiB require a separately
+validated multipart implementation.
+
+Before switching the installer, the Mac anonymously streams the complete public
+COS DMG through SHA-256, checks its size, and compares a bounded 64 KiB HTTP Range
+response with the local artifact. `--full-download-verify` instead keeps a complete
+local verification copy, removed by successful publication receipt cleanup.
+The installer retains its download hash, app signature/source checks, graceful
+app exit and installation rollback. Downloads and redirects require HTTPS.
+
+Installer promotion uses a COS lock object created with overwrite forbidden.
+While holding it, the publisher rechecks the previous installer, saves an immutable
+backup, replaces `mac.sh`, and verifies the anonymous public response. Failure
+restores only this attempt's installer under the same lock. The stable entrypoint
+uses `Cache-Control: no-store`. Lock release and initial-publication rollback need
+`cos:DeleteObject` only for `macos/.publish-lock.json` and `macos/mac.sh`; release
+artifacts are never deleted. A killed publisher may leave a lock: inspect the
+recorded attempt and confirm it has stopped before manually clearing that lock;
+there is no automatic expiry or lock stealing.
+
+Logs and receipts retain the existing worktree-local `dist/qcloud-release/` path
+for cleanup compatibility. First COS publication creates the new installer URL;
+repeating an exact release verifies it without replacing the package or installer.
 
 Mac/iOS local packaging and the formal release script accept any Git worktree
 root. Build caches and artifacts stay in that worktree's `.build-local/` and
 `dist/`; they never write into another worktree. Provision the selected
 worktree's ignored local signing config before building. Local development
 packaging keeps its existing uncommitted-build workflow; formal releases and
-the Qcloud publisher still require clean, exactly tagged source.
+the COS publisher still require clean, exactly tagged source.
 
 ### Local overwrite installation
 
