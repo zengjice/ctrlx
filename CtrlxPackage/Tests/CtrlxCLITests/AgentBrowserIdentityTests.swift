@@ -176,8 +176,8 @@ struct AgentBrowserIdentityTests {
         #expect(saved["epoch"] == nil)
     }
 
-    @Test(arguments: ["codex", "claude"])
-    func registeredGrantsNeverActivateOrRegisterAgainstANewHost(_ name: String) throws {
+    @Test(arguments: ["codex", "claude"], ["read", "click", "fill", "navigate", "close", "upstream", "batch"])
+    func pageOperationsNeverActivateOrRegisterAgainstANewHost(_ name: String, _ operation: String) throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let owner = process(getppid(), name: name, uid: getuid())
@@ -193,9 +193,62 @@ struct AgentBrowserIdentityTests {
                 throw AgentBrowserTransport.Failure("Unexpected startup")
             })
         } operation: {
-            let (_, value) = try AgentBrowserTransport.registeredContext(root: root)
+            let (_, value) = try AgentBrowserTransport.registeredContext(for: operation, root: root)
             #expect(value["socket"] as? String == "/fixture/old-control.sock")
             #expect(value["epoch"] as? String == "old-host")
         }
+    }
+
+    @Test(arguments: ["codex", "claude"], ["tabs", "open"])
+    func entryPointsKeepTheGrantWhenTheRuntimeHasNotChanged(_ name: String, _ operation: String) throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let owner = process(getppid(), name: name, uid: getuid())
+        let original = try AgentBrowserTransport.withRunContext(for: owner, root: root) { url, value in
+            value["socket"] = "/fixture/control.sock"
+            value["epoch"] = "same-host"
+            value["engine"] = "ctrlx"
+            try AgentBrowserTransport.writePrivateJSON(value, to: url)
+            return value
+        }
+        try withDependencies {
+            $0[AgentBrowserProcessClient.self] = client([owner])
+            $0[AgentBrowserHostClient.self] = .init(prepare: { requested in
+                #expect(requested == root)
+                try AgentBrowserTransport.writePrivateJSON([
+                    "socket": "/fixture/control.sock", "epoch": "same-host", "mode": "embedded",
+                ], to: root.appendingPathComponent("endpoint.json"))
+            })
+        } operation: {
+            // No real socket exists: an unchanged epoch must not re-register.
+            let (_, value) = try AgentBrowserTransport.registeredContext(for: operation, root: root)
+            #expect(value["run"] as? String == original["run"] as? String)
+            #expect(value["secret"] as? String == original["secret"] as? String)
+            #expect(value["engine"] as? String == "ctrlx")
+        }
+    }
+
+    @Test(arguments: ["tabs", "open"])
+    func hostPreparationFailurePreservesTheOldGrant(_ operation: String) throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let owner = process(getppid(), uid: getuid())
+        let url = try AgentBrowserTransport.withRunContext(for: owner, root: root) { url, value in
+            value["socket"] = "/fixture/old.sock"
+            value["epoch"] = "old-host"
+            try AgentBrowserTransport.writePrivateJSON(value, to: url)
+            return url
+        }
+        let original = try Data(contentsOf: url)
+        struct WrongHost: Error { }
+        try withDependencies {
+            $0[AgentBrowserProcessClient.self] = client([owner])
+            $0[AgentBrowserHostClient.self] = .init(prepare: { _ in throw WrongHost() })
+        } operation: {
+            #expect(throws: WrongHost.self) {
+                try AgentBrowserTransport.registeredContext(for: operation, root: root)
+            }
+        }
+        #expect(try Data(contentsOf: url) == original)
     }
 }

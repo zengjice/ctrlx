@@ -61,7 +61,7 @@ enum AgentBrowserTransport {
                 connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard connected == 0 else { throw Failure("Agent Browser disconnected. Old grants are not renewed automatically; start a new agent instance.") }
+        guard connected == 0 else { throw Failure("Agent Browser disconnected. No action was sent. When CtrlX is available, run 'ctrlx browser action tabs' to reconnect.") }
         var uid: uid_t = 0
         var gid: gid_t = 0
         guard getpeereid(fd, &uid, &gid) == 0, uid == getuid() else { throw Failure("Unexpected browser socket owner.") }
@@ -117,7 +117,7 @@ enum AgentBrowserTransport {
         guard chmod(url.path, 0o600) == 0 else { throw Failure("Cannot protect browser context.") }
     }
 
-    /// Serialize context creation and first registration across all tools of
+    /// Serialize context creation and registration across all tools of
     /// one live agent. PID reuse gets a different directory and random secret.
     static func withRunContext<T>(
         for process: AgentBrowserProcess,
@@ -163,26 +163,30 @@ enum AgentBrowserTransport {
                 throw Failure("Saved browser identity does not match the calling agent. Refusing to reuse it.")
             }
         } else {
-            let run = UUID().uuidString
-            let folder = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).lastPathComponent
-            let label = ProcessInfo.processInfo.environment["CTRLX_BROWSER_LABEL"] ?? "\(folder) / \(process.agentName ?? "Agent")"
-            context = [
-                "run": run,
-                "secret": (UUID().uuidString + UUID().uuidString).replacingOccurrences(of: "-", with: ""),
-                "label": String(label.prefix(150)) + " · " + run.prefix(6),
-                "pid": process.pid, "startSeconds": process.startSeconds, "startMicros": process.startMicros,
-            ]
+            context = newContext(for: process)
             try writePrivateJSON(context, to: contextURL)
         }
         return try operation(contextURL, &context)
     }
 
-    static func registeredContext(root: URL = stateDirectory) throws -> (URL, [String: Any]) {
+    private static func newContext(for process: AgentBrowserProcess) -> [String: Any] {
+        let run = UUID().uuidString
+        let folder = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).lastPathComponent
+        let label = ProcessInfo.processInfo.environment["CTRLX_BROWSER_LABEL"] ?? "\(folder) / \(process.agentName ?? "Agent")"
+        return [
+            "run": run,
+            "secret": (UUID().uuidString + UUID().uuidString).replacingOccurrences(of: "-", with: ""),
+            "label": String(label.prefix(150)) + " · " + run.prefix(6),
+            "pid": process.pid, "startSeconds": process.startSeconds, "startMicros": process.startMicros,
+        ]
+    }
+
+    static func registeredContext(for operation: String? = nil, root: URL = stateDirectory) throws -> (URL, [String: Any]) {
         @Dependency(AgentBrowserProcessClient.self) var processes
         let owner = try processes.callingAgent(from: getppid(), uid: getuid())
         let context = try withRunContext(for: owner, root: root) { contextURL, context in
             try processes.validate(owner)
-            if context["socket"] == nil {
+            if context["socket"] == nil || operation == "tabs" || operation == "open" {
                 @Dependency(AgentBrowserHostClient.self) var host
                 try host.prepare(root)
                 try processes.validate(owner)
@@ -194,15 +198,35 @@ enum AgentBrowserTransport {
                 guard discovery["mode"] as? String == "embedded" else {
                     throw Failure("An older standalone Agent Browser is running. Quit it and open the updated CtrlX app before retrying.")
                 }
-                guard let socket = discovery["socket"] as? String else { throw Failure("Agent Browser endpoint unavailable.") }
+                guard
+                    let socket = discovery["socket"] as? String,
+                    let epoch = discovery["epoch"] as? String, !epoch.isEmpty else {
+                    throw Failure("Agent Browser endpoint unavailable.")
+                }
+                var next = context
+                if let previousSocket = context["socket"] as? String {
+                    guard let previousEpoch = context["epoch"] as? String else { throw Failure("Saved browser registration is incomplete.") }
+                    if previousEpoch == epoch {
+                        guard previousSocket == socket else { throw Failure("Browser endpoint changed without a new runtime. No action was sent.") }
+                        return (contextURL.deletingLastPathComponent(), context)
+                    }
+                    // A new runtime gets a new grant, not authority over any old
+                    // or human-owned page. Same-runtime refusals never reach here.
+                    next = newContext(for: owner)
+                    next["engine"] = context["engine"]
+                }
                 try processes.validate(owner)
-                var registration = context
+                var registration = next
                 registration["command"] = "register"
-                guard let result = try request(registration, socketPath: socket) as? [String: Any], let epoch = result["epoch"] as? String else {
+                guard
+                    let result = try request(registration, socketPath: socket) as? [String: Any],
+                    result["epoch"] as? String == epoch else {
                     throw Failure("Invalid instance registration response.")
                 }
-                context["socket"] = socket
-                context["epoch"] = epoch
+                try processes.validate(owner)
+                next["socket"] = socket
+                next["epoch"] = epoch
+                context = next
                 try writePrivateJSON(context, to: contextURL)
             }
             return (contextURL.deletingLastPathComponent(), context)
@@ -212,7 +236,7 @@ enum AgentBrowserTransport {
     }
 
     static func perform(_ arguments: [String: Any]) throws -> Any {
-        let (_, context) = try registeredContext()
+        let (_, context) = try registeredContext(for: arguments["command"] as? String)
         return try perform(arguments, context: context)
     }
 
