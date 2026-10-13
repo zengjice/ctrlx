@@ -68,10 +68,13 @@ struct RemoteSessionStructure: Equatable {
 
     /// The catalog and pane store are delivered separately. Wait for matching routing
     /// instead of treating a renamed page as deleted during that intermediate render.
-    func canSyncBrowserCatalog(_ catalog: [RemoteBrowserTab], hostID: String, sessionName: String) -> Bool {
+    func canSyncBrowserCatalog(_ catalog: [RemoteBrowserTab], simulators: [RemoteSimulatorTab] = [], hostID: String, sessionName: String) -> Bool {
         guard locations.contains(where: { $0.key.pairId == hostID && $0.value.sessionName == sessionName }) else { return false }
         return catalog.allSatisfy { tab in
             guard let paneID = tab.sourcePaneID, let location = locations[PaneKey(pairId: hostID, paneId: paneID)] else { return true }
+            return location.sessionName == tab.sessionName
+        } && simulators.allSatisfy { tab in
+            guard let location = locations[PaneKey(pairId: hostID, paneId: tab.sourcePaneID)] else { return true }
             return location.sessionName == tab.sessionName
         }
     }

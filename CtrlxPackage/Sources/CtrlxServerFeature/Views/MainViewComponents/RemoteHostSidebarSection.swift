@@ -153,7 +153,8 @@ struct RemoteHostSidebarSection: View {
                     directorySource: .remote(
                         hostID: host.id,
                         connection: connection,
-                        supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(host.id)
+                        supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(host.id),
+                        supportsWorktrees: sessionStore.hostsSupportingSessionWorktrees.contains(host.id)
                     ),
                     pluginShortName: { sessionStore.presentation(forPluginID: $0)?.shortName ?? $0 }
                 )

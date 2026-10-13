@@ -13,6 +13,18 @@ struct SessionLaunchRequestTests {
         #expect(request.project?.pluginID == "codex")
     }
 
+    @Test("A new worktree names the session and preserves its Host source and agent")
+    func worktreeDirectory() {
+        let worktree = ForkAgentSession.Worktree(name: "feature", expectedHead: "abc")
+        let request = SessionLaunchRequest.directory(path: "~/repo/src", pluginID: "custom-agent", worktree: worktree)
+        #expect(request.project?.name == "feature")
+        #expect(request.project?.path == "~/repo/src")
+        #expect(request.project?.pluginID == "custom-agent")
+        #expect(request.requiresAgentLaunch)
+        #expect(request.worktree == worktree)
+        #expect(SessionLaunchRequest.terminal.worktree == nil)
+    }
+
     @Test("Existing project configuration and Terminal semantics are preserved")
     func existingChoices() {
         let project = AgentProject(name: "Test", path: "/Host/Test", configDir: "/config", pluginID: "claude-code")

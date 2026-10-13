@@ -63,6 +63,7 @@
     __weak NSOperation *_lastInputOperation;
     xpc_object_t _screenshotRequest;
     NSMutableDictionary *_screenshotTiming;
+    NSUInteger _previewDimension;
 }
 - (instancetype)init {
     self = [super init];
@@ -302,6 +303,9 @@
     _screenshotRequest = nil;
     NSMutableDictionary *timing = _screenshotTiming;
     _screenshotTiming = nil;
+    NSMutableDictionary *encodingMetadata = metadata.mutableCopy;
+    if (_previewDimension) encodingMetadata[@"previewDimension"] = @(_previewDimension);
+    _previewDimension = 0;
     if (timing) timing[@"firstCopyReadyAt"] = metadata[@"copyReadyAt"];
     atomic_store_explicit(&_captureDemand, _subscribed, memory_order_release);
     _encodingScreenshot = YES;
@@ -333,7 +337,7 @@
         [self->_operations addOperationWithBlock:^{
             slot.reading = NO;
             if (buffer.status == MTLCommandBufferStatusCompleted) {
-                NSMutableDictionary *screenshotMetadata = metadata.mutableCopy;
+                NSMutableDictionary *screenshotMetadata = encodingMetadata.mutableCopy;
                 if (timing) {
                     timing[@"secondCopyCompletedAt"] = @(completedAt);
                     timing[@"secondCopyDequeuedAt"] = @(NSProcessInfo.processInfo.systemUptime);
@@ -358,6 +362,17 @@
         @autoreleasepool {
             if (timing) timing[@"encodingThreadStartedAt"] = @(NSProcessInfo.processInfo.systemUptime);
             int orientation = [metadata[@"orientation"] intValue];
+            if ([metadata[@"previewDimension"] unsignedIntegerValue]) {
+                NSDictionary *result = CXSimulatorCreatePreview(self->_screenshotBuffer.surface, orientation,
+                    [metadata[@"previewDimension"] unsignedIntegerValue]);
+                [self->_operations addOperationWithBlock:^{
+                    [self reply:request result:result error:result ? nil : [NSError errorWithDomain:@"CtrlXSimulator" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Simulator preview encoding failed"}]];
+                    self->_encodingScreenshot = NO;
+                    [self stopUnusedDisplay];
+                    [self capture];
+                }];
+                return;
+            }
             CGImageRef cg = CXSimulatorCreateScreenshotImage(self->_screenshotBuffer.surface, orientation);
             if (timing) timing[@"imageReadyAt"] = @(NSProcessInfo.processInfo.systemUptime);
             NSMutableData *png = [NSMutableData data];
@@ -469,11 +484,31 @@
             [self reply:object result:@{@"suspended":@(![self.device.capabilities[@"displayConnected"] boolValue])} error:nil];
             return;
         }
-        if ([command isEqual:@"screenshot"]) {
+        if ([command isEqual:@"screenshot"] || [command isEqual:@"preview"]) {
+            BOOL preview = [command isEqual:@"preview"];
+            NSUInteger dimension = [request[@"maximumDimension"] unsignedIntegerValue];
+            if (preview && (dimension < 256 || dimension > 2560)) {
+                [self reply:object result:nil error:[NSError errorWithDomain:@"CtrlXSimulator" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Invalid preview dimension"}]]; return;
+            }
             if (_screenshotRequest || _encodingScreenshot) {
                 [self reply:object result:nil error:[NSError errorWithDomain:@"CtrlXSimulator" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Another screenshot is in progress"}]]; return;
             }
+            _previewDimension = preview ? dimension : 0;
             _screenshotRequest = object;
+            if (preview) {
+                [[NSOperationQueue mainQueue] addOperationWithBlock:^{
+                    [[NSRunLoop mainRunLoop] addTimer:[NSTimer timerWithTimeInterval:4 repeats:NO block:^(NSTimer *timer) {
+                        [self->_operations addOperationWithBlock:^{
+                            if (self->_screenshotRequest != object) return;
+                            self->_screenshotRequest = nil;
+                            self->_previewDimension = 0;
+                            self->_screenshotTiming = nil;
+                            [self reply:object result:nil error:[NSError errorWithDomain:@"CtrlXSimulator" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Simulator preview is not ready"}]];
+                            [self stopUnusedDisplay];
+                        }];
+                    }] forMode:NSRunLoopCommonModes];
+                }];
+            }
             _screenshotTiming = [request[@"screenshotDiagnostics"] boolValue]
                 ? [@{@"helperReceivedAt":@(receivedAt), @"helperStartedAt":@(NSProcessInfo.processInfo.systemUptime)} mutableCopy] : nil;
             atomic_store_explicit(&_captureDemand, true, memory_order_release);

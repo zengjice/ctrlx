@@ -37,11 +37,7 @@ public struct AgentForkConfiguration: Identifiable {
         guard let preparation, preparation.source == source, let plan = preparation.worktree else {
             throw AgentForkError("Check the selected source before creating a worktree.")
         }
-        guard AgentForkWorktree.isValidName(name) else { throw AgentForkError("Choose a valid worktree name.") }
-        guard !plan.hasUncommittedChanges || allowUncommittedChanges else {
-            throw AgentForkError("Confirm that uncommitted and untracked files will not be copied.")
-        }
-        return .init(name: name, expectedHead: plan.head, allowUncommittedChanges: allowUncommittedChanges)
+        return try plan.request(name: name, allowUncommittedChanges: allowUncommittedChanges)
     }
 
     func forkRequest(
@@ -225,18 +221,13 @@ public struct AgentForkPanel: View {
     @ViewBuilder
     private var worktreeFields: some View {
         if let worktree = preparation?.worktree {
-            Text("Use letters, numbers, ., _ or -; start with a letter or number. Do not use HEAD, .., or end with . or .lock.")
-                .font(.caption).foregroundStyle(.secondary)
-            let name = forkName.trimmingCharacters(in: .whitespacesAndNewlines)
-            Text("Branch: \(name)\nDirectory: \(worktree.directory(name: name))\nBase: \(worktree.head.prefix(12))")
-                .font(.callout).textSelection(.enabled)
-            Text("Starts from HEAD. Uncommitted, untracked and ignored files are not copied. The worktree remains after closing its tab.")
-                .font(.callout).foregroundStyle(.secondary)
-            if worktree.hasUncommittedChanges {
-                Toggle("I understand the source has changes that will not be copied", isOn: $acceptsCleanWorktree)
-                    .disabled(isLaunching)
-                    .accessibilityIdentifier("agentFork.allowUncommittedChanges")
-            }
+            WorktreeReview(
+                plan: worktree,
+                name: forkName,
+                allowUncommittedChanges: $acceptsCleanWorktree,
+                acknowledgementIdentifier: "agentFork.allowUncommittedChanges",
+            )
+            .disabled(isLaunching)
         } else if let reason = preparation?.worktreeUnavailableReason {
             Text("New worktree is unavailable: \(reason)\nFork in Current Directory is still available.").font(.callout).foregroundStyle(.secondary)
         }

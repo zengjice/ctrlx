@@ -43,22 +43,30 @@
         func prepare(settings: VoiceCorrectionSettings) async {
             guard !isBusy else { return }
             let provider = settings.provider
-            if preparedProvider != provider {
+            let providerChanged = preparedProvider != provider
+            if providerChanged {
                 apiKeyDraft = ""
+                hasStoredAPIKey = false
                 clearMessages()
                 testResults = []
                 testedModelCount = 0
                 totalModelCount = 0
                 topModelCount = provider.recommendedModelIDs.count
-                preparedProvider = provider
             }
             applySavedOrRecommendedModels(settings: settings)
             let account = VoiceCorrectionCredentials.apiKeyAccount(
                 for: provider
             )
             do {
-                hasStoredAPIKey = try await secrets.loadSecret(account) != nil
+                let savedKey = try await secrets.loadSecret(account)
+                guard !Task.isCancelled, settings.provider == provider else { return }
+                hasStoredAPIKey = savedKey != nil
+                if providerChanged, apiKeyDraft.isEmpty {
+                    apiKeyDraft = savedKey ?? ""
+                }
+                preparedProvider = provider
             } catch {
+                guard !Task.isCancelled, settings.provider == provider else { return }
                 errorMessage = error.localizedDescription
             }
         }
@@ -81,7 +89,7 @@
                 }
 
                 try await secrets.storeSecret(keyDraft, account)
-                apiKeyDraft = ""
+                apiKeyDraft = keyDraft
                 hasStoredAPIKey = true
                 applySavedOrRecommendedModels(settings: settings)
                 statusMessage = "API key saved."

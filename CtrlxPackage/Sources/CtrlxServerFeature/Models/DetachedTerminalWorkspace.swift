@@ -158,7 +158,7 @@ extension SessionFileTabsState {
             destination.directoryTabs[id] = directoryTabs.removeValue(forKey: id)
             destination.scrollOffsets[id] = scrollOffsets.removeValue(forKey: id)
         case let .browser(id):
-            guard let index = openBrowserTabs.firstIndex(where: { $0.id == id }), simulatorStates[id] == nil else { return false }
+            guard let index = openBrowserTabs.firstIndex(where: { $0.id == id }), !openBrowserTabs[index].isSimulator else { return false }
             destination.openBrowserTabs.append(openBrowserTabs.remove(at: index))
             destination.browserStates[id] = browserStates.removeValue(forKey: id)
             destination.agentBrowserStates[id] = agentBrowserStates.removeValue(forKey: id)

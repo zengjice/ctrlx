@@ -1,12 +1,20 @@
 # Terminal quick actions
 
-macOS offers **Agent Commands** (`/`) and **Quick Phrases** on the right side of
-the terminal's bottom status bar, for both local and Viewer windows. They follow
-Settings → General → Show status bar. Both open button-grid popovers. Click a
-bare command or saved phrase to send literal text, a host-side 200 ms pause, and
-one Return. Argument-entry commands instead insert the command and a trailing
-space without Return; add arguments and explicitly send from the terminal.
-Existing terminal input is never cleared automatically.
+macOS offers **Commands** (`/`) and **Quick Phrases** as labeled, bordered buttons
+on the left side of the terminal's bottom status bar, for both local and Viewer
+windows. The buttons keep a 32-point height including native padding;
+session details and telemetry sit on the right. In narrow splits, labels collapse
+to icons with the same height and accessible names, leaving room for the voice
+input button without widening the terminal; details fall back to
+the session/window identifier, then hide together with their spacing if the
+identifier cannot fit. Local and Viewer windows use the same complete status-bar
+component. The status bar keeps the same height across widths
+and focus changes. They follow Settings → General →
+Show status bar. Both open button-grid popovers above their buttons without
+resizing the terminal. Click a bare command or saved phrase to send literal text,
+a host-side 200 ms pause, and one Return. Argument-entry commands instead insert
+the command and a trailing space without Return; add arguments and explicitly
+send from the terminal. Existing terminal input is never cleared automatically.
 
 - The target is the last focused native terminal in this panes scene, including
   a pane in the right-hand workbench split. The popover shows its host, session,

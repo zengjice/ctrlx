@@ -201,40 +201,15 @@ struct WindowPaneLayoutView: View {
     // MARK: - Status Bar
 
     private var statusBar: some View {
-        HStack {
-            Text("\(window.sessionName):\(window.windowIndex)")
-                .font(.system(.caption, design: .monospaced))
-
-            if window.panes.count > 1 {
-                Divider()
-                    .frame(height: 12)
-
-                Text("\(window.panes.count) panes")
-            }
-
-            if let activePane = window.activePane {
-                Divider()
-                    .frame(height: 12)
-
-                Text("\(activePane.width)x\(activePane.height)")
-            }
-
-            // Live OTEL meter + model tag + permission-mode chip for the window's
-            // focused session (issue #597, surface C) — matches the detached mirror
-            // window's status bar.
-            SessionTelemetryStatusBar(
-                telemetry: focusedAgentPane?.telemetry,
-                permissionMode: focusedAgentPane?.permissionMode
-            )
-
-            Spacer()
-            TerminalQuickActionStatusBarButtons(hostID: nil, paneIDs: window.panes.map(\.paneId))
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(settings.theme.chromeBackgroundColor)
+        TerminalWindowStatusBar(
+            hostID: nil,
+            paneIDs: window.panes.map(\.paneId),
+            sessionName: window.sessionName,
+            windowIndex: window.windowIndex,
+            terminalSize: window.activePane.map { "\($0.width)x\($0.height)" },
+            telemetry: focusedAgentPane?.telemetry,
+            permissionMode: focusedAgentPane?.permissionMode
+        )
     }
 
     /// The window's agent-session pane (first pane carrying an `AgentSession`) —

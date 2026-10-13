@@ -426,7 +426,7 @@
             }
             agentSimulator.start(root: CtrlxPaths(stateRootOverride: Self.parseCtrlxStateRoot()).stateRoot) { [tmuxService] pid in
                 @Dependency(SimulatorSystemClient.self) var system
-                return try await tmuxService.agentBrowserPane(processID: pid, ancestorPIDs: system.ancestors(of: pid))
+                return try await tmuxService.agentPaneRoute(processID: pid, ancestorPIDs: system.ancestors(of: pid))
             }
 
             // Pre-fill the editor list on first launch with whatever is installed
@@ -2132,13 +2132,15 @@
         func resolveLaunch(
             forPluginID pluginID: String,
             projectPath: String,
-            requireAgentLaunch: Bool = false
+            requireAgentLaunch: Bool = false,
+            worktree: ForkAgentSession.Worktree? = nil
         ) async throws -> SessionLaunchPreparation {
             try await SessionLaunchPreparation.prepare(
                 path: projectPath,
                 pluginID: pluginID,
                 requireAgentLaunch: requireAgentLaunch,
-                core: pluginRegistry?.core(pluginID)
+                core: pluginRegistry?.core(pluginID),
+                worktree: worktree
             )
         }
 
@@ -3096,6 +3098,9 @@
             agentBrowser.onTabsChanged = { [weak connectionManager] in
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
+            agentSimulator.onTabsChanged = { [weak connectionManager] in
+                Task { await connectionManager?.pushSessionStateToAll() }
+            }
             connectionManager.onViewerUnavailable = { [weak terminalStreamService, weak self] viewerId in
                 self?.agentBrowser.disconnectBrowserViewer(viewerId)
                 await terminalStreamService?.stopStreams(for: viewerId)
@@ -3121,6 +3126,7 @@
             // Start notification-only readers for all discovered panes
             let initialPanes = await tmuxService.refreshPanes()
             agentBrowser.updateBrowserRoutes(initialPanes)
+            agentSimulator.updateSimulatorRoutes(initialPanes)
             windowManager.updatePaneStates(from: initialPanes)
             await windowManager.refreshGitBranches()
             await paneStreamManager.startMonitoring(panes: initialPanes)
@@ -3144,6 +3150,7 @@
                 Task {
                     let panes = await tmuxForCleanup.refreshPanes()
                     self?.agentBrowser.updateBrowserRoutes(panes)
+                    self?.agentSimulator.updateSimulatorRoutes(panes)
                     winManager.updatePaneStates(from: panes)
                     await terminalStreaming.stopStreamsForClosedPanes(currentPanes: panes)
                     await paneStreaming.updateMonitoring(panes: panes)
@@ -3163,6 +3170,15 @@
             let tmux = tmuxService
             let editorManager = editorSessionManager
             connectionManager.onCommand = { [weak self, executor, streamService, tmux, winManager, editorManager, paneStreaming, weak connectionManager] viewerId, command in
+                if case let .browseSimulator(spec) = command.command {
+                    guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
+                        return .failure(for: command.id, error: "Session no longer exists.")
+                    }
+                    do {
+                        let result = try await self.agentSimulator.handleSimulator(spec)
+                        return CommandResponseMessage(commandId: command.id, success: true, simulator: result)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .browseBrowser(spec) = command.command {
                     guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
                         return .failure(for: command.id, error: "Session no longer exists.")
@@ -3177,6 +3193,12 @@
                 }
                 if case let .createSessionDirectory(spec) = command.command {
                     return await SessionDirectoryResolver.respond(to: command, request: spec)
+                }
+                if case let .prepareSessionWorktree(spec) = command.command {
+                    do {
+                        let plan = try await SessionLaunchPreparation.inspectWorktree(path: spec.path)
+                        return CommandResponseMessage(commandId: command.id, success: true, sessionWorktree: plan)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .browseFiles(spec) = command.command {
                     do {
@@ -3258,7 +3280,8 @@
                             path: spec.workingDirectory,
                             pluginID: spec.pluginID,
                             requireAgentLaunch: spec.requireAgentLaunch,
-                            core: self?.pluginRegistry?.core(spec.pluginID)
+                            core: self?.pluginRegistry?.core(spec.pluginID),
+                            worktree: spec.worktree
                         )
                         return await Self.handleCreateSession(
                             command: command,
@@ -3331,6 +3354,7 @@
                         try await tmux.renameSession(from: spec.sessionName, to: spec.newName)
                         let allPanes = await tmux.refreshPanes()
                         self?.agentBrowser.updateBrowserRoutes(allPanes)
+                        self?.agentSimulator.updateSimulatorRoutes(allPanes)
                         winManager.updatePaneStates(from: allPanes)
                         await paneStreaming.updateMonitoring(panes: allPanes)
                         await connectionManager?.pushSessionStateToAll()
@@ -3563,6 +3587,7 @@
                     sharedTerminalLayouts: sharedTerminalLayouts,
                     supportsDirectoryBrowsing: true,
                     supportsDirectoryCreation: true,
+                    supportsSessionWorktrees: true,
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
                     supportsTerminalPaste: true,
@@ -3574,7 +3599,9 @@
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
                     supportsPaneBrowser: await self?.agentBrowser.supportsBrowserSharing,
                     supportsAgentImageInput: true,
-                    browserTabs: await self?.agentBrowser.sharedBrowserTabs
+                    browserTabs: await self?.agentBrowser.sharedBrowserTabs,
+                    supportsSimulatorViewing: await self?.agentSimulator.supportsSimulatorViewing,
+                    simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs
                 )
             }
 
@@ -3603,8 +3630,7 @@
                 self.settings.removePairing(id: pairId)
             }
 
-            // Push session state to all viewers whenever panes change
-            tmuxService.setPanesChangedHandler { [weak connectionManager] in
+            Self.wirePaneRefresh(tmuxService: tmuxService, agentSimulator: agentSimulator) { [weak connectionManager] in
                 await connectionManager?.pushSessionStateToAll()
             }
 
@@ -3638,6 +3664,20 @@
                 self?.updateSleepPrevention()
                 await connectionManager?.pushSessionStateToAll()
                 await self?.broadcastBadgeDecreaseIfNeeded()
+            }
+        }
+
+        static func wirePaneRefresh(
+            tmuxService: TmuxService,
+            agentSimulator: AgentSimulatorService,
+            pushSessionState: @escaping @MainActor @Sendable () async -> Void
+        ) {
+            tmuxService.setPanesChangedHandler { @MainActor [weak tmuxService, weak agentSimulator] in
+                // External renames may only reach periodic discovery, without a layout event.
+                if let tmuxService {
+                    agentSimulator?.updateSimulatorRoutes(tmuxService.panes)
+                }
+                await pushSessionState()
             }
         }
 
@@ -3847,9 +3887,9 @@
                 // launch command so the tab matches what's running; when
                 // auto-run is off (`launch` is nil) fall back to the plugin's
                 // CLI binary name ("claude") rather than the dashed plugin id.
-                let firstWindowName = spec.workingDirectory != nil
+                let firstWindowName = spec.worktree?.name ?? (spec.workingDirectory != nil
                     ? (launch?.command ?? defaultCommand ?? spec.pluginID)
-                    : "terminal 1"
+                    : "terminal 1")
                 let (_, paneId) = try await tmuxService.createSession(
                     baseName: spec.sessionName,
                     width: spec.width,
@@ -3864,7 +3904,7 @@
 
                 return .success(for: command.id, paneId: paneId)
             } catch {
-                return .failure(for: command.id, error: error.localizedDescription)
+                return .failure(for: command.id, error: preparation.failureDescription(error))
             }
         }
 

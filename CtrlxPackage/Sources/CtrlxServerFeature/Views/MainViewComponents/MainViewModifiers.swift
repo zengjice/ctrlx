@@ -40,10 +40,11 @@ struct SharedTerminalLayoutSyncModifier<Signal: Equatable>: ViewModifier {
     }
 }
 
-/// One observer orders rename, browser reconciliation and pruning for every scene.
+/// One observer orders rename, catalog reconciliation and pruning for every scene.
 struct RemoteSessionStructureModifier: ViewModifier {
     let structure: RemoteSessionStructure
     var browserCatalogs: [String: [RemoteBrowserTab]] = [:]
+    var simulatorCatalogs: [String: [RemoteSimulatorTab]] = [:]
     var selection: RemoteSessionSelection?
     let onRename: (String, SessionRenameMapping) -> Void
     let onSyncBrowserTabs: () -> Void
@@ -52,11 +53,12 @@ struct RemoteSessionStructureModifier: ViewModifier {
     private struct Snapshot: Equatable {
         let structure: RemoteSessionStructure
         let browserCatalogs: [String: [RemoteBrowserTab]]
+        let simulatorCatalogs: [String: [RemoteSimulatorTab]]
         let selection: RemoteSessionSelection?
     }
 
     func body(content: Content) -> some View {
-        content.onChange(of: Snapshot(structure: structure, browserCatalogs: browserCatalogs, selection: selection), initial: true) { previous, current in
+        content.onChange(of: Snapshot(structure: structure, browserCatalogs: browserCatalogs, simulatorCatalogs: simulatorCatalogs, selection: selection), initial: true) { previous, current in
             for rename in current.structure.renames(from: previous.structure) {
                 onRename(rename.hostID, rename.mapping)
             }

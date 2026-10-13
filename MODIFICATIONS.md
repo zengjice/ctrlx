@@ -7,7 +7,56 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
-## 3.0.61 — Detached Mac windows, contextual voice and preview annotations
+## 3.0.62 — Visible session status in the Mac menu bar
+
+- Keep local and remote session status icons visible in the menu bar dropdown
+  on macOS 27, including the accent-colored needs-attention indicator. Explicitly
+  preserve icon-and-title labels instead of accepting the system's hidden-image
+  default.
+- iOS source adds a show/hide control for the saved voice correction API key.
+  Keep the key in Keychain, retain unsaved edits, and hide it when switching
+  providers, leaving settings, or backgrounding the app.
+- Validation: the bounded serial Swift regression passed with 2,862 tests
+  reported and four opt-in probes skipped; Apple Intelligence evaluations were
+  excluded because the model is unavailable on this Mac. Both boundary checks,
+  195 script tests, 30 publisher tests and the website build passed. The menu
+  fix passed 35 focused session-state tests, native menu image-visibility checks
+  and a Mac Release build during feature acceptance. The iOS settings change
+  passed three Simulator tests during feature acceptance and a fresh iOS
+  Simulator build for this release.
+- Distribution: Mac package only through the existing private channel. The
+  iOS settings change requires a separate iOS build/install.
+
+## 3.0.61 — Worktree sessions, file annotations and agent iOS tools
+
+- Add a new-branch worktree option to Start in Directory, with branch name,
+  destination and source HEAD preview. Reuse Fork's validation and explicit
+  confirmation for uncommitted changes. Keep subdirectory selection and start
+  the selected agent in the new worktree; gate remote use by Host capability.
+- Annotate supported file previews in place and attach the result to the
+  corresponding agent input. Capture the visible preview, including the paused
+  video frame, and preserve the annotation during terminal handoff. Accept
+  trailing slashes in explicit repository directory links.
+- Add local, Codex-owned iOS Simulator tabs and the `ctrlx ios` CLI / agent-ios
+  skill: native display, input and accessibility, app and device lifecycle,
+  environment settings, optional service profiles, recording and basic pinch.
+  Keep device ownership and human takeover explicit. Physical iPhones and remote
+  simulator control are not supported; Xcode and an installed runtime are needed.
+- Extend worktree-local cleanup to explicitly completed build artifacts and
+  document task-based browser tab reuse.
+- Validation: the bounded serial Swift regression passed with 2,862 tests
+  reported and four opt-in probes skipped; Apple Intelligence evaluations were
+  excluded because the model is unavailable on this Mac. Fixed missing simulator
+  dependency injection in settings tests; initial Sidecar and video-capture
+  failures passed focused and full reruns. Both boundary checks, 195 script tests,
+  30 publisher tests, website build, Mac Release build and iOS Simulator compile
+  passed. The new worktree form also passed isolated UI interaction checks.
+- Distribution: Mac package only through the existing private channel. The
+  simulator's existing local acceptance evidence is retained; cross-Mac and
+  multi-Xcode compatibility remain unverified. No Relay deployment, local Mac
+  replacement or iPhone installation is included.
+
+## 3.0.61 (macinput build) — Detached Mac windows, contextual voice and preview annotations
 
 - Drag Mac terminal Window tabs out of their tab strip into independent native
   windows, including within the same screen. Keep one terminal presentation per

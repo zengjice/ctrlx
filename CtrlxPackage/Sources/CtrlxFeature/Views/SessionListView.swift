@@ -370,11 +370,12 @@
                 workingDirectory: project?.path,
                 configDir: project?.configDir,
                 pluginID: project?.pluginID ?? AgentLaunchDefaults.pluginID,
-                requireAgentLaunch: request.requiresAgentLaunch
+                requireAgentLaunch: request.requiresAgentLaunch,
+                worktree: request.worktree
             )
 
             // paneId is not used for session creation, pass empty string
-            let result = await connectionManager.sendCommand(command, paneId: "", hostId: host.id)
+            let result = await connectionManager.sendCommand(command, paneId: "", hostId: host.id, timeout: request.worktree == nil ? 15 : 180)
             creatingSelection = nil
             guard sessionCreation.revision == revision, selectedHostForNewSession?.id == host.id else { return }
 
@@ -434,7 +435,7 @@
         private var sortedSessions: [TmuxSession] {
             SessionSortData.sortedRemoteSessions(
                 sessions,
-                mode: sessionStore.sidebarSortMode(for: host.id) ?? .statusPriorityIdleFirst,
+                mode: sessionStore.sidebarSortMode(for: host.id) ?? .statusPriority,
                 sidebarFields: SidebarField.defaultFields,
                 sidebarTerminalFields: SidebarField.defaultTerminalFields,
                 homeDirectory: sessionStore.homeDirectoryByHost[host.id],
@@ -486,6 +487,11 @@
                     showUsername: showUsername,
                     onNewSession: onNewSession
                 )
+                .contentShape(Rectangle())
+                .contextMenu {
+                    Button("Restore Automatic Order") { settings.setRemoteSessionOrder([], for: host.id) }
+                        .disabled(settings.remoteSessionOrder(for: host.id).isEmpty)
+                }
             }
         }
 
@@ -958,7 +964,8 @@
                                     hostID: host.id,
                                     connection: connectionManager.connection(for: host.id),
                                     supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(host.id),
-                                    supportsCreation: sessionStore.hostsSupportingDirectoryCreation.contains(host.id)
+                                    supportsCreation: sessionStore.hostsSupportingDirectoryCreation.contains(host.id),
+                                    supportsWorktrees: sessionStore.hostsSupportingSessionWorktrees.contains(host.id)
                                 ),
                                 isCreating: isCreating,
                                 onStart: onSelect,

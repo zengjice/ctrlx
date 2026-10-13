@@ -7,12 +7,19 @@
     import Testing
     @testable import CtrlxServerFeature
 
-    private actor SessionLaunchTestCore: PluginCore {
+    actor SessionLaunchTestCore: PluginCore {
         let launch: LaunchCommand?
+        let launchLimit: Int?
         private(set) var paths: [String] = []
-        init(launch: LaunchCommand? = nil) { self.launch = launch }
+        init(launch: LaunchCommand? = nil, launchLimit: Int? = nil) {
+            self.launch = launch
+            self.launchLimit = launchLimit
+        }
         func commandForLaunch(projectPath: String) async -> LaunchCommand? {
             paths.append(projectPath)
+            if let launchLimit, paths.count > launchLimit {
+                return nil
+            }
             return launch
         }
         func initialize(_: PluginEnv, host _: any PluginHost) async throws { }
@@ -138,6 +145,87 @@
             #expect(result.launch?.args == args)
             #expect(result.extraEnvironment == ["CODEX_HOME=/Host/config"])
             #expect(result.runCommand == (["/opt/Agent Tools/codex"] + args).map(\.posixSingleQuoted).joined(separator: " "))
+        }
+    }
+
+    struct SessionWorktreePreparationTests {
+        private let request = ForkAgentSession.Worktree(name: "feature", expectedHead: "abc")
+
+        @Test("Preview resolves the Host path without creating anything")
+        func preview() async throws {
+            try await withDependencies {
+                $0[SessionDirectoryClient.self].resolve = { path in
+                    #expect(path == "~/repo/src")
+                    return "/Host/repo/src"
+                }
+                $0[AgentForkWorktreeClient.self].inspect = { directory in
+                    #expect(directory == "/Host/repo/src")
+                    return .init(repositoryRoot: "/Host/repo", primaryRoot: "/Host/repo", head: "abc", relativeDirectory: "src", hasUncommittedChanges: false)
+                }
+            } operation: {
+                let plan = try await SessionLaunchPreparation.inspectWorktree(path: "~/repo/src")
+                #expect(plan.relativeDirectory == "src")
+            }
+        }
+
+        @Test("Worktree launch resolves the selected plugin again in the new checkout")
+        func launch() async throws {
+            let command = LaunchCommand(command: "custom-agent", args: ["--telemetry"], env: ["CONFIG_ROOT": "/Host/config"])
+            let core = SessionLaunchTestCore(launch: command)
+            let prepared = try await withDependencies {
+                $0[SessionDirectoryClient.self].resolve = { _ in "/Host/repo/src" }
+                $0[AgentForkWorktreeClient.self].create = { directory, worktree in
+                    #expect(directory == "/Host/repo/src")
+                    #expect(worktree == request)
+                    return "/Host/repo/.worktrees/feature/src"
+                }
+            } operation: {
+                try await SessionLaunchPreparation.prepare(path: "~/repo/src", pluginID: "custom-agent", requireAgentLaunch: true, core: core, worktree: request)
+            }
+            #expect(await core.paths == ["/Host/repo/src", "/Host/repo/.worktrees/feature/src"])
+            #expect(prepared.workingDirectory == "/Host/repo/.worktrees/feature/src")
+            #expect(prepared.launch?.command == command.command)
+            #expect(prepared.launch?.args == command.args)
+            #expect(prepared.extraEnvironment == ["CONFIG_ROOT=/Host/config"])
+            #expect(prepared.failureDescription(AgentForkError("tmux failed")).contains("kept at /Host/repo/.worktrees/feature/src"))
+        }
+
+        @Test("Unavailable agents reject worktrees before Git even without the strict flag")
+        func unavailable() async {
+            await withDependencies {
+                $0[SessionDirectoryClient.self].resolve = { $0 }
+            } operation: {
+                for core: SessionLaunchTestCore? in [nil, SessionLaunchTestCore()] {
+                    await #expect(throws: SessionLaunchPreparation.LaunchError.self) {
+                        try await SessionLaunchPreparation.prepare(path: "/repo", pluginID: "custom-agent", requireAgentLaunch: false, core: core, worktree: request)
+                    }
+                }
+                await #expect(throws: SessionLaunchPreparation.LaunchError.self) {
+                    try await SessionLaunchPreparation.prepare(path: nil, pluginID: "custom-agent", requireAgentLaunch: false, core: nil, worktree: request)
+                }
+            }
+        }
+
+        @Test("Launch failure after checkout reports its retained path")
+        func retainedCheckout() async {
+            await withDependencies {
+                $0[SessionDirectoryClient.self].resolve = { $0 }
+                $0[AgentForkWorktreeClient.self].create = { _, _ in "/repo/.worktrees/feature" }
+            } operation: {
+                do {
+                    _ = try await SessionLaunchPreparation.prepare(
+                        path: "/repo",
+                        pluginID: "custom-agent",
+                        requireAgentLaunch: true,
+                        core: SessionLaunchTestCore(launch: .init(command: "agent"), launchLimit: 1),
+                        worktree: request,
+                    )
+                    Issue.record("A declined launch must fail")
+                } catch {
+                    #expect(error.localizedDescription.contains("declined the launch"))
+                    #expect(error.localizedDescription.contains("kept at /repo/.worktrees/feature"))
+                }
+            }
         }
     }
 

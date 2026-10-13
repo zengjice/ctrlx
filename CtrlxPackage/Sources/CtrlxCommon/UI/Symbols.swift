@@ -8,6 +8,10 @@ import SwiftUI
 @SFSymbol
 public enum Symbols: String {
     // swiftformat:sort:begin
+    case annotationArrow = "arrow.up.right"
+    case annotationRectangle = "rectangle"
+    case annotationUndo = "arrow.uturn.backward"
+
     case antenna2Bars = "antenna.radiowaves.left.and.right"
     case arrowClockwise = "arrow.clockwise"
     case arrowDown = "arrow.down"
@@ -47,6 +51,8 @@ public enum Symbols: String {
     case ellipsisCircle = "ellipsis.circle"
     case exclamationmarkCircleFill = "exclamationmark.circle.fill"
     case exclamationmarkTriangle = "exclamationmark.triangle"
+    case eye
+    case eyeSlash = "eye.slash"
     case faceSmiling = "face.smiling"
     case figureRun = "figure.run"
     case flag
@@ -89,9 +95,6 @@ public enum Symbols: String {
     case pauseCircleFill = "pause.circle.fill"
     case pencil
     case pencilLine = "pencil.line"
-    case annotationRectangle = "rectangle"
-    case annotationArrow = "arrow.up.right"
-    case annotationUndo = "arrow.uturn.backward"
     case photoBadgePlus = "photo.badge.plus"
     case play
     case playFill = "play.fill"

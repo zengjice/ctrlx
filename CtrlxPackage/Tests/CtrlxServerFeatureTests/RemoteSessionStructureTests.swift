@@ -67,6 +67,48 @@ struct RemoteSessionStructureTests {
         #expect(structure.canSyncBrowserCatalog([page], hostID: "B", sessionName: "new"))
         #expect(structure.canSyncBrowserCatalog([], hostID: "A", sessionName: "old"), "Empty catalogs must still remove closed pages")
         #expect(!structure.canSyncBrowserCatalog([], hostID: "missing", sessionName: "old"))
+        let simulator = RemoteSimulatorTab(
+            id: UUID(), sessionName: "new", windowID: "@0", sourcePaneID: "%0",
+            title: "iPhone", runtime: "iOS 27", isPrimary: true
+        )
+        #expect(!structure.canSyncBrowserCatalog([], simulators: [simulator], hostID: "A", sessionName: "old"))
+        #expect(structure.canSyncBrowserCatalog([], simulators: [simulator], hostID: "B", sessionName: "new"))
+    }
+
+    @Test("Simulator-only catalog updates trigger reconciliation without a pane change")
+    func simulatorCatalogChangesAreObserved() async throws {
+        _ = NSApplication.shared
+        let structure = RemoteSessionStructure(panes: [.init(pairId: "A", paneId: "%0"): pane("%0", session: "old")])
+        let simulator = RemoteSimulatorTab(
+            id: UUID(), sessionName: "old", windowID: "@0", sourcePaneID: "%0",
+            title: "iPhone", runtime: "iOS 27", isPrimary: true
+        )
+        var syncs = 0
+        func probe(_ catalog: [RemoteSimulatorTab]) -> some View {
+            Text("Remote workspace").modifier(RemoteSessionStructureModifier(
+                structure: structure, simulatorCatalogs: ["A": catalog],
+                onRename: { _, _ in Issue.record("Unexpected rename") },
+                onSyncBrowserTabs: { syncs += 1 },
+                onPrune: { Issue.record("Unexpected prune") }
+            ))
+        }
+        let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 100, height: 100), styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: probe([]))
+        window.contentView = hosting
+        defer { window.close() }
+        hosting.layoutSubtreeIfNeeded()
+        await Task.yield()
+        #expect(syncs == 1)
+        hosting.rootView = probe([simulator])
+        for _ in 0..<50 {
+            hosting.layoutSubtreeIfNeeded()
+            if syncs == 2 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(syncs == 2)
     }
 
     @Test("Host snapshots reach all mounted scenes before stale-session cleanup", arguments: [false, true])

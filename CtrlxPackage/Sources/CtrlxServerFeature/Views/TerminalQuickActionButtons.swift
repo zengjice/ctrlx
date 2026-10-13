@@ -23,11 +23,14 @@ struct TerminalQuickActionButtons: View {
 
         mutating func updateCommand(_ current: AgentCommandContext?, terminal: TerminalPhraseContext) -> Bool {
             guard phrase.hasSameInput(as: terminal) else { return false }
-            if let command { return command.hasSameInput(as: current) }
+            if let command {
+                return command.hasSameInput(as: current)
+            }
             guard let current else { return true }
-            guard current.target.hostID == phrase.target.hostID,
-                  current.target.paneID == phrase.target.paneID,
-                  current.inputRevision == phrase.inputRevision
+            guard
+                current.target.hostID == phrase.target.hostID,
+                current.target.paneID == phrase.target.paneID,
+                current.inputRevision == phrase.inputRevision
             else { return false }
             command = current
             return true
@@ -39,12 +42,17 @@ struct TerminalQuickActionButtons: View {
             phrasePanel = nil
             commandPanel = presentation
         } label: {
-            Text("/").font(.system(.body, design: .monospaced).bold())
+            Label {
+                Text("Commands")
+            } icon: {
+                Text("/").font(.system(.body, design: .monospaced).bold())
+            }
+            .frame(minWidth: 16, minHeight: 24)
         }
         .help("Agent commands for the focused terminal")
         .accessibilityLabel("Agent Commands")
         .accessibilityIdentifier("terminal-agent-command-control")
-        .popover(item: $commandPanel) { captured in
+        .popover(item: $commandPanel, arrowEdge: .bottom) { captured in
             MacAgentCommandPanel(
                 commands: captured.command?.commands ?? [],
                 pluginID: captured.command?.target.pluginID ?? "",
@@ -72,20 +80,22 @@ struct TerminalQuickActionButtons: View {
             commandPanel = nil
             phrasePanel = presentation
         } label: {
-            Symbols.textBubbleFill.image
+            Label("Quick Phrases", symbol: .textBubbleFill)
+                .frame(minWidth: 16, minHeight: 24)
         }
         .help("Quick phrases for the focused terminal")
         .accessibilityLabel("Quick Phrases")
         .accessibilityIdentifier("terminal-quick-phrase-control")
-        .popover(item: $phrasePanel) { captured in
+        .popover(item: $phrasePanel, arrowEdge: .bottom) { captured in
             MacQuickPhrasePanel(
                 store: settings.quickPhrases,
                 targetLabel: captured.label,
                 unavailableReason: phraseContext.unavailableReason,
                 send: { phrase in
                     let request = TerminalPhraseRequest(phrase: phrase, context: captured.phrase)
-                    guard let token = captured.token,
-                          request.isValid(in: phraseContext, savedPhrases: settings.quickPhrases.phrases)
+                    guard
+                        let token = captured.token,
+                        request.isValid(in: phraseContext, savedPhrases: settings.quickPhrases.phrases)
                     else { return false }
                     return router.send(phrase.keys, to: token)
                 }
@@ -157,7 +167,9 @@ struct TerminalQuickActionButtons: View {
     }
 
     private var commandUnavailableReason: String? {
-        if let context = commandContext { return context.unavailableReason }
+        if let context = commandContext {
+            return context.unavailableReason
+        }
         return pane == nil
             ? "Select a terminal pane to view agent commands."
             : "No supported agent is currently identified in this pane. Commands will appear when Codex or Claude Code is identified."
@@ -197,17 +209,31 @@ struct TerminalQuickActionStatusBarButtons: View {
     var body: some View {
         if let router {
             let ownsFocus = router.containsFocus(hostID: hostID, paneIDs: paneIDs)
-            HStack(spacing: 12) {
+            HStack(spacing: 2) {
                 TerminalQuickActionButtons(router: router)
             }
-            .buttonStyle(.borderless)
-            .controlSize(.mini)
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .labelStyle(TerminalQuickActionLabelStyle())
+            .font(.callout)
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
             // Reserve the controls' height so focus changes never resize terminals.
             .opacity(ownsFocus ? 1 : 0)
             .disabled(!ownsFocus)
             .accessibilityHidden(!ownsFocus)
             .accessibilityIdentifier("terminal-quick-action-status-bar")
         }
+    }
+}
+
+private struct TerminalQuickActionLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ViewThatFits(in: .horizontal) {
+            Label(configuration).labelStyle(.titleAndIcon)
+            configuration.icon
+        }
+        .lineLimit(1)
     }
 }
 

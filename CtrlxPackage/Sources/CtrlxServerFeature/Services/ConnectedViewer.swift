@@ -773,10 +773,15 @@ final public class ConnectedViewer: Identifiable {
             }
 
         case let .command(command):
-            if case let .browseBrowser(request) = command.command, let onCommand {
+            let isPreviewFrame: Bool? = switch command.command {
+            case let .browseBrowser(request): request.operation == .frame
+            case .browseSimulator: true
+            default: nil
+            }
+            if let isPreviewFrame, let onCommand {
                 // Frames are disposable; terminal output and ordered input are not.
-                if request.operation == .frame, !Self.canCaptureBrowserFrame(terminalSendQueueSnapshot) {
-                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Browser preview paused while the connection catches up.")))
+                if isPreviewFrame, !Self.canCaptureBrowserFrame(terminalSendQueueSnapshot) {
+                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Preview paused while the connection catches up.")))
                     return
                 }
                 let generation = connectionGeneration.current
@@ -784,12 +789,15 @@ final public class ConnectedViewer: Identifiable {
                     guard let self, self.connectionGeneration.isCurrent(generation) else { return }
                     await self.sendEncrypted(.commandResponse(response))
                 }) {
-                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Too many browser requests.")))
+                    await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Too many preview requests.")))
                 }
                 return
             }
             let isFileRequest: Bool = switch command.command {
-            case .browseFiles, .createSessionDirectory: true
+            case .browseFiles,
+                 .createSessionDirectory,
+                 .prepareSessionWorktree: true
+            case let .createTmuxSession(spec): spec.worktree != nil
             default: false
             }
             if isFileRequest, let onCommand {

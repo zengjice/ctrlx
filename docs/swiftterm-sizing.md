@@ -302,7 +302,9 @@ provide `session:index` cannot detach. Each terminal appears in only its owning
 native window's tab strip. Terminal, Files and Browser tabs can move between the
 main workbench and detached workbenches for the same Host and Session, or reorder
 within them. Cross-Host/session drops cannot merge workspaces. Git remains a
-per-workbench utility; Simulator tabs are not transferable.
+per-workbench utility; Simulator tabs are not transferable. Local simulator views
+and read-only Host simulator tabs remain in the main workbench, without being
+duplicated into every detached scene.
 
 Closing the native window returns its terminal ownership and live Files/Browser
 state to the main workbench without terminating tmux or reloading native browser
@@ -367,12 +369,12 @@ selection and persistence bookkeeping before pruning stale entries. The rename-c
 callback no longer migrates only its initiating scene. Agent activity, titles,
 cwd and dimensions do not change this structural identity; disconnects and
 partial window moves are not guessed to be renames.
-The same observer reconciles Host browser catalogs after migration, using the
+The same observer reconciles Host browser and simulator catalogs after migration, using the
 current session selection rather than a detail-view callback captured before
 the rename. Catalog and pane delivery may span separate renders: reconciliation
-waits when a source pane's session disagrees with its browser descriptor. Both
+waits when a source pane's session disagrees with either descriptor. Both
 split surfaces include the descriptor's session name in their view identity so
-a late catalog cannot leave an owned `RemoteBrowserSession` targeting the old
+a late catalog cannot leave an owned remote browser or simulator session targeting the old
 name. Browser tab IDs, ordering, split placement and selection remain unchanged.
 
 The explicit-Fit rule also applies here: moving, enlarging or entering fullscreen

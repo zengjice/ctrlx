@@ -370,6 +370,7 @@ public struct MainView: View {
             }
             .onChange(of: tmuxService.windows.map(\.id)) { _, _ in
                 coordinator.agentBrowser.register(agentBrowserWorkspace)
+                if detachedWorkspace == nil { coordinator.agentSimulator.register(simulatorWorkspace) }
             }
             .onChange(of: coordinator.detachedWindows.targets) { _, _ in
                 repairWorkspaceSelection()
@@ -594,6 +595,7 @@ public struct MainView: View {
         .modifier(RemoteSessionStructureModifier(
             structure: RemoteSessionStructure(panes: coordinator.remoteSessionStore?.paneStates ?? [:]),
             browserCatalogs: remoteBrowserCatalogs,
+            simulatorCatalogs: remoteSimulatorCatalogs,
             selection: selectedRemoteSession,
             onRename: { hostID, rename in
                 migrateRemoteSessionState(hostId: hostID, from: rename.oldName, to: rename.newName, windowIDs: rename.windowIDs)
@@ -1636,6 +1638,8 @@ public struct MainView: View {
         if let tabs = remoteSessionTabsStates[tabsKey], let id = tabs.selectedFileTabId, let tab = tabs.directoryTabs[id] {
             WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: remote.hostId, paneID: tab.sourcePaneID, connection: connection))
                 .id(tab.id)
+        } else if let selectedBrowserTab, let tab = remoteSessionTabsStates[tabsKey]?.remoteSimulatorTabs[selectedBrowserTab.id] {
+            RemoteSimulatorView(tab: tab, client: connection.relayClient).id("\(tab.id):\(tab.sessionName)")
         } else if let selectedBrowserTab, let tab = remoteSessionTabsStates[tabsKey]?.remoteBrowserTabs[selectedBrowserTab.id] {
             RemoteBrowserView(tab: tab, client: connection.relayClient).id("\(tab.id):\(tab.sessionName)")
         } else if let selectedBrowserTab, let state = remoteSessionTabsStates[tabsKey]?.agentBrowserStates[selectedBrowserTab.id] {
@@ -1736,7 +1740,11 @@ public struct MainView: View {
                 rightPanePlaceholder
             }
         case let .browser(id):
-            if let tab = sessionTabs.remoteBrowserTabs[id] {
+            if let tab = sessionTabs.remoteSimulatorTabs[id] {
+                RemoteSimulatorView(tab: tab, client: connection.relayClient)
+                    .id("\(tab.id):\(tab.sessionName)")
+                    .accessibilityIdentifier("split-right-pane")
+            } else if let tab = sessionTabs.remoteBrowserTabs[id] {
                 RemoteBrowserView(tab: tab, client: connection.relayClient)
                     .id("\(tab.id):\(tab.sessionName)")
                     .accessibilityIdentifier("split-right-pane")
@@ -4298,11 +4306,7 @@ public struct MainView: View {
             let pane = state.sourcePane
             let tabs = sessionFileTabsStates[pane.sessionName] ?? SessionFileTabsState()
             sessionFileTabsStates[pane.sessionName] = tabs
-            var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), displayTitle: state.handle.name, originWindowId: pane.windowId)
-            tab.isSimulator = true
-            tabs.openBrowserTabs.append(tab)
-            tabs.simulatorStates[state.id] = state
-            if tabs.rightSide.contains(.window(pane.windowId)) { tabs.rightSide.insert(.browser(state.id)) }
+            tabs.attachSimulator(state)
         }
         simulatorWorkspace.onSelect = { state, split in
             guard let (session, tabs) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }
@@ -4319,6 +4323,11 @@ public struct MainView: View {
         }
         simulatorWorkspace.onClose = { state in
             guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }
+            closeBrowserTab(state.id, sessionName: session)
+        }
+        simulatorWorkspace.onDetach = { state in
+            guard let (session, tabs) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }
+            tabs.simulatorStates.removeValue(forKey: state.id)
             closeBrowserTab(state.id, sessionName: session)
         }
         coordinator.agentSimulator.register(simulatorWorkspace)
@@ -4457,6 +4466,7 @@ public struct MainView: View {
     ) {
         let key = remoteTabsKey(hostId: hostId, sessionName: sessionName)
         guard let tabs = remoteSessionTabsStates[key] else { return }
+        guard tabs.remoteSimulatorTabs[tabId] == nil else { return }
         if let tab = tabs.remoteBrowserTabs[tabId],
            let client = coordinator.viewerConnectionManager?.connection(for: hostId)?.relayClient {
             Task {
@@ -4538,9 +4548,16 @@ public struct MainView: View {
         }
     }
 
+    private var remoteSimulatorCatalogs: [String: [RemoteSimulatorTab]] {
+        guard let manager = coordinator.viewerConnectionManager else { return [:] }
+        return Dictionary(uniqueKeysWithValues: manager.managedHostIDs.compactMap { hostID in
+            manager.connection(for: hostID).map { (hostID, $0.relayClient.simulatorTabs) }
+        })
+    }
+
     private func syncHostBrowserTabs(hostId: String, sessionName: String, client: ViewerRelayClient) {
         guard let store = coordinator.remoteSessionStore,
-              RemoteSessionStructure(panes: store.paneStates).canSyncBrowserCatalog(client.browserTabs, hostID: hostId, sessionName: sessionName) else { return }
+              RemoteSessionStructure(panes: store.paneStates).canSyncBrowserCatalog(client.browserTabs, simulators: client.simulatorTabs, hostID: hostId, sessionName: sessionName) else { return }
         let key = remoteTabsKey(hostId: hostId, sessionName: sessionName)
         let tabs = remoteSessionTabsStates[key] ?? SessionFileTabsState()
         remoteSessionTabsStates[key] = tabs
@@ -4549,7 +4566,12 @@ public struct MainView: View {
         }
         let windows = remoteSessionWindows(hostId: hostId, sessionName: sessionName)
             .filter { ownsTerminal(hostID: hostId, windowID: $0.stableId) }
-        if tabs.syncHostBrowserTabs(values, sessionWindowIDs: windows.map(\.stableId)) {
+        let browsersCollapsed = tabs.syncHostBrowserTabs(values, sessionWindowIDs: windows.map(\.stableId))
+        let simulatorsCollapsed = tabs.syncHostSimulatorTabs(
+            client.simulatorTabs.filter { detachedWorkspace == nil && $0.sessionName == sessionName },
+            sessionWindowIDs: windows.map(\.stableId)
+        )
+        if browsersCollapsed || simulatorsCollapsed {
             restoreRemoteLeftWindowSelection(hostId: hostId, sessionName: sessionName, sessionWindows: windows)
         }
     }
@@ -5085,7 +5107,9 @@ public struct MainView: View {
     // MARK: - New Session Actions
 
     private var localDirectorySource: SessionDirectorySource {
-        SessionDirectorySource(id: "local") { request in
+        SessionDirectorySource(id: "local", prepareWorktree: { path in
+            try await SessionLaunchPreparation.inspectWorktree(path: path)
+        }) { request in
             @Dependency(SessionDirectoryClient.self) var client
             return try await client.list(request)
         }
@@ -5639,6 +5663,7 @@ public struct MainView: View {
             // return when the task is cancelled mid-retry), so a later create
             // isn't blocked by `guard creatingSelection == nil`.
             defer { creatingSelection = nil }
+            var preparation: SessionLaunchPreparation?
             do {
                 // Determine session name and working directory
                 let sessionName = project?.name ?? "terminal"
@@ -5650,11 +5675,13 @@ public struct MainView: View {
                     try await coordinator.resolveLaunch(
                         forPluginID: project.pluginID,
                         projectPath: project.path,
-                        requireAgentLaunch: request.requiresAgentLaunch
+                        requireAgentLaunch: request.requiresAgentLaunch,
+                        worktree: request.worktree
                     )
                 } else {
                     SessionLaunchPreparation(workingDirectory: nil, launch: nil)
                 }
+                preparation = launch
                 let runCommand = launch.runCommand
                 let workingDirectory = launch.workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path()
 
@@ -5682,7 +5709,7 @@ public struct MainView: View {
                     workingDirectory: workingDirectory,
                     runCommand: runCommand,
                     extraEnvironment: extraEnvironment,
-                    firstWindowName: firstWindowName
+                    firstWindowName: request.worktree?.name ?? firstWindowName
                 )
 
                 // Find the window containing the new pane and select it.
@@ -5718,7 +5745,7 @@ public struct MainView: View {
                     attachError = "Session created but its window didn't appear in time. Try selecting it from the sidebar."
                 }
             } catch {
-                attachError = "Failed to create session: \(error.localizedDescription)"
+                attachError = "Failed to create session: \(preparation?.failureDescription(error) ?? error.localizedDescription)"
             }
         }
     }
@@ -5808,7 +5835,8 @@ public struct MainView: View {
             workingDirectory: project?.path,
             configDir: project?.configDir,
             pluginID: project?.pluginID ?? AgentLaunchDefaults.pluginID,
-            requireAgentLaunch: request.requiresAgentLaunch
+            requireAgentLaunch: request.requiresAgentLaunch,
+            worktree: request.worktree
         )
 
         guard let manager = coordinator.viewerConnectionManager else {
@@ -5817,7 +5845,7 @@ public struct MainView: View {
             return
         }
 
-        let result = await manager.sendCommand(command, paneId: "", hostId: host.id)
+        let result = await manager.sendCommand(command, paneId: "", hostId: host.id, timeout: request.worktree == nil ? 15 : 180)
 
         switch result {
         case let .success(response):

@@ -104,7 +104,10 @@ startup failures without silently falling back. On first registration the CLI as
 socket to start the runtime, then discovers the native browser endpoint. The
 requested state directory must match that host before it initializes Chromium;
 an isolated CLI cannot start the production profile. `browser identity` remains
-read-only, and an existing grant is never registered against a replacement host.
+read-only. `tabs`/`open` prepare the matching local Host and compare its browser
+epoch under the agent's context lock. After a runtime change, the still-live
+agent obtains a fresh random grant; the old grant is never reused. An unchanged
+epoch keeps the existing grant, including any authorization refusal.
 Simulator-only and terminal-only sessions do not initialize Chromium. Once used,
 the browser runtime stays alive until application shutdown.
 
@@ -292,12 +295,20 @@ file capture does not require or open a browser tab.
 - Page input actions reveal and focus their explicitly authorized native tab before
   dispatching real input. They never use the currently selected tab as a target.
 - Agent exit revokes its authority but retains pages. Browser restart invalidates
-  old grants. This iteration does not restore the old tab layout after restart.
+  old grants and tab IDs. A subsequent `tabs`/`open` can register the same live
+  Codex/Claude Code with new credentials after Host and process revalidation;
+  the saved engine choice is retained. Only a confirmed epoch change permits
+  re-registration, not a timeout or a same-runtime authorization refusal.
+  Page-targeted operations never recover/replay automatically, and no action is
+  retried after sending. Old pages are not restored; human pages are not adopted.
 
 `AgentBrowserIdentityTests` covers both native callers, mixed nested ancestry,
 unsupported executables, UID boundaries, exit/PID reuse and private context reuse.
 `AgentBrowser/tests/cli.py <built-CLI>` exercises real kernel ancestry and engine
 preferences under disposable Codex/Claude-named binaries (no real agent or browser).
+`AgentBrowser/tests/reconnect.py <built-CLI>` uses the real CLI and disposable
+native callers with mock Host/browser sockets to cover close/reopen, epoch
+recovery, concurrent registration, failed recovery and no mutation replay.
 `scripts/tests/test_agent_skills.py` checks both bundles receive identical resources.
 These do not prove automatic skill choice or real-agent browser operation; those
 still require a live acceptance run after updating the Host and agent plugins.

@@ -8,6 +8,20 @@ import Testing
 @testable import CtrlxCLI
 
 struct SimulatorCommandTests {
+    @Test
+    func explicitAdditionalDeviceSurvivesBatchAndRejectsOtherOperations() throws {
+        #expect(try SimulatorActionCommand.parse(["open"]).parameters()["new"] == nil)
+        #expect(try SimulatorActionCommand.parse(["open", "--new"]).parameters()["new"] == .bool(true))
+        let batch = try SimulatorBatchCommand.parse(["--input", "/unused.json"])
+        let prepared = try batch.prepare(JSONEncoder().encode([["open", "--new"]]))
+        guard case let .array(actions)? = prepared.parameters["actions"], case let .object(action) = actions[0] else {
+            Issue.record("Missing open action")
+            return
+        }
+        #expect(action["new"] == .bool(true))
+        #expect(throws: (any Error).self) { try SimulatorActionCommand.parse(["devices", "--new"]).parameters() }
+    }
+
     @Test func recordingAndPinchSurviveBatchEncodingWithoutTreatingVideoAsPNG() throws {
         let batch = try SimulatorBatchCommand.parse(["--input", "/unused.json"])
         let prepared = try batch.prepare(JSONEncoder().encode([

@@ -71,6 +71,38 @@ struct AgentForkWorktreeTests {
         }
     }
 
+    @Test("Start in Directory creates a fresh branch and prepares a fresh agent in its subdirectory")
+    func directorySession() async throws {
+        try await live {
+            let fixture = try await ForkGitFixture.make()
+            defer { try? fixture.cleanUp() }
+            let manager = AgentForkWorktreeManager()
+            let core = SessionLaunchTestCore(launch: .init(command: "custom-agent", args: ["--start"]))
+            try await withDependencies {
+                $0[AgentForkWorktreeClient.self] = .init(
+                    inspect: { try await manager.inspect($0) },
+                    create: { try await manager.create($0, request: $1) },
+                )
+            } operation: {
+                let plan = try await SessionLaunchPreparation.inspectWorktree(path: fixture.source)
+                let request = try plan.request(name: "fresh-session", allowUncommittedChanges: false)
+                let prepared = try await SessionLaunchPreparation.prepare(path: fixture.source, pluginID: "custom-agent", requireAgentLaunch: true, core: core, worktree: request)
+                let destination = plan.directory(name: "fresh-session") + "/src folder"
+                #expect(prepared.workingDirectory == destination)
+                #expect(prepared.runCommand == "custom-agent '--start'")
+                #expect(await core.paths == [fixture.source, destination])
+                #expect(try await fixture.git(["branch", "--show-current"], at: destination) == "fresh-session")
+                #expect(try await fixture.git(["rev-parse", "HEAD"], at: destination) == plan.head)
+                #expect(try await fixture.git(["branch", "--show-current"]) == "main")
+                #expect(try await fixture.git(["status", "--porcelain"]).isEmpty)
+                await #expect(throws: AgentForkError.self) {
+                    try await SessionLaunchPreparation.prepare(path: fixture.source, pluginID: "custom-agent", requireAgentLaunch: true, core: core, worktree: request)
+                }
+                #expect(FileManager.default.fileExists(atPath: destination))
+            }
+        }
+    }
+
     @Test("Negated ignore rules must reject checkout rather than stage a nested repository", arguments: ["!*/\n", "/.worktrees/\n!/.worktrees/\n"])
     func overriddenExclude(ignoreRules: String) async throws {
         try await live {

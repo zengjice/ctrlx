@@ -56,6 +56,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// Absent on older hosts: viewers retain manual entry and send no lookup.
     public let supportsDirectoryBrowsing: Bool?
     public let supportsDirectoryCreation: Bool?
+    public let supportsSessionWorktrees: Bool?
     public let supportsFileBrowsing: Bool?
     public let supportsFileDownloads: Bool?
     public let supportsFileUploads: Bool?
@@ -72,6 +73,8 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsPaneBrowser: Bool?
     public let supportsAgentImageInput: Bool?
     public let browserTabs: [RemoteBrowserTab]?
+    public let supportsSimulatorViewing: Bool?
+    public let simulatorTabs: [RemoteSimulatorTab]?
 
     public init(
         pairId: String,
@@ -83,6 +86,7 @@ public struct SessionStateMessage: Codable, Sendable {
         sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil,
         supportsDirectoryBrowsing: Bool? = nil,
         supportsDirectoryCreation: Bool? = nil,
+        supportsSessionWorktrees: Bool? = nil,
         supportsAgentWindowLaunch: Bool? = nil,
         supportsAgentFork: Bool? = nil,
         supportsTerminalPaste: Bool? = nil,
@@ -94,7 +98,9 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsBrowserSharing: Bool? = nil,
         supportsPaneBrowser: Bool? = nil,
         supportsAgentImageInput: Bool? = nil,
-        browserTabs: [RemoteBrowserTab]? = nil
+        browserTabs: [RemoteBrowserTab]? = nil,
+        supportsSimulatorViewing: Bool? = nil,
+        simulatorTabs: [RemoteSimulatorTab]? = nil
     ) {
         self.pairId = pairId
         self.paneStates = paneStates
@@ -105,6 +111,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.sharedTerminalLayouts = sharedTerminalLayouts
         self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
         self.supportsDirectoryCreation = supportsDirectoryCreation
+        self.supportsSessionWorktrees = supportsSessionWorktrees
         self.supportsFileBrowsing = supportsFileBrowsing
         self.supportsFileDownloads = supportsFileDownloads
         self.supportsFileUploads = supportsFileUploads
@@ -117,6 +124,8 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsPaneBrowser = supportsPaneBrowser
         self.supportsAgentImageInput = supportsAgentImageInput
         self.browserTabs = browserTabs
+        self.supportsSimulatorViewing = supportsSimulatorViewing
+        self.simulatorTabs = simulatorTabs
     }
 
     /// Returns a copy with the `pairId` replaced. Centralises the per-connection
@@ -134,6 +143,7 @@ public struct SessionStateMessage: Codable, Sendable {
             sharedTerminalLayouts: sharedTerminalLayouts,
             supportsDirectoryBrowsing: supportsDirectoryBrowsing,
             supportsDirectoryCreation: supportsDirectoryCreation,
+            supportsSessionWorktrees: supportsSessionWorktrees,
             supportsAgentWindowLaunch: supportsAgentWindowLaunch,
             supportsAgentFork: supportsAgentFork,
             supportsTerminalPaste: supportsTerminalPaste,
@@ -145,7 +155,9 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsBrowserSharing: supportsBrowserSharing,
             supportsPaneBrowser: supportsPaneBrowser,
             supportsAgentImageInput: supportsAgentImageInput,
-            browserTabs: browserTabs
+            browserTabs: browserTabs,
+            supportsSimulatorViewing: supportsSimulatorViewing,
+            simulatorTabs: simulatorTabs
         )
     }
 }

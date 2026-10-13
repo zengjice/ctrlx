@@ -1,4 +1,5 @@
 import CtrlxCommon
+import CtrlxNetworking
 import Dependencies
 import Foundation
 import CtrlxPluginProtocol
@@ -8,17 +9,20 @@ import CtrlxPluginProtocol
 struct SessionLaunchPreparation: Sendable {
     let workingDirectory: String?
     let launch: LaunchCommand?
+    let createdWorktreeDirectory: String?
     private let forkEnvironmentToUnset: [String]?
 
-    init(workingDirectory: String?, launch: LaunchCommand?) {
+    init(workingDirectory: String?, launch: LaunchCommand?, createdWorktreeDirectory: String? = nil) {
         self.workingDirectory = workingDirectory
         self.launch = launch
+        self.createdWorktreeDirectory = createdWorktreeDirectory
         forkEnvironmentToUnset = nil
     }
 
     init(workingDirectory: String, fork: AgentForkLaunch) {
         self.workingDirectory = workingDirectory
         launch = fork.command
+        createdWorktreeDirectory = nil
         forkEnvironmentToUnset = fork.unsetEnvironment
     }
 
@@ -58,8 +62,10 @@ struct SessionLaunchPreparation: Sendable {
         path: String?,
         pluginID: String,
         requireAgentLaunch: Bool,
-        core: (any PluginCore)?
+        core: (any PluginCore)?,
+        worktree: ForkAgentSession.Worktree? = nil
     ) async throws -> Self {
+        let requireAgentLaunch = requireAgentLaunch || worktree != nil
         guard let path else {
             guard !requireAgentLaunch else { throw LaunchError.missingDirectory }
             return Self(workingDirectory: nil, launch: nil)
@@ -69,7 +75,25 @@ struct SessionLaunchPreparation: Sendable {
         if requireAgentLaunch && core == nil { throw LaunchError.unavailable(pluginID) }
         let launch = await core?.commandForLaunch(projectPath: directory)
         if requireAgentLaunch && launch == nil { throw LaunchError.autoRunDisabled(pluginID) }
-        return Self(workingDirectory: directory, launch: launch)
+        guard let worktree else { return Self(workingDirectory: directory, launch: launch) }
+        @Dependency(AgentForkWorktreeClient.self) var worktrees
+        let destination = try await worktrees.create(directory, worktree)
+        let prepared = await Self(workingDirectory: destination, launch: core?.commandForLaunch(projectPath: destination), createdWorktreeDirectory: destination)
+        guard prepared.launch != nil else {
+            throw AgentForkError(prepared.failureDescription(LaunchError.autoRunDisabled(pluginID)))
+        }
+        return prepared
+    }
+
+    static func inspectWorktree(path: String) async throws -> AgentForkWorktree {
+        @Dependency(SessionDirectoryClient.self) var directories
+        @Dependency(AgentForkWorktreeClient.self) var worktrees
+        let directory = try await directories.resolve(path)
+        return try await worktrees.inspect(directory)
+    }
+
+    func failureDescription(_ error: any Error) -> String {
+        error.localizedDescription + (createdWorktreeDirectory.map { "\nThe new worktree is kept at \($0). Check it before retrying." } ?? "")
     }
 
     enum LaunchError: Error, LocalizedError {

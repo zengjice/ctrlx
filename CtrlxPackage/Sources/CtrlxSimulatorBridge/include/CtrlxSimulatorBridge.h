@@ -6,6 +6,9 @@ NS_ASSUME_NONNULL_BEGIN
 typedef void (^CXSimulatorSurfaceHandler)(IOSurfaceRef surface, NSDictionary<NSString *, id> *geometry);
 typedef void (^CXSimulatorReply)(NSDictionary<NSString *, id> * _Nullable result, NSError * _Nullable error);
 
+// The caller keeps the copied surface immutable until encoding returns.
+NSDictionary<NSString *, id> * _Nullable CXSimulatorCreatePreview(IOSurfaceRef surface, int orientation, NSUInteger maximumDimension);
+
 @interface CXSimulatorDevice : NSObject
 - (nullable instancetype)initWithDeveloperDirectory:(NSString *)developerDirectory
                                          deviceSet:(NSString *)deviceSet

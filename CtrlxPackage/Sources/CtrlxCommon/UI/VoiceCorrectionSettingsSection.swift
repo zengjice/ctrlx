@@ -4,6 +4,8 @@
     public struct VoiceCorrectionSettingsSection: View {
         @Bindable private var settings: VoiceCorrectionSettings
         @State private var model = VoiceCorrectionSettingsModel()
+        @Environment(\.scenePhase) private var scenePhase
+        @State private var isAPIKeyVisible = false
 
         public init(settings: VoiceCorrectionSettings) {
             self.settings = settings
@@ -18,19 +20,38 @@
                 }
                 .disabled(model.isBusy)
 
-                SecureField(
-                    model.hasStoredAPIKey ? "Replace saved API key" : "API key",
-                    text: $model.apiKeyDraft
-                )
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
-                .autocorrectionDisabled()
-                .textContentType(.password)
-                .privacySensitive()
+                HStack {
+                    Group {
+                        if isAPIKeyVisible {
+                            TextField("API key", text: $model.apiKeyDraft)
+                        } else {
+                            SecureField("API key", text: $model.apiKeyDraft)
+                        }
+                    }
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .autocorrectionDisabled()
+                    .textContentType(.password)
+                    .privacySensitive()
+
+                    Button {
+                        isAPIKeyVisible.toggle()
+                    } label: {
+                        Label(
+                            isAPIKeyVisible ? "Hide API Key" : "Show API Key",
+                            symbol: isAPIKeyVisible ? .eyeSlash : .eye
+                        )
+                        .labelStyle(.iconOnly)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                }
                 .disabled(model.isBusy)
 
                 Button {
+                    isAPIKeyVisible = false
                     Task {
                         await model.saveAPIKey(settings: settings)
                     }
@@ -120,6 +141,7 @@
 
                 if model.hasStoredAPIKey {
                     Button("Remove API Key", role: .destructive) {
+                        isAPIKeyVisible = false
                         Task {
                             await model.removeAPIKey(settings: settings)
                         }
@@ -151,6 +173,17 @@
             }
             .task(id: settings.provider) {
                 await model.prepare(settings: settings)
+            }
+            .onChange(of: settings.provider) {
+                isAPIKeyVisible = false
+            }
+            .onChange(of: scenePhase) {
+                if scenePhase != .active {
+                    isAPIKeyVisible = false
+                }
+            }
+            .onDisappear {
+                isAPIKeyVisible = false
             }
         }
     }

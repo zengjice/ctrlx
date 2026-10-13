@@ -18,11 +18,12 @@ Remote endpoints are rejected; Node wrappers may lack a recognizable agent execu
 Read [capabilities and limits](references/operations.md#capability-coverage) when assessing
 unsupported tasks, native limitations or validation scope.
 
-Start with `ctrlx ios identity` and `ctrlx ios devices`; reuse a suitable
-owned device. Only when another is needed, use `inventory` to choose installed
-`--runtime` / `--device-type` identifiers, then `open`. Use its CtrlX device ID below:
+Start with `ctrlx ios identity` and `ctrlx ios devices`. `open` reuses this
+pane's default device; `open --new` explicitly adds another. Use `inventory` for
+installed runtime/type IDs. Use the returned CtrlX device ID below:
 
 ```sh
+ctrlx ios open
 ctrlx ios status --device <id>
 ctrlx ios install --device <id> --app /absolute/path/App.app
 ctrlx ios launch --device <id> --bundle com.example.app
@@ -33,13 +34,14 @@ ctrlx ios screenshot --device <id> --output /tmp/new-simulator.png
 ctrlx ios close --device <id>
 ```
 
-`open` returns a CtrlX device ID, scoped to this live agent, and its UDID.
+`open` returns the live agent's CtrlX device ID and its UDID.
 CtrlX has a private device set and defaults to two open devices; change the limit
 with `config --max-devices 8`. `resources` reports pressure, reclaimable memory,
 swap and free disk. Boot requires normal pressure and the configured reserves.
-`close`, agent exit or ten hidden idle minutes shuts down the device, keeping data.
-`open` reuses a shut-down device of the same runtime/type or creates one.
-Reuse preserves apps/data but assigns a new CtrlX ID and live owner.
+`close`, agent exit or ten idle minutes without local display/viewer activity
+shuts down the device, keeping data. Opening a closed guest assigns a new ID.
+Closing the Host workbench only detaches its view. Paired Mac/iOS Viewers can
+observe it read-only; they cannot start, close or control devices.
 Read operations for cleanup, `pinch` and `record-start` / `record-stop`.
 
 `show --device <id>` selects an owned tab; add `--split` to place it in the right
@@ -79,7 +81,7 @@ wait for the app's content; AX may be partial during the transition.
 (`--timeout-ms 1...60000`). Timeout can follow a successful launch: observe before
 acting. Timed-out writes are never retried automatically.
 
-Current native transport requires CoreSimulator 1155.4 or newer. Simulator
+Current native transport requires CoreSimulator 1155.4 or newer. Local simulator
 display/input do not use screen recording, desktop mouse automation or a Relay.
 Read [operations](references/operations.md) for targets, storage, gestures, recording and environment.
 `batch --input actions.json` runs up to 16 actions; see operations.
