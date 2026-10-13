@@ -24,6 +24,7 @@
             let coordinator = withDependencies {
                 $0[PreferencesService.self] = .inMemory()
                 $0[SecretsService.self] = .inMemory()
+                $0[SimulatorSystemClient.self] = SimulatorSystemClient()
             } operation: {
                 AppCoordinator()
             }
@@ -63,6 +64,7 @@
             let coordinator = withDependencies {
                 $0[PreferencesService.self] = .inMemory()
                 $0[SecretsService.self] = .inMemory()
+                $0[SimulatorSystemClient.self] = SimulatorSystemClient()
             } operation: {
                 AppCoordinator()
             }
