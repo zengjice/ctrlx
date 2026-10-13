@@ -31,6 +31,7 @@
 | 键盘与文本 | `key`、`button`、`paste` | HID 按键及修饰键组合，Home / 锁屏 / 音量键，Unicode 剪贴板粘贴和指定目标的 iOS 菜单粘贴；人工输入采用 iOS 硬件键盘输入源 |
 | 原生显示 | `show`、`show --split`、`rotate`、`display-mode` | 内嵌 Metal 画面、左右分栏、方向切换、默认同步 / 可选低延迟显示。低延迟模式可能撕裂；选择标签不保证 Mac App 自动取得前台 |
 | Viewer 查看 | Mac / iOS Viewer 的 Host 模拟器标签 | 共享 Host 设备的只读画面；选择独立，隐藏 / 后台 / 断线停止取帧，无远程输入和设备关闭操作 |
+| 截图标注 | Mac Host / Mac Viewer / iOS Viewer 标签内的 Annotate Screenshot | 原地冻结截图，框选 / 箭头 / 画笔后添加至同会话 Agent 输入；不发送回车、不抢模拟器控制权 |
 | 环境 | `location`、`appearance`、`privacy`、`push` | 固定定位及清除定位模拟、深浅色、列举权限的 grant / revoke / reset、向指定 App 注入模拟推送；关闭时不自动恢复这些配置 |
 | 资源与服务配置 | `config`、`resources`、`metrics`，`open --profile` / `--requires` | 默认双开，数量可配置为 1...32；检查内存压力和内存 / 磁盘保留量。报告进程 footprint / CPU，支持 standard / balanced 和功能依赖保留；配置上限不等于实测容量 |
 | 诊断 | `logs`、`crashes` | 按设备与 App 身份查询有时间、条数及字节上限的日志和崩溃记录；截断和空结果均不能证明从未出错 |
@@ -92,6 +93,32 @@ JPEG，不经 PNG 落盘或录屏。按 Viewer 实际画布缩放、不放大源
 标记 readOnly，预览超时不使输入连接失效。图片经过现有 E2EE / Relay，无新端口或
 Relay 业务接口。此刷新策略不承诺远程达到本地 ≥50 FPS / ≤100 ms，约 5.6 FPS 仅是
 忽略网络和编码时间的理论上限。无 Viewer 请求时无远程编码或磁盘写入。
+
+### 三端截图标注
+
+模拟器标签顶部提供 **Annotate Screenshot**，在首帧就绪、图片投递能力可用时启用。
+复用 `BrowserAnnotationSurface`，在原位置覆盖一张只读截图，不另开编辑页，也不卸载
+Host 的原生渲染视图。支持红色框选、箭头、画笔、撤销、清空、取消和 **Add to Input**；
+笔迹使用图片归一化坐标，窗口缩放 / 分栏不改变落点。冻结的是本次截图，设备与其他
+Viewer 继续运行；设备随后旋转也不会改变正在标注的画布。
+
+Host 与 Viewer 都复用 `BrowseSimulator` 的有界 `preview`，请求最长边 2560 的新截图，
+无新端口、Relay 消息或磁盘 PNG。截图期间关闭设备、取消操作或来源 pane / window / session
+变化时拒绝过期结果；解码失败不进入可发送的画布。Viewer 从有效预览同步当前归属，
+每次捕获开始时单独固定路由快照，而非始终与首次打开的窗口比较；已完成的同会话窗口迁移
+不要求重建 Viewer，过期轮询不能回写旧归属。Viewer 标注期间暂停自身轮询，取消或
+完成后重新取帧，旧在途请求不能覆盖新画面。Mac Host 只隔离当前视图的鼠标、按键及 Home，
+释放已有人工输入与键盘焦点，不发 `claim`、不撤销 Agent 的 writer，也不暂停原生渲染。
+
+捕获开始时固定来源 pane 中已识别的图片接收 Agent 身份；没有该目标则要求显式选择
+同会话 Agent，不自动退到其他 pane。投递前沿用 `AgentImageTarget` 的完整身份 / 可输入状态
+校验，通过既有图片附件链路追加图片，不覆盖已有草稿、不发送回车。失败保留当前标注；
+已确认投递后仅重试打开目标，不能重复插图。iOS 复用 `AnnotationTerminalHandoff`，后台挂载
+目标终端并等待所有 pane 就绪后再露出，切换标签 / 断线 / 取消使旧交接失效。
+
+此能力只编辑截图，不增加 Viewer 对模拟器的远程写权限；不支持笔迹跨端同步、持久草稿、
+视频标注或控制设备。功能代码 / SDK 编译与实际配对端到端验收分别记录在
+[实施清单](v3.0.60/STAGE1_TODO.md)，不扩展既有性能结论。
 
 ### 当前未提供
 

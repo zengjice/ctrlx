@@ -14,6 +14,7 @@
 
     final private class PreviewTestConnection: CXSimulatorConnection, @unchecked Sendable {
         let commands = Mutex<[String]>([])
+        let requests = Mutex<[[String: JSONValue]]>([])
         let hold = Mutex(false)
         let replies = Mutex<[CXSimulatorDataReply]>([])
         override func invalidate() { }
@@ -21,6 +22,9 @@
             let request = try? JSONDecoder().decode([String: JSONValue].self, from: data)
             let command = request?["command"]?.stringValue ?? ""
             commands.withLock { $0.append(command) }
+            if let request {
+                requests.withLock { $0.append(request) }
+            }
             if command == "preview" {
                 if hold.withLock({ $0 }) {
                     replies.withLock { $0.append(reply) }
@@ -580,6 +584,52 @@
             #expect((await screenshot.value).ok)
             #expect(fixture.connection.commands.withLock { $0.filter { ["preview", "screenshot"].contains($0) } } == ["preview", "screenshot"])
             #expect(state.writer == writer)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func annotationUsesReadOnlyPreviewWithoutTakingAgentControl() async throws {
+            let fixture = try Fixture()
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            let writer = state.writer
+            let generation = state.generation
+            let inputRevision = state.manualInputRevision
+            let commandCount = fixture.connection.commands.withLock { $0.count }
+            #expect(!state.hasPresentedFrame)
+            state.view.onFirstFrame()
+            #expect(state.hasPresentedFrame)
+            state.view.setInputSuppressed(true)
+            let screenshot = try await fixture.service.annotationScreenshot(state)
+            state.view.setInputSuppressed(false)
+            #expect(screenshot == Data([1]))
+            #expect(state.writer == writer && writer != nil)
+            #expect(state.generation == generation && state.manualInputRevision == inputRevision)
+            #expect(fixture.connection.commands.withLock { Array($0.dropFirst(commandCount)) } == ["preview"])
+            let request = try #require(fixture.connection.requests.withLock { $0.last })
+            #expect(request["readOnly"] == .bool(true))
+            #expect(request["maximumDimension"] == .int(RemoteSimulatorFrame.maximumDimension))
+            await fixture.service.shutdown()
+        }
+
+        @Test(arguments: ["window", "session", "close", "cancel"])
+        func annotationRejectsLateCapturesAfterSourceChanges(_ change: String) async throws {
+            let fixture = try Fixture()
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            fixture.connection.hold.withLock { $0 = true }
+            let capture = Task { try await fixture.service.annotationScreenshot(state) }
+            try await wait { fixture.connection.replies.withLock { $0.count == 1 } }
+            switch change {
+            case "window",
+                 "session":
+                fixture.pane = Fixture.pane(session: change == "session" ? "moved" : "work", window: 2)
+                fixture.service.updateSimulatorRoutes([fixture.pane])
+            case "close": fixture.service.close(state)
+            default: capture.cancel()
+            }
+            fixture.connection.release()
+            await #expect(throws: (any Error).self) { try await capture.value }
             await fixture.service.shutdown()
         }
 

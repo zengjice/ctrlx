@@ -4,7 +4,7 @@ import Testing
 
 @MainActor @Suite("Annotation to terminal handoff")
 struct AnnotationTerminalHandoffTests {
-    @Test(arguments: [AnnotationTerminalHandoff.Source.browser(UUID()), .file(UUID())])
+    @Test(arguments: [AnnotationTerminalHandoff.Source.browser(UUID()), .file(UUID()), .simulator(UUID())])
     func waitsForEveryPaneAndKeepsDestinationMountedUntilReveal(source: AnnotationTerminalHandoff.Source) async throws {
         let handoff = AnnotationTerminalHandoff()
         let task = Task { try await handoff.prepare(source: source, windowID: "@2", paneIDs: ["%1", "%2"]) }
@@ -27,9 +27,10 @@ struct AnnotationTerminalHandoffTests {
         #expect(handoff.request == nil)
     }
 
-    @Test func cancellationReleasesDestination() async throws {
+    @Test(arguments: [AnnotationTerminalHandoff.Source.file(UUID()), .simulator(UUID())])
+    func cancellationReleasesDestination(source: AnnotationTerminalHandoff.Source) async throws {
         let handoff = AnnotationTerminalHandoff()
-        let task = Task { try await handoff.prepare(source: .file(UUID()), windowID: "@2", paneIDs: ["%1"]) }
+        let task = Task { try await handoff.prepare(source: source, windowID: "@2", paneIDs: ["%1"]) }
         defer { task.cancel(); handoff.cancel() }
         _ = try await pendingRequest(handoff)
         task.cancel()
@@ -89,10 +90,11 @@ struct AnnotationTerminalHandoffTests {
         let first = Task { try await handoff.prepare(source: .browser(sourceID), windowID: "@1", paneIDs: ["%1"]) }
         defer { first.cancel(); handoff.cancel() }
         let old = try await pendingRequest(handoff)
-        let second = Task { try await handoff.prepare(source: .file(sourceID), windowID: "@2", paneIDs: ["%2"]) }
+        let second = Task { try await handoff.prepare(source: .simulator(sourceID), windowID: "@2", paneIDs: ["%2"]) }
         defer { second.cancel() }
         await #expect(throws: CancellationError.self) { try await first.value }
         let current = try #require(handoff.request)
+        #expect(current.source == .simulator(sourceID))
         first.cancel()
         handoff.cancel(id: old.id)
         handoff.update(.ready, paneID: "%1", requestID: old.id)

@@ -282,6 +282,18 @@
             )
         }
 
+        func annotationScreenshot(_ state: SimulatorTabState) async throws -> Data {
+            let source = remoteDescriptor(state)
+            let response = try await handleSimulator(BrowseSimulator(
+                sessionName: source.sessionName, tabID: source.id,
+                frameMaxDimension: RemoteSimulatorFrame.maximumDimension
+            ))
+            guard response.tab.windowID == source.windowID, response.tab.sourcePaneID == source.sourcePaneID else {
+                throw SimulatorFailure("The simulator moved during capture. Reopen the tab and try again")
+            }
+            return response.frame.jpeg
+        }
+
         func handleSimulator(_ request: BrowseSimulator) async throws -> RemoteSimulatorResponse {
             guard
                 supportsSimulatorViewing, let state = tabs[request.tabID], !state.isClosed,
@@ -458,6 +470,7 @@
                 handle: handle, owner: owner, sourcePane: pane, workspaceID: detachedWorkspaceID, view: view, service: self
             )
             tabs[state.id] = state
+            view.onFirstFrame = { [weak state] in state?.hasPresentedFrame = true }
             view.onTouch = { [weak self, weak state] point, phase in
                 guard let self, let state else { return }
                 self.manualTouch(state, point: point, phase: phase, receivedAt: state.view.inputEventReceivedAt)
@@ -1595,6 +1608,7 @@
             didSet { view.setDisplayMode(displayMode) }
         }
         var error: String?
+        var hasPresentedFrame = false
         var isClosed = false
         @ObservationIgnored var generation = 0
         // Keyboard activity must revoke pending claims without discarding queued touch events.

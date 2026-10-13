@@ -176,6 +176,9 @@
         }
 
         private var annotationSource: AnnotationTerminalHandoff.Source? {
+            if let tab = selectedSimulator {
+                return .simulator(tab.id)
+            }
             if let tab = selectedBrowser { return .browser(tab.id) }
             if let tab = fileWorkspace.selected { return .file(tab.id) }
             return nil
@@ -200,6 +203,10 @@
                 }
                 if let tab = selectedSimulator {
                     RemoteSimulatorView(tab: tab, client: relayClient)
+                        .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
+                            targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
+                            didSend: { target in try await revealAnnotationTarget(target, source: .simulator(tab.id)) }
+                        ))
                         .background(Color(.systemBackground))
                         .id(tab.id)
                 } else if let tab = selectedBrowser {

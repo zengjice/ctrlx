@@ -126,6 +126,7 @@
         private var inFlightDrawables: Int { presentationGate.inFlight }
         private var presentationGeneration: Int { presentationGate.generation }
         private var dragging = false
+        private(set) var isInputSuppressed = false
         private var modifiers = Set<Int>()
         let measurements = SimulatorDisplayMeasurements()
         private var renderCounters = SimulatorRenderCounters()
@@ -192,6 +193,18 @@
         }
 
         required init?(coder: NSCoder) { nil }
+
+        func setInputSuppressed(_ suppressed: Bool) {
+            guard isInputSuppressed != suppressed else { return }
+            isInputSuppressed = suppressed
+            if suppressed {
+                if window?.firstResponder === self {
+                    window?.makeFirstResponder(nil)
+                } else {
+                    cancelInput()
+                }
+            }
+        }
 
         func setDisplayMode(_ mode: SimulatorDisplayMode) {
             guard !isClosed, mode != displayMode else { return }
@@ -553,6 +566,7 @@
                 y: (point.y - viewport.minY) / viewport.height * geometry.displayHeight)
         }
         override func mouseDown(with event: NSEvent) {
+            guard !isInputSuppressed else { return }
             if measure { inputEventReceivedAt = ProcessInfo.processInfo.systemUptime }
             guard let point = devicePoint(event) else { return }
             window?.makeFirstResponder(self)
@@ -560,22 +574,26 @@
             onTouch(point, 0)
         }
         override func mouseDragged(with event: NSEvent) {
+            guard !isInputSuppressed else { return }
             if measure { inputEventReceivedAt = ProcessInfo.processInfo.systemUptime }
             guard dragging, let point = devicePoint(event) else { return }
             onTouch(point, 1)
         }
         override func mouseUp(with event: NSEvent) {
+            guard !isInputSuppressed else { return }
             if measure { inputEventReceivedAt = ProcessInfo.processInfo.systemUptime }
             guard dragging else { return }
             dragging = false
             if let point = devicePoint(event) { onTouch(point, 2) } else { onTouch(SimulatorPoint(x: -1, y: -1), 2) }
         }
         override func keyDown(with event: NSEvent) {
+            guard !isInputSuppressed else { return }
             guard let usage = Self.keyUsages[event.keyCode] else { return }
             syncModifiers(event.modifierFlags)
             onKey(usage, true)
         }
         override func keyUp(with event: NSEvent) {
+            guard !isInputSuppressed else { return }
             guard let usage = Self.keyUsages[event.keyCode] else { return }
             syncModifiers(event.modifierFlags)
             onKey(usage, false)
@@ -596,6 +614,7 @@
         }
 
         override func flagsChanged(with event: NSEvent) {
+            guard !isInputSuppressed else { return }
             let mapping: [UInt16: (Int, NSEvent.ModifierFlags)] = [
                 59: (224, .control), 62: (228, .control), 56: (225, .shift), 60: (229, .shift),
                 58: (226, .option), 61: (230, .option), 55: (227, .command), 54: (231, .command),
