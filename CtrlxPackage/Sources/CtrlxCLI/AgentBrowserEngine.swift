@@ -60,9 +60,9 @@ enum AgentBrowserEngine: String, CaseIterable {
             guard let rows = action["steps"] else { throw AgentBrowserTransport.Failure("Invalid batch.") }
             batch = try AgentBrowserBatch.decode(JSONSerialization.data(withJSONObject: rows))
         }
-        let (directory, context) = try AgentBrowserTransport.registeredContext()
-        let engine = try resolve(explicit, saved: context["engine"] as? String)
         let operation = action["command"] as? String ?? ""
+        let (directory, context) = try AgentBrowserTransport.registeredContext(for: operation)
+        let engine = try resolve(explicit, saved: context["engine"] as? String)
         if operation == "snapshot", engine == .ctrlx {
             throw AgentBrowserTransport.Failure("snapshot requires --engine vercel; ctrlx read remains available.")
         }
