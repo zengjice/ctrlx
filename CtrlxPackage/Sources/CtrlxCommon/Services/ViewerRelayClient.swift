@@ -99,6 +99,7 @@ final public class ViewerRelayClient {
 
     public private(set) var hostSupportsTerminalPaste = false
     public private(set) var hostSupportsDirectoryCreation = false
+    public private(set) var hostSupportsSessionWorktrees = false
     public private(set) var hostSupportsFileBrowsing = false
     public private(set) var hostSupportsRepositoryFileLinks = false
     public private(set) var hostSupportsFileDownloads = false
@@ -530,6 +531,10 @@ final public class ViewerRelayClient {
             }
         case .createSessionDirectory where !hostSupportsDirectoryCreation:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to create folders"))
+        case .prepareSessionWorktree where !hostSupportsSessionWorktrees:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to start sessions in new worktrees"))
+        case let .createTmuxSession(spec) where spec.worktree != nil && !hostSupportsSessionWorktrees:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to start sessions in new worktrees"))
         case .pasteTerminalText where !hostSupportsTerminalPaste:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to paste clipboard text"))
         case let .resizeTmuxPane(spec) where spec.userInitiated == true && !hostSupportsTerminalFit:
@@ -673,6 +678,8 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .prepareAgentFork(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
+        case let .prepareSessionWorktree(spec):
+            return await (try? sendCommand(spec, paneId: "").get()) != nil
         case let .forkAgentSession(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .submitEditorContent(spec):
@@ -1030,6 +1037,7 @@ final public class ViewerRelayClient {
             logger.info("Received session state from host")
             hostSupportsTerminalPaste = sessionState.supportsTerminalPaste == true
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
+            hostSupportsSessionWorktrees = sessionState.supportsSessionWorktrees == true
             hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
             hostSupportsRepositoryFileLinks = sessionState.supportsRepositoryFileLinks == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
@@ -1062,6 +1070,7 @@ final public class ViewerRelayClient {
             resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
+            hostSupportsSessionWorktrees = false
             hostSupportsFileBrowsing = false
             hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
@@ -1111,6 +1120,7 @@ final public class ViewerRelayClient {
             resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
+            hostSupportsSessionWorktrees = false
             hostSupportsFileBrowsing = false
             hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
@@ -1142,6 +1152,7 @@ final public class ViewerRelayClient {
             resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
+            hostSupportsSessionWorktrees = false
             hostSupportsFileBrowsing = false
             hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
@@ -1157,6 +1168,7 @@ final public class ViewerRelayClient {
             resetBrowserState()
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
+            hostSupportsSessionWorktrees = false
             hostSupportsFileBrowsing = false
             hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
@@ -1459,6 +1471,7 @@ final public class ViewerRelayClient {
         resetBrowserState()
         hostSupportsTerminalPaste = false
         hostSupportsDirectoryCreation = false
+        hostSupportsSessionWorktrees = false
         hostSupportsFileBrowsing = false
         hostSupportsRepositoryFileLinks = false
         hostSupportsFileDownloads = false

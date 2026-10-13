@@ -38,7 +38,7 @@ struct TerminalPasteTransportTests {
             )
             let viewer = ViewerRelayClient()
             host.onSessionStateRequest = {
-                SessionStateMessage(pairId: "", paneStates: [:], supportsTerminalPaste: true, supportsTerminalFit: true, supportsFileBrowsing: true)
+                SessionStateMessage(pairId: "", paneStates: [:], supportsSessionWorktrees: true, supportsTerminalPaste: true, supportsTerminalFit: true, supportsFileBrowsing: true)
             }
             let (keyGate, releaseKeys) = AsyncStream<Void>.makeStream()
             let (pasteGate, releasePaste) = AsyncStream<Void>.makeStream()
@@ -111,21 +111,35 @@ struct TerminalPasteTransportTests {
                 defer { releaseFile.finish() }
                 events.removeAll()
                 host.onCommand = { command in
-                    if case .browseFiles = command.command {
+                    switch command.command {
+                    case .browseFiles,
+                         .prepareSessionWorktree,
+                         .createTmuxSession:
                         events.append("file-start")
                         for await _ in fileGate { break }
                         events.append("file-end")
-                    } else { events.append("key") }
+                    default: events.append("key")
+                    }
                     return .success(for: command.id)
                 }
-                let fileTask = Task { await viewer.sendCommand(BrowseFiles(.info(path: "/Host")), paneId: "%7") }
-                try await waitUntil { events.contains("file-start") }
-                _ = await viewer.sendCommand(SendKeystroke([.text("unblocked")]), paneId: "%7")
-                try await waitUntil { events.contains("key") }
-                #expect(events == ["file-start", "key"])
-                releaseFile.yield()
-                _ = await fileTask.value
-                #expect(events.last == "file-end")
+                let worktreeSession = CreateTmuxSession(
+                    sessionName: "new",
+                    width: 80,
+                    height: 24,
+                    workingDirectory: "/Host",
+                    worktree: .init(name: "new", expectedHead: "abc"),
+                )
+                for command in [BrowseFiles(.info(path: "/Host")).commandType, PrepareSessionWorktree(path: "/Host").commandType, worktreeSession.commandType] {
+                    events.removeAll()
+                    let fileTask = Task { await viewer.send(command, paneId: "%7") }
+                    try await waitUntil { events.contains("file-start") }
+                    _ = await viewer.sendCommand(SendKeystroke([.text("unblocked")]), paneId: "%7")
+                    try await waitUntil { events.contains("key") }
+                    #expect(events == ["file-start", "key"])
+                    releaseFile.yield()
+                    #expect(await fileTask.value)
+                    #expect(events.last == "file-end")
+                }
                 #expect(await relay.unexpectedTypes.isEmpty)
                 #expect(await relay.errors.isEmpty)
             } catch {
@@ -177,7 +191,7 @@ struct TerminalPasteTransportTests {
             viewer.onSessionState = { _ in receivedState.setValue(true) }
             host.onSessionStateRequest = {
                 SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryBrowsing: true,
-                                    supportsDirectoryCreation: capability, supportsTerminalPaste: capability, supportsTerminalFit: capability)
+                                    supportsDirectoryCreation: capability, supportsSessionWorktrees: capability, supportsTerminalPaste: capability, supportsTerminalFit: capability)
             }
             var commands: [CommandType] = []
             host.onCommand = { command in
@@ -200,6 +214,15 @@ struct TerminalPasteTransportTests {
                 if case .success = paste { Issue.record("Old Host accepted paste") }
                 let create = await viewer.sendCommand(CreateSessionDirectory(parentDirectory: "/Host", name: "child"), paneId: "")
                 if case .success = create { Issue.record("Old Host accepted directory creation") }
+                let worktreeSession = CreateTmuxSession(
+                    sessionName: "new",
+                    width: 80,
+                    height: 24,
+                    workingDirectory: "/Host",
+                    worktree: .init(name: "new", expectedHead: "abc"),
+                )
+                #expect(await !(viewer.send(PrepareSessionWorktree(path: "/Host").commandType, paneId: "")))
+                #expect(await !(viewer.send(worktreeSession.commandType, paneId: "")))
                 let browse = await viewer.sendCommand(BrowseFiles(.list(path: nil, offset: 0, includeHidden: false)), paneId: "%7")
                 if case .success = browse { Issue.record("Old Host accepted file browsing") }
                 #expect(ContinuousClock.now - started < .seconds(1))
@@ -218,10 +241,14 @@ struct TerminalPasteTransportTests {
                 // A later capability offer enables the operation, but is never
                 // carried over to a disconnected or replacement Host.
                 host.onSessionStateRequest = {
-                    SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryCreation: true, supportsTerminalPaste: true, supportsTerminalFit: true, supportsFileBrowsing: true)
+                    SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryCreation: true, supportsSessionWorktrees: true, supportsTerminalPaste: true, supportsTerminalFit: true, supportsFileBrowsing: true)
                 }
                 await host.pushSessionState()
-                try await waitUntil { viewer.hostSupportsTerminalPaste && viewer.hostSupportsTerminalFit && viewer.hostSupportsDirectoryCreation && viewer.hostSupportsFileBrowsing }
+                try await waitUntil { viewer.hostSupportsTerminalPaste && viewer.hostSupportsTerminalFit && viewer.hostSupportsDirectoryCreation && viewer.hostSupportsFileBrowsing && viewer.hostSupportsSessionWorktrees }
+                #expect(await viewer.send(PrepareSessionWorktree(path: "/Host").commandType, paneId: ""))
+                #expect(commands.last == PrepareSessionWorktree(path: "/Host").commandType)
+                #expect(await viewer.send(worktreeSession.commandType, paneId: ""))
+                #expect(commands.last == worktreeSession.commandType)
                 let modernBrowse = await viewer.sendCommand(BrowseFiles(.info(path: "/Host/file")), paneId: "%7")
                 if case .failure(let error) = modernBrowse { Issue.record("Modern file browsing rejected: \(error)") }
                 let modernCreate = await viewer.sendCommand(CreateSessionDirectory(parentDirectory: "/Host", name: "child"), paneId: "")
@@ -243,7 +270,7 @@ struct TerminalPasteTransportTests {
                 try await waitUntil { failures.count == 2 && observed == ["empty-enter"] }
                 #expect(failures.last?.contains("Paste rejected by tmux") == true)
                 await viewer.disconnect()
-                #expect(!viewer.hostSupportsTerminalPaste && !viewer.hostSupportsTerminalFit && !viewer.hostSupportsDirectoryCreation)
+                #expect(!viewer.hostSupportsTerminalPaste && !viewer.hostSupportsTerminalFit && !viewer.hostSupportsDirectoryCreation && !viewer.hostSupportsSessionWorktrees)
             } catch {
                 await viewer.disconnect()
                 await host.disconnect()

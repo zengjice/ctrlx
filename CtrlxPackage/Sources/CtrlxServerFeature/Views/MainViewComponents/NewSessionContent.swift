@@ -63,25 +63,27 @@ struct NewSessionContent: View {
     var body: some View {
         VStack(spacing: 0) {
             if showsDirectoryForm {
-                DirectorySessionForm(
-                    agents: launchAgents,
-                    directorySource: directorySource,
-                    isCreating: isCreating,
-                    onStart: { request in
-                        dismiss()
-                        onCreate(request)
-                    },
-                    onCancel: { showsDirectoryForm = false }
-                )
-                .id(directorySource.id)
-                .padding(20)
+                ScrollView {
+                    DirectorySessionForm(
+                        agents: launchAgents,
+                        directorySource: directorySource,
+                        isCreating: isCreating,
+                        onStart: { request in
+                            dismiss()
+                            onCreate(request)
+                        },
+                        onCancel: { showsDirectoryForm = false },
+                    )
+                    .id(directorySource.id)
+                    .padding(20)
+                }
+                .frame(maxHeight: 600)
             } else {
                 projectPicker
             }
         }
         .frame(maxWidth: popover ? contentWidth : 400)
         .frame(width: popover ? contentWidth : nil)
-        .fixedSize(horizontal: false, vertical: popover && showsDirectoryForm)
     }
 
     private var projectPicker: some View {

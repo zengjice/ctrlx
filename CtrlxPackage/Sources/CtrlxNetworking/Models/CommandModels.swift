@@ -571,6 +571,9 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
     /// when the selected agent is unavailable or auto-run is disabled.
     public let requireAgentLaunch: Bool
 
+    /// Requires supportsSessionWorktrees; older Hosts would ignore this field.
+    public let worktree: ForkAgentSession.Worktree?
+
     public init(
         sessionName: String,
         width: Int,
@@ -578,7 +581,8 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         workingDirectory: String? = nil,
         configDir: String? = nil,
         pluginID: String = AgentLaunchDefaults.pluginID,
-        requireAgentLaunch: Bool = false
+        requireAgentLaunch: Bool = false,
+        worktree: ForkAgentSession.Worktree? = nil
     ) {
         self.sessionName = sessionName
         self.width = width
@@ -587,6 +591,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         self.configDir = configDir
         self.pluginID = pluginID
         self.requireAgentLaunch = requireAgentLaunch
+        self.worktree = worktree
     }
 
     public var commandType: CommandType {
@@ -605,6 +610,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         case configDir
         case pluginID
         case requireAgentLaunch
+        case worktree
     }
 
     public init(from decoder: Decoder) throws {
@@ -616,6 +622,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         self.configDir = try container.decodeIfPresent(String.self, forKey: .configDir)
         self.pluginID = try container.decodeIfPresent(String.self, forKey: .pluginID) ?? "claude-code"
         self.requireAgentLaunch = try container.decodeIfPresent(Bool.self, forKey: .requireAgentLaunch) ?? false
+        self.worktree = try container.decodeIfPresent(ForkAgentSession.Worktree.self, forKey: .worktree)
     }
 }
 
@@ -1071,6 +1078,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     /// Browse/complete directories without creating a session or reading files.
     case listSessionDirectories(ListSessionDirectories)
     case createSessionDirectory(CreateSessionDirectory)
+    case prepareSessionWorktree(PrepareSessionWorktree)
     case browseFiles(BrowseFiles)
     case browseBrowser(BrowseBrowser)
     /// Resize a tmux pane
@@ -1345,6 +1353,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let directoryListing: SessionDirectoryListing?
     public let createdDirectory: String?
     public let forkPreparation: AgentForkPreparation?
+    public let sessionWorktree: AgentForkWorktree?
     public let fileBrowser: FileBrowserResponse?
     public let browser: RemoteBrowserResponse?
 
@@ -1357,6 +1366,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         directoryListing: SessionDirectoryListing? = nil,
         createdDirectory: String? = nil,
         forkPreparation: AgentForkPreparation? = nil,
+        sessionWorktree: AgentForkWorktree? = nil,
         fileBrowser: FileBrowserResponse? = nil,
         browser: RemoteBrowserResponse? = nil
     ) {
@@ -1368,6 +1378,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.directoryListing = directoryListing
         self.createdDirectory = createdDirectory
         self.forkPreparation = forkPreparation
+        self.sessionWorktree = sessionWorktree
         self.fileBrowser = fileBrowser
         self.browser = browser
     }

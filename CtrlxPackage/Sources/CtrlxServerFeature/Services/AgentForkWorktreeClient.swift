@@ -74,7 +74,7 @@ actor AgentForkWorktreeManager {
     }
 
     private func validate(_ plan: AgentForkWorktree, request: ForkAgentSession.Worktree) throws {
-        guard plan.head == request.expectedHead else { throw AgentForkError("Source HEAD changed. Reopen Fork to review the new base commit.") }
+        guard plan.head == request.expectedHead else { throw AgentForkError("Source HEAD changed. Refresh the worktree preview or reopen the form to review the new base commit.") }
         guard !plan.hasUncommittedChanges || request.allowUncommittedChanges else {
             throw AgentForkError("The source has uncommitted or untracked files. Confirm that they will not be copied into the new worktree.")
         }

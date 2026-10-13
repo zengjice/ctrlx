@@ -8,6 +8,8 @@ public struct SessionDirectorySource {
     public let id: String
     public let unavailableReason: String?
     public let creationUnavailableReason: String?
+    public let worktreeUnavailableReason: String?
+    public let prepareWorktree: (@MainActor (String) async throws -> AgentForkWorktree)?
     public let create: (@MainActor (CreateSessionDirectory) async throws -> String)?
     public let list: @MainActor (ListSessionDirectories) async throws -> SessionDirectoryListing
 
@@ -16,16 +18,20 @@ public struct SessionDirectorySource {
         unavailableReason: String? = nil,
         creationUnavailableReason: String? = nil,
         create: (@MainActor (CreateSessionDirectory) async throws -> String)? = nil,
+        worktreeUnavailableReason: String? = nil,
+        prepareWorktree: (@MainActor (String) async throws -> AgentForkWorktree)? = nil,
         list: @escaping @MainActor (ListSessionDirectories) async throws -> SessionDirectoryListing
     ) {
         self.id = id
         self.unavailableReason = unavailableReason
         self.creationUnavailableReason = creationUnavailableReason ?? (create == nil ? "Folder creation is unavailable from this Host." : nil)
         self.create = create
+        self.worktreeUnavailableReason = worktreeUnavailableReason ?? (prepareWorktree == nil ? "Worktree creation is unavailable from this Host." : nil)
+        self.prepareWorktree = prepareWorktree
         self.list = list
     }
 
-    public static func remote(hostID: String, connection: ViewerConnection?, supportsBrowsing: Bool, supportsCreation: Bool = false) -> Self {
+    public static func remote(hostID: String, connection: ViewerConnection?, supportsBrowsing: Bool, supportsCreation: Bool = false, supportsWorktrees: Bool = false) -> Self {
         let reason: String? = if connection?.isHostConnected != true {
             "Host is offline. Reconnect to browse its directories."
         } else if !supportsBrowsing {
@@ -34,6 +40,13 @@ public struct SessionDirectorySource {
             nil
         }
         let creationReason = creationUnavailableReason(isConnected: connection?.isHostConnected == true, supportsCreation: supportsCreation)
+        let worktreeReason: String? = if connection?.isHostConnected != true {
+            "Host is offline. Reconnect to create worktrees."
+        } else if !supportsWorktrees {
+            "Update this Host to start sessions in new worktrees."
+        } else {
+            nil
+        }
         return Self(id: hostID, unavailableReason: reason, creationUnavailableReason: creationReason, create: { request in
             if let creationReason { throw LookupError.unavailable(creationReason) }
             guard let connection, connection.isHostConnected else {
@@ -45,6 +58,20 @@ public struct SessionDirectorySource {
                 throw LookupError.unavailable("The Host did not return the created directory. Refresh before retrying.")
             }
             return directory
+        }, worktreeUnavailableReason: worktreeReason, prepareWorktree: { path in
+            if let worktreeReason {
+                throw LookupError.unavailable(worktreeReason)
+            }
+            guard let connection, connection.isHostConnected else {
+                throw LookupError.unavailable("Host is offline. Reconnect to create worktrees.")
+            }
+            try Task.checkCancellation()
+            let response = try await connection.sendCommand(PrepareSessionWorktree(path: path), paneId: "", timeout: 30).get()
+            try Task.checkCancellation()
+            guard let plan = response.sessionWorktree else {
+                throw LookupError.unavailable("The Host did not return a worktree preview. Update it and retry.")
+            }
+            return plan
         }) { request in
             if let reason { throw LookupError.unavailable(reason) }
             guard let connection, connection.isHostConnected else {

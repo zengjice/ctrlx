@@ -105,6 +105,7 @@ public actor TmuxCommandExecutor {
             case .startTerminalStream,
                  .listSessionDirectories,
                  .createSessionDirectory,
+                 .prepareSessionWorktree,
                  .browseFiles,
                  .browseBrowser,
                  .stopTerminalStream,

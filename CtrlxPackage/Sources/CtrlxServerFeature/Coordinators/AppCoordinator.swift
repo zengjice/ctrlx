@@ -2106,13 +2106,15 @@
         func resolveLaunch(
             forPluginID pluginID: String,
             projectPath: String,
-            requireAgentLaunch: Bool = false
+            requireAgentLaunch: Bool = false,
+            worktree: ForkAgentSession.Worktree? = nil
         ) async throws -> SessionLaunchPreparation {
             try await SessionLaunchPreparation.prepare(
                 path: projectPath,
                 pluginID: pluginID,
                 requireAgentLaunch: requireAgentLaunch,
-                core: pluginRegistry?.core(pluginID)
+                core: pluginRegistry?.core(pluginID),
+                worktree: worktree
             )
         }
 
@@ -3152,6 +3154,12 @@
                 if case let .createSessionDirectory(spec) = command.command {
                     return await SessionDirectoryResolver.respond(to: command, request: spec)
                 }
+                if case let .prepareSessionWorktree(spec) = command.command {
+                    do {
+                        let plan = try await SessionLaunchPreparation.inspectWorktree(path: spec.path)
+                        return CommandResponseMessage(commandId: command.id, success: true, sessionWorktree: plan)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .browseFiles(spec) = command.command {
                     do {
                         let source = FileBrowserSource.local(paneID: command.paneId, tmux: tmux, windows: winManager)
@@ -3232,7 +3240,8 @@
                             path: spec.workingDirectory,
                             pluginID: spec.pluginID,
                             requireAgentLaunch: spec.requireAgentLaunch,
-                            core: self?.pluginRegistry?.core(spec.pluginID)
+                            core: self?.pluginRegistry?.core(spec.pluginID),
+                            worktree: spec.worktree
                         )
                         return await Self.handleCreateSession(
                             command: command,
@@ -3537,6 +3546,7 @@
                     sharedTerminalLayouts: sharedTerminalLayouts,
                     supportsDirectoryBrowsing: true,
                     supportsDirectoryCreation: true,
+                    supportsSessionWorktrees: true,
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
                     supportsTerminalPaste: true,
@@ -3821,9 +3831,9 @@
                 // launch command so the tab matches what's running; when
                 // auto-run is off (`launch` is nil) fall back to the plugin's
                 // CLI binary name ("claude") rather than the dashed plugin id.
-                let firstWindowName = spec.workingDirectory != nil
+                let firstWindowName = spec.worktree?.name ?? (spec.workingDirectory != nil
                     ? (launch?.command ?? defaultCommand ?? spec.pluginID)
-                    : "terminal 1"
+                    : "terminal 1")
                 let (_, paneId) = try await tmuxService.createSession(
                     baseName: spec.sessionName,
                     width: spec.width,
@@ -3838,7 +3848,7 @@
 
                 return .success(for: command.id, paneId: paneId)
             } catch {
-                return .failure(for: command.id, error: error.localizedDescription)
+                return .failure(for: command.id, error: preparation.failureDescription(error))
             }
         }
 

@@ -13,6 +13,10 @@ public struct DirectorySessionForm: View {
     @State private var path = "~/"
     @State private var selectedAgentID: String?
     @State private var isCreatingDirectory = false
+    @State private var usingWorktree = false
+    @State private var worktreeName = "work-\(UUID().uuidString.prefix(8).lowercased())"
+    @State private var worktreeState = SessionWorktreeState()
+    @State private var worktreeRetry = 0
     @FocusState private var isPathFocused: Bool
 
     public init(
@@ -36,6 +40,17 @@ public struct DirectorySessionForm: View {
     private var canStart: Bool {
         !isCreating && !isCreatingDirectory && SessionDirectoryPath.isValid(path)
             && agents.contains(where: { $0.id == agentID })
+            && (!usingWorktree || (try? worktreeState.request(for: worktreeQuery, name: worktreeName)) != nil)
+    }
+
+    private var worktreeQuery: SessionWorktreeState.Query {
+        .init(
+            hostID: directorySource.id,
+            path: path,
+            enabled: usingWorktree,
+            unavailableReason: directorySource.worktreeUnavailableReason,
+            retry: worktreeRetry,
+        )
     }
 
     public var body: some View {
@@ -83,23 +98,79 @@ public struct DirectorySessionForm: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+            Toggle("Create a new branch and worktree", isOn: $usingWorktree)
+                .disabled(directorySource.worktreeUnavailableReason != nil)
+                .accessibilityIdentifier("new-session-use-worktree")
+            if let reason = directorySource.worktreeUnavailableReason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+            if usingWorktree {
+                worktreeFields
+            }
             HStack {
                 Button("Back", action: onCancel)
                     .buttonStyle(.borderless)
                     .disabled(isCreating)
                 Spacer()
                 if isCreating { ProgressView().controlSize(.small) }
-                Button("Start in This Directory", action: start)
+                Button(usingWorktree ? "Start in New Worktree" : "Start in This Directory", action: start)
                     .buttonStyle(.borderedProminent)
                     .disabled(!canStart)
                     .accessibilityIdentifier("start-directory-session")
             }
         }
         .disabled(isCreating || isCreatingDirectory)
+        .task(id: worktreeQuery) { await prepareWorktree() }
+    }
+
+    private var worktreeFields: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Worktree Name", text: $worktreeName)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+            #if os(iOS)
+                .textInputAutocapitalization(.never)
+            #endif
+                .accessibilityIdentifier("new-session-worktree-name")
+            Text("Used for the session, branch and worktree directory.")
+                .font(.caption).foregroundStyle(.secondary)
+            if worktreeState.query == worktreeQuery, let plan = worktreeState.plan {
+                WorktreeReview(
+                    plan: plan,
+                    name: worktreeName,
+                    allowUncommittedChanges: $worktreeState.allowUncommittedChanges,
+                    acknowledgementIdentifier: "new-session-allow-uncommitted-changes",
+                )
+            } else if worktreeState.isLoading {
+                ProgressView("Checking directory…").controlSize(.small)
+            } else if let error = worktreeState.error {
+                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            }
+            Button("Refresh Worktree Preview") { worktreeRetry += 1 }
+                .buttonStyle(.borderless)
+                .disabled(directorySource.worktreeUnavailableReason != nil || worktreeState.isLoading)
+        }
+    }
+
+    private func prepareWorktree() async {
+        let query = worktreeQuery
+        let id = worktreeState.begin(query)
+        guard worktreeState.isLoading, let prepare = directorySource.prepareWorktree else { return }
+        do {
+            try await Task.sleep(for: .milliseconds(250))
+            let plan = try await prepare(query.path)
+            try Task.checkCancellation()
+            worktreeState.finish(id, plan: plan)
+        } catch {
+            guard !Task.isCancelled else { return }
+            worktreeState.fail(id, message: error.localizedDescription)
+        }
     }
 
     private func start() {
         guard canStart, let agentID else { return }
-        onStart(.directory(path: path, pluginID: agentID))
+        let worktree = usingWorktree ? try? worktreeState.request(for: worktreeQuery, name: worktreeName) : nil
+        guard !usingWorktree || worktree != nil else { return }
+        onStart(.directory(path: path, pluginID: agentID, worktree: worktree))
     }
 }

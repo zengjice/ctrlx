@@ -6,7 +6,7 @@ import Foundation
 public enum SessionLaunchRequest: Sendable, Equatable {
     case terminal
     case project(AgentProject)
-    case directory(path: String, pluginID: String)
+    case directory(path: String, pluginID: String, worktree: ForkAgentSession.Worktree? = nil)
 
     public var project: AgentProject? {
         switch self {
@@ -14,9 +14,9 @@ public enum SessionLaunchRequest: Sendable, Equatable {
             nil
         case let .project(project):
             project
-        case let .directory(path, pluginID):
+        case let .directory(path, pluginID, worktree):
             AgentProject(
-                name: Self.directoryName(path),
+                name: worktree?.name ?? Self.directoryName(path),
                 path: path,
                 pluginID: pluginID
             )
@@ -26,6 +26,13 @@ public enum SessionLaunchRequest: Sendable, Equatable {
     public var requiresAgentLaunch: Bool {
         if case .directory = self { return true }
         return false
+    }
+
+    public var worktree: ForkAgentSession.Worktree? {
+        if case let .directory(_, _, worktree) = self {
+            return worktree
+        }
+        return nil
     }
 
     private static func directoryName(_ path: String) -> String {

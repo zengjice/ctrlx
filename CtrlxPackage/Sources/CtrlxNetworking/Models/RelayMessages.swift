@@ -56,6 +56,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// Absent on older hosts: viewers retain manual entry and send no lookup.
     public let supportsDirectoryBrowsing: Bool?
     public let supportsDirectoryCreation: Bool?
+    public let supportsSessionWorktrees: Bool?
     public let supportsFileBrowsing: Bool?
     public let supportsFileDownloads: Bool?
     public let supportsFileUploads: Bool?
@@ -83,6 +84,7 @@ public struct SessionStateMessage: Codable, Sendable {
         sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil,
         supportsDirectoryBrowsing: Bool? = nil,
         supportsDirectoryCreation: Bool? = nil,
+        supportsSessionWorktrees: Bool? = nil,
         supportsAgentWindowLaunch: Bool? = nil,
         supportsAgentFork: Bool? = nil,
         supportsTerminalPaste: Bool? = nil,
@@ -105,6 +107,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.sharedTerminalLayouts = sharedTerminalLayouts
         self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
         self.supportsDirectoryCreation = supportsDirectoryCreation
+        self.supportsSessionWorktrees = supportsSessionWorktrees
         self.supportsFileBrowsing = supportsFileBrowsing
         self.supportsFileDownloads = supportsFileDownloads
         self.supportsFileUploads = supportsFileUploads
@@ -134,6 +137,7 @@ public struct SessionStateMessage: Codable, Sendable {
             sharedTerminalLayouts: sharedTerminalLayouts,
             supportsDirectoryBrowsing: supportsDirectoryBrowsing,
             supportsDirectoryCreation: supportsDirectoryCreation,
+            supportsSessionWorktrees: supportsSessionWorktrees,
             supportsAgentWindowLaunch: supportsAgentWindowLaunch,
             supportsAgentFork: supportsAgentFork,
             supportsTerminalPaste: supportsTerminalPaste,

@@ -4751,7 +4751,9 @@ public struct MainView: View {
     // MARK: - New Session Actions
 
     private var localDirectorySource: SessionDirectorySource {
-        SessionDirectorySource(id: "local") { request in
+        SessionDirectorySource(id: "local", prepareWorktree: { path in
+            try await SessionLaunchPreparation.inspectWorktree(path: path)
+        }) { request in
             @Dependency(SessionDirectoryClient.self) var client
             return try await client.list(request)
         }
@@ -5297,6 +5299,7 @@ public struct MainView: View {
             // return when the task is cancelled mid-retry), so a later create
             // isn't blocked by `guard creatingSelection == nil`.
             defer { creatingSelection = nil }
+            var preparation: SessionLaunchPreparation?
             do {
                 // Determine session name and working directory
                 let sessionName = project?.name ?? "terminal"
@@ -5308,11 +5311,13 @@ public struct MainView: View {
                     try await coordinator.resolveLaunch(
                         forPluginID: project.pluginID,
                         projectPath: project.path,
-                        requireAgentLaunch: request.requiresAgentLaunch
+                        requireAgentLaunch: request.requiresAgentLaunch,
+                        worktree: request.worktree
                     )
                 } else {
                     SessionLaunchPreparation(workingDirectory: nil, launch: nil)
                 }
+                preparation = launch
                 let runCommand = launch.runCommand
                 let workingDirectory = launch.workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path()
 
@@ -5340,7 +5345,7 @@ public struct MainView: View {
                     workingDirectory: workingDirectory,
                     runCommand: runCommand,
                     extraEnvironment: extraEnvironment,
-                    firstWindowName: firstWindowName
+                    firstWindowName: request.worktree?.name ?? firstWindowName
                 )
 
                 // Find the window containing the new pane and select it.
@@ -5376,7 +5381,7 @@ public struct MainView: View {
                     attachError = "Session created but its window didn't appear in time. Try selecting it from the sidebar."
                 }
             } catch {
-                attachError = "Failed to create session: \(error.localizedDescription)"
+                attachError = "Failed to create session: \(preparation?.failureDescription(error) ?? error.localizedDescription)"
             }
         }
     }
@@ -5479,7 +5484,8 @@ public struct MainView: View {
             workingDirectory: project?.path,
             configDir: project?.configDir,
             pluginID: project?.pluginID ?? AgentLaunchDefaults.pluginID,
-            requireAgentLaunch: request.requiresAgentLaunch
+            requireAgentLaunch: request.requiresAgentLaunch,
+            worktree: request.worktree
         )
 
         guard let manager = coordinator.viewerConnectionManager else {
@@ -5488,7 +5494,7 @@ public struct MainView: View {
             return
         }
 
-        let result = await manager.sendCommand(command, paneId: "", hostId: host.id)
+        let result = await manager.sendCommand(command, paneId: "", hostId: host.id, timeout: request.worktree == nil ? 15 : 180)
 
         switch result {
         case let .success(response):

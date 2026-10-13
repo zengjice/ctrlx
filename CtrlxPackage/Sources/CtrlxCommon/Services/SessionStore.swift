@@ -49,6 +49,7 @@ final public class SessionStore {
     public private(set) var homeDirectoryByHost: [String: String] = [:]
     public private(set) var hostsSupportingDirectoryBrowsing: Set<String> = []
     public private(set) var hostsSupportingDirectoryCreation: Set<String> = []
+    public private(set) var hostsSupportingSessionWorktrees: Set<String> = []
     public private(set) var hostsSupportingAgentWindowLaunch: Set<String> = []
     public private(set) var hostsSupportingAgentFork: Set<String> = []
 
@@ -302,6 +303,11 @@ final public class SessionStore {
         } else {
             hostsSupportingDirectoryCreation.remove(hostId)
         }
+        if state.supportsSessionWorktrees == true {
+            hostsSupportingSessionWorktrees.insert(hostId)
+        } else {
+            hostsSupportingSessionWorktrees.remove(hostId)
+        }
         if let usageOverview = state.usageOverview {
             usageOverviewByHost[hostId] = usageOverview
         } else {
@@ -345,6 +351,7 @@ final public class SessionStore {
         homeDirectoryByHost.removeValue(forKey: hostId)
         hostsSupportingDirectoryBrowsing.remove(hostId)
         hostsSupportingDirectoryCreation.remove(hostId)
+        hostsSupportingSessionWorktrees.remove(hostId)
         hostsSupportingAgentWindowLaunch.remove(hostId)
         hostsSupportingAgentFork.remove(hostId)
         usageOverviewByHost.removeValue(forKey: hostId)

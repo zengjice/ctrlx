@@ -546,6 +546,27 @@ only a shortcut list, not an allowlist; a directory need not already appear
 there. No directories are
 created automatically. Do not add shell quotes around paths with spaces.
 
+Enable **Create a new branch and worktree** to start a fresh Agent session in
+a new checkout. The form shares Fork's name validation, branch/path/HEAD preview
+and dirty-file acknowledgement. The name is used for the new session, its first
+window, the branch and the primary repository's `.worktrees/<name>` directory.
+The source may be a subdirectory or linked worktree; checkout starts at that
+source's HEAD and retains its relative working directory. Uncommitted, untracked
+and ignored files are not copied. Existing branches/directories are rejected;
+HEAD changes require a refreshed preview. Agent availability is checked before
+checkout, then its launch command is resolved again in the new directory. Closing
+the session leaves the worktree in place; partial failures report retained paths.
+
+`PrepareSessionWorktree` performs read-only Host inspection; the optional
+`CreateTmuxSession.worktree` carries the reviewed HEAD, name and acknowledgement.
+Both commands require `supportsSessionWorktrees`, including a transport-level
+gate so an older Host cannot silently ignore the worktree option. Preview and
+checkout run outside the keyboard receive loop. Changing the Host/path or
+refreshing invalidates the preview and acknowledgement. This starts a new
+conversation and works with any launchable plugin; no existing Agent conversation
+or native Fork support is required. Mac local, Mac Viewer and iOS share this flow;
+remote use requires updated Host and Viewer apps, with no Relay change.
+
 On iOS, New Session uses a large system sheet for both project history and directory
 browsing, rather than starting at half height. Project search is present only in
 project-history mode; directory mode keeps its own path field without the unrelated
@@ -634,7 +655,9 @@ Regression coverage: `SessionLaunchRequestTests`, `SessionLaunchAgentTests`,
 `DirectorySessionCommandTests`, `SessionLaunchPreparationTests`,
 `SessionDirectoryResolverTests`, `SessionDirectoryBrowsingTests`,
 `SessionDirectoryListingTests`, `SessionDirectoryBrowseStateTests`,
-`SessionDirectoryCapabilityTests`, and the existing Codex OTEL/launch tests.
+`SessionDirectoryCapabilityTests`, `SessionWorktreeStateTests`,
+`SessionWorktreePreparationTests`, `AgentForkWorktreeTests`,
+`TerminalPasteTransportTests`, and the existing Codex OTEL/launch tests.
 
 ### Agent project discovery and command resolution
 

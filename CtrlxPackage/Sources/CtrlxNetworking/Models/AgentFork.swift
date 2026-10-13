@@ -59,6 +59,14 @@ public struct AgentForkWorktree: Codable, Sendable, Equatable {
         name.utf8.count <= 80 && name != "HEAD" && !name.contains("..") && !name.hasSuffix(".") && !name.hasSuffix(".lock")
             && name.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]*$"#, options: .regularExpression) != nil
     }
+
+    public func request(name: String, allowUncommittedChanges: Bool) throws -> ForkAgentSession.Worktree {
+        guard Self.isValidName(name) else { throw AgentForkError("Choose a valid worktree name.") }
+        guard !hasUncommittedChanges || allowUncommittedChanges else {
+            throw AgentForkError("Confirm that uncommitted and untracked files will not be copied.")
+        }
+        return .init(name: name, expectedHead: head, allowUncommittedChanges: allowUncommittedChanges)
+    }
 }
 
 public struct AgentForkPreparation: Codable, Sendable, Equatable {
