@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.65 — Simulator screenshot annotations
+
+- Merge `feature-bug` and add in-place screenshot annotation to Mac Host,
+  Mac Viewer and iOS Viewer simulator tabs. Capture a bounded, fresh preview,
+  mark it with rectangles, arrows or freehand drawing, and add it to the
+  selected Agent's input without submitting the prompt.
+- Preserve simulator control ownership and native rendering during annotation.
+  Suppress input only in the editing Host view, pause only the editing Viewer's
+  preview polling, and reject stale captures after source changes or cancellation.
+  Reuse image delivery and iOS terminal handoff without duplicating attachments.
+- Release validation: the bounded serial Swift regression passed with 3,059
+  tests reported and five opt-in probes skipped. Apple Intelligence evaluations
+  were excluded because the model is unavailable on this Mac. Both boundary
+  checks, 63 publisher/COS tests, website build, Mac Debug build and arm64 iOS
+  Simulator build passed. The conflict-resolution file passes SwiftFormat;
+  imported files retain existing whole-file formatting findings.
+- Native focus/input and capture/routing regressions use isolated test windows
+  and injected simulator I/O. Real Host / paired Mac Viewer / iPhone annotation
+  and delivery acceptance remains pending; SDK compilation does not establish it.
+- Distribution: Mac package through COS, with signature, source metadata and
+  public-download integrity verified before installer promotion. iOS changes
+  require a separate iOS build/install.
+
 ## 3.0.64 — Session directory creation and Codex question notifications
 
 - Add New Folder to the Mac local and remote New Session directory browsers.
