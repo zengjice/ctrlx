@@ -10,6 +10,7 @@ import os
 @MainActor @Observable
 final class FileBrowserVideoPlayback {
     private(set) var player: AVPlayer?
+    private(set) var annotationCapture: FilePreviewVideoCapture?
     private(set) var isBuffering = false
     private(set) var isMuted: Bool
     private(set) var error: String?
@@ -63,6 +64,7 @@ final class FileBrowserVideoPlayback {
         player.isMuted = isMuted
         self.loader = loader
         self.player = player
+        annotationCapture = FilePreviewVideoCapture(player: player)
         observations = [
             item.observe(\.status, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor [weak self] in self?.updateState() }
@@ -174,6 +176,7 @@ final class FileBrowserVideoPlayback {
         loader?.stop()
         loader = nil
         player = nil
+        annotationCapture = nil
         isBuffering = false
         isMuted = startsMuted
     }

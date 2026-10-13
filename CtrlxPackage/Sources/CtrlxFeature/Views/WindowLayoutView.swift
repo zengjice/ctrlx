@@ -26,7 +26,7 @@
         @State private var pendingFileLink: TerminalFileLinkRequest?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
         @State private var selectedBrowserID: UUID?
-        @State private var browserHandoff = BrowserTerminalHandoff()
+        @State private var annotationHandoff = AnnotationTerminalHandoff()
         @State private var showsWindowTabs = false
         @State private var pendingWindowTabAction: WindowTabAction?
 
@@ -169,8 +169,14 @@
 
         private var terminalIsVisible: Bool { selectedBrowser == nil && fileWorkspace.selected == nil }
 
+        private var annotationSource: AnnotationTerminalHandoff.Source? {
+            if let tab = selectedBrowser { return .browser(tab.id) }
+            if let tab = fileWorkspace.selected { return .file(tab.id) }
+            return nil
+        }
+
         private var displayedTerminalWindow: TmuxWindow? {
-            if let request = browserHandoff.request, selectedBrowser?.id == request.browserID {
+            if let request = annotationHandoff.request, annotationSource == request.source {
                 return sessionWindows.first { $0.id == request.windowID }
             }
             return terminalIsVisible ? window : nil
@@ -190,12 +196,16 @@
                     RemoteBrowserView(tab: tab, client: relayClient)
                         .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
                             targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
-                            didSend: { target in try await revealAnnotationTarget(target, browserID: tab.id) }))
+                            didSend: { target in try await revealAnnotationTarget(target, source: .browser(tab.id)) }))
                         .background(Color(.systemBackground))
                         .id(tab.id)
                 } else if let tab = fileWorkspace.selected {
                     WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: hostId, paneID: tab.sourcePaneID,
                                                                        connection: connectionManager.connection(for: hostId)))
+                        .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
+                            targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
+                            didSend: { target in try await revealAnnotationTarget(target, source: .file(tab.id)) }))
+                        .background(Color(.systemBackground))
                         .id(tab.id)
                 } else if displayedTerminalWindow == nil {
                     ContentUnavailableView(
@@ -250,17 +260,17 @@
 
         private var selectedBrowser: RemoteBrowserTab? { sessionBrowsers.first { $0.id == selectedBrowserID } }
 
-        private func revealAnnotationTarget(_ target: AgentImageTarget, browserID: UUID) async throws {
-            guard selectedBrowser?.id == browserID, scenePhase == .active, relayClient.isHostConnected,
+        private func revealAnnotationTarget(_ target: AgentImageTarget, source: AnnotationTerminalHandoff.Source) async throws {
+            guard annotationSource == source, scenePhase == .active, relayClient.isHostConnected,
                   let destination = sessionWindows.first(where: { $0.stableId == target.windowID }),
                   destination.panes.contains(where: target.matches) else {
                 throw AgentImageError.message("The Agent or connection changed. Choose the recipient again.")
             }
-            let id = try await browserHandoff.prepare(browserID: browserID, windowID: destination.id,
+            let id = try await annotationHandoff.prepare(source: source, windowID: destination.id,
                                                       paneIDs: Set(destination.panes.map(\.paneId)))
-            defer { browserHandoff.cancel(id: id) }
+            defer { annotationHandoff.cancel(id: id) }
             try Task.checkCancellation()
-            guard browserHandoff.isReady(id), selectedBrowser?.id == browserID,
+            guard annotationHandoff.isReady(id), annotationSource == source,
                   scenePhase == .active, relayClient.isHostConnected,
                   let current = sessionWindows.first(where: { $0.id == destination.id }),
                   Set(current.panes.map(\.paneId)) == Set(destination.panes.map(\.paneId)),
@@ -268,7 +278,7 @@
                 throw AgentImageError.message("The Agent or connection changed. Try Open Agent again.")
             }
             selectTerminalWindow(current, preferredPaneID: target.paneID)
-            browserHandoff.finish(id)
+            annotationHandoff.finish(id)
         }
 
         private func saveFileWorkspace() {
@@ -438,9 +448,9 @@
             }
             .task(id: windowSelectionCandidates) {
                 reconcileWindowSelection(candidates: windowSelectionCandidates)
-                if let request = browserHandoff.request,
+                if let request = annotationHandoff.request,
                    Set(sessionWindows.first(where: { $0.id == request.windowID })?.panes.map(\.paneId) ?? []) != request.paneIDs {
-                    browserHandoff.cancel(error: AgentImageError.message("The Agent window layout changed. Try Open Agent again."))
+                    annotationHandoff.cancel(error: AgentImageError.message("The Agent window layout changed. Try Open Agent again."))
                 }
             }
             .onChange(of: viewportGrids) {
@@ -456,19 +466,19 @@
                 if !relayClient.isHostConnected {
                     pendingBrowserLink = nil
                     cancelCreationFollowUp()
-                    browserHandoff.cancel(error: AgentImageError.message("The Host disconnected. Reconnect and try Open Agent again."))
+                    annotationHandoff.cancel(error: AgentImageError.message("The Host disconnected. Reconnect and try Open Agent again."))
                 }
             }
-            .onChange(of: selectedBrowserID) {
-                if let request = browserHandoff.request, selectedBrowserID != request.browserID { browserHandoff.cancel() }
+            .onChange(of: annotationSource) {
+                if let request = annotationHandoff.request, annotationSource != request.source { annotationHandoff.cancel() }
             }
             .onChange(of: scenePhase) {
-                if scenePhase != .active { browserHandoff.cancel(); pendingBrowserLink = nil }
+                if scenePhase != .active { annotationHandoff.cancel(); pendingBrowserLink = nil }
             }
             .onDisappear {
                 // A delayed creation reply must not redirect a later visit.
                 cancelCreationFollowUp()
-                browserHandoff.cancel()
+                annotationHandoff.cancel()
                 pendingWindowTabAction = nil
                 pendingBrowserLink = nil
                 pendingFileLink = nil
@@ -1031,7 +1041,7 @@
         }
 
         private func paneTerminal(pane: PaneState, windowName: String, windowID: String) -> some View {
-            let preparationID = browserHandoff.request?.id
+            let preparationID = annotationHandoff.request?.id
             return LiveTerminalView(
                 paneId: pane.paneId,
                 hostId: hostId,
@@ -1097,7 +1107,7 @@
                 preparationID: preparationID,
                 onPresentationChange: { status in
                     if let preparationID {
-                        browserHandoff.update(status, paneID: pane.paneId, requestID: preparationID)
+                        annotationHandoff.update(status, paneID: pane.paneId, requestID: preparationID)
                     }
                 }
             )

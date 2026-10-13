@@ -6,9 +6,11 @@ import SwiftUI
 struct FileBrowserVideoPreview: View {
     let path: String
     let source: FileBrowserSource
+    let capture: FilePreviewCapture
     @State private var started = false
     @State private var playback = FileBrowserVideoPlayback()
     @State private var error: String?
+    @State private var captureOwner = UUID()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -51,13 +53,16 @@ struct FileBrowserVideoPreview: View {
             do {
                 try await playback.prepare(path: path, source: source)
                 try Task.checkCancellation()
+                if let video = playback.annotationCapture {
+                    capture.bind(owner: captureOwner) { try await video.capture() }
+                }
                 playback.play()
             } catch is CancellationError {
                 // Lifecycle handlers own cleanup; an old task must not stop a newer attempt.
                 return
             } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
-        .onDisappear { started = false; playback.stop() }
+        .onDisappear { capture.unbind(owner: captureOwner); started = false; playback.stop() }
         .onChange(of: scenePhase, initial: true) { _, phase in
             playback.setSceneActive(phase == .active)
             if phase != .active, playback.player == nil { started = false }

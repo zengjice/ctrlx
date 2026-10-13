@@ -93,7 +93,7 @@ enum BrowserAnnotationRenderer {
                 kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceThumbnailMaxPixelSize: min(RemoteBrowserFrame.maximumDimension, max(width, height)),
               ] as CFDictionary) else {
-            throw AgentImageError.message("The page could not be captured as an image.")
+            throw AgentImageError.message("The preview could not be captured as an image.")
         }
         return image
     }
@@ -120,7 +120,7 @@ enum BrowserAnnotationRenderer {
         CGImageDestinationAddImage(destination, rendered, nil)
         guard CGImageDestinationFinalize(destination),
               let prepared = RelayImagePreparer.prepare(bytes as Data, maxBytes: SendDroppedFiles.maxRawBytes) else {
-            throw AgentImageError.message("The screenshot is too large to send. Try a smaller browser viewport.")
+            throw AgentImageError.message("The screenshot is too large to send. Try a smaller preview area.")
         }
         return prepared
     }
@@ -136,6 +136,9 @@ public struct BrowserAnnotationSurface<Content: View>: View {
     let requiresRecipientSelection: Bool
     let capture: @MainActor () async throws -> Data
     let onEditingChanged: (Bool) -> Void
+    let captureRequest: UUID?
+    let showsCaptureButton: Bool
+    let identifierPrefix: String
     let content: Content
     @State private var image: CGImage?
     @State private var marks: [BrowserAnnotationMark] = []
@@ -155,10 +158,16 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                 requiresRecipientSelection: Bool = false,
                 capture: @escaping @MainActor () async throws -> Data,
                 onEditingChanged: @escaping (Bool) -> Void = { _ in },
+                captureRequest: UUID? = nil,
+                showsCaptureButton: Bool = true,
+                identifierPrefix: String = "browser",
                 @ViewBuilder content: () -> Content) {
         self.preferredTarget = preferredTarget; self.capture = capture
         self.requiresRecipientSelection = requiresRecipientSelection
         self.onEditingChanged = onEditingChanged; self.content = content()
+        self.captureRequest = captureRequest
+        self.showsCaptureButton = showsCaptureButton
+        self.identifierPrefix = identifierPrefix
     }
 
     public var body: some View {
@@ -181,14 +190,11 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                     VStack(alignment: .trailing, spacing: 6) {
                         if image != nil {
                             tools(context).disabled(operation != nil)
-                        } else {
-                            Button {
-                                target = requiresRecipientSelection ? nil : AgentImageTarget.defaultTarget(in: context.targets, preferred: preferredTarget)
-                                tool = .rectangle; error = nil; operation = Operation(kind: .capture)
-                            } label: { Label("Annotate Screenshot", symbol: .pencilLine) }
+                        } else if showsCaptureButton {
+                            Button(action: beginCapture) { Label("Annotate Screenshot", symbol: .pencilLine) }
                             .disabled(!context.isAvailable || operation != nil)
                             .help(context.isAvailable ? "Mark this page and add it to an Agent input" : "Connect and update the Host to add screenshots")
-                            .accessibilityIdentifier("browser-annotate")
+                            .accessibilityIdentifier("\(identifierPrefix)-annotate")
                         }
                         if let error {
                             Text(error).font(.caption).frame(maxWidth: 320).padding(8)
@@ -210,7 +216,7 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                         image = decoded
                     case .send:
                         guard let context, context.isAvailable, let target, let image,
-                              context.targets.contains(where: { $0.paneID == target.paneID && $0.sessionID == target.sessionID && $0.pluginID == target.pluginID }) else {
+                              AgentImageTarget.defaultTarget(in: context.targets, preferred: target) != nil else {
                             throw AgentImageError.message("The recipient is unavailable. Connect to the Host and choose an Agent.")
                         }
                         try await delivery.sendAndReveal(target: target) {
@@ -223,15 +229,25 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                         reset()
                     }
                 } catch is CancellationError {
-                    // Leaving the browser cancels work, never delivers to a new target.
+                    // Leaving the preview cancels work, never delivers to a new target.
                 } catch {
                     self.error = delivery.deliveredTarget == nil ? error.localizedDescription
                         : "Screenshot already added. \(error.localizedDescription)"
                 }
             }
+            .onChange(of: captureRequest) { _, request in if request != nil { beginCapture() } }
             .onChange(of: image != nil || operation != nil) { _, editing in onEditingChanged(editing) }
+            .onChange(of: context?.isAvailable) { _, available in if available != true { operation = nil } }
             .onChange(of: scenePhase) { _, phase in if phase != .active { operation = nil } }
             .onDisappear { operation = nil; onEditingChanged(false) }
+    }
+
+    private func beginCapture() {
+        guard let context, context.isAvailable, operation == nil, image == nil else { return }
+        target = requiresRecipientSelection ? nil : AgentImageTarget.defaultTarget(in: context.targets, preferred: preferredTarget)
+        tool = .rectangle
+        error = nil
+        operation = Operation(kind: .capture)
     }
 
     private func tools(_ context: BrowserAnnotationContext) -> some View {
@@ -241,7 +257,7 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                     Button { tool = value } label: { Label(value.rawValue, symbol: value.symbol).labelStyle(.iconOnly) }
                         .tint(tool == value ? .red : .primary)
                         .disabled(delivery.deliveredTarget != nil)
-                        .accessibilityIdentifier("browser-annotation-\(value.rawValue.lowercased())")
+                        .accessibilityIdentifier("\(identifierPrefix)-annotation-\(value.rawValue.lowercased())")
                 }
                 Button { _ = marks.popLast() } label: { Label("Undo", symbol: .annotationUndo).labelStyle(.iconOnly) }
                     .disabled(marks.isEmpty || delivery.deliveredTarget != nil)
@@ -259,7 +275,7 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                 .disabled(delivery.deliveredTarget != nil)
                 Button(delivery.deliveredTarget == nil ? "Add to Input" : "Open Agent") { error = nil; operation = Operation(kind: .send) }
                     .disabled(target == nil || !context.isAvailable)
-                    .accessibilityIdentifier("browser-annotation-send")
+                    .accessibilityIdentifier("\(identifierPrefix)-annotation-send")
             }
         }
         .padding(6)
@@ -296,8 +312,8 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                     stroke = nil
                 })
         }
-        .accessibilityLabel("Frozen browser screenshot. Draw to annotate; the live page continues in the background.")
-        .accessibilityIdentifier("browser-annotation-canvas")
+        .accessibilityLabel("Frozen preview screenshot. Draw to annotate without changing the original content.")
+        .accessibilityIdentifier("\(identifierPrefix)-annotation-canvas")
     }
 
     private func reset() { image = nil; marks = []; stroke = nil; error = nil; delivery = BrowserAnnotationDelivery() }

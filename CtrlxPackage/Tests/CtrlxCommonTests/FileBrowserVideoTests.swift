@@ -544,6 +544,28 @@ struct FileBrowserVideoTests {
         }
     }
 
+    @Test func annotationUsesPausedPlayerFrameAndPreservesMute() async throws {
+        let data = try fixture()
+        let info = info(size: data.count)
+        let playback = FileBrowserVideoPlayback(startsMuted: true)
+        defer { playback.stop() }
+        try await playback.prepare(path: info.path, source: videoSource(data: data, info: info))
+        let player = try #require(playback.player)
+        let capture = try #require(playback.annotationCapture)
+        playback.play()
+        try await waitUntil { player.timeControlStatus == .playing && CMTimeGetSeconds(player.currentTime()) > 0.15 }
+        let snapshot = try await capture.capture()
+        #expect(player.rate == 0)
+        #expect(player.isMuted && playback.isMuted)
+        #expect(snapshot.image.width > 0 && snapshot.image.height > 0)
+        #expect(snapshot.detail?.hasPrefix("Time ") == true)
+        let repeated = try await capture.capture()
+        #expect(repeated.detail == snapshot.detail)
+        #expect(player.rate == 0)
+        playback.stop()
+        await #expect(throws: FileBrowserError.self) { try await capture.capture() }
+    }
+
     private func waitUntil(_ predicate: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }

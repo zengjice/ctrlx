@@ -186,6 +186,56 @@ the default app; iOS uses Quick Look and offers **Share / Open in…** for other
 apps or Save to Files. System codec/app support still determines whether a file
 can be opened. Copies are not edited back onto the Host.
 
+### In-place preview annotation
+
+Mac Host, Mac Viewer and iOS expose **Annotate Screenshot** in the selected
+file's preview header. Images, text/Markdown, PDF, Office and a ready video frame
+reuse the browser's rectangle/arrow/pen, undo, clear and **Add to Input** overlay;
+there is no separate editor. Entering annotation freezes the visible preview and
+disables file navigation until Cancel or successful delivery. Original files are
+never edited. Only an explicit Add to Input inserts an image; it never presses
+Return or replaces the Agent's existing draft.
+
+The mounted native preview supplies the capture: text and PDF preserve the
+visible scroll/zoom position, and Office captures the current Quick Look content,
+not a thumbnail or a newly rendered first page. It uses application-view capture,
+not whole-screen recording, a conversion service or private Quick Look APIs.
+System Office rendering limitations still apply. Video pauses and reads one frame
+from the existing player, preserving mute state and remaining paused afterwards;
+it does not download a second asset or resume automatically. Audio-only previews
+cannot be annotated. A missing/unready capture fails visibly without opening a
+different file or app.
+
+Quick Look's assigned preview item is not a render-completion signal. Both
+clients reject transparent or uniformly blank Office screenshots on every
+capture, before adding the filename footer, and keep the preview available for
+retry. This is a blank-frame safeguard, not a guarantee that every part of a
+document has finished rendering; genuinely blank pages also need visible
+content before they can be annotated. There is no fixed readiness delay or
+cached ready flag to carry across file changes.
+
+The screenshot footer carries the basename and, when available, PDF page or video
+time, never the Host's absolute home/cache path. Capture is bounded to 2560 pixels
+per image dimension before the footer; the existing image preparer enforces the
+512 KiB transport limit. No periodic screenshot task is added.
+
+The Files tab's source pane supplies the default Agent. If it has no recognized
+image-capable Agent (including a restored tab with no source pane), the user must
+choose a recipient from the same session; there is no silent fallback. Capture
+fixes that recipient, and sending revalidates the pane, conversation and window
+identity through the existing guarded image-input route. File changes/refresh
+cancel pending capture, and closing/backgrounding/disconnecting cancels pending
+work. Delivery failures retain the annotations. Once delivery is acknowledged,
+retrying **Open Agent** only retries navigation, never inserts a duplicate image.
+iOS keeps Files visible while the destination terminal is prepared, using the
+same `AnnotationTerminalHandoff` as browser annotations.
+
+Remote insertion requires the existing `supportsAgentImageInput` capability.
+Updated clients can use an already-capable Host; no new wire command, Relay
+deployment or original-file upload is required. Native Mac Office capture is
+checked with isolated Word/Excel/PowerPoint fixtures; UIKit/Quick Look interaction
+and the complete tap-to-Agent flow still require real-device acceptance.
+
 ### Remote video playback
 
 Mac Viewer and iOS offer **Play Video** for MP4/MOV in the inline preview area.

@@ -23,6 +23,7 @@ public struct WorkspaceFileBrowserView: View {
     @State private var folderName = ""
     @State private var folderRequest: FolderRequest?
     @State private var actionMessage: String?
+    @State private var isAnnotating = false
 
     private struct Destination {
         let path: String
@@ -46,7 +47,7 @@ public struct WorkspaceFileBrowserView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            navigation
+            navigation.disabled(isAnnotating)
             if upload.isRunning {
                 HStack {
                     VStack(alignment: .leading) {
@@ -71,7 +72,7 @@ public struct WorkspaceFileBrowserView: View {
             Divider()
             #if os(macOS)
             HSplitView {
-                directory.frame(minWidth: 200, idealWidth: 280)
+                directory.disabled(isAnnotating).frame(minWidth: 200, idealWidth: 280)
                 preview.frame(minWidth: 200, maxWidth: .infinity)
             }
             #else
@@ -304,14 +305,51 @@ public struct WorkspaceFileBrowserView: View {
     }
 
     private var preview: some View {
+        FileBrowserFilePreview(tab: tab, source: source, onEditingChanged: { isAnnotating = $0 })
+            .id(FilePreviewIdentity(path: tab.selectedFile, refresh: tab.refresh, sourceID: source.id))
+    }
+
+    private struct FilePreviewIdentity: Hashable {
+        let path: String?
+        let refresh: Int
+        let sourceID: String
+    }
+}
+
+@MainActor
+private struct FileBrowserFilePreview: View {
+    let tab: FileBrowserTab
+    let source: FileBrowserSource
+    let onEditingChanged: (Bool) -> Void
+    @Environment(\.browserAnnotationContext) private var annotationContext
+    @Dependency(ClipboardClient.self) private var clipboard
+    @State private var capture = FilePreviewCapture()
+    @State private var captureRequest: UUID?
+    @State private var isAnnotating = false
+
+    private var preferredTarget: AgentImageTarget? {
+        annotationContext?.targets.first { $0.paneID == tab.sourcePaneID }
+    }
+
+    var body: some View {
         VStack(spacing: 0) {
             if let path = tab.selectedFile {
+                let key = OpenKey(path: path, sourceID: source.id, unavailable: source.unavailableReason,
+                                  downloadUnavailable: source.downloadUnavailableReason)
                 HStack {
                     #if os(iOS)
                     Button { tab.selectedFile = nil } label: { Label("Files", symbol: .chevronLeft) }
                     #endif
                     Text((path as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
                     Spacer()
+                    if annotationContext != nil {
+                        Button { captureRequest = UUID() } label: {
+                            Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
+                        }
+                        .disabled(annotationContext?.isAvailable != true || tab.isPreviewLoading || !supportsAnnotation(path))
+                        .help("Mark the visible file preview and add it to an Agent input")
+                        .accessibilityIdentifier("file-annotate")
+                    }
                     Menu {
                         Button("Copy Path") { clipboard.setString(path) }
                         if let data = tab.previewData, tab.preview?.kind == .text || tab.preview?.kind == .markdown,
@@ -320,36 +358,58 @@ public struct WorkspaceFileBrowserView: View {
                         }
                         Button("Refresh Preview") { tab.refresh += 1 }
                     } label: { Label("File Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly) }
-                }.padding(10)
+                }.disabled(isAnnotating).padding(10)
                 Divider()
                 FileBrowserOpenActions(path: path, source: source)
-                    .id(OpenKey(path: path, sourceID: source.id, unavailable: source.unavailableReason,
-                                downloadUnavailable: source.downloadUnavailableReason))
-                if tab.isPreviewLoading { ProgressView().padding() }
-                if let error = tab.previewError { Text(error).padding().textSelection(.enabled) }
-                if FileBrowserOfficeDocument.supports(path: path) {
-                    FileBrowserOfficePreview(path: path, source: source).id(previewKey)
-                } else if source.localFileURL == nil, FileBrowserVideo.supports(path: path) {
-                    FileBrowserVideoPreview(path: path, source: source).id(previewKey)
-                } else {
-                    #if os(macOS)
-                    if let url = tab.previewURL {
-                        FileBrowserMediaPreview(url: url).id(url)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if let data = tab.previewData, let info = tab.preview {
-                        FileBrowserPreview(data: data, kind: info.kind).id(info.path)
-                    } else { Spacer() }
-                    #else
-                    if let data = tab.previewData, let info = tab.preview {
-                        FileBrowserPreview(data: data, kind: info.kind).id(info.path)
-                    } else { Spacer() }
-                    #endif
+                    .id(key)
+                    .disabled(isAnnotating)
+                BrowserAnnotationSurface(preferredTarget: preferredTarget,
+                    requiresRecipientSelection: preferredTarget == nil,
+                    capture: { try await capture.capture(filename: path) },
+                    onEditingChanged: { editing in
+                        isAnnotating = editing
+                        onEditingChanged(editing)
+                    }, captureRequest: captureRequest, showsCaptureButton: false, identifierPrefix: "file") {
+                    VStack(spacing: 0) { fileContent(path) }
+                        // Reconnection resets downloads/players, not the frozen annotation.
+                        .id(key)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
                 ContentUnavailableView("Select a File", symbol: .docPlaintextFill, description: "Preview files from the Host without downloading a folder.")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func supportsAnnotation(_ path: String) -> Bool {
+        if FileBrowserOfficeDocument.supports(path: path) || FileBrowserVideo.supports(path: path) { return true }
+        if let type = UTType(filenameExtension: (path as NSString).pathExtension), type.conforms(to: .movie) { return true }
+        guard tab.previewData != nil, let kind = tab.preview?.kind else { return false }
+        return [.text, .markdown, .image, .pdf].contains(kind)
+    }
+
+    @ViewBuilder private func fileContent(_ path: String) -> some View {
+        if tab.isPreviewLoading { ProgressView().padding() }
+        if let error = tab.previewError { Text(error).padding().textSelection(.enabled) }
+        if FileBrowserOfficeDocument.supports(path: path) {
+            FileBrowserOfficePreview(path: path, source: source, capture: capture)
+        } else if source.localFileURL == nil, FileBrowserVideo.supports(path: path) {
+            FileBrowserVideoPreview(path: path, source: source, capture: capture)
+        } else {
+            #if os(macOS)
+            if let url = tab.previewURL {
+                FileBrowserMediaPreview(url: url, capture: capture).id(url)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let data = tab.previewData, let info = tab.preview {
+                FileBrowserPreview(data: data, kind: info.kind, capture: capture).id(info.path)
+            } else { Spacer() }
+            #else
+            if let data = tab.previewData, let info = tab.preview {
+                FileBrowserPreview(data: data, kind: info.kind, capture: capture).id(info.path)
+            } else { Spacer() }
+            #endif
+        }
     }
 
     private struct OpenKey: Hashable {
@@ -420,29 +480,34 @@ private struct FileBrowserTreeRow: View {
 private struct FileBrowserPreview: View {
     let data: Data
     let kind: FileBrowserKind
+    let capture: FilePreviewCapture
     @State private var image: CGImage?
     @State private var imageFailed = false
     var body: some View {
         Group {
             switch kind {
             case .text, .markdown:
-                ScrollView([.vertical, .horizontal]) {
-                    if kind == .markdown {
-                        StructuredText(markdown: String(decoding: data, as: UTF8.self))
-                            .textual.imageAttachmentLoader(FilePreviewAttachments())
-                            .textual.emojiAttachmentLoader(FilePreviewAttachments())
-                            .padding()
-                    } else {
-                        Text(String(decoding: data, as: UTF8.self)).font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled).padding().frame(maxWidth: .infinity, alignment: .topLeading)
+                FilePreviewSnapshotView(capture: capture) {
+                    ScrollView([.vertical, .horizontal]) {
+                        if kind == .markdown {
+                            StructuredText(markdown: String(decoding: data, as: UTF8.self))
+                                .textual.imageAttachmentLoader(FilePreviewAttachments())
+                                .textual.emojiAttachmentLoader(FilePreviewAttachments())
+                                .padding()
+                        } else {
+                            Text(String(decoding: data, as: UTF8.self)).font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled).padding().frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
                     }
                 }
             case .image:
                 if let image {
-                    Image(decorative: image, scale: 1).resizable().scaledToFit().padding()
+                    FilePreviewSnapshotView(capture: capture) {
+                        Image(decorative: image, scale: 1).resizable().scaledToFit().padding()
+                    }
                 } else if imageFailed { Text("This image cannot be decoded.") }
                 else { ProgressView() }
-            case .pdf: FileBrowserPDF(data: data)
+            case .pdf: FileBrowserPDF(data: data, capture: capture)
             default: Text("Preview unavailable")
             }
         }
@@ -472,22 +537,44 @@ private struct FilePreviewAttachments: AttachmentLoader {
 #if os(macOS)
 private struct FileBrowserPDF: NSViewRepresentable {
     let data: Data
-    func makeNSView(context: Context) -> PDFView { let view = PDFView(); view.autoScales = true; return view }
+    let capture: FilePreviewCapture
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        registerPDFCapture(view, capture: capture, owner: context.coordinator.owner)
+        return view
+    }
     func updateNSView(_ view: PDFView, context: Context) {
         if context.coordinator.data != data { view.document = PDFDocument(data: data); context.coordinator.data = data }
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator { var data: Data? }
+    final class Coordinator { var data: Data?; let owner = UUID() }
 }
 #else
 private struct FileBrowserPDF: UIViewRepresentable {
     let data: Data
-    func makeUIView(context: Context) -> PDFView { let view = PDFView(); view.autoScales = true; return view }
+    let capture: FilePreviewCapture
+    func makeUIView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        registerPDFCapture(view, capture: capture, owner: context.coordinator.owner)
+        return view
+    }
     func updateUIView(_ view: PDFView, context: Context) {
         if context.coordinator.data != data { view.document = PDFDocument(data: data); context.coordinator.data = data }
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator { var data: Data? }
+    final class Coordinator { var data: Data?; let owner = UUID() }
 }
 #endif
+
+@MainActor
+private func registerPDFCapture(_ view: PDFView, capture: FilePreviewCapture, owner: UUID) {
+    capture.bind(owner: owner) { [weak view] in
+        guard let view, let document = view.document, let page = view.currentPage else {
+            throw FileBrowserError.message("Wait for the PDF preview to load.")
+        }
+        return .init(image: try FilePreviewCapture.snapshot(view), detail: "Page \(document.index(for: page) + 1)")
+    }
+}
 #endif

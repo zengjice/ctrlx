@@ -9,10 +9,15 @@ enum TerminalPresentationStatus: Equatable {
 
 /// Keeps one destination mounted until the caller reveals it or cancels.
 @MainActor @Observable
-final class BrowserTerminalHandoff {
+final class AnnotationTerminalHandoff {
+    enum Source: Equatable {
+        case browser(UUID)
+        case file(UUID)
+    }
+
     struct Request: Equatable {
         let id = UUID()
-        let browserID: UUID
+        let source: Source
         let windowID: String
         let paneIDs: Set<String>
     }
@@ -21,12 +26,12 @@ final class BrowserTerminalHandoff {
     @ObservationIgnored private var readyPanes: Set<String> = []
     @ObservationIgnored private var continuation: CheckedContinuation<Void, any Error>?
 
-    func prepare(browserID: UUID, windowID: String, paneIDs: Set<String>,
+    func prepare(source: Source, windowID: String, paneIDs: Set<String>,
                  timeout: Duration = .seconds(15)) async throws -> UUID {
         try Task.checkCancellation()
         cancel()
         guard !paneIDs.isEmpty else { throw Failure("The Agent window has closed.") }
-        let request = Request(browserID: browserID, windowID: windowID, paneIDs: paneIDs)
+        let request = Request(source: source, windowID: windowID, paneIDs: paneIDs)
         self.request = request
         readyPanes = []
         let deadline = Task { [weak self] in

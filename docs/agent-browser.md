@@ -247,6 +247,10 @@ cancels preparation. An acknowledged image is not resent by **Open Agent** retry
 it only retries opening the captured recipient. This does not keep all session
 terminals alive or change the Host/Relay protocol.
 
+The same annotation surface, guarded delivery and `AnnotationTerminalHandoff`
+also serve [file previews](file-browser.md#in-place-preview-annotation); native
+file capture does not require or open a browser tab.
+
 ## Ownership and data
 
 - One persistent, CtrlX-specific profile per Mac:

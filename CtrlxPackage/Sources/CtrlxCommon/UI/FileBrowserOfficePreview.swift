@@ -11,6 +11,7 @@ import QuickLook
 struct FileBrowserOfficePreview: View {
     let path: String
     let source: FileBrowserSource
+    let capture: FilePreviewCapture
     @State private var transfer = FileBrowserTransfer()
     @State private var shouldLoad = true
     @State private var url: URL?
@@ -19,7 +20,7 @@ struct FileBrowserOfficePreview: View {
     var body: some View {
         VStack(spacing: 8) {
             if let url {
-                FileBrowserOfficeQuickLook(url: url).id(url)
+                FileBrowserOfficeQuickLook(url: url, capture: capture).id(url)
             } else if let error {
                 Text(error).padding().textSelection(.enabled)
             } else if shouldLoad {
@@ -54,6 +55,7 @@ struct FileBrowserOfficePreview: View {
 @MainActor
 struct FileBrowserOfficeQuickLook: NSViewRepresentable {
     let url: URL
+    let capture: FilePreviewCapture
 
     func makeNSView(context: Context) -> QLPreviewView {
         guard let view = QLPreviewView(frame: .zero, style: .normal) else {
@@ -61,6 +63,10 @@ struct FileBrowserOfficeQuickLook: NSViewRepresentable {
         }
         view.shouldCloseWithWindow = false
         view.autostarts = false
+        capture.bind(owner: context.coordinator.owner) { [weak view] in
+            guard let view, view.previewItem != nil else { throw FileBrowserError.message("Wait for the Office preview to load.") }
+            return .init(image: try FilePreviewCapture.snapshot(view), requiresVisibleContent: true)
+        }
         return view
     }
 
@@ -76,18 +82,25 @@ struct FileBrowserOfficeQuickLook: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    final class Coordinator { var url: URL? }
+    final class Coordinator { var url: URL?; let owner = UUID() }
 }
 #else
 @MainActor
 struct FileBrowserOfficeQuickLook: UIViewControllerRepresentable {
     let url: URL
+    let capture: FilePreviewCapture
 
     func makeUIViewController(context: Context) -> QLPreviewController {
         let controller = QLPreviewController()
         controller.dataSource = context.coordinator
         controller.delegate = context.coordinator
         controller.reloadData()
+        capture.bind(owner: context.coordinator.owner) { [weak controller] in
+            guard let controller, controller.isViewLoaded, controller.currentPreviewItem != nil else {
+                throw FileBrowserError.message("Wait for the Office preview to load.")
+            }
+            return .init(image: try FilePreviewCapture.snapshot(controller.view), requiresVisibleContent: true)
+        }
         return controller
     }
 
@@ -106,6 +119,7 @@ struct FileBrowserOfficeQuickLook: UIViewControllerRepresentable {
 
     final class Coordinator: NSObject, QLPreviewControllerDataSource, QLPreviewControllerDelegate {
         var url: URL
+        let owner = UUID()
 
         init(url: URL) { self.url = url }
 
