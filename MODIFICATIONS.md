@@ -7,6 +7,26 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.62 — Visible session status in the Mac menu bar
+
+- Keep local and remote session status icons visible in the menu bar dropdown
+  on macOS 27, including the accent-colored needs-attention indicator. Explicitly
+  preserve icon-and-title labels instead of accepting the system's hidden-image
+  default.
+- iOS source adds a show/hide control for the saved voice correction API key.
+  Keep the key in Keychain, retain unsaved edits, and hide it when switching
+  providers, leaving settings, or backgrounding the app.
+- Validation: the bounded serial Swift regression passed with 2,862 tests
+  reported and four opt-in probes skipped; Apple Intelligence evaluations were
+  excluded because the model is unavailable on this Mac. Both boundary checks,
+  195 script tests, 30 publisher tests and the website build passed. The menu
+  fix passed 35 focused session-state tests, native menu image-visibility checks
+  and a Mac Release build during feature acceptance. The iOS settings change
+  passed three Simulator tests during feature acceptance and a fresh iOS
+  Simulator build for this release.
+- Distribution: Mac package only through the existing private channel. The
+  iOS settings change requires a separate iOS build/install.
+
 ## 3.0.61 — Worktree sessions, file annotations and agent iOS tools
 
 - Add a new-branch worktree option to Start in Directory, with branch name,
