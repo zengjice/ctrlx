@@ -58,7 +58,10 @@ To reopen the exact guest after erasing it:
 ctrlx ios open --udid <private-uuid>
 ```
 
-This returns a new CtrlX device ID. `--udid` cannot be combined with `--device`,
+After closing/erasing, this returns a new CtrlX device ID. If this pane already
+has a different default device, use `open --new --udid <private-uuid>`; the extra
+device does not replace that default. Repeating `open --udid` for the live default
+owned by this agent returns its existing ID. `--udid` cannot be combined with `--device`,
 `--runtime` or `--device-type`; missing/busy/unavailable guests fail instead of
 selecting another. Profiles default to `standard`; supply `--profile` / `--requires`
 again if needed. Install the test app again after erase.

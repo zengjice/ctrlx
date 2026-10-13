@@ -160,12 +160,14 @@ struct BrowserTabStripItem: View {
                 action: onToggleSplit
             )
 
-            TabCloseButton(
-                isVisible: isSelected || isHovered,
-                accessibilityLabel: "Close \(tab.isSimulator ? "simulator" : "browser") tab: \(tab.tabLabel)",
-                action: onClose
-            )
-            .padding(.trailing, 6)
+            if tab.canClose {
+                TabCloseButton(
+                    isVisible: isSelected || isHovered,
+                    accessibilityLabel: "Close \(tab.isSimulator ? "simulator" : "browser") tab: \(tab.tabLabel)",
+                    action: onClose
+                )
+                .padding(.trailing, 6)
+            }
         }
         .tabStripItemStyle(isSelected: isSelected, isOnRightSplit: isOnRight, isSplit: isSplit)
         .overlay(alignment: .leading) {

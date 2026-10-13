@@ -49,10 +49,32 @@ struct AgentBrowserRoutingTests {
         #expect(try AgentBrowserRouting.resolve(panes: [current], matchingPaneIDs: ["%7"]).windowId == "renamed:4")
     }
 
-    nonisolated private static func row(session: String) -> String {
-        ["100", "%1", session, "1", "0", "codex", "/tmp", "80", "24", "1", "@1"]
-            .joined(separator: String(PaneInfo.fieldSeparator))
-    }
+        private nonisolated static func row(session: String, paneID: String = "%1", shellPID: String = "100") -> String {
+            [shellPID, paneID, session, "1", "0", "codex", "/tmp", "80", "24", "1", "@1"]
+                .joined(separator: String(PaneInfo.fieldSeparator))
+        }
+
+        @Test("Agent route returns the complete live snapshot without another tmux query")
+        func completeLiveRoute() async throws {
+            let calls = LockIsolated(0)
+            let rows = Self.row(session: "renamed") + "\n" + Self.row(session: "work", paneID: "%2", shellPID: "300")
+            let runner = ProcessRunner(run: { _, arguments, _, _ in
+                calls.withValue { $0 += 1 }
+                #expect(arguments.contains("list-panes") && arguments.contains("-a"))
+                return ProcessResult(exitCode: 0, stdout: Data(rows.utf8), stderr: Data())
+            })
+            try await withDependencies {
+                $0[ProcessRunner.self] = runner
+            } operation: {
+                let service = TmuxService(tmuxPath: "/usr/bin/true")
+                let route = try await service.agentPaneRoute(processID: 200, ancestorPIDs: [200, 100, 1])
+                #expect(route.pane.paneId == "%1" && route.pane.sessionName == "renamed")
+                #expect(route.panes.map(\.paneId) == ["%1", "%2"])
+                #expect(route.panes.map(\.sessionName) == ["renamed", "work"])
+                #expect(route.panes.first == route.pane && service.panes.isEmpty)
+                #expect(calls.value == 1)
+            }
+        }
 
     @Test("Manual browser routing validates live pane membership without requiring an agent")
     func manualPaneRouting() async throws {

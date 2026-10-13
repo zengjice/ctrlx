@@ -831,6 +831,10 @@ final public class TmuxService {
     /// Resolve the actual calling Codex, not TMUX_PANE inherited by a child or
     /// the focused terminal. A fresh snapshot handles new/split/moved panes.
     func agentBrowserPane(processID: Int32, ancestorPIDs: Set<Int32>? = nil) async throws -> PaneInfo {
+        try await agentPaneRoute(processID: processID, ancestorPIDs: ancestorPIDs).pane
+    }
+
+    func agentPaneRoute(processID: Int32, ancestorPIDs: Set<Int32>? = nil) async throws -> AgentPaneRoute {
         // UI refreshes coalesce and deduplicate linked panes. Neither behavior
         // is valid for routing authority: an in-flight refresh can return stale
         // (initially empty) state, and deduplication hides ambiguous sessions.
@@ -881,7 +885,8 @@ final public class TmuxService {
                 info.shellPID == pid || tree.descendants(of: info.shellPID).contains(pid) ? info.pane.paneId : nil
             })
         }
-        return try AgentBrowserRouting.resolve(panes: current.map(\.pane), matchingPaneIDs: ids)
+        let panes = current.map(\.pane)
+        return try AgentPaneRoute(pane: AgentBrowserRouting.resolve(panes: panes, matchingPaneIDs: ids), panes: panes)
     }
 
     /// Gets the names of sessions that have real terminal clients attached (excludes control-mode clients used by this app)

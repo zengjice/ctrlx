@@ -94,7 +94,7 @@
                 let service = AgentSimulatorService()
                 let pane = PaneInfo(paneId: "%1", target: "record:0.0", sessionName: "record", windowIndex: 0,
                     paneIndex: 0, command: "codex", currentPath: root.path, width: 80, height: 24, isActive: true)
-                service.start(root: root, resolvePane: { _ in pane })
+                service.start(root: root, resolveRoute: { _ in AgentPaneRoute(pane: pane, panes: [pane]) })
                 let workspace = SimulatorWorkspace()
                 workspace.acceptsPane = { _ in true }
                 var tabs: [SimulatorTabState] = []
@@ -117,7 +117,7 @@
                 }
                 do {
                     for udid in [first, second] {
-                        let opened = try await action("open", ["udid": .string(udid)])
+                        let opened = try await action("open", ["udid": .string(udid), "new": .bool(true)])
                         let id = try #require(opened["device"])
                         _ = try await action("record-start", ["device": id,
                             "output": .string(root.appendingPathComponent(udid + ".mp4").path)])

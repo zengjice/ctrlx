@@ -420,7 +420,7 @@
             }
             agentSimulator.start(root: CtrlxPaths(stateRootOverride: Self.parseCtrlxStateRoot()).stateRoot) { [tmuxService] pid in
                 @Dependency(SimulatorSystemClient.self) var system
-                return try await tmuxService.agentBrowserPane(processID: pid, ancestorPIDs: system.ancestors(of: pid))
+                return try await tmuxService.agentPaneRoute(processID: pid, ancestorPIDs: system.ancestors(of: pid))
             }
 
             // Pre-fill the editor list on first launch with whatever is installed
@@ -3072,6 +3072,9 @@
             agentBrowser.onTabsChanged = { [weak connectionManager] in
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
+            agentSimulator.onTabsChanged = { [weak connectionManager] in
+                Task { await connectionManager?.pushSessionStateToAll() }
+            }
             connectionManager.onViewerUnavailable = { [weak terminalStreamService, weak self] viewerId in
                 self?.agentBrowser.disconnectBrowserViewer(viewerId)
                 await terminalStreamService?.stopStreams(for: viewerId)
@@ -3097,6 +3100,7 @@
             // Start notification-only readers for all discovered panes
             let initialPanes = await tmuxService.refreshPanes()
             agentBrowser.updateBrowserRoutes(initialPanes)
+            agentSimulator.updateSimulatorRoutes(initialPanes)
             windowManager.updatePaneStates(from: initialPanes)
             await windowManager.refreshGitBranches()
             await paneStreamManager.startMonitoring(panes: initialPanes)
@@ -3120,6 +3124,7 @@
                 Task {
                     let panes = await tmuxForCleanup.refreshPanes()
                     self?.agentBrowser.updateBrowserRoutes(panes)
+                    self?.agentSimulator.updateSimulatorRoutes(panes)
                     winManager.updatePaneStates(from: panes)
                     await terminalStreaming.stopStreamsForClosedPanes(currentPanes: panes)
                     await paneStreaming.updateMonitoring(panes: panes)
@@ -3139,6 +3144,15 @@
             let tmux = tmuxService
             let editorManager = editorSessionManager
             connectionManager.onCommand = { [weak self, executor, streamService, tmux, winManager, editorManager, paneStreaming, weak connectionManager] viewerId, command in
+                if case let .browseSimulator(spec) = command.command {
+                    guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
+                        return .failure(for: command.id, error: "Session no longer exists.")
+                    }
+                    do {
+                        let result = try await self.agentSimulator.handleSimulator(spec)
+                        return CommandResponseMessage(commandId: command.id, success: true, simulator: result)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .browseBrowser(spec) = command.command {
                     guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
                         return .failure(for: command.id, error: "Session no longer exists.")
@@ -3314,6 +3328,7 @@
                         try await tmux.renameSession(from: spec.sessionName, to: spec.newName)
                         let allPanes = await tmux.refreshPanes()
                         self?.agentBrowser.updateBrowserRoutes(allPanes)
+                        self?.agentSimulator.updateSimulatorRoutes(allPanes)
                         winManager.updatePaneStates(from: allPanes)
                         await paneStreaming.updateMonitoring(panes: allPanes)
                         await connectionManager?.pushSessionStateToAll()
@@ -3558,7 +3573,9 @@
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
                     supportsPaneBrowser: await self?.agentBrowser.supportsBrowserSharing,
                     supportsAgentImageInput: true,
-                    browserTabs: await self?.agentBrowser.sharedBrowserTabs
+                    browserTabs: await self?.agentBrowser.sharedBrowserTabs,
+                    supportsSimulatorViewing: await self?.agentSimulator.supportsSimulatorViewing,
+                    simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs
                 )
             }
 
@@ -3587,8 +3604,7 @@
                 self.settings.removePairing(id: pairId)
             }
 
-            // Push session state to all viewers whenever panes change
-            tmuxService.setPanesChangedHandler { [weak connectionManager] in
+            Self.wirePaneRefresh(tmuxService: tmuxService, agentSimulator: agentSimulator) { [weak connectionManager] in
                 await connectionManager?.pushSessionStateToAll()
             }
 
@@ -3622,6 +3638,20 @@
                 self?.updateSleepPrevention()
                 await connectionManager?.pushSessionStateToAll()
                 await self?.broadcastBadgeDecreaseIfNeeded()
+            }
+        }
+
+        static func wirePaneRefresh(
+            tmuxService: TmuxService,
+            agentSimulator: AgentSimulatorService,
+            pushSessionState: @escaping @MainActor @Sendable () async -> Void
+        ) {
+            tmuxService.setPanesChangedHandler { @MainActor [weak tmuxService, weak agentSimulator] in
+                // External renames may only reach periodic discovery, without a layout event.
+                if let tmuxService {
+                    agentSimulator?.updateSimulatorRoutes(tmuxService.panes)
+                }
+                await pushSessionState()
             }
         }
 

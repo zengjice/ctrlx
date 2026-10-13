@@ -1,6 +1,6 @@
 # Agent iOS 设计（当前支持 iOS Simulator）
 
-当前源码的对外入口为 `ctrlx ios`，配套技能为 `ctrlx:agent-ios`（`plugin/ctrlx/skills/agent-ios/`）。本次仅统一平台命名，能力范围仍为本地 iOS Simulator；真机及 Android 支持留待后续。内部 `Simulator*` 类型、`simulator.action` 协议和设备存储目录继续沿用。旧 CLI 名称不保留别名，调用脚本与 Skill 应随新版本一同更新；下文历史证据中的 `ctrlx simulator` / `agent-simulator` 保留当时名称，不代表本次改名已经过同样的设备验收。
+当前源码的对外入口为 `ctrlx ios`，配套技能为 `ctrlx:agent-ios`（`plugin/ctrlx/skills/agent-ios/`）。运行与控制仍由 Host Mac 上的 iOS Simulator 提供；配对 Mac / iOS Viewer 已加入只读画面查看的源码实现，真机及 Android 支持留待后续。内部 `Simulator*` 类型、`simulator.action` 协议和设备存储目录继续沿用。旧 CLI 名称不保留别名，调用脚本与 Skill 应随新版本一同更新；下文历史证据中的 `ctrlx simulator` / `agent-simulator` 保留当时名称，不代表本次改名已经过同样的设备验收。
 
 当前验收以 **2026-10-12 用户最新更新** 为准：本期仅覆盖**内置屏 120 Hz**，外置屏 60 Hz 推迟。默认同步与可选低延迟模式的源帧至对应原生呈现均要求 **p95 ≤100 ms**，帧率 ≥50 FPS；点击至可见响应 **p95 ≤150 ms**，暖恢复 ≤250 ms。用户明确要求“不用重试再验证，直接复用已有证据”，因此本次仅按新门槛复核既有结果，不再启动性能测试、补采区间或扩展设备数；新增能力另做定向功能验证。历史失败记录保持原样，新结论与当时门槛分开保存。本机 P0 / P1 与跨机兼容、公开分发分别验收。
 
@@ -14,6 +14,8 @@
 
 **录屏退出顺序修复（2026-10-12）：** 接受“已有设备关闭任务阻塞其他录制停止”的 P2。服务退出先调用 coordinator 的 `prepareForShutdown()`，立即拒绝新增启动 / 录制、取消已登记的启动和存储任务，并行停止及回收剩余录制，再等待服务层已有关闭任务，最后完成 coordinator 的设备清理；直接调用 coordinator 退出也复用此准备步骤。保留全局 30 秒期限及既有关闭任务的等待。helper 连接创建纳入现有系统依赖边界，以测试真实服务 / coordinator 路径；分别阻塞设备 A 的封装和关机，确认设备 B 在 A 释放前已收到 SIGINT、完成文件并退出。两个用例修复前失败、修复后通过，72 项相关 Swift 回归及 14 项技能检查通过。日志为 `.build-local/simulator-record-shutdown-before.log` / `simulator-record-shutdown-after.log`；本轮不启动真实模拟器、不重复性能采样，未改动的录屏编码和 pinch 原生效果沿用上轮证据。当前签名 Release 候选 **20261012-213251** 的构建、App / CLI / helper 严格签名及两套随包技能核对通过，索引为 `.build-local/simulator-record-shutdown-build.json`。正式 App 与用户插件未替换。
 
+**Pane 复用与 Viewer 查看（2026-10-13，本机定向验证）：** `open` 改为复用来源 pane 的默认设备，新增 `open --new` 显式多开；设备由 Host 服务持有，关闭工作区仅卸载本地视图。Mac / iOS Viewer 通过现有 E2EE 通路查看同一设备的有界 JPEG 预览，不提供远程写操作。本轮签名 Mac 候选与 iOS Simulator SDK 编译、相关回归和技能检查通过。独立 iOS 27 helper 的三档 JPEG / PNG，以及隔离 Host 窗口中的重复打开、关闭工作台后保留设备、重新挂载画面均已实测；测试资源已回收。真实配对 Mac / iOS Viewer 的端到端界面联调尚未执行，不能由编译或 helper 验证代替；未重新采样性能。具体产物与验收边界见 [实施清单](v3.0.60/STAGE1_TODO.md)。
+
 ## 当前能力与边界（开发维护视角）
 
 本节按当前源码说明能力范围；是否已进入签名 App、完成真实效果验证，分别以文首交付状态及下方验收清单为准。面向使用 agent 的 [操作手册](../plugin/ctrlx/skills/agent-ios/references/operations.md#capability-coverage) 独立列出相同能力范围，并提供参数、操作语义和替代方法。两处均应随接口变化维护；历史实验记录中的计划命令不代表当前接口。
@@ -22,12 +24,13 @@
 
 | 领域 | 当前接口 | 行为与边界 |
 |---|---|---|
-| 设备生命周期 | `inventory`、`open`、`devices`、`status`、`close`、`storage`、`erase`、`delete` | 优先复用自有设备；`open --udid` 精确重开私有设备。关闭仍保留数据；`storage` 列出私有设备、占用与活动状态，`erase` 重置指定闲置设备并保持关机，`delete` 删除指定闲置设备 |
+| 设备生命周期 | `inventory`、`open`、`devices`、`status`、`close`、`storage`、`erase`、`delete` | `open` 复用当前 pane 的默认设备，`open --new` 显式多开；`open --udid` 精确选择私有设备。关闭仍保留数据；`storage` 列出私有设备、占用与活动状态，`erase` 重置指定闲置设备并保持关机，`delete` 删除指定闲置设备 |
 | 应用生命周期 | `install`、`uninstall`、`launch`、`terminate`、`open-url` | 安装或更新预先编译的模拟器 `.app`，按 bundle 卸载；卸载不等于整机重置。启动等待原生 Scene 激活，不代表页面内容已加载。URL 可能触发 iOS 确认，需要观察实际投递 |
 | 观察与定位 | `snapshot`、`wait`、`screenshot` | 原生 AX 树、观察内元素引用、标识 / 标签 / 角色定位、可见 / 消失等待、PNG 截图。元素写入前刷新 AX 并检查唯一性；仅 `--ref` 绑定此前观察的 App 进程、几何及控制代次，语义选择器查询当前界面，需确认当前 App / 页面 |
 | 触摸 | `tap`、`swipe`、`long-press`、`drag`、`pinch` | 单触点点击、滑动、长按、拖动及显式起始边缘手势；`pinch` 同时发送两个触点，按中心和比例缩放。使用模拟器逻辑点，旋转后重新观察 |
 | 键盘与文本 | `key`、`button`、`paste` | HID 按键及修饰键组合，Home / 锁屏 / 音量键，Unicode 剪贴板粘贴和指定目标的 iOS 菜单粘贴；人工输入采用 iOS 硬件键盘输入源 |
 | 原生显示 | `show`、`show --split`、`rotate`、`display-mode` | 内嵌 Metal 画面、左右分栏、方向切换、默认同步 / 可选低延迟显示。低延迟模式可能撕裂；选择标签不保证 Mac App 自动取得前台 |
+| Viewer 查看 | Mac / iOS Viewer 的 Host 模拟器标签 | 共享 Host 设备的只读画面；选择独立，隐藏 / 后台 / 断线停止取帧，无远程输入和设备关闭操作 |
 | 环境 | `location`、`appearance`、`privacy`、`push` | 固定定位及清除定位模拟、深浅色、列举权限的 grant / revoke / reset、向指定 App 注入模拟推送；关闭时不自动恢复这些配置 |
 | 资源与服务配置 | `config`、`resources`、`metrics`，`open --profile` / `--requires` | 默认双开，数量可配置为 1...32；检查内存压力和内存 / 磁盘保留量。报告进程 footprint / CPU，支持 standard / balanced 和功能依赖保留；配置上限不等于实测容量 |
 | 诊断 | `logs`、`crashes` | 按设备与 App 身份查询有时间、条数及字节上限的日志和崩溃记录；截断和空结果均不能证明从未出错 |
@@ -46,13 +49,57 @@
 
 录屏使用 `SimulatorRecorder` actor 管理私有 device set 的 `simctl io recordVideo` 子进程；`SimulatorRecordingClient` 注入创建边界。开始要求 owner / writer；查询和停止仅要求 owner，人工接管后仍可停止。首帧等待最多 10 秒，录制上限由 `--seconds 1...60` 指定（默认 60）；到时或临时文件达到 128 MiB 时发送 SIGINT，最多等 15 秒封装，超时回收进程并丢弃未完成文件。最终文件大于 128 MiB 也拒绝发布。输出卷须满足配置的磁盘保留量加文件预算；这不是磁盘预留。视频在输出目录的私有临时子目录编码，完成后以同卷硬链接原子发布到新 `.mp4` 路径，防止覆盖竞态，随后清理临时目录；强杀宿主仍可能残留录制进程及临时目录。关闭设备、owner 过期及正常退出均先收尾录屏；各设备退出收尾并行。三条命令均可用于 batch，失败不回滚此前的开始。详见 [录屏操作](../plugin/ctrlx/skills/agent-ios/references/recording.md)。录屏保留原生设备画布，片中旋转可能横置显示；仅在显示更新时取得帧，静止画面的视频可能很短，时长参数是采集的墙钟上限，不保证播放时长。录屏直接取得 guest 画面，无音频、暂停或编辑，不申请 macOS 屏幕录制权限；编码期间存在额外负载，既有无录屏性能证据不扩展为录屏中的帧率保证。
 
+### Pane 复用与远程查看的实现约定
+
+`AgentSimulatorService` 在 Host 进程内以来源 pane ID 索引默认活动设备，
+并登记该 pane 正在进行的默认启动任务。并发 `open` 合并；先判断复用，再检查新增
+设备容量。显式 runtime / type / profile / UDID 不符或缺少声明的 required features
+时明确报冲突，不更改已有设备。`--new` 跳过默认映射，额外设备不替换主设备。
+关闭默认设备清理映射；owner 仍按 UID / PID / start time 校验，不通过 pane 共享写权限。
+
+工作区 unregister 只 detach，register 重新采用同一个设备与稳定渲染对象；未挂载时
+不订阅本地连续帧。设备可在没有本地工作区窗口时由来源 agent 打开。tmux pane 的
+session / window 变动更新标签归属。明确关闭设备、agent 退出和 Host App 退出仍
+沿用关机及录屏收尾规则；本地可见或持续有效的 Viewer 请求阻止隐藏空闲回收。
+完整会话重命名通过前后 pane 集合识别，只更新设备路由，保留已挂载视图；
+`open` 的来源解析保留同一次 tmux 查询得到的完整快照，经 owner / 退出状态校验后，
+与后台刷新共用 `updateSimulatorRoutes`，不再单独迁移一个设备。即使 `open` 先于
+批量刷新，也能同时保留同会话的默认与额外设备，且不增加 tmux 查询。
+普通 pane 刷新发现变更时，先用已刷新的完整列表同步模拟器路由，再广播 Viewer
+快照；外部 `tmux rename-session` 即使没有触发布局事件，也会在下一次周期发现
+（间隔 10 秒）后更新，不依赖再次 `open`。快照读取本身保持只读，不追加 tmux 查询。
+MainView 整体迁移原会话的标签集合、选择与分栏状态，避免先移走标签后覆盖新集合。
+同一会话内稳定窗口 ID 不变、仅索引重排时，共用路由方法同样保留挂载与选择，
+由 MainView 的窗口映射更新标签关联；后台刷新与 `open` 复用遵守同一规则。
+真正的 pane 跨窗口或跨会话移动仍卸载并重新挂载到目标位置。
+
+网络模型位于 `CtrlxNetworking/Models/RemoteSimulator.swift`：session 快照新增可选
+`supportsSimulatorViewing` / `simulatorTabs`，`BrowseSimulator` 只请求单帧。
+`withPairId` 保留这两个字段，Viewer 状态依附原有每 Host 连接与工作区。发送前检查
+能力标志；每次请求检查 session / tab / 活动 owner，完成后重查关闭及路由变化。
+不把浏览器命令或 agent 的本地身份凭据暴露给 Viewer。
+
+`ConnectedViewer` 将模拟器请求放进既有 preview 队列，与浏览器合计每连接最多四个
+并发请求；终端输出拥塞时暂停新取帧。模拟器服务全局最多四个请求，同设备同尺寸的
+在途编码合并，不同尺寸等待已有编码结束。每个可见 Viewer surface 仅一个在途帧，
+回复后间隔 180 ms；解码在并发执行上下文进行，过期选择 / 隐藏 surface 的返回不展示。
+Mac 复用 session 标签栏与分栏；iOS 在 Tabs 中列出 iOS Simulators on Host。
+远程标签提供查看和本地分栏，不提供关闭 Host 设备的按钮。
+
+原生 helper 的 `preview` 复用已有独立截图缓冲区、方向处理和 ImageIO，直接输出
+JPEG，不经 PNG 落盘或录屏。按 Viewer 实际画布缩放、不放大源图、最长边最多 2560，
+质量 0.82，超出 512 KiB 时按 75% 有界缩小。未出现源帧时等待最多四秒；传输请求
+标记 readOnly，预览超时不使输入连接失效。图片经过现有 E2EE / Relay，无新端口或
+Relay 业务接口。此刷新策略不承诺远程达到本地 ≥50 FPS / ≤100 ms，约 5.6 FPS 仅是
+忽略网络和编码时间的理论上限。无 Viewer 请求时无远程编码或磁盘写入。
+
 ### 当前未提供
 
 | 缺口 | 与已有能力的区别 |
 |---|---|
 | 任意多点手势、双指旋转或平移 | 当前双指接口仅提供基础 `pinch`，不暴露任意触点轨迹 |
 | Mac 输入法 marked-text 组合及候选窗 | 已验证 iOS 硬件键盘输入源中的拼音；显式粘贴可以输入 Unicode，但不验证逐字符输入或组合过程 |
-| 模拟器远程画面和远程控制 | 已提供本地显示、PNG 截图及有界 MP4 录屏，未提供面向远程 Viewer 的模拟器视频 / 输入通道 |
+| 模拟器远程控制及视频流 | 已提供 Viewer 只读 JPEG 预览；未提供远程输入、创建 / 关闭设备、音频或高帧率视频传输 |
 | 真机控制 | 当前接口面向 iOS Simulator，不控制物理 iPhone |
 | 设备显式克隆 | 已提供复用、擦除和删除，尚未提供复制一台设备作为另一份并行测试环境 |
 | Runtime 下载 / 安装 | `inventory` 只列举已安装资源，Xcode 和 runtime 由外部工作流准备 |

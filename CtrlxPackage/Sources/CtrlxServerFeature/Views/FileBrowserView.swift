@@ -286,6 +286,25 @@ final class FileBrowserState {
 @Observable
 @MainActor
 final class SessionFileTabsState {
+    static func migrateSession(_ rename: SessionRenameMapping, in sessions: inout [String: SessionFileTabsState]) {
+        guard let tabs = sessions.removeValue(forKey: rename.oldName) else { return }
+        tabs.remapWindowIDs(rename.windowIDs)
+        sessions[rename.newName] = tabs
+    }
+
+    func attachSimulator(_ state: SimulatorTabState) {
+        let pane = state.sourcePane
+        var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), displayTitle: state.handle.name, originWindowId: pane.windowId)
+        tab.isSimulator = true
+        if !openBrowserTabs.contains(where: { $0.id == state.id }) {
+            openBrowserTabs.append(tab)
+        }
+        simulatorStates[state.id] = state
+        if rightSide.contains(.window(pane.windowId)) {
+            rightSide.insert(.browser(state.id))
+        }
+    }
+
     /// Files opened as their own tabs via the "Open in New Tab" context menu.
     var openFileTabs: [OpenFileTab] = []
     var directoryTabs: [UUID: FileBrowserTab] = [:]
@@ -347,6 +366,7 @@ final class SessionFileTabsState {
     var agentBrowserStates: [UUID: AgentBrowserTabState] = [:]
     var simulatorStates: [UUID: SimulatorTabState] = [:]
     var remoteBrowserTabs: [UUID: RemoteBrowserTab] = [:]
+    var remoteSimulatorTabs: [UUID: RemoteSimulatorTab] = [:]
 
     /// Returns whether reconciliation collapsed the split, so the view can repair terminal focus.
     @discardableResult
@@ -369,8 +389,44 @@ final class SessionFileTabsState {
                 if openBrowserTabs[index] != tab { openBrowserTabs[index] = tab }
             } else { openBrowserTabs.append(tab) }
         }
-        for index in openBrowserTabs.indices where !live.contains(openBrowserTabs[index].id) {
+        for index in openBrowserTabs.indices where !live.contains(openBrowserTabs[index].id) && remoteSimulatorTabs[openBrowserTabs[index].id] == nil {
             openBrowserTabs[index].isViewerLocal = true
+        }
+        return reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
+    }
+
+    @discardableResult
+    func syncHostSimulatorTabs(_ values: [RemoteSimulatorTab], sessionWindowIDs: [String]) -> Bool {
+        let live = Set(values.map(\.id))
+        let removed = Set(remoteSimulatorTabs.keys).subtracting(live)
+        openBrowserTabs.removeAll { removed.contains($0.id) }
+        for id in removed {
+            remoteSimulatorTabs.removeValue(forKey: id)
+            rightSide.remove(.browser(id))
+            if selectedBrowserTabId == id {
+                selectedBrowserTabId = nil
+            }
+            if selectedRight == .browser(id) {
+                selectedRight = nil
+            }
+        }
+        for value in values {
+            remoteSimulatorTabs[value.id] = value
+            var tab = BrowserTab(
+                id: value.id,
+                url: URL(staticString: "about:blank"),
+                displayTitle: "\(value.title) · Host",
+                originWindowId: value.windowID
+            )
+            tab.isSimulator = true
+            tab.canClose = false
+            if let index = openBrowserTabs.firstIndex(where: { $0.id == value.id }) {
+                if openBrowserTabs[index] != tab {
+                    openBrowserTabs[index] = tab
+                }
+            } else {
+                openBrowserTabs.append(tab)
+            }
         }
         return reconcileRemoteRightPaneSelection(sessionWindowIDs: sessionWindowIDs)
     }

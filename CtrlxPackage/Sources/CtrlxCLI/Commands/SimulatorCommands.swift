@@ -57,6 +57,7 @@ struct SimulatorActionCommand: ParsableCommand {
     @Option var socket: String?
     @Option(help: "CtrlX device ID returned by open, distinct from the simulator UDID") var device: String?
     @Option(help: "Exact private simulator UUID from storage; open, erase or delete only. Erase/delete require an idle, shut-down device") var udid: String?
+    @Flag(name: .customLong("new"), help: "Open an additional device instead of reusing this pane's default; open only") var newDevice = false
     @Option var runtime: String?
     @Option var deviceType: String?
     @Option(help: "standard (default) or balanced; applied before the app starts") var profile: String?
@@ -105,6 +106,9 @@ struct SimulatorActionCommand: ParsableCommand {
 
     func parameters() throws -> [String: JSONValue] {
         guard SimulatorOperation(rawValue: operation) != nil else { throw ValidationError("Unsupported simulator operation") }
+        if newDevice, operation != "open" {
+            throw ValidationError("--new requires open")
+        }
         if let timeoutMs {
             guard ["wait", "launch"].contains(operation), (1...60000).contains(timeoutMs) else {
                 throw ValidationError("--timeout-ms requires wait or launch and a value of 1...60000")
@@ -225,6 +229,9 @@ struct SimulatorActionCommand: ParsableCommand {
         if operation == "record-start", let output { params["output"] = .string(output) }
         if let seconds { params["seconds"] = .int(seconds) }
         if let scale { params["scale"] = .double(scale) }
+        if newDevice {
+            params["new"] = .bool(true)
+        }
         if split { params["split"] = .bool(true) }
         if clear { params["clear"] = .bool(true) }
         if let edge { params["edge"] = .string(edge.rawValue) }

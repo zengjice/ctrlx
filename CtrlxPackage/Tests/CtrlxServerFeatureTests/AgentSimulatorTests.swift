@@ -123,7 +123,8 @@
                 let service = AgentSimulatorService()
                 service.start(
                     root: URL(fileURLWithPath: "/unused-simulator-test"),
-                    resolvePane: { _ in throw SimulatorFailure("Not used by identity") })
+                    resolveRoute: { _ in throw SimulatorFailure("Not used by identity") }
+                )
                 let result = await service.handle(
                     JSONRPCRequest(
                         id: "test", method: "simulator.action", params: ["command": .string("identity"), "_peerPID": .int(Int(peer))]))
@@ -138,8 +139,10 @@
                 $0[ProcessRunner.self] = .previewValue
             } operation: {
                 let service = AgentSimulatorService()
-                service.start(root: URL(fileURLWithPath: "/unused-simulator-batch"),
-                    resolvePane: { _ in throw SimulatorFailure("Not used by batch identity") })
+                service.start(
+                    root: URL(fileURLWithPath: "/unused-simulator-batch"),
+                    resolveRoute: { _ in throw SimulatorFailure("Not used by batch identity") }
+                )
                 let result = await service.handle(JSONRPCRequest(id: "batch-test", method: "simulator.action",
                     params: ["command": .string("batch"), "actions": .array(actions), "_peerPID": .int(11)]))
                 await service.shutdown()

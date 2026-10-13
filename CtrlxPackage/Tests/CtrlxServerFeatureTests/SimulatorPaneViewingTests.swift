@@ -1,0 +1,626 @@
+#if os(macOS)
+    import AppKit
+    import CtrlxCommon
+    import CtrlxNetworking
+    @preconcurrency import CtrlxSimulatorBridge
+    import CtrlxSimulatorProtocol
+    import Dependencies
+    import Foundation
+    import ImageIO
+    import IOSurface
+    import Synchronization
+    import Testing
+    @testable import CtrlxServerFeature
+
+    final private class PreviewTestConnection: CXSimulatorConnection, @unchecked Sendable {
+        let commands = Mutex<[String]>([])
+        let hold = Mutex(false)
+        let replies = Mutex<[CXSimulatorDataReply]>([])
+        override func invalidate() { }
+        override func request(_ data: Data, reply: @escaping CXSimulatorDataReply) {
+            let request = try? JSONDecoder().decode([String: JSONValue].self, from: data)
+            let command = request?["command"]?.stringValue ?? ""
+            commands.withLock { $0.append(command) }
+            if command == "preview" {
+                if hold.withLock({ $0 }) {
+                    replies.withLock { $0.append(reply) }
+                } else {
+                    reply(Self.frame, nil)
+                }
+            } else {
+                reply(Data("{}".utf8), nil)
+            }
+        }
+
+        static let frame = Data(#"{"data":"AQ==","width":256,"height":512}"#.utf8)
+        func release() {
+            hold.withLock { $0 = false }
+            let pending = replies.withLock { let values = $0
+                $0.removeAll()
+                return values
+            }
+            for reply in pending {
+                reply(Self.frame, nil)
+            }
+        }
+    }
+
+    final private class PreviewTestState: Sendable {
+        let calls = Mutex<[[String]]>([])
+        let holdBoot = Mutex(false)
+        let alive = Mutex(true)
+    }
+
+    @Suite("Simulator pane reuse and remote viewing", .serialized) @MainActor
+    struct SimulatorPaneViewingTests {
+        @MainActor
+        final class Fixture {
+            let service: AgentSimulatorService
+            fileprivate let connection: PreviewTestConnection
+            fileprivate let probe = PreviewTestState()
+            var pane: PaneInfo
+            var otherPanes: [PaneInfo] = []
+            let workspace = SimulatorWorkspace()
+            var created: [SimulatorTabState] = []
+            var detached: [UUID] = []
+            var sessionTabs: [String: SessionFileTabsState] = [:]
+            init(attach: Bool = true) throws {
+                _ = NSApplication.shared
+                self.pane = Self.pane(session: "work", window: 0)
+                let connection = PreviewTestConnection()
+                let probe = probe
+                self.connection = connection
+                let inventory = try JSONSerialization.data(withJSONObject: [
+                    "runtimes": [[
+                        "isAvailable": true,
+                        "platform": "iOS",
+                        "version": "27.0",
+                        "identifier": "runtime",
+                        "supportedDeviceTypes": [["productFamily": "iPhone", "identifier": "iphone", "name": "iPhone"]],
+                    ]],
+                    "devices": ["runtime": (0..<4).map { _ in
+                        [
+                            "isAvailable": true,
+                            "state": "Shutdown",
+                            "udid": UUID().uuidString,
+                            "deviceTypeIdentifier": "iphone",
+                            "name": "CtrlX · iPhone",
+                        ] as [String: Any]
+                    }],
+                ])
+                let runner = ProcessRunner(run: { _, arguments, _, _ in
+                    probe.calls.withLock { $0.append(arguments) }
+                    if arguments.first == "on" {
+                        while probe.holdBoot.withLock({ $0 }) {
+                            try await Task.sleep(for: .milliseconds(5))
+                        }
+                    }
+                    let output: Data
+                    if arguments == ["version"] {
+                        output = Data("simslim \(SimulatorCoordinator.simslimCommit)".utf8)
+                    } else if arguments.first == "profiles" {
+                        output = Data("[{\"id\":\"core\",\"labels\":[\"com.apple.apsd\"]}]".utf8)
+                    } else if arguments.contains("--list") {
+                        output = Data("[]".utf8)
+                    } else if arguments.contains("list") {
+                        output = inventory
+                    } else if arguments == ["--find", "xcodebuild"] {
+                        output = Data("/fixture/Xcode.app/Contents/Developer/usr/bin/xcodebuild".utf8)
+                    } else {
+                        output = Data()
+                    }
+                    return ProcessResult(exitCode: 0, stdout: output, stderr: Data())
+                })
+                var system = SimulatorSystemClient()
+                system.createDirectory = { _ in }
+                system.isExecutable = { _ in true }
+                system.read = { _ in throw CocoaError(.fileReadNoSuchFile) }
+                system.write = { _, _ in }
+                system.remove = { _ in }
+                system.inspect = { pid in
+                    guard probe.alive.withLock({ $0 }) else { throw SimulatorFailure("Owner exited") }
+                    return SimulatorProcess(
+                        owner: SimulatorOwner(pid: pid, uid: getuid(), startSeconds: 100, startMicros: 1),
+                        parentPID: 1,
+                        executable: "/fixture/codex"
+                    )
+                }
+                system.connect = { _, _, _ in SimulatorTransport(connection: connection) }
+                self.service = withDependencies {
+                    $0[ProcessRunner.self] = runner
+                    $0[SimulatorSystemClient.self] = system
+                    $0[SimulatorResourceClient.self] = SimulatorResourceClient(read: { _ in
+                        SimulatorResources(
+                            physicalBytes: 32 << 30,
+                            reclaimableBytes: 16 << 30,
+                            pressureLevel: 1,
+                            swapUsedBytes: 0,
+                            freeDiskBytes: 16 << 30
+                        )
+                    })
+                } operation: { AgentSimulatorService() }
+                withDependencies {
+                    $0[ProcessRunner.self] = runner
+                    $0[SimulatorSystemClient.self] = system
+                    $0[SimulatorResourceClient.self] = SimulatorResourceClient(read: { _ in
+                        SimulatorResources(
+                            physicalBytes: 32 << 30,
+                            reclaimableBytes: 16 << 30,
+                            pressureLevel: 1,
+                            swapUsedBytes: 0,
+                            freeDiskBytes: 16 << 30
+                        )
+                    })
+                } operation: {
+                    service.start(root: URL(fileURLWithPath: "/unused-pane-viewing"), resolveRoute: { [unowned self] _ in
+                        AgentPaneRoute(pane: self.pane, panes: [self.pane] + self.otherPanes)
+                    })
+                }
+                workspace.acceptsPane = { _ in true }
+                service.updateSimulatorRoutes([pane])
+                workspace.onCreate = { [unowned self] state in
+                    self.created.append(state)
+                    let tabs = self.sessionTabs[state.sourcePane.sessionName] ?? SessionFileTabsState()
+                    self.sessionTabs[state.sourcePane.sessionName] = tabs
+                    tabs.attachSimulator(state)
+                }
+                workspace.onDetach = { [unowned self] state in
+                    self.detached.append(state.id)
+                    guard let tabs = self.sessionTabs.values.first(where: { $0.simulatorStates[state.id] != nil }) else { return }
+                    tabs.simulatorStates.removeValue(forKey: state.id)
+                    tabs.openBrowserTabs.removeAll { $0.id == state.id }
+                    tabs.rightSide.remove(.browser(state.id))
+                    if tabs.selectedRight == .browser(state.id) {
+                        tabs.selectedRight = nil
+                    }
+                    if tabs.selectedBrowserTabId == state.id {
+                        tabs.selectedBrowserTabId = nil
+                    }
+                }
+                workspace.onSelect = { [unowned self] state, _ in
+                    guard let tabs = self.sessionTabs.values.first(where: { $0.simulatorStates[state.id] != nil }) else { return }
+                    if tabs.rightSide.contains(.browser(state.id)) {
+                        tabs.selectedRight = .browser(state.id)
+                    } else {
+                        tabs.selectedBrowserTabId = state.id
+                    }
+                }
+                if attach {
+                    service.register(workspace)
+                }
+            }
+
+            static func pane(session: String, window: Int, stableID: String? = nil, paneID: String = "%1") -> PaneInfo {
+                PaneInfo(
+                    paneId: paneID,
+                    target: "\(session):\(window).0",
+                    sessionName: session,
+                    windowIndex: window,
+                    tmuxWindowId: stableID ?? "@\(window)",
+                    paneIndex: 0,
+                    command: "codex",
+                    currentPath: "/fixture",
+                    width: 80,
+                    height: 24,
+                    isActive: true
+                )
+            }
+
+            func action(_ command: String, _ parameters: [String: JSONValue] = [:], peer: Int = 10) async -> JSONRPCResponse {
+                var params = parameters
+                params["command"] = .string(command)
+                params["_peerPID"] = .int(peer)
+                return await service.handle(JSONRPCRequest(id: UUID().uuidString, method: "simulator.action", params: params))
+            }
+
+            var boots: Int {
+                probe.calls.withLock { $0.filter { $0.first == "on" }.count }
+            }
+        }
+
+        func wait(_ condition: () -> Bool) async throws {
+            for _ in 0..<500 {
+                if condition() {
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            throw SimulatorFailure("Timed out waiting for test fixture")
+        }
+
+        @Test
+        func samePaneReusesAtCapacityButExplicitNewKeepsIndependentDevices() async throws {
+            let fixture = try Fixture()
+            let first = await fixture.action("open")
+            let second = await fixture.action("open", ["new": .bool(true)])
+            let reused = await fixture.action("open")
+            #expect(first.ok && second.ok && reused.ok)
+            #expect(first.result?["device"] == reused.result?["device"])
+            #expect(first.result?["device"] != second.result?["device"])
+            #expect(fixture.boots == 2 && fixture.created.count == 2)
+            #expect(fixture.service.sharedSimulatorTabs.filter(\.isPrimary).count == 1)
+            #expect(!(await fixture.action("open", ["profile": .string("balanced")])).ok)
+            #expect(!(await fixture.action("open", peer: 20)).ok)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func simultaneousDefaultOpensShareOneBoot() async throws {
+            let fixture = try Fixture()
+            fixture.probe.holdBoot.withLock { $0 = true }
+            let first = Task { await fixture.action("open") }
+            try await wait { fixture.boots == 1 }
+            let second = Task { await fixture.action("open") }
+            await Task.yield()
+            fixture.probe.holdBoot.withLock { $0 = false }
+            let a = await first.value, b = await second.value
+            #expect(a.ok && b.ok && a.result?["device"] == b.result?["device"])
+            #expect(fixture.boots == 1 && fixture.created.count == 1)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func workspaceCanDetachAndAdoptTheSameLiveDevice() async throws {
+            let fixture = try Fixture(attach: false)
+            #expect((await fixture.action("open")).ok)
+            let tab = try #require(fixture.service.sharedSimulatorTabs.first)
+            #expect(fixture.created.isEmpty)
+            fixture.service.register(fixture.workspace)
+            let state = try #require(fixture.created.first)
+            fixture.service.unregister(fixture.workspace)
+            #expect(!state.isClosed && fixture.detached == [state.id])
+            #expect(fixture.service.sharedSimulatorTabs.first?.id == tab.id)
+            fixture.service.register(fixture.workspace)
+            #expect(fixture.created.count == 2 && fixture.created[1] === state)
+            #expect(fixture.service.sharedSimulatorTabs.first?.windowID == "@0")
+            fixture.pane = Fixture.pane(session: "work", window: 0, stableID: "@9")
+            fixture.service.updateSimulatorRoutes([fixture.pane])
+            #expect(fixture.service.sharedSimulatorTabs.first?.windowID == "@9")
+            #expect(fixture.detached == [state.id, state.id])
+            #expect(fixture.created.count == 3 && fixture.created.last === state)
+            fixture.pane = Fixture.pane(session: "moved", window: 2)
+            fixture.service.updateSimulatorRoutes([fixture.pane])
+            #expect(fixture.service.sharedSimulatorTabs.first?.sessionName == "moved")
+            #expect(state.sourcePane.windowIndex == 2 && !state.isClosed)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func closingDefaultClearsItsMapping() async throws {
+            let fixture = try Fixture()
+            let first = await fixture.action("open")
+            let id = try #require(first.result?["device"])
+            #expect((await fixture.action("close", ["device": id])).ok)
+            let next = await fixture.action("open")
+            #expect(next.ok && next.result?["device"] != id && fixture.boots == 2)
+            await fixture.service.shutdown()
+        }
+
+        @Test(arguments: [false, true], [false, true])
+        func sessionRenamePreservesWorkspaceTabs(migrateBeforeRoutes: Bool, split: Bool) async throws {
+            try await verifySessionRename(migrateBeforeRoutes: migrateBeforeRoutes, split: split, openFirst: false)
+        }
+
+        @Test(arguments: [false, true])
+        func ordinaryRefreshPublishesRenamedSimulatorBeforePreview(migrateBeforeRefresh: Bool) async throws {
+            try await withDependencies {
+                $0.continuousClock = .continuous
+            } operation: {
+                let tmuxPath = "/opt/homebrew/bin/tmux"
+                try #require(FileManager.default.isExecutableFile(atPath: tmuxPath))
+                let socket = "/tmp/ctrlx-route-\(UUID().uuidString.prefix(8)).sock"
+                defer { try? FileManager.default.removeItem(atPath: socket) }
+                let runner = ProcessRunner.liveValue
+                func run(_ arguments: [String]) async throws -> ProcessResult {
+                    try await runner.runOrThrow(
+                        executable: tmuxPath,
+                        arguments: ["-f", "/dev/null", "-S", socket] + arguments,
+                        timeout: 5
+                    )
+                }
+                let fixture = try Fixture()
+                let queries = Mutex(0)
+                let tmux = withDependencies {
+                    $0[ProcessRunner.self] = ProcessRunner(run: { executable, arguments, environment, timeout in
+                        if arguments.contains("list-panes") {
+                            queries.withLock { $0 += 1 }
+                        }
+                        return try await runner.run(executable, arguments, environment, timeout)
+                    })
+                } operation: { TmuxService(tmuxPath: tmuxPath, socketPath: socket) }
+                do {
+                    _ = try await run(["new-session", "-d", "-s", "work", "/bin/sleep 60"])
+                    fixture.pane = try #require(await tmux.refreshPanes().first)
+                    #expect((await fixture.action("open")).ok)
+                    #expect((await fixture.action("open", ["new": .bool(true)])).ok)
+                    let state = try #require(fixture.created.first)
+                    let extra = try #require(fixture.created.last)
+                    let tabs = try #require(fixture.sessionTabs["work"])
+                    tabs.selectedBrowserTabId = extra.id
+                    tabs.rightSide = [.browser(state.id)]
+                    tabs.selectedRight = .browser(state.id)
+                    let broadcasts = Mutex<[[RemoteSimulatorTab]]>([])
+                    AppCoordinator.wirePaneRefresh(tmuxService: tmux, agentSimulator: fixture.service) {
+                        broadcasts.withLock { $0.append(fixture.service.sharedSimulatorTabs) }
+                    }
+                    let oldPane = fixture.pane
+                    fixture.pane = Fixture.pane(
+                        session: "renamed", window: oldPane.windowIndex,
+                        stableID: oldPane.tmuxWindowId, paneID: oldPane.paneId
+                    )
+                    let rename = try #require(SessionRenameMapping.detect(from: [oldPane], to: [fixture.pane]).first)
+                    if migrateBeforeRefresh {
+                        SessionFileTabsState.migrateSession(rename, in: &fixture.sessionTabs)
+                    }
+
+                    // Bypass the app's rename/layout handlers; only ordinary discovery runs.
+                    _ = try await run(["rename-session", "-t", "work", "renamed"])
+                    let panes = await tmux.refreshPanes()
+                    try await wait { broadcasts.withLock { !$0.isEmpty } }
+                    if !migrateBeforeRefresh {
+                        SessionFileTabsState.migrateSession(rename, in: &fixture.sessionTabs)
+                    }
+
+                    #expect(panes.count == 1 && panes.first?.sessionName == "renamed")
+                    let published = broadcasts.withLock { $0 }
+                    #expect(published.count == 1)
+                    #expect(published.first?.count == 2)
+                    #expect(published.first?.allSatisfy { $0.sessionName == "renamed" } == true)
+                    #expect(fixture.sessionTabs["renamed"] === tabs && fixture.sessionTabs["work"] == nil)
+                    #expect(tabs.openBrowserTabs.map(\.id) == [state.id, extra.id])
+                    #expect(tabs.selectedBrowserTabId == extra.id)
+                    #expect(tabs.selectedRight == .browser(state.id) && tabs.rightSide == [.browser(state.id)])
+                    #expect(fixture.detached.isEmpty && fixture.created.count == 2 && fixture.boots == 2)
+                    let preview = try await fixture.service.handleSimulator(.init(sessionName: "renamed", tabID: state.id))
+                    #expect(preview.tab.id == state.id && preview.tab.sessionName == "renamed" && preview.frame.isValid)
+                    await #expect(throws: SimulatorFailure.self) {
+                        try await fixture.service.handleSimulator(.init(sessionName: "work", tabID: state.id))
+                    }
+                    _ = await tmux.refreshPanes()
+                    #expect(queries.withLock { $0 } == 3)
+                    #expect(broadcasts.withLock { $0.count } == 1)
+                } catch {
+                    await fixture.service.shutdown()
+                    _ = try? await run(["kill-server"])
+                    throw error
+                }
+                await fixture.service.shutdown()
+                _ = try await run(["kill-server"])
+            }
+        }
+
+        @Test(arguments: [false, true], [false, true])
+        func openBeforeRouteRefreshPreservesRenamedWorkspaceTabs(migrateBeforeRoutes: Bool, split: Bool) async throws {
+            try await verifySessionRename(migrateBeforeRoutes: migrateBeforeRoutes, split: split, openFirst: true)
+        }
+
+        private func verifySessionRename(migrateBeforeRoutes: Bool, split: Bool, openFirst: Bool) async throws {
+            let fixture = try Fixture()
+            let first = await fixture.action("open")
+            let extra = await fixture.action("open", ["new": .bool(true)])
+            #expect(first.ok && extra.ok)
+            let state = try #require(fixture.created.first)
+            let extraState = try #require(fixture.created.last)
+            let tabs = try #require(fixture.sessionTabs["work"])
+            tabs.selectedBrowserTabId = split ? nil : state.id
+            if split {
+                tabs.rightSide = [.browser(state.id)]
+                tabs.selectedRight = .browser(state.id)
+            }
+            tabs.tabOrder = [.window(fixture.pane.windowId), .browser(state.id), .browser(extraState.id)]
+            let oldPane = fixture.pane
+            fixture.pane = Fixture.pane(session: "renamed", window: 0)
+            let rename = try #require(SessionRenameMapping.detect(from: [oldPane], to: [fixture.pane]).first)
+
+            if migrateBeforeRoutes {
+                SessionFileTabsState.migrateSession(rename, in: &fixture.sessionTabs)
+            }
+            if openFirst {
+                let reused = await fixture.action("open")
+                #expect(reused.ok && reused.result?["device"] == first.result?["device"])
+            }
+            fixture.service.updateSimulatorRoutes([fixture.pane])
+            SessionFileTabsState.migrateSession(rename, in: &fixture.sessionTabs)
+            fixture.service.register(fixture.workspace)
+
+            #expect(fixture.sessionTabs["work"] == nil)
+            #expect(fixture.sessionTabs["renamed"] === tabs)
+            #expect(tabs.simulatorStates[state.id] === state)
+            #expect(tabs.simulatorStates[extraState.id] === extraState)
+            #expect(tabs.openBrowserTabs.map(\.id) == [state.id, extraState.id])
+            #expect(tabs.openBrowserTabs.allSatisfy { $0.originWindowId == "renamed:0" })
+            #expect(tabs.tabOrder == [.window("renamed:0"), .browser(state.id), .browser(extraState.id)])
+            #expect(tabs.selectedBrowserTabId == (split ? nil : state.id))
+            #expect(tabs.selectedRight == (split ? .browser(state.id) : nil))
+            #expect(tabs.rightSide == (split ? [.browser(state.id)] : []))
+            #expect(fixture.detached.isEmpty && fixture.created.count == 2)
+            #expect(!state.isClosed && state.workspaceID == fixture.workspace.id)
+            #expect(fixture.service.sharedSimulatorTabs.allSatisfy { $0.sessionName == "renamed" })
+            #expect((await fixture.action("show", ["device": .string(state.id.uuidString)])).ok)
+            let reopened = await fixture.action("open")
+            #expect(reopened.ok && reopened.result?["device"] == first.result?["device"])
+            #expect(reopened.result?["udid"] == first.result?["udid"] && fixture.boots == 2)
+            #expect(tabs.simulatorStates[state.id] === state)
+            await fixture.service.shutdown()
+        }
+
+        @Test(arguments: [false, true], [false, true])
+        func windowReindexPreservesWorkspaceTabs(remapBeforeRoutes: Bool, openFirst: Bool) async throws {
+            let fixture = try Fixture()
+            let oldPanes = [fixture.pane, Fixture.pane(session: "work", window: 3, paneID: "%2")]
+            fixture.otherPanes = Array(oldPanes.dropFirst())
+            fixture.service.updateSimulatorRoutes(oldPanes)
+            let opened = await fixture.action("open")
+            #expect(opened.ok)
+            #expect((await fixture.action("open", ["new": .bool(true)])).ok)
+            let state = try #require(fixture.created.first)
+            let extra = try #require(fixture.created.last)
+            let tabs = try #require(fixture.sessionTabs["work"])
+            tabs.selectedBrowserTabId = extra.id
+            tabs.rightSide = [.browser(state.id)]
+            tabs.selectedRight = .browser(state.id)
+            tabs.tabOrder = [.window("@0"), .browser(state.id), .browser(extra.id)]
+            let originalOrder = tabs.tabOrder
+            fixture.pane = Fixture.pane(session: "work", window: 3, stableID: "@0")
+            let newPanes = [fixture.pane, Fixture.pane(session: "work", window: 0, stableID: "@3", paneID: "%2")]
+            fixture.otherPanes = Array(newPanes.dropFirst())
+            let mapping = WindowReindexMapping.detect(from: oldPanes, to: newPanes)
+            #expect(mapping == ["work:0": "work:3", "work:3": "work:0"])
+
+            if remapBeforeRoutes {
+                tabs.remapWindowIDs(mapping)
+            }
+            if openFirst {
+                let reused = await fixture.action("open")
+                #expect(reused.ok && reused.result?["device"] == opened.result?["device"])
+            }
+            fixture.service.updateSimulatorRoutes(newPanes)
+            if !remapBeforeRoutes {
+                tabs.remapWindowIDs(mapping)
+            }
+
+            #expect(fixture.sessionTabs["work"] === tabs)
+            #expect(tabs.simulatorStates[state.id] === state && tabs.simulatorStates[extra.id] === extra)
+            #expect(tabs.openBrowserTabs.map(\.id) == [state.id, extra.id])
+            #expect(tabs.openBrowserTabs.allSatisfy { $0.originWindowId == "work:3" })
+            #expect(state.sourcePane.windowId == "work:3" && extra.sourcePane.windowId == "work:3")
+            #expect(tabs.tabOrder == originalOrder)
+            #expect(tabs.selectedBrowserTabId == extra.id)
+            #expect(tabs.selectedRight == .browser(state.id))
+            #expect(tabs.rightSide == [.browser(state.id)] && tabs.isSplit)
+            #expect(fixture.detached.isEmpty && fixture.created.count == 2 && fixture.boots == 2)
+            #expect(!state.isClosed && !extra.isClosed && state.workspaceID == fixture.workspace.id)
+            #expect((await fixture.action("show", ["device": .string(state.id.uuidString)])).ok)
+            #expect(tabs.selectedRight == .browser(state.id) && tabs.selectedBrowserTabId == extra.id)
+            await fixture.service.shutdown()
+        }
+
+        @Test(arguments: [false, true])
+        func movingPaneToAnotherSessionStillReattachesItsTab(openFirst: Bool) async throws {
+            let fixture = try Fixture()
+            let otherPane = Fixture.pane(session: "work", window: 1, paneID: "%2")
+            fixture.otherPanes = [otherPane]
+            fixture.service.updateSimulatorRoutes([fixture.pane, otherPane])
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            let oldTabs = try #require(fixture.sessionTabs["work"])
+            fixture.pane = Fixture.pane(session: "other", window: 0)
+            if openFirst {
+                #expect((await fixture.action("open")).ok)
+            }
+            fixture.service.updateSimulatorRoutes([fixture.pane, otherPane])
+
+            #expect(fixture.detached == [state.id])
+            #expect(oldTabs.simulatorStates.isEmpty && oldTabs.openBrowserTabs.isEmpty)
+            #expect(fixture.sessionTabs["other"]?.simulatorStates[state.id] === state)
+            #expect(fixture.created.count == 2 && fixture.created.last === state)
+            #expect(fixture.boots == 1 && !state.isClosed)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func shutdownCancelsDefaultBootAndCannotPublishALateTab() async throws {
+            let fixture = try Fixture()
+            fixture.probe.holdBoot.withLock { $0 = true }
+            let opening = Task { await fixture.action("open") }
+            try await wait { fixture.boots == 1 }
+            await fixture.service.shutdown()
+            #expect(!(await opening.value).ok)
+            #expect(fixture.service.sharedSimulatorTabs.isEmpty && fixture.created.isEmpty)
+        }
+
+        @Test
+        func previewCoalescesWithoutTakingControlAndRejectsMovedOrClosedDevices() async throws {
+            let fixture = try Fixture()
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            let writer = state.writer
+            let request = BrowseSimulator(sessionName: "work", tabID: state.id)
+            fixture.connection.hold.withLock { $0 = true }
+            let first = Task { try await fixture.service.handleSimulator(request) }
+            try await wait { fixture.connection.replies.withLock { $0.count == 1 } }
+            let second = Task { try await fixture.service.handleSimulator(request) }
+            await Task.yield()
+            fixture.connection.release()
+            let a = try await first.value, b = try await second.value
+            #expect(a == b && state.writer == writer)
+            #expect(fixture.connection.commands.withLock { $0.filter { $0 == "preview" }.count } == 1)
+            await #expect(throws: SimulatorFailure.self) {
+                try await fixture.service.handleSimulator(.init(sessionName: "wrong", tabID: state.id))
+            }
+            await #expect(throws: SimulatorFailure.self) {
+                try await fixture.service.handleSimulator(.init(sessionName: "work", tabID: state.id, frameMaxDimension: 9_999))
+            }
+            fixture.connection.hold.withLock { $0 = true }
+            let late = Task { try await fixture.service.handleSimulator(request) }
+            try await wait { fixture.connection.replies.withLock { $0.count == 1 } }
+            fixture.service.close(state)
+            fixture.connection.release()
+            await #expect(throws: (any Error).self) { try await late.value }
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func agentScreenshotDrainsPreviewAndBlocksNewCaptures() async throws {
+            let fixture = try Fixture()
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            let writer = state.writer
+            let request = BrowseSimulator(sessionName: "work", tabID: state.id)
+            fixture.connection.hold.withLock { $0 = true }
+            let preview = Task { try await fixture.service.handleSimulator(request) }
+            try await wait { fixture.connection.replies.withLock { $0.count == 1 } }
+            let screenshot = Task { await fixture.action("screenshot", ["device": .string(state.id.uuidString)]) }
+            // Let the screenshot reach the suspended capture before admitting another Viewer.
+            try await Task.sleep(for: .milliseconds(20))
+            #expect(!fixture.connection.commands.withLock { $0.contains("screenshot") })
+            await #expect(throws: SimulatorFailure.self) { try await fixture.service.handleSimulator(request) }
+            fixture.connection.release()
+            _ = try await preview.value
+            #expect((await screenshot.value).ok)
+            #expect(fixture.connection.commands.withLock { $0.filter { ["preview", "screenshot"].contains($0) } } == ["preview", "screenshot"])
+            #expect(state.writer == writer)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func noisyPreviewShrinksToTheWireBudget() throws {
+            let surface = try #require(IOSurfaceCreate([
+                kIOSurfaceWidth: 2_048, kIOSurfaceHeight: 2_048, kIOSurfaceBytesPerElement: 4,
+                kIOSurfaceBytesPerRow: 8_192, kIOSurfacePixelFormat: 0x42475241,
+            ] as CFDictionary))
+            IOSurfaceLock(surface, [], nil)
+            let pixels = IOSurfaceGetBaseAddress(surface).assumingMemoryBound(to: UInt32.self)
+            var random: UInt32 = 1
+            for index in 0..<(2_048 * 2_048) {
+                random = random &* 1_664_525 &+ 1_013_904_223
+                pixels[index] = random | 0xFF000000
+            }
+            IOSurfaceUnlock(surface, [], nil)
+            let result = try #require(CXSimulatorCreatePreview(surface, 1, 2_560))
+            let encoded = try #require(result["data"] as? String)
+            let bytes = try #require(Data(base64Encoded: encoded))
+            #expect(bytes.count <= RemoteSimulatorFrame.maximumBytes)
+            #expect((result["width"] as? Int ?? 0) < 2_048)
+        }
+
+        @Test(arguments: [1, 2, 3, 4])
+        func nativePreviewRespectsOrientationBoundsAndNeverUpscales(_ orientation: Int32) throws {
+            let surface = try #require(IOSurfaceCreate([
+                kIOSurfaceWidth: 400, kIOSurfaceHeight: 800, kIOSurfaceBytesPerElement: 4,
+                kIOSurfaceBytesPerRow: 1_600, kIOSurfacePixelFormat: 0x42475241,
+            ] as CFDictionary))
+            let result = try #require(CXSimulatorCreatePreview(surface, orientation, 2_560))
+            let encoded = try #require(result["data"] as? String)
+            let data = try #require(Data(base64Encoded: encoded))
+            #expect(data.count <= RemoteSimulatorFrame.maximumBytes)
+            let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+            let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            #expect(image.width == (orientation >= 3 ? 800 : 400))
+            #expect(image.height == (orientation >= 3 ? 400 : 800))
+            let thumbnail = try #require(CXSimulatorCreatePreview(surface, orientation, 256))
+            #expect(max(thumbnail["width"] as? Int ?? 0, thumbnail["height"] as? Int ?? 0) == 256)
+            #expect(CXSimulatorCreatePreview(surface, orientation, 9_999) == nil)
+        }
+    }
+#endif

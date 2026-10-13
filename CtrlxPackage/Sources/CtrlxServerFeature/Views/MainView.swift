@@ -183,6 +183,7 @@ public struct MainView: View {
         .onAppear { registerAgentBrowserWorkspace(); registerSimulatorWorkspace() }
         .onChange(of: tmuxService.windows.map(\.id)) { _, _ in
             coordinator.agentBrowser.register(agentBrowserWorkspace)
+            coordinator.agentSimulator.register(simulatorWorkspace)
         }
         .onDisappear {
             browserOpenTask?.cancel()
@@ -1140,6 +1141,9 @@ public struct MainView: View {
             .onChange(of: connection.relayClient.browserTabs, initial: true) { _, _ in
                 syncHostBrowserTabs(hostId: remote.hostId, sessionName: remote.sessionName, client: connection.relayClient)
             }
+            .onChange(of: connection.relayClient.simulatorTabs, initial: true) { _, _ in
+                syncHostBrowserTabs(hostId: remote.hostId, sessionName: remote.sessionName, client: connection.relayClient)
+            }
         } else if
             let remote = selectedRemoteSession,
             coordinator.viewerConnectionManager?.connection(for: remote.hostId) != nil {
@@ -1453,6 +1457,8 @@ public struct MainView: View {
         if let tabs = remoteSessionTabsStates[tabsKey], let id = tabs.selectedFileTabId, let tab = tabs.directoryTabs[id] {
             WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: remote.hostId, paneID: tab.sourcePaneID, connection: connection))
                 .id(tab.id)
+        } else if let selectedBrowserTab, let tab = remoteSessionTabsStates[tabsKey]?.remoteSimulatorTabs[selectedBrowserTab.id] {
+            RemoteSimulatorView(tab: tab, client: connection.relayClient).id(tab.id)
         } else if let selectedBrowserTab, let tab = remoteSessionTabsStates[tabsKey]?.remoteBrowserTabs[selectedBrowserTab.id] {
             RemoteBrowserView(tab: tab, client: connection.relayClient).id(tab.id)
         } else if let selectedBrowserTab, let state = remoteSessionTabsStates[tabsKey]?.agentBrowserStates[selectedBrowserTab.id] {
@@ -1549,7 +1555,11 @@ public struct MainView: View {
                 rightPanePlaceholder
             }
         case let .browser(id):
-            if let tab = sessionTabs.remoteBrowserTabs[id] {
+            if let tab = sessionTabs.remoteSimulatorTabs[id] {
+                RemoteSimulatorView(tab: tab, client: connection.relayClient)
+                    .id(id)
+                    .accessibilityIdentifier("split-right-pane")
+            } else if let tab = sessionTabs.remoteBrowserTabs[id] {
                 RemoteBrowserView(tab: tab, client: connection.relayClient)
                     .id(id)
                     .accessibilityIdentifier("split-right-pane")
@@ -2502,10 +2512,7 @@ public struct MainView: View {
         if let state = fileBrowserStates.removeValue(forKey: oldName) {
             fileBrowserStates[newName] = state
         }
-        if let tabs = sessionFileTabsStates.removeValue(forKey: oldName) {
-            tabs.remapWindowIDs(rename.windowIDs)
-            sessionFileTabsStates[newName] = tabs
-        }
+        SessionFileTabsState.migrateSession(rename, in: &sessionFileTabsStates)
         if let store = gitWorkbenchStores.removeValue(forKey: oldName) {
             gitWorkbenchStores[newName] = store
         }
@@ -4009,11 +4016,7 @@ public struct MainView: View {
             let pane = state.sourcePane
             let tabs = sessionFileTabsStates[pane.sessionName] ?? SessionFileTabsState()
             sessionFileTabsStates[pane.sessionName] = tabs
-            var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), displayTitle: state.handle.name, originWindowId: pane.windowId)
-            tab.isSimulator = true
-            tabs.openBrowserTabs.append(tab)
-            tabs.simulatorStates[state.id] = state
-            if tabs.rightSide.contains(.window(pane.windowId)) { tabs.rightSide.insert(.browser(state.id)) }
+            tabs.attachSimulator(state)
         }
         simulatorWorkspace.onSelect = { state, split in
             guard let (session, tabs) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }
@@ -4030,6 +4033,11 @@ public struct MainView: View {
         }
         simulatorWorkspace.onClose = { state in
             guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }
+            closeBrowserTab(state.id, sessionName: session)
+        }
+        simulatorWorkspace.onDetach = { state in
+            guard let (session, tabs) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }
+            tabs.simulatorStates.removeValue(forKey: state.id)
             closeBrowserTab(state.id, sessionName: session)
         }
         coordinator.agentSimulator.register(simulatorWorkspace)
@@ -4168,6 +4176,7 @@ public struct MainView: View {
     ) {
         let key = remoteTabsKey(hostId: hostId, sessionName: sessionName)
         guard let tabs = remoteSessionTabsStates[key] else { return }
+        guard tabs.remoteSimulatorTabs[tabId] == nil else { return }
         if let tab = tabs.remoteBrowserTabs[tabId],
            let client = coordinator.viewerConnectionManager?.connection(for: hostId)?.relayClient {
             Task {
@@ -4234,7 +4243,12 @@ public struct MainView: View {
         remoteSessionTabsStates[key] = tabs
         let values = client.browserTabs.filter { $0.sessionName == sessionName }
         let windows = remoteSessionWindows(hostId: hostId, sessionName: sessionName)
-        if tabs.syncHostBrowserTabs(values, sessionWindowIDs: windows.map(\.stableId)) {
+        let browsersCollapsed = tabs.syncHostBrowserTabs(values, sessionWindowIDs: windows.map(\.stableId))
+        let simulatorsCollapsed = tabs.syncHostSimulatorTabs(
+            client.simulatorTabs.filter { $0.sessionName == sessionName },
+            sessionWindowIDs: windows.map(\.stableId)
+        )
+        if browsersCollapsed || simulatorsCollapsed {
             restoreRemoteLeftWindowSelection(hostId: hostId, sessionName: sessionName, sessionWindows: windows)
         }
     }
