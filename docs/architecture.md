@@ -180,8 +180,8 @@ updates, but verify decoding, capability gating and envelope limits per change.
 - The sidebar, menu bar and keyboard session cycling use the same local sorter.
 - Right-click Local or a remote Host header → **Restore Automatic Order** to
   clear only that section's preference and resume the configured Mac strategy.
-  On iOS, the top of each Host's session list shows **Manual Order** or
-  **Automatic Order**, with a visible **Restore Automatic Order** button.
+  On iOS, a **Restore Automatic Order** icon button sits beside **+** in each
+  Host's session-list header, without a separate ordering row or strategy text.
   Restoring clears that device's manual rank for the Host and resumes the
   activity-first rule. The button is disabled when no manual rank is saved.
   No manual ordering is sent to tmux or the Relay.
