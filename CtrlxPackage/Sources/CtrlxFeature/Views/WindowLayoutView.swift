@@ -26,6 +26,7 @@
         @State private var pendingFileLink: TerminalFileLinkRequest?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
         @State private var selectedBrowserID: UUID?
+        @State private var selectedSimulatorID: UUID?
         @State private var annotationHandoff = AnnotationTerminalHandoff()
         @State private var showsWindowTabs = false
         @State private var pendingWindowTabAction: WindowTabAction?
@@ -144,6 +145,9 @@
         /// Use the displayed window's name, matching the window switcher.
         /// Keep the session name only while window data is unavailable.
         private var navigationTitle: String {
+            if let tab = selectedSimulator {
+                return tab.title
+            }
             if let tab = selectedBrowser { return tab.title.isEmpty ? "Browser" : tab.title }
             if let tab = fileWorkspace.selected { return tab.title }
             guard let window else { return sessionName }
@@ -167,7 +171,9 @@
             return max(120, barWidth - reservedPerSide * 2)
         }
 
-        private var terminalIsVisible: Bool { selectedBrowser == nil && fileWorkspace.selected == nil }
+        private var terminalIsVisible: Bool {
+            selectedBrowser == nil && selectedSimulator == nil && fileWorkspace.selected == nil
+        }
 
         private var annotationSource: AnnotationTerminalHandoff.Source? {
             if let tab = selectedBrowser { return .browser(tab.id) }
@@ -192,7 +198,11 @@
                         .allowsHitTesting(terminalIsVisible)
                         .accessibilityHidden(!terminalIsVisible)
                 }
-                if let tab = selectedBrowser {
+                if let tab = selectedSimulator {
+                    RemoteSimulatorView(tab: tab, client: relayClient)
+                        .background(Color(.systemBackground))
+                        .id(tab.id)
+                } else if let tab = selectedBrowser {
                     RemoteBrowserView(tab: tab, client: relayClient)
                         .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
                             targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
@@ -231,7 +241,7 @@
                 sendCommand: sendAgentCommand
             ))
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if selectedBrowser == nil, fileWorkspace.selected == nil, window != nil, settings.terminalKeyboardControlPosition == .bottomBar {
+                if terminalIsVisible, window != nil, settings.terminalKeyboardControlPosition == .bottomBar {
                     TerminalKeyboardBar(
                         keyboardRequested: isKeyboardActive,
                         isEnabled: relayClient.isHostConnected && activePaneId != nil,
@@ -256,6 +266,14 @@
 
         private var sessionBrowsers: [RemoteBrowserTab] {
             relayClient.browserTabs.filter { $0.sessionName == sessionName }
+        }
+
+        private var sessionSimulators: [RemoteSimulatorTab] {
+            relayClient.simulatorTabs.filter { $0.sessionName == sessionName }
+        }
+
+        private var selectedSimulator: RemoteSimulatorTab? {
+            sessionSimulators.first { $0.id == selectedSimulatorID }
         }
 
         private var selectedBrowser: RemoteBrowserTab? { sessionBrowsers.first { $0.id == selectedBrowserID } }
@@ -301,6 +319,9 @@
             .onChange(of: window?.id) { pendingFileLink = nil; pendingBrowserLink = nil }
             .onChange(of: fileWorkspace.selectedID) { pendingFileLink = nil; pendingBrowserLink = nil }
             .onChange(of: selectedBrowserID) { pendingFileLink = nil; pendingBrowserLink = nil }
+                .onChange(of: selectedSimulatorID) { pendingFileLink = nil
+                    pendingBrowserLink = nil
+                }
         }
 
         private var presentedContent: some View {
@@ -309,6 +330,11 @@
                 fileWorkspace.updateContext(context)
             }
             .onChange(of: fileWorkspace.snapshots) { _, _ in saveFileWorkspace() }
+                .onChange(of: relayClient.simulatorTabs) { _, _ in
+                    if let id = selectedSimulatorID, !sessionSimulators.contains(where: { $0.id == id }) {
+                        selectedSimulatorID = nil
+                    }
+                }
             .onChange(of: relayClient.browserTabs) { _, _ in
                 if let id = selectedBrowserID, !sessionBrowsers.contains(where: { $0.id == id }) { selectedBrowserID = nil }
             }
@@ -318,9 +344,11 @@
                     windows: sessionWindows,
                     files: fileWorkspace.tabs,
                     browsers: sessionBrowsers,
+                        simulators: sessionSimulators,
                     selectedWindowID: window?.stableId,
                     selectedFileID: fileWorkspace.selectedID,
                     selectedBrowserID: selectedBrowserID,
+                        selectedSimulatorID: selectedSimulatorID,
                     isConnected: relayClient.isHostConnected,
                     canOpenFiles: relayClient.isHostConnected && relayClient.hostSupportsFileBrowsing && fileWorkspace.tabs.count < 30,
                     canOpenBrowser: relayClient.hostSupportsPaneBrowser,
@@ -408,7 +436,7 @@
                 try Task.checkCancellation()
                 guard pendingFileLink == request, window?.id == origin.id,
                       window?.panes.contains(where: { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext }) == true,
-                      fileWorkspace.selectedID == nil, selectedBrowserID == nil else { return }
+                    fileWorkspace.selectedID == nil, selectedBrowserID == nil && selectedSimulatorID == nil else { return }
                 try fileWorkspace.open(destination, windowID: origin.stableId, paneID: request.paneID)
                 cancelCreationFollowUp()
                 isKeyboardActive = false
@@ -427,6 +455,7 @@
                 try Task.checkCancellation()
                 guard pendingBrowserLink == request, window?.id == originWindowID else { return }
                 selectedBrowserID = tab.id
+                selectedSimulatorID = nil
                 fileWorkspace.selectedID = nil
                 cancelCreationFollowUp()
                 isKeyboardActive = false
@@ -542,7 +571,7 @@
                 .accessibilityLabel("Tabs: \(navigationTitle)")
                 .accessibilityIdentifier("window-tabs-picker")
             }
-            if selectedBrowser == nil, fileWorkspace.selected == nil, settings.terminalKeyboardControlPosition == .topRight {
+            if terminalIsVisible, settings.terminalKeyboardControlPosition == .topRight {
                 ToolbarItem(placement: .topBarTrailing) {
                     TerminalVoiceInputButton(
                         isDisabled: !relayClient.isHostConnected || activePaneId == nil,
@@ -565,7 +594,7 @@
                 }
             }
 
-            if selectedBrowser == nil, fileWorkspace.selected == nil {
+            if terminalIsVisible {
                 ToolbarItem(placement: .topBarTrailing) {
                     ImageUploadToolbarButton(
                         paneId: activePaneId,
@@ -583,7 +612,7 @@
                 }
             }
 
-            if selectedBrowser == nil, fileWorkspace.selected == nil, window != nil {
+            if terminalIsVisible, window != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
@@ -647,6 +676,7 @@
                     selectTerminalWindow(target)
                 case .openFiles:
                     selectedBrowserID = nil
+                    selectedSimulatorID = nil
                     guard relayClient.hostSupportsFileBrowsing, fileWorkspace.tabs.count < 30,
                           let paneID = FileBrowserTab.sourcePaneID(
                             in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
@@ -683,6 +713,7 @@
                 }
             case let .selectFiles(id):
                 selectedBrowserID = nil
+                selectedSimulatorID = nil
                 guard fileWorkspace.tabs.contains(where: { $0.id == id }) else { return }
                 cancelCreationFollowUp()
                 isKeyboardActive = false
@@ -697,15 +728,25 @@
                 fileWorkspace.close(id)
             case .newTerminal:
                 selectedBrowserID = nil
+                selectedSimulatorID = nil
                 guard relayClient.isHostConnected, !isCreatingWindow else { return }
                 fileWorkspace.selectedID = nil
                 createTerminalWindow()
             case .newAgent:
                 selectedBrowserID = nil
+                selectedSimulatorID = nil
                 guard relayClient.isHostConnected, !isCreatingWindow else { return }
                 fileWorkspace.selectedID = nil
                 creationSheetIsPresented = true
                 newAgentConfiguration = agentTabConfiguration()
+            case let .selectSimulator(id):
+                guard sessionSimulators.contains(where: { $0.id == id }) else { return }
+                cancelCreationFollowUp()
+                isKeyboardActive = false
+                quickActionPresentation.dismiss()
+                fileWorkspace.selectedID = nil
+                selectedBrowserID = nil
+                selectedSimulatorID = id
             case let .selectBrowser(id):
                 guard sessionBrowsers.contains(where: { $0.id == id }) else { return }
                 cancelCreationFollowUp()
@@ -713,6 +754,7 @@
                 quickActionPresentation.dismiss()
                 fileWorkspace.selectedID = nil
                 selectedBrowserID = id
+                selectedSimulatorID = nil
             case let .closeBrowser(id):
                 guard let tab = sessionBrowsers.first(where: { $0.id == id }) else { return }
                 Task {
@@ -726,6 +768,7 @@
 
         private func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String? = nil) {
             selectedBrowserID = nil
+            selectedSimulatorID = nil
             fileWorkspace.selectedID = nil
             cancelCreationFollowUp()
             selectedWindowId = target.id
@@ -738,7 +781,8 @@
         }
 
         private func selectAdjacentWindow(from sourceWindowID: String, direction: TerminalWindowSwipePolicy.Direction) {
-            guard window?.id == sourceWindowID, fileWorkspace.selectedID == nil, selectedBrowserID == nil,
+            guard
+                window?.id == sourceWindowID, fileWorkspace.selectedID == nil, selectedBrowserID == nil && selectedSimulatorID == nil,
                   !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput,
                   let targetID = WindowSelectionReconciliation.adjacentWindowID(
                       from: sourceWindowID, direction: direction, in: windowSelectionCandidates

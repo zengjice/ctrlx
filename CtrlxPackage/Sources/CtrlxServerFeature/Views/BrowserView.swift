@@ -32,6 +32,7 @@ struct BrowserTab: Identifiable, Equatable {
     var isAgentBrowser: Bool = false
     var isViewerLocal: Bool = false
     var isSimulator: Bool = false
+    var canClose = true
     var isTransient: Bool { isAgentBrowser || isSimulator }
 
     init(

@@ -7,9 +7,11 @@
         let windows: [TmuxWindow]
         let files: [FileBrowserTab]
         var browsers: [RemoteBrowserTab] = []
+        var simulators: [RemoteSimulatorTab] = []
         let selectedWindowID: String?
         let selectedFileID: UUID?
         var selectedBrowserID: UUID?
+        var selectedSimulatorID: UUID?
         let isConnected: Bool
         let canOpenFiles: Bool
         var canOpenBrowser: Bool = false
@@ -37,6 +39,21 @@
                         Section("Files") {
                             ForEach(files) { tab in
                                 fileRow(tab)
+                            }
+                        }
+                    }
+                    if !simulators.isEmpty {
+                        Section("iOS Simulators on Host") {
+                            ForEach(simulators) { tab in
+                                Button { choose(.selectSimulator(tab.id)) } label: {
+                                    HStack {
+                                        Label(tab.title, symbol: .iphone).lineLimit(1)
+                                        Spacer()
+                                        if selectedSimulatorID == tab.id {
+                                            Symbols.checkmark.image
+                                        }
+                                    }.contentShape(Rectangle())
+                                }.buttonStyle(.plain)
                             }
                         }
                     }
@@ -86,7 +103,7 @@
                         Label(name, symbol: window.hasClaude ? .sparkles : .terminal)
                             .lineLimit(1)
                         Spacer()
-                        if selectedWindowID == window.stableId, selectedFileID == nil, selectedBrowserID == nil {
+                        if selectedWindowID == window.stableId, selectedFileID == nil, selectedBrowserID == nil, selectedSimulatorID == nil {
                             Symbols.checkmark.image
                         }
                     }

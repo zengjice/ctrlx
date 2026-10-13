@@ -1,6 +1,11 @@
 import CtrlxNetworking
 import Foundation
 
+struct AgentPaneRoute: Sendable {
+    let pane: PaneInfo
+    let panes: [PaneInfo]
+}
+
 enum AgentBrowserRoutingError: Error, LocalizedError {
     case processNotInPane
     case ambiguousPane

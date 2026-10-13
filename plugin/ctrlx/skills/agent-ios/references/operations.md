@@ -10,12 +10,12 @@ Requires Xcode, an installed iOS runtime and CoreSimulator 1155.4 or newer.
 
 | Area | Supported controls |
 |---|---|
-| Devices | `devices` lists owned tabs; reuse before `open`. `inventory` lists runtimes/types; `open --udid` selects a private guest. `status` inspects; `close` shuts down, keeping data. `storage` lists private guests/bytes; `erase` resets and `delete` removes a specified idle guest. |
+| Devices | `devices` lists owned tabs. `open` reuses the pane's default; `open --new` adds an independent device. `inventory` lists runtimes/types; `open --udid` selects an exact private guest. `status` inspects; `close` shuts down, keeping data. `storage` lists private guests/bytes; `erase` resets and `delete` removes a specified idle guest. |
 | Apps | `install`, `uninstall`, `launch`, `terminate`, `open-url`: install/remove apps, start/stop or deliver URLs. Install needs a simulator `.app`; launch waits for Scene activation, not page content; URLs may need confirmation. |
 | Observe | `snapshot`, `wait`, `screenshot`: AX nodes/references, semantic selectors, visible/absent waits and PNG to a new path. |
 | Touch | `tap`, `swipe`, `long-press`, `drag`: single-contact input and system edge gestures. `pinch`: simultaneous two-contact scaling. |
 | Keys/text | `key`, `button`, `paste`: HID keys/chords; Home, lock, volume buttons; Unicode clipboard/menu paste. |
-| Display | `show`, `show --split`, `rotate`, `display-mode`: local tabs/splits, orientation and presentation mode. |
+| Display | `show`, `show --split`, `rotate`, `display-mode`: local tabs/splits, orientation and presentation mode. Paired Mac/iOS Viewers can observe live Host devices read-only. |
 | Environment | `location`, `appearance`, `privacy`, `push`: fixed position, light/dark, permissions and simulated notifications. |
 | Resources | `config`, `resources`, `metrics`: device limits/reserves, pressure, CPU and process footprint. |
 | Diagnostics | `logs`, `crashes`: bounded device/app records. |
@@ -36,7 +36,7 @@ For cleanup scope, disk usage and exact-device reuse, read [device storage](stor
 - Arbitrary multi-touch paths, two-finger rotation/pan; `pinch` only scales a horizontal pair.
 - Mac marked-text composition/candidate windows: human input uses the iOS hardware-keyboard
   source; iOS Pinyin was verified. Unicode paste does not test composition or typing.
-- Remote simulator viewing/control or physical iPhone control.
+- Remote simulator input/control, remote device creation/closure, audio or video-rate streaming; physical iPhone control.
 - Device cloning, runtime download/installation, app compilation/signing. Prepare
   runtimes/builds separately; physical-device `.app` builds are not accepted.
 
@@ -54,6 +54,14 @@ CtrlX commands from `simctl` capabilities or claim substitutes provide equivalen
   Codex is the delivery target; Claude is deferred. Public distribution is separately
   qualified. Source/tests do not prove the installed signed App includes the changes.
   Unvalidated does not mean known broken. Operational/native limits follow below.
+
+## Pane reuse and Viewer viewing
+
+`open` reuses the source pane's default; `--new` adds a separate owned device.
+Conflicting explicit configuration fails without changing the running guest.
+Closing the workbench detaches display; owner exit or explicit device close still
+shuts down. Mac/iOS Viewers observe the same device through bounded JPEG previews,
+without input or lifecycle authority. Read [reuse, lifecycle and preview limits](viewing.md).
 
 ## Batches
 

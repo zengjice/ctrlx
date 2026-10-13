@@ -1,5 +1,7 @@
 #import "ScreenshotImage.h"
+#import "CtrlxSimulatorBridge.h"
 #import <Accelerate/Accelerate.h>
+#import <ImageIO/ImageIO.h>
 
 static void CXReleaseScreenshotSurface(void *info, const void *data, size_t size) {
     IOSurfaceRef surface = (IOSurfaceRef)info;
@@ -46,4 +48,45 @@ CGImageRef CXSimulatorCreateScreenshotImage(IOSurfaceRef surface, int orientatio
     CGColorSpaceRelease(color);
     CGDataProviderRelease(provider);
     return image;
+}
+
+NSDictionary *CXSimulatorCreatePreview(IOSurfaceRef surface, int orientation, NSUInteger maximumDimension) {
+    if (maximumDimension < 256 || maximumDimension > 2560 || orientation < 1 || orientation > 4
+        || IOSurfaceGetWidth(surface) > 8192 || IOSurfaceGetHeight(surface) > 8192) return nil;
+    CGImageRef source = CXSimulatorCreateScreenshotImage(surface, orientation);
+    if (!source) return nil;
+    size_t sourceWidth = CGImageGetWidth(source), sourceHeight = CGImageGetHeight(source);
+    size_t dimension = MIN(maximumDimension, MAX(sourceWidth, sourceHeight));
+    NSDictionary *result = nil;
+    while (dimension > 0) {
+        double scale = (double)dimension / MAX(sourceWidth, sourceHeight);
+        size_t width = MAX(1, (size_t)(sourceWidth * scale)), height = MAX(1, (size_t)(sourceHeight * scale));
+        CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef context = CGBitmapContextCreate(NULL, width, height, 8, 0, color,
+            kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst);
+        CGColorSpaceRelease(color);
+        if (!context) break;
+        CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
+        CGContextDrawImage(context, CGRectMake(0, 0, width, height), source);
+        CGImageRef image = CGBitmapContextCreateImage(context);
+        CGContextRelease(context);
+        NSMutableData *jpeg = [NSMutableData data];
+        CGImageDestinationRef output = image ? CGImageDestinationCreateWithData((__bridge CFMutableDataRef)jpeg, CFSTR("public.jpeg"), 1, NULL) : NULL;
+        BOOL success = NO;
+        if (output) {
+            CGImageDestinationAddImage(output, image, (__bridge CFDictionaryRef)@{(id)kCGImageDestinationLossyCompressionQuality:@0.82});
+            success = CGImageDestinationFinalize(output);
+            CFRelease(output);
+        }
+        if (image) CGImageRelease(image);
+        if (!success) break;
+        if (jpeg.length <= 512 * 1024) {
+            result = @{@"data":[jpeg base64EncodedStringWithOptions:0], @"width":@(width), @"height":@(height)};
+            break;
+        }
+        if (dimension <= 256) break;
+        dimension = MAX(256, dimension * 3 / 4);
+    }
+    CGImageRelease(source);
+    return result;
 }

@@ -72,6 +72,8 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsPaneBrowser: Bool?
     public let supportsAgentImageInput: Bool?
     public let browserTabs: [RemoteBrowserTab]?
+    public let supportsSimulatorViewing: Bool?
+    public let simulatorTabs: [RemoteSimulatorTab]?
 
     public init(
         pairId: String,
@@ -94,7 +96,9 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsBrowserSharing: Bool? = nil,
         supportsPaneBrowser: Bool? = nil,
         supportsAgentImageInput: Bool? = nil,
-        browserTabs: [RemoteBrowserTab]? = nil
+        browserTabs: [RemoteBrowserTab]? = nil,
+        supportsSimulatorViewing: Bool? = nil,
+        simulatorTabs: [RemoteSimulatorTab]? = nil
     ) {
         self.pairId = pairId
         self.paneStates = paneStates
@@ -117,6 +121,8 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsPaneBrowser = supportsPaneBrowser
         self.supportsAgentImageInput = supportsAgentImageInput
         self.browserTabs = browserTabs
+        self.supportsSimulatorViewing = supportsSimulatorViewing
+        self.simulatorTabs = simulatorTabs
     }
 
     /// Returns a copy with the `pairId` replaced. Centralises the per-connection
@@ -145,7 +151,9 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsBrowserSharing: supportsBrowserSharing,
             supportsPaneBrowser: supportsPaneBrowser,
             supportsAgentImageInput: supportsAgentImageInput,
-            browserTabs: browserTabs
+            browserTabs: browserTabs,
+            supportsSimulatorViewing: supportsSimulatorViewing,
+            simulatorTabs: simulatorTabs
         )
     }
 }

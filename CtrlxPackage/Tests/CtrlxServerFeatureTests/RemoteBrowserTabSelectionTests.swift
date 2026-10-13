@@ -6,6 +6,34 @@ import Testing
 
 @Suite("Remote browser tab selection") @MainActor
 struct RemoteBrowserTabSelectionTests {
+        @Test
+        func simulatorDescriptorsKeepLocalSelectionAndAreRemovedWithoutAHostClose() {
+            let tabs = SessionFileTabsState()
+            let page = page("Web")
+            tabs.syncHostBrowserTabs([page], sessionWindowIDs: ["@1"])
+            tabs.selectedBrowserTabId = page.id
+            let simulator = RemoteSimulatorTab(
+                id: UUID(),
+                sessionName: "s",
+                windowID: "@1",
+                sourcePaneID: "%1",
+                title: "iPhone",
+                runtime: "iOS 27",
+                isPrimary: true
+            )
+            tabs.syncHostSimulatorTabs([simulator], sessionWindowIDs: ["@1"])
+            #expect(tabs.selectedBrowserTabId == page.id)
+            tabs.syncHostBrowserTabs([page], sessionWindowIDs: ["@1"])
+            let row = tabs.openBrowserTabs.first { $0.id == simulator.id }
+            #expect(row?.isSimulator == true && row?.canClose == false && row?.isViewerLocal == false)
+            tabs.rightSide.insert(.browser(simulator.id))
+            tabs.selectedRight = .browser(simulator.id)
+            tabs.syncHostSimulatorTabs([], sessionWindowIDs: ["@1"])
+            #expect(!tabs.openBrowserTabs.contains { $0.id == simulator.id })
+            #expect(!tabs.rightSide.contains(.browser(simulator.id)))
+            #expect(tabs.remoteBrowserTabs[page.id] == page)
+        }
+
     private func page(_ title: String) -> RemoteBrowserTab {
         RemoteBrowserTab(id: UUID(), sessionName: "s", title: title, url: "about:blank",
                          isLoading: false, isAgentOwned: false)
