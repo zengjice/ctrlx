@@ -2,6 +2,9 @@
 # Builds the embedded runtime and sandboxed helpers; never installs or starts CtrlX.
 set -euo pipefail
 AB_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$AB_REPO/scripts"
+source "$SCRIPT_DIR/common.sh"
+with_worktree_lock "$@"
 AB_BUILD="$AB_REPO/.build-local/agent-browser"
 AB_CACHE="$AB_REPO/.build-local/cef-browser-probe"
 AB_VERSION='152.0.8+g1ce985c+chromium-152.0.7977.134'

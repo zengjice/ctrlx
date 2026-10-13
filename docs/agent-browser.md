@@ -6,30 +6,50 @@ this does not mean hardened-runtime/notarized distribution is approved. Formal
 archives remain gated; see [RELEASE.md](../RELEASE.md). Historical statements such
 as “not published” apply only to their recorded checkpoint, not today's channel.
 
-Mac **Settings → Browser → New Browser → Engine** selects **Chromium** (default)
-or **WebKit** for explicit New Browser actions. Chromium uses the same sandboxed
-CEF runtime as Agent Browser, embedded as native child views in CtrlX's same
-session tab strip and left/right split layout. No standalone browser window, no
-ChatGPT extension, MCP server or browser-wide TCP debugging port is involved.
-Apple Silicon only for the native Host runtime.
+**Open Browser** belongs to a terminal Window, not the global New menu. On Mac,
+right-click its Window tab; on iOS use that Window's action menu. The selected
+pane in that Window (otherwise its active pane) is captured before opening.
+Plain shell panes work without an Agent. All new pages use the source Host's
+Chromium/CEF runtime, including opens from Mac/iOS Viewers. Native child views
+share CtrlX's session tab strip and split layout. The native Host runtime is
+Apple Silicon only; no standalone browser or browser-wide TCP debugging port is
+involved.
 
-This device-local setting affects new human-created local tabs only. New Browser
-in a Mac Viewer session now creates a Chromium page on the Host. Existing
-tabs, restored WebKit tabs, terminal-link rules and Codex automation are unchanged;
-it is unrelated to the `vercel` / `ctrlx` automation-backend selection. iOS has no
-corresponding setting. Chromium tabs share CtrlX's dedicated Chromium profile and
-logins, not WebKit's or system Chrome's. Chromium tabs remain transient and are
-not restored after restarting CtrlX; WebKit layout restoration is unchanged.
-If the native runtime is unavailable, creation reports an error instead of
-silently substituting WebKit.
+Terminal HTTP(S) links offer **Host Browser** or **This Device's Browser**.
+The first opens the same Host page and shows it on the requesting client; the
+second invokes the operating device's default browser, unchanged. Mac global and
+per-domain preferences keep their stored values but “in app” now means Host.
+The existing split-on-link preference is retained. iOS tap and long-press use
+the same destination picker. Unsupported Host URLs fail without local fallback.
 
-Regression coverage: `NewBrowserEngineTests` checks preferences, explicit local /
-Viewer destinations, rename-safe child routing, errors and workspace cleanup;
-`LayoutSnapshotMapperTests` protects existing WebKit restoration. Native
-`tests/ownership.cc` rejects empty-owner human tabs. The isolated signed Mac UI
-check also covers Chromium navigation/input, popup creation and shared test
-cookies, switching the setting to WebKit, both engines side by side without
-reloading existing pages, right-side popup inheritance and normal shutdown.
+The Host has one reusable **human primary page per pane**, shared by all clients.
+Open Browser reveals it without resetting its URL; opening a link navigates that
+page (an identical URL does not reload; origin case, default ports and an empty
+root path are normalized before comparison). URLs with embedded usernames or
+passwords are rejected explicitly before creating or navigating a page. Simultaneous creation coalesces. Agent
+pages and popup children are not primary-page candidates and remain independently
+owned; children inherit the source pane. Pane membership is validated against
+fresh tmux state before opening/navigating, including linked-session ambiguity.
+Session/window moves update the association. If a Viewer holds the primary page's
+control lease, a different URL is rejected until control is released; opening
+does not steal the lease. Cancelled/obsolete UI requests do not switch selection,
+including a switch from the terminal to Git/Files within the same Mac window.
+
+The former New Browser engine preference is retired. Existing/restored WebKit
+tabs stay device-local and usable, including their popups; they are not converted.
+Chromium shares CtrlX's dedicated profile/logins, not WebKit's or system Chrome's.
+Chromium pages remain transient across App restarts. The `vercel` / `ctrlx`
+automation-backend selection is independent. If Chromium is unavailable, report
+an error rather than substituting WebKit or the system browser.
+
+Regression coverage: `PaneBrowserOpeningTests`, `AgentBrowserRoutingTests`,
+`RemoteBrowserProtocolTests` and the connection capability test cover reuse,
+plain panes, source revalidation, ownership/leases, cancellation, parking and
+old-Host gating. `LayoutSnapshotMapperTests` protects WebKit restoration. Native
+`tests/ownership.cc` rejects empty-owner human pages for Agent commands. The new
+Window-menu and URL-picker flows still require isolated Mac / real-iPhone UI
+acceptance; older E2E scenarios that assume global New Browser and Viewer-local
+WebKit do not validate the new contract.
 
 Release preparation for 3.0.41 also passed brand/technical boundary checks,
 10 publisher regressions, the website build and the unsigned iOS device-target
@@ -46,9 +66,22 @@ the [capability audit](agent-browser-capability-audit.md).
 
 ## Embedded routing
 
-Open CtrlX on the **same Mac** as the terminal agent. Start `codex` normally;
+The shared `agent-browser` skill (packaged for Codex and Claude Code) defaults
+webpage interaction, localhost UI checks and screenshots to `ctrlx browser` in
+local CtrlX agent sessions. Explicit requests for another browser or its existing
+tabs/login/extensions take precedence; native-app UI and ordinary search/API
+lookups are outside this default. An unavailable/unsupported CtrlX operation is
+reported without silently switching to Computer Use, another browser client or
+standalone Playwright. Browser switching requires the user's choice. This is
+skill guidance, not a tool-permission sandbox; no global agent settings change.
+
+The shared skill also guides task-based tab creation versus reuse, without a
+one-tab limit or automatic cleanup. See its [owned-tab guidance](../plugin/ctrlx/skills/agent-browser/SKILL.md#owned-tabs).
+The CLI semantics remain unchanged: `open` creates a tab; `navigate` reuses one.
+
+Open CtrlX on the **same Mac** as the terminal agent. Start `codex` or `claude` normally;
 there is no `ctrlx browser run` requirement. On `browser action open`, the CLI
-identifies the real Codex process. The host resolves its fresh process ancestry
+identifies the real native agent process. The host resolves its fresh process ancestry
 to a tmux pane/window/session, then inserts a Chromium tab in that workbench.
 It does not infer the destination from the focused session, working directory,
 or an inherited session-name environment variable. Missing/ambiguous sources
@@ -57,7 +90,7 @@ Routing reads pane metadata and shell PIDs in one live tmux query; it does not
 reuse the UI refresh cache, which may still be loading or have deduplicated
 linked sessions. The process tree is then matched against that live snapshot.
 
-The control owner is the **Codex process instance**; the display location is the
+The control owner is the **agent process instance**; the display location is the
 **source session and split side**. Multiple agents in one session share its tab
 strip, not control grants. Children inherit their opener's owner and location.
 Switching tabs reparents the existing native view; it does not reload Chromium.
@@ -65,7 +98,7 @@ Transient Chromium tabs are excluded from WKWebView layout persistence. Browser
 tabs are available to paired Mac/iOS Viewers through the typed remote surface below.
 
 The host leaves CEF stopped until the first local or Viewer-created Chromium tab
-or a Codex browser operation. Browser-sharing capability is advertised before
+or a native Codex or Claude Code browser operation. Browser-sharing capability is advertised before
 startup; Viewer creation waits for the same on-demand initialization and reports
 startup failures without silently falling back. On first registration the CLI asks the existing CtrlX API
 socket to start the runtime, then discovers the native browser endpoint. The
@@ -101,14 +134,19 @@ already mapped by an older process.
 ## Viewer browser surface
 
 Mac Viewer tabs marked **Host** and iOS **Tabs → Browsers on Host** show the same
-Host Chromium pages, including manual, Agent and popup tabs. New Browser on Host
-creates an ownerless human page in that session. Existing Viewer-local tabs are
+Host Chromium pages, including manual, Agent and popup tabs. Open Browser on Host
+opens/reuses an ownerless human primary page bound to its source pane. Existing Viewer-local tabs are
 marked **Local** and are not migrated. WebKit remains device-local. Page DOM,
 login state, local network access and localhost resolution all stay on the Host;
 the Viewer does not load a second copy of the URL or receive browser credentials.
 
 - `supportsBrowserSharing` and optional tab metadata extend session snapshots.
   Older Hosts reject the feature locally before any new command enum is sent.
+  `supportsPaneBrowser` additionally gates `openPane(url:)`; absence means update
+  the Host, never silently open a Viewer-local page. `RemoteBrowserTab.sourcePaneID`
+  is display association, independent of optional `sourceAgent` and Agent authority.
+  The legacy `create` operation remains decodable but also requires a source pane
+  and uses the same Host registry.
   `BrowseBrowser` operations and frame replies use the existing paired E2EE
   command channel; the opaque Relay requires no browser-specific deployment.
 - The native surface exposes only bounded capture/navigation/input operations,
@@ -201,26 +239,44 @@ not grant browser automation access. The opaque Relay needs no update.
 Annotation coordinates are normalized to the captured image; export flattens the
 red marks into PNG (or a compressed image within the existing 512 KiB budget).
 Screenshot/decode/send failures retain the editor or show an inline error.
+On iOS, after the image is acknowledged, the annotation stays visible with
+“Opening Agent” progress while only the destination window's terminal panes
+bootstrap underneath it. The first usable native layout, not merely a stream
+acknowledgement, releases the overlay. The same mounted terminal views are then
+revealed without another subscription. Hidden panes cannot claim keyboard input
+or expand questions. Leaving, backgrounding, disconnecting or a 15-second timeout
+cancels preparation. An acknowledged image is not resent by **Open Agent** retry;
+it only retries opening the captured recipient. This does not keep all session
+terminals alive or change the Host/Relay protocol.
+
+The same annotation surface, guarded delivery and `AnnotationTerminalHandoff`
+also serve [file previews](file-browser.md#in-place-preview-annotation); native
+file capture does not require or open a browser tab.
 
 ## Ownership and data
 
 - One persistent, CtrlX-specific profile per Mac:
   `~/Library/Application Support/CtrlX/AgentBrowser/Default`.
-- On first browser use, one Codex process gets a fresh random control identity;
+- On first browser use, one native agent process gets a fresh random control identity;
   session/window/pane labels are display hints, not credentials.
-- Start Codex normally, including by typing `codex` in an existing terminal.
+- Start Codex/Claude Code normally in an existing terminal.
   `ctrlx browser action` walks its kernel process ancestry to the nearest native
-  `codex` executable. Shells and `codex-code-mode-host` are not agent identities.
-  Existing Codex instances attach on first use without restarting. A bounded
+  `codex` or `claude` executable. Claude's native installer also uses versioned
+  binaries at `claude/versions/<major.minor.patch>`; Homebrew's `claude` is supported.
+  See the [official installation layout](https://code.claude.com/docs/en/setup#auto-updates).
+  Older Node.js-hosted Claude Code is not supported: no argv/title-based identity
+  is inferred. Shells and `codex-code-mode-host` are not agent identities.
+  Existing native instances attach on first use without restarting. A bounded
   ancestry walk fails closed if identity is unavailable; it never uses focus,
   tmux pane labels, or `CTRLX_BROWSER_CONTEXT` as credentials.
 - Contexts live privately in `~/.ctrlx/agent-browser/runs/<pid>-<start-time>/`.
   Their random credentials and initial registration are protected by a file lock,
-  so concurrent tools reuse one group. Nested/sibling Codex instances are separate;
+  so concurrent tools reuse one group. Nested/sibling agents, including mixed
+  Codex/Claude Code ancestry, are separate;
   PID reuse cannot inherit a prior identity. Shared profile/login is unchanged.
   `ctrlx browser identity` diagnoses the owner without opening a browser or
   printing credentials. `browser run` remains only an optional exec convenience;
-  CtrlX project launches no longer wrap or alter the user's Codex command.
+  CtrlX project launches need no browser wrapper around the user's agent command.
 - The local socket checks its peer UID and requires the runtime secret, browser
   epoch, PID/start time and exact tab ownership for operations. There is no
   focused-tab fallback. Same-user processes are trusted; groups are routing
@@ -237,6 +293,14 @@ Screenshot/decode/send failures retain the editor or show an inline error.
   dispatching real input. They never use the currently selected tab as a target.
 - Agent exit revokes its authority but retains pages. Browser restart invalidates
   old grants. This iteration does not restore the old tab layout after restart.
+
+`AgentBrowserIdentityTests` covers both native callers, mixed nested ancestry,
+unsupported executables, UID boundaries, exit/PID reuse and private context reuse.
+`AgentBrowser/tests/cli.py <built-CLI>` exercises real kernel ancestry and engine
+preferences under disposable Codex/Claude-named binaries (no real agent or browser).
+`scripts/tests/test_agent_skills.py` checks both bundles receive identical resources.
+These do not prove automatic skill choice or real-agent browser operation; those
+still require a live acceptance run after updating the Host and agent plugins.
 
 ## Bounded page actions
 

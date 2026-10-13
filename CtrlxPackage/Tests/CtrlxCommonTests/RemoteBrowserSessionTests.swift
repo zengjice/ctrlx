@@ -5,6 +5,18 @@ import Testing
 
 @Suite("Remote browser surface") @MainActor
 struct RemoteBrowserSessionTests {
+    @Test func reusedPageRefreshesViewerMetadataWithoutWaitingForAnotherSnapshot() {
+        let client = ViewerRelayClient()
+        let id = UUID()
+        let old = RemoteBrowserTab(id: id, sessionName: "old", title: "Old", url: "about:blank",
+            isLoading: false, isAgentOwned: false, sourcePaneID: "%1")
+        let opened = RemoteBrowserTab(id: id, sessionName: "moved", title: "New", url: "https://example.com",
+            isLoading: true, isAgentOwned: false, sourcePaneID: "%1")
+        client.rememberOpenedBrowser(old)
+        client.rememberOpenedBrowser(opened)
+        #expect(client.browserTabs == [opened])
+    }
+
     @MainActor final class Host {
         var control = UUID()
         var operations: [RemoteBrowserOperation] = []

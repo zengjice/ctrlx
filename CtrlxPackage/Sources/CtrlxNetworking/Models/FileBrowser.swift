@@ -13,6 +13,7 @@ public enum FileBrowserOperation: Codable, Sendable, Equatable {
     /// A nil path resolves the source pane's directory on the Host at open time.
     case list(path: String?, offset: Int, includeHidden: Bool)
     case info(path: String)
+    case repositoryInfo(path: String, context: RepositoryFileContext)
     case read(path: String, offset: Int, revision: String)
     /// Explicit export, separate from bounded inline previews. Capability-gated on viewers.
     case download(path: String, offset: Int, revision: String)

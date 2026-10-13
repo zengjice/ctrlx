@@ -73,6 +73,7 @@ enum TerminalCursorTapNavigation {
         var onRawInput: (@MainActor (Data) -> Void)?
         var onPasteText: (@MainActor (String) -> Void)?
         var onOpenPath: (@MainActor (String) -> Void)?
+        var onOpenHostURL: (@MainActor (URL) -> Void)?
 
         /// Sends a guarded intent through the pane's ordered input queue, never
         /// raw Shift+Left. False means the stream is not currently ready.
@@ -819,7 +820,7 @@ enum TerminalCursorTapNavigation {
             case .openLink:
                 guard let url else { return }
                 cancelCursorNavigation()
-                UIApplication.shared.open(url)
+                showURLActionSheet(url: url.absoluteString)
             case .mouseClick:
                 guard onRawInput != nil,
                       point.x >= 0, point.x < CGFloat(terminal.cols) * cellSize.width,
@@ -1040,7 +1041,7 @@ enum TerminalCursorTapNavigation {
         }
 
         private func showURLActionSheet(url: String) {
-            guard let nsURL = URL(string: url) else { return }
+            guard let nsURL = URL(string: url), !nsURL.isFileURL else { return }
 
             let alert = UIAlertController(
                 title: "Open Link",
@@ -1048,7 +1049,13 @@ enum TerminalCursorTapNavigation {
                 preferredStyle: .actionSheet
             )
 
-            alert.addAction(UIAlertAction(title: "Open in Safari", style: .default) { [weak self] _ in
+            if BrowserWebURL.isSupported(nsURL), let openHostURL = onOpenHostURL {
+                alert.addAction(UIAlertAction(title: "Open in Host Browser", style: .default) { [weak self] _ in
+                    self?.removeURLHighlight()
+                    openHostURL(nsURL)
+                })
+            }
+            alert.addAction(UIAlertAction(title: "Open in This Device's Browser", style: .default) { [weak self] _ in
                 self?.removeURLHighlight()
                 UIApplication.shared.open(nsURL)
             })
@@ -1238,11 +1245,8 @@ enum TerminalCursorTapNavigation {
             // regex-link path SwiftTerm exposes through this delegate.
             guard !isMouseModeActive else { return }
             if let url = URL(string: link) {
-                if url.isFileURL {
-                    if let path = TerminalFileLinkDetector.path(link) { onOpenPath?(path) }
-                    return
-                }
-                UIApplication.shared.open(url)
+                guard !url.isFileURL else { return }
+                showURLActionSheet(url: url.absoluteString)
             }
         }
 

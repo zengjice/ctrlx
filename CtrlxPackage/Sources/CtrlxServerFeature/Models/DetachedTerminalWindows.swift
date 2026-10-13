@@ -23,7 +23,7 @@ final class DetachedTerminalWindows {
         case files(paneID: String?)
         case fork(paneID: String?, worktree: Bool)
         case fileLink(TerminalFileLinkRequest)
-        case url(String)
+        case url(String, paneID: String)
     }
 
     struct Request: Identifiable, Equatable {

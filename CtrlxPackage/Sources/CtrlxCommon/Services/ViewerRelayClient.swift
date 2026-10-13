@@ -100,17 +100,22 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsTerminalPaste = false
     public private(set) var hostSupportsDirectoryCreation = false
     public private(set) var hostSupportsFileBrowsing = false
+    public private(set) var hostSupportsRepositoryFileLinks = false
     public private(set) var hostSupportsFileDownloads = false
     public private(set) var hostSupportsFileUploads = false
     public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
     public private(set) var hostSupportsBrowserSharing = false
+    public private(set) var hostSupportsPaneBrowser = false
     public private(set) var hostSupportsAgentImageInput = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
 
-    func rememberCreatedBrowser(_ tab: RemoteBrowserTab) {
-        guard !browserTabs.contains(where: { $0.id == tab.id }) else { return }
-        browserTabs.append(tab)
+    func rememberOpenedBrowser(_ tab: RemoteBrowserTab) {
+        if let index = browserTabs.firstIndex(where: { $0.id == tab.id }) {
+            browserTabs[index] = tab
+        } else {
+            browserTabs.append(tab)
+        }
     }
 
     /// Name of the connected host device (if known)
@@ -507,9 +512,16 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add annotated screenshots to an Agent"))
         case .browseBrowser where !hostSupportsBrowserSharing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
+        case let .browseBrowser(spec):
+            if case .openPane = spec.operation, !hostSupportsPaneBrowser {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open a pane's browser"))
+            }
         case .browseFiles where !hostSupportsFileBrowsing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to browse files"))
         case let .browseFiles(spec):
+            if case .repositoryInfo = spec.operation, !hostSupportsRepositoryFileLinks {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open repository file links"))
+            }
             if case .download = spec.operation, !hostSupportsFileDownloads {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to download files"))
             }
@@ -1019,9 +1031,11 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = sessionState.supportsTerminalPaste == true
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
             hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
+            hostSupportsRepositoryFileLinks = sessionState.supportsRepositoryFileLinks == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
+            hostSupportsPaneBrowser = sessionState.supportsPaneBrowser == true
             hostSupportsAgentImageInput = sessionState.supportsAgentImageInput == true
             browserTabs = sessionState.browserTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
@@ -1049,6 +1063,7 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             logger.info("Host device connected")
@@ -1097,6 +1112,7 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             logger.info(
@@ -1127,6 +1143,7 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
@@ -1141,6 +1158,7 @@ final public class ViewerRelayClient {
             hostSupportsTerminalPaste = false
             hostSupportsDirectoryCreation = false
             hostSupportsFileBrowsing = false
+            hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
             quickPhraseSync?.reset()
@@ -1442,6 +1460,7 @@ final public class ViewerRelayClient {
         hostSupportsTerminalPaste = false
         hostSupportsDirectoryCreation = false
         hostSupportsFileBrowsing = false
+        hostSupportsRepositoryFileLinks = false
         hostSupportsFileDownloads = false
         hostSupportsTerminalFit = false
         quickPhraseSync?.reset()
@@ -1485,6 +1504,7 @@ final public class ViewerRelayClient {
 
     private func resetBrowserState() {
         hostSupportsBrowserSharing = false
+        hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false
     }
 }

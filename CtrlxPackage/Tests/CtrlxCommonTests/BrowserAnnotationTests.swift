@@ -6,6 +6,59 @@ import Testing
 
 @Suite("Browser annotation")
 struct BrowserAnnotationTests {
+    @MainActor @Test func revealRetryDoesNotResendScreenshotOrChangeRecipient() async throws {
+        let delivery = BrowserAnnotationDelivery()
+        let target = try recipient("%1")
+        var sends = 0
+        await #expect(throws: AgentImageError.self) {
+            try await delivery.sendAndReveal(target: target, send: { sends += 1 }, reveal: { _ in
+                throw AgentImageError.message("Terminal timed out")
+            })
+        }
+        #expect(delivery.deliveredTarget == target)
+        var revealed: AgentImageTarget?
+        try await delivery.sendAndReveal(target: recipient("%2"), send: { sends += 1 }, reveal: { revealed = $0 })
+        #expect(sends == 1)
+        #expect(revealed == target)
+    }
+
+    @MainActor @Test func failedSendDoesNotRevealAndRetryCanSend() async throws {
+        let delivery = BrowserAnnotationDelivery()
+        let target = try recipient("%1")
+        var reveals = 0
+        await #expect(throws: AgentImageError.self) {
+            try await delivery.sendAndReveal(target: target, send: { throw AgentImageError.message("Send failed") }, reveal: { _ in reveals += 1 })
+        }
+        #expect(delivery.deliveredTarget == nil)
+        #expect(reveals == 0)
+        try await delivery.sendAndReveal(target: target, send: {}, reveal: { _ in reveals += 1 })
+        #expect(reveals == 1)
+        #expect(delivery.deliveredTarget == target)
+    }
+
+    @MainActor @Test func cancellationAfterSendKeepsReceiptWithoutRevealing() async throws {
+        let delivery = BrowserAnnotationDelivery()
+        let target = try recipient("%1")
+        var reveals = 0
+        let task = Task {
+            try await delivery.sendAndReveal(target: target, send: {
+                withUnsafeCurrentTask { $0?.cancel() }
+            }, reveal: { _ in reveals += 1 })
+        }
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(delivery.deliveredTarget == target)
+        #expect(reveals == 0)
+        try await delivery.sendAndReveal(target: target, send: { Issue.record("Must not send twice") }, reveal: { _ in reveals += 1 })
+        #expect(reveals == 1)
+    }
+
+    private func recipient(_ id: String) throws -> AgentImageTarget {
+        try #require(AgentImageTarget(pane: PaneState(
+            paneId: id, sessionName: "work", tmuxWindowId: "@2", windowName: "Agent",
+            agentSession: AgentSession(paneId: id, pluginID: "codex"), claudeSessionID: "conversation-1"
+        )))
+    }
+
     @Test func coordinatesIgnoreLetterboxAndSurviveResizing() {
         let image = CGSize(width: 1000, height: 500)
         let view = CGSize(width: 400, height: 800)

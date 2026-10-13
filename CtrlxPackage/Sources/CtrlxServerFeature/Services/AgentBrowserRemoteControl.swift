@@ -31,7 +31,8 @@ extension AgentBrowserService {
         RemoteBrowserTab(id: tab.id, sessionName: tab.manualTarget?.sessionName ?? tab.sessionName,
                          windowID: tab.windowID, parentID: tab.parentID, title: String(tab.title.prefix(256)), url: String(tab.url.prefix(8192)),
                          isLoading: tab.isLoading, isAgentOwned: !tab.owner.isEmpty,
-                         isControlled: remoteControls[tab.id] != nil, sourceAgent: tab.sourceAgent)
+                         isControlled: remoteControls[tab.id] != nil, sourceAgent: tab.sourceAgent,
+                         sourcePaneID: tab.paneID.isEmpty ? nil : tab.paneID)
     }
 
     func releaseBrowserControl(_ tabID: UUID) {
@@ -45,7 +46,7 @@ extension AgentBrowserService {
         for (tab, lease) in remoteControls where lease.viewerID == viewerID { releaseBrowserControl(tab) }
     }
 
-    private func expireBrowserControls() {
+    func expireBrowserControls() {
         for (tab, lease) in remoteControls where lease.expires <= .now { releaseBrowserControl(tab) }
     }
 
@@ -65,11 +66,21 @@ extension AgentBrowserService {
     func handleBrowser(_ request: BrowseBrowser, viewerID: String) async throws -> RemoteBrowserResponse {
         try Task.checkCancellation()
         expireBrowserControls()
-        if request.operation == .create {
-            let source = request.sourcePaneID.flatMap(imageTargetForPane)
-            let tab = try await createSharedTab(sessionName: request.sessionName,
-                sourcePaneID: source?.sessionName == request.sessionName ? source?.paneID : nil)
+        switch request.operation {
+        case .create, .openPane:
+            guard let paneID = request.sourcePaneID, !paneID.isEmpty else {
+                throw RemoteBrowserError.message("Open Browser from a terminal Window to select its source pane.")
+            }
+            var url: URL?
+            if case let .openPane(address) = request.operation, let address {
+                guard let parsed = URL(string: address), BrowserWebURL.isSupported(parsed) else {
+                    throw RemoteBrowserError.message("Only HTTP and HTTPS links without embedded usernames or passwords can open in the Host browser.")
+                }
+                url = parsed
+            }
+            let tab = try await openPaneBrowser(sessionName: request.sessionName, paneID: paneID, url: url)
             return RemoteBrowserResponse(tab: descriptor(tab))
+        default: break
         }
         guard supportsBrowserSharing, let runtime else { throw RemoteBrowserError.message("Update the Host Mac to share Chromium pages.") }
         guard let tabID = request.tabID, let tab = tabs[tabID.uuidString], !tab.isClosed,

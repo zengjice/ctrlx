@@ -394,7 +394,7 @@ static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
 - (NSString *)startupError { return self.initializationError; }
 - (void)openManualTabWithRoute:(NSDictionary<NSString *, NSString *> *)route url:(NSString *)url completion:(void (^)(NSString *))completion {
   if (!self.started || !self.endpointReady || self.closing) {
-    completion(@"Chromium is not ready. Try again, or choose WebKit in Settings > Browser."); return;
+    completion(@"Chromium is not ready. Restart CtrlX and try again."); return;
   }
   NSDictionary *destination = [route copy];
   std::string page = url.UTF8String ?: "";

@@ -1,3 +1,4 @@
+import CtrlxNetworking
 import Foundation
 
 public struct TerminalFileLink: Sendable, Equatable {
@@ -39,216 +40,75 @@ public enum TerminalFileLinkDetector {
         let character: Character
         let row: Int
         let columns: Range<Int>
-        var continuation = false
-        var isWebURL = false
     }
 
     public static func links(rows: [Row], columns: Int) -> [TerminalFileLink] {
         guard columns > 0, columns <= 1024 else { return [] }
         var units: [Unit] = []
-        var previous: Row?
-        for row in rows.prefix(256).drop(while: \.wrapped) {
-            if let previous, !row.wrapped {
-                let end = previous.cells.last(where: { !$0.character.isWhitespace })
-                units.append(.init(character: "\n", row: row.number, columns: 0..<0,
-                                   continuation: end.map { $0.column + $0.width >= columns - 4 } ?? false))
+        for row in rows.prefix(256) {
+            if !units.isEmpty, !row.wrapped {
+                units.append(.init(character: "\n", row: row.number, columns: 0..<0))
             }
-            for cell in row.cells where cell.width > 0 {
+            let cells = row.cells.drop(while: { $0.character.isWhitespace })
+            let end = cells.lastIndex(where: { !$0.character.isWhitespace })
+            guard let end else { continue }
+            for cell in cells[...end] where cell.width > 0 {
                 units.append(.init(character: cell.character, row: row.number,
                                    columns: cell.column..<(cell.column + cell.width)))
             }
-            previous = row
         }
-        excludeWebURLs(in: &units)
-        // Prose punctuation separates bare paths; enclosed paths and OSC 8
-        // targets retain their literal filename characters.
-        let delimiters = Set("<>\"'`()[]{}|，。；：！？、" as String)
-        let pairs: [Character: Character] = ["(": ")", "[": "]", "\"": "\"", "'": "'", "`": "`"]
-        func isDelimiter(at index: Int) -> Bool {
-            let character = units[index].character
-            // Keep word apostrophes in their token, not as the start of a quoted path.
-            if character == "'", index > 0, index + 1 < units.count,
-               units[index - 1].character.isLetter || units[index - 1].character.isNumber,
-               units[index + 1].character.isLetter || units[index + 1].character.isNumber { return false }
-            return delimiters.contains(character)
-        }
+        let webPrefixes = [Array("https://"), Array("http://"), Array("ftp://")]
         var result: [TerminalFileLink] = []
         var index = 0
         while index < units.count {
-            if units[index].isWebURL {
+            // A web URL owns its entire token, including parentheses and embedded URIs.
+            if (units[index].character == "h" || units[index].character == "f"), webPrefixes.contains(where: { scheme in
+                units[index...].starts(with: scheme, by: { $0.character == $1 })
+            }) {
+                while index < units.count, !units[index].character.isWhitespace { index += 1 }
+                continue
+            }
+            guard units[index].character == "<" else {
                 index += 1
                 continue
             }
-            if let close = pairs[units[index].character], isDelimiter(at: index) {
-                guard let end = closingIndex(in: units, from: index, close: close) else {
-                    // Drop the incomplete wrapped fragment, not independent lines after it.
-                    index = units[(index + 1)...].firstIndex(where: { $0.character == "\n" && !$0.continuation }) ?? units.count
+            var content: [Unit] = []
+            var marker = ""
+            var cursor = index
+            var matched = false
+            while cursor < units.count, content.count < RepositoryFileLink.maximumLength {
+                let unit = units[cursor]
+                if unit.character == "\n" {
+                    // Only layout breaks may disappear; literal filename spaces must be encoded.
+                    if cursor > index, units[cursor - 1].character == "\n" { break }
+                    cursor += 1
                     continue
                 }
-                let content = joinedEnclosedContent(Array(units[(index + 1)..<end]))
-                if isTruncated(String(content.map(\.character))) {
-                    index = end + 1
-                    continue
+                guard !unit.character.isWhitespace else { break }
+                marker.append(unit.character)
+                content.append(unit)
+                cursor += 1
+                if content.count <= RepositoryFileLink.prefix.count,
+                   !RepositoryFileLink.prefix.hasPrefix(marker) { break }
+                if unit.character == ">" {
+                    if let path = RepositoryFileLink.path(marker) {
+                        var spans: [TerminalFileLink.Span] = []
+                        for item in content {
+                            if let last = spans.last, last.row == item.row, last.columns.upperBound == item.columns.lowerBound {
+                                spans[spans.count - 1] = .init(row: last.row, columns: last.columns.lowerBound..<item.columns.upperBound)
+                            } else {
+                                spans.append(.init(row: item.row, columns: item.columns))
+                            }
+                        }
+                        result.append(.init(path: path, spans: spans))
+                        matched = true
+                    }
+                    break
                 }
-                if let link = makeLink(content) {
-                    result.append(link)
-                    index = end + 1
-                    continue
-                }
             }
-            if units[index].character.isWhitespace || isDelimiter(at: index) {
-                index += 1
-                continue
-            }
-            let start = index
-            while index < units.count, !units[index].character.isWhitespace, !isDelimiter(at: index) {
-                index += 1
-            }
-            var token = Array(units[start..<index])
-            if let end = incompleteFileURLEnd(in: units, token: token, end: index) {
-                index = end
-                continue
-            }
-            // Check before stripping punctuation: an ASCII ellipsis is not a period.
-            guard !isTruncated(String(token.map(\.character))) else { continue }
-            while let last = token.last, ".,;:!?。，；：！？".contains(last.character) { token.removeLast() }
-            if let link = makeLink(token) { result.append(link) }
+            index = matched ? cursor : index + 1
         }
         return result
-    }
-
-    /// Bare hard breaks carry no link target. Suppress a likely split URI and
-    /// its continuation lines instead of making each fragment independently clickable.
-    private static func incompleteFileURLEnd(in units: [Unit], token: [Unit], end: Int) -> Int? {
-        guard token.starts(with: Array("file://"), by: { $0.character == $1 }) else { return nil }
-        var end = end
-        var last = token.last?.character
-        var foundContinuation = false
-        while end < units.count {
-            var newline = end
-            while newline < units.count, units[newline].character.isWhitespace, units[newline].character != "\n" { newline += 1 }
-            guard newline < units.count, units[newline].character == "\n",
-                  last == "/" || last == "-" || units[newline].continuation else { break }
-            let lineEnd = units[(newline + 1)...].firstIndex(where: { $0.character == "\n" }) ?? units.count
-            let text = String(units[(newline + 1)..<lineEnd].map(\.character)).trimmingCharacters(in: .whitespaces)
-            // A new explicitly rooted path or prose line is independent, not a tail.
-            guard let first = text.first, first.isLetter || first.isNumber || first == "_",
-                  !text.contains(where: { $0.isWhitespace || ":<>\"'`()[]{}|，。；：！？、".contains($0) }),
-                  text.contains("/") || text.contains(".") || text.hasSuffix("-") else { break }
-            foundContinuation = true
-            last = text.last
-            end = lineEnd
-        }
-        return foundContinuation ? end : nil
-    }
-
-    private static func closingIndex(in units: [Unit], from start: Int, close: Character) -> Int? {
-        let open = units[start].character
-        var depth = 1
-        for index in (start + 1)..<min(units.count, start + 4097) {
-            let unit = units[index]
-            if unit.character == "\n", !unit.continuation { return nil }
-            if unit.character == close {
-                depth -= 1
-                if depth == 0 { return index }
-            } else if open != close, unit.character == open {
-                depth += 1
-            }
-        }
-        return nil
-    }
-
-    private static func excludeWebURLs(in units: inout [Unit]) {
-        let schemes = [Array("http://"), Array("https://"), Array("ftp://")]
-        let delimiters = Set("<>\"'`|" as String)
-        var index = 0
-        while index < units.count {
-            guard (units[index].character == "h" || units[index].character == "f"),
-                  schemes.contains(where: { scheme in
-                      units[index...].starts(with: scheme, by: { $0.character == $1 })
-                  }) else {
-                index += 1
-                continue
-            }
-            // Parentheses can belong to a URL. Reserve the whole token before
-            // splitting file candidates, including any path after a closing bracket.
-            while index < units.count, !units[index].character.isWhitespace,
-                  !delimiters.contains(units[index].character),
-                  !units[index].character.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
-                units[index].isWebURL = true
-                index += 1
-            }
-        }
-    }
-
-    /// closingIndex has already checked the enclosure's hard-wrap boundaries.
-    /// Truncation checks and link creation must use the same joined characters.
-    private static func joinedEnclosedContent(_ units: [Unit]) -> [Unit] {
-        var content: [Unit] = []
-        var skipsIndent = false
-        for unit in units {
-            if unit.character == "\n" {
-                while content.last?.character.isWhitespace == true { content.removeLast() }
-                skipsIndent = true
-            } else if skipsIndent && unit.character.isWhitespace {
-                continue
-            } else {
-                skipsIndent = false
-                content.append(unit)
-            }
-        }
-        while content.first?.character.isWhitespace == true { content.removeFirst() }
-        while content.last?.character.isWhitespace == true { content.removeLast() }
-        return content
-    }
-
-    private static func makeLink(_ content: [Unit]) -> TerminalFileLink? {
-        guard content.count <= 4096, !content.contains(where: \.isWebURL) else { return nil }
-        let text = String(content.map(\.character))
-        guard !isTruncated(text), let path = path(text), isConfidentTextPath(text) else { return nil }
-        var spans: [TerminalFileLink.Span] = []
-        for unit in content {
-            if let last = spans.last, last.row == unit.row {
-                spans[spans.count - 1] = .init(row: last.row, columns: last.columns.lowerBound..<unit.columns.upperBound)
-            } else { spans.append(.init(row: unit.row, columns: unit.columns)) }
-        }
-        return .init(path: path, spans: spans)
-    }
-
-    private static func isTruncated(_ text: String) -> Bool {
-        text.contains("…") || text.contains("...")
-    }
-
-    /// Text needs path-specific evidence; explicit OSC 8 targets bypass this heuristic.
-    private static func isConfidentTextPath(_ text: String) -> Bool {
-        if text.hasPrefix("file://") || text.hasPrefix("~/") || text.hasPrefix("./") || text.hasPrefix("../") { return true }
-        if text.hasPrefix("/") {
-            // /review and similar single-component slash commands are ambiguous.
-            return text.dropFirst().contains("/") || !(text as NSString).pathExtension.isEmpty
-        }
-        if text.hasPrefix(".") { return true } // Explicit hidden directory, e.g. .build-local/.
-        let name = (text as NSString).lastPathComponent
-        guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return false }
-        let suffix = name[name.index(after: dot)...]
-        return !text.hasSuffix("/") && !suffix.isEmpty && suffix.allSatisfy { $0.isLetter || $0.isNumber }
-    }
-
-    public static func path(_ text: String) -> String? {
-        guard !text.isEmpty, text.utf8.count <= 4096,
-              !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
-        if text.hasPrefix("file://") {
-            guard let url = URL(string: text), url.isFileURL,
-                  url.host == nil || url.host == "" || url.host == "localhost" else { return nil }
-            let path = url.path(percentEncoded: false)
-            return path.hasPrefix("/") && !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) ? path : nil
-        }
-        guard !text.contains("://"), !text.hasPrefix("//"), !text.contains("\\"),
-              text.contains("/"), text.count > 1,
-              !text.contains(where: { "<>\"'`|".contains($0) }) else { return nil }
-        if text.hasPrefix("/") || text.hasPrefix("~/") || text.hasPrefix("./") || text.hasPrefix("../") { return text }
-        guard let first = text.first, first.isLetter || first.isNumber || first == "_" || first == ".",
-              let head = text.split(separator: "/").first, !head.contains(":") else { return nil }
-        return text
     }
 }
 
@@ -298,26 +158,15 @@ extension TerminalFileLinkDetector {
         }
         let excluded = liveEndNearby ? inputStart...inputEnd : -1 ... -1
         var inputRows: [Row] = []
-        var explicit: [TerminalFileLink] = []
         for row in rows.prefix(256) {
             guard let line = bufferLine(at: row) else { continue }
             var cells: [Cell] = []
             var col = 0
             while col < terminal.cols {
                 let data = line[col]
-                if let payload = payloadAt(col, row: row), let separator = payload.firstIndex(of: ";") {
+                if let payload = payloadAt(col, row: row), payload.contains(";") {
                     let start = col
                     while col < terminal.cols, payloadAt(col, row: row) == payload { col += 1 }
-                    var end = col
-                    while end > start {
-                        if line[end - 1].width == 0, end > start + 1, line[end - 2].width == 2 { break }
-                        guard line[end - 1].getCharacter() == "\0" || line[end - 1].getCharacter().isWhitespace else { break }
-                        end -= 1
-                    }
-                    let uri = String(payload[payload.index(after: separator)...])
-                    if end > start, !excluded.contains(row), uri.hasPrefix("file://"), let path = path(uri) {
-                        explicit.append(.init(path: path, spans: [.init(row: row, columns: start..<end)]))
-                    }
                     cells.append(.init(" ", column: start, width: col - start))
                     continue
                 }
@@ -342,7 +191,7 @@ extension TerminalFileLinkDetector {
             while inputRows.last?.wrapped == true { inputRows.removeLast() }
             if !inputRows.isEmpty { inputRows.removeLast() }
         }
-        return explicit + links(rows: inputRows, columns: terminal.cols).filter { link in
+        return links(rows: inputRows, columns: terminal.cols).filter { link in
             !link.spans.contains { excluded.contains($0.row) }
         }
     }

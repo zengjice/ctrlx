@@ -18,7 +18,7 @@ struct WindowTabActionTests {
     }
 
     @Test("Window actions keep their stable target after reorder", arguments: [
-        WindowTabAction.WindowOperation.select, .openFiles, .fork(usingWorktree: false), .fork(usingWorktree: true), .rename, .close,
+        WindowTabAction.WindowOperation.select, .openFiles, .openBrowser, .fork(usingWorktree: false), .fork(usingWorktree: true), .rename, .close,
     ])
     func targetAfterReorder(operation: WindowTabAction.WindowOperation) throws {
         let action = WindowTabAction.window(stableID: "@2", operation: operation)

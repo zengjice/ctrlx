@@ -1,5 +1,6 @@
 #if os(iOS)
 import CtrlxCommon
+import CtrlxNetworking
 import Testing
 import UIKit
 @testable import CtrlxFeature
@@ -236,7 +237,12 @@ struct TerminalNativeViewportTests {
         defer { fixture.close() }
         var opened: [String] = []
         fixture.terminal.onOpenPath = { opened.append($0) }
-        let output = (0..<60).map { "./history/\($0).txt\r\n" }.joined() + "$ "
+        let output = try (0..<60).map { index in
+            let link = try #require(RepositoryFileLink.marker(path: "history/\(index).txt"))
+            // Keep one history entry per buffer row for the scroll-coordinate assertions.
+            try #require(link.count < fixture.terminal.getTerminal().cols)
+            return "\(link)\r\n"
+        }.joined() + "$ "
         fixture.terminal.feedTerminalData(Array(output.utf8)[...])
         fixture.terminal.presentCurrentTail()
         fixture.layout()
@@ -252,8 +258,9 @@ struct TerminalNativeViewportTests {
             #expect(terminal.buffer.yDisp == 0)
             // Include the partially visible final row, not just whole rows.
             let row = Int(ceil(fixture.terminal.bounds.maxY / cellHeight)) - 1
-            let path = "./history/\(row).txt"
-            #expect(terminal.getScrollInvariantLine(row: row)?.translateToString().hasPrefix(path) == true)
+            let path = "history/\(row).txt"
+            let link = try #require(RepositoryFileLink.marker(path: path))
+            #expect(terminal.getScrollInvariantLine(row: row)?.translateToString().hasPrefix(link) == true)
             #expect(fixture.terminal.layer.sublayers?.contains {
                 abs($0.frame.minY - (CGFloat(row + 1) * cellHeight - 2)) < 0.1 && $0.frame.height == 1
             } == true)

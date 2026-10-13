@@ -300,7 +300,7 @@
                 interactive.shouldReportMouseEvent(event),
                 interactive.isClickOnInterceptableURL(
                     at: interactive.convert(event.locationInWindow, from: nil),
-                    allowedSchemes: TerminalURLDetector.defaultAllowedSchemes.union(["file"]),
+                    allowedSchemes: TerminalURLDetector.defaultAllowedSchemes,
                     includePaths: event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty
                 ) {
                 onMouseDown?()
@@ -366,7 +366,7 @@
                     scheduleLinkActivation(in: interactive) { $0.onOpenPath?(link.path) }
                     return
                 }
-                let allowed = TerminalURLDetector.defaultAllowedSchemes.union(["file"])
+                let allowed = TerminalURLDetector.defaultAllowedSchemes
                 if let url = interactive.url(at: point, allowedSchemes: allowed) {
                     // The first mouse-up of a double or triple click also has
                     // clickCount == 1. Stage the action for the system's own
@@ -1576,15 +1576,8 @@
 
         /// Resolves a URL under the given terminal point without opening it.
         ///
-        /// In normal mode `allowedSchemes` is the union of the default
-        /// http/https/ftp set plus `file://`, so OSC 8 file links from the
-        /// local terminal can be routed through `onOpenURL` and open as an
-        /// in-app file tab. Mouse mode uses the same set so TUI applications
-        /// cannot race the configured browser-link policy.
-        ///
-        /// `TerminalURLDetector` still rejects `file://` by default for the
-        /// hover/highlight rendering path (which can run against remote panes
-        /// where opening local files would be unsafe).
+        /// Web URLs use their existing policy. Explicit Host files go through
+        /// the pane-aware snapshot, including its live-input-row exclusion.
         fileprivate func url(at point: NSPoint, allowedSchemes: Set<String>) -> URL? {
             guard let pos = gridPosition(for: point) else { return nil }
             let terminal = terminalView.getTerminal()
@@ -1597,10 +1590,7 @@
                 cellPayload: closures.cellPayload,
                 allowedSchemes: allowedSchemes
             ) else { return nil }
-            let parsed = URL(string: url)
-            // File links use the pane-aware path route, including its input-row guard.
-            if parsed?.isFileURL == true, onOpenPath != nil { return nil }
-            return parsed
+            return URL(string: url)
         }
 
         /// Whether the given point lies on a URL we want to intercept (any of
@@ -1636,10 +1626,7 @@
         /// production, a file-backed log in E2E tests) when the callback is
         /// absent or declines to handle the URL.
         fileprivate func openURL(_ url: URL) {
-            if url.isFileURL, let onOpenPath {
-                if let path = TerminalFileLinkDetector.path(url.absoluteString) { onOpenPath(path) }
-                return
-            }
+            guard !url.isFileURL else { return }
             if onOpenURL?(url) == true { return }
             @Dependency(URLOpener.self) var urlOpener
             urlOpener.openInDefaultBrowser(url)

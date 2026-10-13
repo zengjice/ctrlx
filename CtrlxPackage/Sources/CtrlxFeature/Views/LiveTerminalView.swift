@@ -85,6 +85,8 @@
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
         let onTerminalPaste: @MainActor (String) -> Void
         let onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
+        let preparationID: UUID?
+        let onPresentationChange: @MainActor (TerminalPresentationStatus) -> Void
 
         /// Live OTEL telemetry for this pane's session (issue #597), shown as a
         /// thin meter strip above the terminal (surface C).
@@ -92,11 +94,17 @@
 
         @Environment(ViewerRelayClient.self) private var relayClient
         @Environment(\.openTerminalFileLink) private var openFileLink
+        @Environment(\.openTerminalBrowserLink) private var openBrowserLink
+        private var openHostURLAction: (@MainActor (URL) -> Void)? {
+            guard let openBrowserLink else { return nil }
+            return { url in openBrowserLink(.init(url: url, paneID: paneId, hostID: hostId)) }
+        }
         private var openPathAction: (@MainActor (String) -> Void)? {
             guard let openFileLink else { return nil }
             return { path in openFileLink(.init(path: path, paneID: paneId, hostID: hostId)) }
         }
         @State private var coordinator: StreamCoordinator
+        @State private var presentedTerminal: TerminalState?
 
         /// Whether this standalone terminal requests the software keyboard.
         @State private var isInteractive = false
@@ -148,7 +156,9 @@
             onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in },
             onCopyActionChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
             onViewportGridChange: @escaping @MainActor (TerminalViewportSizing.Grid?) -> Void = { _ in },
-            onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)? = nil
+            onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)? = nil,
+            preparationID: UUID? = nil,
+            onPresentationChange: @escaping @MainActor (TerminalPresentationStatus) -> Void = { _ in }
         ) {
             self.paneId = paneId
             self.hostId = hostId
@@ -176,6 +186,8 @@
             self.onCopyActionChange = onCopyActionChange
             self.onViewportGridChange = onViewportGridChange
             self.onSwitchWindow = onSwitchWindow
+            self.preparationID = preparationID
+            self.onPresentationChange = onPresentationChange
             self.onTerminalPaste = onTerminalPaste
             self.coordinator = StreamCoordinator(
                 paneId: paneId,
@@ -347,12 +359,19 @@
                 coordinator.terminalState?.onKeyboardTransitionChange?(false)
             }
             .onChange(of: coordinator.streamState) { _, newState in
+                if newState != .streaming { presentedTerminal = nil }
                 onCopyActionChange(newState == .streaming ? presentTextSnapshot : nil)
                 if
                     newState == .ended,
                     coordinator.shouldRetryUnexpectedEnd(isConnected: isConnected) {
                     streamRetryGeneration &+= 1
                 }
+            }
+            .onChange(of: presentationStatus, initial: true) { _, status in
+                onPresentationChange(status)
+            }
+            .onChange(of: preparationID) {
+                onPresentationChange(presentationStatus)
             }
             .onChange(of: coordinator.terminalTitle) { _, newTitle in
                 terminalTitle = newTitle
@@ -453,6 +472,18 @@
             isInteractive = true
         }
 
+        private var presentationStatus: TerminalPresentationStatus {
+            switch coordinator.streamState {
+            case .error: .failed(coordinator.error ?? "Could not open the Agent terminal.")
+            case .ended: .failed("The Agent terminal stream ended. Try Open Agent again.")
+            case .streaming:
+                if let state = coordinator.terminalState, presentedTerminal === state {
+                    .ready
+                } else { .preparing }
+            case .idle, .connecting: .preparing
+            }
+        }
+
         @ViewBuilder
         private var terminalContent: some View {
             switch coordinator.streamState {
@@ -475,7 +506,7 @@
                         inputEnabled: inputPresentation.inputEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
                         keyboardIsTransitioning: keyboardIsTransitioning,
-                        questionExpansionEnabled: scenePhase == .active && isConnected
+                        questionExpansionEnabled: scenePhase == .active && isConnected && !isInputSuspended
                             && coordinator.isReadyForToolbarInput && responseState?.request.isBlocking != true,
                         onExpandCodexQuestions: { count in
                             guard isConnected, relayClient.isHostConnected else { return false }
@@ -501,7 +532,12 @@
                             }
                         },
                         onViewportGridChange: onViewportGridChange,
+                        onInitialPresentation: {
+                            guard coordinator.terminalState === state else { return }
+                            presentedTerminal = state
+                        },
                         onOpenPath: openPathAction,
+                        onOpenHostURL: openHostURLAction,
                         onSwitchWindow: isActive && !isInputSuspended && textSnapshot == nil && scenePhase == .active
                             ? onSwitchWindow : nil
                     )
@@ -1362,8 +1398,10 @@
         let onRawInput: @MainActor (Data) -> Void
         let onPasteText: @MainActor (String) -> Void
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
+        let onInitialPresentation: @MainActor () -> Void
 
         var onOpenPath: (@MainActor (String) -> Void)?
+        var onOpenHostURL: (@MainActor (URL) -> Void)?
         var onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
 
         func makeUIView(context: Context) -> UIScrollView {
@@ -1398,6 +1436,7 @@
             terminalView.onRawInput = onRawInput
             terminalView.onPasteText = onPasteText
             terminalView.onOpenPath = onOpenPath
+            terminalView.onOpenHostURL = onOpenHostURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
@@ -1478,6 +1517,7 @@
             context.coordinator.widthConstraint = widthConstraint
             context.coordinator.heightConstraint = heightConstraint
             context.coordinator.onViewportGridChange = onViewportGridChange
+            context.coordinator.onInitialPresentation = onInitialPresentation
             let windowSwipe = TerminalWindowSwipeGesture(viewport: scrollView, terminal: terminalView)
             windowSwipe.onSwitchWindow = onSwitchWindow
             context.coordinator.windowSwipe = windowSwipe
@@ -1571,10 +1611,12 @@
             terminalView.onRawInput = onRawInput
             terminalView.onPasteText = onPasteText
             terminalView.onOpenPath = onOpenPath
+            terminalView.onOpenHostURL = onOpenHostURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
             context.coordinator.onViewportGridChange = onViewportGridChange
+            context.coordinator.onInitialPresentation = onInitialPresentation
             context.coordinator.windowSwipe?.onSwitchWindow = onSwitchWindow
             (scrollView as? BottomAnchoredTerminalScrollView)?.setKeyboardTransitioning(keyboardIsTransitioning)
 
@@ -1590,7 +1632,9 @@
 
         static func dismantleUIView(_ uiView: UIScrollView, coordinator: Coordinator) {
             coordinator.viewportReportTask?.cancel()
+            coordinator.presentationTask?.cancel()
             coordinator.windowSwipe?.onSwitchWindow = nil
+            coordinator.terminalView?.onOpenHostURL = nil
             coordinator.terminalView?.invalidateInput()
         }
 
@@ -1604,6 +1648,8 @@
             var widthConstraint: NSLayoutConstraint?
             var heightConstraint: NSLayoutConstraint?
             var onViewportGridChange: (@MainActor (TerminalViewportSizing.Grid?) -> Void)?
+            var onInitialPresentation: (@MainActor () -> Void)?
+            private(set) var presentationTask: Task<Void, Never>?
             private var reportedGrid: TerminalViewportSizing.Grid?
             private var pendingGrid: TerminalViewportSizing.Grid?
             private(set) var viewportReportTask: Task<Void, Never>?
@@ -1705,8 +1751,16 @@
                 // Focus is applied asynchronously outside SwiftUI's update.
                 // The native bottom anchor follows the later accessory/inset
                 // change, independently of this one-time initial tail reveal.
-                scrollView.requestInitialTailPresentation { [weak terminalView] in
+                scrollView.requestInitialTailPresentation { [weak self, weak terminalView] in
                     terminalView?.presentCurrentTail()
+                    // Report only after the bootstrapped native view has real
+                    // window bounds, and never mutate SwiftUI during layout.
+                    self?.presentationTask = Task { @MainActor [weak self] in
+                        await Task.yield()
+                        guard let self, !Task.isCancelled else { return }
+                        presentationTask = nil
+                        onInitialPresentation?()
+                    }
                 }
             }
 

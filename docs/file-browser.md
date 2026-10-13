@@ -40,66 +40,82 @@ Files rows expose only their own selection/close actions, not terminal operation
 
 ## Supported operations
 
-### Opening paths printed in a terminal
+### Explicit terminal file links
 
-Mac Host, Mac Viewer and iOS recognize output paths such as `/absolute/file`,
-`~/Movies/`, `./output/file`, `../output/file`, `episodes/A01/movie.mp4`, and
-explicit `file://` hyperlinks. Click/tap an underlined path to open Files in the
-same session. A directory opens directly; a file opens its parent directory and
-selects the existing inline preview. Video still waits for Play. An existing
-Files tab at that directory is reused; otherwise a new tab is created. Other
-terminals and Files tabs stay intact, including Mac split placement.
+Mac Host, Mac Viewer and iOS recognize the literal marker
+`<repo:outputs/report.pdf>`, emitted as inline code to preserve both delimiters.
+This is a lightweight application convention, **not a registered URI standard**.
+There is no private CtrlX URI, CLI generation step, link registry or startup hook.
+Ordinary paths, slash commands, local Markdown targets and `file://`/OSC 8
+file targets are not inferred or opened. Web links retain their own handling.
+Compatibility with previous file-link output is deliberately dropped.
 
-The event captures the source Host and pane. Relative paths use that pane's
-published agent project directory, then its current working directory; `~/`
-is expanded only by the Host. One existing `BrowseFiles.info` request validates
-the destination before switching tabs. Missing files, unavailable pane directories
-and unsupported/offline Hosts report an error without opening a guessed local
-path. Changing windows or leaving the view cancels pending navigation. Historical
-output has no per-line cwd history: use absolute paths or explicit absolute file
-links for durable references, especially if the pane has since changed directory.
-The resolver never tries multiple base directories to guess a match.
-There is no recursive search or filesystem work while scanning
-or hovering, no new wire command, and no Relay update.
+Paths are relative to the **current source agent's Git worktree root**.
+A nested launch directory resolves to its worktree root, not the primary checkout.
+`<repo:.>` opens the root. A directory marker such as `<repo:outputs/final_films/>`
+accepts one trailing `/`, removed after percent decoding and before validation;
+the Host receives the same canonical path as `<repo:outputs/final_films>`.
+Leading `./`, absolute paths, `..`, and empty components (including repeated
+trailing or interior slashes) remain invalid. Use `<repo:.>`, not `<repo:./>`, for the root.
+Spaces and reserved punctuation use UTF-8 percent encoding; literal percent signs
+must be `%25`. Chinese may remain literal or be encoded. Decoding happens once:
+a filename containing literal `%27` must not become an apostrophe on the Host.
+Complete markers survive soft/hard visual wraps, including a wrap inside the
+prefix or percent escape. Missing delimiters, whitespace, malformed escapes,
+control characters and paths exceeding 4096 UTF-8 bytes are rejected. No filename
+or continuation is guessed.
 
-Recognition uses actual terminal cell widths for Chinese and wrapped text, with
-bounded visible-row scans. Decorations, hover and clicks share one viewport
-snapshot, refreshed on buffer edits, cursor/mouse-mode changes, scrolling, resize
-and payload updates. They do not independently scan around the clicked row.
-iOS uses the native content-offset/bounds row range, including partially visible
-rows, even when inertial scrolling leaves the terminal's logical display row behind.
-Soft wraps and confidently enclosed near-right-edge hard wraps are joined;
-nested matching brackets are preserved. An incomplete enclosure is skipped only
-through its wrapped fragment, without hiding later independent lines. Ambiguous/truncated wraps
-are not guessed. Spaces need
-quotes/brackets or an explicit file hyperlink; apostrophes inside words such as
-`I've` are not opening quotes. Bare filenames and editor line/
-column suffixes are not inferred. Chinese prose punctuation (`，。；：！？、`)
-separates unquoted paths even without spaces, so `结果：docs/report.md` links
-only `docs/report.md`. Filenames containing those punctuation marks require an
-enclosed path or an explicit file hyperlink; both preserve them literally.
-Plain text needs path-specific evidence: a rooted path, a dot-prefixed hidden
-directory such as `.build-local/`, or a relative filename with an extension.
-Single-component slash commands (`/review`), ordinary slash-separated prose
-(`crayon/gouache`) and ambiguous bare directories (`size/`) are not inferred;
-write `./size/` to make a directory explicit. Visible paths containing `…` or
-`...` are skipped, including truncated tool-command output: expand it to obtain
-the full path. Enclosed hard wraps are joined before checking for truncation;
-an ellipsis split across rows suppresses the entire enclosure, not just its tail.
-Bare hard-wrapped `file://` URIs with apparent continuation lines
-are skipped as a group rather than linking incomplete prefixes/tails. Complete
-URIs, terminal soft wraps and enclosed near-edge hard wraps remain supported.
-Explicit OSC 8 targets bypass these text heuristics, including literal ellipses
-in filenames; they never need to guess a target from a shortened label.
-Explicit hyperlinks take precedence, then
-plain web URLs (including their bracketed/query fragments), then file candidates.
-Explicit file links are decoded once. Resolution checks path bounds and control
-characters without reapplying text-recognition rules, so encoded filename characters
-such as apostrophes remain intact in the Host request. Nonlocal file authorities
-are still rejected during link recognition.
-Live input
-rows (including Codex's colored multiline composer), selection, drag and
-double/long-press gestures retain their terminal behavior.
+A click captures the Host, pane and its agent context (plugin ID, conversation ID
+when available, and detected project directory). `BrowseFiles.repositoryInfo`
+runs off the keyboard receive loop. The Host checks that context before and after
+resolution, runs `git rev-parse --show-toplevel`, checks existence and canonical
+symlink containment, and returns the existing file-info response. Missing context,
+non-Git projects, missing files and links outside the worktree fail clearly:
+there is no shell-cwd fallback or alternate-directory search. Remote clients gate
+the operation on `supportsRepositoryFileLinks`; an older Host is not sent an
+undecodable request. No Relay implementation/deployment change is needed.
+
+The marker intentionally carries no absolute path or repository identity.
+It is not an access grant or proof of provenance. After reusing a pane/session for
+another workspace, old output is interpreted in the **current** agent worktree;
+historical links are not guaranteed to identify the old repository. This is the
+chosen KISS boundary, rather than a per-output provenance registry.
+
+Click/tap an underlined marker to open Files in the same session. A directory
+opens directly; a file selects its existing inline preview. Video still waits
+for Play. Each source terminal window reuses its own link-created Files tab,
+even across directories or panes. The association uses the stable tmux window ID
+inside that Host/session's private workspace. Different windows never share it
+merely because files are in the same directory. Manual **Open Files** tabs stay
+independent. Closing the link-created tab allows the next link to create a new
+one. Reuse updates the source pane, preserving the tab UUID and Mac split placement.
+
+The window association is live-only: saved layouts retain the directory/selection,
+not that association. Restored tabs remain independent. Changing windows, leaving
+the view or changing the source agent during resolution prevents late navigation.
+The Viewer never resolves a remote path against its own filesystem.
+
+Decorations, hover and activation share one bounded visible-row snapshot,
+refreshed on buffer edits, cursor/mouse-mode changes, scrolling, resize and
+payload updates. iOS supplies actual native visible rows during inertial scrolling.
+The live input/composer, selection, drag and modifier gestures retain their existing
+protection. The scanner performs no filesystem I/O or network work.
+
+### Agent output convention and migration
+
+The short independent `file-links` skill remains one of four shared skills.
+Its canonical source is `plugin/ctrlx/skills/file-links/SKILL.md`, packaged for
+Claude Code and mirrored into Codex by `scripts/sync-codex-skills.sh`.
+Bundled skill versions: Codex **1.1.3**, Claude Code **1.3.4**.
+Update the Host and each Mac/iOS Viewer, update the installed agent plugin,
+then start a new agent session. Updating only the App does not refresh a cached
+agent plugin. Both TUIs should receive an inline-code literal marker, never a
+Markdown link target that the renderer can hide or shorten.
+
+Tests cover marker recognition, every soft/hard wrap boundary, inertial viewport
+snapshots, single decoding, source-context changes and actual Git worktree/symlink
+resolution. Device tap/render acceptance still requires a real iPhone; macOS unit
+tests do not run the iOS-only viewport test.
 
 ### Creating folders and adding files
 
@@ -169,6 +185,56 @@ on Mac Viewer or iOS downloads a copy only after a click. Mac opens the copy in
 the default app; iOS uses Quick Look and offers **Share / Open in…** for other
 apps or Save to Files. System codec/app support still determines whether a file
 can be opened. Copies are not edited back onto the Host.
+
+### In-place preview annotation
+
+Mac Host, Mac Viewer and iOS expose **Annotate Screenshot** in the selected
+file's preview header. Images, text/Markdown, PDF, Office and a ready video frame
+reuse the browser's rectangle/arrow/pen, undo, clear and **Add to Input** overlay;
+there is no separate editor. Entering annotation freezes the visible preview and
+disables file navigation until Cancel or successful delivery. Original files are
+never edited. Only an explicit Add to Input inserts an image; it never presses
+Return or replaces the Agent's existing draft.
+
+The mounted native preview supplies the capture: text and PDF preserve the
+visible scroll/zoom position, and Office captures the current Quick Look content,
+not a thumbnail or a newly rendered first page. It uses application-view capture,
+not whole-screen recording, a conversion service or private Quick Look APIs.
+System Office rendering limitations still apply. Video pauses and reads one frame
+from the existing player, preserving mute state and remaining paused afterwards;
+it does not download a second asset or resume automatically. Audio-only previews
+cannot be annotated. A missing/unready capture fails visibly without opening a
+different file or app.
+
+Quick Look's assigned preview item is not a render-completion signal. Both
+clients reject transparent or uniformly blank Office screenshots on every
+capture, before adding the filename footer, and keep the preview available for
+retry. This is a blank-frame safeguard, not a guarantee that every part of a
+document has finished rendering; genuinely blank pages also need visible
+content before they can be annotated. There is no fixed readiness delay or
+cached ready flag to carry across file changes.
+
+The screenshot footer carries the basename and, when available, PDF page or video
+time, never the Host's absolute home/cache path. Capture is bounded to 2560 pixels
+per image dimension before the footer; the existing image preparer enforces the
+512 KiB transport limit. No periodic screenshot task is added.
+
+The Files tab's source pane supplies the default Agent. If it has no recognized
+image-capable Agent (including a restored tab with no source pane), the user must
+choose a recipient from the same session; there is no silent fallback. Capture
+fixes that recipient, and sending revalidates the pane, conversation and window
+identity through the existing guarded image-input route. File changes/refresh
+cancel pending capture, and closing/backgrounding/disconnecting cancels pending
+work. Delivery failures retain the annotations. Once delivery is acknowledged,
+retrying **Open Agent** only retries navigation, never inserts a duplicate image.
+iOS keeps Files visible while the destination terminal is prepared, using the
+same `AnnotationTerminalHandoff` as browser annotations.
+
+Remote insertion requires the existing `supportsAgentImageInput` capability.
+Updated clients can use an already-capable Host; no new wire command, Relay
+deployment or original-file upload is required. Native Mac Office capture is
+checked with isolated Word/Excel/PowerPoint fixtures; UIKit/Quick Look interaction
+and the complete tap-to-Agent flow still require real-device acceptance.
 
 ### Remote video playback
 
@@ -292,13 +358,17 @@ Focused coverage: `HostFileBrowserTests`, `FileBrowserLayoutTests`,
 `HostFileUploadTests`, `FileBrowserUploadTests`,
 `FileBrowserTabTests`, `FileBrowserTransferTests`, `FileBrowserProtocolTests`, `IOSFileBrowserWorkspaceTests`,
 `LayoutSnapshotMapperTests`, and `TerminalPasteTransportTests`.
-`TerminalFileLinkTests` covers path spellings, Chinese cell hit targets, wrapped
-and truncated text, explicit web/file link precedence, input protection,
-scrollback trimming, Host-only resolution, unavailable files and cancellation.
+`TerminalFileLinkTests` covers explicit URI encoding, all hard/soft wrap boundaries,
+truncation and ordinary-path rejection, Chinese OSC 8 hit cells, web precedence,
+input protection, Host-only resolution, unavailable files and cancellation.
+`FileLinkCommandTests` and `FileLinkAPITests` cover CLI worktree resolution,
+Host-only existence checks, file/directory targets, missing files and capabilities.
 `TerminalFileLinkSnapshotTests` checks decoration/activation agreement across a
-seven-row path, reuse on unchanged content, in-place edits, cursor/mouse mode,
+long wrapped link, reuse on unchanged content, in-place edits, cursor/mouse mode,
 resize, alternate buffers, scrollback trimming and external payload invalidation.
-Workspace tests cover same-directory reuse without disturbing other tabs.
+Workspace tests cover cross-directory/per-pane reuse within one window, separate
+windows at the same directory, manual-tab isolation, close/reopen, tab limits,
+Host isolation, split placement and restoration without stale window ownership.
 Tests include fresh source-pane cwd resolution,
 directory pagination/dot-prefixed and system-hidden files and folders, search
 visibility consistency, deferred mount-point metadata, unknown types,
@@ -336,6 +406,12 @@ create a Files tab from each on Mac Host, Mac Viewer and iOS; preview text,
 Markdown, image and PDF; switch tabs during loading; disconnect/reconnect; return
 to a terminal and type while a search is running. Verify Mac tab reorder/split/
 close and that the iOS tab list stays in the session page.
+Click links to two different directories in one terminal window and verify a
+single Files tab changes its directory/preview. Repeat from another pane in the
+same window, then from a different window pointing at the same directory. Move
+the first Files tab to the Mac right split, rename/reorder its source window,
+and repeat the links; keep manually opened Files tabs unchanged. Close the
+link-created tab and click again to verify a fresh tab is created.
 Also preview a local MP4 larger than 8 MiB, open it in the default app, then
 download/open it on Mac Viewer and iOS. Verify Quick Look/share, cancel mid-copy,
 change the source file mid-copy, and test against a Host without download support.

@@ -50,6 +50,9 @@ struct DetachedTerminalWindowsTests {
         #expect(state.mainRequest?.target == target)
         #expect(state.mainRequest?.id != first.id)
         #expect(state.mainRequest?.action == .fork(paneID: "%9", worktree: true))
+        state.request(.url("https://example.com", paneID: "%9"), from: target)
+        #expect(state.mainRequest?.target == target)
+        #expect(state.mainRequest?.action == .url("https://example.com", paneID: "%9"))
         #expect(state.targets == [target])
     }
 

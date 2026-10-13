@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""Worktree-local build cleanup. Preview by default; --yes enables deletion."""
+"""Worktree-local cleanup (preview by default) and managed artifact execution."""
 import argparse
 import contextlib
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+from local_build import inherited_lock, run_child, validate_path, worktree_lock
 
 
 ARTIFACT_NAME = re.compile(r"CtrlX-[0-9]+\.[0-9]+\.[0-9]+(?P<configuration>-Debug)?\.(?P<platform>ipa|dmg)")
 RELEASE_DIRECTORY = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+")
 PUBLISH_REPORT = re.compile(r"publish-report(?:-[0-9]+)?\.json")
+RETAINED_MARKER = ".ctrlx-retained.json"
+RETAINED_GROUPS = {
+    "verification": re.compile(r"upstream-browser-proof\.[A-Za-z0-9_-]+"),
+    "install-backup": re.compile(r"(?:macOS-install-backup|mac-install-backup|mac-install)\.[A-Za-z0-9_-]+"),
+}
+RETAINED_COUNT = 2
 LOW_SPACE_BYTES = 20 * 1024 ** 3
 COMPLETED_MARKER = ".ctrlx-cleanup-ready"
 COMPLETED_ARTIFACT_DIRS = (".build-local/app-backups", ".build-local/diagnostics")
@@ -52,14 +60,130 @@ def check_space(path):
               file=sys.stderr)
 
 
-def validate_path(root, path):
-    relative = path.relative_to(root)
-    if not relative.parts or ".." in relative.parts:
-        raise ValueError(f"Not a worktree-local cleanup target: {path}")
-    for count in range(1, len(relative.parts) + 1):
-        parent = root.joinpath(*relative.parts[:count])
-        if parent.is_symlink():
-            raise ValueError(f"Refusing a symlink cleanup target: {parent}")
+def retained_group(root, path):
+    validate_path(root, path)
+    if path.parent == root / ".build-local" and path.is_dir():
+        for group, pattern in RETAINED_GROUPS.items():
+            if pattern.fullmatch(path.name):
+                return group
+    raise ValueError(f"Not a recognized worktree-local verification copy or install backup: {path}")
+
+
+def lock_artifact(root, path, locks, create=False):
+    marker = path / RETAINED_MARKER
+    validate_path(root, marker)
+    lock = locks.enter_context(marker.open("a+" if create else "r"))
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    # A cleanup could have removed the directory after open(), before flock().
+    if not marker.exists() or os.fstat(lock.fileno()).st_ino != marker.stat().st_ino:
+        raise ValueError(f"Artifact was removed or replaced: {path}")
+    lock.seek(0)
+    return lock
+
+
+def retained_targets(root, locks, report_unmanaged=False):
+    build = root / ".build-local"
+    validate_path(root, build)
+    if not build.is_dir():
+        return []
+    groups = {group: [] for group in RETAINED_GROUPS}
+    for path in sorted(build.iterdir()):
+        if not any(pattern.fullmatch(path.name) for pattern in RETAINED_GROUPS.values()):
+            continue
+        validate_path(root, path)
+        if not path.is_dir():
+            continue
+        group = retained_group(root, path)
+        marker = path / RETAINED_MARKER
+        validate_path(root, marker)
+        if not marker.exists():
+            if report_unmanaged:
+                print(f"Keeping unmanaged artifact (no completion record): {path}")
+            continue
+        try:
+            lock = lock_artifact(root, path, locks)
+        except BlockingIOError:
+            print(f"Skipping active artifact: {path}")
+            continue
+        try:
+            record = json.load(lock)
+        except ValueError:
+            print(f"Keeping unreadable artifact record: {path}", file=sys.stderr)
+            continue
+        expected = {"version": 1, "worktree": str(root), "group": group, "status": "completed"}
+        if record != expected:
+            print(f"Keeping incomplete or unrecognized artifact: {path}")
+            continue
+        groups[group].append((marker.stat().st_mtime_ns, path))
+    # The lock covers cooperating runners; also preserve apps launched directly.
+    if not any(len(entries) > RETAINED_COUNT for entries in groups.values()):
+        return []
+    try:
+        processes = subprocess.check_output(["ps", "-ww", "-axo", "pid=,command="], text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"Keeping retained artifacts: cannot check running processes: {error}", file=sys.stderr)
+        return []
+    commands = [row.split(None, 1)[1] for row in processes.splitlines()
+                if len(row.split(None, 1)) == 2 and row.split(None, 1)[0] != str(os.getpid())]
+    targets = []
+    for entries in groups.values():
+        inactive = []
+        for entry in sorted(entries, reverse=True):
+            path = entry[1]
+            if any(str(path) in command for command in commands):
+                print(f"Skipping running artifact: {path}")
+            else:
+                inactive.append(path)
+        # Active/failed/unmanaged artifacts never evict a known-good backup.
+        targets.extend(inactive[RETAINED_COUNT:])
+    return targets
+
+
+@contextlib.contextmanager
+def managed_artifact(root, path):
+    """Keep failed workflows; mark complete only after all consumers finish."""
+    group = retained_group(root, path)
+    with contextlib.ExitStack() as locks:
+        try:
+            lock = lock_artifact(root, path, locks, create=True)
+        except BlockingIOError as error:
+            raise ValueError(f"Artifact is already in use: {path}") from error
+        record = {"version": 1, "worktree": str(root), "group": group, "status": "incomplete"}
+
+        def write_record():
+            lock.seek(0)
+            lock.truncate()
+            json.dump(record, lock)
+            lock.flush()
+
+        # Invalidate any previous success before rerunning a fixture or installer.
+        write_record()
+        try:
+            yield
+        except BaseException:
+            print(f"Keeping failed artifact for investigation: {path}", file=sys.stderr)
+            raise
+        record["status"] = "completed"
+        write_record()
+    print(f"Completed artifact: {path}")
+
+
+def use_artifact(root, path, command):
+    """Opt in a known disposable directory; keep failures and hold its use lock."""
+    if not command:
+        raise ValueError("use-artifact requires a command after --")
+    try:
+        with managed_artifact(root, path):
+            descriptor = inherited_lock(root)
+            if descriptor is None:
+                subprocess.run(command).check_returncode()
+            else:
+                run_child(command, descriptor)
+    except subprocess.CalledProcessError as error:
+        return error.returncode if error.returncode > 0 else 128 - error.returncode
+    with worktree_lock(root), contextlib.ExitStack() as locks:
+        clean(root, retained_targets(root, locks), apply=True)
+    return 0
 
 
 def artifact_targets(root, current):
@@ -249,12 +373,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
     prune = modes.add_parser("prune", help="Keep two packages per platform/configuration and clean packaging leftovers")
-    prune.add_argument("--artifact", required=True, type=Path, help="Just-built package to protect")
+    prune.add_argument("--artifact", type=Path, help="Just-built package to protect; omit for App-only builds")
     prune.add_argument("--platform", choices=("iOS", "macOS"), help="Also clean that local packaging DerivedData")
     prune.add_argument("--save-space", action="store_true", help="Also remove platform compilation caches; keep products and downloads")
     prune.add_argument("--yes", action="store_true", help="Delete the listed old packages")
     receipts = modes.add_parser("receipts", help="Remove verified public DMG copies; keep publication reports")
     receipts.add_argument("--yes", action="store_true", help="Delete the listed verified copies")
+    retained = modes.add_parser("retained", help="Keep the two latest completed verification copies and install backups per kind")
+    retained.add_argument("--yes", action="store_true", help="Delete only recorded, completed artifacts that are not in use")
+    use = modes.add_parser("use-artifact", help="Run with an artifact use lock; on success, prune to two completed copies per kind")
+    use.add_argument("--path", required=True, type=Path, help="Recognized .build-local verification or backup directory")
+    use.add_argument("command", nargs=argparse.REMAINDER, help="Command after --; must finish using the artifact before returning")
     housekeeping = modes.add_parser("housekeeping", help="Clean completed backups/diagnostics and verified downloads; keep build caches")
     housekeeping.add_argument("--yes", action="store_true", help="Delete the listed completed artifacts")
     deep = modes.add_parser("deep", help="Remove build caches; preserve dist, signing config and user data")
@@ -277,7 +406,12 @@ def main():
     if args.mode == "check-space":
         check_space(args.path)
         return
+    if args.mode == "use-artifact":
+        command = args.command[1:] if args.command[:1] == ["--"] else args.command
+        return use_artifact(root, args.path.absolute(), command)
     with contextlib.ExitStack() as locks:
+        if args.yes:
+            locks.enter_context(worktree_lock(root))
         if args.mode in ("deep", "idle", "tests"):
             print("Stop builds, packaging and device installs in this worktree before deleting caches.")
             if args.mode == "deep":
@@ -285,20 +419,26 @@ def main():
                 targets = deep_targets(root)
             elif args.mode == "idle":
                 targets = idle_targets(root)
+                targets += retained_targets(root, locks, report_unmanaged=True)
+                targets += receipt_targets(root, locks)
             else:
                 targets = test_cache_targets(root, args.save_space)
         elif args.mode == "prune":
             if args.save_space and not args.platform:
                 raise ValueError("--save-space requires --platform")
-            artifact = args.artifact.absolute()
-            targets = artifact_targets(root, artifact)
+            if not args.artifact and not args.platform:
+                raise ValueError("prune requires --artifact or --platform")
+            artifact = args.artifact.absolute() if args.artifact else None
+            targets = artifact_targets(root, artifact) if artifact else []
             if args.platform:
-                expected = "macOS" if artifact.suffix == ".dmg" else "iOS"
-                if args.platform != expected:
+                if artifact and args.platform != ("macOS" if artifact.suffix == ".dmg" else "iOS"):
                     raise ValueError("--platform does not match the artifact")
-                targets += packaging_cache_targets(root, artifact, args.save_space)
+                targets += derived_cache_targets(root, root / ".build-local/DerivedData" / args.platform, args.save_space)
             targets += receipt_targets(root, locks)
+            targets += retained_targets(root, locks)
             targets += completed_targets(root)
+        elif args.mode == "retained":
+            targets = retained_targets(root, locks, report_unmanaged=True)
         elif args.mode == "housekeeping":
             targets = receipt_targets(root, locks) + completed_targets(root)
         else:
@@ -308,7 +448,7 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)

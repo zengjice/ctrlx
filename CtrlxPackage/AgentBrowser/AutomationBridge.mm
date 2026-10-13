@@ -221,7 +221,7 @@ class Bridge final : public CefDevToolsMessageObserver {
       for (auto& [id, client] : clients_)
         if (client.busy && ((!client.opening && !ownership_.Owns(client.run, client.tab)) ||
             !ownership_.runs.at(client.run).active)) cancelled.push_back(id);
-      for (int id : cancelled) Reply(id, nil, @"Codex instance ended; control revoked.");
+      for (int id : cancelled) Reply(id, nil, @"Agent instance ended; control revoked.");
       callbacks_.changed();
     }
   }
@@ -490,7 +490,7 @@ class Bridge final : public CefDevToolsMessageObserver {
           [request[@"pid"] intValue], [request[@"startSeconds"] unsignedLongLongValue],
           [request[@"startMicros"] unsignedLongLongValue]};
       if (!Alive(run) || !ownership_.Register(run)) {
-        Reply(id, nil, @"Instance expired or registration conflicts. Launch a new Codex instance."); return;
+        Reply(id, nil, @"Instance expired or registration conflicts. Launch a new agent instance."); return;
       }
       callbacks_.changed();
       Reply(id, @{@"epoch": epoch_}); return;
@@ -500,7 +500,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if (![request[@"epoch"] isEqual:epoch_] ||
         ![run isKindOfClass:NSString.class] || ![secret isKindOfClass:NSString.class] ||
         !ownership_.Authenticate(run.UTF8String, secret.UTF8String)) {
-      Reply(id, nil, @"Instance not authorized or browser restarted. Launch a new Codex instance."); return;
+      Reply(id, nil, @"Instance not authorized or browser restarted. Launch a new agent instance."); return;
     }
     client.run = run.UTF8String;
     if (AttachEngine(id, request)) return;

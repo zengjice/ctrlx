@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import ConcurrencyExtras
 import CtrlxCommon
 import Dependencies
 import Foundation
@@ -53,8 +54,40 @@ struct AgentBrowserRoutingTests {
             .joined(separator: String(PaneInfo.fieldSeparator))
     }
 
-    @Test("Routing reads live panes while the first UI refresh is still in flight")
-    func duringInitialRefresh() async throws {
+    @Test("Manual browser routing validates live pane membership without requiring an agent")
+    func manualPaneRouting() async throws {
+        func output(_ session: String) -> String {
+            String(Self.row(session: session).split(separator: PaneInfo.fieldSeparator, maxSplits: 1)[1])
+                .replacingOccurrences(of: "codex", with: "zsh")
+        }
+        let initialRows = output("work")
+        let movedRows = output("moved")
+        let linkedRows = initialRows + "\n" + output("linked")
+        let rows = LockIsolated(initialRows)
+        let runner = ProcessRunner(run: { _, arguments, _, _ in
+            #expect(arguments.contains("list-panes") && arguments.contains("-a"))
+            return ProcessResult(exitCode: 0, stdout: Data(rows.value.utf8), stderr: Data())
+        })
+        try await withDependencies {
+            $0[ProcessRunner.self] = runner
+        } operation: {
+            let service = TmuxService(tmuxPath: "/usr/bin/true")
+            let pane = try await service.browserSourcePane(sessionName: "work", paneID: "%1")
+            #expect(pane.command == "zsh" && service.panes.isEmpty)
+            await #expect(throws: (any Error).self) { try await service.browserSourcePane(sessionName: "work", paneID: "%9") }
+            rows.setValue(movedRows)
+            await #expect(throws: (any Error).self) { try await service.browserSourcePane(sessionName: "work", paneID: "%1") }
+            #expect(try await service.browserSourcePane(sessionName: "moved", paneID: "%1").sessionName == "moved")
+            rows.setValue(linkedRows)
+            await #expect(throws: (any Error).self) { try await service.browserSourcePane(sessionName: "work", paneID: "%1") }
+            rows.setValue("")
+            await #expect(throws: (any Error).self) { try await service.browserSourcePane(sessionName: "work", paneID: "%1") }
+            #expect(service.panes.isEmpty)
+        }
+    }
+
+    @Test("Routing reads live panes while the first UI refresh is still in flight", arguments: ["codex", "claude"])
+    func duringInitialRefresh(command: String) async throws {
         let entered = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         defer { release.continuation.finish(); entered.continuation.finish() }
@@ -65,7 +98,7 @@ struct AgentBrowserRoutingTests {
                 return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
             }
             if executable == "/bin/ps" {
-                return ProcessResult(exitCode: 0, stdout: Data(" PID PPID COMM\n100 1 zsh\n200 100 codex\n".utf8), stderr: Data())
+                return ProcessResult(exitCode: 0, stdout: Data(" PID PPID COMM\n100 1 zsh\n200 100 \(command)\n".utf8), stderr: Data())
             }
             let row = Self.row(session: "live")
             let output = arguments.last?.hasPrefix("#{pane_pid}") == true

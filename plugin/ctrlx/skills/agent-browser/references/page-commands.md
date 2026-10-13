@@ -5,6 +5,29 @@ everything after it is a bounded Vercel 0.38.1 page command, not a shell script.
 `action open/tabs/navigate/show/close` still manages the tabs. Do not use upstream
 tab/window/connect/session/provider commands to bypass this routing.
 
+## Engine selection
+
+Vercel is the default unless this agent process saved an explicit choice.
+`--engine ctrlx|vercel` overrides one action without changing that preference;
+switching engines keeps the same embedded tabs and shared login.
+
+```sh
+ctrlx browser engine vercel
+ctrlx browser action snapshot --tab <id>
+ctrlx browser action fill --tab <id> --selector '@e2' --text 'replacement'
+ctrlx browser action click --tab <id> --selector '@e3'
+ctrlx browser engine ctrlx
+```
+
+Use only references returned by the current tab's fresh snapshot. Refresh after
+navigation or the engine's five-minute idle shutdown. Vercel handles snapshot,
+click, type, fill, press, select, check and screenshot; tab lifecycle, read, wait
+and scroll retain the CtrlX contract. Vercel `press` uses page focus, no selector.
+`command` explicitly selects Vercel for that call without changing the preference.
+Literal leading dashes and empty text are preserved through JSON input.
+
+## Commands
+
 ```sh
 ctrlx browser command --tab <id> -- snapshot -i
 ctrlx browser command --tab <id> -- find role button click --name 'Continue'

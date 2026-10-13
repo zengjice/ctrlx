@@ -96,6 +96,7 @@ write_artifact_metadata() {
     ARTIFACT_SHA256="$checksum" \
     CTRLX_VERSION="$(get_version)" \
     CTRLX_BUILD="$(get_build_number)" \
+    CTRLX_BUILD_STAMP="${BUILD_STAMP:-}" \
     CTRLX_SOURCE_REVISION="$full_revision" \
     CTRLX_SOURCE_URL="$source_url" \
         python3 - <<'PY' > "$manifest"
@@ -106,6 +107,7 @@ print(json.dumps({
     "product": "CtrlX",
     "version": os.environ["CTRLX_VERSION"],
     "build": os.environ["CTRLX_BUILD"],
+    "buildStamp": os.environ["CTRLX_BUILD_STAMP"],
     "artifact": os.environ["ARTIFACT_NAME"],
     "sha256": os.environ["ARTIFACT_SHA256"],
     "commit": os.environ["CTRLX_SOURCE_REVISION"],
@@ -131,9 +133,32 @@ check_build_space() {
     python3 "$SCRIPT_DIR/clean-build.py" check-space --path "$1"
 }
 
+with_worktree_lock() {
+    if ! python3 "$SCRIPT_DIR/local_build.py" lock-held; then
+        exec python3 "$SCRIPT_DIR/local_build.py" run -- bash "$0" "$@"
+    fi
+}
+
+invalidate_local_app() {
+    python3 "$SCRIPT_DIR/local_build.py" invalidate-app --platform "$1" --configuration "$2"
+}
+
+record_local_app() {
+    python3 "$SCRIPT_DIR/local_build.py" record-app --platform "$1" --configuration "$2" \
+        --stamp "$BUILD_STAMP" --revision "$SOURCE_REVISION"
+}
+
+publish_local_package() {
+    python3 "$SCRIPT_DIR/local_build.py" publish-package --staged "$1" --artifact "$2"
+}
+
 prune_local_artifacts() {
-    # Success-only housekeeping keeps incremental caches and unmarked diagnostics.
-    local arguments=(prune --artifact "$1" --yes)
+    # An installer owns the final retention pass; its nested App build defers it.
+    [ "${CTRLX_DEFER_BUILD_CLEANUP:-}" != 1 ] || return 0
+    local arguments=(prune --yes)
+    if [ -n "$1" ]; then
+        arguments+=(--artifact "$1")
+    fi
     if [ "$#" -ge 2 ]; then
         arguments+=(--platform "$2")
     fi

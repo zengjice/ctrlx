@@ -7,6 +7,78 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.60 — Explicit repository links and pane-bound Host browsers
+
+- Reuse each terminal Window's linked Files tab instead of opening another tab
+  for each clicked file. Replace automatic path detection with explicit
+  `<repo:relative/path>` references, resolved against the current agent worktree
+  and checked on the Host. Ordinary paths, file URLs and slash commands no longer
+  become Files links; repository references avoid disclosing absolute paths.
+- Move Open Browser to Window actions. In-app web links open/reuse the source
+  pane's Chromium page on the Host, including from Viewers; the system-browser
+  choice still opens on the operating device. Preserve existing local WebKit
+  tabs and keep human pages separate from agent-owned pages.
+- Normalize equivalent browser URLs, reject embedded credentials explicitly,
+  respect Viewer control leases and preserve intervening Git/Files selections
+  when an asynchronous browser open completes.
+- Guide agent webpage interaction through the shared CtrlX browser skill by
+  default while honoring explicit external-browser choices. Do not silently
+  switch tools on failure. Add native Claude Code caller discovery alongside
+  Codex, preserving process-instance ownership and nested-agent isolation.
+  Bundle Codex plugin 1.1.4 and Claude Code plugin 1.3.5.
+- Validation: bounded Swift regression (2,688 tests reported, two opt-in probes
+  skipped; Apple Intelligence evaluation suite excluded), 189 script tests,
+  30 publisher tests, browser CLI checks, both boundary checks, website build,
+  and signed iOS device-target build passed. No device UI acceptance in this run.
+- Distribution: Mac package only, using cloud-side full HTTPS artifact checking
+  plus a bounded client download probe. No Relay deployment or local Mac/iPhone
+  installation. Updated iOS behavior requires a separate install; automatic
+  skill selection and the new cross-device UI flows still need live acceptance.
+
+## 3.0.59 — Worktree-local build, install and cleanup workflows
+
+- Add a unified local Mac/iOS installer that builds, signs, installs and launches
+  through the existing platform scripts. App-only builds avoid unnecessary
+  DMG/IPA creation; standalone packaging still produces distributable artifacts.
+- Validate reusable signed Apps against their recorded build identity. Stage
+  package replacements transactionally and retain local Mac rollback backups.
+- Serialize managed builds, tests, installations and cleanup within each
+  worktree. Lock installation destinations across worktrees without sweeping
+  another worktree's caches or touching simulator state.
+- Keep incremental caches by default. Prune completed verification copies and
+  install backups with explicit completion records; preserve unmarked or failed
+  runs. Optional space-saving cleanup runs only after successful workflows.
+- Preserve zero-argument packaging on macOS's system Bash when entering the
+  worktree lock, alongside app-only and space-saving options.
+- Validation: 189 script tests, 9 worktree regressions, 19 publisher tests,
+  brand/technical boundaries and the website build passed. Re-ran 2,705 Swift
+  tests using existing products for unchanged Swift sources, excluding the
+  unavailable Apple Intelligence evaluation suite. The first Xcode build-settings
+  check timed out; the complete script suite passed on rerun.
+- Distribution: Mac package only. No Relay deployment, iPhone installation or
+  replacement of the local running Mac app; application behavior is unchanged.
+
+## 3.0.58 — Wrapped file links and browser annotation handoff
+
+- Recognize enclosed, word-wrapped filename tails when they cannot fit in the
+  preceding row's remaining cells, including Chinese video paths that leave
+  six columns unused. Both rows target the complete file; truncated paths,
+  independent paths and web URLs retain their existing safeguards.
+- Bundle the new `file-links` Skill for Claude Code (plugin 1.3.3) and Codex
+  (plugin 1.1.2): short Markdown labels with complete absolute Host targets,
+  without manual wrapping or truncation. Keep visible-text compatibility because
+  agent terminal renderers do not guarantee explicit file hyperlink metadata.
+  Update the installed agent plugin and begin a new session to discover the Skill.
+- Keep browser annotations visible while the iOS destination terminal prepares,
+  then reveal the ready terminal without a second subscription. Cancellation,
+  disconnects and navigation failures preserve the acknowledged attachment;
+  retrying Open Agent does not submit the same screenshot again.
+- Refresh architecture and contributor documentation for development by
+  different AI agents. Distinguish current contracts from historical plans.
+- Distribution: Mac package only. No Relay deployment, iPhone installation or
+  replacement of the local running Mac app. The iOS handoff requires a separate
+  iPhone build/install and physical-device acceptance.
+
 ## 3.0.57 — Reliable terminal file links and iOS window swipes
 
 - Separate Chinese prose punctuation from terminal file paths and reject

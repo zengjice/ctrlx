@@ -178,7 +178,7 @@ private struct DetachedTerminalContent: View {
         openWindow(id: "panes")
     }
 
-    private func openURL(_ url: URL) -> Bool {
+    private func openURL(_ url: URL, paneID: String) -> Bool {
         if target.hostID != nil, RemoteTerminalURLPolicy.shouldConsumeWithoutOpening(url) { return true }
         if url.isFileURL {
             guard settings.openClickedFileInNewTab else { return false }
@@ -187,7 +187,7 @@ private struct DetachedTerminalContent: View {
                 BrowserURLDispatcher.canHandle(url),
                 (settings.browserBehavior(for: url) ?? settings.browserLinkBehavior) != .alwaysInDefaultBrowser else { return false }
         }
-        showInMain(.url(url.absoluteString))
+        showInMain(.url(url.absoluteString, paneID: paneID))
         return true
     }
 

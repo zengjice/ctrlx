@@ -5,6 +5,7 @@ enum WindowTabAction: Equatable, Sendable {
     enum WindowOperation: Equatable, Sendable {
         case select
         case openFiles
+        case openBrowser
         case fork(usingWorktree: Bool)
         case rename
         case close
@@ -15,7 +16,6 @@ enum WindowTabAction: Equatable, Sendable {
     case closeFiles(UUID)
     case selectBrowser(UUID)
     case closeBrowser(UUID)
-    case newBrowser
     case newTerminal
     case newAgent
 

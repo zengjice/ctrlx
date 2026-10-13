@@ -2,17 +2,19 @@
 
 The default **vercel** engine adapts the unmodified, pinned agent-browser 0.38.1
 executable. The original **ctrlx** engine is preserved as an explicit choice,
-including its bounded page-action implementation. Neither selection changes CEF, creates a second
-browser/profile or replaces WebKit New Browser. Paired Viewer access is a
+including its bounded page-action implementation. Neither selection changes CEF
+or creates a second browser/profile. Human Open Browser uses Host Chromium per
+pane independently of this backend choice; existing WebKit tabs remain local.
+Paired Viewer access is a
 separate [typed Host surface](agent-browser.md#viewer-browser-surface), not an
 exposed engine/CDP endpoint. A Viewer control lease gates both Agent backends.
 
 ## Usage
 
-Start Codex normally in a local CtrlX session; use the same `ctrlx browser` entry:
+Start native Codex or Claude Code normally in a local CtrlX session; use the same `ctrlx browser` entry:
 
 ```sh
-ctrlx browser engine                 # current Codex instance; default vercel
+ctrlx browser engine                 # current agent instance; default vercel
 ctrlx browser engine vercel          # preference belongs to this process instance
 ctrlx browser action open --url https://example.com
 ctrlx browser action snapshot --tab <returned-id>
@@ -22,7 +24,7 @@ ctrlx browser action read --engine ctrlx --tab <id>
 ctrlx browser engine ctrlx           # restores original backend, keeps tabs/login
 ```
 
-`--engine` overrides one action. A new Codex process defaults to Vercel; an
+`--engine` overrides one action. A new agent process defaults to Vercel; an
 existing saved choice (including ctrlx) is preserved. Another instance is
 unaffected. Commands still require explicit tab IDs.
 No additional launcher, standalone browser, npm or system agent-browser is needed.
@@ -163,7 +165,7 @@ ctrlx browser record --tab <id> --seconds 3 --format mp4 --fps 12 --cursor --out
 
 ## Isolation and lifecycle
 
-- Codex kernel PID/start time remains the authority. Pane/session labels only
+- The native agent's kernel PID/start time remains the authority. Pane/session labels only
   determine where the existing native view is shown.
 - The host mints a random capability for an exact live owner/tab. Its CEF server
   binds only `127.0.0.1` on an ephemeral port, with no target discovery or HTTP

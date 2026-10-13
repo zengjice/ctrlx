@@ -37,9 +37,7 @@ struct RemoteWindowTabBar: View {
     let agentConfiguration: NewAgentTabConfiguration
     let forkUnavailableReason: String?
     let onForkWindow: (TmuxWindow, Bool) -> Void
-    /// Creates a new in-app browser tab (selected, address bar focused). Called
-    /// from the "+" menu's "New Browser" option.
-    let onNewBrowser: () -> Void
+    let onOpenBrowser: (TmuxWindow) -> Void
     let onRenameWindow: (TmuxWindow, String) -> Void
     let onSelectBrowserTab: (UUID) -> Void
     let onCloseBrowserTab: (UUID) -> Void
@@ -276,11 +274,10 @@ struct RemoteWindowTabBar: View {
 
     private var newWindowButton: some View {
         NewTabMenuButton(
-            helpText: "New agent, terminal or browser tab",
+            helpText: "New agent or terminal tab",
             agentConfiguration: agentConfiguration,
             isTerminalDisabled: !isHostConnected,
-            onNewTerminal: onNewWindow,
-            onNewBrowser: onNewBrowser
+            onNewTerminal: onNewWindow
         )
     }
 
@@ -347,6 +344,12 @@ struct RemoteWindowTabBar: View {
                     }
                     .disabled(!isHostConnected)
                     .accessibilityIdentifier("window-open-files-\(window.stableId)")
+
+                    Button { onOpenBrowser(window) } label: {
+                        Label("Open Browser on Host", symbol: .globe)
+                    }
+                    .disabled(!isHostConnected || window.panes.isEmpty)
+                    .accessibilityIdentifier("window-open-browser-\(window.stableId)")
 
                     AgentForkMenu(
                         sources: window.panes.compactMap(AgentForkSource.init(pane:)),

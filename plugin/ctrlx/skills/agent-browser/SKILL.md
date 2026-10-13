@@ -1,16 +1,39 @@
 ---
 name: agent-browser
-description: Control Chromium tabs embedded in the calling Codex's CtrlX session for browsing or local web testing. Not ordinary WebKit tabs, system Chrome or a remote Mac.
+description: Default for webpage interaction, localhost UI tests and screenshots in CtrlX via ctrlx browser. For local Codex/Claude Code; not an explicitly requested external browser or native-app UI.
 ---
 
 # CtrlX Agent Browser
 
-Use `ctrlx browser` when the user wants this browser. `action tabs/open` identifies
-the calling local Codex and creates its group, including for already-running Codex.
-CtrlX must be running with that Codex in a local tmux pane. Pages open in the source
-session's CtrlX window. No special launcher or `CTRLX_BROWSER_CONTEXT` is needed.
-If identification fails, report it; never borrow another pane's context, select
-the focused tab, or ask the user to restart with a wrapper command.
+## Choose the browser
+
+In a local CtrlX Codex/Claude Code session, use `ctrlx browser` by default for
+opening and interacting with webpages, localhost UI tests and page screenshots.
+Pages stay on the source Host and can be viewed from paired Mac/iOS Viewers.
+This is CtrlX's embedded Chromium, not the agent's separate "in-app browser".
+
+- Honor an explicit browser choice (Safari/Chrome/another in-app browser), or a
+  request to use its existing tab, login or extension; do not substitute CtrlX.
+- Native-app UI can use Computer Use. Information lookup can use search, fetch or
+  a dedicated API; it need not open a browser.
+- If CtrlX is unavailable or an operation unsupported, report the limitation.
+  Ask before switching browser surfaces; do not silently launch the default
+  browser with Computer Use, a browser client or standalone Playwright.
+
+## Owned tabs
+
+`action tabs/open` identifies the nearest local native `codex` or `claude` process
+and creates its group, including for already-running agents. CtrlX must be running
+on that Mac with the agent in a local tmux pane. No special launcher or inherited
+`CTRLX_BROWSER_CONTEXT` is needed. Older Node.js Claude Code is not supported.
+On identification failure, stop; never borrow another pane's context, select the
+focused tab, or ask the user to restart with a wrapper command.
+
+`open` creates a tab; `navigate` reuses one. Choose by task and user intent.
+Prefer reuse for a continuing flow or replacing a page; create a tab to keep
+old pages, compare in parallel, or honor an explicit new-tab request.
+Prefer an already-open target; use `tabs` when unsure what is open.
+Do not close pages the user still needs merely to reduce the tab count.
 
 ```sh
 ctrlx browser action tabs
@@ -18,17 +41,16 @@ ctrlx browser action open --url http://localhost:3000
 ctrlx browser action wait --tab <id>
 ctrlx browser action read --tab <returned-id>
 ctrlx browser action click --tab <id> --selector '<selector from read>'
-ctrlx browser action fill --tab <id> --selector '<selector from read>' --text 'replacement'
-ctrlx browser action press --tab <id> --key Enter
 ctrlx browser action screenshot --tab <id> --output /tmp/new-screenshot.png
 ctrlx browser action navigate --tab <id> --url https://example.com
 ctrlx browser action show --tab <id>
 ctrlx browser action close --tab <id>
 ```
 
-Each instance sees only its own group. Ordinary New Browser tabs remain WebKit
-and are not exposed to agents. All Agent Browser groups on this Mac share website logins: group routing does not
-isolate accounts. Never log out or switch accounts without the user's intent.
+Each instance sees only its own group. Human Open Browser pages also use Host
+Chromium but are not agent-owned; legacy WebKit and system-browser tabs are outside
+this CLI. Groups share website logins, not control grants. Never log out or switch
+accounts without the user's intent.
 
 Read the current page before acting; use returned selectors, not invented ones.
 `type` inserts at the caret; `fill` replaces (empty text clears). Neither submits.
@@ -58,33 +80,11 @@ each other. Keep context credentials out of output/logs.
 
 ## Engines
 
-Vercel is the default when no instance preference is saved. Existing explicit
-choices are preserved. The original engine is still selectable (same embedded
-tabs and shared login, no new browser):
-
-```sh
-ctrlx browser engine vercel
-ctrlx browser action snapshot --tab <id>
-ctrlx browser action fill --tab <id> --selector '@e2' --text 'replacement'
-ctrlx browser action click --tab <id> --selector '@e3'
-ctrlx browser engine ctrlx
-```
-
-`snapshot` returns interactive accessibility references; use only references
-from the current tab's fresh snapshot. Refresh after navigation or the engine's
-five-minute idle shutdown. `--engine ctrlx|vercel` overrides one action without
-changing the saved instance preference. Switching engine keeps pages/login.
-
-Vercel handles snapshot, click, type, fill, press, select, check and screenshot.
-Tab lifecycle, read, wait and scroll keep the existing CtrlX behavior. Vercel
-`press` uses page focus (no `--selector`). Literal leading dashes and empty text
-are preserved through JSON input. Browser discovery, external CDP URLs and raw CDP
-are not exposed. Do not invoke the bundled binary directly or system `agent-browser`;
-that bypasses routing. Errors never auto-fallback or retry mutations. Bounded read
-omits sensitive values; upstream snapshots may expose more. Treat them accordingly.
-
-`browser command --tab <id> -- <page command> ...` explicitly selects Vercel for
-that call without changing the saved engine. For JPEG/element/conditional screenshots,
-baseline diffs, batches, React/init setup, WebMCP and bounded recording, see the
-same page-command reference. Runtime/cloud/plugin management, full-profile export
-and browser-wide tracing remain excluded.
+Vercel is the default; existing explicit choices are preserved. `ctrlx` selects
+the original backend, not another browser. Both keep the same tabs/login.
+For engine selection, snapshot references and extended operations, read
+[page commands](references/page-commands.md). References require a fresh snapshot
+after navigation or the engine's five-minute idle shutdown.
+For CtrlX pages, never bypass routing via the bundled binary, system `agent-browser`,
+external-browser discovery or raw CDP. Errors never auto-fallback or retry mutations.
+Bounded read omits sensitive values; upstream snapshots may expose more.

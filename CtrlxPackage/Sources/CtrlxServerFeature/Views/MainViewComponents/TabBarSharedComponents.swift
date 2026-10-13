@@ -86,7 +86,7 @@ struct TabDragPreview: View {
 }
 
 /// Leading "+" menu used by both the local and remote tab bars. Exposes the
-/// "New Agent…" / "New Terminal" / "New Browser" entries with a help string and
+/// "New Agent…" / "New Terminal" entries with a help string and
 /// optional disable on the terminal entry (the remote bar disables it while
 /// the host is disconnected).
 struct NewTabMenuButton: View {
@@ -94,7 +94,6 @@ struct NewTabMenuButton: View {
     let agentConfiguration: NewAgentTabConfiguration
     var isTerminalDisabled = false
     let onNewTerminal: () -> Void
-    let onNewBrowser: () -> Void
     @State private var presentedAgents: NewAgentTabConfiguration?
 
     var body: some View {
@@ -111,11 +110,6 @@ struct NewTabMenuButton: View {
                 Label("New Terminal", symbol: .terminal)
             }
             .disabled(isTerminalDisabled)
-            Button {
-                onNewBrowser()
-            } label: {
-                Label("New Browser", symbol: .globe)
-            }
         } label: {
             Symbols.plus.image
                 .font(.caption)
