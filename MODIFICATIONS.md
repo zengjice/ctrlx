@@ -7,6 +7,32 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.66 — Mac workspace shortcuts and iOS terminal interactions
+
+- Add common Mac shortcuts for new sessions and terminals, session search,
+  focused-side tab navigation and closing, voice input, and terminal font size.
+  Keep new-terminal working directories tied to the focused Files/Git context,
+  including right-side Files and layouts with moved or detached terminals.
+- Merge `ux`: prioritize active iOS sessions in automatic sorting, expose the
+  automatic-order reset, and paste clipboard images through the existing
+  terminal attachment preview and confirmation flow.
+- Merge `feature-bug`: use a consistent iOS terminal link destination sheet
+  for Host/device browsing and copying, preserving input suspension until
+  dismissal and preventing duplicate presentation.
+- Shortcut validation before merge: Mac Debug build, focused Swift tests and
+  four isolated Mac E2E scenarios (251 steps) passed. Live remote shortcuts
+  and microphone capture remain unverified. After merge, 38 focused tests,
+  both boundary checks, 63 publisher/COS tests and the website build passed.
+- The bounded serial Swift regression passed with 3,069 tests reported and
+  five opt-in probes skipped. Apple Intelligence evaluations were excluded
+  because the model is unavailable on this Mac. The merged Mac Debug and arm64
+  iOS Simulator builds passed.
+- iOS image-paste, link-sheet and keyboard behavior still need physical-device
+  UI acceptance; build and installation checks do not establish that coverage.
+- Distribution: Mac package through COS; signature, source metadata and public
+  download integrity must pass before installer promotion. Install the same
+  release on the paired iPhone after Mac publication succeeds.
+
 ## 3.0.65 — Simulator screenshot annotations
 
 - Merge `feature-bug` and add in-place screenshot annotation to Mac Host,
