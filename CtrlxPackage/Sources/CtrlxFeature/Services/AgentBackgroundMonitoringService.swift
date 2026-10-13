@@ -330,14 +330,15 @@
         }
 
         /// Status, recovery snapshot and rich notification frames can race.
-        /// Only the first plain alert for a pane wins; actionable alerts always win.
+        /// Only the first plain alert for a pane wins; actionable and question
+        /// alerts always win. Question calls are already deduplicated by the Host.
         public func reserveNotificationDelivery(
             for notification: AgentNotificationMessage
         ) -> Bool {
             guard let paneId = notification.sessionId else { return true }
             return reserveNotificationDelivery(
                 for: PaneKey(pairId: notification.pairId, paneId: paneId),
-                alwaysAllow: notification.action != nil
+                alwaysAllow: notification.action != nil || notification.isQuestionNotification
             )
         }
 

@@ -281,7 +281,8 @@ final public class ConnectedViewerManager {
         subtitle: String? = nil,
         body: String,
         paneId: String?,
-        action: NotificationActionContext? = nil
+        action: NotificationActionContext? = nil,
+        isQuestion: Bool? = nil
     ) async {
         await withTaskGroup(of: Void.self) { group in
             for connection in connections.values where connection.state.isConnected {
@@ -291,7 +292,8 @@ final public class ConnectedViewerManager {
                         subtitle: subtitle,
                         body: body,
                         paneId: paneId,
-                        action: action
+                        action: action,
+                        isQuestion: isQuestion
                     )
                 }
             }

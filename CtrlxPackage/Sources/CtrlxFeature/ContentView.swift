@@ -168,8 +168,8 @@
 
             // Backgrounded fallback: the relay drops the APNs push while we're
             // WS-connected, so a host's live-socket notification is the only
-            // alert during the backgrounded-but-connected window. When active,
-            // the in-app UI already reflects the event, so we suppress it.
+            // alert during the backgrounded-but-connected window. Questions also
+            // alert while active, including when the user is viewing another pane.
             // Notifications carrying an open-form action context become
             // actionable local notifications, mirroring the NSE's push path.
             connectionManager.onAgentNotification = {
@@ -197,7 +197,7 @@
                             action: action
                         )
                     }
-                    guard !pushService.isAppActive else { return }
+                    guard notification.shouldPresent(isAppActive: pushService.isAppActive) else { return }
                     guard agentBackgroundMonitoring.reserveNotificationDelivery(
                         for: notification
                     ) else { return }

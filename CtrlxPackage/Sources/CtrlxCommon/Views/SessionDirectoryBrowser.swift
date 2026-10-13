@@ -43,22 +43,24 @@ public struct SessionDirectoryBrowser: View {
                 Button { navigate(to: "~/") } label: {
                     Label("Home", symbol: .house)
                 }
-                Button { if let parent = listing?.parentDirectory { navigate(to: parent) } } label: {
+                Button {
+                    if let parent = listing?.parentDirectory {
+                        navigate(to: parent)
+                    }
+                } label: {
                     Label("Up", symbol: .arrowUpCircleFill)
                 }
                 .disabled(listing?.parentDirectory == nil)
-                #if os(iOS)
-                    Button {
-                        guard let listing, listing.isExactDirectory else { return }
-                        folderPrompt = .init(hostID: source.id, path: path, parentDirectory: listing.directory)
-                        folderName = ""
-                        showsFolderPrompt = true
-                    } label: {
-                        Label("New Folder", symbol: .folderBadgePlus)
-                    }
-                    .disabled(source.creationUnavailableReason != nil || listing?.isExactDirectory != true || state.isLoading || state.error != nil)
-                    .accessibilityIdentifier("create-session-directory")
-                #endif
+                Button {
+                    guard let listing, listing.isExactDirectory else { return }
+                    folderPrompt = .init(hostID: source.id, path: path, parentDirectory: listing.directory)
+                    folderName = ""
+                    showsFolderPrompt = true
+                } label: {
+                    Label("New Folder", symbol: .folderBadgePlus)
+                }
+                .disabled(source.creationUnavailableReason != nil || listing?.isExactDirectory != true || state.isLoading || state.error != nil)
+                .accessibilityIdentifier("create-session-directory")
                 Spacer()
                 Button { retry += 1 } label: {
                     Label("Refresh", symbol: .arrowClockwise)
@@ -69,16 +71,14 @@ public struct SessionDirectoryBrowser: View {
             .buttonStyle(.borderless)
             .disabled(source.unavailableReason != nil)
 
-            #if os(iOS)
-                if source.unavailableReason == nil, let reason = source.creationUnavailableReason {
-                    Text(reason).font(.caption).foregroundStyle(.secondary)
-                }
-                if creation.isCreating {
-                    ProgressView("Creating folder…").controlSize(.small)
-                } else if let error = creation.error {
-                    Text(error).font(.caption).foregroundStyle(.red)
-                }
-            #endif
+            if source.unavailableReason == nil, let reason = source.creationUnavailableReason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+            if creation.isCreating {
+                ProgressView("Creating folder…").controlSize(.small)
+            } else if let error = creation.error {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
 
             if let reason = source.unavailableReason {
                 Text(reason).font(.caption).foregroundStyle(.secondary)
@@ -131,31 +131,32 @@ public struct SessionDirectoryBrowser: View {
         }
         .disabled(creation.isCreating)
         .task(id: query) { await load() }
-        #if os(iOS)
-            .alert("New Folder", isPresented: $showsFolderPrompt) {
-                TextField("Folder name", text: $folderName)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                Button("Cancel", role: .cancel) {}
-                Button("Create", action: beginCreation)
-                    .disabled(!SessionDirectoryName.isValid(folderName))
-            } message: {
-                Text("Create in \(folderPrompt?.parentDirectory ?? ""). Enter one folder name, without /. This does not start a session.")
-            }
-            .task(id: creation.request?.id) { await createDirectory() }
-            .onDisappear {
-                creation.cancel()
-                isCreatingDirectory = false
-            }
-        #endif
+        .alert("New Folder", isPresented: $showsFolderPrompt) {
+            TextField("Folder name", text: $folderName)
+                .autocorrectionDisabled()
+            #if os(iOS)
+                .textInputAutocapitalization(.never)
+            #endif
+            Button("Cancel", role: .cancel) { }
+            Button("Create", action: beginCreation)
+                .disabled(!SessionDirectoryName.isValid(folderName))
+        } message: {
+            Text("Create in \(folderPrompt?.parentDirectory ?? ""). Enter one folder name, without /. This does not start a session.")
+        }
+        .task(id: creation.request?.id) { await createDirectory() }
+        .onDisappear {
+            creation.cancel()
+            isCreatingDirectory = false
+        }
     }
 
     private func beginCreation() {
-        guard let prompt = folderPrompt,
-              prompt.hostID == source.id, prompt.path == path,
-              source.creationUnavailableReason == nil, source.create != nil,
-              listing?.isExactDirectory == true, listing?.directory == prompt.parentDirectory,
-              creation.begin(hostID: prompt.hostID, path: prompt.path, parentDirectory: prompt.parentDirectory, name: folderName) != nil
+        guard
+            let prompt = folderPrompt,
+            prompt.hostID == source.id, prompt.path == path,
+            source.creationUnavailableReason == nil, source.create != nil,
+            listing?.isExactDirectory == true, listing?.directory == prompt.parentDirectory,
+            creation.begin(hostID: prompt.hostID, path: prompt.path, parentDirectory: prompt.parentDirectory, name: folderName) != nil
         else { return }
         isCreatingDirectory = true
     }
@@ -176,7 +177,9 @@ public struct SessionDirectoryBrowser: View {
             }
         } catch {
             if Task.isCancelled {
-                if creation.request?.id == request.id { creation.cancel() }
+                if creation.request?.id == request.id {
+                    creation.cancel()
+                }
             } else {
                 creation.fail(request.id, message: error.localizedDescription, hostID: source.id, path: path)
             }

@@ -1029,7 +1029,10 @@
 
                         // Project list
                         if !filteredProjects.isEmpty {
-                            Section("Projects") {
+                            Section {
+                                Text("Discovered from agent history on this Host. Select a directory to start a new session.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                                 ForEach(filteredProjects) { project in
                                     Button {
                                         onSelect(.project(project))
@@ -1062,6 +1065,11 @@
                                                     .foregroundStyle(.secondary)
                                                     .lineLimit(1)
                                                     .truncationMode(.middle)
+                                                if let lastUsed = project.lastUsed {
+                                                    Text("Last used \(lastUsed, format: .relative(presentation: .named))")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
                                             }
 
                                             Spacer()
@@ -1074,18 +1082,20 @@
                                     }
                                     .disabled(isCreating)
                                 }
+                            } header: {
+                                Text("Recent Directories")
                             }
                         } else if !searchText.isEmpty {
                             Section {
-                                Text("No matching projects")
+                                Text("No matching directories")
                                     .foregroundStyle(.secondary)
                             }
                         } else if !sessionStore.hasReceivedState(for: host.id) {
-                            Section("Projects") {
+                            Section("Recent Directories") {
                                 HStack {
                                     ProgressView()
                                         .controlSize(.small)
-                                    Text("Loading projects...")
+                                    Text("Loading recent directories…")
                                         .foregroundStyle(.secondary)
                                 }
                             }
@@ -1099,7 +1109,7 @@
                         pickerContent
                     } else {
                         pickerContent
-                            .searchable(text: $searchText, prompt: "Search projects")
+                            .searchable(text: $searchText, prompt: "Search directories")
                             .onSubmit(of: .search) {
                                 if filteredProjects.count == 1 {
                                     onSelect(.project(filteredProjects[0]))
