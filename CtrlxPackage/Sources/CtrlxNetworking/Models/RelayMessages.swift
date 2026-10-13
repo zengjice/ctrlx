@@ -41,12 +41,9 @@ public struct SessionStateMessage: Codable, Sendable {
     /// snapshot, like `agentProjects`).
     public let usageOverview: UsageOverview?
 
-    /// The host's sidebar sort mode (`SidebarSortMode.rawValue`), so viewers
-    /// without a sort preference of their own (iOS) can order the host's
-    /// sessions exactly like the host does. Optional string rather than the
-    /// enum so an unknown future mode from a newer host decodes fine and the
-    /// viewer just falls back to its default (graceful skew both ways, like
-    /// `usageOverview`).
+    /// The Host's sidebar sort mode (`SidebarSortMode.rawValue`), retained for
+    /// older viewers that mirror it. Current iOS uses its own activity-first
+    /// rule. An optional string keeps unknown future modes decodable.
     public let sidebarSortMode: String?
 
     /// Host-owned terminal-window layouts keyed by tmux session name. This is

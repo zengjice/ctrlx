@@ -59,9 +59,8 @@ final public class SessionStore {
     public private(set) var usageOverviewByHost: [String: UsageOverview] = [:]
 
     /// Each host's sidebar sort mode, from `SessionStateMessage.sidebarSortMode`.
-    /// The iOS session list orders a host's sessions with this so it matches the
-    /// host's own sidebar. Absent for older hosts (or an unknown future mode) —
-    /// callers fall back to the default mode.
+    /// Retained as Host metadata; the iOS list uses its own activity-first rule.
+    /// Absent for older hosts or an unknown future mode.
     public private(set) var sidebarSortModeByHost: [String: SidebarSortMode] = [:]
 
     /// Host-owned terminal layouts, grouped by source Host and session name.
@@ -314,7 +313,7 @@ final public class SessionStore {
             usageOverviewByHost.removeValue(forKey: hostId)
         }
         // An unrecognized raw value (newer host with a future mode) parses to
-        // nil and clears the entry, so the viewer falls back to its default.
+        // nil and clears the stored Host preference.
         if let sortMode = state.sidebarSortMode.flatMap(SidebarSortMode.init(rawValue:)) {
             sidebarSortModeByHost[hostId] = sortMode
         } else {

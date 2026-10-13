@@ -432,17 +432,11 @@
             !sessions.isEmpty
         }
 
-        /// Sessions ordered like the HOST's own sidebar: the host pushes its
-        /// `sidebarSortMode` with every session state, and the shared
-        /// `SessionSortData.sortedRemoteSessions` applies it here — so pinning
-        /// a state (agent or terminal session) re-sorts this list exactly like
-        /// the host's. Older hosts that don't push a mode fall back to the
-        /// default status-priority sort; label-driven modes use the default
-        /// sidebar fields (iOS has no field preference).
+        /// iOS automatic order is activity-first, independent of the Host's
+        /// saved sidebar mode. A device-local manual order takes precedence.
         private var sortedSessions: [TmuxSession] {
             SessionSortData.sortedRemoteSessions(
                 sessions,
-                mode: sessionStore.sidebarSortMode(for: host.id) ?? .statusPriority,
                 sidebarFields: SidebarField.defaultFields,
                 sidebarTerminalFields: SidebarField.defaultTerminalFields,
                 homeDirectory: sessionStore.homeDirectoryByHost[host.id],
@@ -464,6 +458,8 @@
                     }
                     .accessibilityIdentifier("host-version-mismatch-row")
                 } else if hasContent {
+                    sessionOrderControls
+
                     // Cross-session usage rollup for this host (issue #598).
                     // Renders as its own List rows (header + detail rows when
                     // expanded) and owns their insets/separators internally.
@@ -471,8 +467,6 @@
                         UsageOverviewView(overview: overview)
                     }
 
-                    // All sessions — agent and terminal-only interleaved — in
-                    // the host's own sidebar order.
                     ForEach(sortedSessions) { session in
                         sessionRow(session)
                     }
@@ -494,12 +488,29 @@
                     showUsername: showUsername,
                     onNewSession: onNewSession
                 )
-                .contentShape(Rectangle())
-                .contextMenu {
-                    Button("Restore Automatic Order") { settings.setRemoteSessionOrder([], for: host.id) }
-                        .disabled(settings.remoteSessionOrder(for: host.id).isEmpty)
-                }
             }
+        }
+
+        private var sessionOrderControls: some View {
+            let isManual = !settings.remoteSessionOrder(for: host.id).isEmpty
+            return VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(isManual ? "Manual Order" : "Automatic Order")
+                        .font(.subheadline)
+                    Spacer()
+                    Button("Restore Automatic Order") {
+                        settings.setRemoteSessionOrder([], for: host.id)
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    .disabled(!isManual)
+                    .accessibilityIdentifier("restore-automatic-session-order-\(host.id)")
+                }
+                Text(isManual ? "Drag sessions to change their order." : "Waiting → Working → Idle → Terminal")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
         }
 
         @ViewBuilder
