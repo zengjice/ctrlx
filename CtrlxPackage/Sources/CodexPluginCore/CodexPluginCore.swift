@@ -41,6 +41,7 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
     /// Per-`requestID` context retained from `handleIngress` so `deliverResponse`
     /// can translate the structured answer into keystrokes (spec §7.1).
     private var pendingRequests: [String: PendingRequest] = [:]
+    private var notifiedQuestionCalls: [String: Set<String>] = [:]
 
     /// Per-session reviewer snapshots (issue #585, multi-session divergence):
     /// what the session's CODEX_HOME `config.toml` said when the session
@@ -102,6 +103,7 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
     }
 
     public func shutdown() async {
+        notifiedQuestionCalls.removeAll()
         #if os(macOS)
             stopWatchers()
             stopSessionEndMonitor()
@@ -141,6 +143,21 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
         // pane, fall back to the correlation file by session id (spec §12).
         let tmuxPane = resolvePane(action: action, frame: frame)
 
+        if
+            case let .preToolUse(body) = action,
+            let question = CodexQuestionNotification(payload: frame.payload) {
+            guard notifiedQuestionCalls[body.sessionId, default: []].insert(question.callID).inserted else { return nil }
+            // A question can be asynchronous. Notify without opening a blocking
+            // form, retracting another form, or changing the agent's working state.
+            return PluginEvent(
+                pluginID: frame.pluginID,
+                sessionID: body.sessionId,
+                notification: question.notification,
+                tmuxPane: tmuxPane,
+                projectPath: frame.context["CODEX_PROJECT_DIR"] ?? body.cwd
+            )
+        }
+
         // Maintain the per-session reviewer snapshots: a session start is the
         // moment Codex itself loads `config.toml`, so capture what it read; a
         // session end (synthesized by the pane poll today, honored here too in
@@ -149,6 +166,7 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
         case let .sessionStart(body):
             recordReviewerSnapshot(sessionID: body.sessionId, transcriptPath: body.transcriptPath)
         case let .sessionEnd(body):
+            notifiedQuestionCalls.removeValue(forKey: body.sessionId)
             reviewerSnapshots.removeValue(forKey: body.sessionId)
             reviewerPostures.removeValue(forKey: body.sessionId)
         default:
@@ -568,6 +586,7 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
         /// panes). Must run before `correlation.remove(pane:)`.
         private func removeReviewerSnapshot(pane: String) {
             guard let sessionID = correlation.record(forPane: pane)?.sessionID else { return }
+            notifiedQuestionCalls.removeValue(forKey: sessionID)
             reviewerSnapshots.removeValue(forKey: sessionID)
         }
 

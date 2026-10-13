@@ -80,7 +80,7 @@ public enum ProjectPickerArrowNavScenario {
         // an NSPopover panel reliably, whereas System Events follows
         // the accessibility focus chain into the popover.
         TestStep.log("Re-focusing search field before typing (popover scroll can desync first-responder)")
-        TestStep.macCGClick(titled: "Search projects")
+        TestStep.macCGClick(titled: "Search directories")
         TestStep.wait(seconds: 0.3)
         TestStep.log("Typing 'alp': filters to AlphaProject and auto-selects it")
         TestStep.macType(text: "alp")
@@ -98,7 +98,7 @@ public enum ProjectPickerArrowNavScenario {
         // ── Phase G: Return on highlighted project opens it ──────
         TestStep.log("Pressing Return: opens the highlighted AlphaProject session")
         TestStep.macPressKey(.return)
-        TestStep.macWaitForElementToDisappear(titled: "Search projects", timeout: 5)
+        TestStep.macWaitForElementToDisappear(titled: "Search directories", timeout: 5)
         // The stub `claude` prints a stable marker — wait for it to render so we
         // both assert the project launched the agent and stabilize the shot.
         TestStep.macWaitForElementQuery(.anyTextMatches(Shortcut.claudeStubMarker), timeout: 10)
@@ -120,7 +120,7 @@ public enum ProjectPickerArrowNavScenario {
         TestStep.macPressKey(.downArrow)
         TestStep.wait(seconds: 0.3)
         TestStep.macPressKey(.return)
-        TestStep.macWaitForElementToDisappear(titled: "Search projects", timeout: 5)
+        TestStep.macWaitForElementToDisappear(titled: "Search directories", timeout: 5)
         // Same re-pin: a freshly opened terminal can also auto-grow the window.
         TestStep.macResizeWindow(width: 1_000, height: 600)
         TestStep.wait(seconds: 0.5)

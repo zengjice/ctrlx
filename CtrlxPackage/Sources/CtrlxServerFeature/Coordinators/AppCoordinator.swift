@@ -1722,6 +1722,11 @@
             pluginID: String? = nil,
             formState: AgentState? = nil
         ) async {
+            let isQuestion: Bool = if case .awaitingReplies = formState {
+                true
+            } else {
+                notification.isQuestion == true
+            }
             var action: NotificationActionContext?
             if
                 let formState, let pluginID, let paneId,
@@ -1732,27 +1737,27 @@
                     pluginId: pluginID
                 )
             }
-            let macNotification = TerminalStreamMessage.TerminalNotification(
-                title: notification.title,
-                body: notification.body
-            )
-            // Stamp the real pane id so tapping the banner navigates to the
-            // originating session; fall back to "system" only when the event
-            // carries no pane (e.g. a ctrlx-cli notify with no target).
-            terminalNotificationService.showNotification(paneId ?? "system", macNotification, nil)
-
             let paneState = paneId.flatMap { windowManager.paneStates[$0] }
             let pushPresentation = AgentNotificationPresentation(
                 title: notification.title,
                 body: notification.body,
                 paneState: paneState
             )
+            let macNotification = TerminalStreamMessage.TerminalNotification(
+                title: isQuestion ? pushPresentation.title : notification.title,
+                body: isQuestion ? [pushPresentation.subtitle, pushPresentation.body].compactMap { $0 }.joined(separator: "\n") : notification.body
+            )
+            // Stamp the real pane id so tapping the banner navigates to the
+            // originating session; fall back to "system" only when the event
+            // carries no pane (e.g. a ctrlx-cli notify with no target).
+            terminalNotificationService.showNotification(paneId ?? "system", macNotification, nil)
             await connectedViewerManager?.sendCustomPushNotificationToAll(
                 title: pushPresentation.title,
                 subtitle: pushPresentation.subtitle,
                 body: pushPresentation.body,
                 paneId: paneId,
-                action: action
+                action: action,
+                isQuestion: isQuestion ? true : nil
             )
         }
 

@@ -387,7 +387,8 @@ final public class ConnectedViewer: Identifiable {
         subtitle: String? = nil,
         body: String,
         paneId: String?,
-        action: NotificationActionContext? = nil
+        action: NotificationActionContext? = nil,
+        isQuestion: Bool? = nil
     ) async {
         guard state.isConnected else {
             logger.debug("Not connected to \(viewerName), cannot send custom push")
@@ -403,7 +404,7 @@ final public class ConnectedViewer: Identifiable {
             title: title,
             subtitle: subtitle,
             body: body,
-            eventType: "cli.notify",
+            eventType: isQuestion == true ? "agent.question" : "cli.notify",
             pairId: id,
             paneId: paneId,
             timestamp: Date(),
@@ -422,7 +423,7 @@ final public class ConnectedViewer: Identifiable {
             await send(.encryptedPush(payload))
             // Log the (pre-formatted, agent-blind) notification title so E2E
             // scenarios can tell notification kinds apart — the wire `eventType`
-            // stays "cli.notify" for the NSE; this is a test-only signal.
+            // is agent-blind ("agent.question" or "cli.notify"); this is a test-only signal.
             pushNotificationLog.logPushSent(title, paneId)
             // Also deliver over the live WebSocket so a backgrounded-but-connected
             // viewer — whose APNs push the relay just dropped — can still show a
@@ -432,7 +433,8 @@ final public class ConnectedViewer: Identifiable {
                 subtitle: subtitle,
                 body: body,
                 paneId: paneId,
-                action: action
+                action: action,
+                isQuestion: isQuestion
             )
         } catch {
             logger.error("Failed to encrypt custom push notification: \(error)")
@@ -443,13 +445,14 @@ final public class ConnectedViewer: Identifiable {
     /// live WebSocket (encrypted), paired with `sendCustomPushNotification`'s
     /// APNs push. The relay drops the APNs push while the viewer is connected,
     /// so this is the only alert path during the backgrounded-but-connected
-    /// window; iOS materializes a local notification only when not active.
+    /// window. Questions also alert while iOS is active.
     private func sendAgentNotification(
         title: String,
         subtitle: String?,
         body: String,
         paneId: String?,
-        action: NotificationActionContext?
+        action: NotificationActionContext?,
+        isQuestion: Bool?
     ) async {
         guard state.isConnected else { return }
         let message = WebSocketMessage.agentNotification(
@@ -460,7 +463,8 @@ final public class ConnectedViewer: Identifiable {
                 subtitle: subtitle,
                 body: body,
                 timestamp: Date(),
-                action: action
+                action: action,
+                isQuestion: isQuestion
             )
         )
         await sendEncrypted(message)

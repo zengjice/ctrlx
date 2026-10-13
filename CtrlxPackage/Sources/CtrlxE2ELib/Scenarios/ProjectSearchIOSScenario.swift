@@ -61,7 +61,7 @@ public enum ProjectSearchIOSScenario {
         // Check the sheet closed by verifying a sheet-only element is gone.
         // "AlphaProject" can't be used here because it appears in the session list
         // as the newly created session's project label.
-        TestStep.iosWaitForElementToDisappear(.labelContains("Search projects"), timeout: 5)
+        TestStep.iosWaitForElementToDisappear(.labelContains("Search directories"), timeout: 5)
         TestStep.iosScreenshot(label: "ios-project-selected", compare: false)
 
         // ── Teardown ─────────────────────────────────────────────

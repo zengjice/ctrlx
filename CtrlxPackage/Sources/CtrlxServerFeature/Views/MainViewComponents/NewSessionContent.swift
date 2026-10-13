@@ -72,7 +72,7 @@ struct NewSessionContent: View {
                             dismiss()
                             onCreate(request)
                         },
-                        onCancel: { showsDirectoryForm = false },
+                        onCancel: { showsDirectoryForm = false }
                     )
                     .id(directorySource.id)
                     .padding(20)
@@ -99,11 +99,11 @@ struct NewSessionContent: View {
                         .foregroundStyle(.secondary)
                         .font(.caption)
 
-                    TextField("Search projects...", text: $searchText)
+                    TextField("Search directories...", text: $searchText)
                         .textFieldStyle(.plain)
                         .font(.body)
                         .focused($isSearchFocused)
-                        .accessibilityLabel("Search projects")
+                        .accessibilityLabel("Search directories")
                         .onSubmit { handleSubmit() }
                         .onKeyPress(.downArrow) {
                             moveSelection(by: 1)
@@ -172,7 +172,7 @@ struct NewSessionContent: View {
                             HStack {
                                 ProgressView()
                                     .controlSize(.small)
-                                Text("Loading projects...")
+                                Text("Loading recent directories…")
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 8)
@@ -181,8 +181,12 @@ struct NewSessionContent: View {
                                 Divider()
                                     .padding(.vertical, 4)
 
-                                Text("Projects")
+                                Text("Recent Directories")
                                     .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text("Discovered from agent history on this Host. Select a directory to start a new session.")
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -195,7 +199,8 @@ struct NewSessionContent: View {
                                     isCreating: creatingSelection == .project(project.id),
                                     isDisabled: isCreating,
                                     isSelected: selection == .project(project.id),
-                                    badge: pluginShortName(project.pluginID)
+                                    badge: pluginShortName(project.pluginID),
+                                    lastUsed: project.lastUsed
                                 ) {
                                     dismiss()
                                     onCreate(.project(project))
@@ -203,7 +208,7 @@ struct NewSessionContent: View {
                                 .id(NewSessionSelection.project(project.id))
                             }
                         } else if !searchText.isEmpty {
-                            Text("No matching projects")
+                            Text("No matching directories")
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                                 .padding(.vertical, 8)
@@ -272,6 +277,7 @@ struct NewSessionRow: View {
     /// "claude") so users can tell agents apart in mixed lists. Optional so the row
     /// type stays reusable; `NewSessionContent` always supplies one (issue #691).
     var badge: String?
+    var lastUsed: Date?
     let action: () -> Void
 
     private var iconStyle: AnyShapeStyle {
@@ -318,6 +324,11 @@ struct NewSessionRow: View {
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    if let lastUsed {
+                        Text("Last used \(lastUsed, format: .relative(presentation: .named))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Spacer()

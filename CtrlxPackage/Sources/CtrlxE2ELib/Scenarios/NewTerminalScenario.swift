@@ -16,7 +16,7 @@ public enum NewTerminalScenario {
         //    appearing implies the spinner is gone — `waitForElementToDisappear`
         //    alone would return immediately if the spinner hadn't shown yet).
         TestStep.iosWaitForElement(.labelContains("New Terminal"), timeout: 15)
-        TestStep.iosWaitForElementToDisappear(.labelContains("Loading projects"), timeout: 5)
+        TestStep.iosWaitForElementToDisappear(.labelContains("Loading recent directories"), timeout: 5)
         // Settle wait for sheet animation; row text is visible before the
         // sheet finishes transitioning, which leaves the baseline flaky.
         TestStep.wait(seconds: 1)

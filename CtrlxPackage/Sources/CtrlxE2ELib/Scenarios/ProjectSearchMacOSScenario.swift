@@ -45,7 +45,7 @@ public enum ProjectSearchMacOSScenario {
         // Check the popover closed by verifying a popover-only element is gone.
         // "AlphaProject" can't be used here because it appears in the sidebar
         // as the newly created session's project label.
-        TestStep.macWaitForElementToDisappear(titled: "Search projects", timeout: 5)
+        TestStep.macWaitForElementToDisappear(titled: "Search directories", timeout: 5)
         TestStep.macScreenshot(label: "mac-project-selected", compare: false)
 
         // ── Teardown ─────────────────────────────────────────────

@@ -64,10 +64,13 @@ public struct PluginEvent: Codable, Sendable, Equatable {
 public struct NotificationSpec: Codable, Sendable, Equatable {
     public let title: String
     public let body: String
+    /// Questions also alert a foreground Viewer; absent on older plugin events.
+    public let isQuestion: Bool?
 
-    public init(title: String, body: String) {
+    public init(title: String, body: String, isQuestion: Bool? = nil) {
         self.title = title
         self.body = body
+        self.isQuestion = isQuestion
     }
 }
 

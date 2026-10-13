@@ -102,6 +102,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
     public let subtitle: String?
     public let body: String
     public let timestamp: Date
+    public let isQuestion: Bool?
 
     /// Action-button context when the notification accompanies an open
     /// permission / question form (issue #710), mirroring
@@ -116,7 +117,8 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         subtitle: String? = nil,
         body: String,
         timestamp: Date,
-        action: NotificationActionContext? = nil
+        action: NotificationActionContext? = nil,
+        isQuestion: Bool? = nil
     ) {
         self.pairId = pairId
         self.sessionId = sessionId
@@ -125,6 +127,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         self.body = body
         self.timestamp = timestamp
         self.action = action
+        self.isQuestion = isQuestion
     }
 
     public func withPairId(_ pairId: String) -> AgentNotificationMessage {
@@ -135,12 +138,13 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
             subtitle: subtitle,
             body: body,
             timestamp: timestamp,
-            action: action
+            action: action,
+            isQuestion: isQuestion
         )
     }
 
     private enum CodingKeys: String, CodingKey {
-        case pairId, sessionId, title, subtitle, body, timestamp, action
+        case pairId, sessionId, title, subtitle, body, timestamp, action, isQuestion
     }
 
     public init(from decoder: Decoder) throws {
@@ -151,9 +155,24 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         self.subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
         self.body = try container.decode(String.self, forKey: .body)
         self.timestamp = try container.decode(Date.self, forKey: .timestamp)
+        self.isQuestion = try container.decodeIfPresent(Bool.self, forKey: .isQuestion)
         // Lenient like `NotificationContent.action`: an undecodable context
         // from a newer host degrades to a plain notification rather than
         // dropping the whole message.
         self.action = (try? container.decodeIfPresent(NotificationActionContext.self, forKey: .action)) ?? nil
+    }
+
+    public var isQuestionNotification: Bool {
+        if isQuestion == true {
+            return true
+        }
+        if case .askUserQuestion = action?.form {
+            return true
+        }
+        return false
+    }
+
+    public func shouldPresent(isAppActive: Bool) -> Bool {
+        !isAppActive || isQuestionNotification
     }
 }

@@ -598,7 +598,7 @@ search toolbar. Back returns to the project list with the search text preserved.
 Cancel and the system swipe-to-dismiss remain available; directory lookup and
 Agent launch behavior are unchanged.
 
-The iOS directory browser also offers **New Folder** beside Home/Up. It is
+The Mac local, Mac Viewer and iOS directory browsers offer **New Folder** beside Home/Up. It is
 enabled only for an exact, successfully listed directory on a Host advertising
 `supportsDirectoryCreation`; older Hosts show an update hint and receive no
 creation command. The name prompt displays the chosen parent. Creation is an
@@ -608,7 +608,7 @@ parents, and fails for existing files/directories/symlinks or insufficient
 permissions. Success enters the new directory without launching a session.
 Path navigation and Agent launch are disabled while creation is pending;
 late replies cannot redirect a different Host/path or a reopened form. Both
-iOS and the Host Mac need the update; the encrypted Relay remains unchanged.
+the Viewer and Host Mac need the update for remote use; the encrypted Relay remains unchanged.
 
 `AgentLaunchDefaults` makes Codex the initial choice on iOS, Mac local and Mac
 Viewer, and in Mac Agents settings. An explicit selection is preserved; when
@@ -694,6 +694,13 @@ groups existing project directories by cwd. Both emit `AgentProject` tagged by
 Cores push projects through `PluginHost.setProjects`; `AppCoordinator` merges
 per-plugin lists. Sidecar project discovery uses the same contract. There is no
 Host-owned pair of legacy `ClaudeProjectScanner` / `CodexProjectScanner` services.
+
+New Session labels this list **Recent Directories** on Mac and iOS and explains
+that entries come from agent history on the selected Host. Rows keep their path
+and agent badge and show the recorded last-used time when available. Identity
+remains `(pluginID, path)`: the same directory used by two agents has two launch
+choices. Choosing a row starts a new session there; it does not resume an old
+conversation. Discovery, sorting and per-plugin auto-run settings are unchanged.
 
 Launch commands come from the owning core's `commandForLaunch` and per-plugin
 settings, with Host login-shell path validation. Ordinary shell launch, explicit
@@ -922,6 +929,24 @@ describes a Host this client views. Keep role, pair identity and key metadata
 distinct; both peers may be Macs.
 
 ## Push Notifications
+
+Codex `PreToolUse` events for `request_user_input` and `request_user_input_async`
+produce a question notification on the Host, independently of terminal visibility
+or focus. The plugin deduplicates by `(session_id, tool_use_id)` and leaves Agent
+state and response forms unchanged: an asynchronous question does not stop the
+Agent. This uses the existing wildcard hook bridge, not terminal polling or
+question auto-expansion. The hook fields and both tools were checked against
+[Codex 0.162.1](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/hook_runtime.rs).
+
+Notifications carry a bounded question preview through the existing Mac local,
+Mac Viewer and encrypted iOS delivery paths. The additive `isQuestion` marker
+allows the iOS live notification to alert even while the app is active and
+prevents an unrelated recent pane alert from swallowing it. Older structured
+question notifications are recognized through their action context as well.
+Background APNs and tap-to-open routing are retained. Codex tool-hook questions
+offer tap-to-open rather than fabricated answer buttons; actual structured forms
+retain their existing answer actions. Update the Host for new question detection
+and iOS for foreground alerts; Relay changes are unnecessary.
 
 See [push notifications](push-notifications-plan.md) for design/history and
 actionable replies, and [self-hosting](self-hosting.md) for current configuration.

@@ -5495,7 +5495,10 @@ public struct MainView: View {
     // MARK: - New Session Actions
 
     private var localDirectorySource: SessionDirectorySource {
-        SessionDirectorySource(id: "local", prepareWorktree: { path in
+        SessionDirectorySource(id: "local", create: { request in
+            @Dependency(SessionDirectoryClient.self) var client
+            return try await client.create(request)
+        }, prepareWorktree: { path in
             try await SessionLaunchPreparation.inspectWorktree(path: path)
         }) { request in
             @Dependency(SessionDirectoryClient.self) var client
@@ -5523,7 +5526,8 @@ public struct MainView: View {
             source = .remote(
                 hostID: hostID,
                 connection: connection,
-                supportsBrowsing: store?.hostsSupportingDirectoryBrowsing.contains(hostID) == true
+                supportsBrowsing: store?.hostsSupportingDirectoryBrowsing.contains(hostID) == true,
+                supportsCreation: store?.hostsSupportingDirectoryCreation.contains(hostID) == true
             )
             reason = agentTabUnavailableReason(hostID: hostID)
         } else {
