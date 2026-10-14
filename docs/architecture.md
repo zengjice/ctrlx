@@ -73,7 +73,12 @@ tracks Viewer ownership, not an unqualified subscriber count.
 
 Geometry belongs to the Host. Entering a session or explicitly selecting a terminal
 tab fits that window once to the current client's viewport on Mac (local and remote)
-and iOS. Local and remote Fit preserve pane split proportions and affect all Viewers. Passive
+and iOS. Returning from the background on iOS, or activating the owning Mac window,
+also requests one Fit for the displayed terminal. A pending entry waits for reconnect
+and a ready viewport; leaving the terminal cancels it. Each ready request reaches
+the Host, which skips resizing only if the live tmux grid already matches;
+cached client layouts cannot suppress Fit. Local and remote Fit preserve pane
+split proportions and affect all Viewers. Passive
 Host selection/layout snapshots, rotation, keyboard and font changes do not arm
 another fit; this prevents clients from competing over window dimensions. Remote
 fitting requires `supportsTerminalFit`. Creation-scoped sizing retains its own

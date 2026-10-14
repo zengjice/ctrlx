@@ -59,6 +59,7 @@
         @State private var isResizing = false
         @State private var viewportGrids: [String: TerminalViewportSizing.Grid] = [:]
         @State private var automaticTabFit = TerminalTabFit()
+        @State private var wasBackgrounded = false
 
         @State private var newAgentConfiguration: NewAgentTabConfiguration?
         @State private var agentForkConfiguration: AgentForkConfiguration?
@@ -571,10 +572,14 @@
                     if !relayClient.isHostConnected {
                         pendingBrowserLink = nil
                         browserSelection.cancelPendingCloses()
-                        automaticTabFit.cancel()
                         cancelCreationFollowUp()
                         annotationHandoff.cancel(error: AgentImageError.message("The Host disconnected. Reconnect and try Open Agent again."))
+                    } else {
+                        fitTerminalIfReady()
                     }
+                }
+                .onChange(of: relayClient.hostSupportsTerminalFit) {
+                    fitTerminalIfReady()
                 }
         }
 
@@ -586,12 +591,20 @@
                     }
                 }
                 .onChange(of: scenePhase) {
+                    if scenePhase == .background {
+                        wasBackgrounded = true
+                    }
                     if scenePhase != .active {
                         browserSelection.cancelPendingCloses()
-                        automaticTabFit.cancel()
                         annotationHandoff.cancel()
                         pendingBrowserLink = nil
                     } else {
+                        if wasBackgrounded {
+                            wasBackgrounded = false
+                            if terminalIsVisible, automaticTabFit.target == nil {
+                                requestAutomaticTabFit(windowID: window?.stableId)
+                            }
+                        }
                         fitTerminalIfReady()
                     }
                 }
@@ -600,6 +613,7 @@
                     cancelCreationFollowUp()
                     browserSelection.cancelPendingCloses()
                     automaticTabFit.cancel()
+                    wasBackgrounded = false
                     annotationHandoff.cancel()
                     pendingWindowTabAction = nil
                     pendingBrowserLink = nil

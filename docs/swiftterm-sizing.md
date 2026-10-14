@@ -378,7 +378,10 @@ a late catalog cannot leave an owned remote browser or simulator session targeti
 name. Browser tab IDs, ordering, split placement and selection remain unchanged.
 
 The explicit-Fit rule also applies here: moving, enlarging or entering fullscreen
-does not implicitly resize tmux. The **Fit** button uses the independent scene's
+does not implicitly resize tmux. Activating the owning window requests one Fit for
+its displayed terminal (preferring the focused terminal when split); inactive windows
+wait. The Host skips resizing when live tmux dimensions match the request; a cached
+client layout cannot suppress it. The **Fit** button uses the independent scene's
 terminal area, excluding its tab strip. Main-window Fit excludes detached Windows,
 preventing two presentations
 from competing over the same tmux dimensions. AppKit handles the native window's

@@ -39,7 +39,7 @@
             await withDependencies {
                 $0[ProcessRunner.self].run = { @Sendable _, arguments, _, _ in
                     if arguments.contains("display-message") {
-                        return ProcessResult(exitCode: 0, stdout: Data("@1\t132x48,0,0,5\n".utf8), stderr: Data())
+                        return ProcessResult(exitCode: 0, stdout: Data("@1\t160x60,0,0,5\n".utf8), stderr: Data())
                     }
                     if arguments.contains("resize-window") {
                         resizeArguments.withValue { $0 = arguments }
@@ -91,6 +91,53 @@
                 #expect(arguments?.contains("132") == true)
                 #expect(arguments?.contains("48") == true)
                 #expect(arguments?.contains("select-layout") == true)
+            }
+        }
+
+        @Test("Foreground Fit checks live Host dimensions even when the cached grid matches", arguments: [80, 160], [false, true])
+        func foregroundFitUsesHostDimensions(hostWidth: Int, local: Bool) async throws {
+            let commands = LockIsolated<[[String]]>([])
+            try await withDependencies {
+                $0[ProcessRunner.self].run = { @Sendable _, arguments, _, _ in
+                    commands.withValue { $0.append(arguments) }
+                    let output = arguments.contains("display-message")
+                        ? "@1\t\(hostWidth)x\(hostWidth == 80 ? 24 : 60),0,0,5\n" : ""
+                    return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
+                }
+            } operation: {
+                let target = TerminalTabFit.Target(hostID: local ? nil : "host", sessionName: "dev", windowID: "@1")
+                let viewport = ResizeTmuxPane(width: 80, height: 24, userInitiated: true)
+                var fit = TerminalTabFit()
+                fit.request(target)
+                // The last Viewer snapshot matched this viewport, but another
+                // client may have resized tmux before the Viewer resumes.
+                let pendingRequest = fit.takeRequest(
+                    for: target, isAvailable: true, isPresentationReady: true,
+                    measuredRequest: viewport
+                )
+                let request = try #require(pendingRequest)
+                let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
+                if local {
+                    try await tmux.fitWindow("@1", width: request.width, height: request.height)
+                } else {
+                    let response = await TmuxCommandExecutor(tmuxService: tmux).execute(CommandMessage(
+                        paneId: "@1", command: request.commandType
+                    ))
+                    #expect(response.success)
+                }
+                #expect(commands.value.first?.contains("display-message") == true)
+                if hostWidth == 80 {
+                    #expect(commands.value.count == 1)
+                } else {
+                    let resize = try #require(commands.value.first { $0.contains("resize-window") })
+                    #expect(resize.contains("80"))
+                    #expect(resize.contains("24"))
+                    #expect(resize.contains("select-layout"))
+                }
+                #expect(fit.takeRequest(
+                    for: target, isAvailable: true, isPresentationReady: true,
+                    measuredRequest: viewport
+                ) == nil)
             }
         }
 
