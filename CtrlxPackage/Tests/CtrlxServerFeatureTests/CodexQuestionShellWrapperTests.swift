@@ -157,8 +157,8 @@
                 }
             } operation: {
                 let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
-                async let first: Void = tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1)
-                async let second: Void = tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1)
+                async let first = tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1)
+                async let second = tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1)
                 _ = try await (first, second)
             }
             #expect(commands.value.filter { $0.first == "-eo" }.count == 1)

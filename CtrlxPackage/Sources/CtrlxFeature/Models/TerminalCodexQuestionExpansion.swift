@@ -1,5 +1,6 @@
 import CtrlxCommon
 import Dependencies
+import Foundation
 
 /// Event-driven, pane-local stability check. No observable state or output polling:
 /// UIKit supplies the eligible live prompt; the Host remains the authority on
@@ -8,8 +9,9 @@ import Dependencies
 final class TerminalCodexQuestionExpansion {
     @Dependency(\.continuousClock) private var clock
     private let readPrompt: @MainActor () -> CodexQuestionPrompt?
-    private let enqueue: @MainActor (Int) -> Bool
-    private var lastEnqueuedCount: Int?
+    private let enqueue: @MainActor (Int, @escaping @MainActor (Bool) -> Void) -> Bool
+    private var lastHandledCount: Int?
+    private var inFlightID: UUID?
     private var candidate: CodexQuestionPrompt?
     private var generation: UInt64 = 0
     private var isInvalidated = false
@@ -17,7 +19,7 @@ final class TerminalCodexQuestionExpansion {
 
     init(
         readPrompt: @escaping @MainActor () -> CodexQuestionPrompt?,
-        enqueue: @escaping @MainActor (Int) -> Bool
+        enqueue: @escaping @MainActor (Int, @escaping @MainActor (Bool) -> Void) -> Bool
     ) {
         self.readPrompt = readPrompt
         self.enqueue = enqueue
@@ -27,10 +29,11 @@ final class TerminalCodexQuestionExpansion {
 
     func schedule() {
         guard !isInvalidated else { return }
-        guard let prompt = readPrompt(), prompt.count != lastEnqueuedCount else {
+        guard let prompt = readPrompt(), prompt.count != lastHandledCount else {
             cancelPending()
             return
         }
+        guard inFlightID == nil else { return }
         guard candidate != prompt else { return }
         cancelPending()
         candidate = prompt
@@ -46,9 +49,23 @@ final class TerminalCodexQuestionExpansion {
                 schedule()
                 return
             }
-            // Reductions/zero must also reach the Host to update its baseline.
-            // A temporarily unavailable stream must not consume this attempt.
-            if enqueue(prompt.count) { lastEnqueuedCount = prompt.count }
+            let requestID = UUID()
+            inFlightID = requestID
+            let queued = enqueue(prompt.count) { [weak self] handled in
+                guard let self, !isInvalidated, inFlightID == requestID else { return }
+                inFlightID = nil
+                if handled {
+                    lastHandledCount = prompt.count
+                }
+                // A failed attempt waits for a later native event, rather than
+                // polling the same footer. Observe a changed queue immediately.
+                if handled || readPrompt()?.count != prompt.count {
+                    schedule()
+                }
+            }
+            if !queued {
+                inFlightID = nil
+            }
         }
     }
 
@@ -61,6 +78,7 @@ final class TerminalCodexQuestionExpansion {
 
     func invalidate() {
         isInvalidated = true
+        inFlightID = nil
         cancelPending()
     }
 }

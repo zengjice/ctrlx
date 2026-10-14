@@ -827,11 +827,13 @@ final public class ConnectedViewer: Identifiable {
                 else { String(describing: command.command) }
             logger.info("Received command from viewer", metadata: ["type": "\(logType)"])
             if let onCommand {
-                // Clipboard pastes acknowledge completion, but must share the
-                // keyboard FIFO rather than overtake pending typed input.
-                let isPaste: Bool
-                if case .pasteTerminalText = command.command { isPaste = true } else { isPaste = false }
-                if command.command.requiresResponse, !isPaste {
+                // Acknowledged terminal actions still share the keyboard FIFO.
+                let isTerminalInput = switch command.command {
+                case .pasteTerminalText,
+                     .expandCodexQuestions: true
+                default: !command.command.requiresResponse
+                }
+                if !isTerminalInput {
                     if let response = await onCommand(command) {
                         await sendEncrypted(.commandResponse(response))
                     }

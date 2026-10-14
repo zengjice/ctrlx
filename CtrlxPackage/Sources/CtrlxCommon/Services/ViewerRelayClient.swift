@@ -98,6 +98,7 @@ final public class ViewerRelayClient {
     public private(set) var isHostConnected = false
 
     public private(set) var hostSupportsTerminalPaste = false
+    public private(set) var hostSupportsCodexQuestionAcknowledgement = false
     public private(set) var hostSupportsDirectoryCreation = false
     public private(set) var hostSupportsSessionWorktrees = false
     public private(set) var hostSupportsFileBrowsing = false
@@ -542,6 +543,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to start sessions in new worktrees"))
         case let .createTmuxSession(spec) where spec.worktree != nil && !hostSupportsSessionWorktrees:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to start sessions in new worktrees"))
+        case .expandCodexQuestions where !hostSupportsCodexQuestionAcknowledgement:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to automatically expand Codex questions"))
         case .pasteTerminalText where !hostSupportsTerminalPaste:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to paste clipboard text"))
         case let .resizeTmuxPane(spec) where spec.userInitiated == true && !hostSupportsTerminalFit:
@@ -1045,6 +1048,7 @@ final public class ViewerRelayClient {
         case let .sessionState(sessionState):
             logger.info("Received session state from host")
             hostSupportsTerminalPaste = sessionState.supportsTerminalPaste == true
+            hostSupportsCodexQuestionAcknowledgement = sessionState.supportsCodexQuestionAcknowledgement == true
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
             hostSupportsSessionWorktrees = sessionState.supportsSessionWorktrees == true
             hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
@@ -1080,6 +1084,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
             hostSupportsFileBrowsing = false
@@ -1130,6 +1135,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
             hostSupportsFileBrowsing = false
@@ -1162,6 +1168,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
             hostSupportsFileBrowsing = false
@@ -1178,6 +1185,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
             hostSupportsFileBrowsing = false
@@ -1481,6 +1489,7 @@ final public class ViewerRelayClient {
         resetFileUploads()
         resetBrowserState()
         hostSupportsTerminalPaste = false
+        hostSupportsCodexQuestionAcknowledgement = false
         hostSupportsDirectoryCreation = false
         hostSupportsSessionWorktrees = false
         hostSupportsFileBrowsing = false

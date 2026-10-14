@@ -64,6 +64,7 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsAgentFork: Bool?
     /// Clipboard paste is acknowledged and serialized with keyboard input.
     public let supportsTerminalPaste: Bool?
+    public let supportsCodexQuestionAcknowledgement: Bool?
     /// Explicit fit preserves the Host window's pane topology and proportions.
     public let supportsTerminalFit: Bool?
     public let supportsBrowserSharing: Bool?
@@ -87,6 +88,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsAgentWindowLaunch: Bool? = nil,
         supportsAgentFork: Bool? = nil,
         supportsTerminalPaste: Bool? = nil,
+        supportsCodexQuestionAcknowledgement: Bool? = nil,
         supportsTerminalFit: Bool? = nil,
         supportsFileBrowsing: Bool? = nil,
         supportsFileDownloads: Bool? = nil,
@@ -116,6 +118,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
         self.supportsAgentFork = supportsAgentFork
         self.supportsTerminalPaste = supportsTerminalPaste
+        self.supportsCodexQuestionAcknowledgement = supportsCodexQuestionAcknowledgement
         self.supportsTerminalFit = supportsTerminalFit
         self.supportsBrowserSharing = supportsBrowserSharing
         self.supportsPaneBrowser = supportsPaneBrowser
@@ -144,6 +147,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsAgentWindowLaunch: supportsAgentWindowLaunch,
             supportsAgentFork: supportsAgentFork,
             supportsTerminalPaste: supportsTerminalPaste,
+            supportsCodexQuestionAcknowledgement: supportsCodexQuestionAcknowledgement,
             supportsTerminalFit: supportsTerminalFit,
             supportsFileBrowsing: supportsFileBrowsing,
             supportsFileDownloads: supportsFileDownloads,

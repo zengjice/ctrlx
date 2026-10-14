@@ -1,45 +1,69 @@
 import CtrlxCommon
 import CtrlxNetworking
 import Foundation
+import OSLog
+
+private let questionLogger = Logger(subsystem: "com.jicezeng.ctrlx", category: "CodexQuestions")
 
 extension TmuxService {
     /// Shared by the local Mac and remote viewers. Viewers send an intent, NOT
     /// an unconditional keypress: a delayed/stale screen cannot select text in
     /// the host's draft. Older hosts reject the unknown command safely.
-    func expandCodexQuestions(paneID: String, expectedCount: Int) async throws {
-        guard paneID.hasPrefix("%"), Int(paneID.dropFirst()) != nil,
-              (0...999).contains(expectedCount),
-              !codexQuestionChecks.contains(paneID)
-        else { return }
+    @discardableResult
+    func expandCodexQuestions(paneID: String, expectedCount: Int) async throws -> Bool {
+        func deferred(_ reason: String) -> Bool {
+            questionLogger.notice("Question expansion deferred: pane=\(paneID, privacy: .public) count=\(expectedCount) reason=\(reason, privacy: .public)")
+            return false
+        }
+        guard
+            paneID.hasPrefix("%"), Int(paneID.dropFirst()) != nil,
+            (0...999).contains(expectedCount)
+        else { return deferred("invalid-request") }
+        guard !codexQuestionChecks.contains(paneID) else { return deferred("check-in-flight") }
+        // Another viewer may have opened it already. Acknowledge that claim
+        // even though the collapsed footer is no longer on screen.
+        if (codexQuestionStates[paneID]?.count ?? 0) == expectedCount {
+            return true
+        }
         codexQuestionChecks.insert(paneID)
         defer { codexQuestionChecks.remove(paneID) }
 
-        guard let screen = try await codexQuestionScreen(paneID: paneID),
-              screen.prompt.count == expectedCount,
-              screen.command == "codex" || Self.knownShells.contains(screen.command),
-              (codexQuestionStates[paneID]?.count ?? 0) != expectedCount
-        else { return }
+        guard let screen = try await codexQuestionScreen(paneID: paneID)
+        else { return deferred("screen-not-eligible") }
+        guard screen.prompt.count == expectedCount else { return deferred("queue-changed") }
+        guard screen.command == "codex" || Self.knownShells.contains(screen.command)
+        else { return deferred("foreground-not-codex") }
 
         if screen.command != "codex" {
             // The telemetry shell wrapper can remain tmux's foreground command.
             // A printed footer alone is not proof that Codex is still running.
-            guard let detected = await detectAgentPanesIfAvailable(
-                processNamesByPlugin: ["codex": ["codex"]], refreshSnapshot: true
-            ), detected[paneID]?.pluginID == "codex" else { return }
+            guard
+                let detected = await detectAgentPanesIfAvailable(
+                    processNamesByPlugin: ["codex": ["codex"]], refreshSnapshot: true
+                ), detected[paneID]?.pluginID == "codex" else { return deferred("codex-not-detected") }
             // Process inspection suspends; don't select a draft typed meanwhile.
-            guard let current = try await codexQuestionScreen(paneID: paneID),
-                  current.command == screen.command || current.command == "codex",
-                  current.prompt == screen.prompt
-            else { return }
+            guard
+                let current = try await codexQuestionScreen(paneID: paneID),
+                current.command == screen.command || current.command == "codex",
+                current.prompt == screen.prompt
+            else { return deferred("screen-changed-during-check") }
         }
         try Task.checkCancellation()
 
         var state = codexQuestionStates[paneID] ?? CodexQuestionExpansionState()
         let shouldOpen = state.observe(screen.prompt.count)
-        // Claim before the next suspension, including requests from other Macs.
+        // The in-flight guard serializes viewers. Commit the count only after
+        // tmux accepts the key, so a failed send can be tried again.
+        if shouldOpen {
+            do {
+                try await sendKeys(paneID, keys: "S-Left")
+            } catch {
+                questionLogger.notice("Question expansion failed: pane=\(paneID, privacy: .public) count=\(expectedCount) reason=send-key-failed")
+                throw error
+            }
+        }
         codexQuestionStates[paneID] = screen.prompt.count == 0 ? nil : state
-        guard shouldOpen else { return }
-        try await sendKeys(paneID, keys: "S-Left")
+        return true
     }
 
     private func codexQuestionScreen(paneID: String) async throws -> (command: String, prompt: CodexQuestionPrompt)? {
@@ -53,9 +77,10 @@ extension TmuxService {
         guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
         let lines = result.stdoutString.components(separatedBy: "\n")
         let fields = lines.first?.components(separatedBy: "\t") ?? []
-        guard fields.count == 4, fields[3] == "0",
-              let column = Int(fields[1]), let row = Int(fields[2]),
-              let prompt = CodexQuestionPrompt(lines: Array(lines.dropFirst()), cursorRow: row, cursorColumn: column)
+        guard
+            fields.count == 4, fields[3] == "0",
+            let column = Int(fields[1]), let row = Int(fields[2]),
+            let prompt = CodexQuestionPrompt(lines: Array(lines.dropFirst()), cursorRow: row, cursorColumn: column)
         else { return nil }
         return (fields[0], prompt)
     }

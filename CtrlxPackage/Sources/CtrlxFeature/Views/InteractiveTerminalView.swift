@@ -80,7 +80,7 @@ enum TerminalCursorTapNavigation {
 
         /// Sends a guarded intent through the pane's ordered input queue, never
         /// raw Shift+Left. False means the stream is not currently ready.
-        var onExpandCodexQuestions: (@MainActor (Int) -> Bool)?
+        var onExpandCodexQuestions: (@MainActor (Int, @escaping @MainActor (Bool) -> Void) -> Bool)?
         var questionExpansionEnabled = false {
             didSet {
                 guard oldValue != questionExpansionEnabled else { return }
@@ -93,7 +93,7 @@ enum TerminalCursorTapNavigation {
                 guard let self, canExpandCodexQuestions else { return nil }
                 return currentQuestionPrompt
             },
-            enqueue: { [weak self] count in self?.onExpandCodexQuestions?(count) ?? false }
+            enqueue: { [weak self] count, completion in self?.onExpandCodexQuestions?(count, completion) ?? false }
         )
 
         var scrollingAgentID: String? {

@@ -797,14 +797,19 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 guard let self, self.streamState == .streaming,
                       let paneID = self.paneId, let connection = self.connection,
                       connection.isHostConnected, connection.isRelayConnected
-                else { return }
+                else { return false }
                 // No raw-key fallback: an older host must reject this intent,
                 // rather than apply a Shift+Left to an unchecked/stale screen.
                 self.keyCoalescer.flushPending()
                 if self.keystrokeDebouncer == nil {
                     self.keystrokeDebouncer = KeystrokeDebouncer(paneId: paneID, relayClient: connection.relayClient)
                 }
-                self.keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count)
+                guard let queue = self.keystrokeDebouncer else { return false }
+                return await withCheckedContinuation { continuation in
+                    queue.enqueueCodexQuestionExpansion(expectedCount: count) {
+                        continuation.resume(returning: $0)
+                    }
+                }
             }
 
             // Wire raw input (mouse escape sequences) forwarding via relay

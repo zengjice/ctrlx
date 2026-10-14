@@ -311,7 +311,7 @@ struct TerminalContainerView: NSViewRepresentable {
             }
 
             terminalView.onExpandCodexQuestions = { [weak self] count in
-                guard let self else { return }
+                guard let self else { return false }
                 self.keyCoalescer.flushPending()
                 let generation = self.inputGeneration
                 await self.pendingKeyTask?.value
@@ -320,13 +320,14 @@ struct TerminalContainerView: NSViewRepresentable {
                       self.terminalView.canExpandCodexQuestions,
                       self.terminalView.currentQuestionPrompt?.count == count,
                       let paneID = self.paneState?.paneId, let tmux = self.tmuxService
-                else { return }
+                else { return false }
                 do {
-                    try await tmux.expandCodexQuestions(paneID: paneID, expectedCount: count)
+                    return try await tmux.expandCodexQuestions(paneID: paneID, expectedCount: count)
                 } catch {
                     // Optional convenience must not replace a healthy terminal
                     // with an error view. The manual shortcut still works.
                     Self.logger.debug("Codex question auto-expand skipped: \(error)")
+                    return false
                 }
             }
 

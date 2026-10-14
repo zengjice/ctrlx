@@ -8,12 +8,12 @@ import Testing
 @Suite("iOS Codex question auto-expansion")
 @MainActor
 struct TerminalCodexQuestionExpansionTests {
-    nonisolated private static let supportedHints = [
+    private nonisolated static let supportedHints = [
         "shift + ← to answer", "shift+← to answer", "shift← to answer",
         "⇧← to answer", "⇧ + ← to answer", "Shift + Left to answer",
     ]
 
-    private static func prompt(_ count: Int, hint: String = "shift + ← to answer", suffix: String = "") -> CodexQuestionPrompt? {
+    private nonisolated static func prompt(_ count: Int, hint: String = "shift + ← to answer", suffix: String = "") -> CodexQuestionPrompt? {
         let lines = count == 0 ? ["› Ask Codex to do anything"] : [
             "Queued follow-up inputs", "? \(count) \(count == 1 ? "question" : "questions")\(suffix)",
             hint, "› Ask Codex to do anything",
@@ -28,7 +28,10 @@ struct TerminalCodexQuestionExpansionTests {
             try await withDependencies { $0.continuousClock = clock } operation: {
                 var current = try #require(Self.prompt(1, hint: hint, suffix: " · 14s"))
                 var sent: [Int] = []
-                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { sent.append($0); return true })
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { count, complete in sent.append(count)
+                    complete(true)
+                    return true
+                })
                 defer { opener.invalidate() }
                 opener.schedule()
                 for age in [15, 16, 17] {
@@ -57,7 +60,10 @@ struct TerminalCodexQuestionExpansionTests {
                 var sent: [Int] = []
                 let opener = TerminalCodexQuestionExpansion(
                     readPrompt: { Self.prompt(2, hint: hint) },
-                    enqueue: { sent.append($0); return true }
+                    enqueue: { count, complete in sent.append(count)
+                        complete(true)
+                        return true
+                    }
                 )
                 defer { opener.invalidate() }
                 opener.schedule()
@@ -82,7 +88,10 @@ struct TerminalCodexQuestionExpansionTests {
             try await withDependencies { $0.continuousClock = clock } operation: {
                 var current = try #require(Self.prompt(1))
                 var sent: [Int] = []
-                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { sent.append($0); return true })
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { count, complete in sent.append(count)
+                    complete(true)
+                    return true
+                })
                 defer { opener.invalidate() }
                 opener.schedule()
                 await clock.advance(by: .milliseconds(200))
@@ -106,7 +115,10 @@ struct TerminalCodexQuestionExpansionTests {
             await withDependencies { $0.continuousClock = clock } operation: {
                 var current = Self.prompt(1)
                 var sent: [Int] = []
-                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { sent.append($0); return true })
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { count, complete in sent.append(count)
+                    complete(true)
+                    return true
+                })
                 defer { opener.invalidate() }
                 opener.schedule()
                 await clock.advance(by: .milliseconds(200))
@@ -134,7 +146,10 @@ struct TerminalCodexQuestionExpansionTests {
                 var sent: [Int] = []
                 let opener = TerminalCodexQuestionExpansion(
                     readPrompt: { eligible ? Self.prompt(1) : nil },
-                    enqueue: { sent.append($0); return true }
+                    enqueue: { count, complete in sent.append(count)
+                        complete(true)
+                        return true
+                    }
                 )
                 defer { opener.invalidate() }
                 opener.schedule()
@@ -156,7 +171,10 @@ struct TerminalCodexQuestionExpansionTests {
             let clock = TestClock()
             await withDependencies { $0.continuousClock = clock } operation: {
                 var sent: [Int] = []
-                let opener = TerminalCodexQuestionExpansion(readPrompt: { Self.prompt(1) }, enqueue: { sent.append($0); return true })
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { Self.prompt(1) }, enqueue: { count, complete in sent.append(count)
+                    complete(true)
+                    return true
+                })
                 defer { opener.invalidate() }
                 opener.schedule()
                 await clock.advance(by: .milliseconds(200))
@@ -180,9 +198,12 @@ struct TerminalCodexQuestionExpansionTests {
                 var sent: [Int] = []
                 var opened: [Int] = []
                 var host = CodexQuestionExpansionState()
-                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: {
-                    sent.append($0)
-                    if host.observe($0) { opened.append($0) }
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { count, complete in
+                    sent.append(count)
+                    if host.observe(count) {
+                        opened.append(count)
+                    }
+                    complete(true)
                     return true
                 })
                 defer { opener.invalidate() }
@@ -196,8 +217,11 @@ struct TerminalCodexQuestionExpansionTests {
                 }
                 #expect(sent == [4, 3, 4, 0, 1])
                 #expect(opened == [4, 4, 1])
-                let remounted = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: {
-                    if host.observe($0) { opened.append($0) }
+                let remounted = TerminalCodexQuestionExpansion(readPrompt: { current }, enqueue: { count, complete in
+                    if host.observe(count) {
+                        opened.append(count)
+                    }
+                    complete(true)
                     return true
                 })
                 defer { remounted.invalidate() }
@@ -216,8 +240,11 @@ struct TerminalCodexQuestionExpansionTests {
             await withDependencies { $0.continuousClock = clock } operation: {
                 var ready = false
                 var attempts = 0
-                let opener = TerminalCodexQuestionExpansion(readPrompt: { Self.prompt(1) }, enqueue: { _ in
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { Self.prompt(1) }, enqueue: { _, complete in
                     attempts += 1
+                    if ready {
+                        complete(true)
+                    }
                     return ready
                 })
                 defer { opener.invalidate() }
@@ -240,12 +267,82 @@ struct TerminalCodexQuestionExpansionTests {
             let clock = TestClock()
             await withDependencies { $0.continuousClock = clock } operation: {
                 var sent: [Int] = []
-                let opener = TerminalCodexQuestionExpansion(readPrompt: { Self.prompt(1) }, enqueue: { sent.append($0); return true })
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { Self.prompt(1) }, enqueue: { count, complete in sent.append(count)
+                    complete(true)
+                    return true
+                })
                 opener.schedule()
                 opener.invalidate()
                 opener.schedule()
                 await clock.advance(by: .seconds(1))
                 #expect(sent.isEmpty)
+            }
+        }
+    }
+
+    @Test("An enqueued but rejected opener can retry the same footer on a later event")
+    func rejectedAcknowledgement() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                var attempts = 0
+                var complete: (@MainActor (Bool) -> Void)?
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { Self.prompt(1) }, enqueue: { _, result in
+                    attempts += 1
+                    complete = result
+                    return true
+                })
+                defer { opener.invalidate() }
+                opener.schedule()
+                await clock.advance(by: .milliseconds(350))
+                await Task.megaYield()
+                #expect(attempts == 1)
+                opener.schedule()
+                await clock.advance(by: .seconds(1))
+                #expect(attempts == 1) // Still waiting for the first Host result.
+                complete?(false)
+                await clock.advance(by: .seconds(5))
+                #expect(attempts == 1) // No polling after rejection.
+                opener.schedule()
+                await clock.advance(by: .milliseconds(350))
+                await Task.megaYield()
+                #expect(attempts == 2)
+                complete?(true)
+                opener.schedule() // An Escape/redraw must not reopen it.
+                await clock.advance(by: .seconds(1))
+                #expect(attempts == 2)
+            }
+        }
+    }
+
+    @Test("A delayed acknowledgement observes the next queue, but cannot revive a dismantled pane")
+    func delayedAcknowledgement() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                let current = LockIsolated(Self.prompt(1))
+                var sent: [Int] = []
+                var complete: (@MainActor (Bool) -> Void)?
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { current.value }, enqueue: { count, result in
+                    sent.append(count)
+                    complete = result
+                    return true
+                })
+                opener.schedule()
+                await clock.advance(by: .milliseconds(350))
+                await Task.megaYield()
+                current.setValue(Self.prompt(0))
+                opener.schedule()
+                complete?(true)
+                await clock.advance(by: .milliseconds(350))
+                await Task.megaYield()
+                #expect(sent == [1, 0])
+                current.setValue(Self.prompt(2))
+                opener.invalidate()
+                complete?(false)
+                opener.schedule()
+                await clock.advance(by: .seconds(1))
+                #expect(sent == [1, 0])
             }
         }
     }

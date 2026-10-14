@@ -1,13 +1,16 @@
 import CtrlxNetworking
 import Dependencies
 import Foundation
+import OSLog
+
+private let questionInputLogger = Logger(subsystem: "com.jicezeng.ctrlx", category: "CodexQuestions")
 
 /// Accumulates rapid keystrokes and flushes them within a bounded time window.
 ///
 /// Shared between iOS and macOS viewer terminal views. The window starts with the
 /// first key and never slides, so continuous typing cannot postpone transmission
 /// indefinitely. Keys do not wait for a round-trip response; clipboard pastes
-/// acknowledge completion before subsequent input drains.
+/// and question intents acknowledge completion before subsequent input drains.
 /// Optional `onSent` observers run in this same order, only after a successful
 /// write (keys) or acknowledgement (paste), and never after cancellation.
 ///
@@ -39,11 +42,13 @@ final public class KeystrokeDebouncer {
     private struct PendingSend {
         let operation: SendOp
         let completions: [@MainActor () -> Void]
+        let onResult: (@MainActor (Bool) -> Void)?
     }
 
     private var sendQueue: [PendingSend] = []
     private var sendTask: Task<Void, Never>?
     private var sendContinuation: CheckedContinuation<Void, Never>?
+    private var inFlightResult: (@MainActor (Bool) -> Void)?
 
     /// Operation queued for sending. Internal so tests can match against the
     /// values pulled out of the queue.
@@ -69,13 +74,22 @@ final public class KeystrokeDebouncer {
             case let .rawInput(data):
                 result = await relayClient.sendCommand(SendRawInput(data: data), paneId: paneId)
             case let .expandCodexQuestions(count):
-                result = await relayClient.sendCommand(ExpandCodexQuestions(expectedCount: count), paneId: paneId)
+                result = await relayClient.sendCommand(ExpandCodexQuestions(expectedCount: count), paneId: paneId, timeout: 2)
             }
             if case let .failure(error) = result {
                 if case .pasteText = op, !Task.isCancelled {
                     onPasteFailure(error.localizedDescription)
                 }
+                if case .expandCodexQuestions = op, !Task.isCancelled {
+                    questionInputLogger.notice("Question acknowledgement failed: pane=\(paneId, privacy: .public) reason=transport-or-capability")
+                }
                 return false
+            }
+            if case .expandCodexQuestions = op, case let .success(response) = result {
+                if response.codexQuestionsHandled == nil {
+                    questionInputLogger.notice("Question acknowledgement missing: pane=\(paneId, privacy: .public)")
+                }
+                return response.success && response.codexQuestionsHandled == true
             }
             return true
         }
@@ -102,7 +116,9 @@ final public class KeystrokeDebouncer {
     public func enqueue(_ keys: [TmuxKey], onSent: (@MainActor () -> Void)? = nil) {
         guard !keys.isEmpty else { return }
         keyBuffer.append(contentsOf: keys)
-        if let onSent { keyCompletions.append(onSent) }
+        if let onSent {
+            keyCompletions.append(onSent)
+        }
 
         guard flushTask == nil else { return }
 
@@ -156,16 +172,18 @@ final public class KeystrokeDebouncer {
     }
 
     /// The guarded opener must follow already typed keys, not race them via a
-    /// second relay send task. Like keys, it does not wait for a round trip.
-    public func enqueueCodexQuestionExpansion(expectedCount: Int) {
+    /// second relay send task. Report the Host result, including cancellation.
+    public func enqueueCodexQuestionExpansion(expectedCount: Int, onResult: @escaping @MainActor (Bool) -> Void = { _ in }) {
         flushTask?.cancel()
         flushTask = nil
         flushBuffer()
-        enqueueSendOp(.expandCodexQuestions(expectedCount))
+        enqueueSendOp(.expandCodexQuestions(expectedCount), onResult: onResult)
     }
 
     /// Cancel any pending debounce and in-flight sends.
     public func cancelAll() {
+        let results = [inFlightResult].compactMap { $0 } + sendQueue.compactMap(\.onResult)
+        inFlightResult = nil
         flushTask?.cancel()
         flushTask = nil
         keyBuffer.removeAll()
@@ -176,6 +194,9 @@ final public class KeystrokeDebouncer {
         if let cont = sendContinuation {
             sendContinuation = nil
             cont.resume()
+        }
+        for result in results {
+            result(false)
         }
     }
 
@@ -192,8 +213,8 @@ final public class KeystrokeDebouncer {
     }
 
     /// Append an operation and wake the send loop.
-    private func enqueueSendOp(_ op: SendOp, completions: [@MainActor () -> Void] = []) {
-        sendQueue.append(PendingSend(operation: op, completions: completions))
+    private func enqueueSendOp(_ op: SendOp, completions: [@MainActor () -> Void] = [], onResult: (@MainActor (Bool) -> Void)? = nil) {
+        sendQueue.append(PendingSend(operation: op, completions: completions, onResult: onResult))
         if sendTask == nil {
             startSendLoop()
             return
@@ -220,12 +241,18 @@ final public class KeystrokeDebouncer {
                 }
 
                 let pending = self.sendQueue.removeFirst()
+                self.inFlightResult = pending.onResult
                 let succeeded = await self.sendOp(pending.operation)
                 // Observers follow the same FIFO as the actual input. A paste
                 // must acknowledge before its draft can be consumed by Send.
                 guard !Task.isCancelled else { return }
+                let onResult = self.inFlightResult
+                self.inFlightResult = nil
+                onResult?(succeeded)
                 if succeeded {
-                    for completion in pending.completions { completion() }
+                    for completion in pending.completions {
+                        completion()
+                    }
                 }
             }
         }

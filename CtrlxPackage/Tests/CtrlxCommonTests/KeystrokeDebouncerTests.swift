@@ -1,6 +1,6 @@
-import CtrlxNetworking
 import Clocks
 import ConcurrencyExtras
+import CtrlxNetworking
 import Dependencies
 import Foundation
 import Testing
@@ -85,6 +85,54 @@ struct KeystrokeDebouncerTests {
                 debouncer.enqueueImmediately([.backspace])
                 await Task.megaYield()
                 #expect(sent.value == [.keys([.text("draft")]), .expandCodexQuestions(4), .keys([.backspace])])
+            }
+        }
+    }
+
+    @Test("Question results follow the Host acknowledgement before later keys drain")
+    func questionResultFIFO() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                var events: [String] = []
+                let queue = KeystrokeDebouncer(paneId: "%7") { op in
+                    if case .expandCodexQuestions = op {
+                        try? await clock.sleep(for: .seconds(1))
+                        return false
+                    }
+                    events.append("keys")
+                    return true
+                }
+                defer { queue.cancelAll() }
+                queue.enqueueCodexQuestionExpansion(expectedCount: 1) { events.append("result:\($0)") }
+                queue.enqueueImmediately([.text("after")])
+                await Task.megaYield()
+                #expect(events.isEmpty)
+                await clock.advance(by: .seconds(1))
+                await Task.megaYield()
+                #expect(events == ["result:false", "keys"])
+            }
+        }
+    }
+
+    @Test("Cancelling resolves both active and queued question results exactly once")
+    func questionResultCancellation() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                var results: [String] = []
+                let queue = KeystrokeDebouncer(paneId: "%7") { _ in
+                    try? await clock.sleep(for: .seconds(1))
+                    return true
+                }
+                queue.enqueueCodexQuestionExpansion(expectedCount: 1) { results.append("first:\($0)") }
+                queue.enqueueCodexQuestionExpansion(expectedCount: 2) { results.append("second:\($0)") }
+                await Task.megaYield()
+                queue.cancelAll()
+                #expect(results == ["first:false", "second:false"])
+                await clock.advance(by: .seconds(2))
+                await Task.megaYield()
+                #expect(results == ["first:false", "second:false"])
             }
         }
     }

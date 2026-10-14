@@ -90,26 +90,38 @@ focus nor sends Enter/answers, and does not change the agent's working state.
 
 Local panes call `TmuxService.expandCodexQuestions`; viewers enqueue the additive
 `ExpandCodexQuestions(expectedCount:)` intent behind existing keyboard input.
+The intent requires an explicit `codexQuestionsHandled` acknowledgement. The Host
+reports true after tmux accepts the opener, when another viewer already handled
+that count, or after accepting a reduced/empty queue baseline; it reports false
+when a guard defers the attempt. This confirms Host handling, not TUI rendering.
 The Host checks the foreground command, cursor, copy mode and actual screen before
 sending `S-Left`. When tmux reports a shell wrapper instead of `codex`, the Host
 reuses the agent-process scanner with a fresh snapshot to verify Codex in that pane, then rechecks
 the live screen before claiming the opener. Non-shell commands and missing/failed
 process snapshots fail closed. Duplicate counts do not repeat the process scan.
-Host-wide queue-count deduplication prevents duplicate automatic
-opens from multiple viewers, tab remounts and Escape/redraws. Queue reductions
+The Host commits a growing count only after sending the opener successfully;
+clients commit their count only after a positive acknowledgement. Host-wide
+queue-count deduplication prevents duplicate automatic opens from multiple viewers,
+tab remounts and Escape/redraws. Queue reductions
 do not auto-open; a verified empty normal composer resets the baseline. Closed
 panes discard their state. There is no polling timer or history/rollout scan.
 
 This is intentionally a conservative TUI convenience, not an App Server question
 API: unknown/localized layouts, custom empty placeholders and equal-count question
 replacements without an observed queue reduction stay manual. A missed/failed
-attempt is not retried against the same footer. Existing Shift+Left remains usable.
-For remote auto-expansion, update **both Macs**; an old Host safely rejects the new
-command (no raw-key fallback). The elapsed/no-plus footer compatibility fixes require
+attempt can retry on a later native output/focus/eligibility event, without a
+polling loop. A successful attempt remains deduplicated after Escape/redraw.
+Existing Shift+Left remains usable. For remote auto-expansion, update the
+**Host Mac and viewing client (Mac/iOS)**. The Viewer requires the optional
+`supportsCodexQuestionAcknowledgement` capability before sending an intent;
+older Hosts remain manual, without a raw-key fallback or response wait.
+The elapsed/no-plus footer compatibility fixes also require
 an updated **Host Mac and viewing client (Mac/iOS)**: supporting the wire command
 alone is not enough, because the Host independently parses the footer. For example,
 Host 3.0.40 rejects both the compact shortcut and elapsed suffix. Relay deployment
-is unnecessary; the command and wire format are unchanged.
+is unnecessary; the new response and capability fields are optional and travel
+inside the existing encrypted payload. The `CodexQuestions` OSLog category records
+Host refusal reasons and acknowledgement failures without question/draft content.
 
 On iOS, `TerminalCodexQuestionExpansion` runs outside SwiftUI observable state.
 The selected pane's native wrapper reads at most nine live rows, after parsing
@@ -120,10 +132,14 @@ IME, cursor-navigation operation, drag or mouse-scroll momentum, and no blocking
 response form/quick-action overlay. Typing, stream reset, resize, focus loss and
 view teardown cancel pending checks. It never moves focus or scrolls the viewport
 to force eligibility. Counts enter the same `KeystrokeDebouncer` FIFO as text and
-mouse input; Host-wide dedup also covers an iPhone and Mac viewing the same pane.
+mouse input, with a two-second acknowledgement timeout. Pending acknowledgements
+suppress duplicate enqueues; queue cancellation reports failure to the scheduler.
+Host-wide dedup also covers an iPhone and Mac viewing the same pane.
 Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionExpansionTests`,
 `CodexQuestionShellWrapperTests`, `TerminalCodexQuestionExpansionTests` and
-`KeystrokeDebouncerTests.questionExpansionFIFO`. Opening and answering the elapsed
+`KeystrokeDebouncerTests`; wire compatibility is covered by
+`CodexQuestionAcknowledgementTests` and the isolated encrypted relay fixture in
+`TerminalPasteTransportTests`. Opening and answering the elapsed
 footer passed manual acceptance on iPhone Air with the updated Host (2026-09-30).
 The complete UIKit focus/scroll/menu matrix still needs on-device acceptance;
 the scheduler and Host guards run in unit tests.

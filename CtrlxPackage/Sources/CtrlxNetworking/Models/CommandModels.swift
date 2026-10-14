@@ -1295,7 +1295,6 @@ public extension CommandType {
     var requiresResponse: Bool {
         switch self {
         case .sendKeystroke,
-             .expandCodexQuestions,
              .sendRawInput,
              .stopTerminalStream:
             false
@@ -1358,6 +1357,9 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let fileBrowser: FileBrowserResponse?
     public let browser: RemoteBrowserResponse?
     public let simulator: RemoteSimulatorResponse?
+    /// True only after the Host sent the opener or already handled this queue.
+    /// Missing on older Hosts; a generic success is not an acknowledgement.
+    public let codexQuestionsHandled: Bool?
 
     public init(
         commandId: UUID,
@@ -1371,7 +1373,8 @@ public struct CommandResponseMessage: Codable, Sendable {
         sessionWorktree: AgentForkWorktree? = nil,
         fileBrowser: FileBrowserResponse? = nil,
         browser: RemoteBrowserResponse? = nil,
-        simulator: RemoteSimulatorResponse? = nil
+        simulator: RemoteSimulatorResponse? = nil,
+        codexQuestionsHandled: Bool? = nil
     ) {
         self.commandId = commandId
         self.success = success
@@ -1385,6 +1388,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.fileBrowser = fileBrowser
         self.browser = browser
         self.simulator = simulator
+        self.codexQuestionsHandled = codexQuestionsHandled
     }
 
     public static func success(for commandId: UUID, paneId: String? = nil) -> CommandResponseMessage {

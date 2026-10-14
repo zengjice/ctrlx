@@ -11,8 +11,8 @@ import Vapor
 @MainActor
 @Suite("Terminal paste over encrypted WebSockets", .serialized)
 struct TerminalPasteTransportTests {
-    @Test("Acknowledged paste cannot overtake keys or be overtaken by following Send")
-    func hostInputFIFO() async throws {
+    @Test("Acknowledged paste and question intents preserve Host input order", arguments: [false, true])
+    func hostInputFIFO(questions: Bool) async throws {
         let originalVersion = VersionCompatibility.appVersionOverride
         VersionCompatibility.appVersionOverride = "3.0.43"
         defer { VersionCompatibility.appVersionOverride = originalVersion }
@@ -38,11 +38,13 @@ struct TerminalPasteTransportTests {
             )
             let viewer = ViewerRelayClient()
             host.onSessionStateRequest = {
-                SessionStateMessage(pairId: "", paneStates: [:], supportsSessionWorktrees: true, supportsTerminalPaste: true, supportsTerminalFit: true, supportsFileBrowsing: true)
+                SessionStateMessage(pairId: "", paneStates: [:], supportsSessionWorktrees: true, supportsTerminalPaste: true, supportsCodexQuestionAcknowledgement: true, supportsTerminalFit: true, supportsFileBrowsing: true)
             }
             let (keyGate, releaseKeys) = AsyncStream<Void>.makeStream()
-            let (pasteGate, releasePaste) = AsyncStream<Void>.makeStream()
-            defer { releaseKeys.finish(); releasePaste.finish() }
+            let (inputGate, releaseInput) = AsyncStream<Void>.makeStream()
+            defer { releaseKeys.finish()
+                releaseInput.finish()
+            }
             var events: [String] = []
             host.onCommand = { command in
                 switch command.command {
@@ -50,17 +52,22 @@ struct TerminalPasteTransportTests {
                     events.append("keys-start")
                     for await _ in keyGate { break }
                     events.append("keys-end")
-                case let .pasteTerminalText(paste):
-                    #expect(paste.text == "first\nsecond\n")
-                    events.append("paste-start")
-                    for await _ in pasteGate { break }
-                    events.append("paste-end")
+                case .pasteTerminalText,
+                     .expandCodexQuestions:
+                    if case let .pasteTerminalText(paste) = command.command {
+                        #expect(paste.text == "first\nsecond\n")
+                    }
+                    events.append("input-start")
+                    for await _ in inputGate {
+                        break
+                    }
+                    events.append("input-end")
                 case .sendKeystroke(.init([.enter])):
                     events.append("send")
                 default:
                     break
                 }
-                return .success(for: command.id)
+                return CommandResponseMessage(commandId: command.id, success: true, codexQuestionsHandled: true)
             }
             await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test",
                                publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
@@ -70,11 +77,17 @@ struct TerminalPasteTransportTests {
                                  partnerPublicKeyId: hostEncryption.keyId)
             do {
                 try await waitUntil { host.isViewerConnected && viewer.isHostConnected }
-                try await waitUntil { viewer.hostSupportsTerminalPaste }
+                try await waitUntil { viewer.hostSupportsTerminalPaste && viewer.hostSupportsCodexQuestionAcknowledgement }
                 _ = await viewer.sendCommand(SendKeystroke([.text("before")]), paneId: "%7")
                 try await waitUntil { events == ["keys-start"] }
                 let frameCount = await relay.encryptedFrames
-                let pasteTask = Task { await viewer.sendCommand(PasteTerminalText(text: "first\nsecond\n"), paneId: "%7") }
+                let inputTask = Task {
+                    if questions {
+                        await viewer.sendCommand(ExpandCodexQuestions(expectedCount: 1), paneId: "%7")
+                    } else {
+                        await viewer.sendCommand(PasteTerminalText(text: "first\nsecond\n"), paneId: "%7")
+                    }
+                }
                 try await waitUntil { await relay.encryptedFrames > frameCount }
                 _ = await viewer.sendCommand(SendKeystroke([.enter]), paneId: "%7")
                 try await waitUntil { await relay.encryptedFrames >= frameCount + 2 }
@@ -82,25 +95,27 @@ struct TerminalPasteTransportTests {
                 try await Task.sleep(for: .milliseconds(50))
                 #expect(events == ["keys-start"])
                 releaseKeys.yield()
-                try await waitUntil { events.contains("paste-start") }
+                try await waitUntil { events.contains("input-start") }
                 try await Task.sleep(for: .milliseconds(50))
-                #expect(events == ["keys-start", "keys-end", "paste-start"])
-                releasePaste.yield()
-                let result = await pasteTask.value
-                if case .failure(let error) = result { Issue.record("Paste did not acknowledge: \(error)") }
+                #expect(events == ["keys-start", "keys-end", "input-start"])
+                releaseInput.yield()
+                let result = await inputTask.value
+                if case let .failure(error) = result {
+                    Issue.record("Input did not acknowledge: \(error)")
+                }
                 try await waitUntil { events.last == "send" }
-                #expect(events == ["keys-start", "keys-end", "paste-start", "paste-end", "send"])
+                #expect(events == ["keys-start", "keys-end", "input-start", "input-end", "send"])
                 events.removeAll()
                 let debouncer = KeystrokeDebouncer(paneId: "%7", relayClient: viewer)
                 defer { debouncer.cancelAll() }
                 debouncer.enqueuePasteText("first\nsecond\n") { events.append("draft") }
                 debouncer.enqueueImmediately([.enter]) { events.append("observed-send") }
-                try await waitUntil { events == ["paste-start"] }
+                try await waitUntil { events == ["input-start"] }
                 try await Task.sleep(for: .milliseconds(50))
-                #expect(events == ["paste-start"])
-                releasePaste.yield()
+                #expect(events == ["input-start"])
+                releaseInput.yield()
                 try await waitUntil { events.contains("observed-send") && events.contains("send") }
-                #expect(Array(events.prefix(3)) == ["paste-start", "paste-end", "draft"])
+                #expect(Array(events.prefix(3)) == ["input-start", "input-end", "draft"])
                 let draftIndex = try #require(events.firstIndex(of: "draft"))
                 let sendIndex = try #require(events.firstIndex(of: "observed-send"))
                 #expect(draftIndex < sendIndex)
@@ -144,7 +159,7 @@ struct TerminalPasteTransportTests {
                 #expect(await relay.errors.isEmpty)
             } catch {
                 releaseKeys.finish()
-                releasePaste.finish()
+                releaseInput.finish()
                 await viewer.disconnect()
                 await host.disconnect()
                 throw error
@@ -190,8 +205,12 @@ struct TerminalPasteTransportTests {
             let receivedState = LockIsolated(false)
             viewer.onSessionState = { _ in receivedState.setValue(true) }
             host.onSessionStateRequest = {
-                SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryBrowsing: true,
-                                    supportsDirectoryCreation: capability, supportsSessionWorktrees: capability, supportsTerminalPaste: capability, supportsTerminalFit: capability)
+                SessionStateMessage(
+                    pairId: "", paneStates: [:], supportsDirectoryBrowsing: true,
+                    supportsDirectoryCreation: capability, supportsSessionWorktrees: capability,
+                    supportsTerminalPaste: capability, supportsCodexQuestionAcknowledgement: capability,
+                    supportsTerminalFit: capability
+                )
             }
             var commands: [CommandType] = []
             host.onCommand = { command in
@@ -207,6 +226,11 @@ struct TerminalPasteTransportTests {
             do {
                 try await waitUntil { host.isViewerConnected && viewer.isHostConnected && receivedState.value }
                 let frameCount = await relay.encryptedFrames
+                #expect(!viewer.hostSupportsCodexQuestionAcknowledgement)
+                let questions = await viewer.sendCommand(ExpandCodexQuestions(expectedCount: 1), paneId: "%7")
+                if case .success = questions {
+                    Issue.record("Old Host accepted acknowledged question expansion")
+                }
                 let started = ContinuousClock.now
                 let fit = await viewer.sendCommand(ResizeTmuxPane(width: 64, height: 44, userInitiated: true), paneId: "@1")
                 if case .success = fit { Issue.record("Old Host accepted Fit") }
@@ -241,10 +265,10 @@ struct TerminalPasteTransportTests {
                 // A later capability offer enables the operation, but is never
                 // carried over to a disconnected or replacement Host.
                 host.onSessionStateRequest = {
-                    SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryCreation: true, supportsSessionWorktrees: true, supportsTerminalPaste: true, supportsTerminalFit: true, supportsFileBrowsing: true)
+                    SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryCreation: true, supportsSessionWorktrees: true, supportsTerminalPaste: true, supportsCodexQuestionAcknowledgement: true, supportsTerminalFit: true, supportsFileBrowsing: true)
                 }
                 await host.pushSessionState()
-                try await waitUntil { viewer.hostSupportsTerminalPaste && viewer.hostSupportsTerminalFit && viewer.hostSupportsDirectoryCreation && viewer.hostSupportsFileBrowsing && viewer.hostSupportsSessionWorktrees }
+                try await waitUntil { viewer.hostSupportsCodexQuestionAcknowledgement && viewer.hostSupportsTerminalPaste && viewer.hostSupportsTerminalFit && viewer.hostSupportsDirectoryCreation && viewer.hostSupportsFileBrowsing && viewer.hostSupportsSessionWorktrees }
                 #expect(await viewer.send(PrepareSessionWorktree(path: "/Host").commandType, paneId: ""))
                 #expect(commands.last == PrepareSessionWorktree(path: "/Host").commandType)
                 #expect(await viewer.send(worktreeSession.commandType, paneId: ""))
@@ -259,18 +283,27 @@ struct TerminalPasteTransportTests {
                 #expect(commands.last == PasteTerminalText(text: "one\ntwo").commandType)
                 host.onCommand = { command in
                     commands.append(command.command)
+                    if case let .expandCodexQuestions(spec) = command.command {
+                        return CommandResponseMessage(commandId: command.id, success: true, codexQuestionsHandled: spec.expectedCount == 3 ? nil : spec.expectedCount == 2)
+                    }
                     if case .pasteTerminalText = command.command {
                         return .failure(for: command.id, error: "Paste rejected by tmux")
                     }
                     return .success(for: command.id)
                 }
+                var questionResults: [Bool] = []
+                for count in [1, 2, 3] {
+                    debouncer.enqueueCodexQuestionExpansion(expectedCount: count) { questionResults.append($0) }
+                }
+                try await waitUntil { questionResults.count == 3 }
+                #expect(questionResults == [false, true, false])
                 observed.removeAll()
                 debouncer.enqueuePasteText("host-rejected") { observed.append("rejected-paste") }
                 debouncer.enqueueImmediately([.enter]) { observed.append("empty-enter") }
                 try await waitUntil { failures.count == 2 && observed == ["empty-enter"] }
                 #expect(failures.last?.contains("Paste rejected by tmux") == true)
                 await viewer.disconnect()
-                #expect(!viewer.hostSupportsTerminalPaste && !viewer.hostSupportsTerminalFit && !viewer.hostSupportsDirectoryCreation && !viewer.hostSupportsSessionWorktrees)
+                #expect(!viewer.hostSupportsCodexQuestionAcknowledgement && !viewer.hostSupportsTerminalPaste && !viewer.hostSupportsTerminalFit && !viewer.hostSupportsDirectoryCreation && !viewer.hostSupportsSessionWorktrees)
             } catch {
                 await viewer.disconnect()
                 await host.disconnect()

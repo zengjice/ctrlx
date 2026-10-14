@@ -3596,6 +3596,7 @@
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
                     supportsTerminalPaste: true,
+                    supportsCodexQuestionAcknowledgement: true,
                     supportsTerminalFit: true,
                     supportsFileBrowsing: true,
                     supportsFileDownloads: true,

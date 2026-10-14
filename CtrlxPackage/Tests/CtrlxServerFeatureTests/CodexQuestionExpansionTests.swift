@@ -11,20 +11,27 @@
     @Suite("Codex question expansion")
     @MainActor
     struct CodexQuestionExpansionTests {
-        nonisolated private static let supportedHints = [
+        private nonisolated static let supportedHints = [
             "shift + ← to answer", "shift+← to answer", "shift← to answer",
             "⇧← to answer", "⇧ + ← to answer", "Shift + Left to answer",
         ]
-        nonisolated private static let supportedSuffixes = ["", " · 14s", " · 1m 02s"]
+        private nonisolated static let supportedSuffixes = ["", " · 14s", " · 1m 02s"]
 
-        nonisolated private static func screen(
+        private nonisolated static func screen(
             count: Int = 4,
             composer: String = "› Ask Codex to do anything",
             hint: String = "shift + ← to answer",
             suffix: String = ""
         ) -> [String] {
-            ["output", "• Queued follow-up inputs", "  ? \(count) \(count == 1 ? "question" : "questions")\(suffix)",
-             "    \(hint)", "", composer, "  gpt-6-astra · project"]
+            [
+                "output",
+                "• Queued follow-up inputs",
+                "  ? \(count) \(count == 1 ? "question" : "questions")\(suffix)",
+                "    \(hint)",
+                "",
+                composer,
+                "  gpt-6-astra · project",
+            ]
         }
 
         @Test("Recognizes old and new Codex footers at the empty live composer", arguments: [1, 2, 4, 999], supportedHints)
@@ -65,14 +72,15 @@
             #expect(CodexQuestionPrompt(lines: lines, cursorRow: 5, cursorColumn: 2) == nil)
         }
 
-        @Test("Unknown counts fail closed", arguments: [-1, 0, 1000])
+        @Test("Unknown counts fail closed", arguments: [-1, 0, 1_000])
         func invalidCount(count: Int) {
             #expect(CodexQuestionPrompt(lines: Self.screen(count: count), cursorRow: 5, cursorColumn: 2) == nil)
         }
 
         @Test("Only the known normal empty composer can report a cleared queue")
         func clearQueue() {
-            #expect(CodexQuestionPrompt(lines: ["output", "› Ask Codex to do anything"], cursorRow: 1, cursorColumn: 2)?.count == 0)
+            let count = CodexQuestionPrompt(lines: ["output", "› Ask Codex to do anything"], cursorRow: 1, cursorColumn: 2)?.count
+            #expect(count == 0)
             #expect(CodexQuestionPrompt(lines: ["Question?", "›"], cursorRow: 1, cursorColumn: 2) == nil)
             #expect(CodexQuestionPrompt(lines: [], cursorRow: 0, cursorColumn: 2) == nil)
         }
@@ -116,7 +124,7 @@
             let command = CommandMessage(paneId: "%7", command: ExpandCodexQuestions(expectedCount: 4).commandType)
             let decoded = try JSONDecoder().decode(CommandMessage.self, from: JSONEncoder().encode(command))
             #expect(decoded.command == .expandCodexQuestions(ExpandCodexQuestions(expectedCount: 4)))
-            #expect(!decoded.command.requiresResponse)
+            #expect(decoded.command.requiresResponse)
         }
 
         @Test("Host and multiple viewers share one deduplicated opener", arguments: supportedHints)
@@ -200,6 +208,40 @@
             #expect(!commands.value.contains { $0.contains("send-keys") })
         }
 
+        @Test("A failed tmux opener does not consume the queue; acknowledgement suppresses later duplicates")
+        func failedSendCanRetry() async {
+            let sends = LockIsolated(0)
+            let eligible = LockIsolated(false)
+            await withDependencies {
+                $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                    if arguments.contains("send-keys") {
+                        let count = sends.withValue { $0 += 1
+                            return $0
+                        }
+                        return ProcessResult(exitCode: count == 1 ? 1 : 0, stdout: Data(), stderr: Data("test send failure".utf8))
+                    }
+                    let prefix = eligible.value ? "codex\t2\t5\t0\n" : "codex\t2\t5\t1\n"
+                    return ProcessResult(exitCode: 0, stdout: Data((prefix + Self.screen(count: 1).joined(separator: "\n")).utf8), stderr: Data())
+                }
+            } operation: {
+                let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
+                let executor = TmuxCommandExecutor(tmuxService: tmux)
+                let command = CommandMessage(paneId: "%7", command: ExpandCodexQuestions(expectedCount: 1).commandType)
+                let deferred = await executor.execute(command)
+                #expect(deferred.success && deferred.codexQuestionsHandled == false)
+                eligible.setValue(true)
+                let failed = await executor.execute(command)
+                #expect(!failed.success)
+                #expect(tmux.codexQuestionStates["%7"] == nil)
+                let retried = await executor.execute(command)
+                #expect(retried.success && retried.codexQuestionsHandled == true)
+                eligible.setValue(false) // The collapsed footer may now be gone.
+                let duplicate = await executor.execute(command)
+                #expect(duplicate.codexQuestionsHandled == true)
+                #expect(sends.value == 2)
+            }
+        }
+
         @Test("Simultaneous viewers cannot race two expansion checks")
         func concurrentViewers() async throws {
             let commands = LockIsolated<[[String]]>([])
@@ -213,8 +255,8 @@
                 }
             } operation: {
                 let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
-                async let first: Void = tmux.expandCodexQuestions(paneID: "%7", expectedCount: 4)
-                async let second: Void = tmux.expandCodexQuestions(paneID: "%7", expectedCount: 4)
+                async let first = tmux.expandCodexQuestions(paneID: "%7", expectedCount: 4)
+                async let second = tmux.expandCodexQuestions(paneID: "%7", expectedCount: 4)
                 _ = try await (first, second)
             }
             #expect(commands.value.filter { $0.contains("send-keys") }.count == 1)

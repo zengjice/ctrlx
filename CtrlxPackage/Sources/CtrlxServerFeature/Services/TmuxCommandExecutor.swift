@@ -57,7 +57,8 @@ public actor TmuxCommandExecutor {
                 )
 
             case let .expandCodexQuestions(spec):
-                try await tmuxService.expandCodexQuestions(paneID: command.paneId, expectedCount: spec.expectedCount)
+                let handled = try await tmuxService.expandCodexQuestions(paneID: command.paneId, expectedCount: spec.expectedCount)
+                return CommandResponseMessage(commandId: command.id, success: true, codexQuestionsHandled: handled)
 
             case let .sendRawInput(spec):
                 guard let data = spec.data, !data.isEmpty else {

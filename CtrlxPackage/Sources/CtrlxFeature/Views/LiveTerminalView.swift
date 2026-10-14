@@ -530,11 +530,12 @@
                         keyboardRequested: inputPresentation.keyboardRequested,
                         keyboardIsTransitioning: keyboardIsTransitioning,
                         questionExpansionEnabled: scenePhase == .active && isConnected && !isInputSuspended
+                            && relayClient.hostSupportsCodexQuestionAcknowledgement
                             && !linkPresentation.suspendsTerminalInput
                             && coordinator.isReadyForToolbarInput && responseState?.request.isBlocking != true,
-                        onExpandCodexQuestions: { count in
+                        onExpandCodexQuestions: { count, completion in
                             guard isConnected, relayClient.isHostConnected else { return false }
-                            return coordinator.enqueueCodexQuestionExpansion(count: count, relayClient: relayClient)
+                            return coordinator.enqueueCodexQuestionExpansion(count: count, relayClient: relayClient, onResult: completion)
                         },
                         onInput: { keys in
                             enqueueTerminalKeys(keys)
@@ -1001,12 +1002,12 @@
             keystrokeDebouncer?.enqueueRawInput(data)
         }
 
-        func enqueueCodexQuestionExpansion(count: Int, relayClient: ViewerRelayClient) -> Bool {
+        func enqueueCodexQuestionExpansion(count: Int, relayClient: ViewerRelayClient, onResult: @escaping @MainActor (Bool) -> Void) -> Bool {
             guard isReadyForToolbarInput else { return false }
             if keystrokeDebouncer == nil {
                 keystrokeDebouncer = makeInputQueue(relayClient: relayClient)
             }
-            keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count)
+            keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count, onResult: onResult)
             return true
         }
 
@@ -1424,7 +1425,7 @@
         let keyboardIsTransitioning: Bool
 
         let questionExpansionEnabled: Bool
-        let onExpandCodexQuestions: @MainActor (Int) -> Bool
+        let onExpandCodexQuestions: @MainActor (Int, @escaping @MainActor (Bool) -> Void) -> Bool
 
         /// Callback when user types (keys are ready for relay transmission)
         let onInput: @MainActor ([TmuxKey]) -> Void

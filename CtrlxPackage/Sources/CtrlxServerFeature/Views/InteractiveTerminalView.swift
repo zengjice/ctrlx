@@ -501,7 +501,7 @@
         }
 
         /// Sends a guarded intent to the host, not a raw synthetic keypress.
-        var onExpandCodexQuestions: (@MainActor (Int) async -> Void)?
+        var onExpandCodexQuestions: (@MainActor (Int) async -> Bool)?
         private var questionCheckTask: Task<Void, Never>?
         private var questionCheckID: UUID?
         private var lastQuestionCount: Int?
@@ -1986,18 +1986,27 @@
             questionCheckTask = Task { @MainActor [weak self] in
                 do { try await Task.sleep(for: delay) } catch { return }
                 guard let self else { return }
+                var shouldRecheck = true
                 defer {
                     if self.questionCheckID == checkID {
                         self.questionCheckTask = nil
                         self.questionCheckID = nil
-                        self.scheduleQuestionCheck()
+                        if shouldRecheck {
+                            self.scheduleQuestionCheck()
+                        }
                     }
                 }
                 guard !Task.isCancelled, self.questionInputRevision == revision,
                       self.canExpandCodexQuestions, self.currentQuestionPrompt == candidate
                 else { return }
-                self.lastQuestionCount = candidate.count
-                await self.onExpandCodexQuestions?(candidate.count)
+                let handled = await self.onExpandCodexQuestions?(candidate.count) ?? false
+                guard !Task.isCancelled, self.questionCheckID == checkID else { return }
+                if handled {
+                    self.lastQuestionCount = candidate.count
+                }
+                // No timer loop after a rejected attempt. Later native output
+                // or eligibility changes can retry the same queue.
+                shouldRecheck = handled || self.currentQuestionPrompt != candidate
             }
         }
 
