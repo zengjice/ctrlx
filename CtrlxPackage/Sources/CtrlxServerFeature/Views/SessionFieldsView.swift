@@ -103,10 +103,10 @@ extension SessionSortData {
         sidebarFields: [SidebarField],
         sidebarTerminalFields: [SidebarField]
     ) -> SessionSortData {
-        let claudeSession: AgentSession? = session.windows.lazy
+        let claudeSession: AgentSession? = session.windows
             .flatMap(\.panes)
-            .compactMap { paneStates[$0.paneId]?.agentSession }
-            .first
+            .compactMap { paneStates[$0.paneId] }
+            .representativeAgentPane?.agentSession
 
         // The displayed bucket the sidebar's status icon shows: the manual
         // "Set State" override (any pane, window/pane order) wins over the

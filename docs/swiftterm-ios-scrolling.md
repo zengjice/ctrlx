@@ -160,12 +160,23 @@ The Viewer enables Fit only when the Host advertises `supportsTerminalFit`.
 Entering an existing session or explicitly returning to a terminal tab fits the
 selected window once, including window-picker selection and horizontal swipes.
 This also applies to Mac local and remote tabs, including keyboard navigation and
-right-column tab selection. Automatic Fit waits for a usable viewport (and on Mac
-the restored workbench layout), targets the stable window ID, and is consumed
-before dispatch even if the command fails. File/browser views, passive Host
-selection changes and geometry updates cannot arm it. Disconnecting, leaving the
-page or manually fitting cancels a pending request; reconnecting does not retry.
-Hosts without `supportsTerminalFit` retain their dimensions.
+right-column tab selection. Returning from background to foreground on iOS also
+fits the displayed terminal once; a temporary inactive phase, such as opening
+Control Center, does not create a request. On Mac this follows the owning window's
+activation, including detached windows; inactive windows cannot dispatch automatic Fit.
+The focused terminal is preferred when the Mac window shows two terminal columns.
+Automatic Fit waits for a usable viewport (and on Mac the restored workbench
+layout), targets the stable window ID, and is consumed before dispatch even if
+the command fails. Each ready request is sent once, even when the client's cached
+layout matches the measured grid: another client may have resized tmux before a
+fresh snapshot arrives. The Host reads the live tmux layout and skips resize/layout
+commands only if its current grid matches.
+File/browser views, passive Host selection changes and geometry updates cannot
+arm Fit. A pending request survives a disconnect and waits for the connection,
+`supportsTerminalFit` capability and viewport to be ready. Switching tabs replaces
+the pending target; leaving the page or manually fitting cancels it. Completed or
+failed requests are not retried by reconnecting. Hosts without `supportsTerminalFit`
+retain their dimensions.
 
 On Mac and iOS, explicitly closing a selected Host browser fits the terminal revealed
 by the resulting browser-catalog update. The close intent is consumed once,

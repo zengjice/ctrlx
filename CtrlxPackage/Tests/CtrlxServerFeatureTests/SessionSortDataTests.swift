@@ -167,6 +167,76 @@
             #expect(data.latestEventTimestamp == newer)
         }
 
+        @Test("Local and remote task order agrees after ISO 8601 encoding", arguments: [
+            (200.999, ["cm", "ux"]),
+            (201.001, ["ux", "cm"]),
+        ])
+        func localAndRemoteActivityOrder(latestActivity: TimeInterval, expected: [String]) throws {
+            let panes = [
+                makePane("%1", session: "ux", isWindowActive: true),
+                makePane("%2", session: "ux", window: 1),
+                makePane("%3", session: "ux", window: 1, pane: 1, isActive: false),
+                makePane("%4", session: "cm"),
+            ]
+            let activity = ["%1": 100.0, "%2": 100.0, "%3": latestActivity, "%4": 200.001]
+            let states = Dictionary(uniqueKeysWithValues: panes.map { pane in
+                var state = pane.makePaneState()
+                state.agentSession = AgentSession(paneId: pane.paneId, state: .idle)
+                state.lastAgentActivityAt = activity[pane.paneId].map { Date(timeIntervalSince1970: $0) }
+                return (pane.paneId, state)
+            })
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let message = WebSocketMessage.sessionState(SessionStateMessage(pairId: "host", paneStates: states))
+            let decoded = try decoder.decode(WebSocketMessage.self, from: encoder.encode(message))
+            guard case let .sessionState(snapshot) = decoded else {
+                Issue.record("Expected a session state snapshot")
+                return
+            }
+            let local = LocalTmuxSession.groupWindows(LocalTmuxWindow.groupPanes(panes))
+            let remote = TmuxSession.groupWindows(TmuxWindow.groupPanes(Array(snapshot.paneStates.values)))
+            for mode in [SidebarSortMode.statusPriority, .statusPriorityIdleFirst, .recentActivity] {
+                let localOrder = mode.sorted(local) {
+                    SessionSortData.forLocalSession(
+                        $0, paneStates: states, lastActivity: { states[$0]?.lastAgentActivityAt },
+                        sidebarFields: sidebarFields, sidebarTerminalFields: terminalFields
+                    )
+                }.map(\.sessionName)
+                let remoteOrder = SessionSortData.sortedRemoteSessions(
+                    remote, mode: mode, sidebarFields: sidebarFields,
+                    sidebarTerminalFields: terminalFields, homeDirectory: nil
+                ).map(\.sessionName)
+                #expect(localOrder == expected)
+                #expect(remoteOrder == localOrder)
+            }
+        }
+
+        @Test("Local and remote status includes agents beyond the first tab", arguments: [
+            (AgentState.working, 1),
+            (.doneWorking(summary: nil), 0),
+        ])
+        func statusAcrossWindows(state: AgentState, priority: Int) {
+            let panes = [makePane("%1", session: "ux"), makePane("%2", session: "ux", window: 1)]
+            let states = Dictionary(uniqueKeysWithValues: panes.enumerated().map { index, pane in
+                var value = pane.makePaneState()
+                value.agentSession = AgentSession(paneId: pane.paneId, state: index == 0 ? .idle : state)
+                return (pane.paneId, value)
+            })
+            let local = SessionSortData.forLocalSession(
+                makeSession(panes), paneStates: states, lastActivity: { _ in nil },
+                sidebarFields: sidebarFields, sidebarTerminalFields: terminalFields
+            )
+            let remote = TmuxSession.groupWindows(TmuxWindow.groupPanes(Array(states.values)))[0]
+            let remoteData = SessionSortData.forRemoteSession(
+                remote, sidebarFields: sidebarFields, sidebarTerminalFields: terminalFields, homeDirectory: nil
+            )
+            #expect(local.statusPriority == priority)
+            #expect(remoteData.statusPriority == priority)
+            #expect(remote.agentSession?.state == state)
+        }
+
         @Test("Local labels use only the active window and pane metadata")
         func localLabelsUseActiveWindow() {
             let session = makeSession([

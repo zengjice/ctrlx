@@ -40,20 +40,15 @@ struct SessionSidebarRow: View {
         session.activeWindowMetadata(paneStates: windowManager.paneStates)
     }
 
-    /// The first pane state in any window backing an agent session, if any. Also
+    /// The highest-priority agent pane across all windows. Also
     /// the source of its OTEL telemetry / permission mode (#597).
     private var primaryAgentPaneState: PaneState? {
-        for window in session.windows {
-            for pane in window.panes {
-                if let state = windowManager.paneStates[pane.paneId], state.agentSession != nil {
-                    return state
-                }
-            }
-        }
-        return nil
+        session.windows.flatMap(\.panes)
+            .compactMap { windowManager.paneStates[$0.paneId] }
+            .representativeAgentPane
     }
 
-    /// The first Claude session found in any pane of any window, if any.
+    /// The agent whose state represents this session.
     private var claudeSession: AgentSession? {
         primaryAgentPaneState?.agentSession
     }

@@ -17,6 +17,7 @@ public struct MainView: View {
     @Environment(\.e2eeService) private var e2eeService: E2EEService?
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.appearsActive) private var appearsActive
 
     private let detachedWorkspace: DetachedTerminalWorkspace?
 
@@ -334,6 +335,13 @@ public struct MainView: View {
             .onChange(of: selectedRemoteWindowId) { pendingFileLink = nil }
             .onChange(of: selectedRemoteSession) { pendingFileLink = nil }
             .onChange(of: automaticTabFitInput) { fitSelectedTerminalIfReady() }
+            .onChange(of: appearsActive) {
+                guard appearsActive else { return }
+                if automaticTabFit.target == nil {
+                    requestAutomaticTabFit(windowID: focusedTerminalWindowID)
+                }
+                fitSelectedTerminalIfReady()
+            }
             .onDisappear { automaticTabFit.cancel() }
     }
 
@@ -1115,7 +1123,9 @@ public struct MainView: View {
         let description = activeWindow?.activePane.flatMap { windowManager.paneStates[$0.paneId]?.customDescription }
         let color = activeWindow?.activePane.flatMap { windowManager.paneStates[$0.paneId]?.customColor }
         let emoji = activeWindow?.activePane.flatMap { windowManager.paneStates[$0.paneId]?.customEmoji }
-        let claudePane = session.windows.flatMap(\.panes).first { windowManager.paneStates[$0.paneId]?.agentSession != nil }
+        let claudePane = session.windows.flatMap(\.panes)
+            .compactMap { windowManager.paneStates[$0.paneId] }
+            .representativeAgentPane
         // Current sidebar state for the "Set State" menu: the manual override
         // (if any pane has one) wins, else the agent's own state. Matches how
         // `SessionSidebarRow` picks the indicator across the session's panes.
@@ -1124,7 +1134,7 @@ public struct MainView: View {
             .first
         let displayedState = CLISessionState.displayed(
             override: stateOverride,
-            agentState: claudePane.flatMap { windowManager.paneStates[$0.paneId]?.agentSession?.state }
+            agentState: claudePane?.agentSession?.state
         )
         // Compute effective progress here (and not just inside the row) so we can expose
         // a sibling AX element OUTSIDE the Button label below — when the row
@@ -2574,6 +2584,18 @@ public struct MainView: View {
         }
     }
 
+    private var focusedTerminalWindowID: String? {
+        guard
+            let focused = terminalQuickActions.active, focused.isAvailable,
+            focused.hostID == selectedRemoteSession?.hostId else { return nil }
+        if selectedRemoteSession != nil {
+            return selectedRemoteSessionWindows.first { $0.panes.contains { $0.paneId == focused.paneID } }?.stableId
+        }
+        return tmuxService.windows.first {
+            $0.sessionName == currentLocalSession()?.sessionName && $0.panes.contains { $0.paneId == focused.paneID }
+        }?.stableId
+    }
+
     private struct AutomaticTabFitInput: Equatable {
         let pending: TerminalTabFit.Target
         let current: TerminalTabFit.Target
@@ -2634,7 +2656,7 @@ public struct MainView: View {
     }
 
     private func fitSelectedTerminalIfReady() {
-        guard let input = automaticTabFitInput else { return }
+        guard appearsActive, let input = automaticTabFitInput else { return }
         guard input.isVisible else {
             automaticTabFit.cancel()
             return

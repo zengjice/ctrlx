@@ -1,6 +1,6 @@
 import CtrlxNetworking
 
-/// One Fit per explicit tab entry. Geometry and Host snapshots can finish a
+/// One Fit per tab entry or foreground activation. Geometry and Host snapshots can finish a
 /// pending measurement, but cannot schedule another resize.
 public struct TerminalTabFit: Equatable, Sendable {
     public struct Target: Equatable, Sendable {
@@ -34,16 +34,18 @@ public struct TerminalTabFit: Equatable, Sendable {
         measuredRequest: ResizeTmuxPane?
     ) -> ResizeTmuxPane? {
         guard let target else { return nil }
-        guard isAvailable, target.hostID == current.hostID, target.sessionName == current.sessionName else {
+        guard target.hostID == current.hostID, target.sessionName == current.sessionName else {
             cancel()
             return nil
         }
         // Selecting a remote tab may precede the Host's active-window snapshot.
         guard
+            isAvailable,
             current.windowID != nil,
             target.windowID == nil || target.windowID == current.windowID,
             isPresentationReady, let measuredRequest else { return nil }
         cancel()
+        // Host checks live tmux dimensions; a matching client snapshot may be stale.
         return measuredRequest
     }
 }

@@ -381,6 +381,10 @@ Entering a terminal tab requests one automatic Fit after its viewport is ready,
 including in a detached workspace. Closing Files or a browser back to a terminal
 also fits once; returning to another file/browser tab does not. Passive geometry
 changes, moving, enlarging or entering fullscreen do not schedule another Fit.
+Activating the owning window requests one Fit for its displayed terminal,
+preferring the focused terminal when split; inactive windows wait. The Host skips
+resizing when live tmux dimensions match the request; a cached client layout
+cannot suppress it.
 The **Fit** button uses the independent scene's terminal area, excluding its tab
 strip. Both manual and automatic Fit respect terminal ownership, so the main
 window cannot resize detached Windows. Detached workspaces use their transferred

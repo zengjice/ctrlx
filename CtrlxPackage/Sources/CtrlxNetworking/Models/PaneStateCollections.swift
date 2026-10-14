@@ -46,7 +46,23 @@ public struct TerminalOnlySession: Equatable, Sendable, Identifiable {
     }
 }
 
-extension Collection where Element == PaneState {
+public extension Collection where Element == PaneState {
+    /// The agent pane representing a session: attention, then working, then
+    /// idle. Equal-priority agents retain the caller's window/pane order.
+    var representativeAgentPane: PaneState? {
+        var result: PaneState?
+        for pane in self {
+            guard let agent = pane.agentSession else { continue }
+            if agent.needsAttention {
+                return pane
+            }
+            if result == nil || (agent.isWorking && result?.agentSession?.isWorking != true) {
+                result = pane
+            }
+        }
+        return result
+    }
+
     /// Progress displayed for a session's row. A real terminal progress value
     /// from any pane always wins. Only when the whole session has no terminal
     /// progress do we synthesize an indeterminate bar for a working agent.
@@ -54,7 +70,7 @@ extension Collection where Element == PaneState {
     /// Keeping this derived avoids copying agent lifecycle state into
     /// `PaneState.progress`, where hook updates could overwrite explicit
     /// `OSC 9;4` or `ctrlx set-progress` values.
-    public var effectiveProgress: TerminalProgressState? {
+    var effectiveProgress: TerminalProgressState? {
         if let terminalProgress = lazy.compactMap(\.progress).first {
             return terminalProgress
         }
@@ -72,7 +88,7 @@ extension Collection where Element == PaneState {
     /// sidebar's `TmuxSession.cliSessionState` scan — and a partial stamp
     /// still surfaces. Panes with an empty session name (agent-only upserts
     /// that haven't been reconciled with a tmux scan yet) never form a row.
-    public func terminalOnlySessions() -> [TerminalOnlySession] {
+    func terminalOnlySessions() -> [TerminalOnlySession] {
         Dictionary(grouping: self, by: \.sessionName)
             .compactMap { sessionName, panes -> TerminalOnlySession? in
                 guard !sessionName.isEmpty,
@@ -110,7 +126,7 @@ extension Collection where Element == PaneState {
     /// would freeze the phone's badge too low rather than briefly high.
     /// Callers with panes from several hosts must apply this per host so
     /// same-named sessions don't merge.
-    public var pendingSessionCount: Int {
+    var pendingSessionCount: Int {
         let agentPending = filter { $0.agentSession != nil && $0.displayedState == .waiting }.count
         let terminalPending = terminalOnlySessions().count { $0.displayedState == .waiting }
         return agentPending + terminalPending

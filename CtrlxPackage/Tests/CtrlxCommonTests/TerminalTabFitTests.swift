@@ -25,10 +25,12 @@ struct TerminalTabFitTests {
         #expect(take(&fit, current: first) == grid)
         let changedGrid = ResizeTmuxPane(width: 80, height: 24, userInitiated: true)
         #expect(fit.takeRequest(for: first, isAvailable: true, isPresentationReady: true, measuredRequest: changedGrid) == nil)
+        #expect(fit.takeRequest(for: first, isAvailable: false, isPresentationReady: true, measuredRequest: grid) == nil)
+        #expect(take(&fit, current: first) == nil)
         #expect(take(&fit, current: second) == nil)
     }
 
-    @Test("Explicitly returning to the same tab uses its current viewport")
+    @Test("Returning to a tab or foreground activation uses the current viewport")
     func fitsOnEachEntry() {
         var fit = TerminalTabFit()
         fit.request(first)
@@ -66,14 +68,17 @@ struct TerminalTabFitTests {
         #expect(take(&fit, current: first) == nil)
     }
 
-    @Test("Offline or unsupported Hosts consume the request without a reconnect retry")
-    func unavailableHostDoesNotRetry() {
+    @Test("Pending entry waits for reconnect, Fit capability and a ready viewport")
+    func unavailableHostWaits() {
         var fit = TerminalTabFit()
         fit.request(first)
         #expect(fit.takeRequest(for: first, isAvailable: false, isPresentationReady: true, measuredRequest: grid) == nil)
-        #expect(take(&fit, current: first) == nil)
-        fit.request(first)
+        let withoutSnapshot = TerminalTabFit.Target(hostID: first.hostID, sessionName: first.sessionName)
+        #expect(fit.takeRequest(for: withoutSnapshot, isAvailable: false, isPresentationReady: true, measuredRequest: nil) == nil)
+        #expect(fit.target == first)
+        #expect(fit.takeRequest(for: first, isAvailable: true, isPresentationReady: false, measuredRequest: grid) == nil)
         #expect(take(&fit, current: first) == grid)
+        #expect(take(&fit, current: first) == nil)
     }
 
     @Test("Manual fit, hiding the terminal or leaving the page cancels pending work")
@@ -84,10 +89,11 @@ struct TerminalTabFitTests {
         #expect(take(&fit, current: first) == nil)
     }
 
-    @Test("Rapid tab selection replaces the pending target")
+    @Test("Switching tabs while offline replaces the target before reconnect")
     func latestSelectionWins() {
         var fit = TerminalTabFit()
         fit.request(first)
+        #expect(fit.takeRequest(for: first, isAvailable: false, isPresentationReady: true, measuredRequest: grid) == nil)
         fit.request(second)
         #expect(take(&fit, current: first) == nil)
         #expect(take(&fit, current: second) == grid)

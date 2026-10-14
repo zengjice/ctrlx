@@ -2248,6 +2248,7 @@ final public class TmuxService {
               let fitted = TmuxWindowFitLayout.layoutString(layout, width: width, height: height) else {
             throw TmuxError.commandFailed(message: "Terminal size cannot fit the current pane layout")
         }
+        guard layout.width != width || layout.height != height else { return }
         // One tmux command queue: no intermediate layout is published by us.
         let result = try await runTmuxCommand([
             "resize-window", "-t", fields[0], "-x", String(width), "-y", String(height),

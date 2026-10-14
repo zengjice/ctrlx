@@ -151,6 +151,36 @@
 
         // MARK: - Direct mapping
 
+        @Test("Task activity is shared in pane snapshots and survives viewing and metadata refresh")
+        func taskActivitySurvivesViewing() throws {
+            let windowManager = makeWindowManager()
+            let before = Date()
+            windowManager.applyState(
+                pluginID: "echo", sessionID: "s1", state: .doneWorking(summary: nil),
+                tmuxPane: "%7", projectPath: "/tmp/proj"
+            )
+            let activity = try #require(windowManager.paneStates["%7"]?.lastAgentActivityAt)
+            #expect(activity >= before)
+            #expect(activity <= Date())
+            #expect(windowManager.lastActivity(for: "%7") == activity)
+
+            windowManager.markSessionHandled(paneId: "%7")
+            #expect(windowManager.paneStates["%7"]?.agentSession?.state == .idle)
+            let pane = PaneInfo(
+                paneId: "%7", target: "work:0.0", sessionName: "work",
+                windowIndex: 0, paneIndex: 0, command: "codex", currentPath: "/tmp/proj",
+                width: 80, height: 24, isActive: true
+            )
+            windowManager.updatePaneStates(from: [pane])
+            #expect(windowManager.paneStates["%7"]?.lastAgentActivityAt == activity)
+            #expect(windowManager.lastActivity(for: "%7") == activity)
+
+            windowManager.updatePaneStates(from: [])
+            windowManager.updatePaneStates(from: [pane])
+            #expect(windowManager.paneStates["%7"]?.lastAgentActivityAt == nil)
+            #expect(windowManager.lastActivity(for: "%7") == nil)
+        }
+
         @Test("applyState sets the session state directly; the Bools derive from it")
         func applyStateMapping() {
             let windowManager = makeWindowManager()

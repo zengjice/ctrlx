@@ -497,8 +497,7 @@
         private func sessionRow(_ session: TmuxSession) -> some View {
             let activeWindow = session.activeWindow
             let activePaneInSession = activeWindow?.activePane ?? activeWindow?.panes.first
-            // Find the first pane with a Claude session (may differ from the active pane)
-            let claudePaneInSession = session.windows.flatMap(\.panes).first(where: { $0.agentSession != nil })
+            let claudePaneInSession = session.agentPane
             // CLI-driven state override propagated from the host, if any pane has one set.
             let cliSessionState = session.cliSessionState
             // Real terminal progress wins across the session; a working agent
@@ -810,7 +809,7 @@
 
                     // Status label (the plugin model dropped the per-event buffer,
                     // so the row shows the live status rather than an event feed).
-                    Text(session.statusLabel)
+                    Text(cliSessionState?.statusLabel ?? session.statusLabel)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 

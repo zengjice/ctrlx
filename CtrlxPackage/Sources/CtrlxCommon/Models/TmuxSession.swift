@@ -33,9 +33,13 @@ public struct TmuxSession: Identifiable, Sendable {
         windows.lazy.flatMap(\.panes).compactMap(\.cliSessionState).first
     }
 
-    /// The first agent session across the session's panes, if any.
+    /// The highest-priority agent across all windows and panes, if any.
+    public var agentPane: PaneState? {
+        windows.flatMap(\.panes).representativeAgentPane
+    }
+
     public var agentSession: AgentSession? {
-        windows.lazy.flatMap(\.panes).compactMap(\.agentSession).first
+        agentPane?.agentSession
     }
 
     /// The state bucket currently shown on the sidebar (manual override, else
