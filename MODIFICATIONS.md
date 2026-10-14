@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.68 — Reliable question expansion and consistent session activity
+
+- Acknowledge guarded Codex question expansion before deduplicating it. Failed
+  attempts can retry on later terminal events; successful attempts stay closed
+  after Escape. Preserve Host input ordering, report refusal reasons, and gate
+  remote acknowledgement support on the Host capability.
+- Merge `ux`: use the same representative agent state across clients and order
+  idle sessions by their latest task activity. Share Host activity timestamps
+  with Viewers without treating session viewing as new task activity.
+- Preserve pending automatic terminal Fit across reconnects and request one Fit
+  when the owning window or iOS app returns to the foreground. Check live tmux
+  dimensions before skipping an unchanged size, and preserve detached ownership.
+- Release validation: the bounded serial Swift regression passed with 3,091
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, the website build,
+  Mac Debug build and arm64 iOS Simulator build passed. SwiftFormat has no
+  findings on changed lines; existing whole-file findings remain.
+- Distribution: Mac package through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion. iOS
+  changes require a separate build/install; device UI acceptance remains pending.
+
 ## 3.0.67 — Compact iOS session order controls
 
 - Merge `ux`: move Restore Automatic Order beside the new-session button in
