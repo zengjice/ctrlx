@@ -131,7 +131,7 @@ enum TerminalCursorTapNavigation {
         /// When false, tapping the terminal won't show the keyboard.
         /// Use `updateInput(isEnabled:keyboardRequested:)` to control this.
         private(set) var inputEnabled = false
-        var onToggleKeyboard: (() -> Void)?
+        var onKeyboardRequest: ((Bool) -> Void)?
         var onInputPresentationChange: (() -> Void)?
 
         var isInputPresentationReady: Bool {
@@ -867,7 +867,7 @@ enum TerminalCursorTapNavigation {
                     && inputProxy.markedTextRange == nil && window != nil,
                 mouseModeActive: isMouseModeActive,
                 isLiveScreen: terminal.buffer.yDisp == liveRow,
-                isEmptyInputArea: onToggleKeyboard != nil && terminal.isCursorVisible && !terminal.synchronizedOutputActive
+                isEmptyInputArea: onKeyboardRequest != nil && terminal.isCursorVisible && !terminal.synchronizedOutputActive
                     && point.x >= 0 && point.x < CGFloat(terminal.cols) * cellSize.width
                     && TerminalContentTapRouting.isEmptyInputArea(
                         lines: TerminalMultilineCursorNavigation.lines(in: terminal),
@@ -900,12 +900,29 @@ enum TerminalCursorTapNavigation {
                 if let bytes, !bytes.isEmpty {
                     onRawInput?(bytes)
                 }
+                showKeyboardForInputTap(at: point, position: pos)
             case .cursorNavigation:
                 moveInputCursor(to: pos)
+                showKeyboardForInputTap(at: point, position: pos)
             case .toggleKeyboard:
                 cancelCursorNavigation()
-                onToggleKeyboard?()
+                onKeyboardRequest?(!keyboardRequested)
             }
+        }
+
+        private func showKeyboardForInputTap(at point: CGPoint, position: (col: Int, row: Int)) {
+            guard let onKeyboardRequest, !keyboardRequested else { return }
+            let terminal = getTerminal()
+            guard
+                terminal.isCursorVisible, !terminal.synchronizedOutputActive,
+                point.x >= 0, point.x < CGFloat(terminal.cols) * cellSize.width,
+                TerminalContentTapRouting.isInputArea(
+                    lines: TerminalMultilineCursorNavigation.lines(in: terminal),
+                    cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
+                    tap: .init(column: position.col, row: position.row - terminal.buffer.yDisp),
+                    mouseModeActive: isMouseModeActive
+                ) else { return }
+            onKeyboardRequest(true)
         }
 
         /// The remote editor owns its draft. Tap navigation sends only arrows,

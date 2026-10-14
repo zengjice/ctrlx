@@ -527,8 +527,10 @@ Completed single taps now have exactly one owner:
   keyboard through the existing parent/standalone keyboard intent. It emits no
   terminal keys or mouse packets. The known Codex `Ask Codex to do anything`
   placeholder counts as empty; grey color alone and the local keyboard's shadow
-  text do not establish emptiness. Nonempty/unknown text keeps cursor navigation
-  or native TUI clicking, including a multiline draft whose cursor is at Home.
+  text do not establish emptiness. Tapping a nonempty input area preserves cursor
+  navigation or native TUI clicking and requests an open keyboard. Repeated taps
+  never hide it; after hiding it, another input tap reopens it for continued typing.
+  Bounded multiline drafts qualify; output, links and unrelated TUI menus do not.
   IME composition, inactive input, history and unstable redraws cannot toggle.
   The single-tap recognizer still waits for double/triple taps and long press,
   so the existing copy/paste menu and selection behavior are unchanged.

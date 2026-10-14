@@ -68,6 +68,20 @@ struct TerminalContentTapRoutingTests {
         )
     }
 
+    @Test("Keyboard reopening recognizes multiline drafts but excludes output and TUI menus", arguments: [false, true])
+    func draftInputArea(mouse: Bool) {
+        let lines = [line("output"), line("› first", shaded: true), line("  second", shaded: true), line("footer")]
+        for row in lines.indices {
+            #expect(TerminalContentTapRouting.isInputArea(
+                lines: lines, cursor: .init(column: 4, row: 2), tap: .init(column: 3, row: row), mouseModeActive: mouse
+            ) == (row == 1 || row == 2))
+        }
+        #expect(!TerminalContentTapRouting.isInputArea(
+            lines: [line("selected menu item")], cursor: .init(column: 5, row: 0),
+            tap: .init(column: 3, row: 0), mouseModeActive: true
+        ))
+    }
+
     private func line(_ text: String, shaded: Bool = false) -> TerminalMultilineCursorNavigation.Line {
         let characters = Array(text.padding(toLength: 60, withPad: " ", startingAt: 0))
         return .init(cells: characters.map { .init(character: $0, width: 1, inputBackground: shaded) })

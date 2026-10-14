@@ -30,6 +30,27 @@ enum TerminalContentTapRouting {
         return mouseModeActive ? .mouseClick : .cursorNavigation
     }
 
+    static func isInputArea(
+        lines: [TerminalMultilineCursorNavigation.Line],
+        cursor: TerminalMultilineCursorNavigation.Point,
+        tap: TerminalMultilineCursorNavigation.Point,
+        mouseModeActive: Bool
+    ) -> Bool {
+        guard
+            lines.indices.contains(cursor.row), lines.indices.contains(tap.row),
+            lines[cursor.row].cells.indices.contains(cursor.column),
+            lines[tap.row].cells.indices.contains(tap.column) else { return false }
+        if let region = TerminalMultilineCursorNavigation.region(lines: lines, cursor: cursor) {
+            return region.rows.contains(tap.row)
+        }
+        // Mouse-reporting TUIs also contain clickable output and menus.
+        // Without a bounded editor, require a recognizable prompt on this row.
+        if mouseModeActive {
+            guard let inputColumn = lines[cursor.row].inputColumn, cursor.column >= inputColumn else { return false }
+        }
+        return tap.row == cursor.row
+    }
+
     static func isEmptyInputArea(
         lines: [TerminalMultilineCursorNavigation.Line],
         cursor: TerminalMultilineCursorNavigation.Point,
