@@ -95,7 +95,8 @@ send from the terminal. Existing terminal input is never cleared automatically.
 On iOS, the first-row **+ / Attachments** menu owns image input (Photo Library,
 image files, Camera and Paste Image); there is no duplicate image button at the
 top right. In Bottom Bar mode, a single tap in an empty terminal input surface
-shows/hides the keyboard; with draft text, it retains cursor placement. Native
+shows/hides the keyboard; with draft text, it places the cursor and opens the
+keyboard (or keeps it open), so editing can resume after hiding it. Native
 Codex placeholder text is recognized as empty without adding a CtrlX placeholder.
 Double-tap copy/paste remains unchanged. The legacy Top Right keyboard layout
 is still selectable and keeps its explicit keyboard button.

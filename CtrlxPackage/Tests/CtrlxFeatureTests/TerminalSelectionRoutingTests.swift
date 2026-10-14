@@ -25,8 +25,8 @@
             var keys: [TmuxKey] = []
             view.onRawInput = { raw.append($0) }
             view.onInput = { keys += $0 }
-            view.onToggleKeyboard = { [weak view] in
-                requested.toggle()
+            view.onKeyboardRequest = { [weak view] value in
+                requested = value
                 view?.updateInput(isEnabled: true, keyboardRequested: requested)
             }
             for expected in [true, false] {
@@ -38,21 +38,53 @@
             }
         }
 
-        @Test("Draft text retains cursor navigation and multi-tap retains its menu")
-        func draftKeyboardRouting() async throws {
+        @Test("Draft taps reopen the keyboard while retaining cursor navigation", arguments: [false, true])
+        func draftKeyboardRouting(mouseMode: Bool) async throws {
             let (window, view) = await makeView()
             defer { close(window, view) }
-            feed(view, "body\r\n> hello world")
-            var toggles = 0
+            feed(view, "body\r\n\u{1b}[48;5;236m› hello world\u{1b}[K")
+            if mouseMode {
+                feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+            }
+            let proxy = try inputProxy(in: window)
+            var requests: [Bool] = []
             var keys: [TmuxKey] = []
-            view.onToggleKeyboard = { toggles += 1 }
+            var raw: [Data] = []
+            view.onKeyboardRequest = { [weak view] value in
+                requests.append(value)
+                view?.updateInput(isEnabled: true, keyboardRequested: value)
+            }
             view.onInput = { keys += $0 }
-            view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 4.5, y: view.cellDimension.height * 1.5))
-            #expect(toggles == 0 && !keys.isEmpty)
+            view.onRawInput = { raw.append($0) }
+            // Tapping output must not reveal the keyboard, including mouse mode.
+            view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 1.5, y: view.cellDimension.height * 0.5))
+            #expect(requests.isEmpty)
+            raw = []
+            let point = CGPoint(x: view.cellDimension.width * 4.5, y: view.cellDimension.height * 1.5)
+            view.handleContentTap(at: point)
+            await view.inputFocusUpdates.pendingTask?.value
+            #expect(requests == [true])
+            #expect(mouseMode ? !raw.isEmpty : !keys.isEmpty)
+            #expect(proxy.isFirstResponder && proxy.inputView == nil)
+            // Repeated cursor taps keep an open keyboard open.
+            view.handleContentTap(at: point)
+            await view.inputFocusUpdates.pendingTask?.value
+            #expect(requests == [true])
+            view.updateInput(isEnabled: true, keyboardRequested: false)
+            await view.inputFocusUpdates.pendingTask?.value
+            view.handleContentTap(at: point)
+            await view.inputFocusUpdates.pendingTask?.value
+            #expect(requests == [true, true])
+            #expect(proxy.isFirstResponder && proxy.inputView == nil)
             keys = []
-            tap(view, count: 2, column: 4, row: 1)
-            #expect(toggles == 0 && keys.isEmpty && !view.selectionActive)
-            #expect(try inputProxy(in: window).isFirstResponder)
+            proxy.insertText("X")
+            #expect(keys == [.text("X")])
+            if !mouseMode {
+                keys = []
+                tap(view, count: 2, column: 4, row: 1)
+                #expect(requests == [true, true] && keys.isEmpty && !view.selectionActive)
+                #expect(proxy.isFirstResponder)
+            }
         }
 
         @Test("Empty-input taps respect IME, inactive and selection guards")
@@ -62,7 +94,7 @@
             feed(view, "body\r\n> ")
             let proxy = try inputProxy(in: window)
             var toggles = 0
-            view.onToggleKeyboard = { toggles += 1 }
+            view.onKeyboardRequest = { _ in toggles += 1 }
             let point = CGPoint(x: view.cellDimension.width * 5.5, y: view.cellDimension.height * 1.5)
             proxy.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0))
             view.handleContentTap(at: point)

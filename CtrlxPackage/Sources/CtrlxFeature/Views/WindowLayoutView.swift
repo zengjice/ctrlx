@@ -1241,7 +1241,7 @@
                 isActive: terminalIsVisible && pane.paneId == activePaneId,
                 isInputSuspended: !terminalIsVisible || quickActionPresentation.suspendsTerminalInput,
                 parentKeyboardRequested: isKeyboardActive,
-                onToggleKeyboard: { isKeyboardActive.toggle() },
+                onKeyboardRequest: { isKeyboardActive = $0 },
                 settings: settings,
                 telemetry: pane.telemetry,
                 // Tiled panes pass `responseState: .constant(nil)`, so no response

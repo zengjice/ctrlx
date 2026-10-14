@@ -57,7 +57,7 @@
         /// Whether a parent-managed multi-pane layout wants the software keyboard.
         /// The selected pane keeps its shortcut bar available even when this is false.
         let parentKeyboardRequested: Bool
-        let onToggleKeyboard: (@MainActor () -> Void)?
+        let onKeyboardRequest: (@MainActor (Bool) -> Void)?
 
         /// Submits a structured `AgentResponse` for the open response form.
         let submitResponse: ResponseSender
@@ -152,7 +152,7 @@
             isActive: Bool = true,
             isInputSuspended: Bool = false,
             parentKeyboardRequested: Bool = false,
-            onToggleKeyboard: (@MainActor () -> Void)? = nil,
+            onKeyboardRequest: (@MainActor (Bool) -> Void)? = nil,
             settings: IOSSettings,
             telemetry: SessionTelemetry? = nil,
             submitResponse: @escaping ResponseSender,
@@ -189,7 +189,7 @@
             self.isActive = isActive
             self.isInputSuspended = isInputSuspended
             self.parentKeyboardRequested = parentKeyboardRequested
-            self.onToggleKeyboard = onToggleKeyboard
+            self.onKeyboardRequest = onKeyboardRequest
             self.telemetry = telemetry
             self.submitResponse = submitResponse
             self.onTerminalInput = onTerminalInput
@@ -568,7 +568,7 @@
                         codexQuestionID: codexQuestionID,
                         inputEnabled: inputPresentation.inputEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
-                        onToggleKeyboard: settings.terminalKeyboardControlPosition == .bottomBar ? toggleKeyboard : nil,
+                        onKeyboardRequest: settings.terminalKeyboardControlPosition == .bottomBar ? setKeyboardRequested : nil,
                         keyboardIsTransitioning: keyboardIsTransitioning,
                         questionExpansionEnabled: scenePhase == .active && isConnected && !isInputSuspended
                             && relayClient.hostSupportsCodexQuestionAcknowledgement
@@ -663,11 +663,11 @@
             }
         }
 
-        private func toggleKeyboard() {
+        private func setKeyboardRequested(_ requested: Bool) {
             if showKeyboardButton {
-                isInteractive.toggle()
+                isInteractive = requested
             } else {
-                onToggleKeyboard?()
+                onKeyboardRequest?(requested)
             }
         }
 
@@ -1496,7 +1496,7 @@
 
         /// Whether the software keyboard should be visible below the accessory.
         let keyboardRequested: Bool
-        let onToggleKeyboard: (@MainActor () -> Void)?
+        let onKeyboardRequest: (@MainActor (Bool) -> Void)?
         let keyboardIsTransitioning: Bool
 
         let questionExpansionEnabled: Bool
@@ -1546,7 +1546,7 @@
 
             // Wire up input callback
             terminalView.onInput = onInput
-            terminalView.onToggleKeyboard = onToggleKeyboard
+            terminalView.onKeyboardRequest = onKeyboardRequest
             terminalView.onRawInput = onRawInput
             terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
@@ -1725,7 +1725,7 @@
             // sends through the host, pane, or monitoring state captured by its
             // first render.
             terminalView.onInput = onInput
-            terminalView.onToggleKeyboard = onToggleKeyboard
+            terminalView.onKeyboardRequest = onKeyboardRequest
             terminalView.onRawInput = onRawInput
             terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
@@ -1756,7 +1756,7 @@
             coordinator.presentationTask?.cancel()
             coordinator.windowSwipe?.onSwitchWindow = nil
             coordinator.terminalView?.onOpenURL = nil
-            coordinator.terminalView?.onToggleKeyboard = nil
+            coordinator.terminalView?.onKeyboardRequest = nil
             coordinator.terminalView?.invalidateInput()
         }
 
