@@ -3,6 +3,11 @@
 CtrlX releases bind each binary to an immutable source commit.
 
 1. Update `Config/Shared-Base.xcconfig`, version docs and `MODIFICATIONS.md`.
+   Increment `CURRENT_PROJECT_VERSION` for each newly distributed build, even
+   when `MARKETING_VERSION` changes; do not reset it to 1. Keep the app and
+   notification extension on the same build number. iOS uses this build string
+   to recognize updates during synchronization; see Apple's
+   [version and build guidance](https://help.apple.com/xcode/mac/current/en.lproj/devba7f53ad4.html).
 2. Run all boundary checks, Swift tests, website build and Mac/iOS build checks.
 3. Commit from the selected worktree and create `v<version>` at that exact commit.
 4. Copy `.env.example` to the selected root environment file and configure the
