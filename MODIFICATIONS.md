@@ -7,6 +7,32 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.70 — Hold-to-talk input and session order controls
+
+- Merge `ux`: add Restore Automatic Order beside the new-session button in
+  Mac Local and remote Host headers, matching iOS. Keep the context-menu action
+  and disable restoration when the section has no saved manual order.
+- Support hold to talk on Mac Local and Viewer terminals: hold the microphone
+  or a recognized blank prompt cell for 350 ms, then release to insert the final
+  text without Return. Preserve short clicks and selection drags; cancel a
+  pending recording when released during permission preparation. Align the
+  wider microphone with the other 32-point quick-action buttons.
+- Move iOS image input into the bottom Attachments menu. In Bottom Bar mode,
+  tapping a known empty live prompt toggles the keyboard without sending input;
+  preserve draft cursor placement, IME composition and selection gestures.
+- Keep distributed build numbers increasing across marketing versions; this
+  release uses build 3. Document the iOS synchronization requirement.
+- Release validation: the bounded serial Swift regression passed with 3,107
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, website build,
+  Mac Debug build, arm64 iOS Simulator build and the isolated native voice-input
+  interaction test passed. SwiftFormat has no findings on changed lines;
+  whole-file findings outside the changed ranges remain.
+- Distribution: Mac package through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion. Real
+  microphone/permission and iPhone gesture acceptance remain separate from
+  these automated checks; this release does not install iOS.
+
 ## 3.0.69 — Inline voice previews and unified Mac shortcuts
 
 - Merge `macinput`: share context snapshots and one-shot voice delivery across
