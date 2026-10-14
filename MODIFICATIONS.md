@@ -7,6 +7,33 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.69 — Inline voice previews and unified Mac shortcuts
+
+- Merge `macinput`: share context snapshots and one-shot voice delivery across
+  Mac and iOS. Show a compact inline preview without resizing the terminal or
+  opening a popover; insert the final text once, without Return. Cancel stale
+  recordings on input edits, IME composition, target changes or scoped Escape.
+  Keep correction fallback and stage diagnostics explicit.
+- Unify extended Mac shortcuts under Command-Option. Navigate all tab types in
+  the focused split and switch sidebar sessions with the arrow keys; remove
+  redundant terminal-only navigation bindings.
+- Track Codex question identity through Host and Viewer updates, preserving
+  notifications that arrive during a stale pane refresh. Add refusal diagnostics
+  and preserve Codex plugin reinstall diagnostics.
+- Merge `feature-bug`: simulator Viewers annotate the frame already displayed,
+  freezing its image and recipient without waiting for another screenshot.
+  Resume preview polling after cancellation or capture failure.
+- Release validation: the bounded serial Swift regression passed with 3,098
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, website build,
+  Mac Debug build, arm64 iOS Simulator build and the isolated native voice-preview
+  interaction test passed. All 37 Swift files in the voice-input merge pass
+  SwiftFormat.
+- Distribution: Mac package through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion. Real
+  microphone/permission, recognition-quality and paired-device simulator
+  annotation acceptance remain separate; this release does not install iOS.
+
 ## 3.0.68 — Reliable question expansion and consistent session activity
 
 - Acknowledge guarded Codex question expansion before deduplicating it. Failed
