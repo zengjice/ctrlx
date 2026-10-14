@@ -48,13 +48,30 @@ enum VoiceInputDiagnostics {
 
     static func correctionFinished(
         original: String,
-        corrected: String,
+        result: VoiceCorrectionAttempt,
         elapsed: Duration,
         id: String
     ) {
-        logger.notice(
-            "[\(shortID(id), privacy: .public)] correction finished changed=\(corrected != original, privacy: .public) elapsed=\(elapsed.description, privacy: .public) original=\(original, privacy: .private) corrected=\(corrected, privacy: .private)"
-        )
+        switch result {
+        case let .accepted(corrected):
+            logger.notice(
+                "[\(shortID(id), privacy: .public)] correction accepted changed=\(corrected != original, privacy: .public) elapsed=\(elapsed.description, privacy: .public)"
+            )
+        case let .rejected(reason):
+            logger.notice(
+                "[\(shortID(id), privacy: .public)] correction rejected reason=\(reason.rawValue, privacy: .public) elapsed=\(elapsed.description, privacy: .public); preserving transcription"
+            )
+        case .unavailable:
+            break
+        }
+    }
+
+    static func stageFinished(_ stage: VoiceInputStage, elapsed: Duration, id: String) {
+        logger.notice("[\(shortID(id), privacy: .public)] stage=\(stage.rawValue, privacy: .public) elapsed=\(elapsed.description, privacy: .public)")
+    }
+
+    static func delivery(enqueued: Bool, id: String) {
+        logger.notice("[\(shortID(id), privacy: .public)] terminal input enqueued=\(enqueued, privacy: .public)")
     }
 
     static func correctionSkipped(reason: String, id: String) {

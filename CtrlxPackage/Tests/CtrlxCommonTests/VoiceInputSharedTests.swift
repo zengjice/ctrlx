@@ -69,9 +69,11 @@ struct VoiceInputSharedTests {
             })
         } operation: {
             let voice = VoiceInputController(ownership: ownership)
-            voice.toggleRecording(context: "pane context", correctionSelection: nil)
+            voice.toggleRecording(context: .init(terminalText: "pane context"), correctionSelection: nil)
             for _ in 0..<200 {
-                if voice.phase == .idle { break }
+                if voice.phase == .idle {
+                    break
+                }
                 try? await Task.sleep(for: .milliseconds(10))
             }
             #expect(voice.phase == .idle)

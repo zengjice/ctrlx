@@ -1,45 +1,7 @@
 import Foundation
 
-/// The terminal operations needed to make one editable shadow document match
-/// another. Deletions are counted in grapheme clusters because one terminal
-/// Backspace removes one user-visible character, not one UTF-16 code unit.
-struct TerminalInputDocumentDelta: Equatable {
-    let deletionCount: Int
-    let insertion: String
-}
-
-/// Tracks the text already forwarded to the terminal and computes the smallest
-/// end-of-line edit for a new native text document.
-struct TerminalInputDocumentSynchronizer {
-    private(set) var forwardedText = ""
-
-    mutating func advance(to text: String) -> TerminalInputDocumentDelta {
-        var oldIndex = forwardedText.startIndex
-        var newIndex = text.startIndex
-
-        while
-            oldIndex < forwardedText.endIndex,
-            newIndex < text.endIndex,
-            forwardedText[oldIndex] == text[newIndex] {
-            forwardedText.formIndex(after: &oldIndex)
-            text.formIndex(after: &newIndex)
-        }
-
-        let delta = TerminalInputDocumentDelta(
-            deletionCount: forwardedText[oldIndex...].count,
-            insertion: String(text[newIndex...])
-        )
-        forwardedText = text
-        return delta
-    }
-
-    mutating func reset() {
-        forwardedText = ""
-    }
-}
-
 /// A keyboard edit is relative to its last forwarded caret, not the end of the
-/// shadow document. Keep this separate from voice's append/correction stream.
+/// shadow document. Voice uses a separate one-shot insertion, never this shadow.
 struct TerminalInputCursorDelta: Equatable {
     let movementBeforeEdit: Int
     let deletionCount: Int
@@ -79,8 +41,9 @@ struct TerminalInputCursorSynchronizer {
             prefix += 1
         }
         var suffix = 0
-        while suffix < min(old.count, new.count) - prefix,
-              old[old.count - suffix - 1] == new[new.count - suffix - 1] {
+        while
+            suffix < min(old.count, new.count) - prefix,
+            old[old.count - suffix - 1] == new[new.count - suffix - 1] {
             suffix += 1
         }
         let oldEditEnd = old.count - suffix
@@ -163,8 +126,10 @@ struct TerminalInputCursorSynchronizer {
         override func target(forAction action: Selector, withSender sender: Any?) -> Any? {
             if let forwardedNextResponder {
                 switch action {
-                case #selector(copy(_:)), #selector(paste(_:)),
-                     #selector(select(_:)), #selector(selectAll(_:)):
+                case #selector(copy(_:)),
+                     #selector(paste(_:)),
+                     #selector(select(_:)),
+                     #selector(selectAll(_:)):
                     return forwardedNextResponder.target(forAction: action, withSender: sender)
                 default:
                     break
@@ -226,7 +191,9 @@ struct TerminalInputCursorSynchronizer {
         override func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
             // Cancel remote navigation even if composition is later abandoned
             // without committing text or receiving a terminal output frame.
-            if markedText != nil { onCompositionStart?() }
+            if markedText != nil {
+                onCompositionStart?()
+            }
             performNativeEdit { super.setMarkedText(markedText, selectedRange: selectedRange) }
         }
 
@@ -245,7 +212,9 @@ struct TerminalInputCursorSynchronizer {
         /// Commit any candidate first, then forget only local keyboard context;
         /// never erase remote text or guess the remote draft from screen pixels.
         func prepareForExternalInput() {
-            if inputEnabled, markedTextRange != nil { unmarkText() }
+            if inputEnabled, markedTextRange != nil {
+                unmarkText()
+            }
             resetDocument()
         }
 
@@ -287,14 +256,18 @@ struct TerminalInputCursorSynchronizer {
                     "delete=\(delta.deletionCount) insert=\(delta.insertion.debugDescription)"
             )
 
-            if delta.movementBeforeEdit != 0 { onMoveCursor?(delta.movementBeforeEdit) }
+            if delta.movementBeforeEdit != 0 {
+                onMoveCursor?(delta.movementBeforeEdit)
+            }
             for _ in 0..<delta.deletionCount {
                 onDeleteBackward?()
             }
             if !delta.insertion.isEmpty {
                 onInsertText?(delta.insertion)
             }
-            if delta.movementAfterEdit != 0 { onMoveCursor?(delta.movementAfterEdit) }
+            if delta.movementAfterEdit != 0 {
+                onMoveCursor?(delta.movementAfterEdit)
+            }
 
             // Return starts a new terminal input line. The remote command has
             // already received the newline, so reset only the local context.

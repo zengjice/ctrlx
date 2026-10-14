@@ -18,9 +18,9 @@ enum VoiceCorrectionBudget {
 
     /// Reserve the complete utterance and response first. Background context and
     /// phonetic hints can be dropped; the user's utterance must never be truncated.
-    static func onDeviceInput(
+    nonisolated(nonsending) static func onDeviceInput(
         recognition: VoiceRecognitionResult,
-        terminalContext: String?,
+        terminalContext: VoiceInputContextSnapshot?,
         contextualTerms: [String],
         localeIdentifier: String,
         contextSize: Int,
@@ -38,12 +38,12 @@ enum VoiceCorrectionBudget {
         guard fixedTokens < contextSize else { return nil }
 
         var evidence = recognition
-        var context = VoiceInputContext.compacted(
-            terminalContext, maximumCount: VoiceInputContext.maximumTerminalCharacterCount
-        )
+        var contextLimit = terminalContext?.formatted()?.count ?? 0
         while true {
             try Task.checkCancellation()
-            let prompt = VoiceTranscriptCorrectionPrompt.make(recognition: evidence, terminalContext: context)
+            let prompt = VoiceTranscriptCorrectionPrompt.make(
+                recognition: evidence, terminalContext: terminalContext, maximumContextCount: contextLimit
+            )
             let promptTokens = try await countTokens(prompt)
             try Task.checkCancellation()
             if fixedTokens + promptTokens <= contextSize {
@@ -51,9 +51,11 @@ enum VoiceCorrectionBudget {
                     instructions: instructions, prompt: prompt, maximumResponseTokens: responseTokens
                 )
             }
-            if let current = context {
-                let limit = current.count / 2
-                context = limit < 128 ? nil : VoiceInputContext.compacted(current, maximumCount: limit)
+            if contextLimit > 0 {
+                contextLimit /= 2
+                if contextLimit < 128 {
+                    contextLimit = 0
+                }
             } else if !evidence.alternativeTranscripts.isEmpty || !evidence.liveTranscript.isEmpty {
                 evidence = VoiceRecognitionResult(
                     primaryTranscript: recognition.bestAvailableTranscript,

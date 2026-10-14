@@ -7,9 +7,9 @@ struct VoiceCorrectionBudgetTests {
     @Test("Fits the entire request and output, preserving recent context and metadata")
     func boundedContext() async throws {
         let original = "检查新窗口的问题，不要发布。"
-        let context = VoiceInputContext.makeTerminalContext(
-            terminalText: "oldest" + String(repeating: "中文终端输出", count: 3_000) + "newest",
-            metadata: ["Session: reel", "Current path: /tmp/reel"]
+        let context = VoiceInputContextSnapshot(
+            paneMetadata: ["Session: reel", "Current path: /tmp/reel"],
+            terminalText: "oldest" + String(repeating: "中文终端输出", count: 3_000) + "newest"
         )
         let input = try #require(try await VoiceCorrectionBudget.onDeviceInput(
             recognition: VoiceRecognitionResult(primaryTranscript: original),
@@ -32,7 +32,7 @@ struct VoiceCorrectionBudgetTests {
                 alternativeTranscripts: [String(repeating: "候选", count: 3_000)],
                 liveTranscript: String(repeating: "实时", count: 3_000)
             ),
-            terminalContext: "recent text", contextualTerms: [], localeIdentifier: "zh-Hans-CN",
+            terminalContext: .init(terminalText: "recent text"), contextualTerms: [], localeIdentifier: "zh-Hans-CN",
             contextSize: 4_096, countTokens: { $0.utf8.count }
         ))
         #expect(input.prompt.contains(original))
@@ -53,7 +53,7 @@ struct VoiceCorrectionBudgetTests {
     func tokenizedBudget() async throws {
         let input = try #require(try await VoiceCorrectionBudget.onDeviceInput(
             recognition: VoiceRecognitionResult(primaryTranscript: String(repeating: "原文", count: 300)),
-            terminalContext: String(repeating: "背景", count: 3_000), contextualTerms: [], localeIdentifier: "zh-Hans-CN",
+            terminalContext: .init(terminalText: String(repeating: "背景", count: 3_000)), contextualTerms: [], localeIdentifier: "zh-Hans-CN",
             contextSize: 4_096, countTokens: { ($0.utf8.count + 2) / 3 }
         ))
         #expect(input.maximumResponseTokens == 1_264)
@@ -109,11 +109,11 @@ struct VoiceCorrectionLiteralTests {
 struct VoiceInputContextualVocabularyTests {
     @Test("Adds bounded metadata terms but never consumes terminal output")
     func projectTerms() {
-        let context = VoiceInputContext.makeTerminalContext(
-            terminalText: "Session: InjectedTerm\nCurrent path: /tmp/OutputOnly",
-            metadata: VoiceInputContext.paneMetadata(
+        let context = VoiceInputContextSnapshot(
+            paneMetadata: VoiceInputContext.paneMetadata(
                 sessionName: "Reel", windowName: "opening-scene", command: "codex", currentPath: "/tmp/storybook"
-            )
+            ),
+            terminalText: "Session: InjectedTerm\nCurrent path: /tmp/OutputOnly"
         )
         let terms = VoiceInputVocabulary.terms(for: context)
         #expect(terms.contains("Reel"))
@@ -127,9 +127,9 @@ struct VoiceInputContextualVocabularyTests {
 
     @Test("Vocabulary is deduplicated and recalculated for each recording")
     func freshVocabulary() {
-        #expect(VoiceInputVocabulary.terms(for: "Session: ctrlx\nWindow: CTRLX").count == VoiceInputVocabulary.terms.count)
-        let first = VoiceInputVocabulary.terms(for: "Session: ProjectAlpha")
-        let next = VoiceInputVocabulary.terms(for: "Session: ProjectBeta")
+        #expect(VoiceInputVocabulary.terms(for: .init(paneMetadata: ["Session: ctrlx", "Window: CTRLX"])).count == VoiceInputVocabulary.terms.count)
+        let first = VoiceInputVocabulary.terms(for: .init(paneMetadata: ["Session: ProjectAlpha"]))
+        let next = VoiceInputVocabulary.terms(for: .init(paneMetadata: ["Session: ProjectBeta"]))
         #expect(first.contains("ProjectAlpha"))
         #expect(!next.contains("ProjectAlpha"))
         #expect(next.contains("ProjectBeta"))
@@ -138,7 +138,7 @@ struct VoiceInputContextualVocabularyTests {
 
     @Test("Rejects long titles and control-like text")
     func invalidMetadata() {
-        #expect(VoiceInputVocabulary.terms(for: "Session: " + String(repeating: "A", count: 200)) == VoiceInputVocabulary.terms)
-        #expect(VoiceInputVocabulary.terms(for: "Session: \u{1b}[31mBadTitle") == VoiceInputVocabulary.terms)
+        #expect(VoiceInputVocabulary.terms(for: .init(paneMetadata: ["Session: " + String(repeating: "A", count: 200)])) == VoiceInputVocabulary.terms)
+        #expect(VoiceInputVocabulary.terms(for: .init(paneMetadata: ["Session: \u{1b}[31mBadTitle"])) == VoiceInputVocabulary.terms)
     }
 }

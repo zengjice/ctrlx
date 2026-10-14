@@ -351,7 +351,7 @@ enum VoiceCorrectionBenchmark {
             let start = Date()
             let candidate = try await client.correct(
                 recognition: sample.recognition,
-                terminalContext: sample.terminalContext,
+                terminalContext: sample.terminalContext.map { .init(terminalText: $0) },
                 contextualTerms: VoiceInputVocabulary.terms,
                 localeIdentifier: "zh-Hans-CN",
                 selection: selection,
@@ -381,7 +381,9 @@ enum VoiceCorrectionBenchmark {
         _ results: [VoiceCorrectionModelTestResult]
     ) -> [VoiceCorrectionModelTestResult] {
         results.sorted {
-            if $0.score != $1.score { return $0.score > $1.score }
+            if $0.score != $1.score {
+                return $0.score > $1.score
+            }
             if $0.rejectedTermHits != $1.rejectedTermHits {
                 return $0.rejectedTermHits < $1.rejectedTermHits
             }

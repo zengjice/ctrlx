@@ -510,6 +510,20 @@
             #expect(sent.count == count)
         }
 
+        @Test("IME composition invalidates pending dictation before committing terminal text")
+        func compositionInvalidatesVoice() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            var invalidations = 0
+            var keys: [TmuxKey] = []
+            view.onCompositionStart = { invalidations += 1 }
+            view.onInput = { keys += $0 }
+            proxy.setMarkedText("zhong", selectedRange: .init(location: 5, length: 0))
+            #expect(invalidations == 1)
+            #expect(keys.isEmpty)
+        }
+
         @Test("Cross-row taps never send keys for body, padding, mouse mode, IME or inactive input")
         func multilineInputGates() async throws {
             let (window, view) = await makeView()
@@ -538,7 +552,9 @@
             let (window, view) = await makeView()
             defer { close(window, view) }
             if scrollback {
-                for _ in 0..<100 { feed(view, "history\r\n") }
+                for _ in 0..<100 {
+                    feed(view, "history\r\n")
+                }
             }
             paintMultilineDraft(view)
             feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
@@ -549,8 +565,10 @@
             view.onInput = { keys.append($0) }
             view.onRawInput = { raw.append($0) }
             let row = view.getTerminal().buffer.yDisp + 1
-            view.handleContentTap(at: CGPoint(x: 5.5 * view.cellDimension.width,
-                                             y: (CGFloat(row) + 0.5) * view.cellDimension.height))
+            view.handleContentTap(at: CGPoint(
+                x: 5.5 * view.cellDimension.width,
+                y: (CGFloat(row) + 0.5) * view.cellDimension.height
+            ))
             #expect(raw == [Data("\u{1b}[<0;6;2M\u{1b}[<0;6;2m".utf8)])
             #expect(keys.isEmpty)
             // Starting a fresh keyboard context must not delete the old draft.
@@ -579,7 +597,9 @@
         func mouseClickGates() async throws {
             let (window, view) = await makeView()
             defer { close(window, view) }
-            for _ in 0..<100 { feed(view, "history\r\n") }
+            for _ in 0..<100 {
+                feed(view, "history\r\n")
+            }
             paintMultilineDraft(view)
             feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
             let proxy = try inputProxy(in: window)
@@ -608,8 +628,10 @@
             var raw: [Data] = []
             view.onInput = { keys.append($0) }
             view.onRawInput = { raw.append($0) }
-            view.handleContentTap(at: CGPoint(x: 7.5 * view.cellDimension.width,
-                                             y: 2.5 * view.cellDimension.height))
+            view.handleContentTap(at: CGPoint(
+                x: 7.5 * view.cellDimension.width,
+                y: 2.5 * view.cellDimension.height
+            ))
             #expect(keys == [[.right, .right, .right]])
             #expect(raw.isEmpty)
         }
@@ -765,14 +787,16 @@
     }
 
     @MainActor
-    private final class CompletedTerminalMenuTap: UITapGestureRecognizer {
+    final private class CompletedTerminalMenuTap: UITapGestureRecognizer {
         var point = CGPoint.zero
 
         override var state: UIGestureRecognizer.State {
             get { .ended }
-            set {}
+            set { }
         }
 
-        override func location(in view: UIView?) -> CGPoint { point }
+        override func location(in view: UIView?) -> CGPoint {
+            point
+        }
     }
 #endif

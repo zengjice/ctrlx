@@ -241,19 +241,18 @@ struct VoiceTranscriptCorrectionPromptTests {
     @Test("Keeps recent pane context bounded for semantic correction")
     func recentPaneContext() {
         let terminalText = String(repeating: "x", count: 13_000) + "latest output"
-        let context = VoiceInputContext.makeTerminalContext(
-            terminalText: terminalText,
-            metadata: ["Current path: /tmp/ctrlx"]
+        let context = VoiceInputContextSnapshot(
+            paneMetadata: ["Current path: /tmp/ctrlx"], terminalText: terminalText
         )
         let prompt = VoiceTranscriptCorrectionPrompt.make(
             recognition: VoiceRecognitionResult(primaryTranscript: "修复这个问题"),
             terminalContext: context
         )
 
-        #expect(context?.count == VoiceInputContext.maximumTerminalCharacterCount)
-        #expect(context?.hasPrefix("Current path: /tmp/ctrlx") == true)
-        #expect(context?.hasSuffix("latest output") == true)
-        #expect(prompt.contains("Recent pane context"))
+        #expect(context.formatted()?.count == VoiceInputContext.maximumTerminalCharacterCount)
+        #expect(context.formatted()?.hasPrefix("Current path: /tmp/ctrlx") == true)
+        #expect(context.formatted()?.hasSuffix("latest output") == true)
+        #expect(prompt.contains("Read-only context"))
         #expect(!prompt.contains(String(repeating: "x", count: 13_000)))
 
         let instructions = VoiceTranscriptCorrectionPrompt.instructions(
