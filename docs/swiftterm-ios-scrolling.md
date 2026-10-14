@@ -350,8 +350,11 @@ finalization disables repeat taps until the result is ready. Touch and VoiceOver
 use the same action, and context/draft preparation happens only on start.
 
 Terminal voice controls share `TerminalVoiceInputSession` with Mac. Live text stays
-in an in-page preview; only the finalized result is enqueued once, without Return
-or backspace. The preview overlay does not change terminal size or first responder.
+in a compact in-page strip (stage, two lines of recent text, and a cancel icon);
+only the finalized result is enqueued once, without Return or backspace. The
+microphone is the sole start/stop control. The preview overlay does not change
+terminal size or first responder. Toolbar/hardware Escape cancels a recording
+before sending any terminal keys; when idle it retains normal terminal behavior.
 Each recording captures Host/pane and local input revision. Switching targets,
 typing (including starting IME composition), disconnecting, leaving the view/app,
 or opening the toolbar's phrase/command panel cancels it without modifying earlier

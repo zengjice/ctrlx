@@ -195,6 +195,30 @@ struct VoiceInputDeliveryTests {
         }
     }
 
+    @Test("Escape cancels active dictation once and passes through when idle")
+    func cancelIfPresented() async throws {
+        guard #available(macOS 26.0, iOS 26.0, *) else { return }
+        let recorder = Recorder()
+        try await withDependencies {
+            $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
+        } operation: {
+            let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder })
+            let session = TerminalVoiceInputSession(voice: voice)
+            #expect(!session.cancelIfPresented())
+            session.toggle(in: context(), snapshot: nil, selection: nil)
+            try await wait { voice.phase == .recording }
+            recorder.update?("不应插入")
+            #expect(session.cancelIfPresented())
+            #expect(!session.cancelIfPresented())
+            #expect(voice.phase == .idle)
+            #expect(voice.completedTranscript == nil)
+            session.deliver(in: context()) { _ in
+                Issue.record("Escape must not deliver cancelled speech")
+                return true
+            }
+        }
+    }
+
     @Test("An old correction cannot overwrite a new recording and an unsuccessful enqueue is not retried")
     func restartAfterCancel() async throws {
         guard #available(macOS 26.0, iOS 26.0, *) else { return }

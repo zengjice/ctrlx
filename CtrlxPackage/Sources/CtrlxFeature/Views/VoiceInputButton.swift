@@ -137,7 +137,7 @@ extension View {
                         VoiceInputControl(controller: controller, isDisabled: isDisabled, toggleRecording: toggle)
                     }
                 if controller.phase != .idle {
-                    VoiceInputPreview(voice: controller, cancel: cancel, stop: toggle)
+                    VoiceInputPreview(voice: controller, cancel: cancel)
                 }
             }
             .onChange(of: controller.completedTranscript) {

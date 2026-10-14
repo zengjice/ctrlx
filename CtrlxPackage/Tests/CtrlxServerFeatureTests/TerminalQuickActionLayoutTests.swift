@@ -34,7 +34,7 @@ struct TerminalQuickActionLayoutTests {
             // 84 leaves room for the adjacent session identifier as well.
             for ownsFocus in [true, false] {
                 let view = TerminalQuickActionStatusBarButtons(
-                    hostID: hostID, paneIDs: ownsFocus ? ["%1"] : ["%2"]
+                    hostID: hostID, paneIDs: ownsFocus ? ["%1"] : ["%2"], voiceSession: TerminalVoiceInputSession()
                 )
                 .environment(\.terminalQuickActions, router)
                 .environment(coordinator)
@@ -81,6 +81,7 @@ struct TerminalQuickActionLayoutTests {
                         router.focus(TerminalQuickActionEndpoint(
                             hostID: hostID, paneID: focusedPane, isVisible: { true }, enqueue: { _ in }
                         ))
+                        @MainActor
                         func pane(_ id: String) -> some View {
                             VStack(spacing: 0) {
                                 // A viewport with no tmux connection: exercise the same sizing

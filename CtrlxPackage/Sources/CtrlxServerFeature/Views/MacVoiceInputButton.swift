@@ -7,18 +7,16 @@ struct MacVoiceInputButton: View {
     var ownsShortcutFocus = true
     let settings: VoiceCorrectionSettings
     let context: TerminalPhraseContext
-    let targetLabel: String
+    let session: TerminalVoiceInputSession
     let isSuspended: Bool
     let contextProvider: @MainActor () -> VoiceInputContextSnapshot?
     let willStart: @MainActor () -> Void
     @Environment(\.scenePhase) private var scenePhase
-    @State private var session = TerminalVoiceInputSession()
     private var voice: VoiceInputController {
         session.voice
     }
 
     @State private var request: TerminalVoiceInputRequest?
-    @State private var showsPopover = false
 
     var body: some View {
         Button(action: toggleRecording) {
@@ -35,11 +33,6 @@ struct MacVoiceInputButton: View {
         .accessibilityValue(voice.phase.accessibilityValue)
         .accessibilityHint(voice.phase.accessibilityHint)
         .accessibilityIdentifier("terminal-voice-input-control")
-        .background {
-            MacVoiceInputPopover(isPresented: showsPopover, onCancel: cancel) {
-                preview
-            }
-        }
         .onChange(of: voice.completedTranscript) {
             guard voice.completedTranscript != nil, let captured = request else { return }
             guard !isSuspended else { cancel()
@@ -49,12 +42,8 @@ struct MacVoiceInputButton: View {
             session.deliver(in: context) { text in
                 captured.insert(text, router: router, context: context)
             }
-            showsPopover = false
         }
         .onChange(of: voice.phase) {
-            if voice.phase == .recording {
-                showsPopover = true
-            }
             if voice.phase == .idle, voice.completedTranscript == nil {
                 cancel()
             }
@@ -80,11 +69,6 @@ struct MacVoiceInputButton: View {
         .modifier(VoiceInputErrorAlert(voice: voice))
     }
 
-    private var preview: some View {
-        VoiceInputPreview(voice: voice, targetLabel: targetLabel, cancel: cancel, stop: toggleRecording)
-            .frame(width: 360)
-    }
-
     private func toggleRecording() {
         if voice.phase == .idle {
             guard !isSuspended else { return }
@@ -92,8 +76,6 @@ struct MacVoiceInputButton: View {
             willStart()
             request = captured
             session.toggle(in: context, snapshot: contextProvider(), selection: settings.selection)
-            // Keep permission prompts outside the preview; preparation retains
-            // the microphone's spinner/cancel action.
             if voice.phase == .idle {
                 request = nil
             }
@@ -109,7 +91,6 @@ struct MacVoiceInputButton: View {
 
     private func cancel() {
         request = nil
-        showsPopover = false
         session.cancel()
     }
 }

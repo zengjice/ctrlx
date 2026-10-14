@@ -13,10 +13,11 @@ struct TerminalWindowStatusBar: View {
     let permissionMode: String?
 
     @Environment(AppSettings.self) private var settings
+    @State private var voiceSession = TerminalVoiceInputSession()
 
     var body: some View {
         HStack(spacing: 0) {
-            TerminalQuickActionStatusBarButtons(hostID: hostID, paneIDs: paneIDs)
+            TerminalQuickActionStatusBarButtons(hostID: hostID, paneIDs: paneIDs, voiceSession: voiceSession)
             Spacer(minLength: 0)
 
             ViewThatFits(in: .horizontal) {
@@ -57,5 +58,6 @@ struct TerminalWindowStatusBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(settings.theme.chromeBackgroundColor)
+        .modifier(MacVoiceInputOverlay(session: voiceSession))
     }
 }

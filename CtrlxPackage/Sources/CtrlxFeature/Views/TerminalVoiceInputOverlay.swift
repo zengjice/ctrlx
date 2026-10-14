@@ -15,13 +15,9 @@
             content
                 .overlay(alignment: .bottom) {
                     if session.isPresented {
-                        VoiceInputPreview(
-                            voice: session.voice, cancel: session.cancel,
-                            stop: { session.toggle(in: context, snapshot: nil, selection: nil) }
-                        )
-                        .frame(maxWidth: 560)
-                        .background(.regularMaterial, in: .rect(cornerRadius: 16))
-                        .padding(12)
+                        VoiceInputPreview(voice: session.voice, cancel: session.cancel)
+                            .frame(maxWidth: 560)
+                            .padding(8)
                     }
                 }
                 .onChange(of: context) { session.validate(in: context) }

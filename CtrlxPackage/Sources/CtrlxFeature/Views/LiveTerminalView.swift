@@ -64,6 +64,7 @@
         /// The parent uses this only to detect user-submitted Agent turns.
         let onTerminalInput: @MainActor ([TmuxKey]) -> Void
         let onTerminalInputQueued: @MainActor () -> Void
+        let onCancelVoiceInput: @MainActor () -> Bool
 
         /// Lets a parent-owned input bar capture this pane's terminal text only
         /// when dictation starts, without continuously mirroring terminal output.
@@ -152,6 +153,7 @@
             submitResponse: @escaping ResponseSender,
             onTerminalInput: @escaping @MainActor ([TmuxKey]) -> Void = { _ in },
             onTerminalInputQueued: @escaping @MainActor () -> Void = { },
+            onCancelVoiceInput: @escaping @MainActor () -> Bool = { false },
             onTerminalPaste: @escaping @MainActor (String) -> Void = { _ in },
             onPasteImage: (@MainActor (ClipboardImage?) -> Void)? = nil,
             onVoiceInputContextProviderChange: @escaping @MainActor (
@@ -185,6 +187,7 @@
             self.submitResponse = submitResponse
             self.onTerminalInput = onTerminalInput
             self.onTerminalInputQueued = onTerminalInputQueued
+            self.onCancelVoiceInput = onCancelVoiceInput
             self.onVoiceInputContextProviderChange = onVoiceInputContextProviderChange
             self.onCursorNavigationCancellationChange = onCursorNavigationCancellationChange
             self.onExternalInputSenderChange = onExternalInputSenderChange
@@ -678,6 +681,9 @@
         }
 
         private func enqueueTerminalKeys(_ keys: [TmuxKey]) {
+            if keys == [.escape], voiceSession.cancelIfPresented() || onCancelVoiceInput() {
+                return
+            }
             guard canSendTerminalInput, !keys.isEmpty else { return }
             phraseInputRevision &+= 1
             onTerminalInputQueued()

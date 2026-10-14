@@ -71,6 +71,13 @@ package struct TerminalVoiceInputCapture {
             voice.cancel()
         }
 
+        @discardableResult
+        package func cancelIfPresented() -> Bool {
+            guard isPresented else { return false }
+            cancel()
+            return true
+        }
+
         package func deliver(in context: TerminalPhraseContext, insert: (String) -> Bool) {
             guard let transcript = voice.takeCompletedTranscript() else { return }
             var captured = capture

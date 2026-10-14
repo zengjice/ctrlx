@@ -1,60 +1,57 @@
 #if os(iOS) || os(macOS)
     import SwiftUI
 
-    /// Shared presentation only: the owning input surface decides whether the
-    /// captured target is still valid and handles the one-shot insertion.
+    /// Passive preview only. The microphone remains the start/stop control;
+    /// the owning input surface validates and delivers the finalized text.
     @MainActor
     package struct VoiceInputPreview: View {
         package let voice: VoiceInputController
-        package var targetLabel: String?
         package let cancel: () -> Void
-        package let stop: () -> Void
 
         package init(
             voice: VoiceInputController,
-            targetLabel: String? = nil,
-            cancel: @escaping () -> Void,
-            stop: @escaping () -> Void
+            cancel: @escaping () -> Void
         ) {
             self.voice = voice
-            self.targetLabel = targetLabel
             self.cancel = cancel
-            self.stop = stop
         }
 
         package var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Voice Input").font(.headline)
-                    Spacer()
-                    Button("Cancel", action: cancel)
-                        .keyboardShortcut(.cancelAction)
-                        .accessibilityIdentifier("voice-preview-cancel")
-                }
-                if let targetLabel {
-                    Text(targetLabel).font(.caption).foregroundStyle(.secondary)
-                }
-                Text(voice.stage.label)
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("voice-preview-stage")
-                ScrollView {
-                    Text(voice.transcript.isEmpty ? "Your words will appear here." : voice.transcript)
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(voice.stage.label)
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("voice-preview-stage")
+                    Text(voice.transcript.isEmpty ? "Say something…" : voice.transcript)
+                        .font(.callout).foregroundStyle(.primary)
+                        .lineLimit(2, reservesSpace: true)
+                        .truncationMode(.head)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityIdentifier("voice-preview-transcript")
                 }
-                .frame(minHeight: 44, maxHeight: 140)
-                HStack {
-                    Text("Preview only. Stopping inserts text without sending.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Stop and Insert", action: stop)
-                        .keyboardShortcut("m", modifiers: [.command, .shift])
-                        .disabled(!voice.isRecording)
-                        .buttonStyle(.borderedProminent)
-                        .accessibilityIdentifier("voice-preview-stop")
+                .allowsHitTesting(false)
+                Button(action: cancel) {
+                    Label("Cancel Voice Input", symbol: .xmark)
+                        .labelStyle(.iconOnly)
+                    #if os(iOS)
+                        .frame(width: 44, height: 44)
+                    #else
+                        .frame(width: 28, height: 28)
+                    #endif
+                        .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
+                #if os(iOS)
+                    .keyboardShortcut(.cancelAction)
+                #endif
+                    .help("Cancel Voice Input (Esc)")
+                    .accessibilityIdentifier("voice-preview-cancel")
             }
-            .padding(16)
+            .padding(.vertical, 8)
+            .padding(.leading, 12)
+            .padding(.trailing, 4)
+            .background(.regularMaterial, in: .rect(cornerRadius: 10))
             .accessibilityIdentifier("voice-input-preview")
         }
     }

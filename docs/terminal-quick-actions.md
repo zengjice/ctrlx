@@ -103,17 +103,25 @@ editor hides its Form background so it does not obscure the shared material.
 ## Context-aware voice input
 
 Mac (Local/Viewer) and iOS use the same preview-then-insert contract. One click
-starts on-device recognition; a second click, or **Stop and Insert**, finishes
+starts on-device recognition; a second click on the microphone finishes
 correction and inserts one literal text batch **without Return**. Partial results
 stay in the local preview: they never insert or backspace text in the terminal.
 Esc, cancelling the preview, switching targets, editing in the terminal,
 disconnection or leaving the view cancels that recording.
-The Mac preview owns its dismissal: clicking the microphone remains a normal
-button action, while outside clicks, Esc and application deactivation cancel.
-Finishing keeps the preview visible through correction; closing it after insertion
-does not cancel the completed result.
-The iOS terminal preview is an in-page overlay, outside terminal sizing and native
-responder ownership; native reply fields show the preview below their editor.
+Both clients show the same compact inline strip: a stage label, at most two lines
+of live text (keeping the latest end visible), and a close button. There is no
+title, destination description, instruction paragraph or separate stop button.
+The Mac strip overlays the terminal just above its status bar; it creates no
+popover/window and does not acquire first responder. The iOS strip overlays the
+terminal above its input controls; native reply fields show it below their editor.
+Neither terminal overlay changes the terminal's size. The strip remains visible
+during correction; cancelling it discards the recording without inserting text.
+Mac Escape interception is active only during recording/finalization and scoped
+to the recording's native window; inactive controls and other windows keep their
+normal Escape behavior. App deactivation or switching native windows cancels it.
+System permission prompts during preparation are not treated as cancellation.
+iOS toolbar/hardware Escape cancels active dictation before forwarding terminal
+input, including when the preview belongs to the parent multi-pane view.
 The result is bound to the captured Host/pane and local input revision; Mac also
 checks its native endpoint/focus revision. Switching away and back does not revive
 it. Delivery consumes the result before enqueueing, so duplicate completion
@@ -204,10 +212,12 @@ the local FIFO, not acknowledgement that a remote Agent received the text.
 Regression coverage lives in `CtrlxCommonTests/Voice*` (including injected
 recognition/correction through the production controller),
 `CtrlxServerFeatureTests/TerminalVoiceInputRequestTests.swift`,
-`CtrlxServerFeatureTests/MacVoiceInputPopoverTests.swift` and the existing iOS
-phase/input tests. `python3 scripts/tests/test_mac_voice_input_popover.py` exercises
-native mouse dispatch in an isolated AppKit process with fake recognition (no
-microphone, credentials or terminal input). Real microphone, permission prompts
+`CtrlxServerFeatureTests/MacVoiceInputCancellationTests.swift` and the existing iOS
+phase/input tests. `python3 scripts/tests/test_mac_voice_input_inline.py` exercises
+the production microphone/preview views and native mouse dispatch in an isolated
+AppKit process with fake recognition: stable viewport/focus, no popup window,
+microphone stop, narrow-layout cancel and Escape (no microphone, credentials or
+real terminal input). Real microphone, permission prompts
 and recognition quality remain Mac/iPhone device acceptance checks.
 
 For device acceptance, use an isolated test session, not an active task. Test a

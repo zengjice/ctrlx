@@ -1260,6 +1260,10 @@
                     )
                 },
                 onTerminalInputQueued: { terminalInputRevision &+= 1 },
+                onCancelVoiceInput: {
+                    guard terminalIsVisible, pane.paneId == activePaneId else { return false }
+                    return voiceSession.cancelIfPresented()
+                },
                 onTerminalPaste: { text in
                     guard settings.agentBackgroundMonitoringEnabled, relayClient.isHostConnected else { return }
                     backgroundMonitoring.handleTerminalPaste(text, hostId: hostId, paneId: pane.paneId)
@@ -1610,6 +1614,9 @@
         }
 
         private func sendVoiceKeys(_ keys: [TmuxKey]) {
+            if keys == [.escape], voiceSession.cancelIfPresented() {
+                return
+            }
             guard
                 !keys.isEmpty,
                 relayClient.isHostConnected,
