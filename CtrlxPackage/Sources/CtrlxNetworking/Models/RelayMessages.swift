@@ -277,6 +277,10 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// does not change this. Optional for snapshots from older Hosts.
     public var lastAgentActivityAt: Date?
 
+    /// Latest Codex question hook identity. Its presence advertises support for
+    /// identity-checked expansion; older Hosts omit it. Not a response form.
+    public var codexQuestionID: String?
+
     // MARK: - Behavior Flags
 
     /// Whether yolo mode is enabled (auto-approve permissions)
@@ -383,6 +387,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
         gitBranch: String? = nil,
         agentSession: AgentSession? = nil,
         lastAgentActivityAt: Date? = nil,
+        codexQuestionID: String? = nil,
         yoloMode: Bool = false,
         cliSessionState: CLISessionState? = nil,
         editorSession: EditorSessionInfo? = nil,
@@ -414,6 +419,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
         self.gitBranch = gitBranch
         self.agentSession = agentSession
         self.lastAgentActivityAt = lastAgentActivityAt
+        self.codexQuestionID = codexQuestionID
         self.yoloMode = yoloMode
         self.cliSessionState = cliSessionState
         self.editorSession = editorSession

@@ -346,4 +346,58 @@ struct TerminalCodexQuestionExpansionTests {
             }
         }
     }
+
+    @Test("A new question identity opens at the same count without an observed empty queue")
+    func consecutiveIdentities() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                var sends = 0
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { Self.prompt(1) }, enqueue: { _, complete in
+                    sends += 1
+                    complete(true)
+                    return true
+                })
+                defer { opener.invalidate() }
+                for id in ["a", "a", "b", "b"] {
+                    opener.updateQuestionID(id)
+                    opener.schedule()
+                    await clock.advance(by: .milliseconds(350))
+                    await Task.megaYield()
+                }
+                #expect(sends == 2)
+            }
+        }
+    }
+
+    @Test("Old in-flight replies cannot mark a new question at the same count as handled", arguments: [true, false])
+    func staleIdentityAcknowledgement(handled: Bool) async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                var replies: [@MainActor (Bool) -> Void] = []
+                let opener = TerminalCodexQuestionExpansion(readPrompt: { Self.prompt(1) }, enqueue: { _, complete in
+                    replies.append(complete)
+                    return true
+                })
+                defer { opener.invalidate() }
+                opener.updateQuestionID("a")
+                opener.schedule()
+                await clock.advance(by: .milliseconds(350))
+                await Task.megaYield()
+                #expect(replies.count == 1)
+                opener.updateQuestionID("b")
+                opener.schedule()
+                replies.first?(handled)
+                await clock.advance(by: .milliseconds(350))
+                await Task.megaYield()
+                #expect(replies.count == 2)
+                replies.last?(true)
+                opener.updateQuestionID("b") // Repeated snapshot / Escape.
+                opener.schedule()
+                await clock.advance(by: .seconds(1))
+                #expect(replies.count == 2)
+            }
+        }
+    }
 }

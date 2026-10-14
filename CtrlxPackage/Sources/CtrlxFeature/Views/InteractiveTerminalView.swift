@@ -42,6 +42,7 @@ enum TerminalCursorTapNavigation {
     import CtrlxCommon
     import CtrlxNetworking
     import Dependencies
+    import OSLog
     import SwiftTerm
     import UIKit
 
@@ -81,6 +82,17 @@ enum TerminalCursorTapNavigation {
         /// Sends a guarded intent through the pane's ordered input queue, never
         /// raw Shift+Left. False means the stream is not currently ready.
         var onExpandCodexQuestions: (@MainActor (Int, @escaping @MainActor (Bool) -> Void) -> Bool)?
+        var codexQuestionID: String? {
+            didSet {
+                guard oldValue != codexQuestionID else { return }
+                questionExpansion.updateQuestionID(codexQuestionID)
+                lastQuestionDiagnostic = nil
+                scheduleQuestionCheck()
+            }
+        }
+
+        private static let questionLogger = Logger(subsystem: "com.jicezeng.ctrlx", category: "CodexQuestions")
+        private var lastQuestionDiagnostic: String?
         var questionExpansionEnabled = false {
             didSet {
                 guard oldValue != questionExpansionEnabled else { return }
@@ -90,8 +102,14 @@ enum TerminalCursorTapNavigation {
 
         private lazy var questionExpansion = TerminalCodexQuestionExpansion(
             readPrompt: { [weak self] in
-                guard let self, canExpandCodexQuestions else { return nil }
-                return currentQuestionPrompt
+                guard let self else { return nil }
+                let prompt = currentQuestionPrompt
+                let reason = questionExpansionBlockReason ?? (prompt == nil ? "unrecognized-composer-or-footer" : "eligible")
+                if lastQuestionDiagnostic != reason {
+                    lastQuestionDiagnostic = reason
+                    Self.questionLogger.notice("iOS question check: reason=\(reason, privacy: .public)")
+                }
+                return canExpandCodexQuestions ? prompt : nil
             },
             enqueue: { [weak self] count, completion in self?.onExpandCodexQuestions?(count, completion) ?? false }
         )
@@ -411,25 +429,37 @@ enum TerminalCursorTapNavigation {
         // MARK: - Codex Questions
 
         var canExpandCodexQuestions: Bool {
+            questionExpansionBlockReason == nil
+        }
+
+        var questionExpansionBlockReason: String? {
             // SwiftTerm still presents its copy menu with UIMenuController;
             // observe that menu, not a separate UIEditMenuInteraction.
-            guard didFinishInit, questionExpansionEnabled, onExpandCodexQuestions != nil,
-                  inputEnabled, !inputFocusUpdates.isInvalidated,
-                  window?.isKeyWindow == true, window?.windowScene?.activationState == .foregroundActive,
-                  !isHidden, inputProxy.isFirstResponder, inputProxy.markedTextRange == nil,
-                  !selectionActive, !UIMenuController.shared.isMenuVisible,
-                  !cursorNavigation.isPending, !isMouseScrollDecelerating,
-                  !isTracking, !isDragging, !isDecelerating,
-                  !(gestureRecognizers ?? []).contains(where: { $0.state == .began || $0.state == .changed }),
-                  let viewport = outerScrollPanGesture?.view as? UIScrollView,
-                  !viewport.isTracking, !viewport.isDragging, !viewport.isDecelerating
-            else { return false }
-            let bottom = max(-viewport.adjustedContentInset.top,
-                             viewport.contentSize.height - viewport.bounds.height + viewport.adjustedContentInset.bottom)
+            guard
+                didFinishInit, questionExpansionEnabled, onExpandCodexQuestions != nil,
+                inputEnabled, !inputFocusUpdates.isInvalidated,
+                window?.isKeyWindow == true, window?.windowScene?.activationState == .foregroundActive,
+                !isHidden, inputProxy.isFirstResponder
+            else { return "input-focus-or-scene-unavailable" }
+            guard inputProxy.markedTextRange == nil else { return "composing-text" }
+            guard !selectionActive, !UIMenuController.shared.isMenuVisible else { return "selection-or-copy-menu" }
+            guard
+                !cursorNavigation.isPending, !isMouseScrollDecelerating,
+                !isTracking, !isDragging, !isDecelerating,
+                !(gestureRecognizers ?? []).contains(where: { $0.state == .began || $0.state == .changed }),
+                let viewport = outerScrollPanGesture?.view as? UIScrollView,
+                !viewport.isTracking, !viewport.isDragging, !viewport.isDecelerating
+            else { return "viewport-or-gesture-unavailable" }
+            let bottom = max(
+                -viewport.adjustedContentInset.top,
+                viewport.contentSize.height - viewport.bounds.height + viewport.adjustedContentInset.bottom
+            )
             let terminal = getTerminal()
-            return abs(viewport.contentOffset.y - bottom) <= 1
-                && (!canScroll || scrollPosition == 1)
-                && !terminal.synchronizedOutputActive
+            guard
+                abs(viewport.contentOffset.y - bottom) <= 1,
+                !canScroll || scrollPosition == 1 else { return "scrollback" }
+            guard !terminal.synchronizedOutputActive else { return "synchronized-output" }
+            return nil
         }
 
         var currentQuestionPrompt: CodexQuestionPrompt? {

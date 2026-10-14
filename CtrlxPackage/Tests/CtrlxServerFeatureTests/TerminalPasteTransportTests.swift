@@ -57,6 +57,9 @@ struct TerminalPasteTransportTests {
                     if case let .pasteTerminalText(paste) = command.command {
                         #expect(paste.text == "first\nsecond\n")
                     }
+                    if case let .expandCodexQuestions(question) = command.command {
+                        #expect(question.expectedQuestionID == "session:call")
+                    }
                     events.append("input-start")
                     for await _ in inputGate {
                         break
@@ -83,7 +86,7 @@ struct TerminalPasteTransportTests {
                 let frameCount = await relay.encryptedFrames
                 let inputTask = Task {
                     if questions {
-                        await viewer.sendCommand(ExpandCodexQuestions(expectedCount: 1), paneId: "%7")
+                        await viewer.sendCommand(ExpandCodexQuestions(expectedCount: 1, expectedQuestionID: "session:call"), paneId: "%7")
                     } else {
                         await viewer.sendCommand(PasteTerminalText(text: "first\nsecond\n"), paneId: "%7")
                     }

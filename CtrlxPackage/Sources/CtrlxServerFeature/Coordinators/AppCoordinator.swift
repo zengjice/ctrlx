@@ -1722,6 +1722,13 @@
             pluginID: String? = nil,
             formState: AgentState? = nil
         ) async {
+            if
+                pluginID == "codex", notification.isQuestion == true,
+                let paneId, paneId.hasPrefix("%"), let questionID = notification.questionID,
+                tmuxService.recordCodexQuestion(paneID: paneId, questionID: questionID) {
+                windowManager.recordCodexQuestion(paneID: paneId, questionID: questionID)
+                await connectedViewerManager?.pushSessionStateToAll()
+            }
             let isQuestion: Bool = if case .awaitingReplies = formState {
                 true
             } else {

@@ -270,6 +270,7 @@ struct TerminalContainerView: NSViewRepresentable {
         ) {
             self.paneState = paneState
             terminalView.scrollingAgentID = paneState.agentSession?.pluginID
+            terminalView.codexQuestionID = paneState.codexQuestionID
             self.paneStreamManager = paneStreamManager
             self.tmuxService = tmuxService
             self.onStateChange = onStateChange
@@ -310,7 +311,7 @@ struct TerminalContainerView: NSViewRepresentable {
                 self?.keyCoalescer.enqueue(keys)
             }
 
-            terminalView.onExpandCodexQuestions = { [weak self] count in
+            terminalView.onExpandCodexQuestions = { [weak self] count, questionID in
                 guard let self else { return false }
                 self.keyCoalescer.flushPending()
                 let generation = self.inputGeneration
@@ -322,7 +323,7 @@ struct TerminalContainerView: NSViewRepresentable {
                       let paneID = self.paneState?.paneId, let tmux = self.tmuxService
                 else { return false }
                 do {
-                    return try await tmux.expandCodexQuestions(paneID: paneID, expectedCount: count)
+                    return try await tmux.expandCodexQuestions(paneID: paneID, expectedCount: count, expectedQuestionID: questionID)
                 } catch {
                     // Optional convenience must not replace a healthy terminal
                     // with an error view. The manual shortcut still works.
@@ -497,6 +498,7 @@ struct TerminalContainerView: NSViewRepresentable {
         func updatePaneState(_ newState: PaneState) {
             paneState = newState
             terminalView.scrollingAgentID = newState.agentSession?.pluginID
+            terminalView.codexQuestionID = newState.codexQuestionID
         }
 
         func bindQuickActions(_ router: TerminalQuickActionRouter?, onFocus: (@MainActor () -> Void)?) {

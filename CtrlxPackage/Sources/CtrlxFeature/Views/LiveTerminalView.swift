@@ -16,6 +16,7 @@
         let paneId: String
         let hostId: String
         let scrollingAgentID: String?
+        let codexQuestionID: String?
 
         /// Binding to the response state for displaying response options above the terminal
         @Binding var responseState: ResponseState?
@@ -133,6 +134,7 @@
             paneId: String,
             hostId: String,
             scrollingAgentID: String? = nil,
+            codexQuestionID: String? = nil,
             responseState: Binding<ResponseState?>,
             terminalTitle: Binding<String?>,
             clipboardContent: Binding<String?> = .constant(nil),
@@ -166,6 +168,7 @@
             self.paneId = paneId
             self.hostId = hostId
             self.scrollingAgentID = scrollingAgentID
+            self.codexQuestionID = codexQuestionID
             self._responseState = responseState
             self._terminalTitle = terminalTitle
             self._clipboardContent = clipboardContent
@@ -526,6 +529,7 @@
                     TerminalStreamContainerView(
                         terminalState: state,
                         scrollingAgentID: scrollingAgentID,
+                        codexQuestionID: codexQuestionID,
                         inputEnabled: inputPresentation.inputEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
                         keyboardIsTransitioning: keyboardIsTransitioning,
@@ -535,7 +539,7 @@
                             && coordinator.isReadyForToolbarInput && responseState?.request.isBlocking != true,
                         onExpandCodexQuestions: { count, completion in
                             guard isConnected, relayClient.isHostConnected else { return false }
-                            return coordinator.enqueueCodexQuestionExpansion(count: count, relayClient: relayClient, onResult: completion)
+                            return coordinator.enqueueCodexQuestionExpansion(count: count, questionID: codexQuestionID, relayClient: relayClient, onResult: completion)
                         },
                         onInput: { keys in
                             enqueueTerminalKeys(keys)
@@ -1002,12 +1006,12 @@
             keystrokeDebouncer?.enqueueRawInput(data)
         }
 
-        func enqueueCodexQuestionExpansion(count: Int, relayClient: ViewerRelayClient, onResult: @escaping @MainActor (Bool) -> Void) -> Bool {
+        func enqueueCodexQuestionExpansion(count: Int, questionID: String?, relayClient: ViewerRelayClient, onResult: @escaping @MainActor (Bool) -> Void) -> Bool {
             guard isReadyForToolbarInput else { return false }
             if keystrokeDebouncer == nil {
                 keystrokeDebouncer = makeInputQueue(relayClient: relayClient)
             }
-            keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count, onResult: onResult)
+            keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count, expectedQuestionID: questionID, onResult: onResult)
             return true
         }
 
@@ -1416,6 +1420,7 @@
     private struct TerminalStreamContainerView: UIViewRepresentable {
         let terminalState: TerminalState
         let scrollingAgentID: String?
+        let codexQuestionID: String?
 
         /// Whether this terminal owns the input accessory and accepts input.
         let inputEnabled: Bool
@@ -1476,6 +1481,7 @@
             terminalView.onOpenPath = onOpenPath
             terminalView.onOpenURL = onOpenURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
+            terminalView.codexQuestionID = codexQuestionID
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
 
@@ -1652,6 +1658,7 @@
             terminalView.onOpenPath = onOpenPath
             terminalView.onOpenURL = onOpenURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
+            terminalView.codexQuestionID = codexQuestionID
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
             context.coordinator.onViewportGridChange = onViewportGridChange

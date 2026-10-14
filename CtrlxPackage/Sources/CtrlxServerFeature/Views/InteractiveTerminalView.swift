@@ -3,6 +3,7 @@
     import CtrlxCommon
     import CtrlxNetworking
     import Dependencies
+    import OSLog
     import SwiftTerm
 
     // MARK: - Focus Border Overlay
@@ -501,7 +502,19 @@
         }
 
         /// Sends a guarded intent to the host, not a raw synthetic keypress.
-        var onExpandCodexQuestions: (@MainActor (Int) async -> Bool)?
+        var onExpandCodexQuestions: (@MainActor (Int, String?) async -> Bool)?
+        var codexQuestionID: String? {
+            didSet {
+                guard oldValue != codexQuestionID else { return }
+                cancelQuestionCheck()
+                lastQuestionCount = nil
+                lastQuestionDiagnostic = nil
+                scheduleQuestionCheck()
+            }
+        }
+
+        private static let questionLogger = Logger(subsystem: "com.jicezeng.ctrlx", category: "CodexQuestions")
+        private var lastQuestionDiagnostic: String?
         private var questionCheckTask: Task<Void, Never>?
         private var questionCheckID: UUID?
         private var lastQuestionCount: Int?
@@ -1954,13 +1967,20 @@
         // MARK: - Codex question auto-expansion
 
         var canExpandCodexQuestions: Bool {
-            guard onExpandCodexQuestions != nil, NSApp.isActive,
-                  let window, window.isKeyWindow, window.firstResponder === terminalView,
-                  !isHiddenOrHasHiddenAncestor, !isEditorActive,
-                  !terminalView.hasMarkedText(), NSEvent.pressedMouseButtons == 0,
-                  terminalView.getSelection()?.isEmpty != false
-            else { return false }
-            return !terminalView.canScroll || terminalView.scrollPosition == 1
+            questionExpansionBlockReason == nil
+        }
+
+        var questionExpansionBlockReason: String? {
+            guard onExpandCodexQuestions != nil else { return "no-handler" }
+            guard NSApp.isActive else { return "app-inactive" }
+            guard let window, window.isKeyWindow else { return "window-not-key" }
+            guard window.firstResponder === terminalView else { return "terminal-not-focused" }
+            guard !isHiddenOrHasHiddenAncestor, !isEditorActive else { return "terminal-hidden-or-editor" }
+            guard !terminalView.hasMarkedText() else { return "composing-text" }
+            guard NSEvent.pressedMouseButtons == 0 else { return "mouse-down" }
+            guard terminalView.getSelection()?.isEmpty != false else { return "text-selected" }
+            guard !terminalView.canScroll || terminalView.scrollPosition == 1 else { return "scrollback" }
+            return nil
         }
 
         var currentQuestionPrompt: CodexQuestionPrompt? {
@@ -1976,10 +1996,21 @@
         }
 
         fileprivate func scheduleQuestionCheck(delay: Duration = .milliseconds(350)) {
-            guard questionCheckTask == nil, canExpandCodexQuestions,
-                  let candidate = currentQuestionPrompt,
-                  candidate.count != lastQuestionCount
-            else { return }
+            guard questionCheckTask == nil, onExpandCodexQuestions != nil else { return }
+            guard let candidate = currentQuestionPrompt else {
+                reportQuestionCheck("unrecognized-composer-or-footer", count: nil)
+                return
+            }
+            if let reason = questionExpansionBlockReason {
+                reportQuestionCheck(reason, count: candidate.count)
+                return
+            }
+            guard candidate.count != lastQuestionCount else {
+                reportQuestionCheck("already-handled", count: candidate.count)
+                return
+            }
+            reportQuestionCheck("scheduled", count: candidate.count)
+            let questionID = codexQuestionID
             let revision = questionInputRevision
             let checkID = UUID()
             questionCheckID = checkID
@@ -1999,8 +2030,9 @@
                 guard !Task.isCancelled, self.questionInputRevision == revision,
                       self.canExpandCodexQuestions, self.currentQuestionPrompt == candidate
                 else { return }
-                let handled = await self.onExpandCodexQuestions?(candidate.count) ?? false
+                let handled = await self.onExpandCodexQuestions?(candidate.count, questionID) ?? false
                 guard !Task.isCancelled, self.questionCheckID == checkID else { return }
+                self.reportQuestionCheck(handled ? "acknowledged" : "not-acknowledged", count: candidate.count)
                 if handled {
                     self.lastQuestionCount = candidate.count
                 }
@@ -2008,6 +2040,14 @@
                 // or eligibility changes can retry the same queue.
                 shouldRecheck = handled || self.currentQuestionPrompt != candidate
             }
+        }
+
+        private func reportQuestionCheck(_ reason: String, count: Int?) {
+            let diagnostic = "\(reason):\(count ?? -1)"
+            guard diagnostic != lastQuestionDiagnostic else { return }
+            lastQuestionDiagnostic = diagnostic
+            let paneID = terminalAccessibilityIdentifier ?? "unknown"
+            Self.questionLogger.notice("Mac question check: pane=\(paneID, privacy: .public) count=\(count ?? -1) reason=\(reason, privacy: .public)")
         }
 
         func stopQuestionChecks() {

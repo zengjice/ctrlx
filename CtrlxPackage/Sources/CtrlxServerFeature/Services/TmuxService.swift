@@ -334,6 +334,7 @@ final public class TmuxService {
 
     // Host-wide deduplication: local and remote Macs share the same opener.
     @ObservationIgnored var codexQuestionStates: [String: CodexQuestionExpansionState] = [:]
+    @ObservationIgnored var codexQuestionIDs: [String: String] = [:]
     @ObservationIgnored var codexQuestionChecks: Set<String> = []
 
     /// Panes grouped by tmux window (derived from panes)
@@ -454,6 +455,7 @@ final public class TmuxService {
             isRefreshing = true
         }
         let oldPanes = panes
+        let questionIDsAtRefreshStart = codexQuestionIDs
 
         defer {
             refreshInFlight = false
@@ -480,7 +482,7 @@ final public class TmuxService {
                     "oldPaneCount": "\(oldPanes.count)",
                 ])
             }
-            publishPanesIfChanged([])
+            publishPanesIfChanged([], questionIDsAtRefreshStart: questionIDsAtRefreshStart)
             return panes
         }
 
@@ -495,7 +497,7 @@ final public class TmuxService {
             if lastError != nil {
                 lastError = nil
             }
-            publishPanesIfChanged(newPanes)
+            publishPanesIfChanged(newPanes, questionIDsAtRefreshStart: questionIDsAtRefreshStart)
             // When the override is active, type `export VISUAL=…` into any new
             // shell pane (issue #591 §5). Fired detached so it never blocks the
             // refresh; the per-pane dedup set keeps it idempotent.
@@ -512,7 +514,7 @@ final public class TmuxService {
                     "oldPaneCount": "\(oldPanes.count)",
                 ])
             }
-            publishPanesIfChanged([])
+            publishPanesIfChanged([], questionIDsAtRefreshStart: questionIDsAtRefreshStart)
         case let .keep(reason, err):
             if !oldPanes.isEmpty {
                 logger.warning("tmux refresh: keeping old panes", metadata: [
@@ -532,10 +534,18 @@ final public class TmuxService {
     /// Observation emits on assignment, not semantic change. tmux output order
     /// is not UI state, so compare as sets and preserve the current ordering when
     /// the snapshot contains the same pane metadata.
-    private func publishPanesIfChanged(_ newPanes: [PaneInfo]) {
+    private func publishPanesIfChanged(_ newPanes: [PaneInfo], questionIDsAtRefreshStart: [String: String]) {
+        // Hooks can arrive while tmux is awaited. An older snapshot cannot
+        // discard a newer question or its already-handled count.
+        let newerQuestionPaneIDs = codexQuestionIDs.compactMap { paneID, questionID in
+            questionIDsAtRefreshStart[paneID] != questionID ? paneID : nil
+        }
+        let retainedPaneIDs = Set(newPanes.map(\.paneId)).union(newerQuestionPaneIDs)
+        codexQuestionStates = codexQuestionStates.filter { retainedPaneIDs.contains($0.key) }
+        codexQuestionIDs = codexQuestionIDs.filter { retainedPaneIDs.contains($0.key) }
+        // Even an unchanged snapshot can now confirm closure of a pane whose
+        // question was protected during the preceding refresh.
         guard Set(panes) != Set(newPanes) else { return }
-        let livePaneIDs = Set(newPanes.map(\.paneId))
-        codexQuestionStates = codexQuestionStates.filter { livePaneIDs.contains($0.key) }
         panes = newPanes
     }
 

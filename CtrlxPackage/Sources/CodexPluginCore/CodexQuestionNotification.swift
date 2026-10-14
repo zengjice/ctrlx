@@ -26,19 +26,24 @@ struct CodexQuestionNotification {
             questions.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return nil }
         self.callID = hook.callID
         let detail = questions.count == 1 ? questions[0] : "\(questions.count) questions: \(questions.joined(separator: " · "))"
-        self.notification = NotificationSpec(title: "Codex wants answers", body: String(detail.prefix(256)), isQuestion: true)
+        self.notification = NotificationSpec(
+            title: "Codex wants answers", body: String(detail.prefix(256)), isQuestion: true,
+            questionID: "\(hook.sessionID):\(hook.callID)"
+        )
     }
 
     private struct Hook: Decodable {
         let eventName: String
         let toolName: String
         let callID: String
+        let sessionID: String
         let input: Input
 
         enum CodingKeys: String, CodingKey {
             case eventName = "hook_event_name"
             case toolName = "tool_name"
             case callID = "tool_use_id"
+            case sessionID = "session_id"
             case input = "tool_input"
         }
     }

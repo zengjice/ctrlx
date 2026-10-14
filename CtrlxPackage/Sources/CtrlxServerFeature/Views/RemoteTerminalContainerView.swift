@@ -17,6 +17,7 @@ struct RemoteTerminalContainerView: View {
     let connection: ViewerConnection
     let settings: AppSettings
     var scrollingAgentID: String?
+    var codexQuestionID: String?
     /// The stable window key used by MirrorWindowManager to track this window
     var windowKey: String?
     var onStreamEnd: (() -> Void)?
@@ -62,6 +63,7 @@ struct RemoteTerminalContainerView: View {
                 retryGeneration: streamRetryGeneration,
                 settings: settings,
                 scrollingAgentID: scrollingAgentID,
+                codexQuestionID: codexQuestionID,
                 isEditorActive: isEditorActive,
                 autoFocus: autoFocus,
                 showsFocusIndicator: showsFocusIndicator,
@@ -595,6 +597,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
     let retryGeneration: Int
     let settings: AppSettings
     let scrollingAgentID: String?
+    let codexQuestionID: String?
     let isEditorActive: Bool
     let autoFocus: Bool
     let showsFocusIndicator: Bool
@@ -616,6 +619,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         coordinator.terminalView.autoFocusEnabled = autoFocus
         coordinator.terminalView.showsFocusIndicator = showsFocusIndicator
         coordinator.terminalView.scrollingAgentID = scrollingAgentID
+        coordinator.terminalView.codexQuestionID = codexQuestionID
 
         coordinator.start(
             paneId: paneId,
@@ -655,6 +659,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         let coordinator = context.coordinator
         nsView.showsFocusIndicator = showsFocusIndicator
         nsView.scrollingAgentID = scrollingAgentID
+        nsView.codexQuestionID = codexQuestionID
         context.coordinator.updateSettings(settings)
         context.coordinator.updateContainerSize(nsView.frame.size)
         context.coordinator.synchronizeStream(
@@ -793,10 +798,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 keyCoalescer.enqueue(keys)
             }
 
-            terminalView.onExpandCodexQuestions = { [weak self] count in
-                guard let self, self.streamState == .streaming,
-                      let paneID = self.paneId, let connection = self.connection,
-                      connection.isHostConnected, connection.isRelayConnected
+            terminalView.onExpandCodexQuestions = { [weak self] count, questionID in
+                guard
+                    let self, self.streamState == .streaming,
+                    let paneID = self.paneId, let connection = self.connection,
+                    connection.isHostConnected, connection.isRelayConnected
                 else { return false }
                 // No raw-key fallback: an older host must reject this intent,
                 // rather than apply a Shift+Left to an unchecked/stale screen.
@@ -806,7 +812,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 }
                 guard let queue = self.keystrokeDebouncer else { return false }
                 return await withCheckedContinuation { continuation in
-                    queue.enqueueCodexQuestionExpansion(expectedCount: count) {
+                    queue.enqueueCodexQuestionExpansion(expectedCount: count, expectedQuestionID: questionID) {
                         continuation.resume(returning: $0)
                     }
                 }

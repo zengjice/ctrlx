@@ -1224,6 +1224,7 @@
                 paneId: pane.paneId,
                 hostId: hostId,
                 scrollingAgentID: pane.agentSession?.pluginID,
+                codexQuestionID: pane.codexQuestionID,
                 responseState: .constant(nil),
                 terminalTitle: Binding(
                     get: { terminalTitles[pane.paneId] },

@@ -13,6 +13,7 @@ struct CodexQuestionNotificationTests {
         let core = makeCore()
         let event = try #require(try await core.handleIngress(frame(tool: tool)))
         #expect(event.notification?.isQuestion == true)
+        #expect(event.notification?.questionID == "session:call")
         #expect(event.notification?.title == "Codex wants answers")
         #expect(event.notification?.body == "Which directory should I use?")
         #expect(event.state == nil)

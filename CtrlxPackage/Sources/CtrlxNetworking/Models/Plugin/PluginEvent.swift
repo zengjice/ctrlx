@@ -66,11 +66,14 @@ public struct NotificationSpec: Codable, Sendable, Equatable {
     public let body: String
     /// Questions also alert a foreground Viewer; absent on older plugin events.
     public let isQuestion: Bool?
+    /// Stable question identity supplied by the plugin, independent of queue size.
+    public let questionID: String?
 
-    public init(title: String, body: String, isQuestion: Bool? = nil) {
+    public init(title: String, body: String, isQuestion: Bool? = nil, questionID: String? = nil) {
         self.title = title
         self.body = body
         self.isQuestion = isQuestion
+        self.questionID = questionID
     }
 }
 

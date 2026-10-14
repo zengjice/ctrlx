@@ -6,11 +6,22 @@ import OSLog
 private let questionLogger = Logger(subsystem: "com.jicezeng.ctrlx", category: "CodexQuestions")
 
 extension TmuxService {
+    @discardableResult
+    func recordCodexQuestion(paneID: String, questionID: String) -> Bool {
+        guard
+            paneID.hasPrefix("%"), Int(paneID.dropFirst()) != nil, !questionID.isEmpty,
+            codexQuestionIDs[paneID] != questionID else { return false }
+        codexQuestionIDs[paneID] = questionID
+        codexQuestionStates.removeValue(forKey: paneID)
+        questionLogger.notice("New question identity: pane=\(paneID, privacy: .public)")
+        return true
+    }
+
     /// Shared by the local Mac and remote viewers. Viewers send an intent, NOT
     /// an unconditional keypress: a delayed/stale screen cannot select text in
     /// the host's draft. Older hosts reject the unknown command safely.
     @discardableResult
-    func expandCodexQuestions(paneID: String, expectedCount: Int) async throws -> Bool {
+    func expandCodexQuestions(paneID: String, expectedCount: Int, expectedQuestionID: String? = nil) async throws -> Bool {
         func deferred(_ reason: String) -> Bool {
             questionLogger.notice("Question expansion deferred: pane=\(paneID, privacy: .public) count=\(expectedCount) reason=\(reason, privacy: .public)")
             return false
@@ -19,10 +30,15 @@ extension TmuxService {
             paneID.hasPrefix("%"), Int(paneID.dropFirst()) != nil,
             (0...999).contains(expectedCount)
         else { return deferred("invalid-request") }
+        let questionID = codexQuestionIDs[paneID]
+        if let expectedQuestionID, expectedQuestionID != questionID {
+            return deferred("question-identity-changed")
+        }
         guard !codexQuestionChecks.contains(paneID) else { return deferred("check-in-flight") }
         // Another viewer may have opened it already. Acknowledge that claim
         // even though the collapsed footer is no longer on screen.
         if (codexQuestionStates[paneID]?.count ?? 0) == expectedCount {
+            questionLogger.notice("Question already handled: pane=\(paneID, privacy: .public) count=\(expectedCount)")
             return true
         }
         codexQuestionChecks.insert(paneID)
@@ -49,6 +65,7 @@ extension TmuxService {
             else { return deferred("screen-changed-during-check") }
         }
         try Task.checkCancellation()
+        guard codexQuestionIDs[paneID] == questionID else { return deferred("question-changed-during-check") }
 
         var state = codexQuestionStates[paneID] ?? CodexQuestionExpansionState()
         let shouldOpen = state.observe(screen.prompt.count)
@@ -61,7 +78,9 @@ extension TmuxService {
                 questionLogger.notice("Question expansion failed: pane=\(paneID, privacy: .public) count=\(expectedCount) reason=send-key-failed")
                 throw error
             }
+            questionLogger.notice("Question opener sent: pane=\(paneID, privacy: .public) count=\(expectedCount)")
         }
+        guard codexQuestionIDs[paneID] == questionID else { return deferred("question-changed-during-send") }
         codexQuestionStates[paneID] = screen.prompt.count == 0 ? nil : state
         return true
     }

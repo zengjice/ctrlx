@@ -429,8 +429,12 @@ public struct SendKeystroke: CommandSpec, Equatable {
 public struct ExpandCodexQuestions: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
     public let expectedCount: Int
+    public let expectedQuestionID: String?
 
-    public init(expectedCount: Int) { self.expectedCount = expectedCount }
+    public init(expectedCount: Int, expectedQuestionID: String? = nil) {
+        self.expectedCount = expectedCount
+        self.expectedQuestionID = expectedQuestionID
+    }
 
     public var commandType: CommandType { .expandCodexQuestions(self) }
 }

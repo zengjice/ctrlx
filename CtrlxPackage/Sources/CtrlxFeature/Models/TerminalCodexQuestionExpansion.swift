@@ -11,6 +11,7 @@ final class TerminalCodexQuestionExpansion {
     private let readPrompt: @MainActor () -> CodexQuestionPrompt?
     private let enqueue: @MainActor (Int, @escaping @MainActor (Bool) -> Void) -> Bool
     private var lastHandledCount: Int?
+    private var questionID: String?
     private var inFlightID: UUID?
     private var candidate: CodexQuestionPrompt?
     private var generation: UInt64 = 0
@@ -26,6 +27,14 @@ final class TerminalCodexQuestionExpansion {
     }
 
     deinit { pendingTask?.cancel() }
+
+    func updateQuestionID(_ newID: String?) {
+        guard questionID != newID else { return }
+        questionID = newID
+        lastHandledCount = nil
+        inFlightID = nil
+        cancelPending()
+    }
 
     func schedule() {
         guard !isInvalidated else { return }

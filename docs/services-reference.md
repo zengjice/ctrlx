@@ -89,7 +89,7 @@ mouse drag or marked IME text). Typing postpones the check. It neither changes
 focus nor sends Enter/answers, and does not change the agent's working state.
 
 Local panes call `TmuxService.expandCodexQuestions`; viewers enqueue the additive
-`ExpandCodexQuestions(expectedCount:)` intent behind existing keyboard input.
+`ExpandCodexQuestions(expectedCount:expectedQuestionID:)` intent behind existing keyboard input.
 The intent requires an explicit `codexQuestionsHandled` acknowledgement. The Host
 reports true after tmux accepts the opener, when another viewer already handled
 that count, or after accepting a reduced/empty queue baseline; it reports false
@@ -101,14 +101,27 @@ the live screen before claiming the opener. Non-shell commands and missing/faile
 process snapshots fail closed. Duplicate counts do not repeat the process scan.
 The Host commits a growing count only after sending the opener successfully;
 clients commit their count only after a positive acknowledgement. Host-wide
-queue-count deduplication prevents duplicate automatic opens from multiple viewers,
-tab remounts and Escape/redraws. Queue reductions
+queue-count deduplication within each question identity prevents duplicate automatic
+opens from multiple viewers, tab remounts and Escape/redraws. The Codex question hook
+supplies a session-qualified `tool_use_id` through `NotificationSpec.questionID`.
+The Host publishes it as optional `PaneState.codexQuestionID`; this field advertises
+identity-check support for that pane. A new identity resets both Host and native
+client deduplication, so two consecutive single-question calls do not require a
+visible empty queue between them. Repeated snapshots of the same identity do not
+reset it. Intents carry the observed identity; the Host rejects stale identities,
+including changes during an awaited screen check or key send, and clients ignore
+acknowledgements from an older identity. Notifications still leave agent lifecycle
+and response forms unchanged. Queue reductions
 do not auto-open; a verified empty normal composer resets the baseline. Closed
-panes discard their state. There is no polling timer or history/rollout scan.
+panes discard their state. Pane refreshes preserve question IDs received or changed
+while awaiting tmux, together with their handled counts; the next refresh reconciles
+them even if the pane list is unchanged. There is no polling timer or history/rollout scan.
 
 This is intentionally a conservative TUI convenience, not an App Server question
-API: unknown/localized layouts, custom empty placeholders and equal-count question
-replacements without an observed queue reduction stay manual. A missed/failed
+API: unknown/localized layouts and custom empty placeholders stay manual. Without
+question hooks or when paired with an older Host that omits the identity, the
+count-only fallback still needs an observed queue reduction for equal-count
+replacements. A missed/failed
 attempt can retry on a later native output/focus/eligibility event, without a
 polling loop. A successful attempt remains deduplicated after Escape/redraw.
 Existing Shift+Left remains usable. For remote auto-expansion, update the
@@ -121,7 +134,10 @@ alone is not enough, because the Host independently parses the footer. For examp
 Host 3.0.40 rejects both the compact shortcut and elapsed suffix. Relay deployment
 is unnecessary; the new response and capability fields are optional and travel
 inside the existing encrypted payload. The `CodexQuestions` OSLog category records
-Host refusal reasons and acknowledgement failures without question/draft content.
+Host refusal/send results, client eligibility (focus, selection, scrollback and
+composer recognition), deduplication and acknowledgement results without
+question/draft content or hook IDs. Native eligibility diagnostics are emitted only
+when their reason changes.
 
 On iOS, `TerminalCodexQuestionExpansion` runs outside SwiftUI observable state.
 The selected pane's native wrapper reads at most nine live rows, after parsing
