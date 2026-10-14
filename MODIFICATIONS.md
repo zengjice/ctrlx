@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.71 — Reopen the keyboard when tapping an iOS draft
+
+- Merge `ux`: in iOS Bottom Bar mode, tapping existing draft text opens the
+  keyboard while preserving cursor navigation or native TUI clicking. Repeated
+  taps keep it open, and tapping again after hiding it resumes editing.
+- Recognize bounded multiline drafts without treating terminal output or
+  unrelated TUI menus as input. Preserve empty-prompt keyboard toggling,
+  selection gestures and composition guards.
+- Release validation: the bounded serial Swift regression passed with 3,108
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, website build,
+  Mac Debug build and arm64 iOS Simulator build passed. SwiftFormat has no
+  findings on changed lines; existing findings outside those ranges remain.
+  UIKit-only interaction tests and physical iPhone gesture acceptance were not
+  run in this Mac release workflow.
+- Distribution: Mac build 4 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.70 — Hold-to-talk input and session order controls
 
 - Merge `ux`: add Restore Automatic Order beside the new-session button in
