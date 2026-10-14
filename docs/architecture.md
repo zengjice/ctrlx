@@ -168,8 +168,23 @@ updates, but verify decoding, capability gating and envelope limits per change.
   SwiftUI's `DragGesture` before its end callback.
 - Before the first drag, automatic sorting determines the order. A drag captures
   the displayed order as a device-local preference; state changes do not re-rank it.
-- The default automatic order is attention → working → idle → plain terminal,
-  with session-name ordering within each group. Saved sort-mode choices are
+- The default automatic order is attention → working → idle → plain terminal.
+  A session's representative agent is selected across all windows and panes in
+  that same priority order, keeping window/pane order for ties. Icons, status
+  labels, agent metadata and sorting use this representative on Mac and iOS;
+  a manual session-state override still wins. An idle first tab cannot hide a
+  working or waiting agent in another tab. Terminal progress remains independent:
+  any pane's explicit progress wins, otherwise any working agent supplies a bar.
+  Within the idle group, the latest task activity sorts first; ties and missing
+  timestamps fall back to session-name ordering. Other groups keep name ordering.
+  Activity is the Host's latest plugin-state receipt time, taking the maximum
+  across every pane/window in the session. Viewing/marking handled and metadata
+  refreshes do not update it. The optional `PaneState.lastAgentActivityAt` travels
+  in full snapshots, so local Mac and remote Viewers share the same time across
+  Viewer reconnects. All recency sorting uses whole seconds to match the wire's
+  ISO 8601 precision; activity within the same second ties and sorts by name.
+  Older Hosts, and panes without activity recorded since Host
+  startup, fall back to name ordering. Saved sort-mode choices are
   preserved on Mac, which uses its own sort mode for local and remote sections.
   iOS automatic order always uses this activity-first rule, independent of the
   Host's saved sidebar mode. Mac Settings → Sidebar → Sort Order changes the

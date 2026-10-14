@@ -30,7 +30,10 @@ public struct SessionSortData {
         self.hasClaude = hasClaude
         self.statusPriority = statusPriority
         self.statusPriorityIdleFirst = statusPriorityIdleFirst
-        self.latestEventTimestamp = latestEventTimestamp
+        // Match the wire's ISO 8601 precision so local and remote recency ties agree.
+        self.latestEventTimestamp = latestEventTimestamp.map {
+            Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.down))
+        }
     }
 
     /// Status priority: lower = higher priority (attention > working > idle).
@@ -101,7 +104,7 @@ public struct SessionSortData {
         sidebarTerminalFields: [SidebarField],
         homeDirectory: String?
     ) -> SessionSortData {
-        let claudeSession = session.windows.flatMap(\.panes).compactMap(\.agentSession).first
+        let claudeSession = session.agentSession
         let metadata = session.activeWindowMetadata
         let fields = claudeSession != nil ? sidebarFields : sidebarTerminalFields
         let label = primaryLabel(
@@ -122,14 +125,13 @@ public struct SessionSortData {
             hasClaude: claudeSession != nil,
             statusPriority: statusPriority(displayed: session.displayedState),
             statusPriorityIdleFirst: statusPriorityIdleFirst(displayed: session.displayedState),
-            // The plugin model dropped the per-event timestamp buffer (spec §16);
-            // recency sort by last event is no longer available.
-            latestEventTimestamp: nil
+            latestEventTimestamp: session.windows.flatMap(\.panes).compactMap(\.lastAgentActivityAt).max()
         )
     }
 
     /// Shared remote ordering. Automatic order defaults to attention, working,
-    /// idle, then plain terminals; Mac callers can supply their configured mode.
+    /// idle (most recently active first), then plain terminals; Mac callers can
+    /// supply their configured mode.
     public static func sortedRemoteSessions(
         _ sessions: [TmuxSession],
         mode: SidebarSortMode = .statusPriority,
@@ -168,14 +170,19 @@ public extension SidebarSortMode {
                     return a.hasClaude
                 }
                 return a.sessionName.localizedCaseInsensitiveCompare(b.sessionName) == .orderedAscending
-            case .statusPriority:
-                if a.statusPriority != b.statusPriority {
-                    return a.statusPriority < b.statusPriority
+            case .statusPriority,
+                 .statusPriorityIdleFirst:
+                let aPriority = self == .statusPriority ? a.statusPriority : a.statusPriorityIdleFirst
+                let bPriority = self == .statusPriority ? b.statusPriority : b.statusPriorityIdleFirst
+                if aPriority != bPriority {
+                    return aPriority < bPriority
                 }
-                return a.sessionName.localizedCaseInsensitiveCompare(b.sessionName) == .orderedAscending
-            case .statusPriorityIdleFirst:
-                if a.statusPriorityIdleFirst != b.statusPriorityIdleFirst {
-                    return a.statusPriorityIdleFirst < b.statusPriorityIdleFirst
+                if a.statusPriority == SessionSortData.statusPriority(displayed: .idle) {
+                    let aTime = a.latestEventTimestamp ?? .distantPast
+                    let bTime = b.latestEventTimestamp ?? .distantPast
+                    if aTime != bTime {
+                        return aTime > bTime
+                    }
                 }
                 return a.sessionName.localizedCaseInsensitiveCompare(b.sessionName) == .orderedAscending
             case .recentActivity:

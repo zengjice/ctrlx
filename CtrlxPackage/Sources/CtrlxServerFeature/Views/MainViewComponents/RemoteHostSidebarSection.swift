@@ -183,7 +183,7 @@ struct RemoteHostSidebarSection: View {
 
     @ViewBuilder
     private func remoteSessionButton(_ session: TmuxSession) -> some View {
-        let claudePane = session.windows.flatMap(\.panes).first(where: { $0.agentSession != nil })
+        let claudePane = session.agentPane
         // See `sessionButton` — when the row gains a "Working" indicator the
         // merged button becomes `AXBusyIndicator` and swallows the bar's
         // separate accessibility element. Mirror the bar AX info on a sibling

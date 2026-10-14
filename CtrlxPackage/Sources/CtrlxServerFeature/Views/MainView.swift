@@ -1067,7 +1067,9 @@ public struct MainView: View {
         let description = activeWindow?.activePane.flatMap { windowManager.paneStates[$0.paneId]?.customDescription }
         let color = activeWindow?.activePane.flatMap { windowManager.paneStates[$0.paneId]?.customColor }
         let emoji = activeWindow?.activePane.flatMap { windowManager.paneStates[$0.paneId]?.customEmoji }
-        let claudePane = session.windows.flatMap(\.panes).first { windowManager.paneStates[$0.paneId]?.agentSession != nil }
+        let claudePane = session.windows.flatMap(\.panes)
+            .compactMap { windowManager.paneStates[$0.paneId] }
+            .representativeAgentPane
         // Current sidebar state for the "Set State" menu: the manual override
         // (if any pane has one) wins, else the agent's own state. Matches how
         // `SessionSidebarRow` picks the indicator across the session's panes.
@@ -1076,7 +1078,7 @@ public struct MainView: View {
             .first
         let displayedState = CLISessionState.displayed(
             override: stateOverride,
-            agentState: claudePane.flatMap { windowManager.paneStates[$0.paneId]?.agentSession?.state }
+            agentState: claudePane?.agentSession?.state
         )
         // Compute effective progress here (and not just inside the row) so we can expose
         // a sibling AX element OUTSIDE the Button label below — when the row

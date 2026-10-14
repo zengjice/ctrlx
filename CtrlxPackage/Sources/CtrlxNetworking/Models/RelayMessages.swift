@@ -269,6 +269,10 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// The coding-agent session running in this pane, if any
     public var agentSession: AgentSession?
 
+    /// Host receipt time of the latest plugin state update. Viewing a session
+    /// does not change this. Optional for snapshots from older Hosts.
+    public var lastAgentActivityAt: Date?
+
     // MARK: - Behavior Flags
 
     /// Whether yolo mode is enabled (auto-approve permissions)
@@ -374,6 +378,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
         terminalTitle: String? = nil,
         gitBranch: String? = nil,
         agentSession: AgentSession? = nil,
+        lastAgentActivityAt: Date? = nil,
         yoloMode: Bool = false,
         cliSessionState: CLISessionState? = nil,
         editorSession: EditorSessionInfo? = nil,
@@ -404,6 +409,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
         self.terminalTitle = terminalTitle
         self.gitBranch = gitBranch
         self.agentSession = agentSession
+        self.lastAgentActivityAt = lastAgentActivityAt
         self.yoloMode = yoloMode
         self.cliSessionState = cliSessionState
         self.editorSession = editorSession

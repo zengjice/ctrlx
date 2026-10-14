@@ -799,7 +799,7 @@ final public class MirrorWindowManager {
         }
 
         // Record arrival order for the "most recent activity" sort.
-        lastActivityByPane[paneId] = Date()
+        paneStates[paneId]?.lastAgentActivityAt = Date()
 
         // A definitive state wins over any CLI-driven override so subsequent
         // plugin activity is reflected.
@@ -882,16 +882,10 @@ final public class MirrorWindowManager {
 
     // MARK: - Mark Handled
 
-    /// When each pane last received a plugin state update, used for the
-    /// "most recent activity" sidebar sort. The agent-blind `PluginEvent` carries
-    /// no event timestamp (the trailing-event buffer was dropped, spec §16), so
-    /// recency is sourced from state-arrival order instead — which matches the
-    /// order the host received the events in.
-    private var lastActivityByPane: [String: Date] = [:]
-
-    /// The most recent plugin-state arrival time for a pane, if any.
+    /// The most recent plugin-state arrival time, shared with Viewers through
+    /// the pane snapshot. Metadata refreshes and viewing do not update it.
     public func lastActivity(for paneId: String) -> Date? {
-        lastActivityByPane[paneId]
+        paneStates[paneId]?.lastAgentActivityAt
     }
 
     /// Marks a session as handled (user has seen it). Only a finished session
