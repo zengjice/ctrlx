@@ -26,7 +26,7 @@ struct MacVoiceInputButton: View {
             }
         }
         .disabled((!context.canSend || isSuspended) && voice.phase == .idle)
-        .help("Start / Stop Voice Input (⇧⌘M); inserts text without sending")
+        .help("Start / Stop Voice Input (⌘⌥M); inserts text without sending")
         .accessibilityLabel("Voice Input")
         .accessibilityValue(voice.phase.accessibilityValue)
         .accessibilityHint(voice.phase.accessibilityHint)
@@ -91,7 +91,7 @@ struct MacVoiceInputButton: View {
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Stop and Insert", action: toggleRecording)
-                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                    .keyboardShortcut("m", modifiers: [.command, .option])
                     .disabled(!voice.isRecording)
                     .buttonStyle(.borderedProminent)
             }

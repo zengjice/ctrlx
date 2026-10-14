@@ -908,7 +908,7 @@ enum TabDragPayload: Codable, Hashable, Transferable {
     /// surviving entry keeps the user's interleaved position.
     ///
     /// Shared by the visible `WindowTabBar`, the visible `RemoteWindowTabBar`,
-    /// and the Cmd-Shift-[ / Cmd-Shift-] keyboard navigation (both local and
+    /// and the Cmd-Option-Left / Cmd-Option-Right keyboard navigation (both local and
     /// remote) so every surface walks the strip in the exact same order — see
     /// issue #566, where the keyboard path used a fixed kind-grouped order and
     /// ignored reordering.

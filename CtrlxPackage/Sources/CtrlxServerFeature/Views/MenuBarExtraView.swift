@@ -100,7 +100,7 @@ public struct MenuBarExtraView: View {
         } label: {
             Label("Show Sessions", symbol: .terminal)
         }
-        .keyboardShortcut("p", modifiers: [.command, .shift])
+        .keyboardShortcut("p", modifiers: [.command, .option])
 
         Button {
             NSApp.setActivationPolicy(.regular)

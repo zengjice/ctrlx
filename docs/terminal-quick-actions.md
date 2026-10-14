@@ -16,11 +16,21 @@ Git directory, then the home directory, without taking the other side's Files pa
 | Command-N | Open the local New Session picker |
 | Command-T | Create a terminal in the current session and focused split |
 | Command-P | Search local and paired-Host sessions, then switch with Return |
-| Command-1…9 | Select a terminal by its visible order within the focused split |
-| Command-Shift-[ / ] | Select the previous / next tab within that split |
+| Command-1…9 | Select any tab by its visible order within the focused split |
+| Command-Option-Left / Right | Select the previous / next tab within that split |
+| Command-Option-Up / Down | Select the previous / next session in sidebar order |
 | Command-W | Close the focused tab, preserving existing terminal close confirmation |
-| Command-Shift-M | Start / stop voice input; stop inserts without submitting |
+| Command-Option-M | Start / stop voice input; stop inserts without submitting |
+| Command-Option-F | Find in Files |
+| Command-Option-S | Toggle the status bar |
+| Command-Option-P | Show Sessions from the menu bar menu |
 | Command-+ / - / 0 | Increase / decrease / reset terminal font size |
+
+Tab shortcuts include terminals, Git, Files and Browser tabs, follow drag-reordered
+positions, and wrap within the focused split. Command-Shift-[ / ] is no longer
+bound. Extended actions use the same Command-Option modifiers as navigation.
+Rich-text and control-sequence copy remain menu actions without default shortcuts.
+Shortcuts are fixed; Settings does not provide a shortcut editor.
 
 Session search follows the sidebar order and matches session names, displayed
 titles and Host names. Up/Down choose a result, Return switches, and Escape

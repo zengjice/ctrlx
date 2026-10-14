@@ -14,7 +14,7 @@ import Foundation
 ///   ("New Browser", which focuses the address bar locally on the viewer).
 /// - Drag-to-reorder for terminals — the new order is pushed to the host via
 ///   `MoveTmuxWindows` so it survives an app restart on both sides.
-/// - Cmd-Shift-[ / Cmd-Shift-] menu shortcuts that cycle the active tab.
+/// - Cmd-Option-Left / Cmd-Option-Right menu shortcuts that cycle the active tab.
 /// - "Drag past the last tab" via the trailing drop zone.
 /// - Cross-divider drags: terminals and browser tabs can be flipped between
 ///   the two split panes via drag.
@@ -164,8 +164,8 @@ public enum RemoteTabReorderScenario {
         TestStep.macWaitForElement(titled: "rtabreorder:2 winB", timeout: 5, instance: 1)
         TestStep.macScreenshot(label: "viewer-rtabreorder-after-session-roundtrip", instance: 1)
 
-        // ── Phase 5: Cmd-Shift-] / Cmd-Shift-[ keyboard navigation ──────
-        TestStep.log("Phase 5: Cmd-Shift-] cycles to the next tab; Cmd-Shift-[ cycles back")
+        // ── Phase 5: Cmd-Option-Right / Cmd-Option-Left keyboard navigation ──────
+        TestStep.log("Phase 5: Cmd-Option-Right cycles to the next tab; Cmd-Option-Left cycles back")
         // Start on winC (the leftmost tab after the reorder).
         TestStep.macClickButton(titled: "rtabreorder:0 winC", instance: 1)
         TestStep.waitForTmuxDisplayMessage(
@@ -180,8 +180,8 @@ public enum RemoteTabReorderScenario {
             instance: 1
         )
 
-        // Cmd-Shift-] → next visible tab (winA).
-        TestStep.macPressKey(.character("]"), modifiers: [.command, .shift], instance: 1)
+        // Cmd-Option-Right → next visible tab (winA).
+        TestStep.macPressKey(.rightArrow, modifiers: [.command, .option], instance: 1)
         TestStep.macWaitForElementQuery(
             .allOf([.labelContains("rtabreorder:1 winA"), .valueContains("selected")]),
             timeout: 5,
@@ -189,8 +189,8 @@ public enum RemoteTabReorderScenario {
         )
         TestStep.macScreenshot(label: "viewer-rtabreorder-after-next-shortcut", instance: 1)
 
-        // Cmd-Shift-[ → previous visible tab (winC again).
-        TestStep.macPressKey(.character("["), modifiers: [.command, .shift], instance: 1)
+        // Cmd-Option-Left → previous visible tab (winC again).
+        TestStep.macPressKey(.leftArrow, modifiers: [.command, .option], instance: 1)
         TestStep.macWaitForElementQuery(
             .allOf([.labelContains("rtabreorder:0 winC"), .valueContains("selected")]),
             timeout: 5,

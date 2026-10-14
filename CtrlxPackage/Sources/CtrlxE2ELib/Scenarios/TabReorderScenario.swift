@@ -10,7 +10,7 @@ import Foundation
 /// - Drag-to-reorder for terminals — the new order is persisted via
 ///   `tmux move-window` so it survives an app restart. Also tested via a
 ///   session switch so the SwiftUI side preserves the new layout.
-/// - Cmd-Shift-[ / Cmd-Shift-] menu shortcuts that cycle the active tab in
+/// - Cmd-Option-Left / Cmd-Option-Right menu shortcuts that cycle the active tab in
 ///   the current session.
 /// - "Drag past the last tab" via the trailing drop zone.
 /// - Cross-divider drags: terminals, the file explorer, file tabs, and
@@ -150,8 +150,8 @@ public enum TabReorderScenario {
         TestStep.macWaitForElement(titled: "tabreorder:2 winB", timeout: 5)
         TestStep.macScreenshot(label: "mac-tabreorder-after-session-roundtrip")
 
-        // ── Phase 5: Cmd-Shift-] / Cmd-Shift-[ keyboard navigation ────
-        TestStep.log("Phase 5: Cmd-Shift-] cycles to the next tab; Cmd-Shift-[ cycles back")
+        // ── Phase 5: Cmd-Option-Right / Cmd-Option-Left keyboard navigation ────
+        TestStep.log("Phase 5: Cmd-Option-Right cycles to the next tab; Cmd-Option-Left cycles back")
         // Start on winC (the leftmost tab after the reorder).
         TestStep.macClickButton(titled: "tabreorder:0 winC")
         TestStep.waitForTmuxDisplayMessage(
@@ -165,16 +165,16 @@ public enum TabReorderScenario {
             timeout: 5
         )
 
-        // Cmd-Shift-] → next visible tab (winA).
-        TestStep.macPressKey(.character("]"), modifiers: [.command, .shift])
+        // Cmd-Option-Right → next visible tab (winA).
+        TestStep.macPressKey(.rightArrow, modifiers: [.command, .option])
         TestStep.macWaitForElementQuery(
             .allOf([.labelContains("tabreorder:1 winA"), .valueContains("selected")]),
             timeout: 5
         )
         TestStep.macScreenshot(label: "mac-tabreorder-after-next-shortcut")
 
-        // Cmd-Shift-[ → previous visible tab (winC again).
-        TestStep.macPressKey(.character("["), modifiers: [.command, .shift])
+        // Cmd-Option-Left → previous visible tab (winC again).
+        TestStep.macPressKey(.leftArrow, modifiers: [.command, .option])
         TestStep.macWaitForElementQuery(
             .allOf([.labelContains("tabreorder:0 winC"), .valueContains("selected")]),
             timeout: 5

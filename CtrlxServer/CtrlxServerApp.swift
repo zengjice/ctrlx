@@ -20,7 +20,6 @@ struct TmuxPaneMirrorApp: App {
     @State private var updaterController: UpdaterController
     @NSApplicationDelegateAdaptor private var shutdownDelegate: AppShutdownDelegate
     @Environment(\.openSettings) private var openSettings
-    @FocusedValue(\.workbenchMenuActions) private var workbenchMenuActions
 
     init() {
         let isE2E = CommandLine.arguments.contains("--e2e-test")
@@ -480,45 +479,6 @@ struct TmuxPaneMirrorApp: App {
                 CloseTabMenuItem()
             }
 
-            CommandGroup(after: .textEditing) {
-                Button("Find in Files") {
-                    workbenchMenuActions?.openContentSearch()
-                }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled(workbenchMenuActions == nil)
-            }
-
-            // Window menu - tab navigation shortcuts
-            CommandGroup(before: .windowList) {
-                TerminalWindowNavigationMenuItems()
-
-                Divider()
-
-                Button("Previous Tab") {
-                    workbenchMenuActions?.selectPreviousTab()
-                }
-                .keyboardShortcut("[", modifiers: [.command, .shift])
-                .disabled(workbenchMenuActions == nil)
-
-                Button("Next Tab") {
-                    workbenchMenuActions?.selectNextTab()
-                }
-                .keyboardShortcut("]", modifiers: [.command, .shift])
-                .disabled(workbenchMenuActions == nil)
-
-                Button("Previous Session") {
-                    workbenchMenuActions?.selectPreviousSession?()
-                }
-                .disabled(workbenchMenuActions?.selectPreviousSession == nil)
-
-                Button("Next Session") {
-                    workbenchMenuActions?.selectNextSession?()
-                }
-                .disabled(workbenchMenuActions?.selectNextSession == nil)
-
-                Divider()
-            }
-
             // Edit menu - Copy as Rich Text / Copy with Control Sequences
             CommandGroup(after: .pasteboard) {
                 Divider()
@@ -526,12 +486,10 @@ struct TmuxPaneMirrorApp: App {
                 Button("Copy as Rich Text") {
                     NSApp.sendAction(#selector(TerminalActions.copyAsRichText), to: nil, from: nil)
                 }
-                .keyboardShortcut("c", modifiers: [.command, .option])
 
                 Button("Copy with Control Sequences") {
                     NSApp.sendAction(#selector(TerminalActions.copyWithControlSequences), to: nil, from: nil)
                 }
-                .keyboardShortcut("c", modifiers: [.command, .control])
             }
 
             // Help menu - CLI API Reference
@@ -708,45 +666,6 @@ private struct CloseTabMenuItem: View {
             }
         }
         .keyboardShortcut("w", modifiers: .command)
-    }
-}
-
-/// Window-menu commands for tmux-window-only navigation. The focused value is
-/// supplied only by the active panes scene, so Settings/About keep standard
-/// macOS key handling and terminal views never install a key-event monitor.
-private struct TerminalWindowNavigationMenuItems: View {
-    @FocusedValue(\.terminalWindowNavigationActions) private var actions
-
-    private var windowCount: Int {
-        actions?.windowCount ?? 0
-    }
-
-    var body: some View {
-        Button("Previous Terminal Window") {
-            actions?.selectPrevious()
-        }
-        .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-        .disabled(windowCount < 2)
-
-        Button("Next Terminal Window") {
-            actions?.selectNext()
-        }
-        .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-        .disabled(windowCount < 2)
-
-        Menu("Select Terminal Window") {
-            ForEach(0 ..< 9, id: \.self) { index in
-                Button("Terminal Window \(index + 1)") {
-                    actions?.selectAtIndex(index)
-                }
-                .keyboardShortcut(
-                    KeyEquivalent(Character(String(index + 1))),
-                    modifiers: .command
-                )
-                .disabled(index >= windowCount)
-            }
-        }
-        .disabled(windowCount == 0)
     }
 }
 

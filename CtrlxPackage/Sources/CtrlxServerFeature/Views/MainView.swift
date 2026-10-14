@@ -762,7 +762,6 @@ public struct MainView: View {
                 }
             ))
             .focusedSceneValue(\.closeCurrentTabAction, handleCloseCurrentTab)
-            .focusedSceneValue(\.terminalWindowNavigationActions, terminalWindowNavigationActions)
             .onChange(of: terminalQuickActions.active?.id) {
                 guard
                     let endpoint = terminalQuickActions.active, endpoint.isAvailable,
@@ -798,6 +797,8 @@ public struct MainView: View {
             ? terminalQuickActions.toggleVoiceInput : nil
         return MenuCommandsModifier(
             onOpenContentSearch: { handleOpenContentSearch() },
+            tabCount: navigableTabCount,
+            onSelectTabAtIndex: { selectTab(at: $0) },
             onSelectPreviousTab: { selectAdjacentTab(direction: -1) },
             onSelectNextTab: { selectAdjacentTab(direction: 1) },
             onSelectPreviousSession: { selectAdjacentSession(direction: -1) },
@@ -968,7 +969,7 @@ public struct MainView: View {
     /// The local session that owns `selectedWindow`, or nil when the current
     /// selection is remote or empty. Centralizes the "find the session for the
     /// selected window" lookup shared by the navigation title, session
-    /// cycling, and ⌘⇧F content search so they all resolve it the same
+    /// cycling, and ⌘⌥F content search so they all resolve it the same
     /// way.
     private func currentLocalSession() -> LocalTmuxSession? {
         guard selectedRemoteSession == nil else { return nil }
@@ -3045,20 +3046,6 @@ public struct MainView: View {
         return selectedRemoteSession == nil ? selectedWindow?.stableId : selectedRemoteWindow?.stableId
     }
 
-    private func excludedMenuWindowIDs(live: [String], tabs: SessionFileTabsState?) -> Set<String> {
-        let right = tabs?.rightSideWindowIds ?? []
-        return targetsRightPane ? Set(live).subtracting(right) : right
-    }
-
-    private func selectMenuTerminalWindow(_ id: String) {
-        if targetsRightPane {
-            currentSessionTabs?.selectedRight = .window(id)
-            focusRightTerminal(id)
-        } else {
-            selectTerminalWindow(stableId: id)
-        }
-    }
-
     private func focusRightTerminal(_ id: String) {
         let paneID: String?
         if selectedRemoteSession != nil {
@@ -3072,19 +3059,28 @@ public struct MainView: View {
         requestAutomaticTabFit(windowID: id)
     }
 
-    private func selectAdjacentRightTab(direction: Int) {
-        guard let tabs = currentSessionTabs else { return }
+    private var rightTabEntries: [TabDragPayload] {
+        guard let tabs = currentSessionTabs else { return [] }
         let ids = selectedRemoteSession == nil
             ? currentLocalSession()?.windows.map(\.stableId) ?? [] : selectedRemoteSessionWindows.map(\.stableId)
-        let entries = TabDragPayload.reconciledOrder(
+        return TabDragPayload.reconciledOrder(
             windowIds: ids.filter { ownsTerminal(hostID: selectedRemoteSession?.hostId, windowID: $0) },
             fileTabIds: tabs.openFileTabs.map(\.id), browserTabIds: tabs.openBrowserTabs.map(\.id),
             storedOrder: tabs.tabOrder, includeFileExplorer: false, includeGit: selectedRemoteSession == nil
         ).filter { tabs.rightSide.contains($0) }
+    }
+
+    private func selectAdjacentRightTab(direction: Int) {
+        guard let tabs = currentSessionTabs else { return }
+        let entries = rightTabEntries
         guard entries.count > 1, let selected = tabs.selectedRight, let index = entries.firstIndex(of: selected) else { return }
         let next = entries[(index + direction + entries.count) % entries.count]
-        tabs.selectedRight = next
-        if case let .window(id) = next {
+        selectRightTab(next)
+    }
+
+    private func selectRightTab(_ entry: TabDragPayload) {
+        currentSessionTabs?.selectedRight = entry
+        if case let .window(id) = entry {
             focusRightTerminal(id)
         }
     }
@@ -3196,50 +3192,34 @@ public struct MainView: View {
 
     // MARK: - Menu Commands
 
-    /// Window ids eligible for the window-only menu shortcuts, in the same
-    /// visual order as the focused side of the tab strip.
-    private var navigableTerminalWindowIDs: [String] {
-        guard !isPresentingSessionPicker else { return [] }
-        if let remote = selectedRemoteSession {
-            let key = remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)
-            let tabs = remoteSessionTabsStates[key]
-            return TerminalWindowNavigation.orderedWindowIDs(
-                liveWindowIDs: selectedRemoteSessionWindows.filter { ownsTerminal(hostID: remote.hostId, windowID: $0.stableId) }.map(\.stableId),
-                storedTabOrder: tabs?.tabOrder ?? [],
-                excludedWindowIDs: excludedMenuWindowIDs(live: selectedRemoteSessionWindows.map(\.stableId), tabs: tabs)
-            )
+    private var navigableTabCount: Int {
+        guard !isPresentingSessionPicker else { return 0 }
+        if targetsRightPane {
+            return rightTabEntries.count
         }
-
-        guard let session = currentLocalSession() else { return [] }
-        let tabs = sessionFileTabsStates[session.sessionName]
-        return TerminalWindowNavigation.orderedWindowIDs(
-            liveWindowIDs: session.windows.filter { ownsTerminal(hostID: nil, windowID: $0.stableId) }.map(\.stableId),
-            storedTabOrder: tabs?.tabOrder ?? [],
-            excludedWindowIDs: excludedMenuWindowIDs(live: session.windows.map(\.stableId), tabs: tabs)
-        )
+        if let remote = selectedRemoteSession {
+            return remoteTabEntries(remote: remote).count
+        }
+        guard let session = currentLocalSession() else { return 0 }
+        return tabStripEntries(session: session, sessionTabs: currentSessionTabs).count
     }
 
-    /// Scene-scoped value consumed by the macOS Window menu. The closures
-    /// deliberately call the same local/remote selectors as tab clicks.
-    private var terminalWindowNavigationActions: TerminalWindowNavigationActions {
-        TerminalWindowNavigationActions(
-            windowCount: navigableTerminalWindowIDs.count,
-            selectPrevious: { selectAdjacentTerminalWindow(direction: -1) },
-            selectNext: { selectAdjacentTerminalWindow(direction: 1) },
-            selectAtIndex: { selectTerminalWindow(at: $0) }
-        )
-    }
-
-    private func selectAdjacentTerminalWindow(direction: Int) {
-        let orderedIDs = navigableTerminalWindowIDs
-        let currentID = menuTerminalWindowID
-        guard
-            let targetID = TerminalWindowNavigation.adjacentWindowID(
-                currentID: currentID,
-                orderedWindowIDs: orderedIDs,
-                direction: direction
-            ) else { return }
-        selectMenuTerminalWindow(targetID)
+    private func selectTab(at index: Int) {
+        guard !isPresentingSessionPicker else { return }
+        if targetsRightPane {
+            let entries = rightTabEntries
+            guard entries.indices.contains(index) else { return }
+            selectRightTab(entries[index])
+        } else if let remote = selectedRemoteSession {
+            let entries = remoteTabEntries(remote: remote)
+            guard entries.indices.contains(index) else { return }
+            selectRemoteTab(entries[index], remote: remote)
+        } else if let session = currentLocalSession() {
+            let tabs = currentSessionTabs
+            let entries = tabStripEntries(session: session, sessionTabs: tabs)
+            guard entries.indices.contains(index) else { return }
+            applyTabSelection(entry: entries[index], session: session, sessionTabs: tabs, currentWindow: selectedWindow)
+        }
     }
 
     private var browserAnnotationContext: BrowserAnnotationContext? {
@@ -3417,15 +3397,6 @@ public struct MainView: View {
         }
     }
 
-    private func selectTerminalWindow(at index: Int) {
-        guard
-            let targetID = TerminalWindowNavigation.windowID(
-                at: index,
-                orderedWindowIDs: navigableTerminalWindowIDs
-            ) else { return }
-        selectMenuTerminalWindow(targetID)
-    }
-
     private func selectTerminalWindow(stableId: String) {
         guard ownsTerminal(hostID: selectedRemoteSession?.hostId, windowID: stableId) else {
             coordinator.detachedWindows.focus(hostID: selectedRemoteSession?.hostId, windowID: stableId)
@@ -3525,7 +3496,7 @@ public struct MainView: View {
         requestCloseWindow(window)
     }
 
-    /// Cmd-Shift-[ / Cmd-Shift-] handler. Walks the active session's tab
+    /// Cmd-Option-Left / Cmd-Option-Right handler. Walks the active session's tab
     /// strip in visual order, even when only Files / Browser tabs remain.
     /// Wraps at both ends within the focused split.
     private func selectAdjacentTab(direction: Int) {
@@ -3679,22 +3650,11 @@ public struct MainView: View {
         }
     }
 
-    /// Cmd-Shift-[ / Cmd-Shift-] handler for remote sessions. Walks the tab
-    /// strip in visual order — terminal, file and browser tabs — and selects
-    /// the entry `direction` steps away from the current one, with
-    /// wraparound. Sends `SelectTmuxWindow` to the host when the new entry
-    /// is a terminal so tmux follows along.
-    private func cycleRemoteWindowTab(remote: RemoteSessionSelection, direction: Int) {
+    private func remoteTabEntries(remote: RemoteSessionSelection) -> [TabDragPayload] {
         let windows = selectedRemoteSessionWindows.filter { ownsTerminal(hostID: remote.hostId, windowID: $0.stableId) }
         let key = remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)
         let tabs = remoteSessionTabsStates[key]
-        // Walk the same reconciled order the visible `RemoteWindowTabBar`
-        // renders, via the shared `reconciledOrder` helper — keeps keyboard
-        // cycling and the on-screen remote strip from drifting apart, and
-        // (unlike the old inline filter) slots a freshly-appeared window into
-        // the cycle instead of dropping it (issue #566). Directory browsers are
-        // ordinary file tabs; there is no singleton explorer or remote Git tab.
-        let entries = TabDragPayload.reconciledOrder(
+        return TabDragPayload.reconciledOrder(
             windowIds: windows.map(\.stableId),
             fileTabIds: tabs?.openFileTabs.map(\.id) ?? [],
             browserTabIds: tabs?.openBrowserTabs.map(\.id) ?? [],
@@ -3702,6 +3662,11 @@ public struct MainView: View {
             includeFileExplorer: false,
             includeGit: false
         ).filter { tabs?.rightSide.contains($0) != true }
+    }
+
+    private func cycleRemoteWindowTab(remote: RemoteSessionSelection, direction: Int) {
+        let tabs = currentSessionTabs
+        let entries = remoteTabEntries(remote: remote)
         guard entries.count > 1 else { return }
 
         // File tab > browser tab > selected window. The first match wins so the user's
@@ -3718,21 +3683,13 @@ public struct MainView: View {
         }
         guard let currentIndex else { return }
         let nextIndex = (currentIndex + direction + entries.count) % entries.count
-        switch entries[nextIndex] {
+        selectRemoteTab(entries[nextIndex], remote: remote)
+    }
+
+    private func selectRemoteTab(_ entry: TabDragPayload, remote: RemoteSessionSelection) {
+        switch entry {
         case let .window(id):
-            guard let window = windows.first(where: { $0.stableId == id }) else { return }
-            tabs?.selectedBrowserTabId = nil
-            selectedRemoteWindowId = window.id
-            tabs?.selectedFileTabId = nil
-            requestAutomaticTabFit(windowID: window.stableId)
-            Task {
-                guard let manager = coordinator.viewerConnectionManager else { return }
-                _ = await manager.sendCommand(
-                    SelectTmuxWindow(),
-                    paneId: window.id,
-                    hostId: remote.hostId
-                )
-            }
+            selectTerminalWindow(stableId: id)
         case let .browser(id):
             selectRemoteBrowserTab(id, hostId: remote.hostId, sessionName: remote.sessionName)
         case let .file(id):
@@ -3859,7 +3816,7 @@ public struct MainView: View {
         }
     }
 
-    /// Cmd-Shift-F opens content search in a Host-backed directory tab.
+    /// Cmd-Option-F opens content search in a Host-backed directory tab.
     private func handleOpenContentSearch() {
         if let remote = selectedRemoteSession {
             let tabs = tabStore.tabs(hostID: remote.hostId, session: remote.sessionName)

@@ -5,6 +5,8 @@ import SwiftUI
 /// Keeps menu routing scene-local, including when several workbenches are visible.
 struct MenuCommandsModifier: ViewModifier {
     let onOpenContentSearch: @MainActor () -> Void
+    let tabCount: Int
+    let onSelectTabAtIndex: @MainActor (Int) -> Void
     let onSelectPreviousTab: @MainActor () -> Void
     let onSelectNextTab: @MainActor () -> Void
     let onSelectPreviousSession: @MainActor () -> Void
@@ -19,6 +21,8 @@ struct MenuCommandsModifier: ViewModifier {
         content
             .focusedSceneValue(\.workbenchMenuActions, WorkbenchMenuActions(
                 openContentSearch: onOpenContentSearch,
+                tabCount: tabCount,
+                selectTabAtIndex: onSelectTabAtIndex,
                 selectPreviousTab: onSelectPreviousTab,
                 selectNextTab: onSelectNextTab,
                 selectPreviousSession: allowsSessionNavigation ? onSelectPreviousSession : nil,

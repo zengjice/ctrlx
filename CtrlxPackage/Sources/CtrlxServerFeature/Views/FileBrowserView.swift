@@ -141,7 +141,7 @@ final class FileBrowserState {
     /// `ListScrollPreserver`. Reset by `reloadTree` when the directory
     /// changes — a different tree makes the old offset meaningless.
     var treeScrollY: CGFloat = 0
-    /// Monotonic counter bumped from outside the view (e.g., the Cmd-Shift-F
+    /// Monotonic counter bumped from outside the view (e.g., the Cmd-Option-F
     /// menu command) to request the search field take keyboard focus. The view
     /// observes the value and drives `@FocusState` when it changes; using a
     /// counter (rather than a Bool) re-fires focus even when the field is

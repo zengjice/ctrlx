@@ -61,6 +61,8 @@ public enum Key: Sendable, Equatable {
     case space
     case downArrow
     case upArrow
+    case leftArrow
+    case rightArrow
     case character(Character)
 }
 
@@ -276,7 +278,7 @@ public enum TestStep: Sendable {
     /// - `macPressKey(.return)` — confirm the default action
     /// - `macPressKey(.tab)` — cycle focus
     /// - `macPressKey(.character("a"), modifiers: .command)` — Cmd+A select all
-    /// - `macPressKey(.character("]"), modifiers: [.command, .shift])` — app shortcut
+    /// - `macPressKey(.rightArrow, modifiers: [.command, .option])` — app shortcut
     case macPressKey(Key, modifiers: KeyboardModifiers = [], instance: Int = 0)
     /// CGEvent left-click on an element (bypasses AXPress, uses real mouse click).
     /// Use for selecting items in SwiftUI List/OutlineGroup.

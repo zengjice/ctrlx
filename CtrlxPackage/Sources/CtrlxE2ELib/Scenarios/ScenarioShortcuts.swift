@@ -120,7 +120,11 @@ public enum Shortcut {
         TestStep.wait(seconds: 1)
         TestStep.macFocusElement(titled: "Pairing Code", instance: 1)
         TestStep.wait(seconds: 0.5)
-        TestStep.macType(text: "${twoMac.pairingCode}", pressReturn: true, instance: 1)
+        // Paste avoids leaving the code in an active input-method composition.
+        TestStep.macWriteClipboard(text: "${twoMac.pairingCode}", instance: 1)
+        TestStep.macPaste(instance: 1)
+        TestStep.macCGClickElement(query: .allOf([.role("AXButton"), .label("Connect")]), instance: 1)
+        TestStep.macWaitForElementToDisappear(titled: "Pairing Code", timeout: 15, instance: 1)
 
         // Verify pairing succeeded
         TestStep.verifyServerHasPairings(count: 1)
