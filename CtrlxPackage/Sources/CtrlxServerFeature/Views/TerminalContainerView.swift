@@ -503,6 +503,8 @@ struct TerminalContainerView: NSViewRepresentable {
 
         func bindQuickActions(_ router: TerminalQuickActionRouter?, onFocus: (@MainActor () -> Void)?) {
             quickActionRouter = router
+            terminalView.voiceInputRouter = router
+            terminalView.voiceInputEndpoint = quickActionEndpoint
             terminalView.onBecomeFirstResponder = { [weak self] in
                 if let self, let endpoint = self.quickActionEndpoint {
                     self.quickActionRouter?.focus(endpoint)
@@ -512,6 +514,9 @@ struct TerminalContainerView: NSViewRepresentable {
         }
 
         func stop() {
+            terminalView.cancelVoiceInputPress()
+            terminalView.voiceInputRouter = nil
+            terminalView.voiceInputEndpoint = nil
             terminalView.stopQuestionChecks()
             if let endpoint = quickActionEndpoint {
                 endpoint.invalidate()

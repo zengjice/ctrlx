@@ -17,18 +17,40 @@ struct MacVoiceInputButton: View {
     }
 
     @State private var request: TerminalVoiceInputRequest?
+    @State private var heldRequestID: UUID?
+    @State private var pointerHoldID: UUID?
 
     var body: some View {
+        let token = router.token
         Button(action: toggleRecording) {
-            if voice.phase == .requestingPermission || voice.phase == .finalizing {
-                ProgressView().controlSize(.mini)
-            } else {
-                Symbols.micFill.image
-                    .foregroundStyle(voice.isRecording ? Color.red : Color.primary)
+            Group {
+                if voice.phase == .requestingPermission || voice.phase == .finalizing {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Symbols.micFill.image
+                        .foregroundStyle(voice.isRecording ? Color.red : Color.primary)
+                }
             }
+            .frame(minWidth: 16, idealWidth: 32, maxWidth: 32, minHeight: 24)
+        }
+        .background {
+            MacVoiceInputPressTarget(onTap: {
+                if router.matches(token) {
+                    toggleRecording()
+                }
+            }, onBegin: {
+                guard router.matches(token), context.canSend, !isSuspended, voice.phase == .idle else { return false }
+                pointerHoldID = router.beginVoiceInputHold()
+                return pointerHoldID != nil
+            }, onEnd: { cancelled in
+                guard let id = pointerHoldID else { return }
+                pointerHoldID = nil
+                router.endVoiceInputHold(id, cancelled: cancelled)
+            })
+            .accessibilityHidden(true)
         }
         .disabled((!context.canSend || isSuspended) && voice.phase == .idle)
-        .help("Start / Stop Voice Input (⌘⌥M); inserts text without sending")
+        .help("Hold to talk, release to insert. Click or ⌘⌥M to start / stop. Text is not sent automatically.")
         .accessibilityLabel("Voice Input")
         .accessibilityValue(voice.phase.accessibilityValue)
         .accessibilityHint(voice.phase.accessibilityHint)
@@ -52,6 +74,28 @@ struct MacVoiceInputButton: View {
         .onChange(of: router.voiceInputRequest) {
             if ownsShortcutFocus {
                 toggleRecording()
+            }
+        }
+        .onChange(of: router.voiceInputHold) {
+            guard ownsShortcutFocus, let hold = router.voiceInputHold else { return }
+            switch hold.state {
+            case .pressed:
+                guard router.matches(hold.token), voice.phase == .idle, context.canSend, !isSuspended else { return }
+                heldRequestID = hold.id
+                toggleRecording()
+            case .released:
+                guard heldRequestID == hold.id else { return }
+                guard router.matches(hold.token) else { cancel()
+                    return
+                }
+                heldRequestID = nil
+                if request != nil, voice.phase == .recording || voice.phase == .requestingPermission {
+                    session.toggle(in: context, snapshot: nil, selection: nil)
+                }
+            case .cancelled:
+                if heldRequestID == hold.id {
+                    cancel()
+                }
             }
         }
         .onChange(of: context) { cancelIfTargetChanged() }
@@ -90,6 +134,10 @@ struct MacVoiceInputButton: View {
     }
 
     private func cancel() {
+        if let heldRequestID {
+            router.endVoiceInputHold(heldRequestID, cancelled: true)
+        }
+        heldRequestID = nil
         request = nil
         session.cancel()
     }

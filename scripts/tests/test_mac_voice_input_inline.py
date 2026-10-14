@@ -21,6 +21,7 @@ class MacVoiceInputInlineTests(unittest.TestCase):
                 SOURCES / "CtrlxCommon/Models/VoiceInputStage.swift",
                 SOURCES / "CtrlxCommon/UI/VoiceInputPreview.swift",
                 SOURCES / "CtrlxServerFeature/Views/MacVoiceInputButton.swift",
+                SOURCES / "CtrlxServerFeature/Views/MacVoiceInputPress.swift",
                 SOURCES / "CtrlxServerFeature/Views/MacVoiceInputOverlay.swift",
                 SOURCES / "CtrlxServerFeature/Views/MacVoiceInputCancellation.swift",
             ]
@@ -48,6 +49,7 @@ class MacVoiceInputInlineTests(unittest.TestCase):
             result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=25)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("PASS: inline preview, stable viewport/focus, microphone stop, cancel, scoped Escape", result.stdout)
+            self.assertIn("PASS: native hold/release, pending permission, changed target", result.stdout)
 
 
 if __name__ == "__main__":

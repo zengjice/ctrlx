@@ -57,6 +57,7 @@
         /// Whether a parent-managed multi-pane layout wants the software keyboard.
         /// The selected pane keeps its shortcut bar available even when this is false.
         let parentKeyboardRequested: Bool
+        let onToggleKeyboard: (@MainActor () -> Void)?
 
         /// Submits a structured `AgentResponse` for the open response form.
         let submitResponse: ResponseSender
@@ -126,6 +127,7 @@
         /// Immutable terminal text shown in the native iOS copy surface.
         @State private var textSnapshot: TerminalTextSnapshot?
         @State private var linkPresentation = TerminalLinkPresentation()
+        @State private var clipboardImagePaste: TerminalImagePasteRequest?
 
         /// Restores toolbar-controlled terminal input after the copy sheet closes.
         /// Parent-controlled multi-pane input is restored by its existing binding.
@@ -150,6 +152,7 @@
             isActive: Bool = true,
             isInputSuspended: Bool = false,
             parentKeyboardRequested: Bool = false,
+            onToggleKeyboard: (@MainActor () -> Void)? = nil,
             settings: IOSSettings,
             telemetry: SessionTelemetry? = nil,
             submitResponse: @escaping ResponseSender,
@@ -186,6 +189,7 @@
             self.isActive = isActive
             self.isInputSuspended = isInputSuspended
             self.parentKeyboardRequested = parentKeyboardRequested
+            self.onToggleKeyboard = onToggleKeyboard
             self.telemetry = telemetry
             self.submitResponse = submitResponse
             self.onTerminalInput = onTerminalInput
@@ -279,18 +283,19 @@
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if showKeyboardButton, settings.terminalKeyboardControlPosition == .bottomBar {
+                if showKeyboardButton {
                     TerminalKeyboardBar(
                         voiceSession: voiceSession,
-                        keyboardRequested: isInteractive,
+                        relayClient: relayClient,
+                        clipboardPaste: $clipboardImagePaste,
                         isEnabled: isConnected && coordinator.streamState == .streaming,
-                        action: { isInteractive.toggle() },
                         contextProvider: terminalVoiceInputContext,
                         sendKeys: sendTerminalKeys,
                         phraseContext: phraseContext,
                         quickActionPresentation: $quickActionPresentation,
                         customButtonStore: settings.customButtons,
-                        sendCustomButton: sendCustomButton
+                        sendCustomButton: sendCustomButton,
+                        showsTerminalControls: settings.terminalKeyboardControlPosition == .bottomBar
                     )
                 }
             }
@@ -563,6 +568,7 @@
                         codexQuestionID: codexQuestionID,
                         inputEnabled: inputPresentation.inputEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
+                        onToggleKeyboard: settings.terminalKeyboardControlPosition == .bottomBar ? toggleKeyboard : nil,
                         keyboardIsTransitioning: keyboardIsTransitioning,
                         questionExpansionEnabled: scenePhase == .active && isConnected && !isInputSuspended
                             && relayClient.hostSupportsCodexQuestionAcknowledgement
@@ -646,10 +652,22 @@
         }
 
         private var terminalImagePasteAction: (@MainActor (ClipboardImage?) -> Void)? {
-            guard let onPasteImage else { return nil }
+            guard onPasteImage != nil || showKeyboardButton else { return nil }
             return { image in
                 guard canSendTerminalInput, coordinator.isReadyForToolbarInput else { return }
-                onPasteImage(image)
+                if let onPasteImage {
+                    onPasteImage(image)
+                } else if showKeyboardButton {
+                    clipboardImagePaste = TerminalImagePasteRequest(paneId: paneId, image: image)
+                }
+            }
+        }
+
+        private func toggleKeyboard() {
+            if showKeyboardButton {
+                isInteractive.toggle()
+            } else {
+                onToggleKeyboard?()
             }
         }
 
@@ -1478,6 +1496,7 @@
 
         /// Whether the software keyboard should be visible below the accessory.
         let keyboardRequested: Bool
+        let onToggleKeyboard: (@MainActor () -> Void)?
         let keyboardIsTransitioning: Bool
 
         let questionExpansionEnabled: Bool
@@ -1527,6 +1546,7 @@
 
             // Wire up input callback
             terminalView.onInput = onInput
+            terminalView.onToggleKeyboard = onToggleKeyboard
             terminalView.onRawInput = onRawInput
             terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
@@ -1705,6 +1725,7 @@
             // sends through the host, pane, or monitoring state captured by its
             // first render.
             terminalView.onInput = onInput
+            terminalView.onToggleKeyboard = onToggleKeyboard
             terminalView.onRawInput = onRawInput
             terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
@@ -1735,6 +1756,7 @@
             coordinator.presentationTask?.cancel()
             coordinator.windowSwipe?.onSwitchWindow = nil
             coordinator.terminalView?.onOpenURL = nil
+            coordinator.terminalView?.onToggleKeyboard = nil
             coordinator.terminalView?.invalidateInput()
         }
 

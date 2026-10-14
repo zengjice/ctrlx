@@ -131,6 +131,7 @@ enum TerminalCursorTapNavigation {
         /// When false, tapping the terminal won't show the keyboard.
         /// Use `updateInput(isEnabled:keyboardRequested:)` to control this.
         private(set) var inputEnabled = false
+        var onToggleKeyboard: (() -> Void)?
         var onInputPresentationChange: (() -> Void)?
 
         var isInputPresentationReady: Bool {
@@ -865,7 +866,15 @@ enum TerminalCursorTapNavigation {
                 canSendInput: inputEnabled && inputProxy.isFirstResponder
                     && inputProxy.markedTextRange == nil && window != nil,
                 mouseModeActive: isMouseModeActive,
-                isLiveScreen: terminal.buffer.yDisp == liveRow
+                isLiveScreen: terminal.buffer.yDisp == liveRow,
+                isEmptyInputArea: onToggleKeyboard != nil && terminal.isCursorVisible && !terminal.synchronizedOutputActive
+                    && point.x >= 0 && point.x < CGFloat(terminal.cols) * cellSize.width
+                    && TerminalContentTapRouting.isEmptyInputArea(
+                        lines: TerminalMultilineCursorNavigation.lines(in: terminal),
+                        cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
+                        tap: .init(column: pos.col, row: pos.row - terminal.buffer.yDisp),
+                        mouseModeActive: isMouseModeActive
+                    )
             )
             switch action {
             case .ignore:
@@ -893,6 +902,9 @@ enum TerminalCursorTapNavigation {
                 }
             case .cursorNavigation:
                 moveInputCursor(to: pos)
+            case .toggleKeyboard:
+                cancelCursorNavigation()
+                onToggleKeyboard?()
             }
         }
 

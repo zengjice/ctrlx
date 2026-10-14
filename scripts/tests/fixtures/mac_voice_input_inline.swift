@@ -26,6 +26,30 @@ final class TerminalQuickActionRouter {
     var token = 0
     var voiceInputRequest = 0
     var inserted: [String] = []
+
+    struct VoiceInputHold: Equatable {
+        enum State { case pressed, released, cancelled }
+        let id = UUID()
+        let token: Int
+        var state = State.pressed
+    }
+
+    var voiceInputHold: VoiceInputHold?
+    func matches(_ token: Int) -> Bool {
+        token == self.token
+    }
+
+    func beginVoiceInputHold() -> UUID? {
+        guard voiceInputHold?.state != .pressed else { return nil }
+        let hold = VoiceInputHold(token: token)
+        voiceInputHold = hold
+        return hold.id
+    }
+
+    func endVoiceInputHold(_ id: UUID, cancelled: Bool = false) {
+        guard voiceInputHold?.id == id, voiceInputHold?.state == .pressed else { return }
+        voiceInputHold?.state = cancelled ? .cancelled : .released
+    }
 }
 
 @MainActor
@@ -51,6 +75,7 @@ final class TerminalVoiceInputSession {
     let voice = VoiceInputController()
     var stops = 0
     var cancellations = 0
+    var needsPermission = false
     var isPresented: Bool {
         voice.phase != .idle
     }
@@ -59,7 +84,7 @@ final class TerminalVoiceInputSession {
         switch voice.phase.tapAction {
         case .start:
             voice.completedTranscript = nil
-            voice.phase = .recording
+            voice.phase = needsPermission ? .requestingPermission : .recording
             voice.stage = .recording
             voice.transcript = "正在测试语音输入 CtrlX，保留当前终端焦点。"
         case .finish:
@@ -247,8 +272,40 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 precondition(terminal.escapes == 0 && router.inserted.count == 1)
                 sendEscape(to: window)
                 precondition(terminal.escapes == 1, "Idle Escape must reach the terminal")
+
+                // Native held press starts before release and finishes exactly
+                // once on release, without stealing terminal focus.
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                try await wait("fixture key window") { window.isKeyWindow }
+                window.makeFirstResponder(terminal)
+                precondition(window.isKeyWindow, "Hold test requires the fixture window to be key")
+                try await hold(anchor) {
+                    precondition(session.voice.phase == .recording, "Hold phase: \(session.voice.phase), request: \(String(describing: router.voiceInputHold))")
+                    precondition(window.firstResponder === terminal)
+                }
+                try await wait("hold release finishes") { session.stops == 2 }
+                session.complete()
+                try await wait("hold inserts once") { router.inserted.count == 2 }
+
+                session.needsPermission = true
+                try await hold(anchor) {
+                    precondition(session.voice.phase == .requestingPermission)
+                }
+                try await wait("release cancels pending permission") { session.voice.phase == .idle }
+                precondition(session.stops == 2 && router.inserted.count == 2)
+                session.needsPermission = false
+
+                try await hold(anchor) {
+                    precondition(session.voice.phase == .recording)
+                    router.token += 1
+                }
+                try await wait("target change cancels hold") { session.voice.phase == .idle }
+                precondition(session.stops == 2 && router.inserted.count == 2)
+                precondition(router.voiceInputHold?.state != .pressed)
                 window.close()
                 print("PASS: inline preview, stable viewport/focus, microphone stop, cancel, scoped Escape")
+                print("PASS: native hold/release, pending permission, changed target")
                 NSApp.terminate(nil)
             } catch {
                 print("phase=\(session.voice.phase) cancellations=\(session.cancellations)")
@@ -307,16 +364,25 @@ final class Delegate: NSObject, NSApplicationDelegate {
             with: .leftMouseUp, location: location, modifierFlags: [], timestamp: down.timestamp + 0.01,
             windowNumber: view.window!.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 0
         )!
-        var released = false
-        let monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { event in released = true; return event }
-        defer {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-            }
-        }
         NSApp.postEvent(down, atStart: false)
         NSApp.postEvent(up, atStart: false)
-        try await wait("mouse release") { released }
+        // The production control consumes mouse-up. Wait for the app loop,
+        // then assert behavior instead of depending on event-monitor ordering.
+        try await Task.sleep(for: .milliseconds(100))
+    }
+
+    func hold(_ view: NSView, whileHeld: () -> Void) async throws {
+        let location = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+        for type: NSEvent.EventType in [.leftMouseDown, .leftMouseUp] {
+            NSApp.postEvent(NSEvent.mouseEvent(
+                with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: view.window!.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            )!, atStart: false)
+            try await Task.sleep(for: .milliseconds(type == .leftMouseDown ? 600 : 100))
+            if type == .leftMouseDown {
+                whileHeld()
+            }
+        }
     }
 }
 

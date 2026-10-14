@@ -11,6 +11,74 @@
     @MainActor
     @Suite("Terminal input-row selection routing", .serialized)
     struct TerminalSelectionRoutingTests {
+        @Test("Empty input taps toggle keyboard intent without emitting input", arguments: [false, true])
+        func emptyInputKeyboard(mouseMode: Bool) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "body\r\n\u{1b}[48;5;236m› Ask Codex to do anything\u{1b}[K\u{1b}[2;3H")
+            if mouseMode {
+                feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+            }
+            let proxy = try inputProxy(in: window)
+            var requested = false
+            var raw: [Data] = []
+            var keys: [TmuxKey] = []
+            view.onRawInput = { raw.append($0) }
+            view.onInput = { keys += $0 }
+            view.onToggleKeyboard = { [weak view] in
+                requested.toggle()
+                view?.updateInput(isEnabled: true, keyboardRequested: requested)
+            }
+            for expected in [true, false] {
+                view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 10.5, y: view.cellDimension.height * 1.5))
+                await view.inputFocusUpdates.pendingTask?.value
+                #expect(requested == expected)
+                #expect(proxy.isFirstResponder)
+                #expect(keys.isEmpty && raw.isEmpty)
+            }
+        }
+
+        @Test("Draft text retains cursor navigation and multi-tap retains its menu")
+        func draftKeyboardRouting() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "body\r\n> hello world")
+            var toggles = 0
+            var keys: [TmuxKey] = []
+            view.onToggleKeyboard = { toggles += 1 }
+            view.onInput = { keys += $0 }
+            view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 4.5, y: view.cellDimension.height * 1.5))
+            #expect(toggles == 0 && !keys.isEmpty)
+            keys = []
+            tap(view, count: 2, column: 4, row: 1)
+            #expect(toggles == 0 && keys.isEmpty && !view.selectionActive)
+            #expect(try inputProxy(in: window).isFirstResponder)
+        }
+
+        @Test("Empty-input taps respect IME, inactive and selection guards")
+        func emptyInputGuards() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "body\r\n> ")
+            let proxy = try inputProxy(in: window)
+            var toggles = 0
+            view.onToggleKeyboard = { toggles += 1 }
+            let point = CGPoint(x: view.cellDimension.width * 5.5, y: view.cellDimension.height * 1.5)
+            proxy.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0))
+            view.handleContentTap(at: point)
+            #expect(toggles == 0)
+            proxy.unmarkText()
+            view.updateInput(isEnabled: false, keyboardRequested: false)
+            await view.inputFocusUpdates.pendingTask?.value
+            view.handleContentTap(at: point)
+            #expect(toggles == 0)
+            view.updateInput(isEnabled: true, keyboardRequested: false)
+            await view.inputFocusUpdates.pendingTask?.value
+            tap(view, count: 2, column: 1, row: 0)
+            view.handleContentTap(at: point)
+            #expect(toggles == 0)
+        }
+
         @Test("The whole current input row opts out, including blank cells and wide glyphs")
         func inputRow() async throws {
             let (window, view) = await makeView()

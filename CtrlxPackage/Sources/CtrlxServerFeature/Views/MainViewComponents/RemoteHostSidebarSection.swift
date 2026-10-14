@@ -107,6 +107,8 @@ struct RemoteHostSidebarSection: View {
             symbol: .laptopcomputer,
             isNewSessionDisabled: connection?.isHostConnected != true,
             newSessionButtonIdentifier: "new-session-remote-\(host.id)",
+            hasManualSessionOrder: !settings.remoteSessionOrder(for: host.id).isEmpty,
+            onRestoreAutomaticOrder: { settings.setRemoteSessionOrder([], for: host.id) },
             trailing: {
                 HStack(spacing: 6) {
                     Circle()

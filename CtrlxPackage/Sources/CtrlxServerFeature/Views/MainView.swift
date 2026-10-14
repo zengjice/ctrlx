@@ -944,7 +944,9 @@ public struct MainView: View {
             SectionHeader(
                 title: "Local",
                 symbol: .house,
-                newSessionButtonIdentifier: "new-session-local"
+                newSessionButtonIdentifier: "new-session-local",
+                hasManualSessionOrder: !settings.localSessionOrder.isEmpty,
+                onRestoreAutomaticOrder: { settings.setLocalSessionOrder([]) }
             ) {
                 localNewSessionPopover
             }
