@@ -48,6 +48,9 @@ struct CodexCLIInstaller {
         try await checked(["plugin", "marketplace", "add", marketplaceSource.path], configRoot: configRoot)
         // Confirm the CLI is reading OUR bundle before replacing its cached copy.
         let sources = try await run(["plugin", "marketplace", "list", "--json"], configRoot: configRoot, timeout: 30)
+        guard sources.isSuccess else {
+            throw ProcessRunnerError.executionFailed(exitCode: sources.exitCode, stderr: sources.stderrString)
+        }
         struct Sources: Decodable {
             struct Entry: Decodable { let name: String
                 let root: String
@@ -55,10 +58,18 @@ struct CodexCLIInstaller {
 
             let marketplaces: [Entry]
         }
-        let root = try JSONDecoder().decode(Sources.self, from: sources.stdout).marketplaces
-            .first { $0.name == Self.marketplaceName }?.root
+        let root: String?
+        do {
+            root = try JSONDecoder().decode(Sources.self, from: sources.stdout).marketplaces
+                .first { $0.name == Self.marketplaceName }?.root
+        } catch {
+            throw AgentPluginInstallError(
+                "Codex returned an unexpected response to 'plugin marketplace list --json'. "
+                    + "Expected a JSON marketplace list with name and root fields. The existing plugin was not replaced."
+            )
+        }
         guard
-            sources.isSuccess, let root,
+            let root,
             URL(fileURLWithPath: root).resolvingSymlinksInPath() == marketplaceSource.resolvingSymlinksInPath() else {
             throw AgentPluginInstallError("The ctrlx marketplace does not point to this CtrlX app. The existing plugin was not removed.")
         }
@@ -90,7 +101,9 @@ struct CodexCLIInstaller {
         // `ctrlx@ctrlx` row is ours.
         do {
             let result = try await run(["plugin", "list", "-m", Self.marketplaceName], configRoot: configRoot, timeout: 30)
-            if result.exitCode == 127 { return .agentUnavailable }
+            if result.exitCode == 127 {
+                return .agentUnavailable
+            }
             guard result.isSuccess else {
                 if configuredInstallStatus(configRoot: configRoot) == .installed(version: nil) {
                     return .installed(version: nil)
@@ -135,7 +148,9 @@ struct CodexCLIInstaller {
     static func parseStatus(from listing: String) -> PluginInstallStatus {
         for line in listing.split(separator: "\n") where line.split(whereSeparator: \.isWhitespace).first == Substring(pluginRef) {
             let lower = line.lowercased()
-            if lower.contains("not installed") { return .notInstalled }
+            if lower.contains("not installed") {
+                return .notInstalled
+            }
             guard lower.contains("installed") else { continue }
             let version = line
                 .split(whereSeparator: { $0 == " " || $0 == "\t" })
@@ -143,8 +158,12 @@ struct CodexCLIInstaller {
                 .map(String.init)
             return .installed(version: version)
         }
-        if listing.contains("PLUGIN"), listing.contains("STATUS") { return .notInstalled }
-        if listing.trimmingCharacters(in: .whitespacesAndNewlines) == "No plugins found in marketplace `ctrlx`." { return .notInstalled }
+        if listing.contains("PLUGIN"), listing.contains("STATUS") {
+            return .notInstalled
+        }
+        if listing.trimmingCharacters(in: .whitespacesAndNewlines) == "No plugins found in marketplace `ctrlx`." {
+            return .notInstalled
+        }
         return .checkFailed(message: "Codex returned an unrecognized plugin list.")
     }
 }

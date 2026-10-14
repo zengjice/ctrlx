@@ -434,7 +434,11 @@ No remote Host or Agent process is changed by checking.
 Settings shows each configuration folder's installed and bundled versions,
 Check, Install/Reinstall, and Uninstall. Operations are serialized per folder
 across settings views. Reinstall validates the marketplace source first and
-verifies the installed version afterward. Codex 0.162.1 `plugin add` refreshes
+verifies the installed version afterward. Codex marketplace queries check the
+exit status before decoding stdout, preserving the CLI's exit code and stderr.
+Successful queries with invalid JSON or an unsupported schema report the failing
+command and expected format; replacement does not proceed without source verification.
+Codex 0.162.1 `plugin add` refreshes
 even a same-version cache; an `already installed` response is not treated as a
 reinstall. Claude Code 2.1.276 has no force flag: refresh the local marketplace,
 uninstall the exact user-scoped `ctrlx@ctrlx` with `--keep-data`, then install
