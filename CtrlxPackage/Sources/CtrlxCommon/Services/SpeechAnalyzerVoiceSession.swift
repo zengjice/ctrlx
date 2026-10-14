@@ -5,12 +5,12 @@
 
     @available(iOS 26.0, macOS 26.0, *)
     @MainActor
-    final class SpeechAnalyzerVoiceSession {
+    final class SpeechAnalyzerVoiceSession: VoiceInputRecognitionSession {
         typealias UpdateHandler = @MainActor @Sendable (String) -> Void
 
         private let audioEngine = AVAudioEngine()
         private let contextualTerms: [String]
-        private let diagnosticID = UUID().uuidString
+        private let diagnosticID: String
 
         private var analyzer: SpeechAnalyzer?
         private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
@@ -23,8 +23,9 @@
         private var ownsAudioSession = false
         private var audioRecorder: VoiceAudioRecorder?
 
-        init(contextualTerms: [String]) {
+        init(contextualTerms: [String], diagnosticID: String = UUID().uuidString) {
             self.contextualTerms = contextualTerms
+            self.diagnosticID = diagnosticID
         }
 
         func start(onUpdate: @escaping UpdateHandler) async throws {
@@ -85,7 +86,7 @@
             }
         }
 
-        func finish() async throws -> VoiceRecognitionResult {
+        func finish(onStage: (VoiceInputStage) -> Void = { _ in }) async throws -> VoiceRecognitionResult {
             isFinishing = true
             stopAudioInput()
             let recordingURL = audioRecorder?.finish()
@@ -114,6 +115,8 @@
                 var accurateResultError: Error?
                 if let recordingURL {
                     do {
+                        try Task.checkCancellation()
+                        onStage(.accurateTranscription)
                         recognitionResult = try await transcribeRecordedAudio(
                             at: recordingURL,
                             liveTranscript: liveText

@@ -112,35 +112,60 @@ editor hides its Form background so it does not obscure the shared material.
 
 ## Context-aware voice input
 
-The Mac status bar also has a microphone, for both Local and Viewer terminal
-panes. One click starts on-device recognition; a second click, or **Stop and
-Insert** in the live-preview popover, finishes correction and inserts one literal
-text batch **without Return**. Esc, dismissing the preview, switching targets,
-typing in the terminal, disconnection or leaving the view cancels that recording.
-The Mac preview owns its dismissal: clicking the microphone remains a normal
-button action, while outside clicks, Esc and application deactivation cancel.
-Finishing keeps the preview visible through correction; closing it after insertion
-does not cancel the completed result.
-The result is tied to the focused native endpoint and its focus/input revisions;
-switching away and back does not revive it. Ordinary shells are supported.
+Mac (Local/Viewer) and iOS use the same preview-then-insert contract. One click
+starts on-device recognition; a second click on the microphone finishes
+correction and inserts one literal text batch **without Return**. Partial results
+stay in the local preview: they never insert or backspace text in the terminal.
+Esc, cancelling the preview, switching targets, editing in the terminal,
+disconnection or leaving the view cancels that recording.
+Both clients show the same compact inline strip: a stage label, at most two lines
+of live text (keeping the latest end visible), and a close button. There is no
+title, destination description, instruction paragraph or separate stop button.
+The Mac strip overlays the terminal just above its status bar; it creates no
+popover/window and does not acquire first responder. The iOS strip overlays the
+terminal above its input controls; native reply fields show it below their editor.
+Neither terminal overlay changes the terminal's size. The strip remains visible
+during correction; cancelling it discards the recording without inserting text.
+Mac Escape interception is active only during recording/finalization and scoped
+to the recording's native window; inactive controls and other windows keep their
+normal Escape behavior. App deactivation or switching native windows cancels it.
+System permission prompts during preparation are not treated as cancellation.
+iOS toolbar/hardware Escape cancels active dictation before forwarding terminal
+input, including when the preview belongs to the parent multi-pane view.
+The result is bound to the captured Host/pane and local input revision; Mac also
+checks its native endpoint/focus revision. Switching away and back does not revive
+it. Delivery consumes the result before enqueueing, so duplicate completion
+observers or a failed enqueue cannot retry it. Ordinary shells are supported.
 Pending agent forms and external editors disable dictation into the terminal.
 There is no global hotkey, clipboard replacement or extra Host/Relay command.
 
-`CtrlxCommon` owns `VoiceInputController`, the SpeechAnalyzer/legacy recognizers,
-vocabulary, candidate assembly, correction prompts/policy/provider client and
-`VoiceCorrectionSettingsSection`. iOS retains its existing live-input adapter;
-Mac previews partial text and inserts only the final result through
-`TerminalQuickActionRouter` and the existing keyboard queue. App-wide recording
+`CtrlxCommon` owns `VoiceInputController`, `TerminalVoiceInputSession`, the preview,
+typed context snapshot, SpeechAnalyzer/legacy recognizers, vocabulary, candidate
+assembly, correction prompts/policy/provider client and settings component.
+Platform adapters only capture their context and enqueue the finalized text
+through the existing input route. The old iOS voice shadow-document diff/rewrite
+adapter is removed; the UIKit keyboard's caret synchronizer is unchanged. App-wide recording
 ownership prevents two windows from racing the microphone, including asynchronous
 analyzer cleanup. iOS alone configures `AVAudioSession`; Mac uses its local audio
 input and declares microphone/speech usage plus the hardened-runtime audio-input
 entitlement.
 
-Both clients snapshot context once at recording start: session/window names,
-command, current path and recent text from the focused terminal buffer. The shared
-extractor copies at most 512 tail rows, preserves soft wraps and limits the final
-context to 12,000 characters. It does not poll, copy full scrollback, request
-additional Host history or read the Viewer's filesystem.
+Both clients create a fresh `VoiceInputContextSnapshot` once at recording start:
+
+- Pane metadata: session/window names, command and current path, from pane state.
+- Terminal background: recent text from the focused buffer. The shared extractor
+  copies at most 512 tail rows and preserves soft wraps. Output, history and unsent
+  text can be mixed here; this is **not** an authoritative Agent draft.
+- Existing input draft: supplied only by native reply fields that own the actual
+  bound text. It is read-only context, never repeated or rewritten in the result.
+
+The combined context is limited to 12,000 characters, prioritizing an actual native
+draft, then metadata and recent output. This is not 12,000 characters per source.
+There is no polling, full-scrollback copy, extra Host history, filesystem scan or
+cache of previous dictation. A second recording may see previous unsent text in
+terminal background, but CtrlX does not claim to know the remote Agent's full
+current draft or changes made from another client. Local revision checks prevent
+local stale insertion, not cross-device draft conflicts.
 
 The shared vocabulary adds at most eight short, deduplicated terms from the captured
 session/window names and the current directory's basename. It never mines arbitrary
@@ -150,15 +175,18 @@ old project terms into a new recording.
 
 On iOS/macOS 26+, SpeechAnalyzer uses SpeechTranscriber where available, otherwise
 DictationTranscriber; older systems retain on-device SFSpeechRecognizer support.
-Correction tries the configured provider, then the on-device model when available,
-then preserves the recognition result. Terminal insertion flattens newlines and
-removes control characters. Speech models may require a first-use asset download.
+Correction tries the configured provider (if any); only an unavailable/failed
+attempt falls back to the on-device model. An accepted unchanged response is still
+a success. A response rejected by validation preserves the recognition result
+without asking another model to rewrite it. Cancellation never starts a fallback
+or delivers a late result. Terminal insertion flattens newlines and removes control
+characters. Speech models may require a first-use asset download.
 
 Correction reserves room for the complete original utterance and its output before
 adding optional evidence. The on-device route uses the model's context size and,
 on 26.4+, its tokenizer; 26.0–26.3 use a conservative UTF-8 byte budget. It trims
-older terminal context first (retaining metadata when possible), then drops optional
-phonetic hints. If the original cannot fit, it stays unchanged. Provider output
+older terminal context first (retaining explicit draft/metadata when possible), then
+drops optional phonetic hints. If the original cannot fit, it stays unchanged. Provider output
 budgets grow with transcript size up to 8,192 tokens; oversized requests are skipped,
 not shortened. Explicitly incomplete/failed provider responses are never inserted.
 
@@ -183,13 +211,34 @@ and letter case. Scores are fixture checks, not a general measure of semantic ac
 They evaluate the model's actual output: a rejected correction does not earn credit
 for the production pipeline's safe fallback to the original draft.
 
-Regression coverage lives in `CtrlxCommonTests/Voice*`,
+The shared preview distinguishes preparation, recording, recognition finalization,
+accurate on-device transcription, provider correction and on-device correction.
+`VoiceInput` diagnostics record monotonic elapsed time per stage and whether final
+input was enqueued, with one recording ID. Accepted corrections log whether text
+changed; rejected corrections log a reason, distinct from unavailable/error cases.
+New stage/outcome logs contain no audio or transcript. Enqueued means accepted by
+the local FIFO, not acknowledgement that a remote Agent received the text.
+
+Regression coverage lives in `CtrlxCommonTests/Voice*` (including injected
+recognition/correction through the production controller),
 `CtrlxServerFeatureTests/TerminalVoiceInputRequestTests.swift`,
-`CtrlxServerFeatureTests/MacVoiceInputPopoverTests.swift` and the existing iOS
-phase/input tests. `python3 scripts/tests/test_mac_voice_input_popover.py` exercises
-native mouse dispatch in an isolated AppKit process with fake recognition (no
-microphone, credentials or terminal input). Real microphone, permission prompts
+`CtrlxServerFeatureTests/MacVoiceInputCancellationTests.swift` and the existing iOS
+phase/input tests. `python3 scripts/tests/test_mac_voice_input_inline.py` exercises
+the production microphone/preview views and native mouse dispatch in an isolated
+AppKit process with fake recognition: stable viewport/focus, no popup window,
+microphone stop, narrow-layout cancel and Escape (no microphone, credentials or
+real terminal input). Real microphone, permission prompts
 and recognition quality remain Mac/iPhone device acceptance checks.
+
+For device acceptance, use an isolated test session, not an active task. Test a
+short utterance, a long mixed Chinese/English utterance, project names, literal
+paths/ports and negation (e.g. “只检查，不要提交，除非测试通过”). Check a second
+recording before sending the first, then manual edits/IME composition, target
+switching, cancellation and disconnection during correction. Expect no terminal
+bytes during preview and one final text insertion without Return. Compare actual
+speech with the live, accurate and corrected text; bundled text-only model scores
+do not measure recognition accuracy. Capture stage timings separately for cold
+asset preparation, recording finalization and correction before changing timeouts.
 
 ## iOS custom input buttons
 

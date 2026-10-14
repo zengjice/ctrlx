@@ -72,6 +72,8 @@ enum TerminalCursorTapNavigation {
         /// Callback invoked for raw escape sequences (e.g., SGR mouse events) that must be
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
+        /// Invalidate pending voice input before an IME candidate commits bytes.
+        var onCompositionStart: (@MainActor () -> Void)?
         var onPasteText: (@MainActor (String) -> Void)?
         var onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         var onOpenPath: (@MainActor (String) -> Void)?
@@ -116,7 +118,9 @@ enum TerminalCursorTapNavigation {
 
         var scrollingAgentID: String? {
             didSet {
-                if oldValue != scrollingAgentID { cancelMouseScroll() }
+                if oldValue != scrollingAgentID {
+                    cancelMouseScroll()
+                }
             }
         }
 
@@ -138,8 +142,9 @@ enum TerminalCursorTapNavigation {
         /// inner scrollback and the passive canvas's bottom alignment.
         var liveCursorRect: CGRect? {
             let terminal = getTerminal()
-            guard !terminal.isCurrentBufferAlternate, terminal.isCursorVisible,
-                  !canScroll || scrollPosition == 1 else { return nil }
+            guard
+                !terminal.isCurrentBufferAlternate, terminal.isCursorVisible,
+                !canScroll || scrollPosition == 1 else { return nil }
             // At the live tail, the top visible row is the active screen's
             // first row. History scrolling deliberately does not follow it.
             let row = terminal.getTopVisibleRow() + terminal.getCursorLocation().y
@@ -164,6 +169,7 @@ enum TerminalCursorTapNavigation {
             view.backgroundColor = .clear
             return view
         }()
+
         private var keyboardRequested = false
         private var cursorNavigation = TerminalCursorNavigation()
         private var isSendingCursorNavigation = false
@@ -198,9 +204,12 @@ enum TerminalCursorTapNavigation {
                     self?.cancelQuestionCheck()
                 }
                 self?.getTerminal().setTerminalFocus(focused)
-                if focused { self?.scheduleQuestionCheck() }
+                if focused {
+                    self?.scheduleQuestionCheck()
+                }
             }
             proxy.onCompositionStart = { [weak self] in
+                self?.onCompositionStart?()
                 self?.cancelCursorNavigation()
                 self?.cancelMouseScroll()
                 self?.cancelQuestionCheck()
@@ -226,9 +235,10 @@ enum TerminalCursorTapNavigation {
         private var mouseScrollAccumulator = TerminalMouseScrollAccumulator()
         private var mouseScrollLocation: CGPoint = .zero
         private lazy var mouseScrollAnimator = TerminalMouseScrollAnimator { [weak self] delta in
-            guard let self, self.inputEnabled, self.window != nil,
-                  !self.isHidden, !self.selectionActive, self.isCodexFullscreenScroll,
-                  self.isMouseModeActive else { return false }
+            guard
+                let self, self.inputEnabled, self.window != nil,
+                !self.isHidden, !self.selectionActive, self.isCodexFullscreenScroll,
+                self.isMouseModeActive else { return false }
             self.emitMouseModeScrollEvents(deltaY: delta, at: self.mouseScrollLocation)
             return true
         }
@@ -239,7 +249,9 @@ enum TerminalCursorTapNavigation {
             ) == 3
         }
 
-        var isMouseScrollDecelerating: Bool { mouseScrollAnimator.isActive }
+        var isMouseScrollDecelerating: Bool {
+            mouseScrollAnimator.isActive
+        }
 
         /// Highlight layer shown over detected URL during long-press
         private var urlHighlightLayer: CALayer?
@@ -323,7 +335,9 @@ enum TerminalCursorTapNavigation {
         /// including preserving history while the user is scrolled up.
         func feedTerminalData(_ bytes: ArraySlice<UInt8>) {
             feed(byteArray: bytes)
-            if mouseScrollAnimator.isActive, !isCodexFullscreenScroll { cancelMouseScroll() }
+            if mouseScrollAnimator.isActive, !isCodexFullscreenScroll {
+                cancelMouseScroll()
+            }
             extractAndClearPayloads(afterFeeding: bytes)
 
             finishCursorNavigationIfReady()
@@ -342,7 +356,9 @@ enum TerminalCursorTapNavigation {
         /// Used by hot paths (pan/scroll callbacks) where `FontMetrics.calculateCellSize`'s
         /// CoreText measurements would otherwise run at refresh rate.
         private var cellSize: CGSize {
-            if let cached = cachedCellSize { return cached }
+            if let cached = cachedCellSize {
+                return cached
+            }
             let size = FontMetrics.calculateCellSize(font: font as CTFont)
             cachedCellSize = size
             return size
@@ -640,7 +656,8 @@ enum TerminalCursorTapNavigation {
         /// extension overrides.
         override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             cancelQuestionCheck()
-            if gestureRecognizer is UIPanGestureRecognizer || gestureRecognizer is UILongPressGestureRecognizer
+            if
+                gestureRecognizer is UIPanGestureRecognizer || gestureRecognizer is UILongPressGestureRecognizer
                 || ((gestureRecognizer as? UITapGestureRecognizer)?.numberOfTapsRequired ?? 0) > 1 {
                 cancelCursorNavigation()
                 cancelMouseScroll()
@@ -736,7 +753,8 @@ enum TerminalCursorTapNavigation {
                 mouseScrollLocation = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
                 gesture.setTranslation(.zero, in: self)
                 emitMouseModeScrollEvents(deltaY: Double(translation.y), at: mouseScrollLocation)
-            case .changed, .ended:
+            case .changed,
+                 .ended:
                 let translation = gesture.translation(in: self)
                 gesture.setTranslation(.zero, in: self)
                 let location = isCodexFullscreenScroll ? mouseScrollLocation : gesture.location(in: self)
@@ -766,8 +784,9 @@ enum TerminalCursorTapNavigation {
         /// that's a scroll-up event (button 64). "Drag finger up" sends scroll
         /// down (button 65). This matches natural-scrolling expectations.
         private func emitMouseModeScrollEvents(deltaY: Double, at location: CGPoint) {
-            guard deltaY != 0, window != nil, !inputFocusUpdates.isInvalidated,
-                  isMouseModeActive, !selectionActive else { return }
+            guard
+                deltaY != 0, window != nil, !inputFocusUpdates.isInvalidated,
+                isMouseModeActive, !selectionActive else { return }
             let terminal = getTerminal()
             let cols = terminal.cols
             let rows = terminal.rows
@@ -856,9 +875,10 @@ enum TerminalCursorTapNavigation {
                 cancelCursorNavigation()
                 requestURLActions(url: url.absoluteString)
             case .mouseClick:
-                guard onRawInput != nil,
-                      point.x >= 0, point.x < CGFloat(terminal.cols) * cellSize.width,
-                      pos.row >= liveRow, pos.row - liveRow < terminal.rows else { return }
+                guard
+                    onRawInput != nil,
+                    point.x >= 0, point.x < CGFloat(terminal.cols) * cellSize.width,
+                    pos.row >= liveRow, pos.row - liveRow < terminal.rows else { return }
                 prepareForExternalInput()
                 mouseTapBytes = Data()
                 TerminalContentTapRouting.reportMouseClick(
@@ -868,7 +888,9 @@ enum TerminalCursorTapNavigation {
                 )
                 let bytes = mouseTapBytes
                 mouseTapBytes = nil
-                if let bytes, !bytes.isEmpty { onRawInput?(bytes) }
+                if let bytes, !bytes.isEmpty {
+                    onRawInput?(bytes)
+                }
             case .cursorNavigation:
                 moveInputCursor(to: pos)
             }
@@ -937,7 +959,8 @@ enum TerminalCursorTapNavigation {
             input()
         }
 
-        @objc private func cancelNavigationForPan(_ gesture: UIPanGestureRecognizer) {
+        @objc
+        private func cancelNavigationForPan(_ gesture: UIPanGestureRecognizer) {
             if gesture.state == .began {
                 cancelQuestionCheck()
                 cancelCursorNavigation()
@@ -1003,15 +1026,16 @@ enum TerminalCursorTapNavigation {
             guard cellSize.height > 0 else { return nil }
             let terminal = getTerminal()
             let buffer = terminal.buffer
-            guard TerminalCursorTapNavigation.isInputRow(
-                inputEnabled: inputEnabled,
-                inputFocused: inputProxy.isFirstResponder,
-                mouseModeActive: isMouseModeActive,
-                displayRow: buffer.yDisp,
-                liveDisplayRow: liveDisplayRow,
-                cursorRow: buffer.y + buffer.yDisp,
-                tappedRow: row
-            ) else { return nil }
+            guard
+                TerminalCursorTapNavigation.isInputRow(
+                    inputEnabled: inputEnabled,
+                    inputFocused: inputProxy.isFirstResponder,
+                    mouseModeActive: isMouseModeActive,
+                    displayRow: buffer.yDisp,
+                    liveDisplayRow: liveDisplayRow,
+                    cursorRow: buffer.y + buffer.yDisp,
+                    tappedRow: row
+                ) else { return nil }
             return terminal.getScrollInvariantLine(row: row)
         }
 
@@ -1131,14 +1155,19 @@ enum TerminalCursorTapNavigation {
                 for span in links.flatMap(\.spans) where visibleRows.contains(span.row) {
                     let underline = CALayer()
                     underline.backgroundColor = UIColor.tintColor.withAlphaComponent(0.6).cgColor
-                    underline.frame = CGRect(x: CGFloat(span.columns.lowerBound) * cellSize.width,
-                                             y: CGFloat(span.row + 1) * cellSize.height - 2,
-                                             width: CGFloat(span.columns.count) * cellSize.width, height: 1)
+                    underline.frame = CGRect(
+                        x: CGFloat(span.columns.lowerBound) * cellSize.width,
+                        y: CGFloat(span.row + 1) * cellSize.height - 2,
+                        width: CGFloat(span.columns.count) * cellSize.width,
+                        height: 1
+                    )
                     layer.addSublayer(underline)
                     urlUnderlineLayers.append(underline)
                 }
             }
-            if isMouseModeActive { return }
+            if isMouseModeActive {
+                return
+            }
 
             let closures = urlClosures(for: terminal)
             for viewportRow in 0..<terminal.rows {
@@ -1161,7 +1190,6 @@ enum TerminalCursorTapNavigation {
                     urlUnderlineLayers.append(underline)
                 }
             }
-
         }
     }
 
@@ -1201,7 +1229,9 @@ enum TerminalCursorTapNavigation {
             // Defense-in-depth: DA queries are stripped from the feed on the macOS host,
             // but catch any remaining auto-responses (cursor position reports, terminal
             // parameter reports) that SwiftTerm may still generate.
-            if TerminalResponseFilter.isTerminalResponse(data) { return }
+            if TerminalResponseFilter.isTerminalResponse(data) {
+                return
+            }
 
             // Convert raw bytes to TmuxKey representations
             let keys = TmuxKey.from(bytes: Data(data))

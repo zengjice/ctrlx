@@ -15,6 +15,7 @@
 
     /// A dedicated terminal-input control that stays outside terminal content.
     struct TerminalKeyboardBar: View {
+        let voiceSession: TerminalVoiceInputSession
         let keyboardRequested: Bool
         let isEnabled: Bool
         let action: () -> Void
@@ -26,7 +27,7 @@
         let sendCustomButton: (TerminalCustomButtonRequest) -> Bool
         var agentCommandContext: AgentCommandContext? = nil
 
-        // Editing disables terminal keystrokes, not the panel toggles.
+        /// Editing disables terminal keystrokes, not the panel toggles.
         private var terminalInputEnabled: Bool {
             isEnabled && !quickActionPresentation.suspendsTerminalInput
         }
@@ -85,11 +86,11 @@
                 .accessibilityIdentifier("terminal-keyboard-control")
 
                 TerminalVoiceInputButton(
+                    session: voiceSession, context: phraseContext,
                     isDisabled: !terminalInputEnabled || quickActionPresentation.isPresented,
                     showsLabel: false,
                     usesControlStyle: true,
-                    contextProvider: contextProvider,
-                    sendKeys: sendKeys
+                    contextProvider: contextProvider
                 )
                 .id(phraseContext.target)
 

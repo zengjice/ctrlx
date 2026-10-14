@@ -7,6 +7,7 @@ import SwiftUI
 @MainActor
 struct TerminalQuickActionButtons: View {
     let router: TerminalQuickActionRouter
+    let voiceSession: TerminalVoiceInputSession
     var ownsShortcutFocus = true
     @Environment(AppSettings.self) private var settings
     @Environment(AppCoordinator.self) private var coordinator
@@ -115,7 +116,7 @@ struct TerminalQuickActionButtons: View {
 
         MacVoiceInputButton(
             router: router, ownsShortcutFocus: ownsShortcutFocus, settings: settings.voiceCorrection,
-            context: phraseContext, targetLabel: presentation.label,
+            context: phraseContext, session: voiceSession,
             isSuspended: commandPanel != nil || phrasePanel != nil,
             contextProvider: voiceInputContext,
             willStart: {
@@ -125,14 +126,14 @@ struct TerminalQuickActionButtons: View {
         )
     }
 
-    private func voiceInputContext() -> String? {
+    private func voiceInputContext() -> VoiceInputContextSnapshot? {
         guard let pane else { return nil }
-        return VoiceInputContext.makeTerminalContext(
-            terminalText: router.active?.terminalText(),
-            metadata: VoiceInputContext.paneMetadata(
+        return VoiceInputContextSnapshot(
+            paneMetadata: VoiceInputContext.paneMetadata(
                 sessionName: pane.sessionName, windowName: pane.windowName,
                 command: pane.command, currentPath: pane.currentPath
-            )
+            ),
+            terminalText: router.active?.terminalText()
         )
     }
 
@@ -205,13 +206,14 @@ struct TerminalQuickActionButtons: View {
 struct TerminalQuickActionStatusBarButtons: View {
     let hostID: String?
     let paneIDs: [String]
+    let voiceSession: TerminalVoiceInputSession
     @Environment(\.terminalQuickActions) private var router
 
     var body: some View {
         if let router {
             let ownsFocus = router.containsFocus(hostID: hostID, paneIDs: paneIDs)
             HStack(spacing: 2) {
-                TerminalQuickActionButtons(router: router, ownsShortcutFocus: ownsFocus)
+                TerminalQuickActionButtons(router: router, voiceSession: voiceSession, ownsShortcutFocus: ownsFocus)
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)

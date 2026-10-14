@@ -7,14 +7,16 @@ struct MacVoiceInputButton: View {
     var ownsShortcutFocus = true
     let settings: VoiceCorrectionSettings
     let context: TerminalPhraseContext
-    let targetLabel: String
+    let session: TerminalVoiceInputSession
     let isSuspended: Bool
-    let contextProvider: @MainActor () -> String?
+    let contextProvider: @MainActor () -> VoiceInputContextSnapshot?
     let willStart: @MainActor () -> Void
     @Environment(\.scenePhase) private var scenePhase
-    @State private var voice = VoiceInputController()
+    private var voice: VoiceInputController {
+        session.voice
+    }
+
     @State private var request: TerminalVoiceInputRequest?
-    @State private var showsPopover = false
 
     var body: some View {
         Button(action: toggleRecording) {
@@ -31,25 +33,20 @@ struct MacVoiceInputButton: View {
         .accessibilityValue(voice.phase.accessibilityValue)
         .accessibilityHint(voice.phase.accessibilityHint)
         .accessibilityIdentifier("terminal-voice-input-control")
-        .background {
-            MacVoiceInputPopover(isPresented: showsPopover, onCancel: cancel) {
-                preview
-            }
-        }
         .onChange(of: voice.completedTranscript) {
-            guard let text = voice.completedTranscript, let captured = request else { return }
+            guard voice.completedTranscript != nil, let captured = request else { return }
             guard !isSuspended else { cancel()
                 return
             }
             request = nil
-            if !text.isEmpty, !captured.insert(text, router: router, context: context) {
-                voice.errorMessage = "The terminal changed. Record again in the intended pane."
+            session.deliver(in: context) { text in
+                captured.insert(text, router: router, context: context)
             }
-            showsPopover = false
         }
         .onChange(of: voice.phase) {
-            if voice.phase == .recording { showsPopover = true }
-            if voice.phase == .idle, voice.completedTranscript == nil { cancel() }
+            if voice.phase == .idle, voice.completedTranscript == nil {
+                cancel()
+            }
         }
         .onChange(of: router.token) { cancelIfTargetChanged() }
         .onChange(of: router.voiceInputRequest) {
@@ -59,54 +56,17 @@ struct MacVoiceInputButton: View {
         }
         .onChange(of: context) { cancelIfTargetChanged() }
         .onChange(of: isSuspended) {
-            if isSuspended { cancel() }
+            if isSuspended {
+                cancel()
+            }
         }
         .onChange(of: scenePhase) {
-            if scenePhase == .background { cancel() }
+            if scenePhase == .background {
+                cancel()
+            }
         }
         .onDisappear(perform: cancel)
-        .alert("Voice Input", isPresented: Binding(
-            get: { voice.errorMessage != nil },
-            set: { if !$0 { voice.errorMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) { voice.errorMessage = nil }
-        } message: {
-            Text(voice.errorMessage ?? "")
-        }
-    }
-
-    private var preview: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Voice Input").font(.headline)
-            Text(targetLabel).font(.caption).foregroundStyle(.secondary)
-            Text(statusText).font(.subheadline).foregroundStyle(.secondary)
-            ScrollView {
-                Text(voice.transcript.isEmpty ? "Your words will appear here." : voice.transcript)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(minHeight: 60, maxHeight: 180)
-            Text("Stopping inserts the corrected text into this terminal. Press Enter yourself to send.")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Stop and Insert", action: toggleRecording)
-                    .keyboardShortcut("m", modifiers: [.command, .option])
-                    .disabled(!voice.isRecording)
-                    .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(16)
-        .frame(width: 360)
-    }
-
-    private var statusText: String {
-        switch voice.phase {
-        case .idle: "Ready"
-        case .requestingPermission: "Preparing on-device speech recognition…"
-        case .recording: "Listening…"
-        case .finalizing: "Finishing and correcting…"
-        }
+        .modifier(VoiceInputErrorAlert(voice: voice))
     }
 
     private func toggleRecording() {
@@ -115,12 +75,12 @@ struct MacVoiceInputButton: View {
             guard let captured = TerminalVoiceInputRequest(router: router, context: context) else { return }
             willStart()
             request = captured
-            voice.toggleRecording(context: contextProvider(), correctionSelection: settings.selection)
-            // Keep permission prompts outside the preview; preparation retains
-            // the microphone's spinner/cancel action.
-            if voice.phase == .idle { request = nil }
+            session.toggle(in: context, snapshot: contextProvider(), selection: settings.selection)
+            if voice.phase == .idle {
+                request = nil
+            }
         } else {
-            voice.toggleRecording(context: nil, correctionSelection: nil)
+            session.toggle(in: context, snapshot: nil, selection: nil)
         }
     }
 
@@ -131,7 +91,6 @@ struct MacVoiceInputButton: View {
 
     private func cancel() {
         request = nil
-        showsPopover = false
-        voice.cancel()
+        session.cancel()
     }
 }

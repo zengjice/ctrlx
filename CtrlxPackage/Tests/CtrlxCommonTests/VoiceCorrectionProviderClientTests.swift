@@ -170,7 +170,7 @@ struct VoiceCorrectionProviderClientTests {
             #expect((json["thinking"] as? [String: String])?["type"] == "disabled")
             #expect(json["instructions"] == nil)
             #expect((json["input"] as? String)?.contains("Known terms are canonical spellings: CtrlX, Voice") == true)
-            #expect((json["input"] as? String)?.contains("Recent pane context:\nctrlx voice input") == true)
+            #expect((json["input"] as? String)?.contains("Read-only context (not part of the current utterance):\nRecent terminal text:\nctrlx voice input") == true)
 
             let data = Data(
                 #"{"id":"resp_test","output":[{"type":"message","content":[{"type":"output_text","text":"CtrlX 的语音输入通过 Voice 按钮触发。"}]}]}"#.utf8
@@ -183,7 +183,7 @@ struct VoiceCorrectionProviderClientTests {
 
         let result = try await client.correct(
             recognition: VoiceRecognitionResult(primaryTranscript: "CTRS 的语音输入通过 wise 按钮出发"),
-            terminalContext: "ctrlx voice input",
+            terminalContext: .init(terminalText: "ctrlx voice input"),
             contextualTerms: ["CtrlX", "Voice"],
             localeIdentifier: "zh-Hans-CN",
             selection: selection,

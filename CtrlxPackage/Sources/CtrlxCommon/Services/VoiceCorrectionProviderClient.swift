@@ -99,7 +99,7 @@ struct VoiceCorrectionProviderClient {
 
     func correct(
         recognition: VoiceRecognitionResult,
-        terminalContext: String?,
+        terminalContext: VoiceInputContextSnapshot?,
         contextualTerms: [String],
         localeIdentifier: String,
         selection: VoiceCorrectionSelection,

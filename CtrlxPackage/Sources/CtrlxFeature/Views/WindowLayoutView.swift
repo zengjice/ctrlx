@@ -39,13 +39,14 @@
         /// Terminal shortcuts remain available when this is false.
         @State private var isKeyboardActive: Bool
 
-        /// Ordered sender for partial speech-recognition edits to the selected pane.
+        /// Ordered sender shared by keyboard and one-shot toolbar input.
         @State private var externalInputSenders: [String: @MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool] = [:]
         @State private var voiceInputContextProviders: [String: TerminalVoiceInputContextProvider] = [:]
         @State private var cursorNavigationCancellations: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
         @State private var terminalCopyActions: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputRevision: UInt64 = 0
+        @State private var voiceSession = TerminalVoiceInputSession()
         @State private var quickActionPresentation = TerminalQuickActionPresentation()
 
         /// Service for the active pane's Claude session (nil if no session)
@@ -266,9 +267,15 @@
                 commandContext: activeAgentCommandContext,
                 sendCommand: sendAgentCommand
             ))
+            .modifier(TerminalVoiceInputOverlay(
+                session: voiceSession, context: activePhraseContext,
+                isSuspended: !terminalIsVisible || quickActionPresentation.isPresented,
+                insert: insertVoiceTranscript
+            ))
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if terminalIsVisible, window != nil, settings.terminalKeyboardControlPosition == .bottomBar {
                     TerminalKeyboardBar(
+                        voiceSession: voiceSession,
                         keyboardRequested: isKeyboardActive,
                         isEnabled: relayClient.isHostConnected && activePaneId != nil,
                         action: { isKeyboardActive.toggle() },
@@ -688,9 +695,9 @@
             if terminalIsVisible, settings.terminalKeyboardControlPosition == .topRight {
                 ToolbarItem(placement: .topBarTrailing) {
                     TerminalVoiceInputButton(
-                        isDisabled: !relayClient.isHostConnected || activePaneId == nil,
-                        contextProvider: activeVoiceInputContext,
-                        sendKeys: sendVoiceKeys
+                        session: voiceSession, context: activePhraseContext,
+                        isDisabled: !relayClient.isHostConnected || activePaneId == nil || quickActionPresentation.isPresented,
+                        contextProvider: activeVoiceInputContext
                     )
                     .id(activePhraseContext.target)
                 }
@@ -1254,6 +1261,10 @@
                     )
                 },
                 onTerminalInputQueued: { terminalInputRevision &+= 1 },
+                onCancelVoiceInput: {
+                    guard terminalIsVisible, pane.paneId == activePaneId else { return false }
+                    return voiceSession.cancelIfPresented()
+                },
                 onTerminalPaste: { text in
                     guard settings.agentBackgroundMonitoringEnabled, relayClient.isHostConnected else { return }
                     backgroundMonitoring.handleTerminalPaste(text, hostId: hostId, paneId: pane.paneId)
@@ -1604,6 +1615,9 @@
         }
 
         private func sendVoiceKeys(_ keys: [TmuxKey]) {
+            if keys == [.escape], voiceSession.cancelIfPresented() {
+                return
+            }
             guard
                 !keys.isEmpty,
                 relayClient.isHostConnected,
@@ -1612,6 +1626,17 @@
 
             let windowName = window?.windowName ?? ""
             enqueueToolbarKeys(keys, paneId: activePaneId, onSent: {
+                observeTerminalInput(keys, paneId: activePaneId, windowName: windowName)
+            })
+        }
+
+        private func insertVoiceTranscript(_ text: String) -> Bool {
+            guard
+                terminalIsVisible, !quickActionPresentation.isPresented,
+                activePhraseContext.canSend, let activePaneId else { return false }
+            let keys: [TmuxKey] = [.text(text)]
+            let windowName = window?.windowName ?? ""
+            return enqueueToolbarKeys(keys, paneId: activePaneId, immediately: true, onSent: {
                 observeTerminalInput(keys, paneId: activePaneId, windowName: windowName)
             })
         }
@@ -1626,7 +1651,7 @@
             return true
         }
 
-        private func activeVoiceInputContext() -> String? {
+        private func activeVoiceInputContext() -> VoiceInputContextSnapshot? {
             guard let activePaneId else { return nil }
 
             var metadata: [String] = []
@@ -1637,9 +1662,9 @@
                 )
             }
 
-            return VoiceInputContext.makeTerminalContext(
-                terminalText: voiceInputContextProviders[activePaneId]?(),
-                metadata: metadata
+            return VoiceInputContextSnapshot(
+                paneMetadata: metadata,
+                terminalText: voiceInputContextProviders[activePaneId]?()?.terminalText
             )
         }
 

@@ -65,6 +65,7 @@
         /// The parent uses this only to detect user-submitted Agent turns.
         let onTerminalInput: @MainActor ([TmuxKey]) -> Void
         let onTerminalInputQueued: @MainActor () -> Void
+        let onCancelVoiceInput: @MainActor () -> Bool
 
         /// Lets a parent-owned input bar capture this pane's terminal text only
         /// when dictation starts, without continuously mirroring terminal output.
@@ -101,10 +102,12 @@
             guard let openBrowserLink else { return nil }
             return { url in openBrowserLink(.init(url: url, paneID: paneId, hostID: hostId)) }
         }
+
         private var openPathAction: (@MainActor (String) -> Void)? {
             guard let openFileLink else { return nil }
             return { path in openFileLink(.init(path: path, paneID: paneId, hostID: hostId)) }
         }
+
         @State private var coordinator: StreamCoordinator
         @State private var presentedTerminal: TerminalState?
 
@@ -112,6 +115,7 @@
         @State private var isInteractive = false
         @State private var quickActionPresentation = TerminalQuickActionPresentation()
         @State private var phraseInputRevision: UInt64 = 0
+        @State private var voiceSession = TerminalVoiceInputSession()
         @State private var keyboardIsTransitioning = false
         @Environment(\.scenePhase) private var scenePhase
 
@@ -151,6 +155,7 @@
             submitResponse: @escaping ResponseSender,
             onTerminalInput: @escaping @MainActor ([TmuxKey]) -> Void = { _ in },
             onTerminalInputQueued: @escaping @MainActor () -> Void = { },
+            onCancelVoiceInput: @escaping @MainActor () -> Bool = { false },
             onTerminalPaste: @escaping @MainActor (String) -> Void = { _ in },
             onPasteImage: (@MainActor (ClipboardImage?) -> Void)? = nil,
             onVoiceInputContextProviderChange: @escaping @MainActor (
@@ -185,6 +190,7 @@
             self.submitResponse = submitResponse
             self.onTerminalInput = onTerminalInput
             self.onTerminalInputQueued = onTerminalInputQueued
+            self.onCancelVoiceInput = onCancelVoiceInput
             self.onVoiceInputContextProviderChange = onVoiceInputContextProviderChange
             self.onCursorNavigationCancellationChange = onCursorNavigationCancellationChange
             self.onExternalInputSenderChange = onExternalInputSenderChange
@@ -240,9 +246,9 @@
                                 }
                                 if showKeyboardButton, settings.terminalKeyboardControlPosition == .topRight {
                                     TerminalVoiceInputButton(
-                                        isDisabled: !canSendTerminalInput,
-                                        contextProvider: terminalVoiceInputContext,
-                                        sendKeys: sendTerminalKeys
+                                        session: voiceSession, context: phraseContext,
+                                        isDisabled: !canSendTerminalInput || quickActionPresentation.isPresented,
+                                        contextProvider: terminalVoiceInputContext
                                     )
                                     .id(phraseContext.target)
                                     keyboardOverlayButton
@@ -258,9 +264,24 @@
                 phraseContext: phraseContext,
                 sendPhrase: sendPhrase
             ))
+            .modifier(TerminalVoiceInputOverlay(
+                session: voiceSession, context: phraseContext,
+                isSuspended: !canSendTerminalInput || isInputSuspended || textSnapshot != nil
+                    || linkPresentation.suspendsTerminalInput || quickActionPresentation.isPresented,
+                insert: insertVoiceTranscript
+            ))
+            .onChange(of: isInputSuspended || textSnapshot != nil || linkPresentation.suspendsTerminalInput) { _, suspended in
+                if suspended, isActive {
+                    // The parent toolbar owns dictation for embedded panes.
+                    // A child sheet must invalidate that capture as well.
+                    phraseInputRevision &+= 1
+                    onTerminalInputQueued()
+                }
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if showKeyboardButton, settings.terminalKeyboardControlPosition == .bottomBar {
                     TerminalKeyboardBar(
+                        voiceSession: voiceSession,
                         keyboardRequested: isInteractive,
                         isEnabled: isConnected && coordinator.streamState == .streaming,
                         action: { isInteractive.toggle() },
@@ -283,9 +304,9 @@
                 if showKeyboardButton, settings.terminalKeyboardControlPosition == .topRight, !hideNavigationBar {
                     ToolbarItem(placement: .topBarTrailing) {
                         TerminalVoiceInputButton(
-                            isDisabled: !canSendTerminalInput,
-                            contextProvider: terminalVoiceInputContext,
-                            sendKeys: sendTerminalKeys
+                            session: voiceSession, context: phraseContext,
+                            isDisabled: !canSendTerminalInput || quickActionPresentation.isPresented,
+                            contextProvider: terminalVoiceInputContext
                         )
                         .id(phraseContext.target)
                     }
@@ -316,7 +337,11 @@
             }
             .alert("Paste Failed", isPresented: .init(
                 get: { coordinator.pasteError != nil },
-                set: { if !$0 { coordinator.pasteError = nil } }
+                set: {
+                    if !$0 {
+                        coordinator.pasteError = nil
+                    }
+                }
             )) {
                 Button("OK") { coordinator.pasteError = nil }
             } message: {
@@ -329,14 +354,15 @@
                 onCopyActionChange(coordinator.streamState == .streaming ? presentTextSnapshot : nil)
                 let coordinator = coordinator
                 onVoiceInputContextProviderChange { [weak coordinator] in
-                    coordinator?.voiceInputContext()
+                    VoiceInputContextSnapshot(terminalText: coordinator?.voiceInputContext())
                 }
                 onCursorNavigationCancellationChange { [weak coordinator] in
                     coordinator?.terminalState?.cancelCursorNavigation?()
                 }
                 onExternalInputSenderChange { [weak coordinator, relayClient] keys, immediately, onSent in
-                    guard let coordinator, coordinator.isReadyForToolbarInput,
-                          relayClient.isHostConnected, !keys.isEmpty else { return false }
+                    guard
+                        let coordinator, coordinator.isReadyForToolbarInput,
+                        relayClient.isHostConnected, !keys.isEmpty else { return false }
                     coordinator.terminalState?.prepareForExternalInput?()
                     coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: immediately, onSent: onSent)
                     return true
@@ -374,7 +400,9 @@
                 coordinator.terminalState?.onKeyboardTransitionChange?(false)
             }
             .onChange(of: coordinator.streamState) { _, newState in
-                if newState != .streaming { presentedTerminal = nil }
+                if newState != .streaming {
+                    presentedTerminal = nil
+                }
                 onCopyActionChange(newState == .streaming ? presentTextSnapshot : nil)
                 if
                     newState == .ended,
@@ -486,8 +514,8 @@
             )
         }
 
-        private func terminalVoiceInputContext() -> String? {
-            VoiceInputContext.makeTerminalContext(
+        private func terminalVoiceInputContext() -> VoiceInputContextSnapshot? {
+            VoiceInputContextSnapshot(
                 terminalText: coordinator.voiceInputContext()
             )
         }
@@ -505,8 +533,11 @@
             case .streaming:
                 if let state = coordinator.terminalState, presentedTerminal === state {
                     .ready
-                } else { .preparing }
-            case .idle, .connecting: .preparing
+                } else {
+                    .preparing
+                }
+            case .idle,
+                 .connecting: .preparing
             }
         }
 
@@ -546,7 +577,12 @@
                         },
                         onRawInput: { data in
                             phraseInputRevision &+= 1
+                            onTerminalInputQueued()
                             coordinator.enqueueRawInput(data: data, relayClient: relayClient)
+                        },
+                        onCompositionStart: {
+                            phraseInputRevision &+= 1
+                            onTerminalInputQueued()
                         },
                         onPasteText: { text in
                             guard canSendTerminalInput, coordinator.isReadyForToolbarInput else { return }
@@ -639,7 +675,19 @@
             enqueueTerminalKeys(keys)
         }
 
+        private func insertVoiceTranscript(_ text: String) -> Bool {
+            guard
+                phraseContext.canSend, canSendTerminalInput, !isInputSuspended, textSnapshot == nil,
+                !linkPresentation.suspendsTerminalInput, !quickActionPresentation.isPresented else { return false }
+            coordinator.terminalState?.prepareForExternalInput?()
+            enqueueTerminalKeys([.text(text)])
+            return true
+        }
+
         private func enqueueTerminalKeys(_ keys: [TmuxKey]) {
+            if keys == [.escape], voiceSession.cancelIfPresented() || onCancelVoiceInput() {
+                return
+            }
             guard canSendTerminalInput, !keys.isEmpty else { return }
             phraseInputRevision &+= 1
             onTerminalInputQueued()
@@ -669,8 +717,9 @@
         }
 
         private func sendCustomButton(_ request: TerminalCustomButtonRequest) -> Bool {
-            guard !isInputSuspended, !quickActionPresentation.suspendsTerminalInput,
-                  request.isValid(in: phraseContext, savedButtons: settings.customButtons.buttons) else { return false }
+            guard
+                !isInputSuspended, !quickActionPresentation.suspendsTerminalInput,
+                request.isValid(in: phraseContext, savedButtons: settings.customButtons.buttons) else { return false }
             coordinator.terminalState?.prepareForExternalInput?()
             let keys = request.button.action.keys
             phraseInputRevision &+= 1
@@ -858,8 +907,8 @@
         @ObservationIgnored private var bootstrapAccumulator = TerminalStreamSnapshotAccumulator()
         @ObservationIgnored private var recoveryPolicy = TerminalStreamRecoveryPolicy()
         @ObservationIgnored private var resetAccumulator = TerminalStreamSnapshotAccumulator()
-        // Command availability must refresh when an atomic reset starts/ends,
-        // even while streamState stays .streaming throughout the reset.
+        /// Command availability must refresh when an atomic reset starts/ends,
+        /// even while streamState stays .streaming throughout the reset.
         private var pendingResetState: TerminalStreamMessage.InitialState?
 
         private var bootstrapDimensions: (width: Int, height: Int)?
@@ -1038,9 +1087,10 @@
                     initial.contentByteCount,
                     initialContent: content
                 )
-                guard bootstrapPolicy.receiveInitialState(
-                    snapshotIsComplete: expectedByteCount == nil
-                ) else { return }
+                guard
+                    bootstrapPolicy.receiveInitialState(
+                        snapshotIsComplete: expectedByteCount == nil
+                    ) else { return }
 
                 bootstrapDimensions = (initial.width, initial.height)
                 bootstrapScrollbackLineLimit = TerminalScrollbackPolicy.normalizedLineLimit(
@@ -1077,10 +1127,11 @@
                     bootstrapDimensions = (snapshot.width, snapshot.height)
                     bootstrapScrollbackLineLimit = scrollbackLineLimit
                     bootstrapBuffer.appendDimensions(cols: snapshot.width, rows: snapshot.height)
-                    if let expectedByteCount = validSnapshotByteCount(
-                        snapshot.contentByteCount,
-                        initialContent: content
-                    ) {
+                    if
+                        let expectedByteCount = validSnapshotByteCount(
+                            snapshot.contentByteCount,
+                            initialContent: content
+                        ) {
                         bootstrapPolicy.expectSnapshotCompletion()
                         beginBootstrapSnapshot(
                             expectedByteCount: expectedByteCount,
@@ -1437,6 +1488,7 @@
 
         /// Callback for raw escape sequences (e.g., SGR mouse events) ready for relay transmission
         let onRawInput: @MainActor (Data) -> Void
+        let onCompositionStart: @MainActor () -> Void
         let onPasteText: @MainActor (String) -> Void
         let onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
@@ -1476,6 +1528,7 @@
             // Wire up input callback
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
+            terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
             terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
@@ -1653,6 +1706,7 @@
             // first render.
             terminalView.onInput = onInput
             terminalView.onRawInput = onRawInput
+            terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
             terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
@@ -1863,7 +1917,9 @@
         func setKeyboardTransitioning(_ transitioning: Bool) {
             guard keyboardIsTransitioning != transitioning else { return }
             keyboardIsTransitioning = transitioning
-            if transitioning { onViewportChange?(nil) }
+            if transitioning {
+                onViewportChange?(nil)
+            }
             setNeedsLayout()
         }
 
@@ -1887,10 +1943,11 @@
         override func layoutSubviews() {
             super.layoutSubviews()
 
-            if initialPresentationPolicy.consumeIfReady(
-                isAttachedToWindow: window != nil,
-                hasUsableBounds: bounds.width > 0 && bounds.height > 0
-            ) {
+            if
+                initialPresentationPolicy.consumeIfReady(
+                    isAttachedToWindow: window != nil,
+                    hasUsableBounds: bounds.width > 0 && bounds.height > 0
+                ) {
                 let presentation = initialTailPresentation
                 initialTailPresentation = nil
                 presentation?()
@@ -1899,8 +1956,9 @@
             anchorToBottomIfNeeded()
             // Fit must not consume geometry from before deferred focus or a
             // keyboard/accessory transition. Inactive panes need no responder.
-            guard window != nil, !keyboardIsTransitioning,
-                  isInputPresentationReady?() == true else {
+            guard
+                window != nil, !keyboardIsTransitioning,
+                isInputPresentationReady?() == true else {
                 onViewportChange?(nil)
                 return
             }
@@ -1919,11 +1977,12 @@
         }
 
         private func anchorToBottomIfNeeded() {
-            guard let targetOffset = anchorPolicy.targetOffset(
-                maximumOffset: Double(bottomOffset),
-                cursorTop: cursorTop?().map { Double($0) },
-                topInset: Double(adjustedContentInset.top)
-            ) else {
+            guard
+                let targetOffset = anchorPolicy.targetOffset(
+                    maximumOffset: Double(bottomOffset),
+                    cursorTop: cursorTop?().map { Double($0) },
+                    topInset: Double(adjustedContentInset.top)
+                ) else {
                 return
             }
             let targetY = CGFloat(targetOffset)

@@ -1,6 +1,6 @@
 import Foundation
 
-struct VoiceRecognitionResult {
+struct VoiceRecognitionResult: Sendable {
     let primaryTranscript: String
     let alternativeTranscripts: [String]
     let liveTranscript: String
@@ -72,7 +72,9 @@ struct VoiceRecognitionCandidateAccumulator {
         }
 
         combined.sort {
-            if $0.rank != $1.rank { return $0.rank < $1.rank }
+            if $0.rank != $1.rank {
+                return $0.rank < $1.rank
+            }
             return $0.insertionOrder < $1.insertionOrder
         }
 
@@ -108,18 +110,6 @@ struct VoiceRecognitionCandidateAccumulator {
 public enum VoiceInputContext {
     public static let maximumTerminalCharacterCount = 12_000
     static let terminalHeader = "Recent terminal text:\n"
-
-    static func compacted(_ context: String?, maximumCount: Int) -> String? {
-        guard let context else { return nil }
-        guard let header = context.range(of: terminalHeader) else {
-            return terminalExcerpt(context, maximumCount: maximumCount)
-        }
-        return makeTerminalContext(
-            terminalText: String(context[header.upperBound...]),
-            metadata: [String(context[..<header.lowerBound])],
-            maximumCount: maximumCount
-        )
-    }
 
     public static func paneMetadata(
         sessionName: String, windowName: String, command: String?, currentPath: String?
