@@ -48,7 +48,8 @@ intercepts ordinary terminal input. Escape remains local to open panels.
 
 macOS offers **Commands** (`/`) and **Quick Phrases** as labeled, bordered buttons
 on the left side of the terminal's bottom status bar, for both local and Viewer
-windows. The buttons keep a 32-point height including native padding;
+windows. Commands, Quick Phrases and the wider voice input button share a
+32-point height including native padding, with their icons centered vertically;
 session details and telemetry sit on the right. In narrow splits, labels collapse
 to icons with the same height and accessible names, leaving room for the voice
 input button without widening the terminal; details fall back to
@@ -91,7 +92,15 @@ send from the terminal. Existing terminal input is never cleared automatically.
   destroying its native view invalidates the captured action; it cannot silently
   move to another pane or submit twice.
 
-On iOS, the two first-row buttons open a shared **in-page overlay**, not a system
+On iOS, the first-row **+ / Attachments** menu owns image input (Photo Library,
+image files, Camera and Paste Image); there is no duplicate image button at the
+top right. In Bottom Bar mode, a single tap in an empty terminal input surface
+shows/hides the keyboard; with draft text, it retains cursor placement. Native
+Codex placeholder text is recognized as empty without adding a CtrlX placeholder.
+Double-tap copy/paste remains unchanged. The legacy Top Right keyboard layout
+is still selectable and keeps its explicit keyboard button.
+
+The Quick Phrases and Commands buttons open a shared **in-page overlay**, not a system
 sheet. The overlay covers terminal content without contributing to its layout:
 opening, switching and closing it leave the native first responder, keyboard
 intent and second-row shortcut accessory in place. Tap the same toolbar button
@@ -118,6 +127,17 @@ correction and inserts one literal text batch **without Return**. Partial result
 stay in the local preview: they never insert or backspace text in the terminal.
 Esc, cancelling the preview, switching targets, editing in the terminal,
 disconnection or leaving the view cancels that recording.
+
+Mac Local and Viewer also support **hold to talk**: hold the microphone or a
+blank cell beside the current terminal prompt for 350 ms, then release to finish
+and insert without Return. Shaded blank padding belonging to the prompt also
+works. Native placeholder text is not replaced or covered; instructions are in
+the microphone's tooltip. Ordinary clicks, double-clicks and selection drags
+keep their normal behavior. Unknown prompt layouts, scrollback, marked text and
+existing selections do not arm a terminal hold; the microphone remains available.
+Releasing during permission preparation cancels the pending recording. iOS keeps
+its existing tap-to-start/tap-to-stop interaction.
+
 Both clients show the same compact inline strip: a stage label, at most two lines
 of live text (keeping the latest end visible), and a close button. There is no
 title, destination description, instruction paragraph or separate stop button.
@@ -223,7 +243,8 @@ Regression coverage lives in `CtrlxCommonTests/Voice*` (including injected
 recognition/correction through the production controller),
 `CtrlxServerFeatureTests/TerminalVoiceInputRequestTests.swift`,
 `CtrlxServerFeatureTests/MacVoiceInputCancellationTests.swift` and the existing iOS
-phase/input tests. `python3 scripts/tests/test_mac_voice_input_inline.py` exercises
+phase/input tests. `MacVoiceInputPressTests` covers prompt hit areas and preserved
+mouse/selection routing. `python3 scripts/tests/test_mac_voice_input_inline.py` exercises
 the production microphone/preview views and native mouse dispatch in an isolated
 AppKit process with fake recognition: stable viewport/focus, no popup window,
 microphone stop, narrow-layout cancel and Escape (no microphone, credentials or

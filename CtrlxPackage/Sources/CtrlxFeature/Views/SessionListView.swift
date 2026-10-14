@@ -604,7 +604,7 @@
                 Spacer()
 
                 Button(action: onRestoreAutomaticOrder) {
-                    Symbols.arrowClockwise.image
+                    Symbols.arrowUpArrowDown.image
                         .font(.caption)
                         .frame(width: 44, height: 44)
                 }

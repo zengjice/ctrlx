@@ -7,6 +7,31 @@ import Testing
 @MainActor
 @Suite("Mac terminal quick-action routing")
 struct TerminalQuickActionRouterTests {
+    @Test("Hold releases are bound to the original endpoint and press, for Local and Viewer", arguments: [nil, "office"] as [String?])
+    func voiceHold(host: String?) throws {
+        let router = TerminalQuickActionRouter()
+        let sink = Sink()
+        let endpoint = sink.endpoint(host: host)
+        router.focus(endpoint)
+        endpoint.isReady = false
+        #expect(router.beginVoiceInputHold() == nil)
+        endpoint.isReady = true
+        let first = try #require(router.beginVoiceInputHold())
+        #expect(router.beginVoiceInputHold() == nil)
+        #expect(router.voiceInputHold?.token == router.token)
+        router.endVoiceInputHold(first)
+        #expect(router.voiceInputHold?.state == .released)
+        let second = try #require(router.beginVoiceInputHold())
+        router.endVoiceInputHold(first, cancelled: true)
+        #expect(router.voiceInputHold?.state == .pressed)
+        router.endVoiceInputHold(second, cancelled: true)
+        #expect(router.voiceInputHold?.state == .cancelled)
+        _ = router.beginVoiceInputHold()
+        router.focus(sink.endpoint(host: host, pane: "%2"))
+        #expect(router.voiceInputHold == nil)
+        #expect(sink.batches.isEmpty)
+    }
+
     @MainActor
     final private class Sink {
         var batches: [[TmuxKey]] = []

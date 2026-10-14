@@ -48,15 +48,23 @@
                     Label("Paste Image", symbol: .docOnClipboard)
                 }
             } label: {
-                if operationID != nil {
-                    ProgressView()
-                        .accessibilityLabel("Preparing Images")
-                } else {
-                    Label("Send Images", symbol: .photoBadgePlus)
+                Group {
+                    if operationID != nil {
+                        ProgressView()
+                            .accessibilityLabel("Preparing Images")
+                    } else {
+                        Label("Attachments", symbol: .plus).labelStyle(.iconOnly)
+                    }
                 }
+                .frame(minWidth: 20)
+                .terminalInputControlStyle()
+                .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
             .disabled(!canStartInput)
-            .accessibilityIdentifier("terminal-send-image")
+            .opacity(canStartInput ? 1 : 0.4)
+            .accessibilityLabel("Attachments")
+            .accessibilityIdentifier("terminal-attachment-control")
             .photosPicker(
                 isPresented: $isPhotoPickerPresented,
                 selection: $selectedPhotos,

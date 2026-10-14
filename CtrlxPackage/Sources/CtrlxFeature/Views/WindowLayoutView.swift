@@ -273,19 +273,20 @@
                 insert: insertVoiceTranscript
             ))
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if terminalIsVisible, window != nil, settings.terminalKeyboardControlPosition == .bottomBar {
+                if terminalIsVisible, window != nil {
                     TerminalKeyboardBar(
                         voiceSession: voiceSession,
-                        keyboardRequested: isKeyboardActive,
+                        relayClient: relayClient,
+                        clipboardPaste: $clipboardImagePaste,
                         isEnabled: relayClient.isHostConnected && activePaneId != nil,
-                        action: { isKeyboardActive.toggle() },
                         contextProvider: activeVoiceInputContext,
                         sendKeys: sendVoiceKeys,
                         phraseContext: activePhraseContext,
                         quickActionPresentation: $quickActionPresentation,
                         customButtonStore: settings.customButtons,
                         sendCustomButton: sendCustomButton,
-                        agentCommandContext: activeAgentCommandContext
+                        agentCommandContext: activeAgentCommandContext,
+                        showsTerminalControls: settings.terminalKeyboardControlPosition == .bottomBar
                     )
                 }
             }
@@ -716,14 +717,6 @@
             }
 
             if terminalIsVisible {
-                ToolbarItem(placement: .topBarTrailing) {
-                    ImageUploadToolbarButton(
-                        paneId: activePaneId,
-                        relayClient: relayClient,
-                        clipboardPaste: $clipboardImagePaste
-                    )
-                }
-
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: resizeWindowToFit) {
                         Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
@@ -1248,6 +1241,7 @@
                 isActive: terminalIsVisible && pane.paneId == activePaneId,
                 isInputSuspended: !terminalIsVisible || quickActionPresentation.suspendsTerminalInput,
                 parentKeyboardRequested: isKeyboardActive,
+                onToggleKeyboard: { isKeyboardActive.toggle() },
                 settings: settings,
                 telemetry: pane.telemetry,
                 // Tiled panes pass `responseState: .constant(nil)`, so no response

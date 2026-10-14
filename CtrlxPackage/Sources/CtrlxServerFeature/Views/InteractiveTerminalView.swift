@@ -184,6 +184,12 @@
 
         private var linkGesture = TerminalLinkGestureState()
         private var pendingLinkActivationTask: Task<Void, Never>?
+        private let voicePress = MacVoiceInputPress()
+        private var voiceOwnsMouseSequence = false
+
+        func cancelVoicePress() {
+            voicePress.cancel()
+        }
 
         override var acceptsFirstResponder: Bool {
             false
@@ -227,6 +233,7 @@
         }
 
         override func scrollWheel(with event: NSEvent) {
+            voicePress.cancel()
             if event.phase.contains(.began) || event.phase.contains(.cancelled)
                 || event.momentumPhase.contains(.ended) {
                 scrollAccumulator.reset()
@@ -284,6 +291,36 @@
         }
 
         override func mouseDown(with event: NSEvent) {
+            voicePress.cancel()
+            voiceOwnsMouseSequence = false
+            if
+                let interactive = interactiveView,
+                let router = interactive.voiceInputRouter,
+                interactive.isVoiceInputPressCandidate(event) {
+                voiceOwnsMouseSequence = true
+                onMouseDown?()
+                let token = router.token
+                var holdID: UUID?
+                voicePress.mouseDown(event, begin: { [weak interactive, weak router] in
+                    guard
+                        let interactive, let router, router.matches(token),
+                        router.active === interactive.voiceInputEndpoint,
+                        interactive.window?.isKeyWindow == true,
+                        interactive.window?.firstResponder === interactive.terminalView,
+                        interactive.isVoiceInputPressCandidate(event) else { return false }
+                    holdID = router.beginVoiceInputHold()
+                    return holdID != nil
+                }, finish: { [weak router] cancelled in
+                    if let holdID {
+                        router?.endVoiceInputHold(holdID, cancelled: cancelled)
+                    }
+                })
+                return
+            }
+            forwardMouseDown(event)
+        }
+
+        private func forwardMouseDown(_ event: NSEvent) {
             lastDragPosition = nil
             if linkGesture.mouseDown(clickCount: event.clickCount) {
                 cancelPendingLinkActivation()
@@ -312,6 +349,11 @@
         }
 
         override func mouseDragged(with event: NSEvent) {
+            if voiceOwnsMouseSequence {
+                guard let down = voicePress.mouseDragged(event) else { return }
+                voiceOwnsMouseSequence = false
+                forwardMouseDown(down)
+            }
             linkGesture.mouseDragged()
 
             // Only synthesize app-owned drags. Shift bypass and disabled reporting
@@ -354,6 +396,11 @@
         }
 
         override func mouseUp(with event: NSEvent) {
+            if voiceOwnsMouseSequence {
+                voiceOwnsMouseSequence = false
+                guard let down = voicePress.mouseUp() else { return }
+                forwardMouseDown(down)
+            }
             let shouldActivateLink = linkGesture.mouseUp(clickCount: event.clickCount)
             defer {
                 lastDragPosition = nil
@@ -571,6 +618,30 @@
         /// (mouse click, programmatic, tabbing). Used to propagate focus back
         /// to tmux via `select-pane` so external clients see the same active pane.
         var onBecomeFirstResponder: (@MainActor () -> Void)?
+        weak var voiceInputRouter: TerminalQuickActionRouter?
+        weak var voiceInputEndpoint: TerminalQuickActionEndpoint?
+
+        func cancelVoiceInputPress() {
+            scrollOverlay?.cancelVoicePress()
+        }
+
+        fileprivate func isVoiceInputPressCandidate(_ event: NSEvent) -> Bool {
+            guard
+                voiceInputEndpoint?.isAvailable == true, voiceInputEndpoint?.isReady == true,
+                event.clickCount == 1,
+                event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty,
+                !isEditorActive, !terminalView.hasMarkedText(),
+                !terminalView.canScroll || terminalView.scrollPosition == 1,
+                terminalView.getSelection()?.isEmpty != false,
+                cellSize.width > 0, cellSize.height > 0 else { return false }
+            let point = terminalView.convert(event.locationInWindow, from: nil)
+            guard terminalView.bounds.contains(point) else { return false }
+            return MacTerminalVoiceInputRegion.contains(
+                column: Int(point.x / cellSize.width),
+                row: Int((terminalView.bounds.height - point.y) / cellSize.height),
+                in: getTerminal()
+            )
+        }
 
         var preserveUserScroll = false
         var onResize: ((NSSize) -> Void)?
@@ -828,6 +899,7 @@
             }
 
             guard let window else {
+                cancelVoiceInputPress()
                 cancelQuestionCheck()
                 return
             }
