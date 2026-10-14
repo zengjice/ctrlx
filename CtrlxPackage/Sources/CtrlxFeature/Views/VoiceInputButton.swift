@@ -19,12 +19,15 @@ extension View {
 
     private struct TerminalInputControlStyle: ViewModifier {
         let isActive: Bool
+        let fixedWidth: Bool
+        @ScaledMetric(relativeTo: .caption) private var buttonWidth = TerminalInputControlMetrics.buttonWidth
 
         func body(content: Content) -> some View {
             content
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(isActive ? Color.red : Color.primary)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, fixedWidth ? 6 : 10)
+                .frame(width: fixedWidth ? buttonWidth : nil)
                 .frame(minHeight: TerminalInputControlMetrics.buttonHeight)
                 .background(
                     Capsule()
@@ -38,8 +41,8 @@ extension View {
     }
 
     extension View {
-        func terminalInputControlStyle(isActive: Bool = false) -> some View {
-            modifier(TerminalInputControlStyle(isActive: isActive))
+        func terminalInputControlStyle(isActive: Bool = false, fixedWidth: Bool = true) -> some View {
+            modifier(TerminalInputControlStyle(isActive: isActive, fixedWidth: fixedWidth))
         }
     }
 
@@ -114,7 +117,7 @@ extension View {
                 icon()
                 Text(controller.isRecording ? "Stop" : "Voice")
             }
-            .terminalInputControlStyle(isActive: controller.isRecording)
+            .terminalInputControlStyle(isActive: controller.isRecording, fixedWidth: false)
             .scaleEffect(controller.isRecording ? 1.04 : 1)
             .animation(.easeInOut(duration: 0.15), value: controller.isRecording)
         }

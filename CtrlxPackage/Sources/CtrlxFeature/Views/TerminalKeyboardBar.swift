@@ -6,8 +6,7 @@
     /// Shared by the SwiftUI input controls and the native shortcut accessory.
     enum TerminalInputControlMetrics {
         static let buttonHeight: CGFloat = 32
-        /// Send keeps its label instead of collapsing to a Return icon.
-        static let sendContentWidth: CGFloat = 44
+        static let buttonWidth: CGFloat = 44
     }
 
     /// A dedicated terminal-input control that stays outside terminal content.
@@ -44,7 +43,6 @@
                         Text("Send")
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
-                            .frame(width: TerminalInputControlMetrics.sendContentWidth)
                             .terminalInputControlStyle()
                             .contentShape(Capsule())
                     }
@@ -122,7 +120,6 @@
 
                     Button(action: sendEscape) {
                         Text("esc")
-                            .frame(minWidth: 20)
                             .terminalInputControlStyle()
                             .contentShape(Capsule())
                     }
@@ -134,7 +131,6 @@
 
                     Button(action: sendDollar) {
                         Text("$")
-                            .frame(minWidth: 20)
                             .terminalInputControlStyle()
                             .contentShape(Capsule())
                     }
@@ -158,7 +154,6 @@
                     } label: {
                         Label("Add Button", symbol: .plus)
                             .labelStyle(.iconOnly)
-                            .frame(minWidth: 20)
                             .terminalInputControlStyle()
                             .contentShape(Capsule())
                     }
@@ -192,7 +187,6 @@
         var body: some View {
             Button(action: sendKey) {
                 Text(title)
-                    .frame(minWidth: 20)
                     .terminalInputControlStyle()
                     .contentShape(Capsule())
             }

@@ -10,7 +10,6 @@
         var body: some View {
             Button(action: togglePanel) {
                 Symbols.textBubbleFill.image
-                    .frame(minWidth: 16)
                     .terminalInputControlStyle()
                     .contentShape(Capsule())
             }

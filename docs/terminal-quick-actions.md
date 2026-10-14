@@ -282,6 +282,9 @@ asset preparation, recording finalization and correction before changing timeout
 
 The first input row's horizontal scroll area ends with `$`, device-local custom
 buttons, then **Add Button** (`＋`). Send remains pinned outside the scroll area.
+All built-in first-row buttons, including Voice and Send, share a 44-point width
+at the default text size and scale together with Dynamic Type. Custom buttons
+keep content-sized widths; recording and loading states do not widen the row controls.
 Add Button opens the same in-page overlay, without a settings page. Choose a name
 and either single-line literal text or one special key (Tab, Home, End, Ctrl+C,
 etc.). The text action's **Auto Send** switch defaults on for new buttons:

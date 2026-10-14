@@ -17,7 +17,7 @@
                 Text(button.name)
                     .lineLimit(1)
                     .frame(minWidth: 20)
-                    .terminalInputControlStyle()
+                    .terminalInputControlStyle(fixedWidth: false)
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -114,8 +114,8 @@
                         VStack(alignment: .leading, spacing: 8) {
                             if !usesKey {
                                 Text(sendReturn
-                                     ? "Tapping this button enters the text and presses Return."
-                                     : "Tapping this button only enters the text. Continue editing, then tap Send when ready.")
+                                    ? "Tapping this button enters the text and presses Return."
+                                    : "Tapping this button only enters the text. Continue editing, then tap Send when ready.")
                             }
                             Text("Saved on this device for all windows. Saving does not send input. Long-press a custom button to delete it.")
                         }
