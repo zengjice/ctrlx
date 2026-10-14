@@ -243,7 +243,11 @@ public struct BrowserAnnotationSurface<Content: View>: View {
     }
 
     private func beginCapture() {
-        guard let context, context.isAvailable, operation == nil, image == nil else { return }
+        guard operation == nil, image == nil else { return }
+        guard let context, context.isAvailable else {
+            onEditingChanged(false)
+            return
+        }
         target = requiresRecipientSelection ? nil : AgentImageTarget.defaultTarget(in: context.targets, preferred: preferredTarget)
         tool = .rectangle
         error = nil

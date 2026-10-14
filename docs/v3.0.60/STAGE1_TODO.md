@@ -22,6 +22,7 @@
 - [x] Bind the default recipient to the source pane and reuse image delivery / iOS terminal handoff without submitting the prompt or duplicating an acknowledged image.
 - [x] Run focused capture, cancellation, input isolation and terminal-handoff regressions; compile affected platform targets.
 - [x] Track the latest valid Viewer preview route and pin it per capture; verify repeated captures after a completed window move, rejection during a move, and stale-poll isolation.
+- [x] Freeze the already displayed Viewer frame and recipient at annotation entry instead of requesting another Host screenshot; release a rejected capture request so preview polling can resume.
 - [ ] Complete real Host / paired Mac Viewer / iPhone annotation and delivery acceptance. Unit tests and SDK compilation do not replace this step.
 
 Annotation evidence in the `feature-bug` worktree (2026-10-13):
@@ -30,6 +31,13 @@ Annotation evidence in the `feature-bug` worktree (2026-10-13):
 - `.build-local/simulator-annotation-ios-build.log`: workspace `Ctrlx`, Debug, generic iOS device SDK build succeeded with signing disabled. Not an installable signed candidate or execution of UIKit tests; SwiftLint was unavailable and skipped by the existing build phase.
 - Changed Swift ranges pass SwiftFormat; whole-file lint still encounters existing formatting violations. Brand/technical boundaries and `git diff --check` pass. No installed App, user simulator, plugin, Relay or performance evidence was changed.
 - Route review fix: `.build-local/simulator-annotation-route-before.log` reproduces the stale-window rejection in three new cases (four issues), including two consecutive captures after a completed move with unchanged image bytes. `.build-local/simulator-annotation-route-after.log` passes 41 focused tests across Viewer capture, Host preview, shared annotation and terminal handoff. The shared model and test file pass whole-file SwiftFormat; brand/technical boundaries and `git diff --check` pass. This model-only fix does not change the UI or wire API; the iOS SDK build above was not repeated, and paired-device UI acceptance remains pending.
+
+Viewer annotation latency change (2026-10-14):
+
+- `.build-local/simulator-annotation-freeze-tests.log`: 44 focused tests passed across Viewer preview freezing, shared annotation, Host preview, wire compatibility and terminal handoff. Capture uses the displayed frame even if a newer response has arrived; a blocked poll cannot delay it, and stale replies cannot replace it. Completed window moves and resuming with unchanged image bytes remain covered. These are injected-I/O tests, not measured paired-device latency.
+- `.build-local/simulator-annotation-freeze-rejection-before.log`: an isolated SwiftUI surface reproduced the pending-request leak when availability disappeared before capture began. The final run covers both refusal and capture failure, then successful request release/retry. No live simulator or installed App was used.
+- `.build-local/simulator-annotation-freeze-ios-build-final.log`: final workspace `Ctrlx`, Debug, generic iOS device SDK build succeeded with signing disabled. This is compilation only, not a signed installation or iPhone UI acceptance; the existing build phase skipped unavailable SwiftLint. The package tests also compiled the Mac feature modules.
+- The shared Viewer model/view and both changed test files pass whole-file SwiftFormat. The small shared-surface change passes changed-line lint with its existing unindented conditional-compilation style preserved. Brand/technical boundaries and `git diff --check` pass. Host capture, Relay and simulator control are unchanged; Viewer annotation quality now matches the displayed preview rather than a separate maximum-size capture.
 
 ## Evidence (2026-10-13)
 

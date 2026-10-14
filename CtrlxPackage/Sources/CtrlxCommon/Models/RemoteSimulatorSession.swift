@@ -4,7 +4,11 @@ import Observation
 
 @MainActor @Observable
 final public class RemoteSimulatorSession {
-    public private(set) var frame: RemoteSimulatorFrame?
+    public private(set) var preview: RemoteSimulatorResponse?
+    public var frame: RemoteSimulatorFrame? {
+        preview?.frame
+    }
+
     public private(set) var error: String?
     public var frameMaxDimension = 1_024
     @ObservationIgnored private var tab: RemoteSimulatorTab
@@ -39,7 +43,7 @@ final public class RemoteSimulatorSession {
                 let response = try await requestFrame(tab, maxDimension: frameMaxDimension)
                 guard epoch == current else { return }
                 tab = response.tab
-                frame = response.frame
+                preview = response
                 error = nil
             } catch is CancellationError { return }
             catch {
@@ -52,16 +56,19 @@ final public class RemoteSimulatorSession {
 
     public func stop() {
         epoch = UUID()
-        frame = nil
+        preview = nil
     }
 
-    public func annotationScreenshot() async throws -> Data {
-        let source = tab
-        let response = try await requestFrame(source, maxDimension: RemoteSimulatorFrame.maximumDimension)
-        guard response.tab.windowID == source.windowID, response.tab.sourcePaneID == source.sourcePaneID else {
-            throw ViewerRelayClientError.commandFailed("The simulator moved during capture. Try again.")
+    /// Freeze the decoded, displayed frame, not a newer response still waiting to be displayed.
+    public func annotationScreenshot(from displayed: RemoteSimulatorResponse) throws -> Data {
+        guard
+            preview != nil, displayed.frame.isValid,
+            displayed.tab.id == tab.id, displayed.tab.sessionName == tab.sessionName,
+            displayed.tab.windowID == tab.windowID, displayed.tab.sourcePaneID == tab.sourcePaneID else {
+            throw ViewerRelayClientError.commandFailed("The simulator preview changed. Wait for its current frame and try again.")
         }
-        return response.frame.jpeg
+        stop()
+        return displayed.frame.jpeg
     }
 
     private func requestFrame(_ tab: RemoteSimulatorTab, maxDimension: Int) async throws -> RemoteSimulatorResponse {
