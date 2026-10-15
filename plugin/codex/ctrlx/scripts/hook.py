@@ -1,12 +1,37 @@
 #!/usr/bin/env python3
 import json
 import os
+from pathlib import Path
 import socket
 import struct
 import sys
 
 PLUGIN_ID = "codex"
 SOCKET_PATH = os.path.expanduser("~/.ctrlx/state/ingress.sock")
+MAX_SKILL_BYTES = 5000
+
+
+def emit_file_link_context(payload):
+    if not isinstance(payload, dict) or payload.get("hook_event_name") != "SessionStart":
+        return
+
+    # Use the bundled skill as the single source for the output convention.
+    skill = Path(__file__).resolve().parent.parent / "skills/file-links/SKILL.md"
+    try:
+        with skill.open("rb") as source:
+            data = source.read(MAX_SKILL_BYTES + 1)
+        if len(data) > MAX_SKILL_BYTES:
+            return
+        text = data.decode("utf-8")
+    except (OSError, UnicodeError):
+        return  # Optional context must not interrupt lifecycle forwarding.
+
+    header, separator, body = text.partition("\n---\n")
+    if not header.startswith("---\n") or not separator or not body.strip():
+        return
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "SessionStart", "additionalContext": body.strip(),
+    }}))
 
 
 def main():
@@ -32,6 +57,8 @@ def main():
             sock.sendall(frame)
     except Exception:
         return
+
+    emit_file_link_context(payload)
 
 
 if __name__ == "__main__":

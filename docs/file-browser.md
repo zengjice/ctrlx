@@ -79,7 +79,7 @@ transport. Actual multi-device tab switching still requires paired-client accept
 Mac Host, Mac Viewer and iOS recognize the literal marker
 `<repo:outputs/report.pdf>`, emitted as inline code to preserve both delimiters.
 This is a lightweight application convention, **not a registered URI standard**.
-There is no private CtrlX URI, CLI generation step, link registry or startup hook.
+There is no private CtrlX URI, CLI generation step or link registry.
 Ordinary paths, slash commands, local Markdown targets and `file://`/OSC 8
 file targets are not inferred or opened. Web links retain their own handling.
 Compatibility with previous file-link output is deliberately dropped.
@@ -137,15 +137,41 @@ protection. The scanner performs no filesystem I/O or network work.
 
 ### Agent output convention and migration
 
-The short independent `file-links` skill is shared by both agent plugins.
-Its canonical source is `plugin/ctrlx/skills/file-links/SKILL.md`, packaged for
-Claude Code and mirrored into Codex by `scripts/sync-codex-skills.sh`.
+The output convention has one canonical source:
+`plugin/ctrlx/skills/file-links/SKILL.md`, packaged for Claude Code and mirrored
+into Codex by `scripts/sync-codex-skills.sh`. The skill remains explicitly usable,
+but routine file references do not depend on the model selecting it implicitly.
+Each plugin's existing `SessionStart` hook reads that bundled skill, strips its
+frontmatter, and returns its body as `hookSpecificOutput.additionalContext`.
+The existing registrations cover startup, resume, clear, compact and fork, following
+the [Codex](https://learn.chatgpt.com/docs/hooks#sessionstart) and
+[Claude Code](https://code.claude.com/docs/en/hooks#sessionstart) hook contracts.
+Other events only forward lifecycle data: there is no per-turn reminder, Stop
+blocking, repository instruction-file edit, extra CLI call or path inference.
+
+Context is emitted only inside tmux after the existing ingress socket send succeeds.
+An unavailable ingress or missing, unreadable, invalid UTF-8, malformed or oversized
+skill omits the context without failing the hook; skill reads are bounded to 5000
+bytes plus an overflow check. Lifecycle forwarding is unchanged. The convention
+applies to user-facing references, not paths in commands, code or configuration.
+Prior read/write/existence evidence can be reused rather than rechecking each link.
+
 Current bundle versions are recorded in `plugin/codex/ctrlx/.codex-plugin/plugin.json`
 and `plugin/ctrlx/.claude-plugin/plugin.json`.
 Update the Host and each Mac/iOS Viewer, update the installed agent plugin,
-then start a new agent session. Updating only the App does not refresh a cached
-agent plugin. Both TUIs should receive an inline-code literal marker, never a
-Markdown link target that the renderer can hide or shorten.
+then start a new agent session with plugin hooks enabled/trusted. Updating only
+the App does not refresh a cached agent plugin. Both TUIs should receive an
+inline-code literal marker, never a Markdown link target that the renderer can
+hide or shorten.
+
+`python3 scripts/tests/test_agent_skills.py` exercises the real hook scripts with
+isolated ingress sockets and the built-plugin skill mirroring step. It checks
+all five SessionStart sources, unchanged ingress frames, canonical body delivery,
+silent non-start events and failure paths. These are wiring tests, not proof of
+real-model adherence. For that acceptance, ask each CLI to report an edited file,
+generated output and folder **without naming the skill**, repeat after resume and
+compaction, and include Chinese/spaced names and source line references. Commands,
+web URLs, deleted files and external paths must remain unmarked.
 
 Tests cover marker recognition, every soft/hard wrap boundary, inertial viewport
 snapshots, single decoding, source-context changes and actual Git worktree/symlink

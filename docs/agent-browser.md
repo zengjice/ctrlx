@@ -110,8 +110,8 @@ Human menu/link opens still use the distinct human primary page; viewing or
 annotating an Agent page does not create a human copy or change its ownership.
 The typed human `.create` operation explicitly creates an extra; `.openPane`
 remains the normal reusable operation. No global per-window browser is introduced.
-Bundled guidance is versioned as Codex 1.1.8 / Claude Code 1.3.9; rebuild the Host
-and update the installed plugin together for these changed `open` semantics.
+These `open` semantics require bundled guidance from Codex 1.1.8 / Claude Code
+1.3.9 or later; rebuild the Host and update the installed plugin together.
 
 `tests/pane_defaults.py` exercises both engines through the public CLI in an
 isolated signed App, with native fixture owners, private profile/tmux/API sockets
