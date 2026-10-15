@@ -31,11 +31,23 @@ struct GitBrowserView: View {
     let onShowInFileExplorer: (String) -> Void
 
     @Environment(AppSettings.self) private var settings
+    @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(\.openSettings) private var openSettings
+    @State private var worktreeTrackingID = UUID()
 
     var body: some View {
         GitWorkbenchView(store: store)
             .accessibilityIdentifier("git-workbench")
+            .safeAreaInset(edge: .top, alignment: .leading, spacing: 0) {
+                WorktreeStatusButton(
+                    repositories: windowManager.worktreeRepositories,
+                    paths: Set([windowManager.gitWorktreePathsByDirectory[directoryPath]].compactMap { $0 })
+                )
+                .padding(.horizontal, 12)
+            }
+            .onAppear { windowManager.trackGitDirectory(directoryPath, for: worktreeTrackingID) }
+            .onChange(of: directoryPath) { _, path in windowManager.trackGitDirectory(path, for: worktreeTrackingID) }
+            .onDisappear { windowManager.trackGitDirectory(nil, for: worktreeTrackingID) }
             .onChangesDoubleClick { url in
                 NSWorkspace.shared.open(url)
             }

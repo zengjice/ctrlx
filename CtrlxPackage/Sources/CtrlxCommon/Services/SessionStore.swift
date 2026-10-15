@@ -33,6 +33,9 @@ final public class SessionStore {
     /// whose IDs collide across hosts.
     public private(set) var paneStates: [PaneKey: PaneState] = [:]
 
+    /// Paths are meaningful only within their source Host.
+    public private(set) var worktreeRepositoriesByHost: [String: [RepositoryWorktreeStatus]] = [:]
+
     /// Agent projects grouped by source host's pairId
     public private(set) var agentProjectsByHost: [String: [AgentProject]] = [:]
 
@@ -280,6 +283,7 @@ final public class SessionStore {
             lastTurnSummaryByPane.removeValue(forKey: key)
         }
 
+        worktreeRepositoriesByHost[hostId] = state.worktreeRepositories
         agentProjectsByHost[hostId] = state.agentProjects ?? []
         if state.supportsAgentFork == true {
             hostsSupportingAgentFork.insert(hostId)
@@ -343,6 +347,8 @@ final public class SessionStore {
     public func clearSessions(for hostId: String) {
         paneStates = paneStates.filter { $0.key.pairId != hostId }
         lastTurnSummaryByPane = lastTurnSummaryByPane.filter { $0.key.pairId != hostId }
+
+        worktreeRepositoriesByHost.removeValue(forKey: hostId)
 
         // Clear stored projects
         agentProjectsByHost.removeValue(forKey: hostId)

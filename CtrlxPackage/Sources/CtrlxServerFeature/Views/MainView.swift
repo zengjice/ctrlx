@@ -920,6 +920,7 @@ public struct MainView: View {
 
     private func localSessionsSection(sessions: [LocalTmuxSession]) -> some View {
         Section {
+            WorktreeStatusButton(repositories: windowManager.worktreeRepositories)
             // Host's own cross-session usage rollup (issue #598), collapsed to
             // the "Today" line until the disclosure chevron expands it.
             if let overview = coordinator.usageOverview, !overview.isEmpty {
@@ -1171,6 +1172,10 @@ public struct MainView: View {
             // read `Terminal progress` + `60%` regardless of working status.
             SessionProgressAccessibilityProxy(progress: sessionProgress)
         }
+        .modifier(SessionWorktreeStatusModifier(
+            repositories: windowManager.worktreeRepositories,
+            paths: Set(session.windows.flatMap(\.panes).compactMap { windowManager.paneStates[$0.paneId]?.gitWorktreePath })
+        ))
         .modifier(DescriptionEditingModifier(
             sessionName: session.sessionName,
             currentDescription: description,

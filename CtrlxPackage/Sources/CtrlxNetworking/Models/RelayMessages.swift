@@ -50,6 +50,8 @@ public struct SessionStateMessage: Codable, Sendable {
     /// deliberately narrower than the app's workbench state: file/browser
     /// tabs, focus and scroll position remain private to each client.
     public let sharedTerminalLayouts: [String: SharedTerminalLayout]?
+    /// nil on older Hosts; published once per repository, rather than per pane.
+    public let worktreeRepositories: [RepositoryWorktreeStatus]?
     /// Absent on older hosts: viewers retain manual entry and send no lookup.
     public let supportsDirectoryBrowsing: Bool?
     public let supportsDirectoryCreation: Bool?
@@ -82,6 +84,7 @@ public struct SessionStateMessage: Codable, Sendable {
         usageOverview: UsageOverview? = nil,
         sidebarSortMode: String? = nil,
         sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil,
+        worktreeRepositories: [RepositoryWorktreeStatus]? = nil,
         supportsDirectoryBrowsing: Bool? = nil,
         supportsDirectoryCreation: Bool? = nil,
         supportsSessionWorktrees: Bool? = nil,
@@ -108,6 +111,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.usageOverview = usageOverview
         self.sidebarSortMode = sidebarSortMode
         self.sharedTerminalLayouts = sharedTerminalLayouts
+        self.worktreeRepositories = worktreeRepositories
         self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
         self.supportsDirectoryCreation = supportsDirectoryCreation
         self.supportsSessionWorktrees = supportsSessionWorktrees
@@ -141,6 +145,7 @@ public struct SessionStateMessage: Codable, Sendable {
             usageOverview: usageOverview,
             sidebarSortMode: sidebarSortMode,
             sharedTerminalLayouts: sharedTerminalLayouts,
+            worktreeRepositories: worktreeRepositories,
             supportsDirectoryBrowsing: supportsDirectoryBrowsing,
             supportsDirectoryCreation: supportsDirectoryCreation,
             supportsSessionWorktrees: supportsSessionWorktrees,
@@ -268,6 +273,9 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// The git branch name for this pane's current working directory, if it's a git repo
     public var gitBranch: String?
 
+    /// Canonical Host worktree path, used only to join its repository snapshot.
+    public var gitWorktreePath: String?
+
     // MARK: - Agent Session
 
     /// The coding-agent session running in this pane, if any
@@ -385,6 +393,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
         customEmoji: String? = nil,
         terminalTitle: String? = nil,
         gitBranch: String? = nil,
+        gitWorktreePath: String? = nil,
         agentSession: AgentSession? = nil,
         lastAgentActivityAt: Date? = nil,
         codexQuestionID: String? = nil,
@@ -417,6 +426,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
         self.customEmoji = customEmoji
         self.terminalTitle = terminalTitle
         self.gitBranch = gitBranch
+        self.gitWorktreePath = gitWorktreePath
         self.agentSession = agentSession
         self.lastAgentActivityAt = lastAgentActivityAt
         self.codexQuestionID = codexQuestionID

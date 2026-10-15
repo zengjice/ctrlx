@@ -3597,6 +3597,7 @@
                     // this host's sessions with the host's mode.
                     sidebarSortMode: await self?.settings.sidebarSortMode.rawValue,
                     sharedTerminalLayouts: sharedTerminalLayouts,
+                    worktreeRepositories: await windowManager.worktreeRepositories,
                     supportsDirectoryBrowsing: true,
                     supportsDirectoryCreation: true,
                     supportsSessionWorktrees: true,

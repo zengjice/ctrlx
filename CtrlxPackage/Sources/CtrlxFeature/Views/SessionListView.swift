@@ -458,6 +458,7 @@
                     }
                     .accessibilityIdentifier("host-version-mismatch-row")
                 } else if hasContent {
+                    WorktreeStatusButton(repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [])
                     // Cross-session usage rollup for this host (issue #598).
                     // Renders as its own List rows (header + detail rows when
                     // expanded) and owns their insets/separators internally.
@@ -556,6 +557,10 @@
                 }
             }
             .accessibilityValue(cliSessionState?.statusLabel ?? claudePaneInSession?.agentSession?.statusLabel ?? "")
+            .modifier(SessionWorktreeStatusModifier(
+                repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [],
+                paths: Set(session.windows.flatMap(\.panes).compactMap(\.gitWorktreePath))
+            ))
             .modifier(SessionSwipeActionsModifier(
                 session: session,
                 isDisabled: connection?.isHostConnected != true,

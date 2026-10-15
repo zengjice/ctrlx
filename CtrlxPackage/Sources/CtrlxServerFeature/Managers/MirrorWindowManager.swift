@@ -12,6 +12,16 @@ final public class MirrorWindowManager {
     /// Contains tmux metadata, agent session, terminal title, and yolo mode.
     public private(set) var paneStates: [String: PaneState] = [:]
 
+    public private(set) var worktreeRepositories: [RepositoryWorktreeStatus] = []
+    private(set) var gitWorktreePathsByDirectory: [String: String] = [:]
+
+    @ObservationIgnored private var visibleGitDirectories: [UUID: String] = [:]
+
+    @ObservationIgnored
+    @Dependency(WorktreeStatusClient.self) private var worktreeStatus
+
+    @ObservationIgnored private var gitRefreshID: UUID?
+
     /// Canonical terminal-window arrangements published to every Viewer.
     /// Layout revisions are assigned here on the Host; the Relay is stateless.
     public private(set) var sharedTerminalLayouts: [String: SharedTerminalLayout] = [:]
@@ -143,7 +153,12 @@ final public class MirrorWindowManager {
         // Update or create entries for current panes
         for pane in panes {
             if var state = updatedStates[pane.paneId] {
+                let pathChanged = state.currentPath != pane.currentPath
                 if pane.updateMetadata(of: &state) {
+                    if pathChanged {
+                        state.gitBranch = nil
+                        state.gitWorktreePath = nil
+                    }
                     updatedStates[pane.paneId] = state
                     changed = true
                 }
@@ -1055,85 +1070,48 @@ final public class MirrorWindowManager {
 
     // MARK: - Git Branch Detection
 
-    private static let gitPath = "/usr/bin/git"
+    func trackGitDirectory(_ path: String?, for viewID: UUID) {
+        visibleGitDirectories[viewID] = path
+    }
 
-    /// Refreshes git branch info for all panes that have a current path. The Git
-    /// tab's changed-file badge (issue #573) is driven separately, straight off
-    /// the per-session GitWorkbench store's `summary`; the sidebar branch keeps
-    /// using a single cheap `git rev-parse` here rather than GitWorkbench's
-    /// heavier `loadStatus()`.
     func refreshGitBranches() async {
-        var panesForPath: [String: [String]] = [:]
-        for (paneId, state) in paneStates {
-            guard let path = state.currentPath, !path.isEmpty else { continue }
-            panesForPath[path, default: []].append(paneId)
+        let refreshID = UUID()
+        gitRefreshID = refreshID
+        let paths = paneStates.compactMapValues { state in
+            state.currentPath.flatMap { $0.isEmpty ? nil : $0 }
         }
+        let result = await worktreeStatus.refresh(Array(Set(paths.values).union(visibleGitDirectories.values)))
+        guard gitRefreshID == refreshID else { return }
 
-        let branchesByPath = await withTaskGroup(
-            of: (String, String?).self,
-            returning: [(String, String?)].self
-        ) { group in
-            for path in panesForPath.keys {
-                group.addTask { [processRunner] in
-                    let branch = await Self.detectGitBranch(at: path, processRunner: processRunner)
-                    return (path, branch)
-                }
-            }
-
-            var result: [(String, String?)] = []
-            for await (path, branch) in group {
-                result.append((path, branch))
-            }
-            return result
-        }
-
-        // Re-read after the task group: this actor was re-entrant while git ran,
-        // so starting from the pre-await dictionary could overwrite newer agent
-        // or terminal state. Publish once, and only when a branch really changed.
-        var updatedStates = paneStates
+        // Read again after I/O: a pane may have moved or received newer agent
+        // state while Git was running. Never overwrite that newer state.
+        var updated = paneStates
         var changed = false
-        for (path, branch) in branchesByPath {
-            for paneId in panesForPath[path] ?? [] {
-                guard
-                    var state = updatedStates[paneId],
-                    state.currentPath == path,
-                    state.gitBranch != branch
-                else { continue }
-                state.gitBranch = branch
-                updatedStates[paneId] = state
+        for (paneID, path) in paths {
+            guard var state = updated[paneID], state.currentPath == path else { continue }
+            let location = result.locations[path]
+            if state.gitBranch != location?.branch || state.gitWorktreePath != location?.root {
+                state.gitBranch = location?.branch
+                state.gitWorktreePath = location?.root
+                updated[paneID] = state
                 changed = true
             }
         }
         if changed {
-            paneStates = updatedStates
+            paneStates = updated
+        }
+        let roots = result.locations.mapValues(\.root)
+        if gitWorktreePathsByDirectory != roots {
+            gitWorktreePathsByDirectory = roots
+        }
+        if worktreeRepositories != result.repositories {
+            worktreeRepositories = result.repositories
+            changed = true
+        }
+        if changed {
+            await onSessionMetadataChanged?()
         }
     }
-
-    /// Detects the git branch for a given directory path.
-    /// Returns nil if the path is not inside a git repository.
-    private static func detectGitBranch(
-        at path: String,
-        processRunner: ProcessRunner
-    ) async -> String? {
-        guard FileManager.default.fileExists(atPath: path) else { return nil }
-        guard
-            let result = try? await processRunner.run(
-                gitPath,
-                ["-C", path, "rev-parse", "--abbrev-ref", "HEAD"],
-                nil,
-                5
-            ) else { return nil }
-
-        guard result.isSuccess else { return nil }
-        let branch = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if branch.isEmpty { return nil }
-        // `git rev-parse --abbrev-ref HEAD` returns the literal "HEAD" when the
-        // working copy is in a detached-HEAD state. Surface that explicitly
-        // rather than showing "HEAD" in the sidebar.
-        if branch == "HEAD" { return "(detached)" }
-        return branch
-    }
-
 }
 
 #if DEBUG

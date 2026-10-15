@@ -886,6 +886,47 @@ last-known layout. See `docs/folder-layout-persistence-plan.md`.
   `persistChangedLayouts()`. `LayoutSnapshotMapper` translates the live
   `SessionFileTabsState` ⇄ the `SavedFolderLayout` snapshot.
 
+### Worktree merge status
+
+The Mac Host's existing five-second pane validation also reads Git worktree
+metadata. `WorktreeStatusReader` groups live terminal and visible local Git-tab
+directories by their canonical common Git directory, enumerates all existing
+worktrees (including those without sessions), and compares their captured HEADs with **local**
+`refs/heads/main`. Counts use commit ancestry (`rev-list --count main..HEAD`),
+not upstream tracking, dirty files, or squash/cherry-pick patch equivalence.
+Successful counts are cached by repository/main/HEAD; a change to main refreshes
+all affected comparisons. There is no fetch, merge or filesystem mutation.
+Detached HEAD, missing/unborn main and read/comparison errors are unavailable
+states, never a zero count. Prunable/missing and bare worktree entries are omitted.
+Discovery covers repositories referenced by live panes or visible local Git tabs;
+this is not a disk scan or a persistent catalog of repositories whose sessions
+and Git tabs have all closed.
+
+`PaneState.gitWorktreePath` joins a pane to the Host's canonical worktree path.
+For absorbed submodules and `--separate-git-dir` repositories, Git may list the
+primary worktree by its metadata directory. The Host matches an observed checkout
+whose own Git directory equals the common directory, or lets Git resolve a
+submodule's `core.worktree`. A separate Git directory without that reverse pointer
+cannot locate an unobserved primary checkout; only that entry becomes unavailable,
+and linked worktrees retain their branches and counts. The common Git directory
+remains the repository key.
+`SessionStateMessage.worktreeRepositories` carries one optional repository list
+per snapshot. A changed count triggers a Viewer push even when the terminal's
+branch name did not change. Both fields are additive; old snapshots omit them,
+old Viewers ignore them, and no new command or Relay change is required.
+`SessionStore` scopes this metadata by Host pair ID and clears it on downgrade
+or disconnect. Viewers never inspect those paths on their own filesystem.
+
+Mac local/Viewer sidebars and the iOS session list show a separate, clickable
+pending-merge badge, independent of configured sidebar fields and notification
+state. A session spanning several worktrees counts each worktree once. Badges
+open the complete associated repository list; the Host section's Worktrees
+entry remains available when everything is merged. The local Mac Git page also
+has a Worktrees entry. Mac uses a popover and iOS a sheet; their contents follow
+incoming snapshots. A missing comparison shows its reason instead of claiming
+that the branch is merged. “No commits pending merge” is not a clean-worktree or
+safe-to-delete assertion.
+
 ## Shared Viewer services (Mac and iOS)
 
 ### ViewerConnectionManager / ViewerConnection (`CtrlxCommon/Services/`)
