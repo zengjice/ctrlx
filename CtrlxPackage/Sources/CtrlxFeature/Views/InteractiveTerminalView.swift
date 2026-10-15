@@ -95,6 +95,7 @@ enum TerminalCursorTapNavigation {
 
         private static let questionLogger = Logger(subsystem: "com.jicezeng.ctrlx", category: "CodexQuestions")
         private var lastQuestionDiagnostic: String?
+        private var isFeedingTerminalData = false
         var questionExpansionEnabled = false {
             didSet {
                 guard oldValue != questionExpansionEnabled else { return }
@@ -103,6 +104,10 @@ enum TerminalCursorTapNavigation {
         }
 
         private lazy var questionExpansion = TerminalCodexQuestionExpansion(
+            isFrameComplete: { [weak self] in
+                guard let self else { return false }
+                return !isFeedingTerminalData && !getTerminal().synchronizedOutputActive
+            },
             readPrompt: { [weak self] in
                 guard let self else { return nil }
                 let prompt = currentQuestionPrompt
@@ -335,6 +340,11 @@ enum TerminalCursorTapNavigation {
         /// SwiftTerm keeps `yDisp`, `userScrolling`, and `contentOffset` in sync,
         /// including preserving history while the user is scrolled up.
         func feedTerminalData(_ bytes: ArraySlice<UInt8>) {
+            isFeedingTerminalData = true
+            defer {
+                isFeedingTerminalData = false
+                scheduleQuestionCheck()
+            }
             feed(byteArray: bytes)
             if mouseScrollAnimator.isActive, !isCodexFullscreenScroll {
                 cancelMouseScroll()
@@ -344,7 +354,6 @@ enum TerminalCursorTapNavigation {
             finishCursorNavigationIfReady()
 
             setNeedsLayout()
-            scheduleQuestionCheck()
         }
 
         override func layoutSubviews() {

@@ -87,6 +87,13 @@ native wrapper checks a stable screen after 350 ms; only the key window's focuse
 visible terminal at the live bottom is eligible (no editor overlay, text selection,
 mouse drag or marked IME text). Typing postpones the check. It neither changes
 focus nor sends Enter/answers, and does not change the agent's working state.
+Mac and iOS inspect completed terminal frames: synchronized output in progress
+preserves an existing stability deadline. If that deadline expires mid-frame,
+the native frame-completion event resumes the check, revalidating the live prompt
+and input eligibility before sending. Parsing an output chunk also defers checks
+until the whole chunk and any viewport restoration finish. Continuous status
+redraws therefore cannot keep restarting the wait. Cancellation or a new question
+identity discards a check waiting for frame completion.
 
 Local panes call `TmuxService.expandCodexQuestions`; viewers enqueue the additive
 `ExpandCodexQuestions(expectedCount:expectedQuestionID:)` intent behind existing keyboard input.
@@ -142,7 +149,8 @@ when their reason changes.
 On iOS, `TerminalCodexQuestionExpansion` runs outside SwiftUI observable state.
 The selected pane's native wrapper reads at most nine live rows, after parsing
 terminal output, and checks again after 350 ms. Unrelated output does not extend
-the deadline; a changed/partial footer does. It requires the input proxy's focus,
+the deadline; a changed or unrecognized footer in a completed frame does. It
+requires the input proxy's focus,
 an active scene, a ready stream, both native viewports at the bottom, no copy/menu,
 IME, cursor-navigation operation, drag or mouse-scroll momentum, and no blocking
 response form/quick-action overlay. Typing, stream reset, resize, focus loss and

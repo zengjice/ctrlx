@@ -108,6 +108,151 @@ struct TerminalCodexQuestionExpansionTests {
         }
     }
 
+    @Test("Synchronized redraws preserve the deadline and wait for frame completion")
+    func synchronizedRedraws() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                var frameComplete = true
+                var sent: [Int] = []
+                let opener = TerminalCodexQuestionExpansion(
+                    isFrameComplete: { frameComplete },
+                    readPrompt: {
+                        #expect(frameComplete)
+                        return Self.prompt(1)
+                    },
+                    enqueue: { count, complete in
+                        #expect(frameComplete)
+                        sent.append(count)
+                        complete(true)
+                        return true
+                    }
+                )
+                defer { opener.invalidate() }
+                opener.schedule()
+                for _ in 0..<3 {
+                    frameComplete = false
+                    opener.schedule()
+                    await clock.advance(by: .milliseconds(80))
+                    frameComplete = true
+                    opener.schedule()
+                    await clock.advance(by: .milliseconds(20))
+                }
+                frameComplete = false
+                opener.schedule()
+                await clock.advance(by: .milliseconds(80)) // Deadline at 350 ms, mid-frame.
+                #expect(sent.isEmpty)
+                frameComplete = true
+                opener.schedule()
+                #expect(sent == [1]) // No new 350 ms delay.
+                for _ in 0..<5 {
+                    frameComplete = false
+                    opener.schedule()
+                    await clock.advance(by: .milliseconds(80))
+                    frameComplete = true
+                    opener.schedule()
+                    await clock.advance(by: .milliseconds(20))
+                }
+                #expect(sent == [1])
+            }
+        }
+    }
+
+    @Test("A completed frame must still have the same eligible prompt", arguments: [false, true])
+    func changedFrame(losesEligibility: Bool) async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                var frameComplete = true
+                var current = Self.prompt(1)
+                var sent: [Int] = []
+                let opener = TerminalCodexQuestionExpansion(
+                    isFrameComplete: { frameComplete }, readPrompt: { current },
+                    enqueue: { count, complete in sent.append(count)
+                        complete(true)
+                        return true
+                    }
+                )
+                defer { opener.invalidate() }
+                opener.schedule()
+                frameComplete = false
+                await clock.advance(by: .milliseconds(350))
+                current = losesEligibility ? nil : Self.prompt(2)
+                frameComplete = true
+                opener.schedule()
+                #expect(sent.isEmpty)
+                await clock.advance(by: .milliseconds(350))
+                await Task.megaYield()
+                #expect(sent == (losesEligibility ? [] : [2]))
+            }
+        }
+    }
+
+    @Test("Cancellation, new identity and teardown discard a check waiting for a frame", arguments: ["input", "identity", "teardown"])
+    func cancelDeferredFrame(reason: String) async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                var frameComplete = true
+                var sent: [Int] = []
+                let opener = TerminalCodexQuestionExpansion(
+                    isFrameComplete: { frameComplete }, readPrompt: { Self.prompt(1) },
+                    enqueue: { count, complete in sent.append(count)
+                        complete(true)
+                        return true
+                    }
+                )
+                defer { opener.invalidate() }
+                opener.schedule()
+                frameComplete = false
+                await clock.advance(by: .milliseconds(350))
+                switch reason {
+                case "input": opener.cancelPending()
+                case "identity": opener.updateQuestionID("next-question")
+                default: opener.invalidate()
+                }
+                frameComplete = true
+                opener.schedule()
+                #expect(sent.isEmpty)
+                await clock.advance(by: .milliseconds(350))
+                await Task.megaYield()
+                #expect(sent == (reason == "teardown" ? [] : [1]))
+            }
+        }
+    }
+
+    @Test("A partial first frame cannot start a stability check")
+    func partialFirstFrame() async {
+        await withMainSerialExecutor {
+            let clock = TestClock()
+            await withDependencies { $0.continuousClock = clock } operation: {
+                var frameComplete = false
+                var sent: [Int] = []
+                let opener = TerminalCodexQuestionExpansion(
+                    isFrameComplete: { frameComplete },
+                    readPrompt: {
+                        #expect(frameComplete)
+                        return Self.prompt(1)
+                    },
+                    enqueue: { count, complete in sent.append(count)
+                        complete(true)
+                        return true
+                    }
+                )
+                defer { opener.invalidate() }
+                opener.schedule()
+                await clock.advance(by: .seconds(1))
+                frameComplete = true
+                opener.schedule()
+                await clock.advance(by: .milliseconds(349))
+                #expect(sent.isEmpty)
+                await clock.advance(by: .milliseconds(1))
+                await Task.megaYield()
+                #expect(sent == [1])
+            }
+        }
+    }
+
     @Test("A changed or partially painted footer starts a new stability window")
     func repaint() async {
         await withMainSerialExecutor {
