@@ -7,6 +7,34 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.73 — Shared pane tabs, worktree status and clearer voice correction
+
+- Reuse Host-owned Files tabs across clients while preserving private navigation,
+  selection and layouts, including iOS workspace restoration. Keep human and
+  Agent browser defaults separate; Agent `open` reuses its pane's primary page,
+  preserves identical-URL page state, and supports explicit extras with `--new`.
+- Show worktree commits pending merge into local `main` in Mac and iOS sidebars,
+  with a complete repository worktree list and explicit unavailable states.
+  Host-scoped, additive snapshots preserve compatibility with older peers.
+- Add Mac terminal-link shortcuts: Command-click opens on the source Host and
+  Option-click opens in this Mac's default browser without changing preferences.
+  Show the shortcuts in the destination picker.
+- Explain voice-correction readiness in settings and show when inserted text
+  remains an uncorrected transcription, preserving focus and one-shot delivery.
+- Bundle updated browser guidance: Codex plugin 1.1.8 and Claude Code plugin 1.3.9.
+- Release validation: the bounded serial Swift regression passed with 3,151
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, the website build,
+  signed Mac Release and arm64 iOS Simulator builds, native worktree/voice UI tests
+  and browser CLI/ownership tests passed. Both browser engines passed pane-default
+  acceptance in a private, signed App with fixture owners and mock Keychain,
+  including normal Host exit.
+  SwiftFormat has no findings on changed lines across 65 Swift files; existing
+  whole-file findings remain. Real-agent, paired-device and microphone/correction
+  quality acceptance were not run in this release workflow.
+- Distribution: Mac build 6 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.72 — Mixed-language voice correction and consistent input controls
 
 - Merge `macinput`: improve Chinese/English speech correction with common Git
