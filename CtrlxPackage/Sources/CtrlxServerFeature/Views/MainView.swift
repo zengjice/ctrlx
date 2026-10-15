@@ -20,6 +20,7 @@ public struct MainView: View {
     @Environment(\.appearsActive) private var appearsActive
 
     private let detachedWorkspace: DetachedTerminalWorkspace?
+    @State private var rejectedTabDropID: UUID?
 
     public init() {
         self.detachedWorkspace = nil
@@ -122,7 +123,9 @@ public struct MainView: View {
     }
 
     private func tabContext(hostID: String?, session: String) -> WorkbenchTabContext {
-        WorkbenchTabContext(workspaceID: detachedWorkspace?.id, hostID: hostID, sessionName: session) { drag, before, right in
+        WorkbenchTabContext(workspaceID: detachedWorkspace?.id, hostID: hostID, sessionName: session, onRejected: {
+            rejectedTabDropID = UUID()
+        }) { drag, before, right in
             guard
                 drag.hostID == hostID, drag.sessionName == session,
                 coordinator.detachedWindows.transfer(drag, to: detachedWorkspace?.id, session: terminalSession) else { return false }
@@ -361,10 +364,12 @@ public struct MainView: View {
             .containerBackground(settings.theme.workspaceBackgroundColor, for: .window)
             .toolbarBackground(settings.theme.chromeBackgroundColor, for: .windowToolbar)
             .preferredColorScheme(settings.theme.workspaceColorScheme)
-            .navigationTitle(detachedWorkspace == nil ? (selectedSessionTitle ?? "CtrlX") : "\(selectedSessionTitle ?? "CtrlX") — Workspace")
+            .navigationTitle(workspaceTitle)
+            .toolbar(removing: .title)
             .toolbar {
                 toolbarContent
             }
+            .modifier(WorkbenchTabDropNotice(presentationID: $rejectedTabDropID))
             .sheet(isPresented: $showingSessionSwitcher) {
                 SessionSwitcherView(items: sessionSwitcherItems, current: sidebarSessionSelection.wrappedValue) { selection in
                     guard sessionSwitcherItems.contains(where: { $0.id == selection && $0.isAvailable }) else { return }
@@ -2327,6 +2332,11 @@ public struct MainView: View {
 
     // MARK: - Toolbar
 
+    private var workspaceTitle: String {
+        let title = selectedSessionTitle ?? "CtrlX"
+        return detachedWorkspace == nil ? title : "\(title) — Workspace"
+    }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         if detachedWorkspace == nil {
@@ -2338,6 +2348,7 @@ public struct MainView: View {
                 .accessibilityIdentifier("session-switcher-button")
             }
         }
+        WorkbenchWindowTitle(title: workspaceTitle)
         ToolbarItem(placement: .automatic) {
             TrialStatusToolbarItem()
         }

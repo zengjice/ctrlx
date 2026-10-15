@@ -23,6 +23,7 @@ struct WorkbenchTabContext {
     let workspaceID: UUID?
     let hostID: String?
     let sessionName: String
+    let onRejected: () -> Void
     let receive: (WorkbenchTabDrag, TabDragPayload?, Bool) -> Bool
 
     func drag(_ tab: TabDragPayload) -> WorkbenchTabDrag {
@@ -31,6 +32,19 @@ struct WorkbenchTabContext {
 
     func accepts(_ drag: WorkbenchTabDrag) -> Bool {
         drag.hostID == hostID && drag.sessionName == sessionName
+    }
+
+    func drop(_ drag: WorkbenchTabDrag, before: TabDragPayload?, rightSide: Bool, reorder: () -> Bool) -> Bool {
+        guard accepts(drag) else {
+            onRejected()
+            // Consume the drop without moving a tab. An unhandled drop makes the
+            // native terminal drag source fall back to creating a new window.
+            return true
+        }
+        if drag.workspaceID != workspaceID {
+            return receive(drag, before, rightSide)
+        }
+        return reorder()
     }
 }
 
@@ -62,15 +76,41 @@ private struct WorkbenchDropModifier: ViewModifier {
     func body(content: Content) -> some View {
         if let context {
             content.dropDestination(for: WorkbenchTabDrag.self) { values, point in
-                guard values.count == 1, let value = values.first, context.accepts(value) else { return false }
-                if value.workspaceID != context.workspaceID {
-                    return context.receive(value, before, rightSide)
+                guard values.count == 1, let value = values.first else { return false }
+                return context.drop(value, before: before, rightSide: rightSide) {
+                    action([value.tab], point)
                 }
-                return action([value.tab], point)
             } isTargeted: { targeted($0) }
         } else {
             content.dropDestination(for: TabDragPayload.self, action: action, isTargeted: targeted)
         }
+    }
+}
+
+struct WorkbenchTabDropNotice: ViewModifier {
+    @Binding var presentationID: UUID?
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                if presentationID != nil {
+                    Text("Only tabs from the same host and session can be combined.")
+                        .font(.callout)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .padding(12)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("workbench-tab-drop-notice")
+                }
+            }
+            .task(id: presentationID) {
+                guard let id = presentationID else { return }
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled, presentationID == id else { return }
+                presentationID = nil
+            }
     }
 }
 
@@ -83,7 +123,7 @@ extension View {
         before: TabDragPayload? = nil,
         rightSide: Bool = false,
         action: @escaping ([TabDragPayload], CGPoint) -> Bool,
-        isTargeted: @escaping (Bool) -> Void,
+        isTargeted: @escaping (Bool) -> Void
     ) -> some View {
         modifier(WorkbenchDropModifier(before: before, rightSide: rightSide, action: action, targeted: isTargeted))
     }

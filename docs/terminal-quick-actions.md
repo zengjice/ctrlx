@@ -41,6 +41,12 @@ strip's own overflow scrolling remain unchanged. Hold Option while scrolling
 to use the content's existing horizontal scrolling or browser navigation instead.
 Short or cancelled swipes and momentum do not switch tabs.
 
+Mac workbench titlebars use a compact, non-interactive session title and native
+flexible toolbar space. Double-clicking the empty area follows the same macOS
+window action as the area beside the traffic lights, including the system's
+minimize or do-nothing preference. Main and detached windows share this layout;
+toolbar controls and terminal content keep their own click handling.
+
 Session search follows the sidebar order and matches session names, displayed
 titles and Host names. Up/Down choose a result, Return switches, and Escape
 cancels. Offline Hosts are shown but cannot be selected. The main workspace owns
