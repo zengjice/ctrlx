@@ -1780,13 +1780,14 @@ public struct MainView: View {
                 window: window,
                 connection: connection,
                 settings: settings,
-                onOpenURL: { url, paneID in
+                onOpenURL: { url, paneID, behavior in
                     handleRemoteTerminalURLClick(
                         url,
                         hostId: remote.hostId,
                         sessionName: remote.sessionName,
                         windowId: window.id,
-                        paneID: paneID
+                        paneID: paneID,
+                        behaviorOverride: behavior
                     )
                 }
             )
@@ -1814,13 +1815,14 @@ public struct MainView: View {
                     window: rightWindow,
                     connection: connection,
                     settings: settings,
-                    onOpenURL: { url, paneID in
+                    onOpenURL: { url, paneID, behavior in
                         handleRemoteTerminalURLClick(
                             url,
                             hostId: remote.hostId,
                             sessionName: remote.sessionName,
                             windowId: rightWindow.id,
-                            paneID: paneID
+                            paneID: paneID,
+                            behaviorOverride: behavior
                         )
                     }
                 )
@@ -2039,13 +2041,14 @@ public struct MainView: View {
             sessionTabs?.rightSide.contains(.window(window.stableId)) != true {
             WindowPaneLayoutView(
                 window: window,
-                onOpenURL: { url, paneID in
+                onOpenURL: { url, paneID, behavior in
                     handleTerminalURLClick(
                         url,
                         directoryPath: directoryPath,
                         session: session,
                         window: window,
-                        paneID: paneID
+                        paneID: paneID,
+                        behaviorOverride: behavior
                     )
                 }
             )
@@ -2198,13 +2201,14 @@ public struct MainView: View {
                 }) {
                 WindowPaneLayoutView(
                     window: window,
-                    onOpenURL: { url, paneID in
+                    onOpenURL: { url, paneID, behavior in
                         handleTerminalURLClick(
                             url,
                             directoryPath: directoryPath,
                             session: tmuxService.sessions.first(where: { $0.sessionName == sessionName }),
                             window: window,
-                            paneID: paneID
+                            paneID: paneID,
+                            behaviorOverride: behavior
                         )
                     }
                 )
@@ -3396,14 +3400,17 @@ public struct MainView: View {
         case let .url(raw, paneID):
             guard let url = URL(string: raw), let pane = panes.first(where: { $0.paneId == paneID }) else { return }
             if let host = target.hostID {
-                _ = handleRemoteTerminalURLClick(url, hostId: host, sessionName: sessionName, windowId: windowID, paneID: paneID)
+                _ = handleRemoteTerminalURLClick(
+                    url, hostId: host, sessionName: sessionName, windowId: windowID, paneID: paneID, behaviorOverride: nil
+                )
             } else if let window = tmuxService.windows.first(where: { $0.stableId == target.windowID }) {
                 _ = handleTerminalURLClick(
                     url,
                     directoryPath: pane.currentPath ?? NSHomeDirectory(),
                     session: tmuxService.sessions.first { $0.sessionName == sessionName },
                     window: window,
-                    paneID: paneID
+                    paneID: paneID,
+                    behaviorOverride: nil
                 )
             }
         }
@@ -4295,8 +4302,8 @@ public struct MainView: View {
     /// - `file://` URL with `openClickedFileInNewTab` enabled: opens the file
     ///   in a new file tab. Returns `true`.
     /// - http/https/ftp URL: the destination depends on the effective behavior
-    ///   for the URL — a per-domain rule (`settings.browserBehavior(for:)`)
-    ///   takes precedence over the global `settings.browserLinkBehavior`.
+    ///   for the URL — a one-click modifier override, then a per-domain rule,
+    ///   then the global `settings.browserLinkBehavior`.
     ///   `.alwaysInApp` opens the source pane's Host browser and returns `true`.
     ///   `.alwaysInDefaultBrowser` returns `false` so the click falls through
     ///   to `NSWorkspace.shared.open`. `.ask` shows a confirmation dialog
@@ -4308,7 +4315,8 @@ public struct MainView: View {
         directoryPath: String,
         session: LocalTmuxSession?,
         window: LocalTmuxWindow,
-        paneID: String
+        paneID: String,
+        behaviorOverride: BrowserLinkBehavior?
     ) -> Bool {
         if url.isFileURL {
             guard settings.openClickedFileInNewTab, let session else {
@@ -4328,7 +4336,7 @@ public struct MainView: View {
             return false
         }
 
-        let effective = settings.browserBehavior(for: url) ?? settings.browserLinkBehavior
+        let effective = settings.effectiveBrowserBehavior(for: url, override: behaviorOverride)
 
         switch effective {
         case .alwaysInApp:
@@ -4361,13 +4369,14 @@ public struct MainView: View {
         hostId: String,
         sessionName: String,
         windowId: String,
-        paneID: String
+        paneID: String,
+        behaviorOverride: BrowserLinkBehavior?
     ) -> Bool {
         if RemoteTerminalURLPolicy.shouldConsumeWithoutOpening(url) {
             return true
         }
 
-        let effective = settings.browserBehavior(for: url) ?? settings.browserLinkBehavior
+        let effective = settings.effectiveBrowserBehavior(for: url, override: behaviorOverride)
 
         switch effective {
         case .alwaysInApp:

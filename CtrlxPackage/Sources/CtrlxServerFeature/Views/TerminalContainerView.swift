@@ -15,7 +15,8 @@ typealias TerminalTitleChangeHandler = @MainActor (String) -> Void
 
 /// Callback type for handling URL clicks in the terminal. Returns `true` if the
 /// callback handled the URL, `false` to fall back to `NSWorkspace.shared.open`.
-typealias TerminalOpenURLHandler = @MainActor (URL, String) -> Bool
+/// The source pane and one-click behavior override travel with the URL.
+typealias TerminalOpenURLHandler = @MainActor (URL, String, BrowserLinkBehavior?) -> Bool
 
 /// Tracks the last pane dimensions delivered by SwiftUI so width-only and
 /// height-only layout changes are both observed exactly once.
@@ -95,7 +96,7 @@ struct TerminalContainerView: NSViewRepresentable {
 
         // URL-click handler is set on every layout pass so it picks up fresh
         // state captured by parent closures (window/session selection).
-        coordinator.terminalView.onOpenURL = { url in onOpenURL?(url, paneState.paneId) ?? false }
+        coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
@@ -128,7 +129,7 @@ struct TerminalContainerView: NSViewRepresentable {
 
         // Re-bind the URL click handler so closures captured here reflect the
         // current parent state on every layout pass.
-        nsView.onOpenURL = { url in onOpenURL?(url, paneState.paneId) ?? false }
+        nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 

@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import ConcurrencyExtras
     import CtrlxCommon
     import Dependencies
     import Testing
@@ -228,6 +229,104 @@
 
             #expect(view.getSelectedTextTrimmed() == "tps://")
             #expect(rawInput.isEmpty)
+        }
+
+        @Test(
+            "Web-link clicks retain their one-click destination through deferred activation",
+            arguments: [NSEvent.ModifierFlags(), .command, .option, [.command, .option]], [false, true]
+        )
+        func webLinkClickDestination(modifiers: NSEvent.ModifierFlags, mouseReporting: Bool) async throws {
+            for osc8 in [false, true] {
+                let systemURLs = LockIsolated<[URL]>([])
+                try await withDependencies {
+                    $0[URLOpener.self] = URLOpener(openInDefaultBrowser: { url in systemURLs.withValue { $0.append(url) } })
+                } operation: {
+                    let (window, panes) = makeTerminalWindow()
+                    defer { withExtendedLifetime(window) { } }
+                    let view = panes[1]
+                    let url = try #require(URL(string: "https://example.com/path"))
+                    let text = osc8 ? "\u{1b}]8;;\(url.absoluteString)\u{7}website\u{1b}]8;;\u{7}" : url.absoluteString
+                    view.feed(byteArray: Array("\u{1b}[H\u{1b}[2K\(text)".utf8)[...])
+                    if mouseReporting {
+                        enableMouseMode(1_002, in: view)
+                    }
+                    var urls: [URL] = []
+                    var overrides: [BrowserLinkBehavior?] = []
+                    var rawInput: [Data] = []
+                    view.onRawInput = { rawInput.append($0) }
+                    view.onOpenURL = { url, behavior in
+                        urls.append(url)
+                        overrides.append(behavior)
+                        return behavior != .alwaysInDefaultBrowser
+                    }
+
+                    try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers)
+                    #expect(urls.isEmpty)
+                    try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+
+                    let expected: BrowserLinkBehavior? = modifiers.contains(.command) ? .alwaysInApp
+                        : modifiers.contains(.option) ? .alwaysInDefaultBrowser : nil
+                    #expect(urls == [url])
+                    #expect(overrides == [expected])
+                    #expect(systemURLs.value == (expected == .alwaysInDefaultBrowser ? [url] : []))
+                    #expect(rawInput.isEmpty)
+                }
+            }
+        }
+
+        @Test("An explicit Host click never falls back to this device's browser")
+        func unhandledHostLinkDoesNotOpenLocally() async throws {
+            let systemURLs = LockIsolated<[URL]>([])
+            try await withDependencies {
+                $0[URLOpener.self] = URLOpener(openInDefaultBrowser: { url in systemURLs.withValue { $0.append(url) } })
+            } operation: {
+                let (window, panes) = makeTerminalWindow()
+                defer { withExtendedLifetime(window) { } }
+                let view = panes[0]
+                view.feed(byteArray: Array("\u{1b}[H\u{1b}[2Khttps://example.com".utf8)[...])
+                var calls = 0
+                view.onOpenURL = { _, behavior in
+                    calls += 1
+                    #expect(behavior == .alwaysInApp)
+                    return false
+                }
+
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: .command)
+                try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+
+                #expect(calls == 1)
+                #expect(systemURLs.value.isEmpty)
+            }
+        }
+
+        @Test(
+            "Modified drag and multi-click selection never open web links",
+            arguments: [NSEvent.ModifierFlags.command, .option], ["drag", "doubleClick", "tripleClick"]
+        )
+        func modifiedLinkSelection(modifiers: NSEvent.ModifierFlags, action: String) async throws {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[1]
+            view.feed(byteArray: Array("\u{1b}[H\u{1b}[2Khttps://example.com".utf8)[...])
+            var opened = 0
+            view.onOpenURL = { _, _ in
+                opened += 1
+                return true
+            }
+
+            if action == "drag" {
+                try drag(in: view, modifiers: modifiers)
+            } else {
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers)
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers, clickCount: 2)
+                if action == "tripleClick" {
+                    try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers, clickCount: 3)
+                }
+            }
+            try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+
+            #expect(opened == 0)
+            #expect(view.getSelectedTextTrimmed() != nil)
         }
 
         @Test("Wheel reporting follows the same Shift and reporting policy", arguments: [false, true], [false, true])

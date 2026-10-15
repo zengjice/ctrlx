@@ -760,6 +760,10 @@ final public class AppSettings {
         return browserDomainRules.first(where: { $0.domain == key })?.behavior
     }
 
+    func effectiveBrowserBehavior(for url: URL, override: BrowserLinkBehavior? = nil) -> BrowserLinkBehavior {
+        override ?? browserBehavior(for: url) ?? browserLinkBehavior
+    }
+
     /// Sets the behavior for `domain`, replacing any existing rule for the
     /// same (case-insensitively normalized) host.
     public func setBrowserBehavior(_ behavior: BrowserLinkBehavior, for domain: String) {

@@ -1098,15 +1098,29 @@ struct BrowserURLConfirmationView: View {
                 }
             }
 
-            HStack {
-                Button("In Host Browser") {
-                    onResolve(.inApp, rememberScope)
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!BrowserWebURL.isSupported(url))
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Button("In Host Browser") {
+                        onResolve(.inApp, rememberScope)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!BrowserWebURL.isSupported(url))
 
-                Button("In This Device's Browser") {
-                    onResolve(.defaultBrowser, rememberScope)
+                    Text("⌘-click a terminal link")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Command-click a terminal link")
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Button("In This Device's Browser") {
+                        onResolve(.defaultBrowser, rememberScope)
+                    }
+
+                    Text("⌥-click a terminal link")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Option-click a terminal link")
                 }
 
                 Button("Cancel", role: .cancel) {
