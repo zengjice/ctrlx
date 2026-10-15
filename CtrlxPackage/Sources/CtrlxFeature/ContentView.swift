@@ -15,6 +15,7 @@
         @State private var settings = IOSSettings()
         @State private var connectionManager: ViewerConnectionManager?
         @State private var sessionStore = SessionStore()
+        @State private var fileWorkspaces = IOSFileBrowserWorkspaceStore()
         @State private var initializationError: String?
 
         @Environment(\.scenePhase) private var scenePhase
@@ -57,6 +58,7 @@
             }
             .environment(settings)
             .environment(sessionStore)
+            .environment(fileWorkspaces)
             .environment(agentBackgroundMonitoring)
             .preferredColorScheme(settings.appearanceMode.colorScheme)
             .fileBrowserCacheMaintenance()
@@ -71,6 +73,9 @@
                 await initializeConnectionManager()
                 setupConnectionManagerHandlers()
                 await autoConnectIfNeeded()
+            }
+            .onChange(of: connectionManager?.managedHostIDs ?? []) { _, hostIDs in
+                fileWorkspaces.retainHosts(Set(hostIDs))
             }
             .onChange(of: scenePhase) { _, newPhase in
                 handleScenePhaseChange(newPhase)
@@ -143,9 +148,10 @@
                 Task { @MainActor in
                     sessionStore.handleAgentStatus(status)
                     agentBackgroundMonitoring.handle(status) { notification in
-                        guard agentBackgroundMonitoring.reserveNotificationDelivery(
-                            for: notification
-                        ) else { return }
+                        guard
+                            agentBackgroundMonitoring.reserveNotificationDelivery(
+                                for: notification
+                            ) else { return }
                         pushService.scheduleLocalNotification(
                             title: notification.title,
                             subtitle: notification.subtitle,
@@ -198,9 +204,10 @@
                         )
                     }
                     guard notification.shouldPresent(isAppActive: pushService.isAppActive) else { return }
-                    guard agentBackgroundMonitoring.reserveNotificationDelivery(
-                        for: notification
-                    ) else { return }
+                    guard
+                        agentBackgroundMonitoring.reserveNotificationDelivery(
+                            for: notification
+                        ) else { return }
                     if let action = notification.action {
                         await NotificationActionService.shared.scheduleActionableLocalNotification(
                             title: presentation.title,
@@ -224,13 +231,16 @@
             }
 
             connectionManager.onSessionState = {
-                [pushService, sessionStore, agentBackgroundMonitoring] state in
+                [weak connectionManager, pushService, sessionStore, fileWorkspaces, agentBackgroundMonitoring] state in
                 Task { @MainActor in
+                    guard let client = connectionManager?.connection(for: state.pairId)?.relayClient else { return }
+                    fileWorkspaces.update(state, client: client)
                     sessionStore.handleStateUpdate(state)
                     agentBackgroundMonitoring.handle(state) { notification in
-                        guard agentBackgroundMonitoring.reserveNotificationDelivery(
-                            for: notification
-                        ) else { return }
+                        guard
+                            agentBackgroundMonitoring.reserveNotificationDelivery(
+                                for: notification
+                            ) else { return }
                         pushService.scheduleLocalNotification(
                             title: notification.title,
                             subtitle: notification.subtitle,
@@ -259,20 +269,23 @@
                 }
             }
 
-            connectionManager.onHostDisconnected = { [sessionStore, agentBackgroundMonitoring] hostId in
+            connectionManager.onHostDisconnected = { [sessionStore, fileWorkspaces, agentBackgroundMonitoring] hostId in
                 agentBackgroundMonitoring.removeHost(hostId)
+                fileWorkspaces.suspendHost(hostId)
                 sessionStore.clearSessions(for: hostId)
             }
 
-            connectionManager.onTransportInterrupted = { [sessionStore] hostId in
+            connectionManager.onTransportInterrupted = { [sessionStore, fileWorkspaces] hostId in
                 // The Host may still be running. Clear stale UI state, but leave
                 // the finite Agent monitor alive so it can drive reconnection.
+                fileWorkspaces.suspendHost(hostId)
                 sessionStore.clearSessions(for: hostId)
             }
 
             connectionManager.onUnpaired = {
-                [settings, sessionStore, agentBackgroundMonitoring] hostId in
+                [settings, sessionStore, fileWorkspaces, agentBackgroundMonitoring] hostId in
                 agentBackgroundMonitoring.removeHost(hostId)
+                fileWorkspaces.removeHost(hostId)
                 sessionStore.clearSessions(for: hostId)
                 settings.removePairing(id: hostId)
             }
@@ -386,13 +399,11 @@
             // so dismissing the Settings sheet and pushing onto the nav
             // stack don't fight each other (avoids a sleep workaround in
             // handleDeepLink).
-            Group {
-                NavigationStack(path: $sessionsNavigationPath) {
-                    SessionListView(
-                        navigationPath: $sessionsNavigationPath,
-                        onOpenSettings: { showingSettings = true }
-                    )
-                }
+            NavigationStack(path: $sessionsNavigationPath) {
+                SessionListView(
+                    navigationPath: $sessionsNavigationPath,
+                    onOpenSettings: { showingSettings = true }
+                )
             }
             .sheet(isPresented: $showingSettings) {
                 NavigationStack {
@@ -466,7 +477,9 @@
                     for _ in 0..<5 {
                         try? await Task.sleep(for: .milliseconds(500))
                         paneState = sessionStore.paneState(for: deepLink.paneId, hostId: deepLink.hostId)
-                        if paneState != nil { break }
+                        if paneState != nil {
+                            break
+                        }
                     }
                 }
 
@@ -567,7 +580,9 @@
                         .focused($deviceNameFieldFocused)
                         .onSubmit { commitDeviceName() }
                         .onChange(of: deviceNameFieldFocused) { _, isFocused in
-                            if !isFocused { commitDeviceName() }
+                            if !isFocused {
+                                commitDeviceName()
+                            }
                         }
                         .accessibilityIdentifier("device-name-field")
                 } header: {

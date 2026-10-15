@@ -52,6 +52,11 @@
 
 ### Pane 复用与远程查看的实现约定
 
+三类 Host 标签遵守同一个边界：按来源 Pane 区分人工 / Agent 默认资源，普通打开复用、
+显式多开不替换默认资源，查看 / 标注不改变归属。模拟器目前只有 Agent 创建入口，
+不为形式统一增加人工创建或远程控制；Viewer 查看已有 Agent 设备不会创建人工副本。
+浏览器保留人工与 Agent 两组，Files 目前只有人工组（点击 Agent 输出路径也属于人工操作）。
+
 `AgentSimulatorService` 在 Host 进程内以来源 pane ID 索引默认活动设备，
 并登记该 pane 正在进行的默认启动任务。并发 `open` 合并；先判断复用，再检查新增
 设备容量。显式 runtime / type / profile / UDID 不符或缺少声明的 required features

@@ -4,9 +4,9 @@
     import CtrlxCommon
     import CtrlxEncryption
     import CtrlxNetworking
+    import CtrlxPluginProtocol
     import Dependencies
     import Foundation
-    import CtrlxPluginProtocol
     import Logging
 
     /// A pending selection set by the menu bar to be consumed by MainView.
@@ -48,6 +48,7 @@
 
         public let agentBrowser: AgentBrowserService
         public let agentSimulator = AgentSimulatorService()
+        let hostFileTabs = HostFileTabService()
 
         /// Pane state and session tracking manager
         public let windowManager: MirrorWindowManager
@@ -141,14 +142,18 @@
                     let paneID = try await tmuxService.newWindow(
                         sessionName: sessionName, workingDirectory: prepared.workingDirectory,
                         windowName: windowName,
-                        runCommand: try prepared.forkRunCommand(shell: tmuxService.loginShellPath),
+                        runCommand: prepared.forkRunCommand(shell: tmuxService.loginShellPath),
                         extraEnvironment: prepared.extraEnvironment, forceLoginShell: true
                     )
                     for attempt in 0..<PaneSurfaceRetry.attempts {
                         let panes = await tmuxService.refreshPanes()
                         windowManager.updatePaneStates(from: panes)
-                        if panes.contains(where: { $0.paneId == paneID }) { break }
-                        if attempt < PaneSurfaceRetry.attempts - 1 { try await Task.sleep(for: PaneSurfaceRetry.delay) }
+                        if panes.contains(where: { $0.paneId == paneID }) {
+                            break
+                        }
+                        if attempt < PaneSurfaceRetry.attempts - 1 {
+                            try await Task.sleep(for: PaneSurfaceRetry.delay)
+                        }
                     }
                     await connectedViewerManager?.pushSessionStateToAll()
                     return paneID
@@ -420,6 +425,10 @@
             }
             agentBrowser.resolveSourcePane = { [tmuxService] sessionName, paneID in
                 try await tmuxService.browserSourcePane(sessionName: sessionName, paneID: paneID)
+            }
+            hostFileTabs.resolvePane = agentBrowser.resolveSourcePane
+            hostFileTabs.projectDirectory = { [weak windowManager] paneID in
+                windowManager?.paneStates[paneID]?.agentSession?.detectedProjectPath
             }
             agentBrowser.configure { [tmuxService] pid in
                 try await tmuxService.agentBrowserPane(processID: pid)
@@ -996,9 +1005,10 @@
         /// trusts, scoped to the calling plugin so it stays agent-blind.
         private func handlePluginAgentPanes(pluginID: String) async -> [String]? {
             guard let names = pluginRegistry?.processNamesByPlugin[pluginID] else { return nil }
-            guard let detected = await tmuxService.detectAgentPanesIfAvailable(
-                processNamesByPlugin: [pluginID: names]
-            ) else { return nil }
+            guard
+                let detected = await tmuxService.detectAgentPanesIfAvailable(
+                    processNamesByPlugin: [pluginID: names]
+                ) else { return nil }
             return Array(detected.keys)
         }
 
@@ -1299,7 +1309,9 @@
                 // Drop a single trailing empty element from the final newline so a
                 // 3-line file reports 3 lines, not 4.
                 var split = content.components(separatedBy: "\n")
-                if split.last == "" { split.removeLast() }
+                if split.last == "" {
+                    split.removeLast()
+                }
                 allLines = split
             } else {
                 allLines = []
@@ -1564,7 +1576,9 @@
         /// Ensure a plugin's core is enabled, then query its install status for
         /// the given config root (nil = default location).
         public func pluginInstallStatus(id: String, configRoot: String?) async -> PluginInstallStatus {
-            if isE2ETest { return e2eInstallStatus[e2eInstallKey(id, configRoot)] ?? .notInstalled }
+            if isE2ETest {
+                return e2eInstallStatus[e2eInstallKey(id, configRoot)] ?? .notInstalled
+            }
             guard let core = await enabledCore(id) else { return .agentUnavailable }
             return await core.installStatus(configRoot: configRoot)
         }
@@ -1625,7 +1639,9 @@
         /// connected viewers as a side effect of the enabled-set change.
         private func enabledCore(_ id: String) async -> (any PluginCore)? {
             guard let registry = pluginRegistry else { return nil }
-            if let core = registry.core(id) { return core }
+            if let core = registry.core(id) {
+                return core
+            }
             _ = await enablePluginViaCLI(id)
             return registry.core(id)
         }
@@ -2087,7 +2103,9 @@
         /// carries the pane id as the session id; if it doesn't name a tracked
         /// pane we still pass it through so a freshly-created pane works.
         private func resolvePluginPaneTarget(_ sessionID: String) -> String {
-            if windowManager.paneStates[sessionID] != nil { return sessionID }
+            if windowManager.paneStates[sessionID] != nil {
+                return sessionID
+            }
             if let pane = tmuxService.panes.first(where: { $0.paneId == sessionID }) {
                 return pane.paneId
             }
@@ -2419,7 +2437,9 @@
                 },
                 onWindowCreate: { [tmux] sessionId, path, paneId, name in
                     let targetSession: String = await MainActor.run {
-                        if let sessionId { return sessionId }
+                        if let sessionId {
+                            return sessionId
+                        }
                         let panes = tmux.panes
                         if let paneId, let match = panes.first(where: { $0.paneId == paneId }) {
                             return match.sessionName
@@ -2936,15 +2956,18 @@
 
             // Set the router as the request handler on the socket server
             await apiSocketServer.setRequestHandler { [agentSimulator] request in
-                if request.method == "simulator.action" { return await agentSimulator.handle(request) }
+                if request.method == "simulator.action" {
+                    return await agentSimulator.handle(request)
+                }
                 return await router.handleRequest(request)
             }
 
             // Start the socket server (use separate path in E2E to avoid conflicts)
             let isE2E = CommandLine.arguments.contains("--e2e-test")
             var socketPath = NSTemporaryDirectory() + (isE2E ? "ctrlx-e2e.sock" : "ctrlx.sock")
-            if isE2E, let index = CommandLine.arguments.firstIndex(of: "--e2e-api-socket"),
-               index + 1 < CommandLine.arguments.count {
+            if
+                isE2E, let index = CommandLine.arguments.firstIndex(of: "--e2e-api-socket"),
+                index + 1 < CommandLine.arguments.count {
                 socketPath = CommandLine.arguments[index + 1]
             }
             do {
@@ -3051,11 +3074,12 @@
             connectionManager.onAgentResponseSubmission = { [weak self] submission in
                 let openFormRequestID = self?.windowManager
                     .paneStates[submission.sessionId]?.agentSession?.state.openForm?.requestID
-                guard AgentResponseSubmissionGuard.shouldDeliver(
-                    response: submission.response,
-                    openFormRequestID: openFormRequestID,
-                    submittedRequestID: submission.requestId
-                ) else {
+                guard
+                    AgentResponseSubmissionGuard.shouldDeliver(
+                        response: submission.response,
+                        openFormRequestID: openFormRequestID,
+                        submittedRequestID: submission.requestId
+                    ) else {
                     self?.logger.info(
                         "Dropping stale agent response submission",
                         metadata: [
@@ -3110,6 +3134,9 @@
             agentBrowser.onTabsChanged = { [weak connectionManager] in
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
+            hostFileTabs.onChange = { [weak connectionManager] in
+                Task { await connectionManager?.pushSessionStateToAll() }
+            }
             agentSimulator.onTabsChanged = { [weak connectionManager] in
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
@@ -3138,6 +3165,7 @@
             // Start notification-only readers for all discovered panes
             let initialPanes = await tmuxService.refreshPanes()
             agentBrowser.updateBrowserRoutes(initialPanes)
+            hostFileTabs.updateRoutes(initialPanes)
             agentSimulator.updateSimulatorRoutes(initialPanes)
             windowManager.updatePaneStates(from: initialPanes)
             await windowManager.refreshGitBranches()
@@ -3162,6 +3190,7 @@
                 Task {
                     let panes = await tmuxForCleanup.refreshPanes()
                     self?.agentBrowser.updateBrowserRoutes(panes)
+                    self?.hostFileTabs.updateRoutes(panes)
                     self?.agentSimulator.updateSimulatorRoutes(panes)
                     winManager.updatePaneStates(from: panes)
                     await terminalStreaming.stopStreamsForClosedPanes(currentPanes: panes)
@@ -3214,6 +3243,11 @@
                 }
                 if case let .browseFiles(spec) = command.command {
                     do {
+                        if case let .tabs(operation) = spec.operation {
+                            guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                            let response = try await self.hostFileTabs.handle(operation, paneID: command.paneId)
+                            return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
+                        }
                         let source = FileBrowserSource.local(paneID: command.paneId, tmux: tmux, windows: winManager)
                         let response = try await source.request(spec.operation)
                         return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
@@ -3258,13 +3292,14 @@
                         return .failure(for: command.id, error: "Right-side windows are invalid")
                     }
 
-                    if winManager.setSharedTerminalLayout(
-                        sessionName: spec.sessionName,
-                        leftWindowId: spec.leftWindowId,
-                        rightWindowIds: spec.rightWindowIds,
-                        selectedRightWindowId: spec.selectedRightWindowId,
-                        splitRatio: spec.splitRatio
-                    ) {
+                    if
+                        winManager.setSharedTerminalLayout(
+                            sessionName: spec.sessionName,
+                            leftWindowId: spec.leftWindowId,
+                            rightWindowIds: spec.rightWindowIds,
+                            selectedRightWindowId: spec.selectedRightWindowId,
+                            splitRatio: spec.splitRatio
+                        ) {
                         await connectionManager?.pushSessionStateToAll()
                     }
                     return .success(for: command.id)
@@ -3366,6 +3401,7 @@
                         try await tmux.renameSession(from: spec.sessionName, to: spec.newName)
                         let allPanes = await tmux.refreshPanes()
                         self?.agentBrowser.updateBrowserRoutes(allPanes)
+                        self?.hostFileTabs.updateRoutes(allPanes)
                         self?.agentSimulator.updateSimulatorRoutes(allPanes)
                         winManager.updatePaneStates(from: allPanes)
                         await paneStreaming.updateMonitoring(panes: allPanes)
@@ -3485,7 +3521,7 @@
                 }
                 if case let .forkAgentSession(spec) = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host is shutting down.") }
-                    do { return .success(for: command.id, paneId: try await forkAgentSession(spec)) }
+                    do { return try .success(for: command.id, paneId: await forkAgentSession(spec)) }
                     catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .createTmuxWindow(spec) = command.command {
@@ -3615,7 +3651,8 @@
                     supportsAgentImageInput: true,
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs,
                     supportsSimulatorViewing: await self?.agentSimulator.supportsSimulatorViewing,
-                    simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs
+                    simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs,
+                    supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs
                 )
             }
 
@@ -3644,7 +3681,7 @@
                 self.settings.removePairing(id: pairId)
             }
 
-            Self.wirePaneRefresh(tmuxService: tmuxService, agentSimulator: agentSimulator) { [weak connectionManager] in
+            Self.wirePaneRefresh(tmuxService: tmuxService, agentSimulator: agentSimulator, files: hostFileTabs, browser: agentBrowser) { [weak connectionManager] in
                 await connectionManager?.pushSessionStateToAll()
             }
 
@@ -3684,12 +3721,16 @@
         static func wirePaneRefresh(
             tmuxService: TmuxService,
             agentSimulator: AgentSimulatorService,
+            files: HostFileTabService? = nil,
+            browser: AgentBrowserService? = nil,
             pushSessionState: @escaping @MainActor @Sendable () async -> Void
         ) {
-            tmuxService.setPanesChangedHandler { @MainActor [weak tmuxService, weak agentSimulator] in
+            tmuxService.setPanesChangedHandler { @MainActor [weak tmuxService, weak agentSimulator, weak files, weak browser] in
                 // External renames may only reach periodic discovery, without a layout event.
                 if let tmuxService {
                     agentSimulator?.updateSimulatorRoutes(tmuxService.panes)
+                    files?.updateRoutes(tmuxService.panes)
+                    browser?.updateBrowserRoutes(tmuxService.panes)
                 }
                 await pushSessionState()
             }
@@ -3787,7 +3828,9 @@
                         ? .seconds(6 * 3_600)
                         : .seconds(1_800)
                     try? await Task.sleep(for: interval)
-                    if self == nil { break }
+                    if self == nil {
+                        break
+                    }
                 }
             }
         }
@@ -4045,7 +4088,8 @@
             let spec = SendDroppedFiles(files: [.init(name: "browser-annotation.\(image.format.fileExtension)", data: image.data)], expectedAgent: target)
             let result = await Self.handleSendDroppedFiles(
                 command: .init(paneId: target.paneID, command: spec.commandType), spec: spec,
-                tmuxService: tmuxService, currentPane: { [windowManager] in windowManager.paneStates[$0] })
+                tmuxService: tmuxService, currentPane: { [windowManager] in windowManager.paneStates[$0] }
+            )
             guard result.success else { throw AgentImageError.message(result.error ?? "Could not add the screenshot.") }
         }
 
@@ -4096,9 +4140,11 @@
                 return .failure(for: command.id, error: "Pane \(command.paneId) not found")
             }
 
-            if let target = spec.expectedAgent,
-               !panes.contains(where: { $0.paneId == target.paneID && $0.sessionName == target.sessionName
-                   && ($0.tmuxWindowId ?? "\($0.sessionName):\($0.windowIndex)") == target.windowID }) {
+            if
+                let target = spec.expectedAgent,
+                !panes.contains(where: { $0.paneId == target.paneID && $0.sessionName == target.sessionName
+                        && ($0.tmuxWindowId ?? "\($0.sessionName):\($0.windowIndex)") == target.windowID
+                }) {
                 return .failure(for: command.id, error: "The Agent pane moved. Choose the recipient again.")
             }
 

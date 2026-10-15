@@ -30,8 +30,10 @@ struct ManualBrowserTarget: Equatable, Sendable {
 /// One Chromium runtime per CtrlX process. Page state outlives SwiftUI tab
 /// representations; authority (agent run) is distinct from UI routing (pane).
 @MainActor
-public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostDelegate {
-    public static func prepareApplication() { _ = CXBrowserPrepareApplication() }
+final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostDelegate {
+    public static func prepareApplication() {
+        _ = CXBrowserPrepareApplication()
+    }
 
     var runtime: (any CXBrowserRuntime)?
     private var workspaces: [UUID: AgentBrowserWorkspace] = [:]
@@ -39,9 +41,14 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     private let parkingID = UUID()
     private lazy var parkingWindow: NSWindow = {
         _ = NSApplication.shared
-        return NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
-                        styleMask: .borderless, backing: .buffered, defer: false)
+        return NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 700),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
     }()
+
     var onTabsChanged: (() -> Void)?
     var imageTargetForPane: (String) -> AgentImageTarget? = { _ in nil }
     var resolveSourcePane: (@MainActor (String, String) async throws -> PaneInfo)?
@@ -58,6 +65,7 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
             self?.onTabsChanged?()
         }
     }
+
     var remoteControls: [UUID: BrowserControlLease] = [:]
     var remoteCaptures: Set<UUID> = []
     var controlExpiryTask: Task<Void, Never>?
@@ -71,14 +79,14 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     private let logger = Logger(label: "com.ctrlx.agent-browser")
 
     public override init() {
-        startRuntime = Self.createAndStartRuntime
+        self.startRuntime = Self.createAndStartRuntime
         super.init()
     }
 
-    // Tests inject the native boundary without starting Chromium or touching a profile.
+    /// Tests inject the native boundary without starting Chromium or touching a profile.
     init(runtime: any CXBrowserRuntime) {
         self.runtime = runtime
-        startRuntime = Self.createAndStartRuntime
+        self.startRuntime = Self.createAndStartRuntime
         super.init()
     }
 
@@ -97,8 +105,9 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
             throw ManualBrowserError.creation("Mock keychain requires an isolated E2E host.")
         }
         if arguments.contains("--e2e-test") {
-            guard let index = arguments.firstIndex(of: "--ctrlx-state-root"),
-                  index + 1 < arguments.count else { throw ManualBrowserError.unavailable }
+            guard
+                let index = arguments.firstIndex(of: "--ctrlx-state-root"),
+                index + 1 < arguments.count else { throw ManualBrowserError.unavailable }
             return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
                 .appendingPathComponent("agent-browser", isDirectory: true)
         }
@@ -126,8 +135,11 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         }
         // CEF canonicalizes the root itself. Resolve /var ↔ /private/var for
         // both paths or Chromium silently disables persistent cookies.
-        try runtime.start(with: service, profile: profile.resolvingSymlinksInPath().path,
-                          state: state.resolvingSymlinksInPath().path)
+        try runtime.start(
+            with: service,
+            profile: profile.resolvingSymlinksInPath().path,
+            state: state.resolvingSymlinksInPath().path
+        )
         return runtime
     }
 
@@ -142,7 +154,9 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     func ensureStarted() async throws {
         try Task.checkCancellation()
         guard !closing else { throw ManualBrowserError.unavailable }
-        if let startupError { throw startupError }
+        if let startupError {
+            throw startupError
+        }
         if runtime == nil {
             guard resolvePane != nil else { throw ManualBrowserError.unavailable }
             do {
@@ -153,7 +167,8 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
                 throw error
             }
         }
-        guard let runtime, runtime.responds(to: #selector(CXBrowserRuntime.isReady)),
+        guard
+            let runtime, runtime.responds(to: #selector(CXBrowserRuntime.isReady)),
             runtime.responds(to: #selector(CXBrowserRuntime.startupError)) else {
             throw ManualBrowserError.unavailable
         }
@@ -225,11 +240,12 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
 
     /// All manual entry points use this Host-owned registry, including local UI.
     /// Coalesce creation only; each caller retains its own navigation intent.
-    func openPaneBrowser(sessionName: String, paneID: String, url: URL? = nil) async throws -> AgentBrowserTabState {
+    func openPaneBrowser(sessionName: String, paneID: String, url: URL? = nil, new: Bool = false) async throws -> AgentBrowserTabState {
         guard !closing, let resolveSourcePane else { throw ManualBrowserError.unavailable }
         try await ensureStarted()
-        guard !closing, let runtime,
-              runtime.responds(to: #selector(CXBrowserRuntime.openManualTab(route:url:completion:))) else {
+        guard
+            !closing, let runtime,
+            runtime.responds(to: #selector(CXBrowserRuntime.openManualTab(route:url:completion:))) else {
             throw ManualBrowserError.unavailable
         }
         let destination: URL?
@@ -244,10 +260,13 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         let pane = try await resolveSourcePane(sessionName, paneID)
         try Task.checkCancellation()
         let tab: AgentBrowserTabState
-        if let existing = tabs.values.first(where: {
-            !$0.isClosed && $0.owner.isEmpty && $0.manualTarget?.hostID == nil
-                && $0.paneID == paneID && $0.parentID == nil
-        }) {
+        if new {
+            tab = try await createPaneTab(pane, primary: false)
+        } else if
+            let existing = tabs.values.first(where: {
+                !$0.isClosed && $0.owner.isEmpty && $0.manualTarget?.hostID == nil
+                    && $0.paneID == paneID && $0.parentID == nil && $0.isPrimary
+            }) {
             tab = existing
         } else if let opening = openingPaneTabs[paneID] {
             tab = try await opening.value
@@ -295,7 +314,9 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         }
         for tab in tabs.values where tab.manualTarget?.hostID == nil && tab.sessionName == old {
             tab.sessionName = new
-            if tab.manualTarget != nil { tab.manualTarget = ManualBrowserTarget(sessionName: new) }
+            if tab.manualTarget != nil {
+                tab.manualTarget = ManualBrowserTarget(sessionName: new)
+            }
         }
         publishBrowserTabs()
     }
@@ -342,6 +363,7 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         workspaces[tab.workspaceID]?.onChange(tab)
         publishBrowserTabs()
     }
+
     func unregister(_ workspace: AgentBrowserWorkspace) {
         guard workspaces.removeValue(forKey: workspace.id) === workspace else { return }
         manualRoutes = manualRoutes.filter { $0.value.workspaceID != workspace.id || $0.value.target.hostID == nil }
@@ -369,14 +391,19 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     public func resolveBrowserProcess(_ pid: Int32, completion: @escaping ([String: String]?, String?) -> Void) {
         Task { @MainActor [weak self] in
             guard let self, !self.closing, let resolvePane = self.resolvePane else {
-                completion(nil, "CtrlX browser host is not ready."); return
+                completion(nil, "CtrlX browser host is not ready.")
+                return
             }
             do {
                 let pane = try await resolvePane(pid)
                 let candidates = self.workspaces.values.filter { $0.window != nil && $0.acceptsPane(pane) }
                 let workspaceID = candidates.sorted { $0.id.uuidString < $1.id.uuidString }.first?.id ?? self.parkingID
-                completion(["workspace": workspaceID.uuidString, "pane": pane.paneId,
-                            "session": pane.sessionName, "window": pane.windowId], nil)
+                completion([
+                    "workspace": workspaceID.uuidString,
+                    "pane": pane.paneId,
+                    "session": pane.sessionName,
+                    "window": pane.windowId,
+                ], nil)
             } catch { completion(nil, error.localizedDescription) }
         }
     }
@@ -392,26 +419,40 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }
 
     public func browserTabCreated(_ identifier: String, view: NSView, route: [String: String], owner: String, parent: String?) {
-        guard let routedWorkspaceID = route["workspace"].flatMap(UUID.init(uuidString:)),
-              let id = UUID(uuidString: identifier) else {
-            runtime?.closeTab(identifier); return
+        guard
+            let routedWorkspaceID = route["workspace"].flatMap(UUID.init(uuidString:)),
+            let id = UUID(uuidString: identifier) else {
+            runtime?.closeTab(identifier)
+            return
         }
         let manualRouteID = route["manualRoute"]
         let registeredRoute = manualRouteID.flatMap { manualRoutes[$0] }
         let manualTarget = owner.isEmpty ? registeredRoute?.target : nil
         guard !closing, manualTarget != nil || (!owner.isEmpty && route["pane"] != nil) else {
-            runtime?.closeTab(identifier); return
+            runtime?.closeTab(identifier)
+            return
         }
         let paneID = parent.flatMap { tabs[$0]?.paneID } ?? route["pane"] ?? ""
-        guard !paneID.isEmpty else { runtime?.closeTab(identifier); return }
+        guard !paneID.isEmpty else { runtime?.closeTab(identifier)
+            return
+        }
         let workspaceID = parent.flatMap { tabs[$0]?.workspaceID } ?? routedWorkspaceID
-        let state = AgentBrowserTabState(id: id, identifier: identifier, view: view,
-            workspaceID: workspaceID, paneID: paneID, owner: owner, service: self,
-            manualTarget: manualTarget, manualRouteID: manualRouteID)
+        let state = AgentBrowserTabState(
+            id: id,
+            identifier: identifier,
+            view: view,
+            workspaceID: workspaceID,
+            paneID: paneID,
+            owner: owner,
+            service: self,
+            manualTarget: manualTarget,
+            manualRouteID: manualRouteID
+        )
         state.sessionName = manualTarget?.sessionName ?? parent.flatMap { tabs[$0]?.sessionName } ?? route["session"] ?? ""
         state.sourceAgent = parent.flatMap { tabs[$0]?.sourceAgent } ?? imageTargetForPane(paneID)
         state.windowID = parent.flatMap { tabs[$0]?.windowID } ?? route["window"]
         state.parentID = parent.flatMap(UUID.init(uuidString:))
+        state.isPrimary = parent == nil && route["primary"] != "false"
         state.suppressInitialSelection = (parent == nil && route["remote"] == "true")
             || parent.flatMap { tabs[$0]?.isRemotelyControlled } == true
         tabs[identifier] = state
@@ -421,18 +462,29 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
 
     public func browserTabChanged(_ identifier: String, title: String, url: String, loading: Bool) {
         guard let tab = tabs[identifier] else { return }
-        if tab.title != title { tab.title = title }
-        if tab.url != url { tab.url = url }
-        if tab.isLoading != loading { tab.isLoading = loading }
+        if tab.title != title {
+            tab.title = title
+        }
+        if tab.url != url {
+            tab.url = url
+        }
+        if tab.isLoading != loading {
+            tab.isLoading = loading
+        }
         workspaces[tab.workspaceID]?.onChange(tab)
         publishBrowserTabs()
     }
+
     public func browserTabSelected(_ identifier: String) {
         guard let tab = tabs[identifier] else { return }
-        if tab.suppressInitialSelection { tab.suppressInitialSelection = false; return }
+        if tab.suppressInitialSelection {
+            tab.suppressInitialSelection = false
+            return
+        }
         guard !tab.isRemotelyControlled else { return }
         workspaces[tab.workspaceID]?.onSelect(tab)
     }
+
     public func browserTabClosed(_ identifier: String) {
         guard let tab = tabs.removeValue(forKey: identifier) else { return }
         if let routeID = tab.manualRouteID, !tabs.values.contains(where: { $0.manualRouteID == routeID }) {
@@ -443,14 +495,28 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         workspaces[tab.workspaceID]?.onClose(tab)
         publishBrowserTabs()
     }
-    func navigate(_ tab: AgentBrowserTabState, url: String) { runtime?.navigateTab(tab.identifier, url: url) }
-    func back(_ tab: AgentBrowserTabState) { runtime?.goBack(tab.identifier) }
-    func forward(_ tab: AgentBrowserTabState) { runtime?.goForward(tab.identifier) }
-    func reload(_ tab: AgentBrowserTabState) { runtime?.reloadTab(tab.identifier) }
+
+    func navigate(_ tab: AgentBrowserTabState, url: String) {
+        runtime?.navigateTab(tab.identifier, url: url)
+    }
+
+    func back(_ tab: AgentBrowserTabState) {
+        runtime?.goBack(tab.identifier)
+    }
+
+    func forward(_ tab: AgentBrowserTabState) {
+        runtime?.goForward(tab.identifier)
+    }
+
+    func reload(_ tab: AgentBrowserTabState) {
+        runtime?.reloadTab(tab.identifier)
+    }
+
     func showDevTools(_ tab: AgentBrowserTabState) {
         guard !closing, !tab.isClosed, tabs[tab.identifier] === tab else { return }
         runtime?.showDevTools(tab.identifier)
     }
+
     func close(_ tab: AgentBrowserTabState) {
         guard !tab.isClosed, !detachingTabs.contains(tab.identifier) else { return }
         runtime?.closeTab(tab.identifier)
@@ -463,7 +529,9 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         controlExpiryTask?.cancel()
         controlExpiryTask = nil
         remoteControls.removeAll()
-        for opening in openingPaneTabs.values { opening.cancel() }
+        for opening in openingPaneTabs.values {
+            opening.cancel()
+        }
         openingPaneTabs.removeAll()
         guard let runtime else { return }
         runtime.beginShutdown()
@@ -480,7 +548,7 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         manualRoutes.removeAll()
     }
 
-    private func createPaneTab(_ pane: PaneInfo) async throws -> AgentBrowserTabState {
+    private func createPaneTab(_ pane: PaneInfo, primary: Bool = true) async throws -> AgentBrowserTabState {
         guard !closing, let runtime else { throw ManualBrowserError.unavailable }
         let sessionName = pane.sessionName
         let workspaceID = (workspaces.values.first { $0.acceptsPane(pane) }
@@ -493,11 +561,15 @@ public final class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         route["window"] = pane.windowId
         route["manualRoute"] = routeID
         route["remote"] = "true"
+        route["primary"] = primary ? "true" : "false"
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 runtime.openManualTab(route: route, url: "about:blank") { error in
-                    if let error { continuation.resume(throwing: ManualBrowserError.creation(error)) }
-                    else { continuation.resume() }
+                    if let error {
+                        continuation.resume(throwing: ManualBrowserError.creation(error))
+                    } else {
+                        continuation.resume()
+                    }
                 }
             }
             guard let tab = tabs.values.first(where: { $0.manualRouteID == routeID && $0.parentID == nil }) else {
@@ -556,14 +628,29 @@ final class AgentBrowserTabState {
     var sessionName = ""
     var windowID: String?
     var parentID: UUID?
+    var isPrimary = true
     var suppressInitialSelection = false
     var isRemotelyControlled = false
     var sourceAgent: AgentImageTarget?
 
-    init(id: UUID, identifier: String, view: NSView, workspaceID: UUID, paneID: String,
-         owner: String, service: AgentBrowserService, manualTarget: ManualBrowserTarget? = nil, manualRouteID: String? = nil) {
-        self.id = id; self.identifier = identifier; self.view = view
-        self.workspaceID = workspaceID; self.paneID = paneID; self.owner = owner; self.service = service
+    init(
+        id: UUID,
+        identifier: String,
+        view: NSView,
+        workspaceID: UUID,
+        paneID: String,
+        owner: String,
+        service: AgentBrowserService,
+        manualTarget: ManualBrowserTarget? = nil,
+        manualRouteID: String? = nil
+    ) {
+        self.id = id
+        self.identifier = identifier
+        self.view = view
+        self.workspaceID = workspaceID
+        self.paneID = paneID
+        self.owner = owner
+        self.service = service
         self.manualTarget = manualTarget
         self.manualRouteID = manualRouteID
         self.requestsInitialAddressFocus = manualTarget != nil

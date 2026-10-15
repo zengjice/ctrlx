@@ -12,8 +12,11 @@ struct BrowserCommand: ParsableCommand {
 }
 
 struct BrowserPageCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "command", abstract: "Vercel page capabilities in an owned embedded tab; options precede --, e.g. --tab ID -- get title",
-        discussion: "Page commands: " + AgentBrowserPageCommand.commands.sorted().joined(separator: ", ") + ". Use action open/tabs/navigate/show/close for tab lifecycle. screenshot/diff screenshot/diff url --screenshot/pdf/download/network har stop require --output before --. See browser batch/setup/record for managed workflows. No browser-wide or external-runtime commands.")
+    static let configuration = CommandConfiguration(
+        commandName: "command",
+        abstract: "Vercel page capabilities in an owned embedded tab; options precede --, e.g. --tab ID -- get title",
+        discussion: "Page commands: " + AgentBrowserPageCommand.commands.sorted().joined(separator: ", ") + ". Use action open/tabs/navigate/show/close for tab lifecycle. screenshot/diff screenshot/diff url --screenshot/pdf/download/network har stop require --output before --. See browser batch/setup/record for managed workflows. No browser-wide or external-runtime commands."
+    )
     @Option var tab: String
     @Option(help: "New artifact path; never overwrites an existing file") var output: String?
     @Option(help: "UTF-8 JavaScript for eval/init add, or a JSON object for webmcp invoke; max 48 KB") var inputFile: String?
@@ -28,9 +31,11 @@ struct BrowserPageCommand: ParsableCommand {
         } else if inputStdin {
             guard isatty(STDIN_FILENO) == 0 else { throw ValidationError("--input-stdin requires piped input, not an interactive terminal.") }
             var data = Data()
-            while data.count <= 48000 {
-                let chunk = try FileHandle.standardInput.read(upToCount: 48001 - data.count) ?? Data()
-                if chunk.isEmpty { break }
+            while data.count <= 48_000 {
+                let chunk = try FileHandle.standardInput.read(upToCount: 48_001 - data.count) ?? Data()
+                if chunk.isEmpty {
+                    break
+                }
                 data.append(chunk)
             }
             words = try AgentBrowserPageCommand.withInput(words, data: data)
@@ -38,10 +43,12 @@ struct BrowserPageCommand: ParsableCommand {
         try AgentBrowserPageCommand.validate(words)
         let artifact = AgentBrowserPageCommand.artifactExtension(words)
         guard (artifact != nil) == (output != nil) else { throw ValidationError("screenshot/diff screenshot/diff url --screenshot/pdf/download/network har stop require --output before --; other commands do not accept it.") }
-        if let output, FileManager.default.fileExists(atPath: output) { throw ValidationError("Output already exists; no page action sent.") }
+        if let output, FileManager.default.fileExists(atPath: output) {
+            throw ValidationError("Output already exists; no page action sent.")
+        }
         let raw = try AgentBrowserEngine.perform(["command": "upstream", "tab": tab, "words": words], explicit: "vercel")
         let result = try AgentBrowserBatch.export(raw, to: output)
-        print(String(decoding: try JSONSerialization.data(withJSONObject: ["ok": true, "result": result], options: [.sortedKeys]), as: UTF8.self))
+        try print(String(decoding: JSONSerialization.data(withJSONObject: ["ok": true, "result": result], options: [.sortedKeys]), as: UTF8.self))
     }
 }
 
@@ -56,8 +63,10 @@ struct BrowserBatchCommand: ParsableCommand {
         let rows = try JSONSerialization.jsonObject(with: JSONEncoder().encode(steps))
         let result = try AgentBrowserEngine.perform(["command": "batch", "tab": tab, "steps": rows, "continueOnError": continueOnError], explicit: "vercel")
         let success = (result as? [[String: Any]])?.allSatisfy { $0["success"] as? Bool == true } == true
-        print(String(decoding: try JSONSerialization.data(withJSONObject: ["ok": success, "result": result], options: [.sortedKeys]), as: UTF8.self))
-        if !success { throw ExitCode.failure }
+        try print(String(decoding: JSONSerialization.data(withJSONObject: ["ok": success, "result": result], options: [.sortedKeys]), as: UTF8.self))
+        if !success {
+            throw ExitCode.failure
+        }
     }
 }
 
@@ -71,11 +80,11 @@ struct BrowserSetupCommand: ParsableCommand {
         guard initScript.count <= 4 else { throw ValidationError("At most four init scripts.") }
         let sources = try initScript.map { path -> String in
             let data = try ManagedAgentBrowser.readBaseline(path, image: false)
-            guard data.count <= 48000, let source = String(data: data, encoding: .utf8) else { throw ValidationError("Init script must be UTF-8 and at most 48 KB.") }
+            guard data.count <= 48_000, let source = String(data: data, encoding: .utf8) else { throw ValidationError("Init script must be UTF-8 and at most 48 KB.") }
             return source
         }
         let result = try AgentBrowserEngine.perform(["command": "setup", "tab": tab, "react": react, "sources": sources], explicit: "vercel")
-        print(String(decoding: try JSONSerialization.data(withJSONObject: ["ok": true, "result": result], options: [.sortedKeys]), as: UTF8.self))
+        try print(String(decoding: JSONSerialization.data(withJSONObject: ["ok": true, "result": result], options: [.sortedKeys]), as: UTF8.self))
     }
 }
 
@@ -83,12 +92,12 @@ struct BrowserRecordCommand: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "record", abstract: "Record a bounded 1...10 second WebM/MP4 clip of the owned page (requires local Homebrew ffmpeg)")
     @Option var tab: String
     @Option var output: String
-    @Option var seconds: Int = 3
-    @Option(help: "webm (default) or mp4") var format: String = "webm"
-    @Option(help: "Capture frame rate, 1...60") var fps: Int = 10
+    @Option var seconds = 3
+    @Option(help: "webm (default) or mp4") var format = "webm"
+    @Option(help: "Capture frame rate, 1...60") var fps = 10
     @Flag(help: "Include upstream cursor feedback in the recording") var cursor = false
     @Option(help: "Optional new PNG path for an upstream contact sheet") var contactSheet: String?
-    @Option(help: "Changed-pixel ratio for contact-sheet selection, 0...1") var contactSheetThreshold: Double = 0.05
+    @Option(help: "Changed-pixel ratio for contact-sheet selection, 0...1") var contactSheetThreshold = 0.05
     @Option(help: "Optional JSON argv-array batch to execute while recording; stop on first failure") var commandsJSON: String?
 
     func run() throws {
@@ -96,42 +105,55 @@ struct BrowserRecordCommand: ParsableCommand {
         try AgentBrowserPageCommand.validateRecording(format: format, fps: fps)
         guard contactSheetThreshold.isFinite, (0...1).contains(contactSheetThreshold) else { throw ValidationError("Contact sheet threshold must be 0...1.") }
         if let contactSheet {
-            guard !FileManager.default.fileExists(atPath: contactSheet),
-                  URL(fileURLWithPath: contactSheet).standardizedFileURL != URL(fileURLWithPath: output).standardizedFileURL else {
+            guard
+                !FileManager.default.fileExists(atPath: contactSheet),
+                URL(fileURLWithPath: contactSheet).standardizedFileURL != URL(fileURLWithPath: output).standardizedFileURL else {
                 throw ValidationError("Contact sheet must use a separate new path.")
             }
         }
         var steps: [[String]] = []
         if let commandsJSON {
-            guard commandsJSON.utf8.count <= 65536, let parsed = try JSONSerialization.jsonObject(with: Data(commandsJSON.utf8)) as? [[String]] else { throw ValidationError("Invalid command batch.") }
+            guard commandsJSON.utf8.count <= 65_536, let parsed = try JSONSerialization.jsonObject(with: Data(commandsJSON.utf8)) as? [[String]] else { throw ValidationError("Invalid command batch.") }
             try AgentBrowserPageCommand.validateBatch(parsed)
             steps = parsed
         }
-        let result = try AgentBrowserEngine.perform(["command": "record", "tab": tab, "seconds": seconds, "steps": steps,
-            "format": format, "fps": fps, "cursor": cursor, "contactSheet": contactSheet != nil,
-            "contactSheetThreshold": contactSheetThreshold], explicit: "vercel")
-        guard let body = result as? [String: Any], let encoded = body["data"] as? String,
-              let data = Data(base64Encoded: encoded), AgentBrowserPageCommand.isRecording(data, format: format) else { throw ValidationError("Invalid recording artifact.") }
+        let result = try AgentBrowserEngine.perform([
+            "command": "record",
+            "tab": tab,
+            "seconds": seconds,
+            "steps": steps,
+            "format": format,
+            "fps": fps,
+            "cursor": cursor,
+            "contactSheet": contactSheet != nil,
+            "contactSheetThreshold": contactSheetThreshold,
+        ], explicit: "vercel")
+        guard
+            let body = result as? [String: Any], let encoded = body["data"] as? String,
+            let data = Data(base64Encoded: encoded), AgentBrowserPageCommand.isRecording(data, format: format) else { throw ValidationError("Invalid recording artifact.") }
         var sheet: Data?
         if contactSheet != nil {
-            guard let encoded = body["contactSheetData"] as? String, let png = Data(base64Encoded: encoded),
-                  png.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else { throw ValidationError("Invalid contact sheet artifact.") }
+            guard
+                let encoded = body["contactSheetData"] as? String, let png = Data(base64Encoded: encoded),
+                png.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else { throw ValidationError("Invalid contact sheet artifact.") }
             sheet = png
         }
         let fd = Darwin.open(output, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw ValidationError("Output exists or cannot be created.") }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        try handle.write(contentsOf: data); try handle.close()
+        try handle.write(contentsOf: data)
+        try handle.close()
         var summary: [String: Any] = ["path": output, "bytes": data.count, "format": format, "fps": fps, "cursor": cursor]
         if let contactSheet, let sheet {
             let sheetFD = Darwin.open(contactSheet, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
             guard sheetFD >= 0 else { throw ValidationError("Video saved at \(output), but contact-sheet output exists or cannot be created. No retry performed.") }
             let sheetHandle = FileHandle(fileDescriptor: sheetFD, closeOnDealloc: true)
-            try sheetHandle.write(contentsOf: sheet); try sheetHandle.close()
+            try sheetHandle.write(contentsOf: sheet)
+            try sheetHandle.close()
             summary["contactSheetPath"] = contactSheet
             summary["contactSheetFrames"] = body["contactSheetFrames"]
         }
-        print(String(decoding: try JSONSerialization.data(withJSONObject: ["ok": true, "result": summary], options: [.sortedKeys]), as: UTF8.self))
+        try print(String(decoding: JSONSerialization.data(withJSONObject: ["ok": true, "result": summary], options: [.sortedKeys]), as: UTF8.self))
     }
 }
 
@@ -155,11 +177,15 @@ struct BrowserRunCommand: ParsableCommand {
     func run() throws {
         let words = command.first == "--" ? Array(command.dropFirst()) : command
         guard let executable = words.first, !executable.isEmpty else { throw ValidationError("Use: ctrlx browser run -- <agent> [arguments] (codex or claude)") }
-        if let label { setenv("CTRLX_BROWSER_LABEL", label, 1) }
+        if let label {
+            setenv("CTRLX_BROWSER_LABEL", label, 1)
+        }
         // Compatibility convenience only. Identity is discovered at action time,
         // not granted by this command or inherited through environment variables.
         let pointers = words.map { strdup($0) } + [nil]
-        defer { for pointer in pointers { free(pointer) } }
+        defer { for pointer in pointers {
+            free(pointer)
+        } }
         pointers.withUnsafeBufferPointer { buffer in _ = execvp(executable, buffer.baseAddress!) }
         throw AgentBrowserTransport.Failure("Cannot execute \(executable): \(String(cString: strerror(errno)))")
     }
@@ -168,6 +194,7 @@ struct BrowserRunCommand: ParsableCommand {
 struct BrowserActionCommand: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "action", abstract: "tabs | open | read | snapshot (vercel) | click | type | fill | press | scroll | wait | select | check | screenshot | navigate | show | close")
     @Argument var operation: String
+    @Flag(help: "With open, create an additional page instead of reusing this pane's Agent browser") var new = false
     @Option(help: "ctrlx (original) or vercel; overrides this agent instance's saved engine") var engine: String?
     @Option var tab: String?
     @Option var url: String?
@@ -188,36 +215,87 @@ struct BrowserActionCommand: ParsableCommand {
 
     func run() throws {
         _ = try AgentBrowserEngine.resolve(engine, saved: nil)
+        if new, operation != "open" {
+            throw ValidationError("--new is only supported by open.")
+        }
         guard ["tabs", "open", "read", "snapshot", "click", "type", "fill", "press", "scroll", "wait", "select", "check", "screenshot", "navigate", "show", "close"].contains(operation) else {
             throw ValidationError("Unsupported browser operation.")
         }
-        if !["tabs", "open"].contains(operation), tab == nil { throw ValidationError("This operation requires --tab.") }
-        if ["click", "type", "fill", "select", "check"].contains(operation), selector == nil { throw ValidationError("This operation requires --selector.") }
-        if ["type", "fill"].contains(operation), text == nil { throw ValidationError("This operation requires --text (empty text clears with fill).") }
-        if operation == "press", key == nil { throw ValidationError("press requires --key.") }
-        if operation == "select", value == nil { throw ValidationError("select requires --value.") }
-        if operation == "check", checked == nil { throw ValidationError("check requires --checked true|false.") }
+        if !["tabs", "open"].contains(operation), tab == nil {
+            throw ValidationError("This operation requires --tab.")
+        }
+        if ["click", "type", "fill", "select", "check"].contains(operation), selector == nil {
+            throw ValidationError("This operation requires --selector.")
+        }
+        if ["type", "fill"].contains(operation), text == nil {
+            throw ValidationError("This operation requires --text (empty text clears with fill).")
+        }
+        if operation == "press", key == nil {
+            throw ValidationError("press requires --key.")
+        }
+        if operation == "select", value == nil {
+            throw ValidationError("select requires --value.")
+        }
+        if operation == "check", checked == nil {
+            throw ValidationError("check requires --checked true|false.")
+        }
         var payload: [String: Any] = ["command": operation]
-        if let tab { payload["tab"] = tab }
-        if let url { payload["url"] = url }
-        if let selector { payload["selector"] = selector }
-        if let text { payload["text"] = text }
-        if let key { payload["key"] = key }
-        if let deltaX { payload["deltaX"] = deltaX }
-        if let deltaY { payload["deltaY"] = deltaY }
-        if let state { payload["state"] = state }
-        if let timeoutMs { payload["timeoutMs"] = timeoutMs }
-        if let value { payload["value"] = value }
-        if let checked { payload["checked"] = checked }
-        if let textOffset { payload["textOffset"] = textOffset }
-        if let textLimit { payload["textLimit"] = textLimit }
-        if let controlOffset { payload["controlOffset"] = controlOffset }
-        if let controlLimit { payload["controlLimit"] = controlLimit }
-        if operation == "screenshot", output == nil { throw ValidationError("screenshot requires --output <new.png>") }
+        if new {
+            payload["new"] = true
+        }
+        if let tab {
+            payload["tab"] = tab
+        }
+        if let url {
+            payload["url"] = url
+        }
+        if let selector {
+            payload["selector"] = selector
+        }
+        if let text {
+            payload["text"] = text
+        }
+        if let key {
+            payload["key"] = key
+        }
+        if let deltaX {
+            payload["deltaX"] = deltaX
+        }
+        if let deltaY {
+            payload["deltaY"] = deltaY
+        }
+        if let state {
+            payload["state"] = state
+        }
+        if let timeoutMs {
+            payload["timeoutMs"] = timeoutMs
+        }
+        if let value {
+            payload["value"] = value
+        }
+        if let checked {
+            payload["checked"] = checked
+        }
+        if let textOffset {
+            payload["textOffset"] = textOffset
+        }
+        if let textLimit {
+            payload["textLimit"] = textLimit
+        }
+        if let controlOffset {
+            payload["controlOffset"] = controlOffset
+        }
+        if let controlLimit {
+            payload["controlLimit"] = controlLimit
+        }
+        if operation == "screenshot", output == nil {
+            throw ValidationError("screenshot requires --output <new.png>")
+        }
         var result = try AgentBrowserEngine.perform(payload, explicit: engine)
         if operation == "screenshot", let output {
-            guard let body = result as? [String: Any], let encoded = body["data"] as? String,
-                  let image = Data(base64Encoded: encoded), image.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else {
+            guard
+                let body = result as? [String: Any], let encoded = body["data"] as? String,
+                let image = Data(base64Encoded: encoded), image.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else {
                 throw ValidationError("Invalid PNG screenshot.")
             }
             let fd = Darwin.open(output, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
@@ -237,7 +315,9 @@ struct BrowserEngineCommand: ParsableCommand {
     @Argument var name: String?
 
     func run() throws {
-        if let name { _ = try AgentBrowserEngine.resolve(name, saved: nil) }
+        if let name {
+            _ = try AgentBrowserEngine.resolve(name, saved: nil)
+        }
         @Dependency(AgentBrowserProcessClient.self) var processes
         let owner = try processes.callingAgent(from: getppid(), uid: getuid())
         let selected = try AgentBrowserTransport.withRunContext(for: owner) { url, context in
@@ -256,24 +336,26 @@ struct BrowserEngineCommand: ParsableCommand {
 struct BrowserEngineProviderCommand: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "engine-provider", shouldDisplay: false)
     func run() throws {
-        let data = try FileHandle.standardInput.read(upToCount: 65537) ?? Data()
-        guard data.count <= 65536,
-              let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              request["protocol"] as? String == "agent-browser.plugin.v1",
-              let path = ProcessInfo.processInfo.environment["CTRLX_ENGINE_PROVIDER_FILE"] else {
+        let data = try FileHandle.standardInput.read(upToCount: 65_537) ?? Data()
+        guard
+            data.count <= 65_536,
+            let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            request["protocol"] as? String == "agent-browser.plugin.v1",
+            let path = ProcessInfo.processInfo.environment["CTRLX_ENGINE_PROVIDER_FILE"] else {
             throw ValidationError("Invalid managed provider request.")
         }
         let config = try AgentBrowserTransport.readPrivateJSON(URL(fileURLWithPath: path))
-        guard let address = config["url"] as? String, let url = URLComponents(string: address),
-              url.scheme == "ws", url.host == "127.0.0.1", url.port != nil,
-              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-              url.path.count == 73 else { throw ValidationError("Invalid scoped engine endpoint.") }
+        guard
+            let address = config["url"] as? String, let url = URLComponents(string: address),
+            url.scheme == "ws", url.host == "127.0.0.1", url.port != nil,
+            url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+            url.path.count == 73 else { throw ValidationError("Invalid scoped engine endpoint.") }
         var response: [String: Any] = ["protocol": "agent-browser.plugin.v1", "success": true]
         switch request["type"] as? String {
         case "browser.launch": response["browser"] = ["cdpUrl": address, "directPage": true]
         case "plugin.manifest": response["manifest"] = ["name": "ctrlx", "capabilities": ["browser.provider"]]
         default: throw ValidationError("Unsupported managed provider request.")
         }
-        print(String(decoding: try JSONSerialization.data(withJSONObject: response), as: UTF8.self))
+        try print(String(decoding: JSONSerialization.data(withJSONObject: response), as: UTF8.self))
     }
 }

@@ -6,7 +6,7 @@
 #include "include/cef_jsdialog_handler.h"
 
 struct BrowserCallbacks {
-  std::function<void(const std::string&, int, const std::string&, std::function<bool()>, std::function<void(CefRefPtr<CefBrowser>, NSString*)>)> open;
+  std::function<void(const std::string&, int, const std::string&, bool, std::function<bool()>, std::function<void(CefRefPtr<CefBrowser>, NSString*)>)> open;
   std::function<void(CefRefPtr<CefBrowser>)> select;
   std::function<void()> changed;
   std::function<NSDictionary*(CefRefPtr<CefBrowser>)> presentation;

@@ -88,9 +88,26 @@ reported without silently switching to Computer Use, another browser client or
 standalone Playwright. Browser switching requires the user's choice. This is
 skill guidance, not a tool-permission sandbox; no global agent settings change.
 
-The shared skill also guides task-based tab creation versus reuse, without a
-one-tab limit or automatic cleanup. See its [owned-tab guidance](../plugin/ctrlx/skills/agent-browser/SKILL.md#owned-tabs).
-The CLI semantics remain unchanged: `open` creates a tab; `navigate` reuses one.
+The shared skill guides default reuse versus explicit extra tabs. See its
+[owned-tab guidance](../plugin/ctrlx/skills/agent-browser/SKILL.md#owned-tabs).
+`open` reuses the source pane's **Agent primary page**; `open --new` creates an
+extra without replacing it, and `navigate --tab` still targets a specific page.
+Same normalized URLs do not reload. Creation/reuse runs serially on CEF's UI loop;
+capacity limits apply only to creation. Popups and extras never become defaults.
+An expired owner or a different process cannot inherit a page/control grant merely
+by occupying the same pane. Busy or human-controlled pages reject Agent reuse.
+Human menu/link opens still use the distinct human primary page; viewing or
+annotating an Agent page does not create a human copy or change its ownership.
+The typed human `.create` operation explicitly creates an extra; `.openPane`
+remains the normal reusable operation. No global per-window browser is introduced.
+Bundled guidance is versioned as Codex 1.1.8 / Claude Code 1.3.9; rebuild the Host
+and update the installed plugin together for these changed `open` semantics.
+
+`tests/pane_defaults.py` exercises both engines through the public CLI in an
+isolated signed App, with native fixture owners, private profile/tmux/API sockets
+and mock Keychain. The 2026-10-15 run passed identical-URL DOM preservation,
+explicit extras, default close/recreation and normal Host exit. This is fixture
+acceptance, not real-Codex/Claude or paired Viewer UI acceptance.
 
 Open CtrlX on the **same Mac** as the terminal agent. Start `codex` or `claude` normally;
 there is no `ctrlx browser run` requirement. On `browser action open`, the CLI

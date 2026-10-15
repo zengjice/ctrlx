@@ -3,21 +3,21 @@ import Foundation
 import Observation
 import UniformTypeIdentifiers
 
-/// Client-private navigation state. No file contents or paths are broadcast as session state.
+/// Client-private navigation/preview state; only the Host's initial route is shared.
 @MainActor @Observable
-public final class FileBrowserTab: Identifiable {
+final public class FileBrowserTab: Identifiable {
     public struct Snapshot: Codable, Sendable, Hashable {
         public let id: UUID
         public let path: String
         public let includeHidden: Bool
         public let expanded: [String]
         public let selectedFile: String?
+        public var hostOwned: Bool? = nil
     }
+
     public let id: UUID
+    public private(set) var hostTab: HostFileTab?
     public private(set) var sourcePaneID: String?
-    /// Only link-created tabs participate in reuse. Scoped by the owning Host/session workspace,
-    /// never persisted: restored tabs must not bind to recycled tmux window IDs.
-    public let terminalLinkWindowID: String?
     public private(set) var path: String?
     private var requestedPath: String?
     public var pathInput: String
@@ -41,34 +41,53 @@ public final class FileBrowserTab: Identifiable {
     @ObservationIgnored private var loadID = UUID()
     @ObservationIgnored private var previewID = UUID()
 
-    public init(id: UUID = UUID(), path: String? = nil, sourcePaneID: String? = nil, terminalLinkWindowID: String? = nil) {
+    public init(id: UUID = UUID(), path: String? = nil, sourcePaneID: String? = nil) {
         self.id = id
         self.path = path
         self.requestedPath = path
         self.pathInput = path ?? ""
         self.sourcePaneID = sourcePaneID
-        self.terminalLinkWindowID = terminalLinkWindowID
     }
 
-    public var title: String { "Files · \(path.map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? "/" : $0 } ?? "…")" }
-    public var listing: FileBrowserListing? { path.flatMap { listings[$0] } }
+    public var title: String {
+        "Files · \(path.map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? "/" : $0 } ?? "…")"
+    }
+
+    public var listing: FileBrowserListing? {
+        path.flatMap { listings[$0] }
+    }
 
     public static func sourcePaneID(in paneIDs: [String], focusedPaneID: String?, activePaneID: String?) -> String? {
-        if let focusedPaneID, paneIDs.contains(focusedPaneID) { return focusedPaneID }
-        if let activePaneID, paneIDs.contains(activePaneID) { return activePaneID }
+        if let focusedPaneID, paneIDs.contains(focusedPaneID) {
+            return focusedPaneID
+        }
+        if let activePaneID, paneIDs.contains(activePaneID) {
+            return activePaneID
+        }
         return paneIDs.first
     }
 
     public var snapshot: Snapshot? {
-        path.map { .init(id: id, path: $0, includeHidden: includeHidden, expanded: expanded.sorted(), selectedFile: selectedFile) }
+        path.map { .init(id: id, path: $0, includeHidden: includeHidden, expanded: expanded.sorted(), selectedFile: selectedFile, hostOwned: hostTab == nil ? nil : true) }
+    }
+
+    public convenience init(hostTab: HostFileTab) {
+        self.init(id: hostTab.id, path: hostTab.initialDirectory, sourcePaneID: hostTab.sourcePaneID)
+        self.hostTab = hostTab
+    }
+
+    public func updateHostTab(_ tab: HostFileTab) {
+        guard tab.id == id else { return }
+        hostTab = tab
+        sourcePaneID = tab.sourcePaneID
     }
 
     public convenience init(snapshot: Snapshot) {
         // Pane IDs are process-lifetime handles, never persisted/rebound after restart.
         self.init(id: snapshot.id, path: snapshot.path)
-        includeHidden = snapshot.includeHidden
-        expanded = Set(snapshot.expanded)
-        selectedFile = snapshot.selectedFile
+        self.includeHidden = snapshot.includeHidden
+        self.expanded = Set(snapshot.expanded)
+        self.selectedFile = snapshot.selectedFile
     }
 
     public func releasePreview() {
@@ -99,8 +118,15 @@ public final class FileBrowserTab: Identifiable {
     }
 
     public func loadKey(source: FileBrowserSource) -> LoadKey {
-        .init(path: requestedPath, query: query, mode: searchMode, hidden: includeHidden,
-              refresh: refresh, sourceID: source.id, unavailable: source.unavailableReason)
+        .init(
+            path: requestedPath,
+            query: query,
+            mode: searchMode,
+            hidden: includeHidden,
+            refresh: refresh,
+            sourceID: source.id,
+            unavailable: source.unavailableReason
+        )
     }
 
     public func navigate(_ path: String?) {
@@ -122,6 +148,14 @@ public final class FileBrowserTab: Identifiable {
         selectedFile = destination.file
     }
 
+    /// A closed/moved source must not attach to a later window or pane with the same ID.
+    public func reconcileSource(windows: [TmuxWindow]) {
+        let panes = windows.flatMap(\.panes)
+        if let sourcePaneID, !panes.contains(where: { $0.paneId == sourcePaneID }) {
+            self.sourcePaneID = nil
+        }
+    }
+
     public func load(source: FileBrowserSource) async {
         let token = UUID()
         loadID = token
@@ -130,9 +164,15 @@ public final class FileBrowserTab: Identifiable {
         searchResults = nil
         // Reset pages, not expansion, so a refresh never combines different directory revisions.
         listings = [:]
-        defer { if loadID == token { isLoading = false } }
+        defer {
+            if loadID == token {
+                isLoading = false
+            }
+        }
         do {
-            if let reason = source.unavailableReason { throw FileBrowserError.message(reason) }
+            if let reason = source.unavailableReason {
+                throw FileBrowserError.message(reason)
+            }
             if !query.isEmpty, let path {
                 try await Task.sleep(for: .milliseconds(250))
                 let response = try await source.request(.search(path: path, query: query, mode: searchMode, includeHidden: includeHidden))
@@ -149,7 +189,11 @@ public final class FileBrowserTab: Identifiable {
                 listings[result.directory] = result
             }
         } catch is CancellationError { }
-        catch { if loadID == token { self.error = error.localizedDescription } }
+        catch {
+            if loadID == token {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     public func loadDirectory(_ directory: String, more: Bool, source: FileBrowserSource) async {
@@ -165,11 +209,22 @@ public final class FileBrowserTab: Identifiable {
                 guard previous.revision == result.revision else { throw FileBrowserError.message("Directory changed. Refresh to load its new contents.") }
                 // Ignore duplicate page requests rather than appending a page twice.
                 guard listings[directory]?.nextOffset == offset else { return }
-                listings[directory] = .init(directory: result.directory, homeDirectory: result.homeDirectory,
-                                            entries: previous.entries + result.entries, nextOffset: result.nextOffset, revision: result.revision)
-            } else { listings[directory] = result }
+                listings[directory] = .init(
+                    directory: result.directory,
+                    homeDirectory: result.homeDirectory,
+                    entries: previous.entries + result.entries,
+                    nextOffset: result.nextOffset,
+                    revision: result.revision
+                )
+            } else {
+                listings[directory] = result
+            }
         } catch is CancellationError { }
-        catch { if token == loadID { self.error = error.localizedDescription } }
+        catch {
+            if token == loadID {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     public func loadPreview(source: FileBrowserSource) async {
@@ -187,7 +242,11 @@ public final class FileBrowserTab: Identifiable {
         // Remote video starts only when Play is tapped, using random-access reads.
         guard source.localFileURL != nil || !FileBrowserVideo.supports(path: selectedFile) else { return }
         isPreviewLoading = true
-        defer { if token == previewID { isPreviewLoading = false } }
+        defer {
+            if token == previewID {
+                isPreviewLoading = false
+            }
+        }
         do {
             guard case let .info(info) = try await source.request(.info(path: selectedFile)) else {
                 throw FileBrowserError.message("Missing file information.")
@@ -209,9 +268,10 @@ public final class FileBrowserTab: Identifiable {
             var data = Data()
             while data.count < info.size {
                 try Task.checkCancellation()
-                guard case let .chunk(chunk) = try await source.request(.read(path: info.path, offset: data.count, revision: info.revision)),
-                      chunk.path == info.path, chunk.revision == info.revision, chunk.offset == data.count,
-                      !chunk.data.isEmpty, chunk.data.count <= FileBrowserLimits.chunkBytes, data.count + chunk.data.count <= info.size else {
+                guard
+                    case let .chunk(chunk) = try await source.request(.read(path: info.path, offset: data.count, revision: info.revision)),
+                    chunk.path == info.path, chunk.revision == info.revision, chunk.offset == data.count,
+                    !chunk.data.isEmpty, chunk.data.count <= FileBrowserLimits.chunkBytes, data.count + chunk.data.count <= info.size else {
                     throw FileBrowserError.message("File changed or the Host returned an invalid file chunk. Refresh its preview.")
                 }
                 data.append(chunk.data)
@@ -229,7 +289,11 @@ public final class FileBrowserTab: Identifiable {
             }
             previewData = data
         } catch is CancellationError { }
-        catch { if token == previewID { previewError = error.localizedDescription } }
+        catch {
+            if token == previewID {
+                previewError = error.localizedDescription
+            }
+        }
     }
 
     static func isMedia(path: String) -> Bool {

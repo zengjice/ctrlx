@@ -39,7 +39,7 @@ document.querySelector('#block').onclick=()=>setTimeout(()=>{const end=Date.now(
 
 
 def verify(request, a, b, url):
-    tab = request(a, 'open', url=url + 'actions')['id']
+    tab = request(a, 'open', new=True, url=url + 'actions')['id']
     def action(command, ok=True, **params):
         return request(a, command, ok=ok, tab=tab, **params)
     def read(selector, **params):

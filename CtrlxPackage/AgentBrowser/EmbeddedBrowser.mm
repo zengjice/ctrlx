@@ -2,6 +2,7 @@
 // sandboxed subprocesses; no separate visible browser application is created.
 #import "../Sources/CtrlxBrowserBridge/include/CtrlxBrowserBridge.h"
 #include "AgentBrowser.h"
+#include "Ownership.h"
 #include <atomic>
 #include <map>
 #include "include/cef_app.h"
@@ -9,6 +10,7 @@
 #include "include/cef_client.h"
 #include "include/cef_command_line.h"
 #include "include/cef_cookie.h"
+#include "include/cef_parser.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_helpers.h"
 #include "include/wrapper/cef_library_loader.h"
@@ -41,6 +43,7 @@ static CXEmbeddedBrowserRuntime *runtime;
 static std::unique_ptr<CefScopedLibraryLoader> library;
 static std::map<int, CefRefPtr<CefBrowser>> browsers;
 static std::map<int, NSString *> identifiers;
+static BrowserPrimaryTabs primaryAgentTabs;
 // DevTools are human-only native windows, never agent-controlled page tabs.
 static std::map<int, CefRefPtr<CefBrowser>> devToolsBrowsers;
 static std::atomic_size_t pendingDevTools{0};
@@ -152,6 +155,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     CEF_REQUIRE_UI_THREAD();
     CloseDevToolsFor(browser);
     RemoveAgentBrowserTab(browser);
+    primaryAgentTabs.Remove(browser->GetIdentifier());
     browsers.erase(browser->GetIdentifier());
     identifiers.erase(browser->GetIdentifier());
     [container_ removeFromSuperview];
@@ -243,7 +247,7 @@ static void CreateRoutedTab(const std::string& owner, NSDictionary *route, const
   done(browser, browser ? nil : @"Chromium could not create the embedded page.");
 }
 
-static void OpenTab(std::string owner, int pid, std::string url,
+static void OpenTab(std::string owner, int pid, std::string url, bool newTab,
     std::function<bool()> current, std::function<void(CefRefPtr<CefBrowser>, NSString*)> done) {
   [runtime.delegate resolveBrowserProcess:pid completion:^(NSDictionary *route, NSString *error) {
     // Process discovery awaits Swift I/O. Resume Chromium creation on CEF's
@@ -252,7 +256,25 @@ static void OpenTab(std::string owner, int pid, std::string url,
     CEF_REQUIRE_UI_THREAD();
     if (!current()) { done(nullptr, @"Open request expired. No page was opened."); return; }
     if (!route) { done(nullptr, error ?: @"Source session unavailable. No page was opened."); return; }
-    CreateRoutedTab(owner, route, url, done);
+    NSString *pane = route[@"pane"];
+    if (![pane isKindOfClass:NSString.class] || !pane.length) { done(nullptr, @"Source pane unavailable."); return; }
+    if (!newTab) if (auto existing = primaryAgentTabs.Find(pane.UTF8String, owner); existing && browsers.contains(*existing)) {
+      auto browser = browsers.at(*existing);
+      if (AgentBrowserOwner(browser) != owner || AgentBrowserHumanControlled(browser) || AgentBrowserTabBusy(browser)) {
+        done(nullptr, @"The pane's Agent browser is busy or controlled by a person. No navigation was sent."); return;
+      }
+      CefURLParts currentParts, destinationParts;
+      const bool same = CefParseURL(browser->GetMainFrame()->GetURL(), currentParts) && CefParseURL(url, destinationParts) &&
+          CefString(&currentParts.spec) == CefString(&destinationParts.spec);
+      if (!same) browser->GetMainFrame()->LoadURL(url);
+      [runtime.delegate browserTabSelected:identifiers.at(*existing)];
+      done(browser, nil);
+      return;
+    }
+    CreateRoutedTab(owner, route, url, [=](auto browser, NSString *creationError) {
+      if (browser && !newTab) primaryAgentTabs.Set(pane.UTF8String, owner, browser->GetIdentifier());
+      done(browser, creationError);
+    });
     }));
   }];
 }

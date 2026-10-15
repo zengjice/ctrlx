@@ -11,7 +11,13 @@ struct BrowserControlLease {
 
 enum RemoteBrowserError: LocalizedError {
     case message(String)
-    var errorDescription: String? { if case let .message(message) = self { message } else { nil } }
+    var errorDescription: String? {
+        if case let .message(message) = self {
+            message
+        } else {
+            nil
+        }
+    }
 }
 
 @MainActor
@@ -28,11 +34,19 @@ extension AgentBrowserService {
     }
 
     func descriptor(_ tab: AgentBrowserTabState) -> RemoteBrowserTab {
-        RemoteBrowserTab(id: tab.id, sessionName: tab.manualTarget?.sessionName ?? tab.sessionName,
-                         windowID: tab.windowID, parentID: tab.parentID, title: String(tab.title.prefix(256)), url: String(tab.url.prefix(8192)),
-                         isLoading: tab.isLoading, isAgentOwned: !tab.owner.isEmpty,
-                         isControlled: remoteControls[tab.id] != nil, sourceAgent: tab.sourceAgent,
-                         sourcePaneID: tab.paneID.isEmpty ? nil : tab.paneID)
+        RemoteBrowserTab(
+            id: tab.id,
+            sessionName: tab.manualTarget?.sessionName ?? tab.sessionName,
+            windowID: tab.windowID,
+            parentID: tab.parentID,
+            title: String(tab.title.prefix(256)),
+            url: String(tab.url.prefix(8_192)),
+            isLoading: tab.isLoading,
+            isAgentOwned: !tab.owner.isEmpty,
+            isControlled: remoteControls[tab.id] != nil,
+            sourceAgent: tab.sourceAgent,
+            sourcePaneID: tab.paneID.isEmpty ? nil : tab.paneID
+        )
     }
 
     func releaseBrowserControl(_ tabID: UUID) {
@@ -43,11 +57,15 @@ extension AgentBrowserService {
     }
 
     func disconnectBrowserViewer(_ viewerID: String) {
-        for (tab, lease) in remoteControls where lease.viewerID == viewerID { releaseBrowserControl(tab) }
+        for (tab, lease) in remoteControls where lease.viewerID == viewerID {
+            releaseBrowserControl(tab)
+        }
     }
 
     func expireBrowserControls() {
-        for (tab, lease) in remoteControls where lease.expires <= .now { releaseBrowserControl(tab) }
+        for (tab, lease) in remoteControls where lease.expires <= .now {
+            releaseBrowserControl(tab)
+        }
     }
 
     private func startControlExpiry() {
@@ -57,7 +75,9 @@ extension AgentBrowserService {
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
                 guard let self else { return }
                 self.expireBrowserControls()
-                if self.remoteControls.isEmpty { break }
+                if self.remoteControls.isEmpty {
+                    break
+                }
             }
             self?.controlExpiryTask = nil
         }
@@ -67,7 +87,8 @@ extension AgentBrowserService {
         try Task.checkCancellation()
         expireBrowserControls()
         switch request.operation {
-        case .create, .openPane:
+        case .create,
+             .openPane:
             guard let paneID = request.sourcePaneID, !paneID.isEmpty else {
                 throw RemoteBrowserError.message("Open Browser from a terminal Window to select its source pane.")
             }
@@ -78,13 +99,14 @@ extension AgentBrowserService {
                 }
                 url = parsed
             }
-            let tab = try await openPaneBrowser(sessionName: request.sessionName, paneID: paneID, url: url)
+            let tab = try await openPaneBrowser(sessionName: request.sessionName, paneID: paneID, url: url, new: request.operation == .create)
             return RemoteBrowserResponse(tab: descriptor(tab))
         default: break
         }
         guard supportsBrowserSharing, let runtime else { throw RemoteBrowserError.message("Update the Host Mac to share Chromium pages.") }
-        guard let tabID = request.tabID, let tab = tabs[tabID.uuidString], !tab.isClosed,
-              tab.manualTarget?.hostID == nil, descriptor(tab).sessionName == request.sessionName else {
+        guard
+            let tabID = request.tabID, let tab = tabs[tabID.uuidString], !tab.isClosed,
+            tab.manualTarget?.hostID == nil, descriptor(tab).sessionName == request.sessionName else {
             throw RemoteBrowserError.message("This Host browser tab is no longer available in the session.")
         }
         switch request.operation {
@@ -109,15 +131,22 @@ extension AgentBrowserService {
             guard runtime.setHumanControl(id.uuidString, forTab: tabID.uuidString) else {
                 throw RemoteBrowserError.message("The Agent is still performing a page operation. Try Take Control when it finishes.")
             }
-            remoteControls[tabID] = BrowserControlLease(id: id, viewerID: viewerID, surfaceID: request.surfaceID,
-                                                       expires: .now.advanced(by: .seconds(20)))
+            remoteControls[tabID] = BrowserControlLease(
+                id: id,
+                viewerID: viewerID,
+                surfaceID: request.surfaceID,
+                expires: .now.advanced(by: .seconds(20))
+            )
             tab.isRemotelyControlled = true
             startControlExpiry()
             onTabsChanged?()
             return RemoteBrowserResponse(tab: descriptor(tab), controlID: id)
         case .releaseControl:
-            if let lease = remoteControls[tabID], lease.viewerID == viewerID,
-               lease.surfaceID == request.surfaceID, lease.id == request.controlID { releaseBrowserControl(tabID) }
+            if
+                let lease = remoteControls[tabID], lease.viewerID == viewerID,
+                lease.surfaceID == request.surfaceID, lease.id == request.controlID {
+                releaseBrowserControl(tabID)
+            }
             return RemoteBrowserResponse(tab: descriptor(tab))
         case .frame:
             var payload: [String: Any] = ["action": "frame"]
@@ -150,8 +179,9 @@ extension AgentBrowserService {
     }
 
     private func renewBrowserControl(_ request: BrowseBrowser, viewerID: String) -> BrowserControlLease? {
-        guard let id = request.tabID, var lease = remoteControls[id], lease.viewerID == viewerID,
-              lease.surfaceID == request.surfaceID, lease.id == request.controlID else { return nil }
+        guard
+            let id = request.tabID, var lease = remoteControls[id], lease.viewerID == viewerID,
+            lease.surfaceID == request.surfaceID, lease.id == request.controlID else { return nil }
         lease.expires = .now.advanced(by: .seconds(20))
         remoteControls[id] = lease
         return lease
@@ -174,8 +204,11 @@ extension AgentBrowserService {
         let request = try JSONSerialization.data(withJSONObject: payload)
         return try await withCheckedThrowingContinuation { continuation in
             runtime.requestBrowserTab(tabID.uuidString, request: request) { data, error in
-                if let data { continuation.resume(returning: data) }
-                else { continuation.resume(throwing: RemoteBrowserError.message(error ?? "Browser request failed.")) }
+                if let data {
+                    continuation.resume(returning: data)
+                } else {
+                    continuation.resume(throwing: RemoteBrowserError.message(error ?? "Browser request failed."))
+                }
             }
         }
     }
@@ -183,19 +216,19 @@ extension AgentBrowserService {
     static func nativePayload(_ operation: RemoteBrowserOperation) throws -> [String: Any] {
         switch operation {
         case let .navigate(url):
-            guard url.utf8.count <= 8192 else { throw RemoteBrowserError.message("Address is too long.") }
+            guard url.utf8.count <= 8_192 else { throw RemoteBrowserError.message("Address is too long.") }
             return ["action": "navigate", "url": url]
         case .back: return ["action": "back"]
         case .forward: return ["action": "forward"]
         case .reload: return ["action": "reload"]
         case .close: return ["action": "close"]
         case let .fit(width, height):
-            guard (240...2560).contains(width), (240...2560).contains(height) else {
+            guard (240...2_560).contains(width), (240...2_560).contains(height) else {
                 throw RemoteBrowserError.message("Unsupported viewport size.")
             }
             return ["action": "fit", "width": width, "height": height]
         case let .text(text):
-            guard text.utf8.count <= 16000 else { throw RemoteBrowserError.message("Paste at most 16 KB of text at a time.") }
+            guard text.utf8.count <= 16_000 else { throw RemoteBrowserError.message("Paste at most 16 KB of text at a time.") }
             return ["action": "text", "text": text]
         case let .key(key):
             guard key.key.utf8.count <= 32, (0...255).contains(key.keyCode), (0...15).contains(key.modifiers) else {
@@ -204,15 +237,24 @@ extension AgentBrowserService {
             return ["action": "key", "key": key.key, "keyCode": key.keyCode, "modifiers": key.modifiers]
         case let .pointer(event):
             guard event.isValid else { throw RemoteBrowserError.message("Invalid pointer input.") }
-            let type: String = switch event.kind {
+            let type = switch event.kind {
             case .down: "mousePressed"
             case .up: "mouseReleased"
             case .move: "mouseMoved"
             case .scroll: "mouseWheel"
             }
-            return ["action": "mouse", "type": type, "x": event.x, "y": event.y,
-                    "deltaX": event.deltaX, "deltaY": event.deltaY, "button": event.button.rawValue,
-                    "buttons": event.buttons, "modifiers": event.modifiers, "clickCount": event.clickCount]
+            return [
+                "action": "mouse",
+                "type": type,
+                "x": event.x,
+                "y": event.y,
+                "deltaX": event.deltaX,
+                "deltaY": event.deltaY,
+                "button": event.button.rawValue,
+                "buttons": event.buttons,
+                "modifiers": event.modifiers,
+                "clickCount": event.clickCount,
+            ]
         default: throw RemoteBrowserError.message("This operation is handled by the Host registry.")
         }
     }

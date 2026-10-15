@@ -17,6 +17,7 @@
         let onOpenSettings: () -> Void
 
         @Environment(SessionStore.self) private var sessionStore
+        @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
         @Environment(ViewerConnectionManager.self) private var connectionManager
         @Environment(IOSSettings.self) private var settings
 
@@ -42,12 +43,15 @@
             .navigationTitle("Sessions")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SessionNavigation.self) { destination in
-                if let connection = connectionManager.connection(for: destination.hostId) {
+                if
+                    let connection = connectionManager.connection(for: destination.hostId),
+                    let fileWorkspace = fileWorkspaces.workspace(hostID: destination.hostId, sessionName: destination.sessionName) {
                     WindowLayoutView(
                         sessionName: destination.sessionName,
                         hostId: destination.hostId,
                         relayClient: connection.relayClient,
                         settings: settings,
+                        fileWorkspace: fileWorkspace,
                         initialSessionFit: $initialSessionFit,
                         automaticallyFitOnEntry: destination != createdSessionDestination
                     )
@@ -84,14 +88,20 @@
                 navigateToCreatedSessionIfReady()
             }
             .onChange(of: creationHostIsConnected) {
-                if !creationHostIsConnected { sessionCreation.cancel() }
+                if !creationHostIsConnected {
+                    sessionCreation.cancel()
+                }
             }
             .onDisappear {
                 sessionCreation.cancel()
             }
             .alert("Session Creation Failed", isPresented: .init(
                 get: { creationError != nil },
-                set: { if !$0 { creationError = nil } }
+                set: {
+                    if !$0 {
+                        creationError = nil
+                    }
+                }
             )) {
                 Button("OK") {
                     creationError = nil
@@ -117,7 +127,11 @@
             }
             .alert("Close Session?", isPresented: .init(
                 get: { closeConfirmation != nil },
-                set: { if !$0 { closeConfirmation = nil } }
+                set: {
+                    if !$0 {
+                        closeConfirmation = nil
+                    }
+                }
             )) {
                 if let confirmation = closeConfirmation {
                     Button("Close Anyway", role: .destructive) {
@@ -132,7 +146,11 @@
             }
             .alert("Session Close Failed", isPresented: .init(
                 get: { closeError != nil },
-                set: { if !$0 { closeError = nil } }
+                set: {
+                    if !$0 {
+                        closeError = nil
+                    }
+                }
             )) {
                 Button("OK") { closeError = nil }
             } message: {
@@ -143,7 +161,9 @@
             .sheet(item: $selectedHostForNewSession, onDismiss: {
                 // Our success dismissal retains the pane while its snapshot is
                 // in flight. A user dismissal before the reply cancels routing.
-                if sessionCreation.paneID == nil { sessionCreation.cancel() }
+                if sessionCreation.paneID == nil {
+                    sessionCreation.cancel()
+                }
             }) { host in
                 ProjectPickerSheet(
                     host: host,
@@ -344,9 +364,10 @@
                 sessionCreation.cancel()
                 return
             }
-            guard let destination = sessionCreation.takeDestination(
-                paneStates: sessionStore.paneStates, isConnected: creationHostIsConnected
-            ) else { return }
+            guard
+                let destination = sessionCreation.takeDestination(
+                    paneStates: sessionStore.paneStates, isConnected: creationHostIsConnected
+                ) else { return }
             initialSessionFit = destination.initialFit
             let navigation = SessionNavigation(sessionName: destination.sessionName, hostId: destination.hostID)
             createdSessionDestination = navigation
@@ -1151,6 +1172,7 @@
     private struct SessionListPreview: View {
         @State private var navigationPath = NavigationPath()
         @State private var sessionStore = SessionStore()
+        @State private var fileWorkspaces = IOSFileBrowserWorkspaceStore()
         @State private var settings = IOSSettings()
         @State private var connectionManager: ViewerConnectionManager?
 
@@ -1168,6 +1190,7 @@
                     NavigationStack(path: $navigationPath) {
                         SessionListView(navigationPath: $navigationPath, onOpenSettings: { })
                             .environment(sessionStore)
+                            .environment(fileWorkspaces)
                             .environment(connectionManager)
                             .environment(settings)
                     }

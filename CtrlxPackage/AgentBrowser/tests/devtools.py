@@ -106,7 +106,7 @@ class DevTools(Managed):
         assert len(await self.request(b, 'tabs')) == 1
         self.passed('closing a source disposes only its own inspector')
 
-        temporary = (await self.request(a, 'open', url=self.url + 'race'))['id']
+        temporary = (await self.request(a, 'open', new=True, url=self.url + 'race'))['id']
         await self.request(a, 'wait', tab=temporary)
         await self.tools(a, temporary, 'show')
         await self.request(a, 'close', tab=temporary)

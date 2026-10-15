@@ -14,6 +14,7 @@
         let hostId: String
         let relayClient: ViewerRelayClient
         let settings: IOSSettings
+        let fileWorkspace: IOSFileBrowserWorkspace
         @Binding var initialSessionFit: NewSessionSizing.InitialFit?
         let automaticallyFitOnEntry: Bool
 
@@ -23,8 +24,14 @@
 
         /// The currently selected window within the session
         @State private var selectedWindowId: String?
-        @State private var fileWorkspace = IOSFileBrowserWorkspace()
         @State private var pendingFileLink: TerminalFileLinkRequest?
+        private struct FilesOpenRequest: Equatable {
+            let paneID: String
+            let new: Bool
+        }
+
+        @State private var pendingFilesRequest: FilesOpenRequest?
+        @State private var pendingFilesCloseID: UUID?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
         @State private var browserSelection = IOSBrowserTabSelection()
         @State private var selectedSimulatorID: UUID?
@@ -111,6 +118,7 @@
             hostId: String,
             relayClient: ViewerRelayClient,
             settings: IOSSettings,
+            fileWorkspace: IOSFileBrowserWorkspace,
             initialSessionFit: Binding<NewSessionSizing.InitialFit?>,
             automaticallyFitOnEntry: Bool = true
         ) {
@@ -118,6 +126,7 @@
             self.hostId = hostId
             self.relayClient = relayClient
             self.settings = settings
+            self.fileWorkspace = fileWorkspace
             self._initialSessionFit = initialSessionFit
             self.automaticallyFitOnEntry = automaticallyFitOnEntry
             self._isKeyboardActive = State(initialValue: settings.showTerminalKeyboardOnEntry)
@@ -347,6 +356,34 @@
 
         private var fileLinkContent: some View {
             browserContent
+                .task(id: pendingFilesRequest) {
+                    guard let request = pendingFilesRequest else { return }
+                    let paneID = request.paneID
+                    do {
+                        let descriptor = try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: paneID, new: request.new)
+                        try Task.checkCancellation()
+                        guard pendingFilesRequest == request, sessionWindows.contains(where: { $0.panes.contains { $0.paneId == paneID } }) else { return }
+                        let tab = fileWorkspace.adopt(descriptor)
+                        browserSelection.selectedID = nil
+                        selectedSimulatorID = nil
+                        fileWorkspace.selectedID = tab.id
+                        pendingFilesRequest = nil
+                    } catch is CancellationError { }
+                    catch { commandError = error.localizedDescription
+                        pendingFilesRequest = nil
+                    }
+                }
+                .task(id: pendingFilesCloseID) {
+                    guard let id = pendingFilesCloseID else { return }
+                    do {
+                        try await HostFileTabClient.close(connection: connectionManager.connection(for: hostId), id: id)
+                        fileWorkspace.close(id)
+                    } catch is CancellationError { }
+                    catch { commandError = error.localizedDescription }
+                    if pendingFilesCloseID == id {
+                        pendingFilesCloseID = nil
+                    }
+                }
                 .environment(\.openTerminalBrowserLink) { request in pendingBrowserLink = request }
                 .task(id: pendingBrowserLink) {
                     guard let request = pendingBrowserLink else { return }
@@ -358,15 +395,19 @@
                     await openTerminalFile(request)
                 }
                 .onChange(of: window?.id) { pendingFileLink = nil
+                    pendingFilesRequest = nil
                     pendingBrowserLink = nil
                 }
                 .onChange(of: fileWorkspace.selectedID) { pendingFileLink = nil
+                    pendingFilesRequest = nil
                     pendingBrowserLink = nil
                 }
                 .onChange(of: browserSelection.selectedID) { pendingFileLink = nil
+                    pendingFilesRequest = nil
                     pendingBrowserLink = nil
                 }
                 .onChange(of: selectedSimulatorID) { pendingFileLink = nil
+                    pendingFilesRequest = nil
                     pendingBrowserLink = nil
                 }
         }
@@ -400,7 +441,7 @@
                         selectedBrowserID: browserSelection.selectedID,
                         selectedSimulatorID: selectedSimulatorID,
                         isConnected: relayClient.isHostConnected,
-                        canOpenFiles: relayClient.isHostConnected && relayClient.hostSupportsFileBrowsing && fileWorkspace.tabs.count < 30,
+                        canOpenFiles: relayClient.isHostConnected && relayClient.hostSupportsPaneFiles,
                         canOpenBrowser: relayClient.hostSupportsPaneBrowser,
                         isCreatingWindow: isCreatingWindow,
                         forkUnavailableReason: agentForkUnavailableReason,
@@ -501,12 +542,15 @@
                 let destination = try await TerminalFileDestination.resolve(
                     path: request.path, context: fileContext, source: source
                 )
+                let descriptor = try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: request.paneID)
                 try Task.checkCancellation()
                 guard
                     pendingFileLink == request, window?.id == origin.id,
                     window?.panes.contains(where: { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext }) == true,
                     fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && selectedSimulatorID == nil else { return }
-                try fileWorkspace.open(destination, windowID: origin.stableId, paneID: request.paneID)
+                let tab = fileWorkspace.adopt(descriptor)
+                tab.openTerminalFile(destination, paneID: request.paneID)
+                fileWorkspace.selectedID = tab.id
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
@@ -634,6 +678,7 @@
                     pendingBrowserLink = nil
                     pendingFileLink = nil
                     showsWindowTabs = false
+                    fileWorkspace.selectedID = nil
                 }
                 .onChange(of: activeService?.session?.state) {
                     if activeSessionHasBlockingForm {
@@ -789,11 +834,10 @@
                 switch operation {
                 case .select:
                     selectTerminalWindow(target)
-                case .openFiles:
-                    browserSelection.selectedID = nil
-                    selectedSimulatorID = nil
+                case .openFiles,
+                     .openAnotherFiles:
                     guard
-                        relayClient.hostSupportsFileBrowsing, fileWorkspace.tabs.count < 30,
+                        relayClient.hostSupportsPaneFiles,
                         let paneID = FileBrowserTab.sourcePaneID(
                             in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
                         ) else {
@@ -803,7 +847,7 @@
                     cancelCreationFollowUp()
                     isKeyboardActive = false
                     quickActionPresentation.dismiss()
-                    fileWorkspace.open(paneID: paneID)
+                    pendingFilesRequest = .init(paneID: paneID, new: operation == .openAnotherFiles)
                 case .openBrowser:
                     guard
                         let paneID = FileBrowserTab.sourcePaneID(
@@ -843,7 +887,11 @@
                     let sourceWindow = sessionWindows.first(where: { $0.panes.contains { $0.paneId == sourcePaneID } }) {
                     selectTerminalWindow(sourceWindow, preferredPaneID: sourcePaneID)
                 }
-                fileWorkspace.close(id)
+                if fileWorkspace.tabs.first(where: { $0.id == id })?.hostTab != nil {
+                    pendingFilesCloseID = id
+                } else {
+                    fileWorkspace.close(id)
+                }
             case .newTerminal:
                 browserSelection.selectedID = nil
                 selectedSimulatorID = nil

@@ -1,5 +1,6 @@
 import AppKit
 import CtrlxCommon
+import CtrlxNetworking
 import Observation
 
 /// Presentation identity, independent of session names and tmux window indices.
@@ -143,6 +144,68 @@ final class DetachedTerminalWindows {
     func owner(hostID: String?, windowID: String) -> UUID? {
         guard let target = DetachedTerminalTarget(hostID: hostID, windowID: windowID) else { return nil }
         return workspace(containing: target)?.id
+    }
+
+    /// Project each Host tab once across this Mac's native windows; retain navigation when moving it.
+    func syncFileTabs(hostID: String?, descriptors: [HostFileTab], sessionWindows: [String: [String]]) {
+        let stores = [mainTabs] + workspaces.values.map(\.tabs)
+        func sessions(_ store: WorkbenchTabStore) -> [String: SessionFileTabsState] {
+            if let hostID {
+                return Dictionary(uniqueKeysWithValues: store.remote.filter { $0.key.hostId == hostID }.map { ($0.key.sessionName, $0.value) })
+            }
+            return store.local
+        }
+        let live = Set(descriptors.map(\.id))
+        var movedFrom: Set<ObjectIdentifier> = []
+        for descriptor in descriptors {
+            let existing = stores.flatMap { store in sessions(store).map { (store, $0.key, $0.value) } }
+                .first { $0.2.directoryTabs[descriptor.id] != nil }
+            let old = existing?.2.directoryTabs[descriptor.id]?.hostTab
+            let destinationStore: WorkbenchTabStore
+            if let existing, old?.sessionName == descriptor.sessionName, old?.windowID == descriptor.windowID {
+                destinationStore = existing.0
+            } else {
+                destinationStore = store(for: owner(hostID: hostID, windowID: descriptor.windowID)) ?? mainTabs
+            }
+            let destination = destinationStore.tabs(hostID: hostID, session: descriptor.sessionName)
+            if let existing, existing.2 !== destination {
+                existing.2.move(.file(descriptor.id), to: destination)
+                movedFrom.insert(ObjectIdentifier(existing.2))
+            }
+            if let tab = destination.directoryTabs[descriptor.id] {
+                tab.updateHostTab(descriptor)
+            } else {
+                destination.directoryTabs[descriptor.id] = FileBrowserTab(hostTab: descriptor)
+                destination.openFileTabs.append(.init(id: descriptor.id, path: "Files", directoryPath: "", isDirectory: true))
+            }
+        }
+        for store in stores {
+            for (session, tabs) in sessions(store) {
+                let removed = tabs.directoryTabs.values.filter { $0.hostTab != nil && !live.contains($0.id) }
+                for tab in removed {
+                    tabs.removeFileTab(tab.id)
+                }
+                guard !removed.isEmpty || movedFrom.contains(ObjectIdentifier(tabs)) else { continue }
+                let ids = (sessionWindows[session] ?? []).filter { id in
+                    self.store(for: owner(hostID: hostID, windowID: id)) === store
+                }
+                tabs.reconcileRightPaneSelection(sessionWindowIDs: ids, includeLocalTabs: hostID == nil)
+                tabs.repairLeftContent(hasTerminal: ids.contains { !tabs.rightSide.contains(.window($0)) })
+            }
+        }
+    }
+
+    func claimFile(_ id: UUID, hostID: String?, session: String, workspaceID: UUID?) {
+        guard let destination = store(for: workspaceID)?.tabs(hostID: hostID, session: session) else { return }
+        for store in [mainTabs] + workspaces.values.map(\.tabs) {
+            guard
+                let source = store.existing(hostID: hostID, session: session), source !== destination,
+                source.directoryTabs[id] != nil else { continue }
+            if source.move(.file(id), to: destination) {
+                presentationRevision += 1
+                closeEmptyWorkspaces()
+            }
+        }
     }
 
     func browserOwner(hostID: String?, session: String, id: UUID, windowID: String?) -> UUID? {
