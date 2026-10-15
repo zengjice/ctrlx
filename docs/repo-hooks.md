@@ -3,8 +3,10 @@
 This repo ships a few **project-scoped Claude Code hooks** in `.claude/settings.json`.
 They run for anyone working in the repo with Claude Code and exist to keep the
 development workflow consistent. They are unrelated to the `ctrlx` plugin hooks
-(`plugin/**/hooks/`), which forward session events to the monitoring app and never
-talk back to the agent.
+(`plugin/**/hooks/`), which forward session events to the monitoring app. The
+plugin's `SessionStart` hook also supplies the shared
+[file-reference output convention](file-browser.md#agent-output-convention-and-migration)
+as agent context; it does not enforce this repository's development workflow.
 
 The tool-independent requirements live in [CONTRIBUTING.md](../CONTRIBUTING.md)
 and the [PR checklist](../.github/PULL_REQUEST_TEMPLATE.md). Other AI tools must
