@@ -11,10 +11,9 @@ public struct SessionWorktreeStatusModifier: ViewModifier {
     }
 
     public func body(content: Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            content
-            WorktreeStatusButton(repositories: repositories, paths: paths, pendingOnly: true)
-                .padding(.leading, 28)
+        HStack(spacing: 4) {
+            content.frame(maxWidth: .infinity, alignment: .leading)
+            WorktreeStatusButton(repositories: repositories, paths: paths, pendingOnly: true, compact: true)
         }
     }
 }
@@ -25,32 +24,47 @@ public struct WorktreeStatusButton: View {
     let repositories: [RepositoryWorktreeStatus]
     let paths: Set<String>?
     let pendingOnly: Bool
+    let compact: Bool
     @State private var isPresented = false
 
-    public init(repositories: [RepositoryWorktreeStatus], paths: Set<String>? = nil, pendingOnly: Bool = false) {
+    public init(repositories: [RepositoryWorktreeStatus], paths: Set<String>? = nil, pendingOnly: Bool = false, compact: Bool = false) {
         self.repositories = repositories
         self.paths = paths
         self.pendingOnly = pendingOnly
+        self.compact = compact
     }
 
     public var body: some View {
         let selection = WorktreeStatusSelection(repositories: repositories, paths: paths)
         Group {
-            if !selection.repositories.isEmpty, !pendingOnly || selection.badgeText != nil || isPresented {
+            if !selection.repositories.isEmpty, compact || !pendingOnly || selection.badgeText != nil || isPresented {
                 Button { isPresented = true } label: {
-                    Label(pendingOnly ? selection.badgeText ?? "Worktrees" : "Worktrees", symbol: .arrowTriangleBranch)
-                        .font(.caption)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .padding(.vertical, 3)
-                    #if os(iOS)
-                        .frame(minHeight: 44, alignment: .leading)
-                    #endif
+                    if compact {
+                        Label(selection.statusDescription, symbol: statusSymbol(selection.status))
+                            .labelStyle(.iconOnly)
+                            .font(.caption)
+                            .foregroundStyle(selection.status == .pending ? Color.orange : .secondary)
+                        #if os(iOS)
+                            .frame(width: 44, height: 44)
+                        #else
+                            .frame(width: 24, height: 24)
+                        #endif
+                            .contentShape(.rect)
+                    } else {
+                        Label(pendingOnly ? selection.badgeText ?? "Worktrees" : "Worktrees", symbol: .arrowTriangleBranch)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .padding(.vertical, 3)
+                        #if os(iOS)
+                            .frame(minHeight: 44, alignment: .leading)
+                        #endif
+                    }
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier(pendingOnly ? "worktree-pending-status" : "worktree-list-button")
-                .help("Worktree commits not yet in local main")
+                .help(compact ? selection.statusDescription : "Worktree commits not yet in their local base branch")
             }
         }
         #if os(macOS)
@@ -65,6 +79,15 @@ public struct WorktreeStatusButton: View {
             }
         }
         #endif
+    }
+
+    private func statusSymbol(_ status: WorktreeStatusSelection.Status?) -> Symbols {
+        switch status {
+        case .pending: .arrowTriangleBranch
+        case .merged: .checkmark
+        case .unavailable,
+             nil: .minus
+        }
     }
 }
 
@@ -88,7 +111,7 @@ public struct WorktreeStatusList: View {
             #endif
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    Text("Compared with local main by commit history. Uncommitted changes and squash/cherry-pick equivalence are not included.")
+                    Text("Each repository uses its unique local main or master branch. Counts compare commit history; uncommitted changes and squash/cherry-pick equivalence are not included.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     ForEach(repositories) { repository in
@@ -97,11 +120,14 @@ public struct WorktreeStatusList: View {
                                 .font(.headline)
                             if let reason = repository.unavailableReason {
                                 Text(reason).font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Text("Compared with local \(repository.baseBranch ?? "main")")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                             ForEach(repository.worktrees) { worktree in
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(worktree.branch ?? "Detached HEAD").font(.subheadline.weight(.medium))
-                                    Text(status(worktree)).font(.caption)
+                                    Text(status(worktree, baseBranch: repository.baseBranch ?? "main")).font(.caption)
                                     Text(worktree.path)
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
@@ -132,14 +158,14 @@ public struct WorktreeStatusList: View {
         #endif
     }
 
-    private func status(_ worktree: WorktreeMergeStatus) -> String {
+    private func status(_ worktree: WorktreeMergeStatus, baseBranch: String) -> String {
         if let reason = worktree.unavailableReason {
             return reason
         }
         guard let count = worktree.pendingCommitCount else { return "Comparison unavailable" }
-        if worktree.branch == "main" {
+        if worktree.branch == baseBranch {
             return "Base branch"
         }
-        return count == 0 ? "No commits pending merge" : "\(count) commits not yet in main"
+        return count == 0 ? "No commits pending merge" : "\(count) commits not yet in \(baseBranch)"
     }
 }

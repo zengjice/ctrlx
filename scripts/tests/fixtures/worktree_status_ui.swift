@@ -2,16 +2,27 @@ import AppKit
 import SwiftUI
 
 /// Only the symbol dependency is inert; the models and views are production code.
-enum Symbols {
-    case arrowTriangleBranch
+enum Symbols: String {
+    case arrowTriangleBranch = "arrow.triangle.branch"
+    case checkmark
+    case minus
+
     var image: Image {
-        Image(systemName: "arrow.triangle.branch")
+        Image(systemName: rawValue)
     }
 }
 
-extension Label where Title == Text, Icon == Image {
+struct WorktreeProbeIcon: View {
+    let symbol: Symbols
+
+    var body: some View {
+        symbol.image.background { WorktreeProbeAnchor(id: "symbol:\(symbol.rawValue)") }
+    }
+}
+
+extension Label where Title == Text, Icon == WorktreeProbeIcon {
     init(_ title: String, symbol: Symbols) {
-        self.init { Text(title) } icon: { symbol.image }
+        self.init { Text(title) } icon: { WorktreeProbeIcon(symbol: symbol) }
     }
 }
 
@@ -23,7 +34,9 @@ struct WorktreeProbeAnchor: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_: NSView, context _: Context) {}
+    func updateNSView(_ view: NSView, context _: Context) {
+        view.identifier = .init(id)
+    }
 }
 
 @MainActor @Observable
@@ -69,17 +82,20 @@ final class WorktreeFixtureDelegate: NSObject, NSApplicationDelegate {
                 try require(find("entry", in: hosting) != nil, "repository entry missing")
                 let badge = find("badge", in: hosting)
                 try require(badge != nil, "pending badge missing")
+                try requireSymbols([.arrowTriangleBranch, .arrowTriangleBranch], in: hosting)
                 if let badge {
                     let rect = badge.convert(badge.bounds, to: hosting)
                     try require(rect.minX >= 0 && rect.maxX <= 134 && rect.width > 0, "badge overflows 133-point sidebar: \(rect)")
                 }
                 state.count = 0
                 try await settle(hosting)
-                try require(find("badge", in: hosting) == nil, "merged badge did not disappear")
+                try require(find("badge", in: hosting) != nil, "merged status button disappeared")
+                try requireSymbols([.arrowTriangleBranch, .checkmark], in: hosting)
                 try require(find("entry", in: hosting) != nil, "merged repository lost its list entry")
                 state.count = nil
                 try await settle(hosting)
                 try require(find("badge", in: hosting) != nil, "unavailable comparison looked merged")
+                try requireSymbols([.arrowTriangleBranch, .minus], in: hosting)
                 print("PASS: narrow sidebar, separate controls, live merged and unavailable states")
                 window.close()
                 NSApp.terminate(nil)
@@ -97,15 +113,17 @@ final class WorktreeFixtureDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func find(_ id: String, in view: NSView) -> NSView? {
-        if view.identifier?.rawValue == id {
-            return view
-        }
-        for child in view.subviews {
-            if let result = find(id, in: child) {
-                return result
-            }
-        }
-        return nil
+        descendants(of: view).first { $0.identifier?.rawValue == id }
+    }
+
+    private func requireSymbols(_ symbols: [Symbols], in view: NSView) throws {
+        let actual = descendants(of: view).compactMap { $0.identifier?.rawValue }.filter { $0.hasPrefix("symbol:") }.sorted()
+        let expected = symbols.map { "symbol:\($0.rawValue)" }.sorted()
+        try require(actual == expected, "expected icons \(expected), got \(actual)")
+    }
+
+    private func descendants(of view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap { descendants(of: $0) }
     }
 
     private func require(_ condition: Bool, _ message: String) throws {

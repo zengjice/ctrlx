@@ -208,7 +208,9 @@ updates, but verify decoding, capability gating and envelope limits per change.
   **+** in each session-list header (including Mac's Local section), without a
   separate ordering row or strategy text. Restoring clears only that device's
   manual rank for the section. Mac resumes its configured sort mode; iOS resumes
-  the activity-first rule. The button is disabled when no manual rank is saved.
+  the activity-first rule. A single click restores the order. On Mac the button
+  has a 24-point hit area; with no manual rank it is disabled, explicitly dimmed,
+  and its tooltip says the section is already using automatic order.
   Mac also retains the section header's right-click menu action.
   No manual ordering is sent to tmux or the Relay.
 

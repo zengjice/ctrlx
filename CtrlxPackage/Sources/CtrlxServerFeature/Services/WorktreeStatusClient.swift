@@ -31,7 +31,7 @@ actor WorktreeStatusReader {
 
     private struct Comparison: Hashable {
         let repository: String
-        let main: String
+        let base: String
         let head: String
     }
 
@@ -61,7 +61,7 @@ actor WorktreeStatusReader {
             do {
                 let entries = try Self.parse(await git(directory, ["worktree", "list", "--porcelain", "-z"]))
                     .filter { !$0.prunable && !$0.bare && FileManager.default.fileExists(atPath: $0.path) }
-                let main = try? await git(directory, ["rev-parse", "--verify", "refs/heads/main^{commit}"])
+                let (baseBranch, baseHead, baseReason) = await comparisonBase(in: directory)
                 var worktrees: [WorktreeMergeStatus] = []
                 for entry in entries {
                     let listedPath = canonical(entry.path)
@@ -82,37 +82,39 @@ actor WorktreeStatusReader {
                     branchesByRoot[path] = entry.branch ?? "(detached)"
                     var count: Int?
                     var reason: String?
-                    if entry.branch == nil {
+                    if let baseReason {
+                        reason = baseReason
+                    } else if entry.branch == nil {
                         reason = "Detached HEAD — no branch to compare."
-                    } else if let main, let head = entry.head, !head.allSatisfy({ $0 == "0" }) {
-                        let comparison = Comparison(repository: repository, main: main, head: head)
+                    } else if let baseHead, let baseBranch, let head = entry.head, !head.allSatisfy({ $0 == "0" }) {
+                        let comparison = Comparison(repository: repository, base: baseHead, head: head)
                         usedComparisons.insert(comparison)
                         if let cached = counts[comparison] {
                             count = cached
                         } else {
                             do {
-                                let output = try await git(directory, ["rev-list", "--count", "\(main)..\(head)", "--"])
+                                let output = try await git(directory, ["rev-list", "--count", "\(baseHead)..\(head)", "--"])
                                 guard let value = Int(output), value >= 0 else {
                                     throw WorktreeStatusError("Git returned an invalid commit count.")
                                 }
                                 counts[comparison] = value
                                 count = value
                             } catch {
-                                reason = "Unable to compare with main: \(error.localizedDescription)"
+                                reason = "Unable to compare with \(baseBranch): \(error.localizedDescription)"
                             }
                         }
                     } else {
-                        reason = main == nil ? "Local main is unavailable." : "This worktree has no commits yet."
+                        reason = "This worktree has no commits yet."
                     }
-                    worktrees.append(.init(path: path, branch: entry.branch, pendingCommitCount: count, unavailableReason: reason))
+                    worktrees.append(.init(path: path, branch: entry.branch, pendingCommitCount: count, unavailableReason: reason, baseBranch: baseBranch ?? "main"))
                 }
-                result.repositories.append(.init(id: repository, worktrees: worktrees))
+                result.repositories.append(.init(id: repository, worktrees: worktrees, unavailableReason: baseReason, baseBranch: baseBranch))
             } catch {
                 let reason = "Unable to read worktrees: \(error.localizedDescription)"
                 let known = (rootsByRepository[repository] ?? []).sorted().map {
                     WorktreeMergeStatus(path: $0, branch: nil, unavailableReason: reason)
                 }
-                result.repositories.append(.init(id: repository, worktrees: known, unavailableReason: reason))
+                result.repositories.append(.init(id: repository, worktrees: known, unavailableReason: reason, baseBranch: nil))
             }
         }
         counts = counts.filter { usedComparisons.contains($0.key) }
@@ -120,6 +122,23 @@ actor WorktreeStatusReader {
             result.locations[path] = .init(root: root, branch: branchesByRoot[root])
         }
         return result
+    }
+
+    private func comparisonBase(in directory: String) async -> (branch: String?, head: String?, reason: String?) {
+        do {
+            let refs = try Set(await git(directory, ["for-each-ref", "--format=%(refname)", "refs/heads/main", "refs/heads/master"]).split(separator: "\n").map(String.init))
+            let candidates = ["main", "master"].filter { refs.contains("refs/heads/\($0)") }
+            guard candidates.count == 1, let branch = candidates.first else {
+                let reason = candidates.isEmpty
+                    ? "No local main or master branch is available."
+                    : "Both local main and master exist. A unique base branch is required."
+                return (nil, nil, reason)
+            }
+            let head = try await git(directory, ["rev-parse", "--verify", "refs/heads/\(branch)^{commit}"])
+            return (branch, head, nil)
+        } catch {
+            return (nil, nil, "Unable to read base branch: \(error.localizedDescription)")
+        }
     }
 
     private func primaryWorktreePath(repository: String, knownRoots: Set<String>) async throws -> String {

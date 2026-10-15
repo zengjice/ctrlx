@@ -58,6 +58,12 @@ struct WorktreeStatusTests {
             await manager.refreshGitBranches()
             #expect(pushes == 2)
             #expect(manager.worktreeRepositories.first?.worktrees.first?.pendingCommitCount == 0)
+            current.withValue { value in
+                value.repositories = [.init(id: "/repo/.git", worktrees: [.init(path: "/repo/ux", branch: "ux", pendingCommitCount: 0, baseBranch: "master")], baseBranch: "master")]
+            }
+            await manager.refreshGitBranches()
+            #expect(pushes == 3)
+            #expect(manager.worktreeRepositories.first?.baseBranch == "master")
             manager.updatePaneStates(from: [pane(path: "/not-git")])
             #expect(manager.paneStates["%5"]?.gitWorktreePath == nil)
         }
@@ -286,12 +292,73 @@ struct WorktreeStatusTests {
         }
     }
 
-    @Test("Missing local main and Git failures never become zero pending commits")
+    @Test("Each repository requires exactly one local main or master, including ordinary checkouts")
+    func baseBranchSelection() async throws {
+        try await withDependencies {
+            $0.continuousClock = ContinuousClock()
+            $0[ProcessRunner.self] = .liveValue
+        } operation: {
+            let first = try await WorktreeGitFixture.make()
+            defer { try? FileManager.default.removeItem(at: first.root) }
+            let second = try await WorktreeGitFixture.make()
+            defer { try? FileManager.default.removeItem(at: second.root) }
+            _ = try await second.git(["branch", "-m", "master"])
+            for fixture in [first, second] {
+                _ = try await fixture.git(["checkout", "-b", "feature"])
+                _ = try await fixture.git(["commit", "--allow-empty", "-m", "feature change"])
+            }
+            let reader = WorktreeStatusReader()
+            let paths = [first.repo.path, second.repo.path]
+            let result = await reader.refresh(paths: paths)
+            #expect(result.repositories.count == 2)
+            for (fixture, expectedBase) in [(first, "main"), (second, "master")] {
+                let repository = try #require(result.repositories.first { $0.worktrees.contains { $0.path == fixture.repo.path } })
+                #expect(repository.baseBranch == expectedBase)
+                #expect(repository.worktrees.first?.pendingCommitCount == 1)
+                #expect(result.locations[fixture.repo.path]?.branch == "feature")
+                #expect(WorktreeStatusSelection(repositories: result.repositories, paths: [fixture.repo.path]).badgeText == "feature · 1 to \(expectedBase)")
+            }
+
+            // Even equal tips are ambiguous. A cached successful count must not leak through.
+            _ = try await second.git(["branch", "main", "master"])
+            let ambiguous = await reader.refresh(paths: paths)
+            let secondRepository = try #require(ambiguous.repositories.first { $0.worktrees.contains { $0.path == second.repo.path } })
+            #expect(secondRepository.baseBranch == nil)
+            #expect(secondRepository.worktrees.allSatisfy { $0.pendingCommitCount == nil })
+            #expect(secondRepository.unavailableReason?.contains("Both local main and master") == true)
+            #expect(ambiguous.locations[second.repo.path]?.branch == "feature")
+            #expect(WorktreeStatusSelection(repositories: ambiguous.repositories, paths: [second.repo.path]).status == .unavailable)
+            #expect(WorktreeStatusSelection(repositories: ambiguous.repositories, paths: Set(paths)).status == .pending)
+
+            _ = try await second.git(["branch", "-d", "main"])
+            _ = try await second.git(["checkout", "master"])
+            _ = try await second.git(["merge", "--ff-only", "feature"])
+            _ = try await second.git(["checkout", "feature"])
+            let merged = await reader.refresh(paths: paths)
+            #expect(WorktreeStatusSelection(repositories: merged.repositories, paths: [second.repo.path]).status == .merged)
+            #expect(WorktreeStatusSelection(repositories: merged.repositories, paths: Set(paths)).badgeText == "feature · 1 to main")
+
+            _ = try await second.git(["branch", "-m", "master", "trunk"])
+            _ = try await second.git(["branch", "main/topic"])
+            _ = try await second.git(["branch", "master/topic"])
+            _ = try await second.git(["update-ref", "refs/remotes/origin/main", "HEAD"])
+            let missing = await reader.refresh(paths: [second.repo.path])
+            #expect(missing.repositories.first?.baseBranch == nil)
+            #expect(missing.entry("feature")?.pendingCommitCount == nil)
+            #expect(missing.entry("feature")?.unavailableReason?.contains("No local main or master") == true)
+        }
+    }
+
+    @Test("Missing local base branches and Git failures never become zero pending commits")
     func unavailable() async throws {
         let failComparison = LockIsolated(false)
+        let failBase = LockIsolated(false)
         try await withDependencies {
             $0.continuousClock = ContinuousClock()
             $0[ProcessRunner.self].run = { executable, arguments, environment, timeout in
+                if failBase.value, arguments.contains("for-each-ref") {
+                    return .init(exitCode: 1, stdout: Data(), stderr: Data("base lookup failure".utf8))
+                }
                 if failComparison.value, arguments.contains("rev-list") {
                     return .init(exitCode: 1, stdout: Data(), stderr: Data("fixture failure".utf8))
                 }
@@ -312,6 +379,11 @@ struct WorktreeStatusTests {
             #expect(failed.entry("trunk")?.unavailableReason?.contains("fixture failure") == true)
             failComparison.setValue(false)
             #expect(await reader.refresh(paths: [fixture.repo.path]).entry("trunk")?.pendingCommitCount == 0)
+            failBase.setValue(true)
+            let baseFailure = await reader.refresh(paths: [fixture.repo.path])
+            #expect(baseFailure.locations[fixture.repo.path]?.branch == "trunk")
+            #expect(baseFailure.entry("trunk")?.pendingCommitCount == nil)
+            #expect(baseFailure.entry("trunk")?.unavailableReason?.contains("base lookup failure") == true)
             #expect(await reader.refresh(paths: [fixture.root.path]).repositories.isEmpty)
         }
     }

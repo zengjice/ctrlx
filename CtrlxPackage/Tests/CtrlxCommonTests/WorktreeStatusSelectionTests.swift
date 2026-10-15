@@ -23,6 +23,53 @@ struct WorktreeStatusSelectionTests {
         #expect(WorktreeStatusSelection(repositories: [unknown]).hasUnavailableStatus)
     }
 
+    @Test("Compact session status distinguishes pending, merged, unavailable and unrelated worktrees")
+    func compactStatus() {
+        let unknown = RepositoryWorktreeStatus(id: "/unknown/.git", worktrees: [
+            .init(path: "/unknown", branch: nil, unavailableReason: "Detached"),
+        ])
+        let repositories = [repository, unknown]
+        #expect(WorktreeStatusSelection(repositories: repositories, paths: ["/repo/ux"]).status == .pending)
+        #expect(WorktreeStatusSelection(repositories: repositories, paths: ["/repo"]).status == .merged)
+        #expect(WorktreeStatusSelection(repositories: repositories, paths: ["/unknown"]).status == .unavailable)
+        #expect(WorktreeStatusSelection(repositories: repositories, paths: ["/repo", "/unknown"]).status == .unavailable)
+        #expect(WorktreeStatusSelection(repositories: repositories, paths: ["/repo/ux", "/unknown"]).status == .pending)
+        #expect(WorktreeStatusSelection(repositories: repositories, paths: ["/elsewhere"]).status == nil)
+        #expect(WorktreeStatusSelection(repositories: repositories, paths: []).status == nil)
+
+        let merged = RepositoryWorktreeStatus(id: repository.id, worktrees: [
+            .init(path: "/repo/ux", branch: "ux", pendingCommitCount: 0),
+        ])
+        let selection = WorktreeStatusSelection(repositories: [merged], paths: ["/repo/ux"])
+        #expect(selection.status == .merged)
+        #expect(selection.statusDescription == "No commits pending merge into local main")
+    }
+
+    @Test("Multiple repositories use their own bases and preserve mixed pending, merged and unknown results")
+    func mixedRepositories() {
+        let master = RepositoryWorktreeStatus(id: "/second/.git", worktrees: [
+            .init(path: "/second/fix", branch: "fix", pendingCommitCount: 2, baseBranch: "master"),
+            .init(path: "/second/merged", branch: "merged", pendingCommitCount: 0, baseBranch: "master"),
+            .init(path: "/second/unknown", branch: nil, unavailableReason: "Detached HEAD"),
+        ], baseBranch: "master")
+        let repositories = [repository, master]
+        let single = WorktreeStatusSelection(repositories: repositories, paths: ["/second/fix", "/repo", "/not-git"])
+        #expect(single.badgeText == "fix · 2 to master")
+        let multiple = WorktreeStatusSelection(repositories: repositories, paths: Set(["/repo/ux", "/second/fix", "/second/fix"]))
+        #expect(multiple.pending.count == 2)
+        #expect(multiple.badgeText == "2 worktrees to merge")
+        let mixed = WorktreeStatusSelection(repositories: repositories, paths: ["/repo/ux", "/second/merged", "/second/unknown"])
+        #expect(mixed.status == .pending)
+        #expect(mixed.statusDescription == "ux · 3 to main · Some comparisons unavailable")
+        #expect(WorktreeStatusSelection(repositories: repositories, paths: ["/repo", "/second/unknown"]).status == .unavailable)
+        let merged = WorktreeStatusSelection(repositories: repositories, paths: ["/repo", "/second/merged"])
+        #expect(merged.status == .merged)
+        #expect(merged.statusDescription == "No commits pending merge into local main/master")
+        #expect(WorktreeStatusSelection(repositories: repositories, paths: ["/not-git"]).status == nil)
+        let legacy = RepositoryWorktreeStatus(id: repository.id, worktrees: repository.worktrees, baseBranch: nil)
+        #expect(WorktreeStatusSelection(repositories: [legacy], paths: ["/repo/ux"]).badgeText == "ux · 3 to main")
+    }
+
     @Test("Identical paths on different Hosts stay isolated; downgrade and disconnect clear metadata")
     func hostIsolation() {
         let store = SessionStore()

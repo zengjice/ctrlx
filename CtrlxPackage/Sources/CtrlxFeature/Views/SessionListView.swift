@@ -564,6 +564,11 @@
                     }
                 }
             }
+            .accessibilityValue(cliSessionState?.statusLabel ?? claudePaneInSession?.agentSession?.statusLabel ?? "")
+            .modifier(SessionWorktreeStatusModifier(
+                repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [],
+                paths: Set(session.windows.flatMap(\.panes).compactMap(\.gitWorktreePath))
+            ))
             .padding(.leading, 16)
             .padding(.bottom, 16)
             .overlay(alignment: .leading) {
@@ -577,11 +582,6 @@
                         .padding(.leading, 16)
                 }
             }
-            .accessibilityValue(cliSessionState?.statusLabel ?? claudePaneInSession?.agentSession?.statusLabel ?? "")
-            .modifier(SessionWorktreeStatusModifier(
-                repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [],
-                paths: Set(session.windows.flatMap(\.panes).compactMap(\.gitWorktreePath))
-            ))
             .modifier(SessionSwipeActionsModifier(
                 session: session,
                 isDisabled: connection?.isHostConnected != true,

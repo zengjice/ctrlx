@@ -87,6 +87,7 @@ public enum Symbols: String {
     case magnifyingglass
     case mic
     case micFill = "mic.fill"
+    case minus
     case minusCircleFill = "minus.circle.fill"
     case moonFill = "moon.fill"
     case number

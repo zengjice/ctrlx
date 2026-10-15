@@ -891,12 +891,15 @@ last-known layout. See `docs/folder-layout-persistence-plan.md`.
 The Mac Host's existing five-second pane validation also reads Git worktree
 metadata. `WorktreeStatusReader` groups live terminal and visible local Git-tab
 directories by their canonical common Git directory, enumerates all existing
-worktrees (including those without sessions), and compares their captured HEADs with **local**
-`refs/heads/main`. Counts use commit ancestry (`rev-list --count main..HEAD`),
+worktrees (including those without sessions), and compares their captured HEADs
+with each repository's unique **local** `main` or `master` branch. Exactly one
+must exist: both present is ambiguous even when their tips match; neither present
+is unavailable. Remote-tracking refs and similarly prefixed names are not bases.
+Counts use commit ancestry (`rev-list --count <base>..HEAD`),
 not upstream tracking, dirty files, or squash/cherry-pick patch equivalence.
-Successful counts are cached by repository/main/HEAD; a change to main refreshes
+Successful counts are cached by repository/base commit/HEAD; a change to the base refreshes
 all affected comparisons. There is no fetch, merge or filesystem mutation.
-Detached HEAD, missing/unborn main and read/comparison errors are unavailable
+Detached HEAD, missing/ambiguous/unborn bases and read/comparison errors are unavailable
 states, never a zero count. Prunable/missing and bare worktree entries are omitted.
 Discovery covers repositories referenced by live panes or visible local Git tabs;
 this is not a disk scan or a persistent catalog of repositories whose sessions
@@ -911,15 +914,32 @@ cannot locate an unobserved primary checkout; only that entry becomes unavailabl
 and linked worktrees retain their branches and counts. The common Git directory
 remains the repository key.
 `SessionStateMessage.worktreeRepositories` carries one optional repository list
-per snapshot. A changed count triggers a Viewer push even when the terminal's
-branch name did not change. Both fields are additive; old snapshots omit them,
+per snapshot, including each repository's optional `baseBranch`. Older Host
+snapshots omit the base name and their successful counts refer to main.
+Counts against master use an additive `pendingBaseCommitCount` wire field;
+the original `pendingCommitCount` key remains main-only. Older Viewers therefore
+show master comparisons as unavailable instead of labeling them as main.
+A changed count or base triggers a Viewer push even when the terminal's
+branch name did not change. These fields are additive; old snapshots omit them,
 old Viewers ignore them, and no new command or Relay change is required.
 `SessionStore` scopes this metadata by Host pair ID and clears it on downgrade
 or disconnect. Viewers never inspect those paths on their own filesystem.
 
-Mac local/Viewer sidebars and the iOS session list show a separate, clickable
-pending-merge badge, independent of configured sidebar fields and notification
-state. A session spanning several worktrees counts each worktree once. Badges
+Mac local/Viewer sidebars and the iOS session list show a compact status button
+at the trailing edge of each session: an orange branch for pending commits, a
+secondary checkmark when all selected worktrees are in their own local base,
+or a dash when comparison is unavailable. Sessions without Git metadata omit
+the button. Mac hovering shows the status/count without increasing row height;
+iOS keeps a 44-point tap target within the session row. These buttons are
+independent of configured sidebar fields and notification state.
+A session's terminal panes select worktrees by their current directory, including
+ordinary repositories' primary checkouts. Non-Git paths contribute no status;
+sessions with only those paths omit the icon. Several panes in one worktree count
+it once. Different worktrees and repositories compare independently. Any pending
+worktree takes icon priority, with a tooltip note if other comparisons are
+unavailable; without pending commits, any unavailable comparison takes priority
+over the merged checkmark. The detail list names each repository's base.
+Status buttons
 open the complete associated repository list; the Host section's Worktrees
 entry remains available when everything is merged. The local Mac Git page also
 has a Worktrees entry. Mac uses a popover and iOS a sheet; their contents follow

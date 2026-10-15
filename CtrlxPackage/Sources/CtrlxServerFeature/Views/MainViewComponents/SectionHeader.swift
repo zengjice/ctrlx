@@ -30,11 +30,15 @@ struct SectionHeader<Trailing: View, Popover: View>: View {
                 Button(action: onRestoreAutomaticOrder) {
                     Symbols.arrowUpArrowDown.image
                         .font(.caption)
+                        .foregroundStyle(hasManualSessionOrder ? Color.primary : Color.secondary.opacity(0.5))
+                        .frame(width: 24, height: 24)
+                        .contentShape(.rect)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .disabled(!hasManualSessionOrder)
                 .accessibilityLabel("Restore Automatic Order")
-                .help("Restore Automatic Order")
+                .accessibilityIdentifier("restore-automatic-session-order")
+                .help(hasManualSessionOrder ? "Restore Automatic Order" : "Already using automatic order")
             }
 
             if hasPopover {
