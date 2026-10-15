@@ -4,6 +4,47 @@ import Testing
 
 @Suite("Voice correction budgets and evidence")
 struct VoiceCorrectionBudgetTests {
+    @Test("Long utterances and production vocabulary still fit the legacy byte budget", arguments: [false, true])
+    func legacyLongUtteranceBudget(withContext: Bool) async throws {
+        let sample = try #require(VoiceCorrectionBenchmark.samples.first { $0.id == "long-utterance-completeness" })
+        let original = sample.recognition.primaryTranscript
+        #expect(original.count == 145)
+        let context: VoiceInputContextSnapshot? = withContext ? .init(
+            paneMetadata: ["Session: ctrlx", "Window: feature-bug", "Current path: /tmp/macinput"],
+            terminalText: "oldest" + String(repeating: "unrelated log line\n", count: 1_000) + "newest"
+        ) : nil
+        let input = try #require(try await VoiceCorrectionBudget.onDeviceInput(
+            recognition: sample.recognition,
+            terminalContext: context, contextualTerms: VoiceInputVocabulary.terms(for: context),
+            localeIdentifier: "zh-Hans-CN", contextSize: 4_096, countTokens: { $0.utf8.count }
+        ))
+        #expect(input.instructions.utf8.count + input.prompt.utf8.count + input.maximumResponseTokens + 128 <= 4_096)
+        #expect(input.prompt.contains("Primary draft:\n" + original))
+        #expect(input.maximumResponseTokens == VoiceCorrectionBudget.responseTokens(for: original.utf8.count))
+        if withContext {
+            #expect(input.prompt.contains("Session: ctrlx"))
+            #expect(input.prompt.contains("newest"))
+            #expect(!input.prompt.contains("oldest"))
+        }
+    }
+
+    @Test("Mixed-language instructions and real vocabulary fit the legacy on-device budget", arguments: VoiceCorrectionBenchmark.samples.filter { $0.id.hasPrefix("mixed-") })
+    func mixedLanguageBudget(_ sample: VoiceCorrectionBenchmarkSample) async throws {
+        let context = VoiceInputContextSnapshot(
+            paneMetadata: ["Session: ctrlx", "Window: feature-bug", "Current path: /tmp/macinput"],
+            terminalText: sample.terminalContext
+        )
+        let input = try #require(try await VoiceCorrectionBudget.onDeviceInput(
+            recognition: sample.recognition,
+            terminalContext: context, contextualTerms: VoiceInputVocabulary.terms(for: context),
+            localeIdentifier: "zh-Hans-CN", contextSize: 4_096, countTokens: { $0.utf8.count }
+        ))
+        #expect(input.instructions.utf8.count + input.prompt.utf8.count + input.maximumResponseTokens + 128 <= 4_096)
+        #expect(input.prompt.contains("Primary draft:\n" + sample.recognition.primaryTranscript))
+        #expect(input.prompt.contains("Session: ctrlx"))
+        #expect(input.instructions.contains("Chinese phonetic text"))
+    }
+
     @Test("Fits the entire request and output, preserving recent context and metadata")
     func boundedContext() async throws {
         let original = "检查新窗口的问题，不要发布。"
@@ -107,6 +148,16 @@ struct VoiceCorrectionLiteralTests {
 
 @Suite("Voice input contextual vocabulary")
 struct VoiceInputContextualVocabularyTests {
+    @Test("Shared vocabulary includes common Git terms without duplication or exceeding the speech hint limit")
+    func gitTerms() {
+        let terms = VoiceInputVocabulary.terms
+        for term in ["branch", "commit", "develop", "diff", "main", "master", "merge", "rebase", "worktree"] {
+            #expect(terms.contains(term))
+        }
+        #expect(Set(terms.map { $0.lowercased() }).count == terms.count)
+        #expect(terms.count + 8 <= 100)
+    }
+
     @Test("Adds bounded metadata terms but never consumes terminal output")
     func projectTerms() {
         let context = VoiceInputContextSnapshot(

@@ -11,7 +11,6 @@
         var body: some View {
             Button(action: togglePanel) {
                 Text("/")
-                    .frame(minWidth: 16)
                     .terminalInputControlStyle()
                     .contentShape(Capsule())
             }
@@ -39,8 +38,8 @@
                 Divider()
                 ScrollView {
                     Text(hasSelectedPane
-                         ? "No supported agent is currently identified in this pane. Commands will appear when the host identifies Codex or Claude Code."
-                         : "Select a terminal pane to view agent commands.")
+                        ? "No supported agent is currently identified in this pane. Commands will appear when the host identifies Codex or Claude Code."
+                        : "Select a terminal pane to view agent commands.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)

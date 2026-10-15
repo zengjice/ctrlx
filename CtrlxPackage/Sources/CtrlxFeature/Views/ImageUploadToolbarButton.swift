@@ -56,7 +56,6 @@
                         Label("Attachments", symbol: .plus).labelStyle(.iconOnly)
                     }
                 }
-                .frame(minWidth: 20)
                 .terminalInputControlStyle()
                 .contentShape(Capsule())
             }
@@ -118,7 +117,11 @@
             .onDisappear(perform: handleDisappear)
             .alert("Image Input Failed", isPresented: .init(
                 get: { sourceErrorMessage != nil },
-                set: { if !$0 { sourceErrorMessage = nil } }
+                set: {
+                    if !$0 {
+                        sourceErrorMessage = nil
+                    }
+                }
             )) {
                 Button("OK") { sourceErrorMessage = nil }
             } message: {
@@ -230,7 +233,9 @@
                         try urls.map { url in
                             let hasAccess = url.startAccessingSecurityScopedResource()
                             defer {
-                                if hasAccess { url.stopAccessingSecurityScopedResource() }
+                                if hasAccess {
+                                    url.stopAccessingSecurityScopedResource()
+                                }
                             }
                             let data = try Data(contentsOf: url)
                             return ImageUploadSource(

@@ -460,10 +460,10 @@ detection does not turn Return into a newline. Keeping the delay in the existing
 key protocol prevents network batching from removing this boundary. The command
 cancels pending cursor correction like other toolbar keys.
 It does not arm the background prompt monitor. The button retains the 32-point
-control height. Keyboard is capped at 64 points (and may shrink further or use
-its icon when space is tight), instead of taking all spare width. Send reserves
-64 points, roughly twice the previous icon-only button, and always shows `Send`.
-The first row uses 4-point gaps to keep the wider Send reachable on narrow phones.
+minimum control height. All built-in first-row controls share a 44-point width
+at the default text size, scaling together with Dynamic Type; only custom buttons
+size to their labels. Send always shows `Send` and stays pinned outside the
+horizontal scroll area. The first row keeps its 4-point gaps.
 No terminal renderer, SwiftTerm gesture, wire protocol or host change is needed.
 
 Coverage: `AgentCommandMenuTests` checks catalog isolation, unique command IDs,

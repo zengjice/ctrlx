@@ -158,6 +158,16 @@ enum VoiceCorrectionBenchmark {
     developer@mac ctrlx %
     """
 
+    private static let gitBranchTerminalContext = """
+    developer@mac project % git branch --list
+    * feature-bug
+      main
+      master
+      develop
+    developer@mac project % git status --short
+     M Sources/Input.swift
+    """
+
     static let samples = [
         VoiceCorrectionBenchmarkSample(
             id: "ctrlx-introduction",
@@ -198,6 +208,51 @@ enum VoiceCorrectionBenchmark {
             requiredTerms: ["相近的词", "优化一下"],
             rejectedTerms: ["相信的词", "优化一半"],
             referenceTranscript: "我觉得这些相近的词明显跟整个语句的意思不匹配，你再认真优化一下"
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-git-main",
+            recognition: VoiceRecognitionResult(primaryTranscript: "将本地妹分支合入"),
+            terminalContext: nil,
+            requiredTerms: ["本地", "main", "合入"],
+            rejectedTerms: ["妹"],
+            referenceTranscript: "将本地 main 分支合入",
+            requiresExactMatch: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-git-operations",
+            recognition: VoiceRecognitionResult(primaryTranscript: "先看迪夫，再决定要不要瑞贝斯，不要提交。"),
+            terminalContext: gitBranchTerminalContext,
+            requiredTerms: ["diff", "要不要", "rebase", "不要提交"],
+            rejectedTerms: ["迪夫", "瑞贝斯"],
+            referenceTranscript: "先看 diff，再决定要不要 rebase，不要提交。",
+            requiresExactMatch: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-preserve-family",
+            recognition: VoiceRecognitionResult(primaryTranscript: "我妹妹晚上来吃饭，先不要修改代码。"),
+            terminalContext: gitBranchTerminalContext,
+            requiredTerms: ["我妹妹", "吃饭", "不要修改代码"],
+            rejectedTerms: ["main"],
+            referenceTranscript: "我妹妹晚上来吃饭，先不要修改代码。",
+            requiresExactMatch: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-preserve-negation",
+            recognition: VoiceRecognitionResult(primaryTranscript: "这个分支还没合入，先不要提交。"),
+            terminalContext: gitBranchTerminalContext,
+            requiredTerms: ["还没合入", "不要提交"],
+            rejectedTerms: ["main"],
+            referenceTranscript: "这个分支还没合入，先不要提交。",
+            requiresExactMatch: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-preserve-branch-names",
+            recognition: VoiceRecognitionResult(primaryTranscript: "将本地 master 分支合入主分支，先不要推送。"),
+            terminalContext: gitBranchTerminalContext,
+            requiredTerms: ["master", "主分支", "不要推送"],
+            rejectedTerms: ["main"],
+            referenceTranscript: "将本地 master 分支合入主分支，先不要推送。",
+            requiresExactMatch: true
         ),
         VoiceCorrectionBenchmarkSample(
             id: "already-correct",

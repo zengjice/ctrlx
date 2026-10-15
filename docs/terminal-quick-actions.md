@@ -188,11 +188,23 @@ terminal background, but CtrlX does not claim to know the remote Agent's full
 current draft or changes made from another client. Local revision checks prevent
 local stale insertion, not cross-device draft conflicts.
 
-The shared vocabulary adds at most eight short, deduplicated terms from the captured
+The shared vocabulary includes common Git terms such as `main`, `master`, `develop`,
+`diff` and `rebase`, and adds at most eight short, deduplicated terms from the captured
 session/window names and the current directory's basename. It never mines arbitrary
 terminal output or scans files. Live recognition, the accurate second pass and
 correction use the same per-recording vocabulary; switching sessions cannot carry
 old project terms into a new recording.
+
+Correction explicitly covers Chinese/English code-switching: for example, in a
+branch-merge request, `将本地妹分支合入` can become `将本地 main 分支合入` when
+pronunciation and sentence meaning agree. Vocabulary is evidence, not a replacement
+dictionary: ordinary Chinese (`我妹妹`, `还没合入`), Chinese terminology (`主分支`)
+and explicitly named branches must not be rewritten just because context mentions
+`main`. Both provider and on-device correction use these shared instructions.
+The recognizer choice is unchanged; supplying vocabulary does not guarantee speech
+biasing. Apple documents `AnalysisContext.contextualStrings` for
+[`DictationTranscriber`](https://developer.apple.com/documentation/speech/analysiscontext/contextualstrings).
+Compare recognizers on the same recorded speech before changing their priority.
 
 On iOS/macOS 26+, SpeechAnalyzer uses SpeechTranscriber where available, otherwise
 DictationTranscriber; older systems retain on-device SFSpeechRecognizer support.
@@ -210,6 +222,9 @@ older terminal context first (retaining explicit draft/metadata when possible), 
 drops optional phonetic hints. If the original cannot fit, it stays unchanged. Provider output
 budgets grow with transcript size up to 8,192 tokens; oversized requests are skipped,
 not shortened. Explicitly incomplete/failed provider responses are never inserted.
+Legacy-budget regressions include the bundled 145-character utterance with production
+vocabulary, both without context and with long terminal output; prompt changes must
+leave room for the complete utterance and its response reserve.
 
 Shared validation rejects altered literal numbers, versions, addresses, prefixed
 paths, flags, assignments and backtick-delimited code. Prompts additionally require
@@ -224,7 +239,8 @@ Settings and credentials stay device-local; no credential sync is added. If a
 provider is configured, transcript candidates and bounded terminal context are
 sent directly to it for correction; microphone audio is not uploaded.
 
-Bundled model tests include already-correct input, negation/conditions, literals,
+Bundled model tests include mixed-language Git terms and ordinary-Chinese/branch-name
+counterexamples (even with Git context), already-correct input, negation/conditions, literals,
 irrelevant or instruction-like context and long utterances. Scores penalize differences
 from complete reference transcripts, not just missing/incorrect keywords; unchanged
 and intent-sensitive fixtures require a full match apart from punctuation, spacing
@@ -266,6 +282,9 @@ asset preparation, recording finalization and correction before changing timeout
 
 The first input row's horizontal scroll area ends with `$`, device-local custom
 buttons, then **Add Button** (`＋`). Send remains pinned outside the scroll area.
+All built-in first-row buttons, including Voice and Send, share a 44-point width
+at the default text size and scale together with Dynamic Type. Custom buttons
+keep content-sized widths; recording and loading states do not widen the row controls.
 Add Button opens the same in-page overlay, without a settings page. Choose a name
 and either single-line literal text or one special key (Tab, Home, End, Ctrl+C,
 etc.). The text action's **Auto Send** switch defaults on for new buttons:

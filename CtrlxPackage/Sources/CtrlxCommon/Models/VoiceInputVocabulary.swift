@@ -35,11 +35,19 @@ enum VoiceInputVocabulary {
     ]
 
     private static let developmentTerms = [
+        "branch",
+        "commit",
+        "develop",
+        "diff",
         "Docker",
         "Git",
         "GitHub",
         "Homebrew",
+        "main",
+        "master",
+        "merge",
         "Nginx",
+        "rebase",
         "SSH",
         "Swift",
         "SwiftTerm",
@@ -47,6 +55,7 @@ enum VoiceInputVocabulary {
         "tmux",
         "Vapor",
         "WebSocket",
+        "worktree",
         "Xcode",
         "xcodebuild",
     ]
