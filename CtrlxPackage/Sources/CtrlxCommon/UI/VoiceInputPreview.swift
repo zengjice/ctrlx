@@ -1,7 +1,7 @@
 #if os(iOS) || os(macOS)
     import SwiftUI
 
-    /// Passive preview only. The microphone remains the start/stop control;
+    /// Recording preview and post-insertion notice. The microphone remains the start/stop control;
     /// the owning input surface validates and delivers the finalized text.
     @MainActor
     package struct VoiceInputPreview: View {
@@ -19,20 +19,21 @@
         package var body: some View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(voice.stage.label)
-                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(voice.correctionNotice == nil ? voice.stage.label : "Transcription Only")
+                        .font(.caption2)
+                        .foregroundStyle(voice.correctionNotice == nil ? Color.secondary : .orange)
                         .lineLimit(1)
                         .accessibilityIdentifier("voice-preview-stage")
-                    Text(voice.transcript.isEmpty ? "Say something…" : voice.transcript)
+                    Text(voice.correctionNotice ?? (voice.transcript.isEmpty ? "Say something…" : voice.transcript))
                         .font(.callout).foregroundStyle(.primary)
-                        .lineLimit(2, reservesSpace: true)
-                        .truncationMode(.head)
+                        .lineLimit(voice.correctionNotice == nil ? 2 : 4, reservesSpace: voice.correctionNotice == nil)
+                        .truncationMode(voice.correctionNotice == nil ? .head : .tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityIdentifier("voice-preview-transcript")
                 }
                 .allowsHitTesting(false)
-                Button(action: cancel) {
-                    Label("Cancel Voice Input", symbol: .xmark)
+                Button(action: dismiss) {
+                    Label(voice.correctionNotice == nil ? "Cancel Voice Input" : "Dismiss Voice Notice", symbol: .xmark)
                         .labelStyle(.iconOnly)
                     #if os(iOS)
                         .frame(width: 44, height: 44)
@@ -43,9 +44,9 @@
                 }
                 .buttonStyle(.plain)
                 #if os(iOS)
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(voice.correctionNotice == nil ? .cancelAction : nil)
                 #endif
-                    .help("Cancel Voice Input (Esc)")
+                    .help(voice.correctionNotice == nil ? "Cancel Voice Input (Esc)" : "Dismiss Voice Notice")
                     .accessibilityIdentifier("voice-preview-cancel")
             }
             .padding(.vertical, 8)
@@ -53,6 +54,14 @@
             .padding(.trailing, 4)
             .background(.regularMaterial, in: .rect(cornerRadius: 10))
             .accessibilityIdentifier("voice-input-preview")
+        }
+
+        private func dismiss() {
+            if voice.correctionNotice != nil {
+                voice.dismissCorrectionNotice()
+            } else {
+                cancel()
+            }
         }
     }
 

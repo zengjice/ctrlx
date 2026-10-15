@@ -50,6 +50,7 @@ class MacVoiceInputInlineTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("PASS: inline preview, stable viewport/focus, microphone stop, cancel, scoped Escape", result.stdout)
             self.assertIn("PASS: native hold/release, pending permission, changed target", result.stdout)
+            self.assertIn("PASS: uncorrected notice survives delivery, preserves focus/Escape, dismisses without resending", result.stdout)
 
 
 if __name__ == "__main__":

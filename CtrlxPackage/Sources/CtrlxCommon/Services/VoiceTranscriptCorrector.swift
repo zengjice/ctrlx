@@ -73,6 +73,32 @@ enum VoiceTranscriptCorrectionRoute: Equatable, Sendable {
     case onDevice
 }
 
+struct VoiceCorrectionResult: Equatable, Sendable {
+    enum Outcome: Equatable, Sendable {
+        case accepted
+        case unavailable
+        case rejected
+        case cancelled
+        case emptyInput
+    }
+
+    let text: String
+    let outcome: Outcome
+
+    var notice: String? {
+        switch outcome {
+        case .unavailable:
+            "Inserted without context-aware correction. Check Voice Input settings."
+        case .rejected:
+            "Correction could not be safely applied. Original transcription inserted."
+        case .accepted,
+             .cancelled,
+             .emptyInput:
+            nil
+        }
+    }
+}
+
 enum VoiceTranscriptCorrectionRouting {
     static func routes(hasProviderSelection: Bool) -> [VoiceTranscriptCorrectionRoute] {
         hasProviderSelection ? [.provider, .onDevice] : [.onDevice]
@@ -82,18 +108,18 @@ enum VoiceTranscriptCorrectionRouting {
     static func run(
         original: String, hasProviderSelection: Bool,
         attempt: (VoiceTranscriptCorrectionRoute) async -> VoiceCorrectionAttempt
-    ) async -> String {
+    ) async -> VoiceCorrectionResult {
         for route in routes(hasProviderSelection: hasProviderSelection) {
-            guard !Task.isCancelled else { return original }
+            guard !Task.isCancelled else { return .init(text: original, outcome: .cancelled) }
             let result = await attempt(route)
-            guard !Task.isCancelled else { return original }
+            guard !Task.isCancelled else { return .init(text: original, outcome: .cancelled) }
             switch result {
-            case let .accepted(text): return text
-            case .rejected: return original
+            case let .accepted(text): return .init(text: text, outcome: .accepted)
+            case .rejected: return .init(text: original, outcome: .rejected)
             case .unavailable: continue
             }
         }
-        return original
+        return .init(text: original, outcome: .unavailable)
     }
 }
 
@@ -164,7 +190,7 @@ enum VoiceTranscriptCorrector {
         terminalContext: VoiceInputContextSnapshot? = nil,
         providerSelection: VoiceCorrectionSelection? = nil,
         onStage: (VoiceInputStage) -> Void = { _ in }
-    ) async -> String {
+    ) async -> VoiceCorrectionResult {
         await correct(
             VoiceRecognitionResult(primaryTranscript: transcript),
             contextualTerms: contextualTerms,
@@ -180,9 +206,11 @@ enum VoiceTranscriptCorrector {
         terminalContext: VoiceInputContextSnapshot? = nil,
         providerSelection: VoiceCorrectionSelection? = nil,
         onStage: (VoiceInputStage) -> Void = { _ in }
-    ) async -> String {
+    ) async -> VoiceCorrectionResult {
         let original = recognition.bestAvailableTranscript
-        guard !original.isEmpty else { return original }
+        guard !VoiceInputTextComposer.terminalTranscript(original).isEmpty else {
+            return .init(text: "", outcome: .emptyInput)
+        }
         VoiceInputDiagnostics.correctionStarted(
             result: recognition,
             hasTerminalContext: terminalContext != nil
@@ -288,24 +316,16 @@ enum VoiceTranscriptCorrector {
             let original = recognition.bestAvailableTranscript
             let localeIdentifier = Locale.preferredLanguages.first ?? Locale.current.identifier
             let locale = Locale(identifier: localeIdentifier)
+            @Dependency(VoiceCorrectionAvailabilityClient.self) var availability
+            let status = availability.onDevice()
+            guard status.isAvailable else {
+                VoiceInputDiagnostics.correctionSkipped(reason: status.label, id: recognition.diagnosticID)
+                return .unavailable
+            }
             let model = SystemLanguageModel(
                 useCase: .general,
                 guardrails: .permissiveContentTransformations
             )
-            guard model.isAvailable else {
-                VoiceInputDiagnostics.correctionSkipped(
-                    reason: availabilityDescription(model.availability),
-                    id: recognition.diagnosticID
-                )
-                return .unavailable
-            }
-            guard model.supportsLocale(locale) else {
-                VoiceInputDiagnostics.correctionSkipped(
-                    reason: "locale \(locale.identifier) is unsupported",
-                    id: recognition.diagnosticID
-                )
-                return .unavailable
-            }
             VoiceInputDiagnostics.correctionModel(
                 locale: locale,
                 id: recognition.diagnosticID
@@ -378,25 +398,5 @@ enum VoiceTranscriptCorrector {
             }
         }
 
-        @available(iOS 26.0, macOS 26.0, *)
-        private static func availabilityDescription(
-            _ availability: SystemLanguageModel.Availability
-        ) -> String {
-            switch availability {
-            case .available:
-                "available"
-            case let .unavailable(reason):
-                switch reason {
-                case .deviceNotEligible:
-                    "device is not eligible for Apple Intelligence"
-                case .appleIntelligenceNotEnabled:
-                    "Apple Intelligence is not enabled"
-                case .modelNotReady:
-                    "Apple Intelligence model is not ready"
-                @unknown default:
-                    "Apple Intelligence is unavailable"
-                }
-            }
-        }
     #endif
 }

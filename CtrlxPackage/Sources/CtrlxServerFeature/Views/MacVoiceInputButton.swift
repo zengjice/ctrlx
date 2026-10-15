@@ -66,7 +66,7 @@ struct MacVoiceInputButton: View {
             }
         }
         .onChange(of: voice.phase) {
-            if voice.phase == .idle, voice.completedTranscript == nil {
+            if voice.phase == .idle, voice.completedTranscript == nil, voice.correctionNotice == nil {
                 cancel()
             }
         }
