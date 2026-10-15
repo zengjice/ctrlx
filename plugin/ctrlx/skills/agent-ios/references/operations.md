@@ -51,8 +51,9 @@ CtrlX commands from `simctl` capabilities or claim substitutes provide equivalen
   mixed 1x/2x displays, four or more devices and other Macs/toolchains/runtimes are
   not qualified. Command success does not certify performance or compatibility.
 - Common UIKit/SwiftUI/WKWebView fixtures were checked, not every app/control/dialog.
-  Codex is the delivery target; Claude is deferred. Public distribution is separately
-  qualified. Source/tests do not prove the installed signed App includes the changes.
+  Native acceptance covers Codex. Claude Code has entrypoint/caller tests; real
+  CLI/device acceptance remains separate, as does public distribution.
+  Source/tests do not prove the installed signed App includes the changes.
   Unvalidated does not mean known broken. Operational/native limits follow below.
 
 ## Pane reuse and Viewer viewing

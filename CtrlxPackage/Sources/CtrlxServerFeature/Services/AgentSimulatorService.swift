@@ -146,13 +146,23 @@
                 guard pid > 1, seen.insert(pid).inserted else { break }
                 let process = try system.inspect(pid)
                 guard process.owner.uid == getuid() else { break }
-                if ["codex", "claude", "opencode", "omp", "pi"].contains(URL(fileURLWithPath: process.executable).lastPathComponent) {
+                let executable = URL(fileURLWithPath: process.executable)
+                if ["codex", "claude", "opencode", "omp", "pi"].contains(executable.lastPathComponent) {
+                    return process.owner
+                }
+                // Claude's native installer resolves its launcher to claude/versions/<version>.
+                let directory = executable.deletingLastPathComponent()
+                if
+                    directory.lastPathComponent == "versions",
+                    directory.deletingLastPathComponent().lastPathComponent == "claude",
+                    executable.lastPathComponent.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil {
                     return process.owner
                 }
                 pid = process.parentPID
             }
             throw SimulatorFailure(
-                "Run simulator actions from a local coding agent in CtrlX. The socket caller has no supported agent ancestor")
+                "Run simulator actions from a local coding agent in CtrlX. The socket caller has no supported agent ancestor"
+            )
         }
 
         private func validate(_ owner: SimulatorOwner) throws {
@@ -364,7 +374,9 @@
         ) async throws -> SimulatorTabState {
             let pane: PaneInfo
             do { pane = try await resolvePane(for: owner) } catch {
-                throw SimulatorFailure("Cannot route this agent to a CtrlX pane: \(error.localizedDescription). Launch Codex using ctrlx ios run -- codex")
+                throw SimulatorFailure(
+                    "Cannot route this agent to a CtrlX pane: \(error.localizedDescription). Run the agent in a local CtrlX terminal. For Codex, use ctrlx ios run -- codex"
+                )
             }
             try validate(owner)
             guard !closing else { throw SimulatorFailure("Simulator host is closing") }

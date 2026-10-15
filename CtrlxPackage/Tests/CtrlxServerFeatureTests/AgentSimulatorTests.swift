@@ -327,9 +327,10 @@
             }
         }
 
-        @Test func nearestAgentOwnsToolCalls() async {
+        @Test(arguments: ["claude", "home/.local/share/claude/versions/2.1.276", "Caskroom/claude-code/2.1.276/claude"])
+        func nearestAgentOwnsToolCalls(_ claudeExecutable: String) async {
             let entries = [
-                process(10, name: "codex"), process(11, parent: 10, name: "sh"), process(20, parent: 11, name: "claude"),
+                process(10, name: "codex"), process(11, parent: 10, name: "sh"), process(20, parent: 11, name: claudeExecutable),
                 process(21, parent: 20, name: "python3"),
             ]
             let table = Dictionary(uniqueKeysWithValues: entries.map { ($0.owner.pid, $0) })
@@ -344,9 +345,17 @@
             #expect(inner.result?["owner"]?.objectValue?["pid"]?.intValue == 20)
         }
 
-        @Test func foreignOrReusedProcessFailsClosed() async {
+        @Test(arguments: ["other/versions/2.1.276", "claude/versions/helper", "claude/versions/2.1.276/helper", "claude/versions/2x1x276"])
+        func unrelatedVersionedExecutableCannotOwnSimulator(_ executable: String) async {
+            var system = SimulatorSystemClient()
+            system.inspect = { pid in process(pid, name: executable) }
+            #expect(!(await identity(peer: 10, system: system)).ok)
+        }
+
+        @Test(arguments: ["codex", "home/.local/share/claude/versions/2.1.276"])
+        func foreignOrReusedProcessFailsClosed(_ executable: String) async {
             var foreign = SimulatorSystemClient()
-            foreign.inspect = { pid in process(pid, name: "codex", uid: getuid() + 1) }
+            foreign.inspect = { pid in process(pid, name: executable, uid: getuid() + 1) }
             #expect(!(await identity(peer: 10, system: foreign)).ok)
             let count = Mutex(0)
             var reused = SimulatorSystemClient()
@@ -355,7 +364,7 @@
                     value += 1
                     return value
                 }
-                return process(pid, name: "codex", start: call == 1 ? 100 : 101)
+                return process(pid, name: executable, start: call == 1 ? 100 : 101)
             }
             #expect(!(await identity(peer: 10, system: reused)).ok)
         }

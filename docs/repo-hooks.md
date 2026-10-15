@@ -4,9 +4,12 @@ This repo ships a few **project-scoped Claude Code hooks** in `.claude/settings.
 They run for anyone working in the repo with Claude Code and exist to keep the
 development workflow consistent. They are unrelated to the `ctrlx` plugin hooks
 (`plugin/**/hooks/`), which forward session events to the monitoring app. The
-plugin's `SessionStart` hook also supplies the shared
+plugins' `SessionStart` hooks also supply the shared
 [file-reference output convention](file-browser.md#agent-output-convention-and-migration)
-as agent context; it does not enforce this repository's development workflow.
+as agent context. Codex and Claude Code additionally receive the
+[default iOS Simulator entry point](agent-simulator-design.md#agent-工具选择入口)
+before tool selection. These read the bundled skill entrypoints; they do not
+start devices or enforce this repository's development workflow.
 
 The tool-independent requirements live in [CONTRIBUTING.md](../CONTRIBUTING.md)
 and the [PR checklist](../.github/PULL_REQUEST_TEMPLATE.md). Other AI tools must

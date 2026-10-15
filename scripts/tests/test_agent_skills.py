@@ -180,6 +180,13 @@ class PluginSessionContext(unittest.TestCase):
                         listener.accept()
                 return result.stdout
 
+    def skill_context(self, plugin, name):
+        skill = (self.plugins[plugin] / "skills" / name / "SKILL.md").resolve()
+        body = skill.read_text().split("---", 2)[2].strip()
+        if name == "agent-ios":
+            return f"Skill source: `{skill}`. Resolve relative references from this file.\n\n{body}"
+        return body
+
     def test_registered_session_start_covers_all_sources(self):
         for plugin, path in self.plugins.items():
             groups = json.loads((path / "hooks/hooks.json").read_text())["hooks"]["SessionStart"]
@@ -202,27 +209,31 @@ class PluginSessionContext(unittest.TestCase):
                     self.assertEqual(command, expected)
 
     def test_session_start_forwards_event_and_emits_canonical_body(self):
-        body = (SKILLS / "file-links/SKILL.md").read_text().split("---", 2)[2].strip()
         for plugin in self.plugins:
+            contexts = [self.skill_context(plugin, name) for name in ("file-links", "agent-ios")]
             for source in self.sources:
                 with self.subTest(plugin=plugin, source=source):
                     payload = {"hook_event_name": "SessionStart", "source": source,
                                "session_id": "isolated-session", "cwd": "/tmp/project"}
                     stdout = self.run_hook(plugin, payload)
-                    self.assertTrue(stdout, "SessionStart did not deliver the output convention")
+                    self.assertTrue(stdout, "SessionStart did not deliver the skill entrypoints")
                     self.assertEqual(json.loads(stdout), {"hookSpecificOutput": {
-                        "hookEventName": "SessionStart", "additionalContext": body}})
+                        "hookEventName": "SessionStart", "additionalContext": "\n\n".join(contexts)}})
 
     def test_reads_current_bundled_skill_not_a_second_copy(self):
-        body = "# Repository references\n\nFixture: `<repo:报告.md>` (line 12)."
+        bodies = {"file-links": "# Repository references\n\nFixture: `<repo:报告.md>` (line 12).",
+                  "agent-ios": "# Simulator fixture\n\nRead [workflow](references/workflow.md)."}
         for plugin, path in self.plugins.items():
             with self.subTest(plugin=plugin):
-                (path / "skills/file-links/SKILL.md").write_text(
-                    "---\nname: file-links\ndescription: fixture\n---\n\n" + body + "\n",
-                    encoding="utf-8")
+                for name, body in bodies.items():
+                    (path / "skills" / name / "SKILL.md").write_text(
+                        f"---\nname: {name}\ndescription: fixture\n---\n\n{body}\n",
+                        encoding="utf-8")
+                contexts = [self.skill_context(plugin, name) for name in bodies]
                 stdout = self.run_hook(plugin, {"hook_event_name": "SessionStart", "source": "resume"})
                 self.assertTrue(stdout)
-                self.assertEqual(json.loads(stdout)["hookSpecificOutput"]["additionalContext"], body)
+                self.assertEqual(json.loads(stdout)["hookSpecificOutput"]["additionalContext"],
+                                 "\n\n".join(contexts))
 
     def test_other_events_only_forward_without_repeating_context(self):
         for plugin, path in self.plugins.items():
@@ -244,14 +255,32 @@ class PluginSessionContext(unittest.TestCase):
                     b"---\nname: file-links\n---\n\xff",
                     b"---\nname: file-links\n---\n" + b"x" * 5001, None)
         for plugin, path in self.plugins.items():
-            for index, content in enumerate(contents):
-                with self.subTest(plugin=plugin, case=index):
-                    skill = path / "skills/file-links/SKILL.md"
-                    if content is None:
-                        skill.unlink()
-                    else:
-                        skill.write_bytes(content)
-                    self.assertEqual(self.run_hook(plugin, {"hook_event_name": "SessionStart"}), b"")
+            names = ("file-links", "agent-ios")
+            for name in names:
+                skill = path / "skills" / name / "SKILL.md"
+                original = skill.read_bytes()
+                remaining = "\n\n".join(self.skill_context(plugin, other)
+                                        for other in names if other != name)
+                for index, content in enumerate(contents):
+                    with self.subTest(plugin=plugin, skill=name, case=index):
+                        if content is None:
+                            skill.unlink()
+                        else:
+                            skill.write_bytes(content)
+                        stdout = self.run_hook(plugin, {"hook_event_name": "SessionStart"})
+                        if remaining:
+                            self.assertEqual(json.loads(stdout), {"hookSpecificOutput": {
+                                "hookEventName": "SessionStart", "additionalContext": remaining}})
+                        else:
+                            self.assertEqual(stdout, b"")
+                skill.write_bytes(original)
+
+    def test_no_context_when_all_entrypoints_are_missing(self):
+        for plugin, path in self.plugins.items():
+            with self.subTest(plugin=plugin):
+                for name in ("file-links", "agent-ios"):
+                    (path / "skills" / name / "SKILL.md").unlink()
+                self.assertEqual(self.run_hook(plugin, {"hook_event_name": "SessionStart"}), b"")
 
     def test_invalid_input_does_not_emit_context(self):
         for plugin in self.plugins:

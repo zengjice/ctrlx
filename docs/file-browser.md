@@ -143,6 +143,8 @@ into Codex by `scripts/sync-codex-skills.sh`. The skill remains explicitly usabl
 but routine file references do not depend on the model selecting it implicitly.
 Each plugin's existing `SessionStart` hook reads that bundled skill, strips its
 frontmatter, and returns its body as `hookSpecificOutput.additionalContext`.
+Both plugins include the [default iOS Simulator entry point](agent-simulator-design.md#agent-工具选择入口)
+in the same context block.
 The existing registrations cover startup, resume, clear, compact and fork, following
 the [Codex](https://learn.chatgpt.com/docs/hooks#sessionstart) and
 [Claude Code](https://code.claude.com/docs/en/hooks#sessionstart) hook contracts.
@@ -150,9 +152,10 @@ Other events only forward lifecycle data: there is no per-turn reminder, Stop
 blocking, repository instruction-file edit, extra CLI call or path inference.
 
 Context is emitted only inside tmux after the existing ingress socket send succeeds.
-An unavailable ingress or missing, unreadable, invalid UTF-8, malformed or oversized
-skill omits the context without failing the hook; skill reads are bounded to 5000
-bytes plus an overflow check. Lifecycle forwarding is unchanged. The convention
+An unavailable ingress omits all context. A missing, unreadable, invalid UTF-8,
+malformed or oversized skill omits only that skill's context without failing the
+hook; each skill read is bounded to 5000 bytes plus an overflow check. Lifecycle
+forwarding is unchanged. The convention
 applies to user-facing references, not paths in commands, code or configuration.
 Prior read/write/existence evidence can be reused rather than rechecking each link.
 
