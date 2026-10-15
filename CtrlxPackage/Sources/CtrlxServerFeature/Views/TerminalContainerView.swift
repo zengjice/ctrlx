@@ -62,6 +62,7 @@ struct TerminalContainerView: NSViewRepresentable {
     @Environment(EditorSessionManager.self) private var editorSessionManager
     @Environment(\.terminalQuickActions) private var quickActions
     @Environment(\.openTerminalFileLink) private var openFileLink
+    @Environment(\.terminalContentClick) private var contentClick
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
@@ -98,6 +99,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // state captured by parent closures (window/session selection).
         coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
+        coordinator.terminalView.onContentClick = { contentClick?(nil, paneState.paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
         quickActions?.applyRequestedFocus(to: coordinator.terminalView, hostID: nil, paneID: paneState.paneId, autoFocus: autoFocus)
@@ -131,6 +133,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // current parent state on every layout pass.
         nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
+        nsView.onContentClick = { contentClick?(nil, paneState.paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
         // Update container size on layout changes
@@ -531,6 +534,7 @@ struct TerminalContainerView: NSViewRepresentable {
             terminalView.onRawInput = nil
             terminalView.onFileDrop = nil
             terminalView.onOpenPath = nil
+            terminalView.onContentClick = nil
 
             pendingKeyTask?.cancel()
             pendingKeyTask = nil

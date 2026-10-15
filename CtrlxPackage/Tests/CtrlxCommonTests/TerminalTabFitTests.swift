@@ -102,4 +102,67 @@ struct TerminalTabFitTests {
     private func take(_ fit: inout TerminalTabFit, current: TerminalTabFit.Target) -> ResizeTmuxPane? {
         fit.takeRequest(for: current, isAvailable: true, isPresentationReady: true, measuredRequest: grid)
     }
+
+    @Test("A content click fits a changed viewport once; geometry alone never does", arguments: [nil, "host-a"] as [String?])
+    func contentClickAfterResize(hostID: String?) {
+        let target = TerminalTabFit.Target(hostID: hostID, sessionName: "dev", windowID: "@1")
+        var fit = TerminalTabFit()
+        fit.request(target)
+        #expect(take(&fit, current: target) == grid)
+        fit.recordFit(for: target, request: grid)
+        fit.requestAfterViewportChange(target, measuredRequest: grid)
+        #expect(take(&fit, current: target) == nil)
+
+        let larger = ResizeTmuxPane(width: 160, height: 50, userInitiated: true)
+        #expect(fit.takeRequest(for: target, isAvailable: true, isPresentationReady: true, measuredRequest: larger) == nil)
+        fit.requestAfterViewportChange(target, measuredRequest: larger)
+        #expect(fit.takeRequest(for: target, isAvailable: true, isPresentationReady: true, measuredRequest: larger) == larger)
+        fit.recordFit(for: target, request: larger)
+        fit.requestAfterViewportChange(target, measuredRequest: larger)
+        #expect(take(&fit, current: target) == nil)
+
+        fit.requestAfterViewportChange(target, measuredRequest: grid)
+        #expect(take(&fit, current: target) == grid)
+    }
+
+    @Test("Manual fit updates the click baseline without suppressing later foreground Fit")
+    func manualFitThenClick() {
+        var fit = TerminalTabFit()
+        fit.recordFit(for: first, request: grid)
+        fit.requestAfterViewportChange(first, measuredRequest: grid)
+        #expect(take(&fit, current: first) == nil)
+        fit.request(first)
+        #expect(take(&fit, current: first) == grid)
+    }
+
+    @Test("A failed automatic Fit stays consumed until a new click, which can retry", arguments: [nil, "host-a"] as [String?])
+    func clickRetriesFailedFit(hostID: String?) {
+        let target = TerminalTabFit.Target(hostID: hostID, sessionName: "dev", windowID: "@1")
+        var fit = TerminalTabFit()
+        fit.request(target)
+        #expect(take(&fit, current: target) == grid)
+        // Dispatch failed: no successful baseline, but geometry must not retry by itself.
+        #expect(take(&fit, current: target) == nil)
+        fit.requestAfterViewportChange(target, measuredRequest: grid)
+        #expect(take(&fit, current: target) == grid)
+        fit.recordFit(for: target, request: grid)
+        fit.requestAfterViewportChange(target, measuredRequest: grid)
+        #expect(take(&fit, current: target) == nil)
+    }
+
+    @Test("Click baselines stay separate across split tabs, Hosts and scenes")
+    func independentClickBaselines() {
+        var fit = TerminalTabFit()
+        fit.recordFit(for: first, request: grid)
+        let otherHost = TerminalTabFit.Target(hostID: "host-b", sessionName: "dev", windowID: "@1")
+        for target in [second, otherHost] {
+            fit.requestAfterViewportChange(target, measuredRequest: grid)
+            #expect(take(&fit, current: target) == grid)
+        }
+        fit.requestAfterViewportChange(first, measuredRequest: grid)
+        #expect(take(&fit, current: first) == nil)
+        var detachedScene = TerminalTabFit()
+        detachedScene.requestAfterViewportChange(first, measuredRequest: grid)
+        #expect(take(&detachedScene, current: first) == grid)
+    }
 }

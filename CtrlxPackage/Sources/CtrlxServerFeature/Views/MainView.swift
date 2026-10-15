@@ -323,6 +323,7 @@ public struct MainView: View {
         workspaceContent
             .environment(\.workbenchWindowID, detachedWorkspace?.id)
             .environment(\.terminalQuickActions, terminalQuickActions)
+            .environment(\.terminalContentClick, fitClickedTerminal)
             .environment(\.openTerminalFileLink) { request in pendingFileLink = request }
             .task(id: pendingFileLink) {
                 guard let request = pendingFileLink else { return }
@@ -2581,15 +2582,6 @@ public struct MainView: View {
         )
     }
 
-    /// Immutable plan captured by a Fit action. Calculating every
-    /// target before the first await prevents an incoming pane snapshot from
-    /// changing which tmux windows the same click resizes halfway through.
-    private struct TerminalResizeRequest {
-        let windowTarget: String
-        let columns: Int
-        let rows: Int
-    }
-
     /// Manual Fit also consumes any pending automatic fit for this entry.
     private func resizeVisibleTerminalsToFit() {
         automaticTabFit.cancel()
@@ -2598,7 +2590,7 @@ public struct MainView: View {
         if let remote = selectedRemoteSession {
             let requests = visibleRemoteResizeRequests(remote: remote)
             Task {
-                await performRemoteResize(requests, hostId: remote.hostId)
+                await performResize(requests)
             }
             return
         }
@@ -2606,7 +2598,7 @@ public struct MainView: View {
         let requests = visibleLocalResizeRequests()
         guard !requests.isEmpty else { return }
         Task {
-            await performLocalResize(requests)
+            await performResize(requests)
         }
     }
 
@@ -2625,6 +2617,25 @@ public struct MainView: View {
         } else if let session = currentLocalSession() {
             automaticTabFit.request(.init(hostID: nil, sessionName: session.sessionName, windowID: windowID))
         }
+    }
+
+    private func fitClickedTerminal(hostID: String?, paneID: String) {
+        guard
+            appearsActive,
+            let focused = terminalQuickActions.active, focused.isAvailable,
+            focused.hostID == hostID, focused.paneID == paneID,
+            let windowID = focusedTerminalWindowID else { return }
+        let target = TerminalTabFit.Target(
+            hostID: hostID,
+            sessionName: selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName ?? "",
+            windowID: windowID
+        )
+        let input = terminalFitInput(for: target)
+        guard
+            input.current == target, input.isAvailable, input.isReady, input.isVisible,
+            let request = input.request else { return }
+        automaticTabFit.requestAfterViewportChange(target, measuredRequest: request)
+        fitSelectedTerminalIfReady()
     }
 
     private var focusedTerminalWindowID: String? {
@@ -2650,6 +2661,10 @@ public struct MainView: View {
 
     private var automaticTabFitInput: AutomaticTabFitInput? {
         guard let pending = automaticTabFit.target else { return nil }
+        return terminalFitInput(for: pending)
+    }
+
+    private func terminalFitInput(for pending: TerminalTabFit.Target) -> AutomaticTabFitInput {
         let hostID = selectedRemoteSession?.hostId
         let sessionName = selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName ?? ""
         let tabs: SessionFileTabsState?
@@ -2711,17 +2726,16 @@ public struct MainView: View {
                 isPresentationReady: input.isReady,
                 measuredRequest: input.request
             ), let windowID = input.current.windowID else { return }
-        let requests = [TerminalResizeRequest(windowTarget: windowID, columns: request.width, rows: request.height)]
+        let requests = [TerminalFitRequest(
+            hostID: input.current.hostID, sessionName: input.current.sessionName,
+            windowTarget: windowID, columns: request.width, rows: request.height
+        )]
         Task {
-            if let hostID = input.current.hostID {
-                await performRemoteResize(requests, hostId: hostID)
-            } else {
-                await performLocalResize(requests)
-            }
+            await performResize(requests)
         }
     }
 
-    private func visibleLocalResizeRequests() -> [TerminalResizeRequest] {
+    private func visibleLocalResizeRequests() -> [TerminalFitRequest] {
         guard let session = currentLocalSession() else { return [] }
         var visibleWindows = selectedWindow.map { [$0] } ?? []
         if
@@ -2733,6 +2747,7 @@ public struct MainView: View {
         let tabs = sessionFileTabsStates[session.sessionName]
         return visibleWindows.filter { ownsTerminal(hostID: nil, windowID: $0.stableId) }.map { window in
             resizeRequest(
+                hostID: nil, sessionName: session.sessionName,
                 windowTarget: window.stableId,
                 width: effectiveTerminalWidth(tabs: tabs, windowId: window.stableId)
             )
@@ -2741,7 +2756,7 @@ public struct MainView: View {
 
     private func visibleRemoteResizeRequests(
         remote: RemoteSessionSelection
-    ) -> [TerminalResizeRequest] {
+    ) -> [TerminalFitRequest] {
         let key = remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)
         let tabs = remoteSessionTabsStates[key]
         var visibleWindows = selectedRemoteWindow.map { [$0] } ?? []
@@ -2758,6 +2773,7 @@ public struct MainView: View {
 
         return visibleWindows.filter { ownsTerminal(hostID: remote.hostId, windowID: $0.stableId) }.map { window in
             resizeRequest(
+                hostID: remote.hostId, sessionName: remote.sessionName,
                 windowTarget: window.stableId,
                 width: effectiveTerminalWidth(tabs: tabs, windowId: window.stableId)
             )
@@ -2765,55 +2781,42 @@ public struct MainView: View {
     }
 
     private func resizeRequest(
+        hostID: String?,
+        sessionName: String,
         windowTarget: String,
         width: CGFloat?
-    ) -> TerminalResizeRequest {
+    ) -> TerminalFitRequest {
         let dimensions = calculateOptimalTerminalDimensions(widthOverride: width)
-        return TerminalResizeRequest(
+        return TerminalFitRequest(
+            hostID: hostID, sessionName: sessionName,
             windowTarget: windowTarget,
             columns: dimensions.columns,
             rows: dimensions.rows
         )
     }
 
-    private func performLocalResize(_ requests: [TerminalResizeRequest]) async {
-        for request in requests {
-            do {
-                try await tmuxService.fitWindow(
-                    request.windowTarget,
-                    width: request.columns,
-                    height: request.rows
-                )
-            } catch {
-                attachError = "Failed to resize: \(error.localizedDescription)"
-                return
-            }
-        }
-    }
-
-    private func performRemoteResize(
-        _ requests: [TerminalResizeRequest],
-        hostId: String
-    ) async {
-        guard let manager = coordinator.viewerConnectionManager else {
-            attachError = "Failed to resize: Viewer is not connected"
-            return
-        }
-
-        for request in requests {
-            let result = await manager.sendCommand(
-                ResizeTmuxPane(
-                    width: request.columns,
-                    height: request.rows,
-                    userInitiated: true
-                ),
-                paneId: request.windowTarget,
-                hostId: hostId
-            )
-            if case let .failure(error) = result {
-                attachError = "Failed to resize: \(error.localizedDescription)"
-                return
-            }
+    private func performResize(_ requests: [TerminalFitRequest]) async {
+        do {
+            try await TerminalFitRequest.perform(requests, willStart: { request in
+                automaticTabFit.invalidateFit(for: request.target)
+            }, resize: { request in
+                if let hostID = request.hostID {
+                    guard let manager = coordinator.viewerConnectionManager else {
+                        throw ViewerRelayClientError.notConnected
+                    }
+                    _ = try await manager.sendCommand(
+                        request.resize, paneId: request.windowTarget, hostId: hostID
+                    ).get()
+                } else {
+                    try await tmuxService.fitWindow(
+                        request.windowTarget, width: request.columns, height: request.rows
+                    )
+                }
+            }, didSucceed: { request in
+                automaticTabFit.recordFit(for: request.target, request: request.resize)
+            })
+        } catch {
+            attachError = "Failed to resize: \(error.localizedDescription)"
         }
     }
 

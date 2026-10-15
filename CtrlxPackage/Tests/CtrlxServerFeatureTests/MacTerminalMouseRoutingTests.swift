@@ -2,13 +2,127 @@
     import AppKit
     import ConcurrencyExtras
     import CtrlxCommon
+    import CtrlxNetworking
     import Dependencies
     import Testing
     @testable import CtrlxServerFeature
 
+    /// The CLI test process has no foreground app; only window activation is supplied.
+    @MainActor
+    final private class TerminalMouseTestWindow: NSWindow {
+        var keyForTesting = false
+        override var isKeyWindow: Bool {
+            keyForTesting
+        }
+    }
+
     @MainActor
     @Suite("Mac terminal mouse routing", .serialized)
     struct MacTerminalMouseRoutingTests {
+        @Test("An enlarged terminal fits on a content click without changing focus")
+        func resizedContentClick() async throws {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            let target = TerminalTabFit.Target(hostID: nil, sessionName: "dev", windowID: "@1")
+            var fit = TerminalTabFit()
+            var requests: [ResizeTmuxPane] = []
+            func grid() -> ResizeTmuxPane {
+                .init(width: Int(view.bounds.width / view.cellSize.width), height: Int(view.bounds.height / view.cellSize.height), userInitiated: true)
+            }
+            fit.recordFit(for: target, request: grid())
+            view.onContentClick = {
+                let request = grid()
+                fit.requestAfterViewportChange(target, measuredRequest: request)
+                if let request = fit.takeRequest(for: target, isAvailable: true, isPresentationReady: true, measuredRequest: request) {
+                    requests.append(request)
+                    fit.recordFit(for: target, request: request)
+                }
+            }
+            view.focusTerminal()
+            #expect(window.isKeyWindow)
+            window.setContentSize(NSSize(width: 1_800, height: 800))
+            view.frame.size = NSSize(width: 1_000, height: 800)
+            view.layoutSubtreeIfNeeded()
+            #expect(requests.isEmpty)
+            for _ in 0..<2 {
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [])
+                try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+                #expect(requests == [grid()])
+                #expect(window.firstResponder === view.terminalView)
+            }
+        }
+
+        @Test("Selection, links and application mouse clicks never request content Fit", arguments: ["drag", "doubleClick", "tripleClick", "link", "mouse", "shift", "editor", "ime"])
+        func contentClickExclusions(action: String) async throws {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            var clicks = 0
+            var links = 0
+            view.onContentClick = { clicks += 1 }
+            view.onOpenURL = { _, _ in links += 1
+                return true
+            }
+            if action == "link" {
+                view.feed(byteArray: Array("\u{1b}[Hhttps://example.com".utf8)[...])
+            }
+            if action == "mouse" {
+                enableMouseMode(1_002, in: view)
+            }
+            if action == "editor" {
+                view.isEditorActive = true
+            }
+            if action == "ime" {
+                view.terminalView.setMarkedText("拼", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            if action == "drag" {
+                try drag(in: view)
+            } else {
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: action == "shift" ? .shift : [])
+                if action == "doubleClick" || action == "tripleClick" {
+                    try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [], clickCount: 2)
+                    if action == "tripleClick" {
+                        try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [], clickCount: 3)
+                    }
+                }
+            }
+            try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+            #expect(clicks == 0)
+            #expect(links == (action == "link" ? 1 : 0))
+        }
+
+        @Test("Delayed content clicks are cancelled by input or a stale presentation", arguments: ["key", "scroll", "focus", "hidden", "removed", "inactive", "stop"])
+        func pendingContentClickCancellation(action: String) async throws {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            var clicks = 0
+            view.onContentClick = { clicks += 1 }
+            let recipient = try mouseRecipient(in: view)
+            try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [])
+            switch action {
+            case "key":
+                let event = try #require(NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, characters: "a",
+                    charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0
+                ))
+                _ = view.interceptTerminalKeyDown(event)
+            case "scroll":
+                recipient.scrollWheel(with: TerminalTestScrollEvent(
+                    window: window, location: view.terminalView.convert(NSPoint(x: 20, y: 500), to: nil), modifiers: []
+                ))
+            case "focus": window.makeFirstResponder(panes[1].terminalView)
+            case "hidden": view.isHidden = true
+            case "inactive": (window as? TerminalMouseTestWindow)?.keyForTesting = false
+            case "removed": view.removeFromSuperview()
+            default: view.cancelVoiceInputPress()
+            }
+            try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+            #expect(clicks == 0)
+        }
+
         @Test("Plain drag selects in both original and split panes", arguments: [0, 1])
         func plainSelection(paneIndex: Int) throws {
             let (window, panes) = makeTerminalWindow()
@@ -424,10 +538,10 @@
             #expect(raw.count == 1)
         }
 
-        private func makeTerminalWindow() -> (NSWindow, [InteractiveTerminalView]) {
+        private func makeTerminalWindow(key: Bool = false) -> (NSWindow, [InteractiveTerminalView]) {
             _ = NSApplication.shared
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1600, height: 600),
+            let window = TerminalMouseTestWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1_600, height: 600),
                 styleMask: .borderless, backing: .buffered, defer: false
             )
             let root = NSView(frame: NSRect(x: 0, y: 0, width: 1600, height: 600))
@@ -442,6 +556,7 @@
                 view.feed(byteArray: Array("alpha bravo charlie\r\nsecond row\r\n".utf8)[...])
                 return view
             }
+            window.keyForTesting = key
             return (window, panes)
         }
 

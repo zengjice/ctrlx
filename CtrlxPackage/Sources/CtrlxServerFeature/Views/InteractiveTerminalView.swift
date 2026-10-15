@@ -184,11 +184,19 @@
 
         private var linkGesture = TerminalLinkGestureState()
         private var pendingLinkActivationTask: Task<Void, Never>?
+        private var pendingContentClickTask: Task<Void, Never>?
+        private var contentClickEligible = false
         private let voicePress = MacVoiceInputPress()
         private var voiceOwnsMouseSequence = false
 
         func cancelVoicePress() {
             voicePress.cancel()
+        }
+
+        func cancelContentClick() {
+            pendingContentClickTask?.cancel()
+            pendingContentClickTask = nil
+            contentClickEligible = false
         }
 
         override var acceptsFirstResponder: Bool {
@@ -233,6 +241,7 @@
         }
 
         override func scrollWheel(with event: NSEvent) {
+            cancelContentClick()
             voicePress.cancel()
             if event.phase.contains(.began) || event.phase.contains(.cancelled)
                 || event.momentumPhase.contains(.ended) {
@@ -291,6 +300,12 @@
         }
 
         override func mouseDown(with event: NSEvent) {
+            cancelContentClick()
+            contentClickEligible = event.clickCount == 1
+                && event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty
+                && interactiveView?.isEditorActive == false
+                && interactiveView?.terminalView.hasMarkedText() == false
+                && interactiveView?.shouldReportMouseEvent(event) == false
             voicePress.cancel()
             voiceOwnsMouseSequence = false
             if
@@ -349,6 +364,7 @@
         }
 
         override func mouseDragged(with event: NSEvent) {
+            cancelContentClick()
             if voiceOwnsMouseSequence {
                 guard let down = voicePress.mouseDragged(event) else { return }
                 voiceOwnsMouseSequence = false
@@ -450,6 +466,37 @@
                 interactive.getSelectedTextTrimmed() != nil {
                 interactive.copySelectionToClipboard()
             }
+
+            if
+                shouldActivateLink, contentClickEligible,
+                event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
+                scheduleContentClick()
+            }
+        }
+
+        private func scheduleContentClick() {
+            guard let interactive = interactiveView, let window = interactive.window else { return }
+            let size = interactive.bounds.size
+            // A first mouse-up may still become a double-click selection. Wait just as
+            // link activation does; never resize underneath selection or composition.
+            pendingContentClickTask = Task { @MainActor [weak self, weak interactive, weak window] in
+                do {
+                    try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval))
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                self.pendingContentClickTask = nil
+                guard
+                    let interactive, let window,
+                    interactive.window === window, window.isKeyWindow, !window.inLiveResize,
+                    window.firstResponder === interactive.terminalView,
+                    !interactive.isHiddenOrHasHiddenAncestor, !interactive.isEditorActive,
+                    !interactive.terminalView.hasMarkedText(), !interactive.isMouseModeActive,
+                    interactive.terminalView.getSelection()?.isEmpty != false,
+                    interactive.bounds.size == size else { return }
+                interactive.onContentClick?()
+            }
         }
 
         private func cancelPendingLinkActivation() {
@@ -472,6 +519,7 @@
         }
 
         override func rightMouseDown(with event: NSEvent) {
+            cancelContentClick()
             if interactiveView?.shouldReportMouseEvent(event) == true {
                 terminalView?.rightMouseDown(with: event)
             } else {
@@ -494,6 +542,7 @@
         }
 
         override func otherMouseDown(with event: NSEvent) {
+            cancelContentClick()
             if interactiveView?.shouldReportMouseEvent(event) == true {
                 terminalView?.otherMouseDown(with: event)
             }
@@ -627,11 +676,14 @@
         /// (mouse click, programmatic, tabbing). Used to propagate focus back
         /// to tmux via `select-pane` so external clients see the same active pane.
         var onBecomeFirstResponder: (@MainActor () -> Void)?
+        /// A completed plain content click, separate from programmatic focus and selections.
+        var onContentClick: (@MainActor () -> Void)?
         weak var voiceInputRouter: TerminalQuickActionRouter?
         weak var voiceInputEndpoint: TerminalQuickActionEndpoint?
 
         func cancelVoiceInputPress() {
             scrollOverlay?.cancelVoicePress()
+            scrollOverlay?.cancelContentClick()
         }
 
         fileprivate func isVoiceInputPressCandidate(_ event: NSEvent) -> Bool {
@@ -850,6 +902,7 @@
 
             // Pause automation while the user types/composes. A manual opener
             // consumes this queue too, so Escape won't immediately reopen it.
+            scrollOverlay?.cancelContentClick()
             if event.keyCode == 123, event.modifierFlags.intersection([.shift, .control, .option, .command]) == .shift {
                 lastQuestionCount = currentQuestionPrompt?.count
             }
@@ -896,6 +949,7 @@
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            scrollOverlay?.cancelContentClick()
 
             // Clean up old observers
             for observer in windowObservers {
@@ -967,6 +1021,7 @@
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in
+                    self?.scrollOverlay?.cancelContentClick()
                     self?.terminalView.hasFocus = false
                     self?.isFocused = false
                 }

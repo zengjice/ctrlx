@@ -1,9 +1,9 @@
 import CtrlxNetworking
 
-/// One Fit per tab entry or foreground activation. Geometry and Host snapshots can finish a
-/// pending measurement, but cannot schedule another resize.
+/// One Fit per tab entry, foreground activation or content click after a viewport change.
+/// Geometry and Host snapshots can finish a pending measurement, but cannot schedule a resize.
 public struct TerminalTabFit: Equatable, Sendable {
-    public struct Target: Equatable, Sendable {
+    public struct Target: Hashable, Sendable {
         public let hostID: String?
         public let sessionName: String
         public let windowID: String?
@@ -16,6 +16,7 @@ public struct TerminalTabFit: Equatable, Sendable {
     }
 
     public private(set) var target: Target?
+    private var fittedViewports: [Target: ResizeTmuxPane] = [:]
 
     public init() { }
 
@@ -25,6 +26,23 @@ public struct TerminalTabFit: Equatable, Sendable {
 
     public mutating func cancel() {
         target = nil
+    }
+
+    /// Only content clicks are deduplicated. Tab/window activation must still ask the Host
+    /// to check live dimensions, which another client may have changed in the meantime.
+    public mutating func requestAfterViewportChange(_ target: Target, measuredRequest: ResizeTmuxPane) {
+        let previous = fittedViewports[target]
+        guard previous?.width != measuredRequest.width || previous?.height != measuredRequest.height else { return }
+        request(target)
+    }
+
+    public mutating func recordFit(for target: Target, request: ResizeTmuxPane) {
+        guard target.windowID != nil else { return }
+        fittedViewports[target] = request
+    }
+
+    public mutating func invalidateFit(for target: Target) {
+        fittedViewports.removeValue(forKey: target)
     }
 
     public mutating func takeRequest(

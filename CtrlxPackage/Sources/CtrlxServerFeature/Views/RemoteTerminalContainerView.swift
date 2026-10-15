@@ -586,6 +586,7 @@ enum RemoteStreamState: Equatable {
 private struct RemoteTerminalNSView: NSViewRepresentable {
     @Environment(\.terminalQuickActions) private var quickActions
     @Environment(\.openTerminalFileLink) private var openFileLink
+    @Environment(\.terminalContentClick) private var contentClick
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
@@ -634,6 +635,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
         coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
+        coordinator.terminalView.onContentClick = { contentClick?(connection.id, paneId) }
         // Route image pastes through the SwiftUI parent so the upload state
         // and cancel popover live alongside the terminal view in the body
         // hierarchy. Returning `true` consumes the paste — `Ctrl+V` is sent
@@ -672,6 +674,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         context.coordinator.bindQuickActions(quickActions, onFocus: onFocus)
         nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
+        nsView.onContentClick = { contentClick?(connection.id, paneId) }
         nsView.onImagePaste = { [weak coordinator] image in
             coordinator?.quickActionEndpoint?.recordInput()
             onImagePaste(image)
@@ -887,6 +890,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             terminalView.onFileDrop = nil
             terminalView.onOpenURL = nil
             terminalView.onOpenPath = nil
+            terminalView.onContentClick = nil
 
             keystrokeDebouncer?.cancelAll()
             keystrokeDebouncer = nil
