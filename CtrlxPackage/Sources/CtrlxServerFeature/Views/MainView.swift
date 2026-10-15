@@ -1428,6 +1428,11 @@ public struct MainView: View {
                     sessionTabs: remoteTabs,
                     selectedBrowserTab: selectedBrowserTab
                 )
+                .background {
+                    if let remoteTabs {
+                        WorkbenchTabSwipe(tabs: remoteTabs, isEnabled: !isPresentingSessionPicker, onSwipe: selectSwipedTab)
+                    }
+                }
             }
             .background {
                 if let remoteTabs {
@@ -1626,6 +1631,11 @@ public struct MainView: View {
                     sessionTabs: sessionFileTabsStates[session.sessionName],
                     selectedBrowserTab: selectedBrowserTab
                 )
+                .background {
+                    if let sessionTabs {
+                        WorkbenchTabSwipe(tabs: sessionTabs, isEnabled: !isPresentingSessionPicker, onSwipe: selectSwipedTab)
+                    }
+                }
             }
             .background {
                 if let sessionTabs {
@@ -3518,6 +3528,13 @@ public struct MainView: View {
         guard !fileBrowserActiveWindowIds.contains(window.id) else { return }
         guard sessionFileTabsStates[window.sessionName]?.isGitSelected != true else { return }
         requestCloseWindow(window)
+    }
+
+    private func selectSwipedTab(direction: Int, onRight: Bool) {
+        guard !isPresentingSessionPicker, let tabs = currentSessionTabs else { return }
+        guard !onRight || tabs.isSplit else { return }
+        tabs.isRightPaneFocused = onRight
+        selectAdjacentTab(direction: direction)
     }
 
     /// Cmd-Option-Left / Cmd-Option-Right handler. Walks the active session's tab
