@@ -7,6 +7,32 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.75 — Click-to-fit Mac terminals and reliable file-link guidance
+
+- After resizing a Mac terminal viewport, an ordinary content click fits its
+  owned tmux window once. Record the viewport baseline only after each target
+  succeeds, so failed and unattempted split targets remain retryable. Preserve
+  selection, links, application mouse reporting, voice holds and IME input;
+  cancel delayed clicks when input, focus or presentation changes.
+- Supply the shared file-link output guidance through Codex and Claude Code
+  SessionStart hooks, including resume, clear, compact and fork. Keep lifecycle
+  forwarding unchanged and omit unavailable or malformed guidance silently.
+  Bundle Codex plugin 1.1.9 and Claude Code plugin 1.3.10.
+- Document the proposed workspace recovery behavior after a computer reboot.
+  This is a design record; reboot recovery is not implemented by this release.
+- Release validation: the bounded serial Swift regression passed with 3,176
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, 21 bundled-skill
+  and hook tests, the website build, signed Mac Release build and arm64 iOS
+  Simulator build passed. The Mac bundle's plugin versions, hooks and file-link
+  guidance match the source. Native terminal-click and Fit completion regressions
+  are included in the Swift suite. SwiftFormat has no findings on changed lines
+  across 11 Swift files; existing whole-file findings remain. Full detached-window
+  E2E, paired-device and real-agent file-reference
+  adherence acceptance were not run in this release workflow.
+- Distribution: Mac build 8 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.74 — Mac workbench gestures and compact worktree status
 
 - Show compact pending, merged and unavailable worktree status controls in Mac
