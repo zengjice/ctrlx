@@ -41,7 +41,9 @@
             preferredLeftWindowId: String? = nil
         ) -> SetSharedTerminalLayout? {
             let orderedWindows = windows.sorted { lhs, rhs in
-                if lhs.index != rhs.index { return lhs.index < rhs.index }
+                if lhs.index != rhs.index {
+                    return lhs.index < rhs.index
+                }
                 return lhs.stableId < rhs.stableId
             }
             guard !sessionName.isEmpty, !orderedWindows.isEmpty else { return nil }
@@ -105,7 +107,7 @@
         ) -> SavedFolderLayout {
             // Deleted tabs reference files that no longer exist — don't persist them.
             let liveFileTabs = tabs.openFileTabs.filter {
-                !$0.isDeleted && (!$0.isDirectory || tabs.directoryTabs[$0.id]?.snapshot != nil)
+                !$0.isDeleted && tabs.directoryTabs[$0.id]?.hostTab == nil && (!$0.isDirectory || tabs.directoryTabs[$0.id]?.snapshot != nil)
             }
             let fileTabs = liveFileTabs.map {
                 SavedFileTab(id: $0.id, path: $0.path, directoryPath: $0.directoryPath, browser: tabs.directoryTabs[$0.id]?.snapshot)
@@ -198,8 +200,7 @@
 
         // MARK: - Restore
 
-        /// Hydrate a *fresh* (empty) workbench from a saved layout. No-op-safe to
-        /// call on a populated state, but intended only for seeding at birth.
+        /// Seed private content once, preserving Files already supplied by the Host.
         ///
         /// - Parameters:
         ///   - windowIdForIndex: maps a tmux window index back to the live
@@ -216,11 +217,27 @@
             windowIdForIndex: (Int) -> String?,
             makeBrowserState: (BrowserTab) -> BrowserTabState
         ) {
+            let hostDirectories = tabs.directoryTabs.filter { $0.value.hostTab != nil }
+            let hostIDs = Set(hostDirectories.keys)
+            let hostFiles = tabs.openFileTabs.filter { hostIDs.contains($0.id) }
+            func isHostFile(_ payload: TabDragPayload) -> Bool {
+                if case let .file(id) = payload {
+                    return hostIDs.contains(id)
+                }
+                return false
+            }
+            let hostOrder = tabs.tabOrder.filter(isHostFile)
+            let hostRightSide = tabs.rightSide.filter(isHostFile)
+            let hostSelectedRight = tabs.selectedRight.flatMap { isHostFile($0) ? $0 : nil }
+            let hostSelectedLeft = tabs.selectedFileTabId.flatMap { hostIDs.contains($0) ? $0 : nil }
+            let liveSplitRatio = tabs.splitRatio
+
             // File tabs — ids preserved so SavedTabRef.file references stay valid.
-            tabs.openFileTabs = layout.fileTabs.map {
+            let privateFiles = layout.fileTabs.filter { $0.browser?.hostOwned != true && !hostIDs.contains($0.id) }
+            tabs.openFileTabs = privateFiles.map {
                 OpenFileTab(id: $0.id, path: $0.path, directoryPath: $0.directoryPath, isDirectory: $0.browser != nil)
             }
-            tabs.directoryTabs = Dictionary(uniqueKeysWithValues: layout.fileTabs.compactMap { saved in
+            tabs.directoryTabs = Dictionary(uniqueKeysWithValues: privateFiles.compactMap { saved in
                 saved.browser.map { (saved.id, FileBrowserTab(snapshot: $0)) }
             })
 
@@ -269,6 +286,21 @@
             }
 
             tabs.splitRatio = min(max(layout.splitRatio, SplitLayout.minRatio), SplitLayout.maxRatio)
+
+            tabs.openFileTabs += hostFiles
+            tabs.directoryTabs.merge(hostDirectories) { _, live in live }
+            tabs.tabOrder += hostOrder
+            tabs.rightSide.formUnion(hostRightSide)
+            if let hostSelectedLeft {
+                tabs.selectedFileTabId = hostSelectedLeft
+                tabs.selectedBrowserTabId = nil
+            }
+            if let hostSelectedRight {
+                tabs.selectedRight = hostSelectedRight
+            }
+            if !hostRightSide.isEmpty {
+                tabs.splitRatio = liveSplitRatio
+            }
 
             if let fileTree = layout.fileTree, let fileBrowser {
                 fileBrowser.sidebarWidth = fileTree.sidebarWidth

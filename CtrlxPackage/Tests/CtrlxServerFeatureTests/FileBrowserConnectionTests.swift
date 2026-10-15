@@ -1,18 +1,19 @@
-@testable import CtrlxCommon
-import CtrlxEncryption
-import CtrlxNetworking
 import ConcurrencyExtras
 import CryptoKit
+import CtrlxEncryption
+import CtrlxNetworking
 import Dependencies
 import Foundation
 import Testing
 import Vapor
+@testable import CtrlxCommon
 @testable import CtrlxServerFeature
 
 @MainActor
 @Suite("File requests across Viewer reconnects", .serialized)
 struct FileBrowserConnectionTests {
-    @Test func browserCapabilitySlowFramesAndReconnect() async throws {
+    @Test
+    func browserCapabilitySlowFramesAndReconnect() async throws {
         let originalVersion = VersionCompatibility.appVersionOverride
         VersionCompatibility.appVersionOverride = "3.0.51"
         defer { VersionCompatibility.appVersionOverride = originalVersion }
@@ -34,49 +35,105 @@ struct FileBrowserConnectionTests {
             let port = try #require(app.http.server.shared.localAddress?.port)
             let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
             let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
-            let host = ConnectedViewer(pairedViewer: .init(id: "pair", deviceName: "Viewer",
-                partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(), partnerPublicKeyId: viewerEncryption.keyId),
-                e2eeService: hostEncryption)
-            let viewer = ViewerRelayClient()
+            let host = ConnectedViewer(
+                pairedViewer: .init(
+                    id: "pair",
+                    deviceName: "Viewer",
+                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
+                    partnerPublicKeyId: viewerEncryption.keyId
+                ),
+                e2eeService: hostEncryption
+            )
+            let connection = ViewerConnection(pairedDevice: .init(
+                id: "pair", hostName: "Host", username: "test",
+                partnerPublicKey: hostEncryption.publicKey.base64EncodedString(), partnerPublicKeyId: hostEncryption.keyId
+            ), e2eeService: viewerEncryption)
+            let viewer = connection.relayClient
             let enabled = LockIsolated(false)
             let paneBrowserEnabled = LockIsolated(false)
+            let paneFilesEnabled = LockIsolated(false)
+            let filesClosed = LockIsolated(false)
+            let rejectClose = LockIsolated(true)
+            let fileTab = HostFileTab(sessionName: "test", windowID: "@1", sourcePaneID: "%7", initialDirectory: "/Host")
             var held: [CheckedContinuation<Void, Never>] = []
             var cancelled = 0
             var input = false
-            defer { for continuation in held { continuation.resume() } }
+            defer { for continuation in held {
+                continuation.resume()
+            } }
             host.onSessionStateRequest = {
-                .init(pairId: "", paneStates: [:], supportsBrowserSharing: enabled.value ? true : nil,
-                      supportsPaneBrowser: paneBrowserEnabled.value ? true : nil)
+                .init(
+                    pairId: "",
+                    paneStates: [:],
+                    supportsFileBrowsing: true,
+                    supportsBrowserSharing: enabled.value ? true : nil,
+                    supportsPaneBrowser: paneBrowserEnabled.value ? true : nil,
+                    supportsPaneFiles: paneFilesEnabled.value ? true : nil,
+                    fileTabs: paneFilesEnabled.value ? (filesClosed.value ? [] : [fileTab]) : nil
+                )
             }
             host.onCommand = { command in
+                if case let .browseFiles(spec) = command.command, case let .tabs(operation) = spec.operation {
+                    if case .close = operation, !rejectClose.value {
+                        filesClosed.setValue(true)
+                        return .init(commandId: command.id, success: true, fileBrowser: .tabClosed)
+                    }
+                    return .init(commandId: command.id, success: true, fileBrowser: .tab(fileTab))
+                }
                 if case let .browseBrowser(spec) = command.command, spec.operation == .frame {
                     await withCheckedContinuation { held.append($0) }
-                    if Task.isCancelled { cancelled += 1 }
+                    if Task.isCancelled {
+                        cancelled += 1
+                    }
                 }
-                if case .sendKeystroke = command.command { input = true }
+                if case .sendKeystroke = command.command {
+                    input = true
+                }
                 return .init(commandId: command.id, success: true, browser: .init())
             }
-            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test",
-                publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
+            await host.connect(
+                serverURL: url,
+                deviceId: "host",
+                deviceName: "Host",
+                username: "test",
+                publicKey: hostEncryption.publicKey.base64EncodedString(),
+                publicKeyId: hostEncryption.keyId
+            )
             do {
                 await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
-                try await waitUntil { host.isViewerConnected && viewer.isHostConnected }
+                // Count only after the initial capability snapshot, not while it is in flight.
+                try await waitUntil { host.isViewerConnected && viewer.hostSupportsFileBrowsing }
                 let command = BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .frame)
                 let frames = await relay.encryptedFrames
                 let rejected = await viewer.sendCommand(command, paneId: "")
-                if case .success = rejected { Issue.record("Legacy Host accepted browser input") }
+                if case .success = rejected {
+                    Issue.record("Legacy Host accepted browser input")
+                }
                 #expect(await relay.encryptedFrames == frames)
                 enabled.setValue(true)
                 await host.pushSessionState()
                 try await waitUntil { viewer.hostSupportsBrowserSharing }
                 let open = BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .openPane(url: nil), sourcePaneID: "%7")
                 let legacyOpen = await viewer.sendCommand(open, paneId: "")
-                if case .success = legacyOpen { Issue.record("Browser-sharing-only Host accepted pane open") }
+                if case .success = legacyOpen {
+                    Issue.record("Browser-sharing-only Host accepted pane open")
+                }
                 #expect(!viewer.hostSupportsPaneBrowser)
                 paneBrowserEnabled.setValue(true)
                 await host.pushSessionState()
                 try await waitUntil { viewer.hostSupportsPaneBrowser }
                 #expect(try await viewer.sendCommand(open, paneId: "").get().success)
+                let openFiles = BrowseFiles(.tabs(.open(sessionName: "test", new: false)))
+                let beforeFiles = await relay.encryptedFrames
+                if case .success = await viewer.sendCommand(openFiles, paneId: "%7") {
+                    Issue.record("Old Host accepted shared Files")
+                }
+                #expect(await relay.encryptedFrames == beforeFiles)
+                paneFilesEnabled.setValue(true)
+                await host.pushSessionState()
+                try await waitUntil { viewer.hostSupportsPaneFiles }
+                #expect(viewer.fileTabs == [fileTab])
+                #expect(try await viewer.sendCommand(openFiles, paneId: "%7").get().fileBrowser == .tab(fileTab))
                 let requests = (0..<4).map { _ in Task { await viewer.sendCommand(command, paneId: "") } }
                 defer { requests.forEach { $0.cancel() } }
                 try await waitUntil { held.count == 4 }
@@ -86,8 +143,12 @@ struct FileBrowserConnectionTests {
                 await viewer.disconnect()
                 #expect(!viewer.hostSupportsBrowserSharing)
                 #expect(!viewer.hostSupportsPaneBrowser)
+                #expect(!viewer.hostSupportsPaneFiles)
+                #expect(viewer.fileTabs == [fileTab], "Transient disconnect must not erase Host identities")
                 try await waitUntil { !host.isViewerConnected }
-                for request in requests { _ = await request.value }
+                for request in requests {
+                    _ = await request.value
+                }
                 await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
                 try await waitUntil { viewer.hostSupportsBrowserSharing && host.isViewerConnected }
                 let fresh = await viewer.sendCommand(BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .create), paneId: "")
@@ -96,19 +157,33 @@ struct FileBrowserConnectionTests {
                 held.removeAll()
                 old.forEach { $0.resume() }
                 try await waitUntil { cancelled == 4 }
+                await #expect(throws: FileBrowserError.self) {
+                    try await HostFileTabClient.close(connection: connection, id: fileTab.id)
+                }
+                #expect(viewer.fileTabs == [fileTab], "An unconfirmed close must retain the tab")
+                rejectClose.setValue(false)
+                try await HostFileTabClient.close(connection: connection, id: fileTab.id)
+                #expect(viewer.fileTabs.isEmpty, "Confirmed close must update the catalog without waiting for its snapshot")
                 #expect(await relay.errors.isEmpty)
                 #expect(await relay.unexpectedTypes.isEmpty)
             } catch {
-                await viewer.disconnect(); await host.disconnect(); throw error
+                await viewer.disconnect()
+                await host.disconnect()
+                throw error
             }
-            await viewer.disconnect(); await host.disconnect()
+            await viewer.disconnect()
+            await host.disconnect()
         } catch {
-            await app.server.shutdown(); try await app.asyncShutdown(); throw error
+            await app.server.shutdown()
+            try await app.asyncShutdown()
+            throw error
         }
-        await app.server.shutdown(); try await app.asyncShutdown()
+        await app.server.shutdown()
+        try await app.asyncShutdown()
     }
 
-    @Test func encryptedVideoRangeReadsLeaveKeyboardCommandsResponsive() async throws {
+    @Test
+    func encryptedVideoRangeReadsLeaveKeyboardCommandsResponsive() async throws {
         let originalVersion = VersionCompatibility.appVersionOverride
         VersionCompatibility.appVersionOverride = "3.0.43"
         defer { VersionCompatibility.appVersionOverride = originalVersion }
@@ -127,13 +202,22 @@ struct FileBrowserConnectionTests {
             let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
             let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
             let host = ConnectedViewer(
-                pairedViewer: .init(id: "pair", deviceName: "Viewer",
-                                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
-                                    partnerPublicKeyId: viewerEncryption.keyId), e2eeService: hostEncryption)
+                pairedViewer: .init(
+                    id: "pair",
+                    deviceName: "Viewer",
+                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
+                    partnerPublicKeyId: viewerEncryption.keyId
+                ), e2eeService: hostEncryption
+            )
             let viewer = ViewerRelayClient()
             let block = FileBrowserLimits.chunkBytes
-            let info = FileBrowserEntry(path: "/Host/movie.mp4", name: "movie.mp4", kind: .unsupported,
-                                       size: 2 * block + 13, revision: "1")
+            let info = FileBrowserEntry(
+                path: "/Host/movie.mp4",
+                name: "movie.mp4",
+                kind: .unsupported,
+                size: 2 * block + 13,
+                revision: "1"
+            )
             let (gate, release) = AsyncStream<Void>.makeStream()
             defer { release.finish() }
             var reading = false
@@ -141,22 +225,40 @@ struct FileBrowserConnectionTests {
             var keysArrived = false
             host.onSessionStateRequest = { .init(pairId: "", paneStates: [:], supportsFileBrowsing: true, supportsFileDownloads: true) }
             host.onCommand = { command in
-                if case let .browseFiles(spec) = command.command,
-                   case let .download(path, offset, revision) = spec.operation {
+                if
+                    case let .browseFiles(spec) = command.command,
+                    case let .download(path, offset, revision) = spec.operation {
                     if offset == block {
                         reading = true
-                        for await _ in gate { break }
+                        for await _ in gate {
+                            break
+                        }
                         replied = true
                     }
-                    return .init(commandId: command.id, success: true,
-                                 fileBrowser: .chunk(.init(path: path, revision: revision, offset: offset,
-                                                          data: Data(repeating: 0xFF, count: min(block, info.size - offset)))))
+                    return .init(
+                        commandId: command.id,
+                        success: true,
+                        fileBrowser: .chunk(.init(
+                            path: path,
+                            revision: revision,
+                            offset: offset,
+                            data: Data(repeating: 0xFF, count: min(block, info.size - offset))
+                        ))
+                    )
                 }
-                if case .sendKeystroke = command.command { keysArrived = true }
+                if case .sendKeystroke = command.command {
+                    keysArrived = true
+                }
                 return .success(for: command.id)
             }
-            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test",
-                               publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
+            await host.connect(
+                serverURL: url,
+                deviceId: "host",
+                deviceName: "Host",
+                username: "test",
+                publicKey: hostEncryption.publicKey.base64EncodedString(),
+                publicKeyId: hostEncryption.keyId
+            )
             do {
                 await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
                 try await waitUntil { host.isViewerConnected && viewer.hostSupportsFileDownloads }
@@ -193,7 +295,8 @@ struct FileBrowserConnectionTests {
         try await app.asyncShutdown()
     }
 
-    @Test func viewerDisconnectFreesSlotsBeforeOldIOFinishes() async throws {
+    @Test
+    func viewerDisconnectFreesSlotsBeforeOldIOFinishes() async throws {
         let uploadRoot = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-wire-upload-\(UUID())")
         try FileManager.default.createDirectory(at: uploadRoot, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: uploadRoot) }
@@ -217,48 +320,77 @@ struct FileBrowserConnectionTests {
             let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
             let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
             let host = ConnectedViewer(
-                pairedViewer: .init(id: "pair", deviceName: "Viewer",
-                                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
-                                    partnerPublicKeyId: viewerEncryption.keyId),
+                pairedViewer: .init(
+                    id: "pair",
+                    deviceName: "Viewer",
+                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
+                    partnerPublicKeyId: viewerEncryption.keyId
+                ),
                 e2eeService: hostEncryption
             )
             let viewer = ViewerRelayClient()
             var waiters: [CheckedContinuation<Void, Never>] = []
             var finishedCancelled: [Bool] = []
             let downloadsEnabled = LockIsolated(false)
-            defer { for waiter in waiters { waiter.resume() } }
+            defer { for waiter in waiters {
+                waiter.resume()
+            } }
             host.onSessionStateRequest = {
-                .init(pairId: "", paneStates: [:], supportsFileBrowsing: true, supportsFileDownloads: downloadsEnabled.value ? true : nil,
-                      supportsFileUploads: downloadsEnabled.value ? true : nil)
+                .init(
+                    pairId: "",
+                    paneStates: [:],
+                    supportsFileBrowsing: true,
+                    supportsFileDownloads: downloadsEnabled.value ? true : nil,
+                    supportsFileUploads: downloadsEnabled.value ? true : nil
+                )
             }
             host.onCommand = { command in
-                if case let .browseFiles(spec) = command.command,
-                   case let .info(path) = spec.operation, path.hasPrefix("/old/") {
+                if
+                    case let .browseFiles(spec) = command.command,
+                    case let .info(path) = spec.operation, path.hasPrefix("/old/") {
                     // Simulates I/O that cannot finish immediately on cancellation.
                     await withCheckedContinuation { waiters.append($0) }
                     finishedCancelled.append(Task.isCancelled)
                 }
-                if case let .browseFiles(spec) = command.command,
-                   case let .download(path, offset, revision) = spec.operation {
-                    return .init(commandId: command.id, success: true,
-                                 fileBrowser: .chunk(.init(path: path, revision: revision, offset: offset,
-                                                          data: Data(repeating: 7, count: FileBrowserLimits.chunkBytes))))
+                if
+                    case let .browseFiles(spec) = command.command,
+                    case let .download(path, offset, revision) = spec.operation {
+                    return .init(
+                        commandId: command.id,
+                        success: true,
+                        fileBrowser: .chunk(.init(
+                            path: path,
+                            revision: revision,
+                            offset: offset,
+                            data: Data(repeating: 7, count: FileBrowserLimits.chunkBytes)
+                        ))
+                    )
                 }
                 return .success(for: command.id)
             }
-            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test",
-                               publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
+            await host.connect(
+                serverURL: url,
+                deviceId: "host",
+                deviceName: "Host",
+                username: "test",
+                publicKey: hostEncryption.publicKey.base64EncodedString(),
+                publicKeyId: hostEncryption.keyId
+            )
             do {
                 await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
                 try await waitUntil { host.isViewerConnected && viewer.hostSupportsFileBrowsing }
                 let frameCount = await relay.encryptedFrames
                 let started = ContinuousClock.now
                 let unsupported = await viewer.sendCommand(BrowseFiles(.download(path: "/movie.mp4", offset: 0, revision: "1")), paneId: "%7")
-                if case .success = unsupported { Issue.record("Legacy Host accepted a download") }
+                if case .success = unsupported {
+                    Issue.record("Legacy Host accepted a download")
+                }
                 #expect(ContinuousClock.now - started < .seconds(1))
                 #expect(await relay.encryptedFrames == frameCount, "Do not send a new enum case to an old Host")
                 let uploadBegin = BrowseFiles(.upload(.begin(id: uploadID, directory: uploadRoot.path, name: "file", size: 3)))
-                if case .success = await viewer.sendCommand(uploadBegin, paneId: "") { Issue.record("Legacy Host accepted an upload") }
+                if case .success = await viewer.sendCommand(uploadBegin, paneId: "") {
+                    Issue.record("Legacy Host accepted an upload")
+                }
                 #expect(await relay.encryptedFrames == frameCount)
                 downloadsEnabled.setValue(true)
                 await host.pushSessionState()
@@ -271,15 +403,20 @@ struct FileBrowserConnectionTests {
                 let modern = await viewer.sendCommand(BrowseFiles(.download(path: "/movie.mp4", offset: 0, revision: "1")), paneId: "%7")
                 if case let .chunk(chunk) = try modern.get().fileBrowser {
                     #expect(chunk.data == Data(repeating: 7, count: FileBrowserLimits.chunkBytes))
-                } else { Issue.record("Missing encrypted file chunk") }
+                } else {
+                    Issue.record("Missing encrypted file chunk")
+                }
                 let requests = (0..<4).map { index in
                     Task { await viewer.sendCommand(BrowseFiles(.info(path: "/old/\(index)")), paneId: "%7", timeout: 5) }
                 }
                 try await waitUntil { waiters.count == 4 }
                 requests[0].cancel()
                 let cancelled = await requests[0].value
-                if case let .failure(error) = cancelled { #expect(error is CancellationError) }
-                else { Issue.record("Cancelled request unexpectedly succeeded") }
+                if case let .failure(error) = cancelled {
+                    #expect(error is CancellationError)
+                } else {
+                    Issue.record("Cancelled request unexpectedly succeeded")
+                }
                 await viewer.disconnect()
                 #expect(!viewer.hostSupportsFileDownloads)
                 #expect(!viewer.hostSupportsFileUploads)
@@ -287,7 +424,9 @@ struct FileBrowserConnectionTests {
                 try await waitUntil { !host.isViewerConnected }
                 try await waitUntil { (try? FileManager.default.contentsOfDirectory(atPath: uploadRoot.path).isEmpty) == true }
                 #expect(host.state.isConnected, "This must exercise peer disconnect, not Host socket cleanup")
-                for request in requests { _ = await request.value }
+                for request in requests {
+                    _ = await request.value
+                }
 
                 await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
                 try await waitUntil { host.isViewerConnected && viewer.hostSupportsFileBrowsing }
@@ -298,7 +437,9 @@ struct FileBrowserConnectionTests {
                 await host.pushSessionState()
                 try await waitUntil { viewer.hostSupportsFileUploads }
                 let oldUpload = await viewer.sendCommand(append, paneId: "")
-                if case .success = oldUpload { Issue.record("Reconnected Host reused an old upload") }
+                if case .success = oldUpload {
+                    Issue.record("Reconnected Host reused an old upload")
+                }
                 let newID = UUID(), content = Data([4, 5, 6])
                 let freshBegin = BrowseFiles(.upload(.begin(id: newID, directory: uploadRoot.path, name: "complete", size: content.count)))
                 #expect(try await viewer.sendCommand(freshBegin, paneId: "").get().success)
@@ -311,7 +452,9 @@ struct FileBrowserConnectionTests {
                 #expect(finishedCancelled.isEmpty, "New work must enter before old I/O finishes")
                 let pending = waiters
                 waiters.removeAll()
-                for waiter in pending { waiter.resume() }
+                for waiter in pending {
+                    waiter.resume()
+                }
                 try await waitUntil { finishedCancelled.count == 4 }
                 #expect(finishedCancelled.allSatisfy { $0 })
                 #expect(await relay.errors.isEmpty)
@@ -333,10 +476,17 @@ struct FileBrowserConnectionTests {
     }
 
     private func connect(_ viewer: ViewerRelayClient, url: URL, encryption: E2EEService, hostEncryption: E2EEService) async {
-        await viewer.connect(serverURL: url, pairId: "pair", deviceId: "viewer", deviceName: "Viewer",
-                             publicKey: encryption.publicKey.base64EncodedString(), publicKeyId: encryption.keyId,
-                             e2eeService: encryption, partnerPublicKey: hostEncryption.publicKey.base64EncodedString(),
-                             partnerPublicKeyId: hostEncryption.keyId)
+        await viewer.connect(
+            serverURL: url,
+            pairId: "pair",
+            deviceId: "viewer",
+            deviceName: "Viewer",
+            publicKey: encryption.publicKey.base64EncodedString(),
+            publicKeyId: encryption.keyId,
+            e2eeService: encryption,
+            partnerPublicKey: hostEncryption.publicKey.base64EncodedString(),
+            partnerPublicKeyId: hostEncryption.keyId
+        )
     }
 
     private func encryption() async throws -> E2EEService {
@@ -345,7 +495,9 @@ struct FileBrowserConnectionTests {
 
     private func waitUntil(_ condition: () async -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
-        while !(await condition()), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        while !(await condition()), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         let met = await condition()
         try #require(met, "File-request connection state did not converge")
     }

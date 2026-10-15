@@ -311,9 +311,44 @@ final class SessionFileTabsState {
     /// Files opened as their own tabs via the "Open in New Tab" context menu.
     var openFileTabs: [OpenFileTab] = []
     var directoryTabs: [UUID: FileBrowserTab] = [:]
+    @ObservationIgnored private var closingHostFileTabs: [UUID: (FileTabCloseResult) -> Void] = [:]
 
-    func terminalFilesTab(windowID: String) -> FileBrowserTab? {
-        openFileTabs.compactMap { directoryTabs[$0.id] }.first { $0.terminalLinkWindowID == windowID }
+    struct FileTabCloseResult: Equatable {
+        let wasSelectedLeft: Bool
+        let origin: FileTabOrigin?
+    }
+
+    func beginClosingHostFileTab(_ id: UUID, onClose: @escaping (FileTabCloseResult) -> Void) -> Bool {
+        guard directoryTabs[id]?.hostTab != nil, closingHostFileTabs[id] == nil else { return false }
+        closingHostFileTabs[id] = onClose
+        return true
+    }
+
+    func cancelClosingHostFileTab(_ id: UUID) {
+        closingHostFileTabs.removeValue(forKey: id)
+    }
+
+    /// A Host catalog can confirm closure before its command reply. Consume the
+    /// explicit close once, using selection at removal time rather than click time.
+    @discardableResult
+    func removeFileTab(_ id: UUID) -> FileTabCloseResult? {
+        let onClose = closingHostFileTabs.removeValue(forKey: id)
+        guard let index = openFileTabs.firstIndex(where: { $0.id == id }) else { return nil }
+        let wasSelectedLeft = selectedFileTabId == id && !rightSide.contains(.file(id))
+        let result = FileTabCloseResult(wasSelectedLeft: wasSelectedLeft, origin: wasSelectedLeft ? openFileTabs[index].origin : nil)
+        openFileTabs.remove(at: index)
+        directoryTabs.removeValue(forKey: id)?.releasePreview()
+        scrollOffsets.removeValue(forKey: id)
+        tabOrder.removeAll { $0 == .file(id) }
+        rightSide.remove(.file(id))
+        if selectedFileTabId == id {
+            selectedFileTabId = nil
+        }
+        if selectedRight == .file(id) {
+            selectedRight = nil
+        }
+        onClose?(result)
+        return result
     }
 
     func migrateLegacyExplorer(directory: String) {
@@ -527,6 +562,11 @@ final class SessionFileTabsState {
 
     @discardableResult
     func reconcileRemoteRightPaneSelection(sessionWindowIDs: [String]) -> Bool {
+        reconcileRightPaneSelection(sessionWindowIDs: sessionWindowIDs, includeLocalTabs: false)
+    }
+
+    @discardableResult
+    func reconcileRightPaneSelection(sessionWindowIDs: [String], includeLocalTabs: Bool) -> Bool {
         if let selectedRight, !rightSide.contains(selectedRight) {
             self.selectedRight = nil
         }
@@ -552,6 +592,10 @@ final class SessionFileTabsState {
                 }
             }) {
             selectedRight = window
+        } else if includeLocalTabs, rightSide.contains(.fileExplorer) {
+            selectedRight = .fileExplorer
+        } else if includeLocalTabs, rightSide.contains(.git) {
+            selectedRight = .git
         } else if let browser = openBrowserTabs.last(where: { rightSide.contains(.browser($0.id)) }) {
             selectedRight = .browser(browser.id)
         } else if let file = openFileTabs.last(where: { rightSide.contains(.file($0.id)) }) {
@@ -607,17 +651,17 @@ final class SessionFileTabsState {
         })
     }
 
-    /// Shared terminal placement is not private workbench content. A Host
-    /// snapshot may arrive before the saved file/browser layout is hydrated;
-    /// terminal-only state must not suppress that restore.
+    /// Host terminals and Files can arrive before the saved private layout.
     var isPrivateWorkbenchEmpty: Bool {
-        openFileTabs.isEmpty
+        openFileTabs.allSatisfy { directoryTabs[$0.id]?.hostTab != nil }
             && openBrowserTabs.isEmpty
+            && !isGitSelected
             && !rightSide.contains { payload in
-                if case .window = payload {
-                    return false
+                switch payload {
+                case .window: return false
+                case let .file(id): return directoryTabs[id]?.hostTab == nil
+                default: return true
                 }
-                return true
             }
     }
 

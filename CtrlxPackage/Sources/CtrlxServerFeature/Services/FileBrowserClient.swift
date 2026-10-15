@@ -13,12 +13,16 @@ struct FileBrowserClient: Sendable {
 }
 
 extension FileBrowserClient: DependencyKey {
-    static let liveValue = Self(request: {
-        if case let .upload(operation) = $0 { return try await HostFileUploads.local.request(operation) }
-        return try await HostFileBrowser.shared.request($0)
-    },
-                                repositoryFile: { try await HostFileBrowser.shared.repositoryFile(path: $0, projectDirectory: $1) },
-                                localFileURL: { try await HostFileBrowser.shared.localFileURL($0) })
+    static let liveValue = Self(
+        request: {
+            if case let .upload(operation) = $0 {
+                return try await HostFileUploads.local.request(operation)
+            }
+            return try await HostFileBrowser.shared.request($0)
+        },
+        repositoryFile: { try await HostFileBrowser.shared.repositoryFile(path: $0, projectDirectory: $1) },
+        localFileURL: { try await HostFileBrowser.shared.localFileURL($0) }
+    )
 }
 
 extension FileBrowserSource {
@@ -32,7 +36,8 @@ extension FileBrowserSource {
         }) { operation in
             @Dependency(FileBrowserClient.self) var client
             if case let .repositoryInfo(path, context) = operation {
-                @MainActor func isCurrent() -> Bool {
+                @MainActor
+                func isCurrent() -> Bool {
                     guard let paneID, let pane = windows.paneStates[paneID] else { return false }
                     return RepositoryFileContext(pane: pane) == context
                 }
@@ -60,8 +65,9 @@ extension FileBrowserSource {
                 @Dependency(SessionDirectoryClient.self) var directories
                 var directory: String?
                 for candidate in candidates {
-                    do { directory = try await directories.resolve(candidate); break }
-                    catch is CancellationError { throw CancellationError() }
+                    do { directory = try await directories.resolve(candidate)
+                        break
+                    } catch is CancellationError { throw CancellationError() }
                     catch { continue } // A closed pane/deleted cwd falls back to Home.
                 }
                 guard let directory else { throw FileBrowserError.message("The Host home directory is unavailable.") }
@@ -80,6 +86,8 @@ actor HostFileBrowser {
     func request(_ request: FileBrowserOperation) throws -> FileBrowserResponse {
         try Task.checkCancellation()
         switch request {
+        case .tabs:
+            throw FileBrowserError.message("Files tabs require the Host workspace registry.")
         case .upload:
             throw FileBrowserError.message("Uploads require a connection-owned writer.")
         case .repositoryInfo:
@@ -132,8 +140,9 @@ actor HostFileBrowser {
     }
 
     private func resolve(_ input: String) throws -> String {
-        guard input.utf8.count <= 4096,
-              let path = SessionDirectoryPath.expanded(input, hostHome: files.homeDirectoryForCurrentUser.path)
+        guard
+            input.utf8.count <= 4_096,
+            let path = SessionDirectoryPath.expanded(input, hostHome: files.homeDirectoryForCurrentUser.path)
         else { throw FileBrowserError.message("Enter an absolute Host path or ~/….") }
         return (path as NSString).standardizingPath
     }
@@ -153,11 +162,21 @@ actor HostFileBrowser {
         var link = stat()
         let isLink = lstat(path, &link) == 0 && (link.st_mode & S_IFMT) == S_IFLNK
         let kind: FileBrowserKind
-        if (value.st_mode & S_IFMT) == S_IFDIR { kind = .directory }
-        else if (value.st_mode & S_IFMT) != S_IFREG { kind = .unsupported }
-        else { kind = Self.kind(for: path) }
-        return .init(path: path, name: (path as NSString).lastPathComponent, kind: kind,
-                     size: max(0, Int(value.st_size)), revision: revision(value), isSymbolicLink: isLink)
+        if (value.st_mode & S_IFMT) == S_IFDIR {
+            kind = .directory
+        } else if (value.st_mode & S_IFMT) != S_IFREG {
+            kind = .unsupported
+        } else {
+            kind = Self.kind(for: path)
+        }
+        return .init(
+            path: path,
+            name: (path as NSString).lastPathComponent,
+            kind: kind,
+            size: max(0, Int(value.st_size)),
+            revision: revision(value),
+            isSymbolicLink: isLink
+        )
     }
 
     func listedEntry(path: String, type: fsobj_type_t) throws -> FileBrowserEntry {
@@ -181,21 +200,28 @@ actor HostFileBrowser {
         }
         var entries = try directoryEntries(path: path, hidden: hidden)
         entries.sort {
-            if ($0.kind == .directory) != ($1.kind == .directory) { return $0.kind == .directory }
+            if ($0.kind == .directory) != ($1.kind == .directory) {
+                return $0.kind == .directory
+            }
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
-        guard revision(before) == revision(try metadata(path)) else { throw FileBrowserError.message("Directory changed. Refresh and try again.") }
+        guard try revision(before) == revision(metadata(path)) else { throw FileBrowserError.message("Directory changed. Refresh and try again.") }
         var page: [FileBrowserEntry] = []
         var bytes = 0
         for item in entries.dropFirst(offset).prefix(FileBrowserLimits.directoryPageSize) {
             let count = try JSONEncoder().encode(item).count
-            guard bytes + count <= 128 * 1024 else { break }
+            guard bytes + count <= 128 * 1_024 else { break }
             page.append(item)
             bytes += count
         }
         let next = offset + page.count
-        return .init(directory: path, homeDirectory: files.homeDirectoryForCurrentUser.path, entries: page,
-                     nextOffset: next < entries.count ? next : nil, revision: revision(before))
+        return .init(
+            directory: path,
+            homeDirectory: files.homeDirectoryForCurrentUser.path,
+            entries: page,
+            nextOffset: next < entries.count ? next : nil,
+            revision: revision(before)
+        )
     }
 
     private func directoryEntries(path: String, hidden: Bool) throws -> [FileBrowserEntry] {
@@ -213,7 +239,7 @@ actor HostFileBrowser {
         let typeOffset = nameOffset + MemoryLayout<attrreference_t>.size
         let flagsOffset = typeOffset + MemoryLayout<fsobj_type_t>.size
         let headerSize = flagsOffset + MemoryLayout<UInt32>.size
-        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
         var entries: [FileBrowserEntry] = []
         while true {
             try Task.checkCancellation()
@@ -221,7 +247,9 @@ actor HostFileBrowser {
                 getattrlistbulk(fd, &attributes, $0.baseAddress, $0.count, UInt64(FSOPT_PACK_INVAL_ATTRS))
             }
             guard count >= 0 else { throw posixError(path) }
-            if count == 0 { break }
+            if count == 0 {
+                break
+            }
             try buffer.withUnsafeBytes { bytes in
                 var offset = 0
                 for _ in 0..<count {
@@ -236,8 +264,9 @@ actor HostFileBrowser {
                     let record = UnsafeRawBufferPointer(rebasing: bytes[offset..<offset + length])
                     offset += length
                     let returned = record.loadUnaligned(fromByteOffset: 4, as: attribute_set_t.self)
-                    guard record.loadUnaligned(fromByteOffset: errorOffset, as: UInt32.self) == 0,
-                          returned.commonattr & UInt32(ATTR_CMN_NAME) != 0 else { continue }
+                    guard
+                        record.loadUnaligned(fromByteOffset: errorOffset, as: UInt32.self) == 0,
+                        returned.commonattr & UInt32(ATTR_CMN_NAME) != 0 else { continue }
                     let reference = record.loadUnaligned(fromByteOffset: nameOffset, as: attrreference_t.self)
                     let nameStart = nameOffset + Int(reference.attr_dataoffset)
                     let nameEnd = nameStart + Int(reference.attr_length)
@@ -274,8 +303,9 @@ actor HostFileBrowser {
         guard revision(before) == expected else { throw FileBrowserError.message("File changed. Refresh its preview.") }
         let kind = Self.kind(for: path)
         let limit = kind == .text || kind == .markdown ? FileBrowserLimits.maximumTextBytes : FileBrowserLimits.maximumPreviewBytes
-        guard before.st_size >= 0, before.st_size <= (download ? FileBrowserLimits.maximumDownloadBytes : limit),
-              (download || kind != .unsupported), offset <= before.st_size else {
+        guard
+            before.st_size >= 0, before.st_size <= (download ? FileBrowserLimits.maximumDownloadBytes : limit),
+            download || kind != .unsupported, offset <= before.st_size else {
             throw FileBrowserError.message("This file is too large or its format cannot be previewed.")
         }
         var data = Data(count: min(FileBrowserLimits.chunkBytes, Int(before.st_size) - offset))
@@ -285,17 +315,22 @@ actor HostFileBrowser {
         guard count >= 0 else { throw posixError(path) }
         data.count = count
         var after = stat()
-        guard fstat(fd, &after) == 0, revision(after) == expected,
-              revision(try metadata(path)) == expected else { throw FileBrowserError.message("File changed. Refresh its preview.") }
+        guard
+            fstat(fd, &after) == 0, revision(after) == expected,
+            try revision(metadata(path)) == expected else { throw FileBrowserError.message("File changed. Refresh its preview.") }
         return data
     }
 
     private func search(path: String, query: String, mode: FileBrowserSearchMode, hidden: Bool) throws -> FileBrowserSearchResults {
         guard !query.isEmpty, query.utf8.count <= 512 else { throw FileBrowserError.message("Enter a search of 1–512 bytes.") }
-        guard try entry(path: path).kind == .directory,
-              files.isReadableFile(atPath: path), files.isExecutableFile(atPath: path),
-              let enumerator = files.enumerator(at: URL(fileURLWithPath: path), includingPropertiesForKeys: [.isSymbolicLinkKey],
-                                               options: hidden ? [] : [.skipsHiddenFiles]) else {
+        guard
+            try entry(path: path).kind == .directory,
+            files.isReadableFile(atPath: path), files.isExecutableFile(atPath: path),
+            let enumerator = files.enumerator(
+                at: URL(fileURLWithPath: path),
+                includingPropertiesForKeys: [.isSymbolicLinkKey],
+                options: hidden ? [] : [.skipsHiddenFiles]
+            ) else {
             throw FileBrowserError.message("Cannot search Host directory: \(path)")
         }
         let deadline = ContinuousClock.now + .seconds(2)
@@ -305,16 +340,24 @@ actor HostFileBrowser {
         var truncated = false
         for case let url as URL in enumerator {
             try Task.checkCancellation()
-            guard scanned < FileBrowserLimits.maximumSearchEntries, matches.count < FileBrowserLimits.maximumSearchResults,
-                  bytesRead < 16 * 1024 * 1024, ContinuousClock.now < deadline else { truncated = true; break }
+            guard
+                scanned < FileBrowserLimits.maximumSearchEntries, matches.count < FileBrowserLimits.maximumSearchResults,
+                bytesRead < 16 * 1_024 * 1_024, ContinuousClock.now < deadline else { truncated = true
+                break
+            }
             scanned += 1
             guard let item = try? entry(path: url.path) else { continue }
-            if item.isSymbolicLink { enumerator.skipDescendants() }
+            if item.isSymbolicLink {
+                enumerator.skipDescendants()
+            }
             if mode == .name {
-                if item.name.localizedCaseInsensitiveContains(query) { matches.append(.init(entry: item)) }
-            } else if !item.isSymbolicLink, item.kind == .text || item.kind == .markdown,
-                      item.size <= FileBrowserLimits.maximumTextBytes,
-                      let data = try? searchData(item) {
+                if item.name.localizedCaseInsensitiveContains(query) {
+                    matches.append(.init(entry: item))
+                }
+            } else if
+                !item.isSymbolicLink, item.kind == .text || item.kind == .markdown,
+                item.size <= FileBrowserLimits.maximumTextBytes,
+                let data = try? searchData(item) {
                 bytesRead += data.count
                 guard let text = String(data: data, encoding: .utf8), !text.contains("\0") else { continue }
                 // One hit per file keeps response size and list identity bounded.
@@ -324,7 +367,10 @@ actor HostFileBrowser {
             }
         }
         // Deep paths can exceed the frame budget even with only 200 matches.
-        while try JSONEncoder().encode(matches).count > 128 * 1024 { matches.removeLast(); truncated = true }
+        while try JSONEncoder().encode(matches).count > 128 * 1_024 {
+            matches.removeLast()
+            truncated = true
+        }
         return .init(matches: matches, isTruncated: truncated)
     }
 
@@ -341,10 +387,30 @@ actor HostFileBrowser {
 
     static func kind(for path: String) -> FileBrowserKind {
         switch (path as NSString).pathExtension.lowercased() {
-        case "md", "markdown": .markdown
-        case "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp": .image
+        case "md",
+             "markdown": .markdown
+        case "png",
+             "jpg",
+             "jpeg",
+             "gif",
+             "heic",
+             "webp",
+             "tiff",
+             "bmp": .image
         case "pdf": .pdf
-        case "zip", "gz", "dmg", "app", "mp4", "mov", "mp3", "a", "dylib", "woff", "ttf", "sqlite", "db": .unsupported
+        case "zip",
+             "gz",
+             "dmg",
+             "app",
+             "mp4",
+             "mov",
+             "mp3",
+             "a",
+             "dylib",
+             "woff",
+             "ttf",
+             "sqlite",
+             "db": .unsupported
         default: .text // UTF-8/NUL validation rejects unknown binary formats.
         }
     }

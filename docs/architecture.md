@@ -143,6 +143,10 @@ updates, but verify decoding, capability gating and envelope limits per change.
 ## Files, browser and workspace ownership
 
 - **Files:** common UI on all clients; paths resolve on the selected Host.
+  `HostFileTabService` owns the catalog and one human default per source pane;
+  manual opens and terminal links reuse it, explicit extras do not replace it.
+  `supportsPaneFiles` gates shared open/close. Client navigation remains private,
+  while Host IDs survive Viewer re-entry/disconnect and follow source-pane moves.
   `FileBrowserClient` / `HostFileBrowser` provide bounded filesystem work,
   `HostFileUploads` manages writes, and per-connection file queues keep it
   outside terminal input. Terminal link recognition runs in shared client code;
@@ -154,7 +158,9 @@ updates, but verify decoding, capability gating and envelope limits per change.
   remain local. `supportsPaneBrowser` gates the new command on Viewers.
   `vercel` / `ctrlx` selects the automation backend, not the rendering
   engine. Agent authority follows a verified process instance, not the focused
-  pane. Viewer control requires a lease; there is no raw remote CDP gateway.
+  pane. Agent `open` reuses its own pane default; `--new` preserves an extra.
+  Human and Agent defaults never share control grants. Viewer control requires
+  a lease; there is no raw remote CDP gateway.
   See [browser](agent-browser.md) and [engines](agent-browser-engines.md).
 - **Layouts:** session/window/pane terminal geometry is distinct from private
   Files/browser tab selection and per-folder workspace persistence. Shared Host

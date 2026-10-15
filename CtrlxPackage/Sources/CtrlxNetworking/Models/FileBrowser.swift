@@ -5,11 +5,18 @@ public struct BrowseFiles: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
     public let operation: FileBrowserOperation
 
-    public init(_ operation: FileBrowserOperation) { self.operation = operation }
-    public var commandType: CommandType { .browseFiles(self) }
+    public init(_ operation: FileBrowserOperation) {
+        self.operation = operation
+    }
+
+    public var commandType: CommandType {
+        .browseFiles(self)
+    }
 }
 
 public enum FileBrowserOperation: Codable, Sendable, Equatable {
+    /// Host-owned tab identity; navigation and preview state stay client-local.
+    case tabs(FileBrowserTabOperation)
     /// A nil path resolves the source pane's directory on the Host at open time.
     case list(path: String?, offset: Int, includeHidden: Bool)
     case info(path: String)
@@ -54,7 +61,9 @@ public struct FileBrowserEntry: Codable, Sendable, Equatable, Identifiable {
     public let size: Int
     public let revision: String
     public let isSymbolicLink: Bool
-    public var id: String { path }
+    public var id: String {
+        path
+    }
 
     public init(path: String, name: String, kind: FileBrowserKind, size: Int, revision: String, isSymbolicLink: Bool = false) {
         self.path = path
@@ -100,7 +109,9 @@ public struct FileBrowserSearchMatch: Codable, Sendable, Equatable, Identifiable
     public let entry: FileBrowserEntry
     public let lineNumber: Int?
     public let lineText: String?
-    public var id: String { "\(entry.path):\(lineNumber ?? 0)" }
+    public var id: String {
+        "\(entry.path):\(lineNumber ?? 0)"
+    }
 
     public init(entry: FileBrowserEntry, lineNumber: Int? = nil, lineText: String? = nil) {
         self.entry = entry
@@ -121,11 +132,52 @@ public struct FileBrowserSearchResults: Codable, Sendable, Equatable {
 }
 
 public enum FileBrowserResponse: Codable, Sendable, Equatable {
+    case tab(HostFileTab)
+    case tabClosed
     case listing(FileBrowserListing)
     case info(FileBrowserEntry)
     case chunk(FileBrowserChunk)
     case search(FileBrowserSearchResults)
     case uploaded(offset: Int, path: String?)
+}
+
+public enum PaneTabGroup: String, Codable, Sendable {
+    case human
+    case agent
+}
+
+public enum FileBrowserTabOperation: Codable, Sendable, Equatable {
+    case open(sessionName: String, new: Bool)
+    case close(id: UUID)
+}
+
+/// A live Host resource, never restored by rebinding a saved tmux pane ID.
+public struct HostFileTab: Codable, Sendable, Equatable, Identifiable {
+    public let id: UUID
+    public var sessionName: String
+    public var windowID: String
+    public let sourcePaneID: String
+    public let group: PaneTabGroup
+    public let isPrimary: Bool
+    public let initialDirectory: String
+
+    public init(
+        id: UUID = UUID(),
+        sessionName: String,
+        windowID: String,
+        sourcePaneID: String,
+        group: PaneTabGroup = .human,
+        isPrimary: Bool = true,
+        initialDirectory: String
+    ) {
+        self.id = id
+        self.sessionName = sessionName
+        self.windowID = windowID
+        self.sourcePaneID = sourcePaneID
+        self.group = group
+        self.isPrimary = isPrimary
+        self.initialDirectory = initialDirectory
+    }
 }
 
 /// IDs belong to one connection; a reconnect cannot resume an old upload.

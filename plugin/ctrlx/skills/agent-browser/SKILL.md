@@ -29,27 +29,27 @@ on that Mac with the agent in a local tmux pane. No special launcher or inherite
 On identification failure, stop; never borrow another pane's context, select the
 focused tab, or ask the user to restart with a wrapper command.
 
-`open` creates a tab; `navigate` reuses one. Choose by task and user intent.
-Prefer reuse for a continuing flow or replacing a page; create a tab to keep
-old pages, compare in parallel, or honor an explicit new-tab request.
-Prefer an already-open target; use `tabs` when unsure what is open.
-Do not close pages the user still needs merely to reduce the tab count.
+`open` opens/reuses this pane's Agent default tab; `navigate --tab` targets a
+specific owned tab. Use `open --new` to keep an old page, compare in parallel,
+or honor an explicit new-tab request; extras do not replace the default.
+Prefer an open target; use `tabs` when unsure. Keep pages the user still needs.
 
 ```sh
 ctrlx browser action tabs
 ctrlx browser action open --url http://localhost:3000
+ctrlx browser action open --new --url https://example.com
 ctrlx browser action wait --tab <id>
 ctrlx browser action read --tab <returned-id>
 ctrlx browser action click --tab <id> --selector '<selector from read>'
 ctrlx browser action screenshot --tab <id> --output /tmp/new-screenshot.png
 ctrlx browser action navigate --tab <id> --url https://example.com
 ctrlx browser action show --tab <id>
-ctrlx browser action close --tab <id>
 ```
 
-Each instance sees only its own group. Human Open Browser pages also use Host
-Chromium but are not agent-owned; legacy WebKit and system-browser tabs are outside
-this CLI. Groups share website logins, not control grants. Never log out or switch
+Human and Agent defaults are separate per pane; clicking a terminal URL is a human action.
+Reopening never transfers grants. Each instance sees only its own group. Human
+pages use Host Chromium, not Agent grants; WebKit/system-browser tabs are outside
+this CLI. Groups share logins, not control grants. Never log out or switch
 accounts without the user's intent.
 
 Read the current page before acting; use returned selectors, not invented ones.

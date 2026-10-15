@@ -42,13 +42,15 @@ class Managed(Probe):
 
     async def cli_action(self, number, *args, ok=True, failure_json=False):
         prefix = self.root / str(uuid.uuid4())
-        command = shlex.join([self.cli, 'browser', *args])
+        words = ['/usr/bin/env', 'CTRLX_SOCKET=' + self.api,
+                 'CTRLX_BROWSER_TEST_STATE_ROOT=' + str(self.root), self.cli, 'browser', *args]
+        command = shlex.join(words)
         if '\n' in command:
             # The native identity fixture reads one command per line. Preserve
             # literal newlines in argv without splitting its input protocol.
             command = shlex.join(['/usr/bin/python3', '-c',
                 'import json,subprocess,sys;sys.exit(subprocess.run(json.loads(sys.argv[1])).returncode)',
-                json.dumps([self.cli, 'browser', *args])])
+                json.dumps(words)])
         command += f' > {prefix}.out 2> {prefix}.err; echo $? > {prefix}.exit'
         name = ('upstream-alpha', 'upstream-beta')[number]
         pane = (await self.control('list-panes', '--window', name + ':1'))['panes'][0]['id']

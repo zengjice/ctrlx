@@ -8,7 +8,7 @@ private actor WebSocketMessageDecoder {
     private let decoder: JSONDecoder
 
     init() {
-        decoder = JSONDecoder()
+        self.decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
     }
 
@@ -63,7 +63,9 @@ final public class ViewerRelayClient {
         case error(String)
 
         public var isConnected: Bool {
-            if case .connected = self { return true }
+            if case .connected = self {
+                return true
+            }
             return false
         }
 
@@ -102,6 +104,8 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsDirectoryCreation = false
     public private(set) var hostSupportsSessionWorktrees = false
     public private(set) var hostSupportsFileBrowsing = false
+    public private(set) var hostSupportsPaneFiles = false
+    public private(set) var fileTabs: [HostFileTab] = []
     public private(set) var hostSupportsRepositoryFileLinks = false
     public private(set) var hostSupportsFileDownloads = false
     public private(set) var hostSupportsFileUploads = false
@@ -119,6 +123,18 @@ final public class ViewerRelayClient {
             browserTabs[index] = tab
         } else {
             browserTabs.append(tab)
+        }
+    }
+
+    func forgetClosedFileTab(_ id: UUID) {
+        fileTabs.removeAll { $0.id == id }
+    }
+
+    func rememberOpenedFileTab(_ tab: HostFileTab) {
+        if let index = fileTabs.firstIndex(where: { $0.id == tab.id }) {
+            fileTabs[index] = tab
+        } else {
+            fileTabs.append(tab)
         }
     }
 
@@ -341,6 +357,7 @@ final public class ViewerRelayClient {
 
         if self.pairId != pairId {
             simulatorTabs = []
+            fileTabs = []
         }
         self.serverURL = serverURL
         self.pairId = pairId
@@ -528,6 +545,9 @@ final public class ViewerRelayClient {
         case .browseFiles where !hostSupportsFileBrowsing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to browse files"))
         case let .browseFiles(spec):
+            if case .tabs = spec.operation, !hostSupportsPaneFiles {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Files tabs"))
+            }
             if case .repositoryInfo = spec.operation, !hostSupportsRepositoryFileLinks {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open repository file links"))
             }
@@ -596,11 +616,12 @@ final public class ViewerRelayClient {
 
                 Task {
                     guard self.pendingCommands[commandMessage.id] != nil else { return }
-                    guard await self.sendEncrypted(
-                        .command(commandMessage),
-                        using: task,
-                        generation: generation
-                    ) else {
+                    guard
+                        await self.sendEncrypted(
+                            .command(commandMessage),
+                            using: task,
+                            generation: generation
+                        ) else {
                         self.timeoutTasks.removeValue(forKey: commandMessage.id)?.cancel()
                         if let handler = self.pendingCommands.removeValue(forKey: commandMessage.id) {
                             handler(.failure(ViewerRelayClientError.commandFailed("Unable to send relay message")))
@@ -1052,6 +1073,8 @@ final public class ViewerRelayClient {
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
             hostSupportsSessionWorktrees = sessionState.supportsSessionWorktrees == true
             hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
+            hostSupportsPaneFiles = sessionState.supportsPaneFiles == true
+            fileTabs = sessionState.fileTabs ?? []
             hostSupportsRepositoryFileLinks = sessionState.supportsRepositoryFileLinks == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
@@ -1157,7 +1180,9 @@ final public class ViewerRelayClient {
             }
             // Compatible — now safe to surface the host as connected and ask for state.
             isHostConnected = true
-            if case .encrypted = message { quickPhraseSync?.receiveHello(peerHello.quickPhraseSync) }
+            if case .encrypted = message {
+                quickPhraseSync?.receiveHello(peerHello.quickPhraseSync)
+            }
             await requestSessionState()
 
         case let .quickPhraseSync(payload):
@@ -1394,8 +1419,7 @@ final public class ViewerRelayClient {
             !Task.isCancelled,
             state.isConnected,
             connectionGeneration.isCurrent(generation),
-            webSocketTask === task
-        {
+            webSocketTask === task {
             // Idle period between keep-alive pings.
             let jitter = isFirstRound ? initialPingJitterSeconds : 0
             isFirstRound = false
@@ -1438,7 +1462,7 @@ final public class ViewerRelayClient {
     /// the same MainActor turn. Short test intervals intentionally use no jitter.
     private var initialPingJitterSeconds: Int {
         guard pingIntervalSeconds >= 5, let pairId else { return 0 }
-        let checksum = pairId.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0x7FFF_FFFF }
+        let checksum = pairId.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0x7FFFFFFF }
         return checksum % 5
     }
 
@@ -1532,6 +1556,7 @@ final public class ViewerRelayClient {
 
     private func resetFileUploads() {
         hostSupportsFileUploads = false
+        hostSupportsPaneFiles = false
         fileTransferEpoch = UUID()
     }
 

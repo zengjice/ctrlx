@@ -22,7 +22,7 @@ public struct MainView: View {
     private let detachedWorkspace: DetachedTerminalWorkspace?
 
     public init() {
-        detachedWorkspace = nil
+        self.detachedWorkspace = nil
     }
 
     init(detachedWorkspace: DetachedTerminalWorkspace) {
@@ -179,6 +179,7 @@ public struct MainView: View {
     @State private var attachError: String?
     @State private var pendingFileLink: TerminalFileLinkRequest?
     @State private var browserOpenTask: Task<Void, Never>?
+    @State private var filesOpenTask: Task<Void, Never>?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var projects: [AgentProject] = []
     @State private var isLoadingProjects = false
@@ -405,6 +406,14 @@ public struct MainView: View {
                 }
             }
             .onChange(of: detachedWorkspace?.selectionRevision) { selectDetachedWorkspace() }
+            .onChange(of: coordinator.hostFileTabs.tabs, initial: true) { _, tabs in
+                syncHostFiles(hostID: nil, descriptors: tabs)
+            }
+            .onChange(of: remoteFileCatalogs, initial: true) { _, catalogs in
+                for (hostID, descriptors) in catalogs {
+                    syncHostFiles(hostID: hostID, descriptors: descriptors)
+                }
+            }
             .onChange(of: coordinator.detachedWindows.presentationRevision) {
                 coordinator.agentBrowser.register(agentBrowserWorkspace)
                 repairWorkspaceSelection()
@@ -431,6 +440,7 @@ public struct MainView: View {
             }
             .onDisappear {
                 browserOpenTask?.cancel()
+                filesOpenTask?.cancel()
                 if detachedWorkspace == nil {
                     coordinator.agentBrowser.unregister(agentBrowserWorkspace)
                     coordinator.agentSimulator.unregister(simulatorWorkspace)
@@ -1391,13 +1401,13 @@ public struct MainView: View {
                     onCloseFileTab: { id in
                         closeRemoteFileTab(id, hostID: remote.hostId, sessionName: remote.sessionName)
                     },
-                    onOpenFiles: { sourceWindow in
+                    onOpenFiles: { sourceWindow, new in
                         openDirectoryTab(
                             sessionName: remote.sessionName,
                             windowID: sourceWindow.id,
                             hostID: remote.hostId,
                             paneIDs: sourceWindow.panes.map(\.paneId),
-                            fallbackPaneID: sourceWindow.activePane?.paneId
+                            fallbackPaneID: sourceWindow.activePane?.paneId, new: new
                         )
                     },
                     onDetachWindow: { sourceWindow, point in
@@ -1585,13 +1595,13 @@ public struct MainView: View {
                         onReorderBrowserTabs: { newOrder in
                             reorderBrowserTabs(in: session.sessionName, to: newOrder)
                         },
-                        onOpenFiles: { sourceWindow in
+                        onOpenFiles: { sourceWindow, new in
                             openDirectoryTab(
                                 sessionName: session.sessionName,
                                 windowID: sourceWindow.id,
                                 hostID: nil,
                                 paneIDs: sourceWindow.panes.map(\.paneId),
-                                fallbackPaneID: sourceWindow.activePane?.paneId
+                                fallbackPaneID: sourceWindow.activePane?.paneId, new: new
                             )
                         },
                         onDetachWindow: { sourceWindow, point in
@@ -2158,15 +2168,15 @@ public struct MainView: View {
     /// the Git tab's right-click menu so both behave identically.
     @MainActor
     private func revealInFileExplorer(path: String, sessionName: String, windowId: String) {
-        let tab = openDirectoryTab(
+        openDirectoryTab(
             sessionName: sessionName,
             windowID: windowId,
             hostID: nil,
             paneIDs: [],
             fallbackPaneID: nil,
-            path: (path as NSString).deletingLastPathComponent
+            path: (path as NSString).deletingLastPathComponent,
+            selectedFile: path
         )
-        tab.selectedFile = path
     }
 
     /// Renders the right pane of the split layout by dispatching on the
@@ -3822,26 +3832,28 @@ public struct MainView: View {
     private func handleOpenContentSearch() {
         if let remote = selectedRemoteSession {
             let tabs = tabStore.tabs(hostID: remote.hostId, session: remote.sessionName)
-            tabs.focusContentSearch {
-                guard let window = selectedRemoteWindow else { return nil }
-                return openDirectoryTab(
+            if tabs.selectedFileTabId.flatMap({ tabs.directoryTabs[$0] }) != nil {
+                tabs.focusContentSearch { nil }
+            } else if let window = selectedRemoteWindow {
+                openDirectoryTab(
                     sessionName: remote.sessionName,
                     windowID: window.id,
                     hostID: remote.hostId,
                     paneIDs: window.panes.map(\.paneId),
-                    fallbackPaneID: window.activePane?.paneId
+                    fallbackPaneID: window.activePane?.paneId, focusSearch: true
                 )
             }
         } else if let session = currentLocalSession() {
             let tabs = tabStore.tabs(hostID: nil, session: session.sessionName)
-            tabs.focusContentSearch {
-                guard let window = selectedWindow else { return nil }
-                return openDirectoryTab(
+            if tabs.selectedFileTabId.flatMap({ tabs.directoryTabs[$0] }) != nil {
+                tabs.focusContentSearch { nil }
+            } else if let window = selectedWindow {
+                openDirectoryTab(
                     sessionName: session.sessionName,
                     windowID: window.id,
                     hostID: nil,
                     paneIDs: window.panes.map(\.paneId),
-                    fallbackPaneID: window.activePane?.paneId
+                    fallbackPaneID: window.activePane?.paneId, focusSearch: true
                 )
             }
         }
@@ -3971,58 +3983,27 @@ public struct MainView: View {
             fileContext = RepositoryFileContext(pane: pane)
             source = .local(paneID: request.paneID, tmux: tmuxService, windows: windowManager)
         }
-        let initialTabs: SessionFileTabsState?
-        if let hostID = request.hostID {
-            initialTabs = remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: sessionName)]
-        } else {
-            initialTabs = sessionFileTabsStates[sessionName]
-        }
-        let initialSelection = (initialTabs?.selectedFileTabId, initialTabs?.selectedBrowserTabId, initialTabs?.selectedRight)
+        let target = ManualBrowserTarget(hostID: request.hostID, sessionName: sessionName)
+        let initialSelection = browserOpenSelection(for: target)
         do {
             let destination = try await TerminalFileDestination.resolve(path: request.path, context: fileContext, source: source)
+            let descriptor = try await requestHostFileTab(hostID: request.hostID, sessionName: sessionName, paneID: request.paneID)
             try Task.checkCancellation()
             guard fileLinkIsCurrent(request, detachedRequestID: detachedRequestID) else { return }
-            let tabs: SessionFileTabsState?
             if let hostID = request.hostID {
                 guard
                     selectedRemoteSession?.hostId == hostID, selectedRemoteSession?.sessionName == sessionName,
                     ownsTerminal(hostID: hostID, windowID: stableWindowID),
                     selectedRemoteSessionWindows.contains(where: { $0.id == windowID && $0.panes.contains { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext } }) else { return }
-                tabs = remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: sessionName)]
             } else {
                 guard
                     selectedRemoteSession == nil, currentLocalSession()?.sessionName == sessionName,
                     ownsTerminal(hostID: nil, windowID: stableWindowID),
                     tmuxService.windows.contains(where: { $0.id == windowID && $0.panes.contains { $0.paneId == request.paneID } }),
                     let pane = windowManager.paneStates[request.paneID], RepositoryFileContext(pane: pane) == fileContext else { return }
-                tabs = sessionFileTabsStates[sessionName]
             }
-            guard initialSelection == (tabs?.selectedFileTabId, tabs?.selectedBrowserTabId, tabs?.selectedRight) else { return }
-            let tab: FileBrowserTab
-            if let tabs, let existing = tabs.terminalFilesTab(windowID: stableWindowID) {
-                tab = existing
-                if let index = tabs.openFileTabs.firstIndex(where: { $0.id == tab.id }) {
-                    tabs.openFileTabs[index].origin = .terminalWindow(windowID)
-                }
-                if tabs.rightSide.contains(.file(tab.id)) {
-                    tabs.selectedRight = .file(tab.id)
-                } else if request.hostID != nil {
-                    tabs.selectedFileTabId = tab.id
-                    tabs.selectedBrowserTabId = nil
-                } else {
-                    tabs.selectLeftFileTab(tab.id, windowID: windowID, legacyExplorerWindows: &fileBrowserActiveWindowIds)
-                }
-            } else {
-                tab = openDirectoryTab(
-                    sessionName: sessionName,
-                    windowID: windowID,
-                    hostID: request.hostID,
-                    paneIDs: [request.paneID],
-                    fallbackPaneID: request.paneID,
-                    path: destination.directory,
-                    terminalLinkWindowID: stableWindowID
-                )
-            }
+            guard initialSelection == browserOpenSelection(for: target) else { return }
+            let tab = try presentHostFileTab(descriptor, hostID: request.hostID, windowID: windowID)
             tab.openTerminalFile(destination, paneID: request.paneID)
         } catch is CancellationError { }
         catch {
@@ -4033,34 +4014,70 @@ public struct MainView: View {
     }
 
     /// Captures a pane in the source window as the initial directory and return target.
-    @discardableResult
-    private func openDirectoryTab(sessionName: String, windowID: String, hostID: String?, paneIDs: [String], fallbackPaneID: String?, path: String? = nil, terminalLinkWindowID: String? = nil) -> FileBrowserTab {
+    private func openDirectoryTab(sessionName: String, windowID: String, hostID: String?, paneIDs: [String], fallbackPaneID: String?, path: String? = nil, selectedFile: String? = nil, focusSearch: Bool = false, new: Bool = false) {
         let localWindows = tmuxService.windows.filter { $0.sessionName == sessionName }
         let remoteWindows = hostID.map { remoteSessionWindows(hostId: $0, sessionName: sessionName) } ?? []
         let focused = terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
-        let sourcePaneID = FileBrowserTab.sourcePaneID(in: paneIDs, focusedPaneID: focused, activePaneID: fallbackPaneID)
-        let tab = FileBrowserTab(path: path, sourcePaneID: sourcePaneID, terminalLinkWindowID: terminalLinkWindowID)
-        let localOrigin = localWindows.first { $0.panes.contains { $0.paneId == tab.sourcePaneID } }
-        let remoteOrigin = remoteWindows.first { $0.panes.contains { $0.paneId == tab.sourcePaneID } }
-        let originID = hostID == nil ? localOrigin?.id : remoteOrigin?.id
-        let originStableID = hostID == nil ? localOrigin?.stableId : remoteOrigin?.stableId
-        let tabs: SessionFileTabsState
-        if let hostID {
-            let key = remoteTabsKey(hostId: hostID, sessionName: sessionName)
-            tabs = remoteSessionTabsStates[key] ?? SessionFileTabsState()
-            remoteSessionTabsStates[key] = tabs
-        } else {
-            tabs = sessionFileTabsStates[sessionName] ?? SessionFileTabsState()
-            sessionFileTabsStates[sessionName] = tabs
+        let candidates = paneIDs.isEmpty
+            ? (hostID == nil ? localWindows.first { $0.id == windowID }?.panes.map(\.paneId) : remoteWindows.first { $0.id == windowID }?.panes.map(\.paneId)) ?? []
+            : paneIDs
+        guard let paneID = FileBrowserTab.sourcePaneID(in: candidates, focusedPaneID: focused, activePaneID: fallbackPaneID) else {
+            attachError = "This window no longer has a source pane."
+            return
         }
-        tabs.openFileTabs.append(.init(id: tab.id, path: "Files", directoryPath: "", origin: .terminalWindow(originID ?? windowID), isDirectory: true))
-        tabs.directoryTabs[tab.id] = tab
-        if let originStableID, tabs.rightSide.contains(.window(originStableID)) {
+        let target = ManualBrowserTarget(hostID: hostID, sessionName: sessionName)
+        let selection = browserOpenSelection(for: target)
+        filesOpenTask?.cancel()
+        filesOpenTask = Task {
+            do {
+                let descriptor = try await requestHostFileTab(hostID: hostID, sessionName: sessionName, paneID: paneID, new: new)
+                try Task.checkCancellation()
+                guard browserOpenSelection(for: target) == selection else { return }
+                let tab = try presentHostFileTab(descriptor, hostID: hostID, windowID: windowID)
+                if let path {
+                    tab.navigate(path)
+                    tab.selectedFile = selectedFile
+                }
+                if focusSearch {
+                    tab.searchMode = .content
+                    tab.searchFocusRequest += 1
+                }
+            } catch is CancellationError { }
+            catch {
+                if !Task.isCancelled {
+                    attachError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func requestHostFileTab(hostID: String?, sessionName: String, paneID: String, new: Bool = false) async throws -> HostFileTab {
+        if let hostID {
+            return try await HostFileTabClient.open(connection: coordinator.viewerConnectionManager?.connection(for: hostID), sessionName: sessionName, paneID: paneID, new: new)
+        }
+        return try await coordinator.hostFileTabs.open(sessionName: sessionName, paneID: paneID, new: new)
+    }
+
+    private func presentHostFileTab(_ descriptor: HostFileTab, hostID: String?, windowID: String) throws -> FileBrowserTab {
+        let catalog: [HostFileTab]
+        if let hostID {
+            catalog = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient.fileTabs ?? []
+        } else {
+            catalog = coordinator.hostFileTabs.tabs
+        }
+        syncHostFiles(hostID: hostID, descriptors: catalog.filter { $0.id != descriptor.id } + [descriptor])
+        coordinator.detachedWindows.claimFile(descriptor.id, hostID: hostID, session: descriptor.sessionName, workspaceID: detachedWorkspace?.id)
+        let tabs = tabStore.tabs(hostID: hostID, session: descriptor.sessionName)
+        guard let tab = tabs.directoryTabs[descriptor.id] else { throw FileBrowserError.message("The Host Files tab is no longer available.") }
+        if let index = tabs.openFileTabs.firstIndex(where: { $0.id == tab.id }) {
+            tabs.openFileTabs[index].origin = .terminalWindow(windowID)
+        }
+        if tabs.rightSide.contains(.file(tab.id)) {
             tabs.rightSide.insert(.file(tab.id))
             tabs.selectedRight = .file(tab.id)
         } else {
             if hostID == nil {
-                let presentationWindowID = selectedWindow.flatMap { $0.sessionName == sessionName ? $0.id : nil } ?? windowID
+                let presentationWindowID = selectedWindow.flatMap { $0.sessionName == descriptor.sessionName ? $0.id : nil } ?? windowID
                 tabs.selectLeftFileTab(tab.id, windowID: presentationWindowID, legacyExplorerWindows: &fileBrowserActiveWindowIds)
             } else {
                 tabs.selectedFileTabId = tab.id
@@ -4080,37 +4097,68 @@ public struct MainView: View {
         }
     }
 
+    private var remoteFileCatalogs: [String: [HostFileTab]] {
+        guard let manager = coordinator.viewerConnectionManager else { return [:] }
+        return Dictionary(uniqueKeysWithValues: manager.managedHostIDs.compactMap { hostID in
+            guard let client = manager.connection(for: hostID)?.relayClient, client.isHostConnected else { return nil }
+            return (hostID, client.fileTabs)
+        })
+    }
+
+    private func syncHostFiles(hostID: String?, descriptors: [HostFileTab]) {
+        let windows: [String: [String]]
+        if let hostID {
+            windows = Dictionary(grouping: coordinator.remoteSessionStore?.windows(for: hostID) ?? [], by: \.sessionName)
+                .mapValues { $0.map(\.stableId) }
+        } else {
+            windows = Dictionary(grouping: tmuxService.windows, by: \.sessionName).mapValues { $0.map(\.stableId) }
+        }
+        coordinator.detachedWindows.syncFileTabs(hostID: hostID, descriptors: descriptors, sessionWindows: windows)
+    }
+
     private func closeRemoteFileTab(_ id: UUID, hostID: String, sessionName: String) {
         guard let tabs = remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: sessionName)] else { return }
-        let wasSelectedLeft = tabs.selectedFileTabId == id
-        defer {
-            if
-                wasSelectedLeft, selectedRemoteSession?.hostId == hostID,
-                selectedRemoteSession?.sessionName == sessionName {
-                requestAutomaticTabFit()
+        if tabs.directoryTabs[id]?.hostTab != nil {
+            guard
+                tabs.beginClosingHostFileTab(id, onClose: { result in
+                    finishRemoteFileTabClose(result, hostID: hostID, sessionName: sessionName)
+                }) else { return }
+            Task {
+                defer { tabs.cancelClosingHostFileTab(id) }
+                do {
+                    try await HostFileTabClient.close(connection: coordinator.viewerConnectionManager?.connection(for: hostID), id: id)
+                    if let values = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient.fileTabs {
+                        syncHostFiles(hostID: hostID, descriptors: values)
+                    }
+                } catch { attachError = "Cannot close Host Files: \(error.localizedDescription)" }
             }
+            return
         }
-        let origin = tabs.openFileTabs.first(where: { $0.id == id })?.origin
-        tabs.openFileTabs.removeAll { $0.id == id }
-        tabs.directoryTabs.removeValue(forKey: id)
-        tabs.tabOrder.removeAll { $0 == .file(id) }
-        tabs.rightSide.remove(.file(id))
-        if tabs.selectedRight == .file(id) {
-            tabs.selectedRight = nil
+        if let result = tabs.removeFileTab(id) {
+            finishRemoteFileTabClose(result, hostID: hostID, sessionName: sessionName)
         }
-        if tabs.selectedFileTabId == id {
-            tabs.selectedFileTabId = nil
-        }
-        if
-            wasSelectedLeft, case let .terminalWindow(windowID) = origin,
-            remoteSessionWindows(hostId: hostID, sessionName: sessionName).contains(where: { $0.id == windowID }) {
-            selectedRemoteWindowId = windowID
-        }
+    }
+
+    private func finishRemoteFileTabClose(_ result: SessionFileTabsState.FileTabCloseResult, hostID: String, sessionName: String) {
         reconcileRemoteRightPaneSelection(
             hostId: hostID,
             sessionName: sessionName,
             sessionWindows: remoteSessionWindows(hostId: hostID, sessionName: sessionName)
         )
+        guard
+            result.wasSelectedLeft, selectedRemoteSession?.hostId == hostID,
+            selectedRemoteSession?.sessionName == sessionName,
+            let tabs = remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: sessionName)] else { return }
+        if
+            case let .terminalWindow(windowID) = result.origin,
+            let window = remoteSessionWindows(hostId: hostID, sessionName: sessionName).first(where: { $0.id == windowID }),
+            ownsTerminal(hostID: hostID, windowID: window.stableId),
+            !tabs.rightSide.contains(.window(window.stableId)) {
+            selectedRemoteWindowId = windowID
+        }
+        if tabs.selectedFileTabId == nil, tabs.selectedBrowserTabId == nil, !tabs.isGitSelected {
+            requestAutomaticTabFit()
+        }
     }
 
     private func selectFileTab(_ tabId: UUID, sessionName: String, windowId: String) {
@@ -4239,48 +4287,7 @@ public struct MainView: View {
                 true
             }
         }
-        if let sel = tabs.selectedRight, !tabs.rightSide.contains(sel) {
-            tabs.selectedRight = nil
-        }
-        guard tabs.isSplit else { return }
-
-        // If every window/file/browser is on the right, the left section is
-        // effectively empty (only the "+" button would remain) — collapse
-        // the split so the user isn't stuck with a half-empty layout. The
-        // file-explorer button doesn't disqualify collapse on its own; it's
-        // a navigation affordance, not content.
-        let leftEmpty = (!sessionWindows.isEmpty || !tabs.openFileTabs.isEmpty || !tabs.openBrowserTabs.isEmpty)
-            && sessionWindows.allSatisfy { tabs.rightSide.contains(.window($0.stableId)) }
-            && tabs.openFileTabs.allSatisfy { tabs.rightSide.contains(.file($0.id)) }
-            && tabs.openBrowserTabs.allSatisfy { tabs.rightSide.contains(.browser($0.id)) }
-        if leftEmpty {
-            tabs.rightSide.removeAll()
-            tabs.selectedRight = nil
-            return
-        }
-
-        if tabs.selectedRight != nil {
-            return
-        }
-        // Auto-pick: window > file explorer > git > newest browser > newest file.
-        if
-            let window = tabs.rightSide.first(where: {
-                if case .window = $0 {
-                    true
-                } else {
-                    false
-                }
-            }) {
-            tabs.selectedRight = window
-        } else if tabs.rightSide.contains(.fileExplorer) {
-            tabs.selectedRight = .fileExplorer
-        } else if tabs.rightSide.contains(.git) {
-            tabs.selectedRight = .git
-        } else if let browser = tabs.openBrowserTabs.last(where: { tabs.rightSide.contains(.browser($0.id)) }) {
-            tabs.selectedRight = .browser(browser.id)
-        } else if let file = tabs.openFileTabs.last(where: { tabs.rightSide.contains(.file($0.id)) }) {
-            tabs.selectedRight = .file(file.id)
-        }
+        tabs.reconcileRightPaneSelection(sessionWindowIDs: sessionWindows.map(\.stableId), includeLocalTabs: true)
     }
 
     /// Routes a URL clicked in the terminal. Three flows are possible:
@@ -5498,43 +5505,38 @@ public struct MainView: View {
     /// suggestions, etc.) keep the legacy fallback so the file tree remains
     /// visible underneath.
     ///
-    /// Invariant: this must be the only code path that removes entries from
-    /// `openFileTabs`. Any bulk mutation that bypasses this method must also
-    /// clear `selectedFileTabId` when the selected tab is removed, otherwise
-    /// the id will dangle and the content area will render `OpenFileTabContentView`
-    /// against a stale tab.
+    /// Host catalog removal and private closes share `removeFileTab`; only an
+    /// explicit close runs the origin/Fit completion in the requesting scene.
     private func closeOpenFileTab(_ tabId: UUID, sessionName: String) {
         guard let tabs = sessionFileTabsStates[sessionName] else { return }
-        guard let closedIndex = tabs.openFileTabs.firstIndex(where: { $0.id == tabId }) else { return }
-        defer { reconcileRightPaneSelection(sessionName: sessionName) }
-        let closedTab = tabs.openFileTabs[closedIndex]
-        let payload = TabDragPayload.file(tabId)
-        let wasOnRight = tabs.rightSide.contains(payload)
-        let wasSelectedLeft = tabs.selectedFileTabId == tabId
-        defer {
-            if wasSelectedLeft, selectedRemoteSession == nil, selectedWindow?.sessionName == sessionName {
-                requestAutomaticTabFit()
-            }
-        }
-        tabs.openFileTabs.remove(at: closedIndex)
-        tabs.directoryTabs.removeValue(forKey: tabId)
-        tabs.scrollOffsets.removeValue(forKey: tabId)
-        tabs.rightSide.remove(payload)
-        if tabs.selectedRight == payload {
-            tabs.selectedRight = nil
-        }
-        guard wasSelectedLeft else { return }
-        tabs.selectedFileTabId = nil
-        // Right-side close flow doesn't reroute focus to a terminal window.
-        guard !wasOnRight else { return }
-
-        switch closedTab.origin {
-        case nil:
+        if tabs.directoryTabs[tabId]?.hostTab != nil {
+            guard
+                tabs.beginClosingHostFileTab(tabId, onClose: { result in
+                    finishLocalFileTabClose(result, sessionName: sessionName)
+                }) else { return }
+            coordinator.hostFileTabs.close(tabId)
+            syncHostFiles(hostID: nil, descriptors: coordinator.hostFileTabs.tabs)
             return
+        }
+        if let result = tabs.removeFileTab(tabId) {
+            finishLocalFileTabClose(result, sessionName: sessionName)
+        }
+    }
+
+    private func finishLocalFileTabClose(_ result: SessionFileTabsState.FileTabCloseResult, sessionName: String) {
+        defer { reconcileRightPaneSelection(sessionName: sessionName) }
+        guard
+            result.wasSelectedLeft, selectedRemoteSession == nil, currentLocalSession()?.sessionName == sessionName,
+            let tabs = sessionFileTabsStates[sessionName] else { return }
+        switch result.origin {
+        case nil: break
         case let .terminalWindow(windowId):
             restoreFileTabOrigin(windowId: windowId, showGit: false)
         case let .gitTab(windowId):
             restoreFileTabOrigin(windowId: windowId, showGit: true)
+        }
+        if tabs.selectedFileTabId == nil, tabs.selectedBrowserTabId == nil, !tabs.isGitSelected {
+            requestAutomaticTabFit()
         }
     }
 

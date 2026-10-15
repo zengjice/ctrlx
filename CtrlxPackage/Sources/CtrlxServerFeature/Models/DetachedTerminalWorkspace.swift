@@ -161,6 +161,7 @@ extension SessionFileTabsState {
         case .window: break
         case let .file(id):
             guard let index = openFileTabs.firstIndex(where: { $0.id == id }) else { return false }
+            cancelClosingHostFileTab(id)
             destination.openFileTabs.append(openFileTabs.remove(at: index))
             destination.directoryTabs[id] = directoryTabs.removeValue(forKey: id)
             destination.scrollOffsets[id] = scrollOffsets.removeValue(forKey: id)

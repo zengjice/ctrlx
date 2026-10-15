@@ -47,14 +47,16 @@ public struct SessionStateMessage: Codable, Sendable {
     public let sidebarSortMode: String?
 
     /// Host-owned terminal-window layouts keyed by tmux session name. This is
-    /// deliberately narrower than the app's workbench state: file/browser
-    /// tabs, focus and scroll position remain private to each client.
+    /// deliberately narrower than the workbench: auxiliary tab catalogs are
+    /// shared separately; placement, selection and scroll stay client-local.
     public let sharedTerminalLayouts: [String: SharedTerminalLayout]?
     /// Absent on older hosts: viewers retain manual entry and send no lookup.
     public let supportsDirectoryBrowsing: Bool?
     public let supportsDirectoryCreation: Bool?
     public let supportsSessionWorktrees: Bool?
     public let supportsFileBrowsing: Bool?
+    public let supportsPaneFiles: Bool?
+    public let fileTabs: [HostFileTab]?
     public let supportsFileDownloads: Bool?
     public let supportsFileUploads: Bool?
     public let supportsRepositoryFileLinks: Bool?
@@ -99,7 +101,8 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsAgentImageInput: Bool? = nil,
         browserTabs: [RemoteBrowserTab]? = nil,
         supportsSimulatorViewing: Bool? = nil,
-        simulatorTabs: [RemoteSimulatorTab]? = nil
+        simulatorTabs: [RemoteSimulatorTab]? = nil,
+        supportsPaneFiles: Bool? = nil, fileTabs: [HostFileTab]? = nil
     ) {
         self.pairId = pairId
         self.paneStates = paneStates
@@ -112,6 +115,8 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsDirectoryCreation = supportsDirectoryCreation
         self.supportsSessionWorktrees = supportsSessionWorktrees
         self.supportsFileBrowsing = supportsFileBrowsing
+        self.supportsPaneFiles = supportsPaneFiles
+        self.fileTabs = fileTabs
         self.supportsFileDownloads = supportsFileDownloads
         self.supportsFileUploads = supportsFileUploads
         self.supportsRepositoryFileLinks = supportsRepositoryFileLinks
@@ -158,7 +163,8 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsAgentImageInput: supportsAgentImageInput,
             browserTabs: browserTabs,
             supportsSimulatorViewing: supportsSimulatorViewing,
-            simulatorTabs: simulatorTabs
+            simulatorTabs: simulatorTabs,
+            supportsPaneFiles: supportsPaneFiles, fileTabs: fileTabs
         )
     }
 }

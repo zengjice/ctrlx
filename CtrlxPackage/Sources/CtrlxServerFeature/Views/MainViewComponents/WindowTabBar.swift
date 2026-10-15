@@ -58,7 +58,7 @@ struct WindowTabBar: View {
     let onReorderFileTabs: ([UUID]) -> Void
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
-    let onOpenFiles: (LocalTmuxWindow) -> Void
+    let onOpenFiles: (LocalTmuxWindow, Bool) -> Void
     var onDetachWindow: ((LocalTmuxWindow, CGPoint?) -> Void)?
 
     @Environment(MirrorWindowManager.self) private var windowManager
@@ -391,8 +391,12 @@ struct WindowTabBar: View {
     /// assert both from one element.
     private func gitAccessibilityValue(isSelected: Bool) -> String {
         var parts: [String] = []
-        if isSelected { parts.append("selected") }
-        if gitChangedFileCount > 0 { parts.append("\(gitChangedFileCount) changed files") }
+        if isSelected {
+            parts.append("selected")
+        }
+        if gitChangedFileCount > 0 {
+            parts.append("\(gitChangedFileCount) changed files")
+        }
         return parts.joined(separator: ", ")
     }
 
@@ -488,10 +492,16 @@ struct WindowTabBar: View {
                 additionalMenu: {
                     Button("Open in Separate Window") { onDetachWindow?(window, nil) }
                         .disabled(onDetachWindow == nil || DetachedTerminalTarget(hostID: nil, windowID: window.stableId) == nil)
-                    Button { onOpenFiles(window) } label: {
+                    Button { onOpenFiles(window, false) } label: {
                         Label("Open Files", symbol: .folderBadgePlus)
                     }
+                    .disabled(window.panes.isEmpty)
                     .accessibilityIdentifier("window-open-files-\(window.stableId)")
+                    Button { onOpenFiles(window, true) } label: {
+                        Label("Open Another Files Tab", symbol: .folderBadgePlus)
+                    }
+                    .disabled(window.panes.isEmpty)
+                    .accessibilityIdentifier("window-open-another-files-\(window.stableId)")
 
                     Button { onOpenBrowser(window) } label: {
                         Label("Open Browser", symbol: .globe)
@@ -597,8 +607,11 @@ struct WindowTabBar: View {
             isDirectory: tab.isDirectory,
             onOpenFileInNewTab: nil,
             onShowInFileExplorer: { path in
-                if tab.isDirectory { onSelectFileTab(tab.id) }
-                else { onShowInFileExplorer(path) }
+                if tab.isDirectory {
+                    onSelectFileTab(tab.id)
+                } else {
+                    onShowInFileExplorer(path)
+                }
             }
         )
         .onHover { hovering in
@@ -763,7 +776,9 @@ struct WindowTabBar: View {
     /// can land on either side now — windows render their terminal on the
     /// right pane, the file explorer renders the file tree on the right.
     private func sectionOf(_ ref: TabDragPayload) -> TabSection {
-        if isOnRight(ref) { return .right }
+        if isOnRight(ref) {
+            return .right
+        }
         return isSplit ? .left : .single
     }
 
@@ -785,10 +800,18 @@ struct WindowTabBar: View {
     private func syncSubsequences(from order: [TabDragPayload], rollbackOrder: [TabDragPayload]) {
         let windowIds = order.windowIds
         let fileIds: [UUID] = order.compactMap { ref in
-            if case let .file(id) = ref { return id } else { return nil }
+            if case let .file(id) = ref {
+                return id
+            } else {
+                return nil
+            }
         }
         let browserIds: [UUID] = order.compactMap { ref in
-            if case let .browser(id) = ref { return id } else { return nil }
+            if case let .browser(id) = ref {
+                return id
+            } else {
+                return nil
+            }
         }
 
         if windowIds != session.windows.map(\.stableId), !windowIds.isEmpty {
@@ -956,7 +979,13 @@ enum TabDragPayload: Codable, Hashable, Transferable {
         if includeFileExplorer {
             insertAt = order.firstIndex(of: .fileExplorer) ?? order.count
         } else {
-            insertAt = order.firstIndex { if case .browser = $0 { true } else { false } } ?? order.count
+            insertAt = order.firstIndex {
+                if case .browser = $0 {
+                    true
+                } else {
+                    false
+                }
+            } ?? order.count
         }
         for window in liveWindows where seen.insert(window).inserted {
             order.insert(window, at: insertAt)

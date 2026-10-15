@@ -516,12 +516,14 @@ class Bridge final : public CefDevToolsMessageObserver {
     if ([command isEqual:@"open"]) {
       NSString* url = request[@"url"];
       if (!ValidURL(url)) { Reply(id, nil, @"Only HTTP(S) URLs without embedded credentials are allowed."); return; }
-      if (tabs_.size() >= 64) { Reply(id, nil, @"Close unused tabs first (64-tab limit)."); return; }
+      if (request[@"new"] && CFGetTypeID((__bridge CFTypeRef)request[@"new"]) != CFBooleanGetTypeID()) {
+        Reply(id, nil, @"new must be a boolean."); return;
+      }
       // Routing queries tmux asynchronously. Never block the UI/CEF thread on
       // process I/O, and never substitute the currently focused terminal.
       client.busy = true;
       client.opening = true;
-      callbacks_.open(client.run, ownership_.runs.at(client.run).pid, url.UTF8String,
+      callbacks_.open(client.run, ownership_.runs.at(client.run).pid, url.UTF8String, [request[@"new"] boolValue],
           [self = CefRefPtr<Bridge>(this), id] {
         auto it = self->clients_.find(id);
         return self->listener_ >= 0 && it != self->clients_.end() && it->second.busy &&

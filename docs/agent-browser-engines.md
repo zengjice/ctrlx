@@ -257,6 +257,9 @@ python3 CtrlxPackage/AgentBrowser/tests/managed_engine.py \
 python3 CtrlxPackage/AgentBrowser/tests/page_capabilities.py \
   '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
   '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex
+python3 CtrlxPackage/AgentBrowser/tests/pane_defaults.py \
+  '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
+  '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex
 python3 CtrlxPackage/AgentBrowser/tests/expanded_capabilities.py \
   '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
   '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex \

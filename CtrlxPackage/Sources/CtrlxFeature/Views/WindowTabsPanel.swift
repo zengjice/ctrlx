@@ -14,7 +14,7 @@
         var selectedSimulatorID: UUID?
         let isConnected: Bool
         let canOpenFiles: Bool
-        var canOpenBrowser: Bool = false
+        var canOpenBrowser = false
         let isCreatingWindow: Bool
         let forkUnavailableReason: String?
         let onChoose: (WindowTabAction) -> Void
@@ -65,7 +65,9 @@
                                         HStack {
                                             Label(tab.title.isEmpty ? "Browser" : tab.title, symbol: .globe).lineLimit(1)
                                             Spacer()
-                                            if selectedBrowserID == tab.id { Symbols.checkmark.image }
+                                            if selectedBrowserID == tab.id {
+                                                Symbols.checkmark.image
+                                            }
                                         }.contentShape(Rectangle())
                                     }.buttonStyle(.plain)
                                     Menu {
@@ -118,6 +120,11 @@
                     }
                     .disabled(!canOpenFiles || window.panes.isEmpty)
 
+                    Button { choose(.window(stableID: window.stableId, operation: .openAnotherFiles)) } label: {
+                        Label("Open Another Files Tab", symbol: .folderBadgePlus)
+                    }
+                    .disabled(!canOpenFiles || window.panes.isEmpty)
+
                     Button { choose(.window(stableID: window.stableId, operation: .openBrowser)) } label: {
                         Label("Open Browser on Host", symbol: .globe)
                     }
@@ -160,13 +167,15 @@
                     HStack {
                         Label(tab.title, symbol: .folder).lineLimit(1)
                         Spacer()
-                        if selectedFileID == tab.id { Symbols.checkmark.image }
+                        if selectedFileID == tab.id {
+                            Symbols.checkmark.image
+                        }
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 Menu {
-                    Button("Close Files Tab", role: .destructive) { choose(.closeFiles(tab.id)) }
+                    Button(tab.hostTab == nil ? "Close Files Tab" : "Close Files on Host", role: .destructive) { choose(.closeFiles(tab.id)) }
                 } label: {
                     Label("Actions for \(tab.title)", symbol: .ellipsisCircle)
                         .labelStyle(.iconOnly)

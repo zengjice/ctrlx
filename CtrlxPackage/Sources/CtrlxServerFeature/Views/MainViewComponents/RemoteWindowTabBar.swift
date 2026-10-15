@@ -51,7 +51,7 @@ struct RemoteWindowTabBar: View {
     let onReorderBrowserTabs: ([UUID]) -> Void
     var onSelectFileTab: ((UUID) -> Void)?
     var onCloseFileTab: ((UUID) -> Void)?
-    let onOpenFiles: (TmuxWindow) -> Void
+    let onOpenFiles: (TmuxWindow, Bool) -> Void
     var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
 
     /// Cached width of the split-mode tab strip. Measured via the background
@@ -265,7 +265,9 @@ struct RemoteWindowTabBar: View {
                 openBrowserTabView(tab)
             }
         case let .file(id):
-            if let tab = sessionTabs?.directoryTabs[id] { fileTab(tab) }
+            if let tab = sessionTabs?.directoryTabs[id] {
+                fileTab(tab)
+            }
         case .fileExplorer,
              .git:
             EmptyView()
@@ -289,8 +291,13 @@ struct RemoteWindowTabBar: View {
             Button { onSelectFileTab?(tab.id) } label: {
                 Label(tab.title, symbol: .folder).lineLimit(1).padding(.horizontal, 10).padding(.vertical, 6)
             }.buttonStyle(.plain)
-            TabSplitToggleButton(isSplit: isSplit, isOnRight: onRight, tabKind: "file tab", tabName: tab.title,
-                                 action: { onToggleSplit(payload) })
+            TabSplitToggleButton(
+                isSplit: isSplit,
+                isOnRight: onRight,
+                tabKind: "file tab",
+                tabName: tab.title,
+                action: { onToggleSplit(payload) }
+            )
             TabCloseButton(isVisible: true, accessibilityLabel: "Close \(tab.title)", action: { onCloseFileTab?(tab.id) })
                 .padding(.trailing, 6)
         }
@@ -339,11 +346,16 @@ struct RemoteWindowTabBar: View {
                 additionalMenu: {
                     Button("Open in Separate Window") { onDetachWindow?(window, nil) }
                         .disabled(onDetachWindow == nil || DetachedTerminalTarget(hostID: nil, windowID: window.stableId) == nil)
-                    Button { onOpenFiles(window) } label: {
+                    Button { onOpenFiles(window, false) } label: {
                         Label("Open Files", symbol: .folderBadgePlus)
                     }
-                    .disabled(!isHostConnected)
+                    .disabled(!isHostConnected || window.panes.isEmpty)
                     .accessibilityIdentifier("window-open-files-\(window.stableId)")
+                    Button { onOpenFiles(window, true) } label: {
+                        Label("Open Another Files Tab", symbol: .folderBadgePlus)
+                    }
+                    .disabled(!isHostConnected || window.panes.isEmpty)
+                    .accessibilityIdentifier("window-open-another-files-\(window.stableId)")
 
                     Button { onOpenBrowser(window) } label: {
                         Label("Open Browser on Host", symbol: .globe)
@@ -470,7 +482,9 @@ struct RemoteWindowTabBar: View {
     }
 
     private func sectionOf(_ ref: TabDragPayload) -> TabSection {
-        if isOnRight(ref) { return .right }
+        if isOnRight(ref) {
+            return .right
+        }
         return isSplit ? .left : .single
     }
 
@@ -483,11 +497,21 @@ struct RemoteWindowTabBar: View {
     private func syncSubsequences(from order: [TabDragPayload], rollbackOrder: [TabDragPayload]) {
         if let tabs = sessionTabs {
             let files = Dictionary(uniqueKeysWithValues: tabs.openFileTabs.map { ($0.id, $0) })
-            tabs.openFileTabs = order.compactMap { if case let .file(id) = $0 { files[id] } else { nil } }
+            tabs.openFileTabs = order.compactMap {
+                if case let .file(id) = $0 {
+                    files[id]
+                } else {
+                    nil
+                }
+            }
         }
         let windowIds = order.compactMap(\.windowId)
         let browserIds: [UUID] = order.compactMap { ref in
-            if case let .browser(id) = ref { return id } else { return nil }
+            if case let .browser(id) = ref {
+                return id
+            } else {
+                return nil
+            }
         }
 
         if windowIds != windows.map(\.stableId), !windowIds.isEmpty {

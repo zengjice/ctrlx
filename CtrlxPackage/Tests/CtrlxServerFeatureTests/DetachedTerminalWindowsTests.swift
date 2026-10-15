@@ -1,5 +1,6 @@
 import AppKit
 import CtrlxCommon
+import CtrlxNetworking
 import SwiftUI
 import Testing
 @testable import CtrlxServerFeature
@@ -7,6 +8,212 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct DetachedTerminalWindowsTests {
+    @Test(arguments: [TabDragPayload.git, .fileExplorer])
+    func closingHostFilesKeepsRemainingLocalRightContent(fallback: TabDragPayload) {
+        let manager = DetachedTerminalWindows()
+        let file = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host")
+        manager.syncFileTabs(hostID: nil, descriptors: [file], sessionWindows: ["work": ["@1"]])
+        let tabs = manager.mainTabs.tabs(hostID: nil, session: "work")
+        tabs.rightSide = [.file(file.id), fallback]
+        tabs.selectedRight = .file(file.id)
+
+        manager.syncFileTabs(hostID: nil, descriptors: [], sessionWindows: ["work": ["@1"]])
+
+        #expect(tabs.rightSide == [fallback])
+        #expect(tabs.selectedRight == fallback)
+    }
+
+    @Test(arguments: [nil, "viewer-host"] as [String?], [false, true])
+    func hostCloseFinishesOnceInTheOwningScene(host: String?, detached: Bool) throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let workspace = detached ? manager.detach(target, position: nil, session: { _ in "work" }) : nil
+        let file = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host")
+        let windows = ["work": ["@1", "@2"]]
+        manager.syncFileTabs(hostID: host, descriptors: [file], sessionWindows: windows)
+        let store = try #require(manager.store(for: workspace?.id))
+        let tabs = store.tabs(hostID: host, session: "work")
+        tabs.openFileTabs[0].origin = .terminalWindow("work:2")
+        tabs.selectedFileTabId = file.id
+        var completions: [SessionFileTabsState.FileTabCloseResult] = []
+        #expect(tabs.beginClosingHostFileTab(file.id) { completions.append($0) })
+        #expect(!tabs.beginClosingHostFileTab(file.id) { _ in Issue.record("Duplicate close replaced its completion") })
+
+        manager.syncFileTabs(hostID: host, descriptors: [file], sessionWindows: windows)
+        #expect(completions.isEmpty)
+        // Any scene may observe the catalog first, before the command response.
+        manager.syncFileTabs(hostID: host, descriptors: [], sessionWindows: windows)
+        manager.syncFileTabs(hostID: host, descriptors: [], sessionWindows: windows)
+        tabs.cancelClosingHostFileTab(file.id)
+
+        #expect(completions == [.init(wasSelectedLeft: true, origin: .terminalWindow("work:2"))])
+        #expect(tabs.openFileTabs.isEmpty && tabs.selectedFileTabId == nil)
+    }
+
+    @Test(arguments: ["otherFile", "git", "terminal", "right", "cancelled", "moved", "passive"])
+    func hostCloseCannotReturnFromAnUnselectedOrMovedTab(action: String) throws {
+        let manager = DetachedTerminalWindows()
+        let file = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host")
+        let windows = ["work": ["@1"]]
+        manager.syncFileTabs(hostID: nil, descriptors: [file], sessionWindows: windows)
+        let tabs = manager.mainTabs.tabs(hostID: nil, session: "work")
+        tabs.openFileTabs[0].origin = .terminalWindow("work:1")
+        tabs.selectedFileTabId = file.id
+        var completions: [SessionFileTabsState.FileTabCloseResult] = []
+        if action != "passive" {
+            #expect(tabs.beginClosingHostFileTab(file.id) { completions.append($0) })
+        }
+        switch action {
+        case "otherFile":
+            let other = OpenFileTab(path: "/other.md", directoryPath: "/")
+            tabs.openFileTabs.append(other)
+            tabs.selectedFileTabId = other.id
+        case "git": tabs.selectLeftGit()
+        case "terminal": _ = tabs.selectLeftTerminalWindow("@1")
+        case "right":
+            tabs.selectedFileTabId = nil
+            tabs.rightSide = [.file(file.id)]
+            tabs.selectedRight = .file(file.id)
+        case "cancelled": tabs.cancelClosingHostFileTab(file.id)
+        case "moved":
+            let target = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@1"))
+            let workspace = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+            manager.claimFile(file.id, hostID: nil, session: "work", workspaceID: workspace.id)
+        default: break
+        }
+        manager.syncFileTabs(hostID: nil, descriptors: [], sessionWindows: windows)
+        if ["cancelled", "moved", "passive"].contains(action) {
+            #expect(completions.isEmpty)
+        } else {
+            #expect(completions == [.init(wasSelectedLeft: false, origin: nil)])
+        }
+        if action == "git" {
+            #expect(tabs.isGitSelected)
+        }
+        if action == "otherFile" {
+            #expect(tabs.selectedFileTabId == tabs.openFileTabs.first?.id)
+        }
+    }
+
+    @Test
+    func closingSharedFilesRepairsRightSelectionWithoutSelectingOnCatalogArrival() {
+        let manager = DetachedTerminalWindows()
+        let first = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host")
+        let second = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", isPrimary: false, initialDirectory: "/host")
+        manager.syncFileTabs(hostID: nil, descriptors: [first, second], sessionWindows: ["work": ["@1"]])
+        let tabs = manager.mainTabs.tabs(hostID: nil, session: "work")
+        #expect(tabs.selectedFileTabId == nil && tabs.selectedRight == nil)
+        tabs.rightSide = [.file(first.id), .file(second.id)]
+        tabs.selectedRight = .file(first.id)
+        manager.syncFileTabs(hostID: nil, descriptors: [second], sessionWindows: ["work": ["@1"]])
+        #expect(tabs.selectedRight == .file(second.id))
+        #expect(tabs.selectedFileTabId == nil)
+    }
+
+    @Test(arguments: [nil, "host"] as [String?])
+    func hostFilesCatalogHasOnePresentationAcrossNativeWindows(host: String?) throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let detached = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        var tab = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host")
+        let extra = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", isPrimary: false, initialDirectory: "/host")
+        let windows = ["work": ["@1", "@2"]]
+        manager.syncFileTabs(hostID: host, descriptors: [tab, extra], sessionWindows: windows)
+        let detachedTabs = detached.tabs.tabs(hostID: host, session: "work")
+        let model = try #require(detachedTabs.directoryTabs[tab.id])
+        model.navigate("/host/child")
+        #expect(detachedTabs.selectedFileTabId == nil)
+        for _ in 0..<3 {
+            manager.syncFileTabs(hostID: host, descriptors: [tab, extra], sessionWindows: windows)
+        }
+        #expect(detachedTabs.openFileTabs.count == 2)
+        let main = manager.mainTabs.tabs(hostID: host, session: "work")
+        #expect(main.openFileTabs.isEmpty)
+        manager.claimFile(tab.id, hostID: host, session: "work", workspaceID: nil)
+        manager.syncFileTabs(hostID: host, descriptors: [tab, extra], sessionWindows: windows)
+        #expect(main.directoryTabs[tab.id] === model)
+        #expect(detachedTabs.directoryTabs[tab.id] == nil)
+        tab.windowID = "@2"
+        manager.syncFileTabs(hostID: host, descriptors: [tab, extra], sessionWindows: windows)
+        #expect(main.directoryTabs[tab.id] === model && model.path == "/host/child")
+        main.rightSide = [.file(tab.id)]
+        main.selectedRight = .file(tab.id)
+        manager.syncFileTabs(hostID: host, descriptors: [extra], sessionWindows: windows)
+        #expect(main.openFileTabs.isEmpty && main.selectedRight == nil)
+        #expect(detachedTabs.openFileTabs.map(\.id) == [extra.id])
+    }
+
+    @Test(arguments: [nil, "viewer-host"] as [String?], [false, true])
+    func claimingHostFilesNotifiesSourceSplitRepair(host: String?, fromDetached: Bool) throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let workspace = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        let sourceID = fromDetached ? workspace.id : nil
+        let destinationID = fromDetached ? nil : workspace.id
+        let sourceWindowID = fromDetached ? "@1" : "@2"
+        let file = HostFileTab(sessionName: "work", windowID: sourceWindowID, sourcePaneID: "%1", initialDirectory: "/host")
+        let windows = ["work": ["@1", "@2"]]
+        manager.syncFileTabs(hostID: host, descriptors: [file], sessionWindows: windows)
+        let source = try #require(manager.store(for: sourceID)).tabs(hostID: host, session: "work")
+        let destination = try #require(manager.store(for: destinationID)).tabs(hostID: host, session: "work")
+        let model = try #require(source.directoryTabs[file.id])
+        model.navigate("/host/child")
+        source.selectedFileTabId = file.id
+        source.tabOrder = [.file(file.id), .window(sourceWindowID)]
+        source.rightSide = [.window(sourceWindowID)]
+        source.selectedRight = .window(sourceWindowID)
+        let revision = manager.presentationRevision
+
+        manager.claimFile(file.id, hostID: host, session: "work", workspaceID: sourceID)
+        #expect(manager.presentationRevision == revision)
+        #expect(source.selectedFileTabId == file.id && source.isSplit)
+
+        manager.claimFile(file.id, hostID: host, session: "work", workspaceID: destinationID)
+
+        // MainView reacts to this revision by repairing its own selection and split.
+        try #require(manager.presentationRevision == revision + 1)
+        #expect(source.directoryTabs.isEmpty && source.openFileTabs.isEmpty && source.selectedFileTabId == nil)
+        #expect(destination.directoryTabs[file.id] === model && model.path == "/host/child")
+        #expect(source.reconcileRightPaneSelection(sessionWindowIDs: [sourceWindowID], includeLocalTabs: host == nil))
+        let selected = WorkspaceTerminalSelection.leftWindowID(
+            current: nil, orderedIDs: ["@1", "@2"], activeID: "@1", rightSide: source.rightSideWindowIds,
+            owns: { manager.owner(hostID: host, windowID: $0) == sourceID }
+        )
+        source.repairLeftContent(hasTerminal: selected != nil)
+        #expect(selected == sourceWindowID)
+        #expect(!source.isSplit && source.selectedRight == nil)
+        #expect(manager.workspaces[workspace.id] === workspace)
+
+        manager.syncFileTabs(hostID: host, descriptors: [file], sessionWindows: windows)
+        manager.claimFile(file.id, hostID: host, session: "work", workspaceID: destinationID)
+        manager.claimFile(UUID(), hostID: host, session: "work", workspaceID: sourceID)
+        manager.claimFile(file.id, hostID: host, session: "work", workspaceID: UUID())
+        #expect(manager.presentationRevision == revision + 1)
+        #expect(destination.openFileTabs.map(\.id) == [file.id])
+        #expect(destination.directoryTabs[file.id] === model)
+        #expect(source.openFileTabs.isEmpty && !source.isSplit)
+    }
+
+    @Test(arguments: [nil, "viewer-host"] as [String?])
+    func claimingHostFilesClosesAnEmptySourceWorkbench(host: String?) throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let workspace = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        let file = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host")
+        manager.syncFileTabs(hostID: host, descriptors: [file], sessionWindows: ["work": ["@1"]])
+        let model = try #require(workspace.tabs.tabs(hostID: host, session: "work").directoryTabs[file.id])
+        var closed = false
+        workspace.onClose = { closed = true }
+        manager.returnToMain(target)
+        #expect(workspace.members.isEmpty && !closed)
+
+        manager.claimFile(file.id, hostID: host, session: "work", workspaceID: nil)
+
+        #expect(closed)
+        #expect(manager.workspaces[workspace.id] == nil)
+        #expect(manager.mainTabs.tabs(hostID: host, session: "work").directoryTabs[file.id] === model)
+    }
+
     @Test(arguments: [nil, "host"] as [String?])
     func renameMigratesAllOwnersOnceAndKeepsHostAndSessionIsolation(host: String?) throws {
         let manager = DetachedTerminalWindows()
