@@ -416,12 +416,20 @@
                 }
                 let allowed = TerminalURLDetector.defaultAllowedSchemes
                 if let url = interactive.url(at: point, allowedSchemes: allowed) {
+                    let behaviorOverride: BrowserLinkBehavior?
+                    if event.modifierFlags.contains(.command) {
+                        behaviorOverride = .alwaysInApp
+                    } else if event.modifierFlags.contains(.option) {
+                        behaviorOverride = .alwaysInDefaultBrowser
+                    } else {
+                        behaviorOverride = nil
+                    }
                     // The first mouse-up of a double or triple click also has
                     // clickCount == 1. Stage the action for the system's own
                     // double-click interval; the next mouse-down cancels it.
                     // This keeps link clicks working without stealing word/row
                     // selection gestures.
-                    scheduleLinkActivation(in: interactive) { $0.openURL(url) }
+                    scheduleLinkActivation(in: interactive) { $0.openURL(url, behaviorOverride: behaviorOverride) }
                     return
                 }
             }
@@ -524,7 +532,7 @@
     /// - Preserves scroll position when new content arrives
     /// - Shows a focus highlight only when multiple panes share a window
     /// - Supports horizontal scrolling for wide terminals
-    /// - Detects plain-text URLs: Cmd+hover highlights, Cmd+click opens in browser
+    /// - Opens web links with preferences, or Command/Option destination overrides
     final class InteractiveTerminalView: NSView {
         let terminalView: TerminalView
         private var horizontalScroller: NSScroller?
@@ -597,9 +605,10 @@
         /// Callback invoked when the user clicks a URL in the terminal. The
         /// callback should return `true` if it handled the URL (and the
         /// terminal view should do nothing further) or `false` to fall back to
-        /// `NSWorkspace.shared.open(_:)`. When the callback is `nil`, all URLs
-        /// are forwarded to `NSWorkspace`.
-        var onOpenURL: (@MainActor (URL) -> Bool)?
+        /// `NSWorkspace.shared.open(_:)`. The optional behavior overrides
+        /// preferences for this click only. An explicit Host request never
+        /// falls back to this device's browser.
+        var onOpenURL: (@MainActor (URL, BrowserLinkBehavior?) -> Bool)?
         var onOpenPath: (@MainActor (String) -> Void)?
 
         /// When false, the terminal won't auto-grab focus on window add or window-becomes-key.
@@ -1709,10 +1718,12 @@
         /// Opens a URL by giving `onOpenURL` first chance to handle it. Falls
         /// back to the `URLOpener` dependency (`NSWorkspace.shared.open` in
         /// production, a file-backed log in E2E tests) when the callback is
-        /// absent or declines to handle the URL.
-        fileprivate func openURL(_ url: URL) {
+        /// absent or declines to handle the URL, unless the user chose Host.
+        fileprivate func openURL(_ url: URL, behaviorOverride: BrowserLinkBehavior? = nil) {
             guard !url.isFileURL else { return }
-            if onOpenURL?(url) == true { return }
+            if onOpenURL?(url, behaviorOverride) == true || behaviorOverride == .alwaysInApp {
+                return
+            }
             @Dependency(URLOpener.self) var urlOpener
             urlOpener.openInDefaultBrowser(url)
         }

@@ -125,6 +125,29 @@
             }
         }
 
+        @Test("One-click destinations override domain/global rules without saving them", arguments: BrowserLinkBehavior.allCases)
+        func linkClickOverridesAreTransient(global: BrowserLinkBehavior) throws {
+            let preferences = PreferencesService.inMemory()
+            try withDependencies {
+                $0[PreferencesService.self] = preferences
+                $0[LoginItemService.self] = .previewValue
+            } operation: {
+                let settings = AppSettings()
+                settings.browserLinkBehavior = global
+                let url = try #require(URL(string: "https://example.com/path"))
+                #expect(settings.effectiveBrowserBehavior(for: url) == global)
+                for domain in BrowserLinkBehavior.allCases {
+                    settings.setBrowserBehavior(domain, for: "example.com")
+                    for override in [nil, .alwaysInApp, .alwaysInDefaultBrowser] as [BrowserLinkBehavior?] {
+                        #expect(settings.effectiveBrowserBehavior(for: url, override: override) == (override ?? domain))
+                    }
+                    let reloaded = AppSettings()
+                    #expect(reloaded.browserLinkBehavior == global)
+                    #expect(reloaded.browserBehavior(for: url) == domain)
+                }
+            }
+        }
+
         @Test
         func plainTerminalReusesItsOwnPageWithoutResettingIt() async throws {
             let (service, runtime) = fixture()

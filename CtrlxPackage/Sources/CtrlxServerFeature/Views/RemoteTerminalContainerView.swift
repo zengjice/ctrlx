@@ -632,7 +632,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         )
         coordinator.terminalView.isEditorActive = isEditorActive
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
-        coordinator.terminalView.onOpenURL = { url in onOpenURL?(url, paneId) ?? false }
+        coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
         // Route image pastes through the SwiftUI parent so the upload state
         // and cancel popover live alongside the terminal view in the body
@@ -670,7 +670,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         // Re-bind focus, paste and URL-click callbacks so closures captured
         // here reflect the current parent state on every layout pass.
         context.coordinator.bindQuickActions(quickActions, onFocus: onFocus)
-        nsView.onOpenURL = { url in onOpenURL?(url, paneId) ?? false }
+        nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
         nsView.onImagePaste = { [weak coordinator] image in
             coordinator?.quickActionEndpoint?.recordInput()

@@ -22,6 +22,16 @@ per-domain preferences keep their stored values but “in app” now means Host.
 The existing split-on-link preference is retained. iOS tap and long-press use
 the same destination picker. Unsupported Host URLs fail without local fallback.
 
+On Mac Local and Mac Viewer, **Command-click** opens a terminal web link directly
+in the source Host's browser; **Option-click** opens it in this Mac's default
+browser. These one-click overrides bypass the picker and saved domain/global
+preferences without changing them. Command wins if both keys are held. The
+modifier is captured on mouse-up before the double-click delay, so releasing the
+key does not change the destination. Drag/multi-click selection and repository
+file links keep their existing behavior; iOS touch handling is unchanged.
+The Mac destination picker shows each shortcut below its matching button,
+explicitly describing a terminal-link click rather than a dialog-button shortcut.
+
 On iOS the picker is a SwiftUI sheet, not a popover anchored to the scrollable
 terminal. It shows a bounded URL preview and separate Host / this-device actions
 with destination explanations, plus Copy Link and Cancel. Medium and large
