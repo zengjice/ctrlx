@@ -32,6 +32,11 @@ argument-aware Agent commands, Agent-side CtrlX plugin update/reinstall UX, and
 file-browser playback cache cleanup. Implemented behavior and deferred acceptance
 are tracked separately; release contents are recorded in [MODIFICATIONS.md](../MODIFICATIONS.md).
 
+Planned reboot recovery is described in [工作现场恢复设计](workspace-recovery-design.md):
+session/window/pane reconstruction, detached-window layouts, Agent resume, drafts,
+Host/Viewer responsibilities and acceptance criteria. This is a proposed design,
+not implemented behavior; current persistence remains documented in the layout contract above.
+
 ## How to read status and history
 
 - **Current references** above describe the intended present contract. Some also
