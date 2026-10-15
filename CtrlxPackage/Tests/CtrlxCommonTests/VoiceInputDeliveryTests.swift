@@ -56,7 +56,63 @@ struct VoiceInputProvenanceTests {
             return route == .provider ? outcome : .accepted("校正8080")
         }
         #expect(calls == (outcome == .unavailable ? [.provider, .onDevice] : [.provider]))
-        #expect(result == (outcome == .unavailable ? "校正8080" : "原文8080"))
+        #expect(result.text == (outcome == .unavailable ? "校正8080" : "原文8080"))
+        #expect(result.outcome == (outcome == .rejected(.changedLiterals) ? .rejected : .accepted))
+        #expect((result.notice == nil) == (result.outcome == .accepted))
+    }
+
+    @MainActor
+    @Test("Unavailable routes retain the transcript and report that correction was skipped")
+    func unavailableCorrection() async {
+        let result = await VoiceTranscriptCorrectionRouting.run(original: "复用 pane", hasProviderSelection: true) { _ in
+            .unavailable
+        }
+        #expect(result.text == "复用 pane")
+        #expect(result.outcome == .unavailable)
+        #expect(result.notice != nil)
+    }
+
+    @MainActor
+    @Test("Empty speech skips correction without a failure notice", arguments: ["", " \n\t ", "\u{0000}\u{001B}"])
+    func emptyCorrection(_ transcript: String) async {
+        var stages: [VoiceInputStage] = []
+        let result = await VoiceTranscriptCorrector.correct(
+            transcript, contextualTerms: [], onStage: { stages.append($0) }
+        )
+        #expect(result.text.isEmpty)
+        #expect(result.outcome == .emptyInput)
+        #expect(result.notice == nil)
+        #expect(stages.isEmpty)
+    }
+
+    @MainActor
+    @Test("Empty accurate recognition still preserves a nonempty live transcript")
+    func liveTranscriptIsNotEmptyInput() async {
+        let result = await withDependencies {
+            $0[VoiceCorrectionAvailabilityClient.self] = .init(onDevice: { .unavailable("Unavailable for test") })
+        } operation: {
+            await VoiceTranscriptCorrector.correct(
+                .init(primaryTranscript: "", liveTranscript: "保留实时转写"), contextualTerms: []
+            )
+        }
+        #expect(result.text == "保留实时转写")
+        #expect(result.outcome == .unavailable)
+        #expect(result.notice != nil)
+    }
+
+    @MainActor
+    @Test("Cancelled correction never reports an uncorrected insertion")
+    func cancelledCorrection() async {
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await VoiceTranscriptCorrectionRouting.run(original: "原文", hasProviderSelection: true) { _ in
+                Issue.record("Cancelled routes must not run")
+                return .unavailable
+            }
+        }
+        let result = await task.value
+        #expect(result.outcome == .cancelled)
+        #expect(result.notice == nil)
     }
 
     @Test("Unsafe text is rejected with a reason, not reported as an unchanged success")
@@ -109,6 +165,13 @@ struct VoiceInputDeliveryTests {
         #expect(second.take("第二段", in: context(revision: 1)) == "第二段")
     }
 
+    @Test("Empty terminal input is consumed without insertion", arguments: ["", " \n\t ", "\u{0000}\u{001B}"])
+    func emptyCapture(_ transcript: String) throws {
+        var capture = try #require(TerminalVoiceInputCapture(context: context()))
+        #expect(capture.take(transcript, in: context()) == nil)
+        #expect(capture.take("不得重试", in: context()) == nil)
+    }
+
     @Test("Host, pane, edits, submission, readiness and blocking forms invalidate delivery", arguments: 0..<6)
     func staleCapture(_ change: Int) throws {
         var capture = try #require(TerminalVoiceInputCapture(context: context()))
@@ -134,7 +197,7 @@ struct VoiceInputDeliveryTests {
         } operation: {
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { result, _, _, _, stage in
                 stage(.onDeviceCorrection)
-                return result.bestAvailableTranscript + "。"
+                return .init(text: result.bestAvailableTranscript + "。", outcome: .accepted)
             })
             let session = TerminalVoiceInputSession(voice: voice)
             var inserted: [String] = []
@@ -170,7 +233,7 @@ struct VoiceInputDeliveryTests {
         } operation: {
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { _, _, _, _, stage in
                 stage(.providerCorrection)
-                return await gate.result()
+                return .init(text: await gate.result(), outcome: .unavailable)
             })
             let session = TerminalVoiceInputSession(voice: voice)
             session.toggle(in: context(), snapshot: nil, selection: nil)
@@ -192,6 +255,7 @@ struct VoiceInputDeliveryTests {
             }
             #expect(voice.phase == .idle)
             #expect(voice.completedTranscript == nil)
+            #expect(voice.correctionNotice == nil)
         }
     }
 
@@ -235,7 +299,10 @@ struct VoiceInputDeliveryTests {
                 return recorder
             }, correct: { result, _, _, _, _ in
                 correctionCount += 1
-                return correctionCount == 1 ? await gate.result() : result.bestAvailableTranscript
+                return .init(
+                    text: correctionCount == 1 ? await gate.result() : result.bestAvailableTranscript,
+                    outcome: .unavailable
+                )
             })
             let session = TerminalVoiceInputSession(voice: voice)
             defer { session.cancel() }
@@ -270,6 +337,75 @@ struct VoiceInputDeliveryTests {
             #expect(attempts == 1)
             #expect(voice.errorMessage != nil)
             #expect(voice.completedTranscript == nil)
+            #expect(voice.correctionNotice == nil)
+        }
+    }
+
+    @Test("Uncorrected speech is inserted once; dismiss or restart clears its notice", arguments: [false, true])
+    func uncorrectedNotice(_ restart: Bool) async throws {
+        guard #available(macOS 26.0, iOS 26.0, *) else { return }
+        let recorder = Recorder()
+        try await withDependencies {
+            $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
+        } operation: {
+            let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { result, _, _, _, _ in
+                .init(text: result.bestAvailableTranscript, outcome: .unavailable)
+            })
+            let session = TerminalVoiceInputSession(voice: voice)
+            defer { session.cancel() }
+            session.toggle(in: context(), snapshot: nil, selection: nil)
+            try await wait { voice.phase == .recording }
+            session.toggle(in: context(), snapshot: nil, selection: nil)
+            try await wait { voice.completedTranscript != nil }
+            #expect(voice.correctionNotice == nil)
+            var inserted: [String] = []
+            session.deliver(in: context()) { inserted.append($0)
+                return true
+            }
+            session.deliver(in: context()) { _ in Issue.record("Notice must not resend input")
+                return true
+            }
+            #expect(inserted == ["精确转写"])
+            #expect(voice.phase == .idle)
+            #expect(voice.correctionNotice != nil)
+            #expect(voice.isFeedbackVisible)
+            #expect(!session.cancelIfPresented())
+            #expect(voice.errorMessage == nil)
+            if restart {
+                session.toggle(in: context(), snapshot: nil, selection: nil)
+                #expect(voice.correctionNotice == nil)
+                try await wait { voice.phase == .recording }
+                session.cancel()
+            } else {
+                voice.dismissCorrectionNotice()
+            }
+            #expect(!voice.isFeedbackVisible)
+        }
+    }
+
+    @Test("Empty finalized speech never leaves an insertion notice", arguments: ["", " \n\t ", "\u{0000}\u{001B}"])
+    func emptyRecording(_ transcript: String) async throws {
+        guard #available(macOS 26.0, iOS 26.0, *) else { return }
+        let recorder = Recorder(result: .init(primaryTranscript: transcript))
+        try await withDependencies {
+            $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
+        } operation: {
+            let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder })
+            defer { voice.cancel() }
+            voice.toggleRecording(context: .init(inputDraft: "已有草稿"), correctionSelection: nil)
+            try await wait { voice.phase == .recording }
+            voice.toggleRecording(context: nil, correctionSelection: nil)
+            try await wait { voice.completedTranscript != nil }
+            let result = try #require(voice.takeCompletedTranscript())
+            #expect(result.isEmpty)
+            #expect(VoiceInputTextComposer.appending(result, to: "已有草稿") == "已有草稿")
+            // Even an input surface incorrectly accepting an empty result must not
+            // turn silence into a correction failure or a settings warning.
+            voice.recordDelivery(enqueued: true)
+            #expect(voice.correctionNotice == nil)
+            #expect(!voice.isFeedbackVisible)
+            #expect(voice.errorMessage == nil)
+            #expect(voice.takeCompletedTranscript() == nil)
         }
     }
 
@@ -288,13 +424,19 @@ struct VoiceInputDeliveryTests {
     @MainActor
     final private class Recorder: VoiceInputRecognitionSession {
         var update: (@MainActor @Sendable (String) -> Void)?
+        let result: VoiceRecognitionResult
+
+        init(result: VoiceRecognitionResult = .init(primaryTranscript: "精确转写", liveTranscript: "实时预览")) {
+            self.result = result
+        }
+
         func start(onUpdate: @escaping @MainActor @Sendable (String) -> Void) async throws {
             update = onUpdate
         }
 
         func finish(onStage: (VoiceInputStage) -> Void) async throws -> VoiceRecognitionResult {
             onStage(.accurateTranscription)
-            return .init(primaryTranscript: "精确转写", liveTranscript: "实时预览")
+            return result
         }
 
         func cancel() async {

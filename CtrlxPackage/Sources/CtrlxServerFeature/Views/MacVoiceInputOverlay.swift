@@ -10,7 +10,7 @@ struct MacVoiceInputOverlay: ViewModifier {
         content
             .overlay(alignment: .top) {
                 VStack(spacing: 0) {
-                    if session.isPresented {
+                    if session.voice.isFeedbackVisible {
                         VoiceInputPreview(voice: session.voice, cancel: session.cancel)
                             .frame(maxWidth: 560)
                             .fixedSize(horizontal: false, vertical: true)

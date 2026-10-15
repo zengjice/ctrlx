@@ -20,6 +20,21 @@
                 }
                 .disabled(model.isBusy)
 
+                LabeledContent("Provider Correction") {
+                    Text(model.credentialStatus.label)
+                        .foregroundStyle(model.hasStoredAPIKey ? Color.secondary : .orange)
+                }
+                LabeledContent("On-Device Correction") {
+                    Text(model.onDeviceAvailability?.label ?? "Checking…")
+                        .foregroundStyle(model.onDeviceAvailability?.isAvailable == true ? Color.secondary : .orange)
+                }
+                if model.credentialStatus == .missing, model.onDeviceAvailability?.isAvailable == false {
+                    Text("Only speech transcription is available. Save an API key to enable context-aware correction.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("voice-correction-unavailable")
+                }
+
                 HStack {
                     Group {
                         if isAPIKeyVisible {
@@ -171,8 +186,10 @@
                         + "to the selected provider for correction; microphone audio is not uploaded."
                 )
             }
-            .task(id: settings.provider) {
-                await model.prepare(settings: settings)
+            .task(id: scenePhase == .active ? settings.provider : nil) {
+                if scenePhase == .active {
+                    await model.prepare(settings: settings)
+                }
             }
             .onChange(of: settings.provider) {
                 isAPIKeyVisible = false

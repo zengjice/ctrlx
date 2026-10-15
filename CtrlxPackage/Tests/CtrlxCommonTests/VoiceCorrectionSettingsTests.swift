@@ -24,6 +24,8 @@
                 await model.prepare(settings: settings)
                 #expect(model.apiKeyDraft == "saved-fixture-key")
                 #expect(model.hasStoredAPIKey)
+                #expect(model.credentialStatus == .saved)
+                #expect(model.credentialStatus.label.contains("not verified"))
                 model.apiKeyDraft = "replacement-draft"
                 await model.prepare(settings: settings)
                 #expect(model.apiKeyDraft == "replacement-draft")
@@ -45,18 +47,76 @@
 
                 #expect(model.apiKeyDraft.isEmpty)
                 #expect(!model.hasStoredAPIKey)
+                #expect(model.credentialStatus == .missing)
                 model.apiKeyDraft = "  saved-fixture-key  "
                 await model.saveAPIKey(settings: settings)
                 #expect(model.apiKeyDraft == "saved-fixture-key")
                 #expect(model.hasStoredAPIKey)
+                #expect(model.credentialStatus == .saved)
                 let savedKey = try await secrets.loadSecret(account)
                 #expect(savedKey == "saved-fixture-key")
 
                 await model.removeAPIKey(settings: settings)
                 #expect(model.apiKeyDraft.isEmpty)
                 #expect(!model.hasStoredAPIKey)
+                #expect(model.credentialStatus == .missing)
                 let removedKey = try await secrets.loadSecret(account)
                 #expect(removedKey == nil)
+            }
+        }
+
+        @Test("Settings refresh on-device availability and distinguish unreadable credentials from missing ones")
+        func availabilityAndReadFailure() async {
+            let status = LockIsolated(VoiceCorrectionAvailability.unavailable("Apple Intelligence is not enabled"))
+            let readFails = LockIsolated(true)
+            await withDependencies {
+                $0[PreferencesService.self] = .inMemory()
+                var secrets = SecretsService.inMemory()
+                secrets.loadSecret = { _ in
+                    if readFails.value {
+                        throw CocoaError(.fileReadNoPermission)
+                    }
+                    return "saved-fixture-key"
+                }
+                $0[SecretsService.self] = secrets
+                $0[VoiceCorrectionAvailabilityClient.self] = .init(onDevice: { status.value })
+            } operation: {
+                let settings = VoiceCorrectionSettings()
+                let model = VoiceCorrectionSettingsModel()
+                #expect(model.credentialStatus == .checking)
+                await model.prepare(settings: settings)
+                #expect(model.credentialStatus == .unreadable)
+                #expect(!model.hasStoredAPIKey)
+                #expect(model.onDeviceAvailability == status.value)
+                status.setValue(.available)
+                readFails.setValue(false)
+                await model.prepare(settings: settings)
+                #expect(model.onDeviceAvailability == .available)
+                #expect(model.credentialStatus == .saved)
+                #expect(model.errorMessage == nil)
+            }
+        }
+
+        @Test("A selected model without a key and without Apple Intelligence returns an explicit uncorrected result")
+        func missingKeyAndUnavailableDevice() async throws {
+            try await withDependencies {
+                $0[PreferencesService.self] = .inMemory()
+                $0[SecretsService.self] = .inMemory()
+                $0[VoiceCorrectionAvailabilityClient.self] = .init(onDevice: { .unavailable("Device not supported") })
+            } operation: {
+                let settings = VoiceCorrectionSettings()
+                let model = VoiceCorrectionSettingsModel()
+                await model.prepare(settings: settings)
+                let selection = try #require(settings.selection)
+                #expect(model.credentialStatus == .missing)
+                #expect(model.onDeviceAvailability?.isAvailable == false)
+                let result = await VoiceTranscriptCorrector.correct(
+                    "绑定服用", contextualTerms: ["pane"],
+                    terminalContext: .init(terminalText: "绑定 pane 复用"), providerSelection: selection
+                )
+                #expect(result.text == "绑定服用")
+                #expect(result.outcome == .unavailable)
+                #expect(result.notice != nil)
             }
         }
 

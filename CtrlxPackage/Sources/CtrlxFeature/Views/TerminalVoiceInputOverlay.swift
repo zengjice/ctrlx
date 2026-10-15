@@ -14,7 +14,7 @@
         func body(content: Content) -> some View {
             content
                 .overlay(alignment: .bottom) {
-                    if session.isPresented {
+                    if session.voice.isFeedbackVisible {
                         VoiceInputPreview(voice: session.voice, cancel: session.cancel)
                             .frame(maxWidth: 560)
                             .padding(8)

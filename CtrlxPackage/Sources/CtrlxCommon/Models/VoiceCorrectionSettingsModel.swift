@@ -7,11 +7,32 @@
     @Observable
     @MainActor
     final class VoiceCorrectionSettingsModel {
+        enum CredentialStatus: Equatable {
+            case checking
+            case missing
+            case saved
+            case unreadable
+
+            var label: String {
+                switch self {
+                case .checking: "Checking API key…"
+                case .missing: "Not configured — save an API key on this device"
+                case .saved: "Configured — API key saved, access not verified"
+                case .unreadable: "Unavailable — could not read API key"
+                }
+            }
+        }
+
         var apiKeyDraft = ""
         var topModelCount = 5
         private(set) var models: [String] = []
         private(set) var testResults: [VoiceCorrectionModelTestResult] = []
-        private(set) var hasStoredAPIKey = false
+        private(set) var credentialStatus: CredentialStatus = .checking
+        private(set) var onDeviceAvailability: VoiceCorrectionAvailability?
+        var hasStoredAPIKey: Bool {
+            credentialStatus == .saved
+        }
+
         private(set) var hasTestedModels = false
         private(set) var isLoading = false
         private(set) var isTesting = false
@@ -22,6 +43,8 @@
 
         @ObservationIgnored
         @Dependency(SecretsService.self) private var secrets
+        @ObservationIgnored
+        @Dependency(VoiceCorrectionAvailabilityClient.self) private var availability
 
         @ObservationIgnored private let client: VoiceCorrectionProviderClient
 
@@ -42,11 +65,12 @@
 
         func prepare(settings: VoiceCorrectionSettings) async {
             guard !isBusy else { return }
+            onDeviceAvailability = availability.onDevice()
             let provider = settings.provider
             let providerChanged = preparedProvider != provider
             if providerChanged {
                 apiKeyDraft = ""
-                hasStoredAPIKey = false
+                credentialStatus = .checking
                 clearMessages()
                 testResults = []
                 testedModelCount = 0
@@ -60,13 +84,17 @@
             do {
                 let savedKey = try await secrets.loadSecret(account)
                 guard !Task.isCancelled, settings.provider == provider else { return }
-                hasStoredAPIKey = savedKey != nil
+                if credentialStatus == .unreadable {
+                    errorMessage = nil
+                }
+                credentialStatus = savedKey?.isEmpty == false ? .saved : .missing
                 if providerChanged, apiKeyDraft.isEmpty {
                     apiKeyDraft = savedKey ?? ""
                 }
                 preparedProvider = provider
             } catch {
                 guard !Task.isCancelled, settings.provider == provider else { return }
+                credentialStatus = .unreadable
                 errorMessage = error.localizedDescription
             }
         }
@@ -90,7 +118,7 @@
 
                 try await secrets.storeSecret(keyDraft, account)
                 apiKeyDraft = keyDraft
-                hasStoredAPIKey = true
+                credentialStatus = .saved
                 applySavedOrRecommendedModels(settings: settings)
                 statusMessage = "API key saved."
             } catch {
@@ -111,7 +139,7 @@
             let account = VoiceCorrectionCredentials.apiKeyAccount(for: provider)
             do {
                 guard let apiKey = try await secrets.loadSecret(account), !apiKey.isEmpty else {
-                    hasStoredAPIKey = false
+                    credentialStatus = .missing
                     errorMessage = "Save an API key before testing models."
                     return
                 }
@@ -200,7 +228,7 @@
             do {
                 try await secrets.deleteSecret(account)
                 apiKeyDraft = ""
-                hasStoredAPIKey = false
+                credentialStatus = .missing
                 statusMessage = "API key removed."
             } catch {
                 errorMessage = error.localizedDescription

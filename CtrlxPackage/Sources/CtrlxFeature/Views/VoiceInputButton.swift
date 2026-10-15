@@ -139,13 +139,13 @@ extension View {
                     .overlay(alignment: .bottomTrailing) {
                         VoiceInputControl(controller: controller, isDisabled: isDisabled, toggleRecording: toggle)
                     }
-                if controller.phase != .idle {
+                if controller.isFeedbackVisible {
                     VoiceInputPreview(voice: controller, cancel: cancel)
                 }
             }
             .onChange(of: controller.completedTranscript) {
                 guard let transcript = controller.takeCompletedTranscript() else { return }
-                let valid = !isDisabled && text == baseText && scenePhase == .active
+                let valid = !transcript.isEmpty && !isDisabled && text == baseText && scenePhase == .active
                 if valid {
                     text = VoiceInputTextComposer.appending(transcript, to: baseText)
                 }

@@ -147,6 +147,17 @@ popover/window and does not acquire first responder. The iOS strip overlays the
 terminal above its input controls; native reply fields show it below their editor.
 Neither terminal overlay changes the terminal's size. The strip remains visible
 during correction; cancelling it discards the recording without inserting text.
+If neither corrector can run, the recognized text is still inserted once without
+Return. Only after the input surface accepts it, the same strip shows
+**Transcription Only**, explaining that context-aware correction was unavailable
+and pointing to Voice Input settings. A rejected correction similarly identifies
+that the original transcription was kept. An accepted unchanged response is not
+a failure. The notice does not reopen recording, steal focus or intercept terminal
+Escape; dismiss it with its close button, or start another recording to clear it.
+Empty recordings (including whitespace or control-only results) skip correction
+without a failure notice; native reply fields do not change the draft or report
+a successful insertion. Cancelled recordings and failed insertions never claim
+that uncorrected text was inserted.
 Mac Escape interception is active only during recording/finalization and scoped
 to the recording's native window; inactive controls and other windows keep their
 normal Escape behavior. App deactivation or switching native windows cancels it.
@@ -238,6 +249,13 @@ iOS preference keys (`voiceCorrectionProvider`, `voiceCorrectionModelID`,
 Settings and credentials stay device-local; no credential sync is added. If a
 provider is configured, transcript candidates and bounded terminal context are
 sent directly to it for correction; microphone audio is not uploaded.
+The settings section separately reports provider credential readiness and
+on-device correction availability, including unsupported devices, disabled Apple
+Intelligence, missing models and unsupported languages. A saved key is labelled
+configured, not verified; selecting a model alone does not configure correction.
+These checks run on opening settings and returning to the app, without a provider
+request. Runtime notices follow the actual correction outcome, not the settings
+snapshot. Missing/unreadable credentials remain distinct from model availability.
 
 Bundled model tests include mixed-language Git terms and ordinary-Chinese/branch-name
 counterexamples (even with Git context), already-correct input, negation/conditions, literals,

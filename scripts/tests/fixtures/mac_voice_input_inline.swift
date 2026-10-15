@@ -10,6 +10,15 @@ package final class VoiceInputController {
     var transcript = ""
     var completedTranscript: String?
     var errorMessage: String?
+    var correctionNotice: String?
+    var isFeedbackVisible: Bool {
+        phase != .idle || correctionNotice != nil
+    }
+
+    func dismissCorrectionNotice() {
+        correctionNotice = nil
+    }
+
     var isRecording: Bool {
         phase == .recording
     }
@@ -76,6 +85,7 @@ final class TerminalVoiceInputSession {
     var stops = 0
     var cancellations = 0
     var needsPermission = false
+    var correctionUnavailable = false
     var isPresented: Bool {
         voice.phase != .idle
     }
@@ -83,6 +93,7 @@ final class TerminalVoiceInputSession {
     func toggle(in _: TerminalPhraseContext, snapshot _: VoiceInputContextSnapshot?, selection _: VoiceCorrectionSettings?) {
         switch voice.phase.tapAction {
         case .start:
+            voice.correctionNotice = nil
             voice.completedTranscript = nil
             voice.phase = needsPermission ? .requestingPermission : .recording
             voice.stage = .recording
@@ -105,10 +116,13 @@ final class TerminalVoiceInputSession {
     func deliver(in _: TerminalPhraseContext, insert: (String) -> Bool) {
         guard let text = voice.completedTranscript else { return }
         voice.completedTranscript = nil
-        _ = insert(text)
+        if insert(text), correctionUnavailable {
+            voice.correctionNotice = "Inserted without context-aware correction. Check Voice Input settings."
+        }
     }
 
     func cancel() {
+        voice.correctionNotice = nil
         if isPresented {
             cancellations += 1
         }
@@ -285,8 +299,24 @@ final class Delegate: NSObject, NSApplicationDelegate {
                     precondition(window.firstResponder === terminal)
                 }
                 try await wait("hold release finishes") { session.stops == 2 }
+                session.correctionUnavailable = true
                 session.complete()
                 try await wait("hold inserts once") { router.inserted.count == 2 }
+                try await wait("uncorrected notice") { marker("voice-input-preview", in: hosting) != nil && session.voice.correctionNotice != nil }
+                // Let both completion/phase observers run before checking that
+                // normal finalization cleanup did not erase the notice.
+                try await Task.sleep(for: .milliseconds(100))
+                precondition(session.voice.correctionNotice != nil)
+                precondition(!session.isPresented && window.firstResponder === terminal)
+                try snapshot(hosting, name: "notice")
+                let cancellations = session.cancellations
+                sendEscape(to: window)
+                precondition(terminal.escapes == 2, "Notice must not intercept terminal Escape")
+                try await click(marker("voice-preview-cancel", in: hosting)!)
+                try await wait("notice dismissed") { session.voice.correctionNotice == nil }
+                precondition(session.cancellations == cancellations && router.inserted.count == 2)
+                session.correctionUnavailable = false
+                print("PASS: uncorrected notice survives delivery, preserves focus/Escape, dismisses without resending")
 
                 session.needsPermission = true
                 try await hold(anchor) {

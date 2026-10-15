@@ -11,7 +11,7 @@
         typealias Correct = @MainActor (
             VoiceRecognitionResult, [String], VoiceInputContextSnapshot?, VoiceCorrectionSelection?,
             (VoiceInputStage) -> Void
-        ) async -> String
+        ) async -> VoiceCorrectionResult
 
         public private(set) var phase: VoiceInputPhase = .idle
         public private(set) var stage: VoiceInputStage = .preparing
@@ -19,6 +19,8 @@
         /// Only successful finalization publishes a result for one-shot input surfaces.
         public private(set) var completedTranscript: String?
         public var errorMessage: String?
+        public private(set) var correctionNotice: String?
+        @ObservationIgnored private var pendingCorrectionNotice: String?
 
         @ObservationIgnored private var audioEngine: AVAudioEngine?
         @ObservationIgnored @Dependency(VoiceInputAuthorization.self) private var authorization
@@ -68,12 +70,22 @@
             phase == .recording
         }
 
+        public var isFeedbackVisible: Bool {
+            phase != .idle || correctionNotice != nil
+        }
+
+        public func dismissCorrectionNotice() {
+            correctionNotice = nil
+        }
+
         private func beginRecording(
             context: VoiceInputContextSnapshot?,
             correctionSelection: VoiceCorrectionSelection?
         ) {
             guard phase == .idle else { return }
             errorMessage = nil
+            correctionNotice = nil
+            pendingCorrectionNotice = nil
             guard let lease = ownership.acquire() else {
                 errorMessage = "Voice input is already active in another window, or is still stopping."
                 return
@@ -149,6 +161,8 @@
         }
 
         public func cancel() {
+            correctionNotice = nil
+            pendingCorrectionNotice = nil
             finishTiming()
             let preparation = permissionTask
             let finalization = finalizationTask
@@ -185,6 +199,8 @@
         }
 
         public func recordDelivery(enqueued: Bool) {
+            correctionNotice = enqueued ? pendingCorrectionNotice : nil
+            pendingCorrectionNotice = nil
             finishTiming()
             VoiceInputDiagnostics.delivery(enqueued: enqueued, id: diagnosticID)
         }
@@ -368,13 +384,14 @@
             }
         }
 
-        private func completeModernRecognition(_ completedTranscript: String) {
+        private func completeModernRecognition(_ result: VoiceCorrectionResult) {
             updateStage(.ready)
             finalizationTask = nil
             recognitionContext = nil
             correctionSelection = nil
-            transcript = VoiceInputTextComposer.terminalTranscript(completedTranscript)
-            self.completedTranscript = transcript
+            transcript = VoiceInputTextComposer.terminalTranscript(result.text)
+            pendingCorrectionNotice = result.notice
+            completedTranscript = transcript
             if let lease = recordingLease {
                 recordingLease = nil
                 ownership.release(lease)
