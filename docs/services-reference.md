@@ -947,10 +947,11 @@ it once. Different worktrees and repositories compare independently. Any pending
 worktree takes icon priority, with a tooltip note if other comparisons are
 unavailable; without pending commits, any unavailable comparison takes priority
 over the merged checkmark. The detail list names each repository's base.
-Status buttons
-open the complete associated repository list; the Host section's Worktrees
-entry remains available when everything is merged. The local Mac Git page also
-has a Worktrees entry. Mac uses a popover and iOS a sheet; their contents follow
+Session status buttons list only worktrees referenced by terminal panes across
+that session's tabs, with each worktree shown once. The Host section's Worktrees
+entry shows the complete repository list and remains available when everything
+is merged. The local Mac Git page's Worktrees entry shows its complete associated
+repository. Mac uses a popover and iOS a sheet; their contents follow
 incoming snapshots. A missing comparison shows its reason instead of claiming
 that the branch is merged. “No commits pending merge” is not a clean-worktree or
 safe-to-delete assertion.

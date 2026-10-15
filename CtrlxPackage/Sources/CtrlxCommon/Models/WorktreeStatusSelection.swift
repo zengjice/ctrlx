@@ -11,6 +11,8 @@ public struct WorktreeStatusSelection: Sendable {
     }
 
     public let repositories: [RepositoryWorktreeStatus]
+    /// Session details include only worktrees referenced by the session's panes.
+    public let selectedRepositories: [RepositoryWorktreeStatus]
     public let pending: [WorktreeMergeStatus]
     public let hasUnavailableStatus: Bool
 
@@ -18,7 +20,15 @@ public struct WorktreeStatusSelection: Sendable {
         self.repositories = repositories.filter { repository in
             paths == nil || repository.worktrees.contains { paths?.contains($0.path) == true }
         }
-        let selected = self.repositories.flatMap(\.worktrees).filter { paths == nil || paths?.contains($0.path) == true }
+        self.selectedRepositories = self.repositories.map { repository in
+            RepositoryWorktreeStatus(
+                id: repository.id,
+                worktrees: repository.worktrees.filter { paths == nil || paths?.contains($0.path) == true },
+                unavailableReason: repository.unavailableReason,
+                baseBranch: repository.baseBranch
+            )
+        }
+        let selected = selectedRepositories.flatMap(\.worktrees)
         self.pending = selected.filter { ($0.pendingCommitCount ?? 0) > 0 }
         self.hasUnavailableStatus = selected.contains { $0.pendingCommitCount == nil }
             || self.repositories.contains { $0.unavailableReason != nil }

@@ -11,9 +11,10 @@ public struct SessionWorktreeStatusModifier: ViewModifier {
     }
 
     public func body(content: Content) -> some View {
+        let selection = WorktreeStatusSelection(repositories: repositories, paths: paths)
         HStack(spacing: 4) {
             content.frame(maxWidth: .infinity, alignment: .leading)
-            WorktreeStatusButton(repositories: repositories, paths: paths, pendingOnly: true, compact: true)
+            WorktreeStatusButton(repositories: selection.selectedRepositories, pendingOnly: true, compact: true)
         }
     }
 }
