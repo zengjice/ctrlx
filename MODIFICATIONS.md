@@ -7,6 +7,30 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.74 — Mac workbench gestures and compact worktree status
+
+- Show compact pending, merged and unavailable worktree status controls in Mac
+  and iOS session lists. Compare each repository against its unique local main
+  or master branch; ambiguous bases remain unavailable. Preserve older Viewer
+  compatibility and make the automatic-order reset button easier to use.
+- Switch Mac workbench tabs with horizontal two-finger trackpad swipes, using
+  the split where the gesture began. Switch once per completed gesture while
+  preserving vertical scrolling, modified scrolling and tab-strip scrolling.
+- Restore native double-click behavior in empty titlebar areas for main and
+  detached workbenches, respecting macOS window-action preferences.
+- Reject drops from a different Host or session with an inline explanation,
+  consuming the drop so it cannot accidentally tear the tab into a new window.
+- Release validation: the bounded serial Swift regression passed with 3,168
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. All 19 changed Swift files pass SwiftFormat. Both boundary
+  checks, 63 publisher/COS tests, the website build, signed Mac Release and arm64
+  iOS Simulator builds, and native worktree-status, tab-drop and titlebar UI
+  fixtures passed. Native swipe-routing regressions are included in the Swift
+  suite. Physical trackpad and paired-device acceptance were not run in this
+  release workflow.
+- Distribution: Mac build 7 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.73 — Shared pane tabs, worktree status and clearer voice correction
 
 - Reuse Host-owned Files tabs across clients while preserving private navigation,
