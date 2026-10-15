@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.72 — Mixed-language voice correction and consistent input controls
+
+- Merge `macinput`: improve Chinese/English speech correction with common Git
+  vocabulary while preserving ordinary Chinese, explicit branch names, negations
+  and existing draft text. Keep complete utterances and response reserves within
+  legacy correction budgets; add mixed-language and intent-preservation fixtures.
+- Align built-in iOS first-row input buttons to a shared 44-point width at the
+  default text size, scaling with Dynamic Type. Recording and loading states keep
+  that width; custom buttons remain content-sized.
+- Release validation: the bounded serial Swift regression passed with 3,113
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, website build,
+  signed Mac Release build and arm64 iOS Simulator build passed. All 13 changed
+  Swift files pass SwiftFormat. UIKit-only layout tests, real speech-recognition
+  and correction-quality benchmarks, and physical iPhone acceptance were not run.
+- Distribution: Mac build 5 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.71 — Reopen the keyboard when tapping an iOS draft
 
 - Merge `ux`: in iOS Bottom Bar mode, tapping existing draft text opens the
