@@ -141,8 +141,22 @@ reported without silently switching to Computer Use, another browser client or
 standalone Playwright. Browser switching requires the user's choice. This is
 skill guidance, not a tool-permission sandbox; no global agent settings change.
 
+Codex and Claude Code inject this short entrypoint alongside `file-links` and
+`agent-ios` through the existing `SessionStart` hook, after lifecycle forwarding
+to the local Host succeeds. It covers startup, resume, clear, compact and fork;
+the hook reads the bundled skill without opening pages or running browser commands.
+The injected source path anchors relative links; the agent reads the full
+workflow only when webpage interaction is needed. Each entrypoint is independent:
+a missing, unreadable, malformed or oversized file is skipped without blocking
+the other guidance or lifecycle event.
+
+This requires updating the cached plugin to Codex 1.1.11 / Claude Code 1.3.12
+or later and triggering `SessionStart` with hooks enabled and trusted. Repository
+edits alone do not update running agents. Isolated hook tests verify delivery and
+bundle contents; they do not guarantee a model's tool choice.
+
 The shared skill guides default reuse versus explicit extra tabs. See its
-[owned-tab guidance](../plugin/ctrlx/skills/agent-browser/SKILL.md#owned-tabs).
+[owned-tab guidance](../plugin/ctrlx/skills/agent-browser/references/workflow.md#owned-tabs).
 `open` reuses the source pane's **Agent primary page**; `open --new` creates an
 extra without replacing it, and `navigate --tab` still targets a specific page.
 Same normalized URLs do not reload. Creation/reuse runs serially on CEF's UI loop;

@@ -34,11 +34,11 @@ def emit_session_context(payload):
     # Bundled entrypoints remain the single source for these early instructions.
     skills = Path(__file__).resolve().parent.parent / "skills"
     contexts = []
-    for name in ("file-links", "agent-ios"):
+    for name in ("file-links", "agent-ios", "agent-browser"):
         skill = skills / name / "SKILL.md"
         body = read_skill_body(skill)
         if body:
-            if name == "agent-ios":
+            if name != "file-links":
                 body = (f"Skill source: `{skill}`. Resolve relative references from this file.\n\n"
                         + body)
             contexts.append(body)

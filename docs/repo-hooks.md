@@ -8,8 +8,9 @@ plugins' `SessionStart` hooks also supply the shared
 [file-reference output convention](file-browser.md#agent-output-convention-and-migration)
 as agent context. Codex and Claude Code additionally receive the
 [default iOS Simulator entry point](agent-simulator-design.md#agent-工具选择入口)
-before tool selection. These read the bundled skill entrypoints; they do not
-start devices or enforce this repository's development workflow.
+and [default browser entry point](agent-browser.md#embedded-routing) before tool
+selection. These read the bundled skill entrypoints; they do not start devices,
+open pages or enforce this repository's development workflow.
 
 The tool-independent requirements live in [CONTRIBUTING.md](../CONTRIBUTING.md)
 and the [PR checklist](../.github/PULL_REQUEST_TEMPLATE.md). Other AI tools must
