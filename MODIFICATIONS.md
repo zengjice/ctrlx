@@ -7,6 +7,43 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.76 — Workspace recovery, browser extensions and faster local files
+
+- Restore saved tmux topology, directories, main/detached window layouts,
+  Files/Git selections and unsent drafts. Optionally resume verified Codex and
+  Claude conversations; offer layout-only and disabled recovery modes. Preserve
+  private Mac Viewer/iOS presentation across Host reconstruction, and reject
+  delayed input or commands aimed at replaced terminals. Real OS reboot/login
+  and physical display-removal acceptance remain explicitly deferred.
+- Manage Host browser extensions from Mac and iOS: preview permissions, import
+  ZIP/verified CRX3 packages, install from the Chrome Web Store, update, enable,
+  disable and remove extensions. Use native extension-compatible windows and
+  separately granted Viewer control. Compatibility remains extension-specific;
+  native messaging and cross-machine acceptance are not established.
+- Keep Codex question checks stable through terminal redraws, scope session
+  worktree details to terminal tabs, route notifications to the owning window,
+  and forward Command-C to Codex selections.
+- Improve voice capture, correction cancellation and transcript fidelity. Load
+  browser guidance at Agent session start and prioritize the Agent iOS skill
+  when operating owned simulators. Bundle Codex plugin 1.1.11 and Claude Code
+  plugin 1.3.12.
+- Speed up local file previews and directory paging while preserving remote
+  file behavior.
+- Release validation: the bounded serial Swift regression passed with 3,462
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Update shell-integration test fixtures for the guarded tmux
+  creation identity and input command format. Both boundary checks, 63
+  publisher/COS tests, 22 bundled-skill tests, the website build, signed Mac
+  Release build and arm64 iOS Simulator build passed. All 33 bundled plugin
+  source files match the source checkout. Existing isolated browser-extension
+  and workspace-recovery acceptance is recorded in their implementation docs;
+  this release workflow did not repeat those UI runs or hardware acceptance.
+  SwiftFormat still reports findings in 35 of the 258 Swift files changed since
+  3.0.75, including 23 changed-line findings; the updated fixture lines pass
+  scoped lint. No full formatting pass is claimed.
+- Distribution: Mac build 9 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.75 — Click-to-fit Mac terminals and reliable file-link guidance
 
 - After resizing a Mac terminal viewport, an ordinary content click fits its

@@ -5,15 +5,17 @@ Status: delivered for review on 2026-10-16. After software acceptance, the user
 chose “先交付审查”, explicitly deferring physical display removal and real OS
 reboot/login acceptance for this delivery. These are unverified follow-ups,
 not passing results. See the current closeout in [Stage 4](STAGE4_TODO.md).
-This directory tracks implementation; it does not bump the release version.
+This directory tracks implementation and its acceptance scope. The subsequent
+Mac 3.0.76 release is recorded in [MODIFICATIONS.md](../../MODIFICATIONS.md).
 
 ## Review handoff
 
 The implementation is delivered on `main`, based on `53bb8f2`, including the
 accepted P2 reconstruction identity fix. The user authorized committing the
 implementation, tests and documentation on 2026-10-16. Locally generated E2E
-screenshots remain outside Git. No installed App was replaced and no release
-was made.
+screenshots remain outside Git. At this review handoff, no installed App was
+replaced and no release was made. The user separately authorized Mac packaging
+and publication on 2026-10-16; the deferred hardware acceptance scope is unchanged.
 
 - Durable snapshots capture tmux topology, directories and private presentation
   every two seconds, writing only changed content. Startup distinguishes a new
