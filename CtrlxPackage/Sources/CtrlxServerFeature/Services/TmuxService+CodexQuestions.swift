@@ -21,7 +21,7 @@ extension TmuxService {
     /// an unconditional keypress: a delayed/stale screen cannot select text in
     /// the host's draft. Older hosts reject the unknown command safely.
     @discardableResult
-    func expandCodexQuestions(paneID: String, expectedCount: Int, expectedQuestionID: String? = nil) async throws -> Bool {
+    func expandCodexQuestions(paneID: String, expectedCount: Int, expectedQuestionID: String? = nil, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> Bool {
         func deferred(_ reason: String) -> Bool {
             questionLogger.notice("Question expansion deferred: pane=\(paneID, privacy: .public) count=\(expectedCount) reason=\(reason, privacy: .public)")
             return false
@@ -73,7 +73,7 @@ extension TmuxService {
         // tmux accepts the key, so a failed send can be tried again.
         if shouldOpen {
             do {
-                try await sendKeys(paneID, keys: "S-Left")
+                try await sendKeys(paneID, keys: "S-Left", expectedWorkspacePane: expectedWorkspacePane)
             } catch {
                 questionLogger.notice("Question expansion failed: pane=\(paneID, privacy: .public) count=\(expectedCount) reason=send-key-failed")
                 throw error

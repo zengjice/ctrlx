@@ -12,9 +12,8 @@ struct PermissionRequestResponseView: View {
     let request: PermissionRequest
     let isConnected: Bool
     let submit: ResponseSender
-    let state: ResponseState
+    @Bindable var state: ResponseState
 
-    @State private var customInstructions = ""
     @FocusState private var isTextFieldFocused: Bool
 
     private var suggestions: [PermissionSuggestionOption] {
@@ -22,7 +21,7 @@ struct PermissionRequestResponseView: View {
     }
 
     private var isInputEmpty: Bool {
-        customInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        state.replyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -111,8 +110,8 @@ struct PermissionRequestResponseView: View {
             Button {
                 Task {
                     state.isSending = true
-                    await submit(.permission(decision: .deny, appliedSuggestionID: nil))
-                    state.isSending = false
+                    defer { state.isSending = false }
+                    guard await submit(.permission(decision: .deny, appliedSuggestionID: nil)) else { return }
                     state.response = .rejected
                 }
             } label: {
@@ -128,8 +127,8 @@ struct PermissionRequestResponseView: View {
             Button {
                 Task {
                     state.isSending = true
-                    await submit(.permission(decision: .allow, appliedSuggestionID: nil))
-                    state.isSending = false
+                    defer { state.isSending = false }
+                    guard await submit(.permission(decision: .allow, appliedSuggestionID: nil)) else { return }
                     state.response = .accepted
                 }
             } label: {
@@ -160,8 +159,8 @@ struct PermissionRequestResponseView: View {
                 SuggestionRow(suggestion: suggestion) {
                     Task {
                         state.isSending = true
-                        await submit(.permission(decision: .allow, appliedSuggestionID: suggestion.id))
-                        state.isSending = false
+                        defer { state.isSending = false }
+                        guard await submit(.permission(decision: .allow, appliedSuggestionID: suggestion.id)) else { return }
                         state.response = .acceptedWithSuggestion
                     }
                 }
@@ -180,14 +179,14 @@ struct PermissionRequestResponseView: View {
 
     private var customInstructionsSection: some View {
         VStack(spacing: 8) {
-            TextField("Custom instructions...", text: $customInstructions, axis: .vertical)
+            TextField("Custom instructions...", text: $state.replyDraft, axis: .vertical)
                 // Stable id so E2E can target the deny-with-feedback field (a
                 // TextField's placeholder isn't exposed as its accessibility label).
                 .accessibilityIdentifier("permission-custom-instructions")
                 .textFieldStyle(.plain)
                 .lineLimit(2...4)
                 .voiceInputAccessory(
-                    text: $customInstructions,
+                    text: $state.replyDraft,
                     isDisabled: state.isSending || !isConnected
                 )
                 .padding(12)
@@ -217,14 +216,13 @@ struct PermissionRequestResponseView: View {
     }
 
     private func sendCustomInstructions() async {
-        let trimmed = customInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = state.replyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
         state.isSending = true
-        await submit(.permission(decision: .denyWithFeedback(trimmed), appliedSuggestionID: nil))
-        let sentText = customInstructions
-        customInstructions = ""
-        state.isSending = false
+        let sentText = state.replyDraft
+        defer { state.isSending = false }
+        guard await submit(.permission(decision: .denyWithFeedback(trimmed), appliedSuggestionID: nil)) else { return }
         state.response = .customInstructions(sentText)
     }
 }
@@ -283,7 +281,7 @@ private struct SuggestionRow: View {
                 PermissionRequestResponseView(
                     request: request,
                     isConnected: true,
-                    submit: { _ in },
+                    submit: { _ in true },
                     state: state
                 )
             }

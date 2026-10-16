@@ -393,6 +393,9 @@ public enum TestStep: Sendable {
     case macSetSidebarFields(_ fields: [String], instance: Int = 0)
     /// Focus a text field by title so subsequent typing goes into it
     case macFocusElement(titled: String, instance: Int = 0)
+    /// Replace the focused native text field through Accessibility, without the
+    /// user's input method or system clipboard participating in the fixture.
+    case macSetFocusedText(String, instance: Int = 0)
     /// Type text into the macOS app (via AppleScript keystroke).
     /// Set `charDelay` > 0 to type character-by-character with delays (for remote terminals).
     case macType(text: String, pressReturn: Bool = false, charDelay: TimeInterval = 0, instance: Int = 0)

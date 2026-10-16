@@ -47,6 +47,11 @@ public struct FileBrowserSource {
         let uploadReason = reason ?? (connection?.relayClient.hostSupportsFileUploads == true ? nil : "Update the Host Mac to upload files.")
         let creationReason = reason ?? (connection?.relayClient.hostSupportsDirectoryCreation == true ? nil : "Update the Host Mac to create folders.")
         let epoch = connection?.relayClient.fileTransferEpoch
+        let inputBinding: ViewerWorkspaceInputBinding? = if let paneID, !paneID.isEmpty {
+            connection?.relayClient.workspaceInputState.binding(paneID: paneID) ?? .unavailable
+        } else {
+            nil
+        }
         return Self(id: hostID, paneID: paneID, unavailableReason: reason, downloadUnavailableReason: downloadReason,
                     uploadUnavailableReason: uploadReason, creationUnavailableReason: creationReason, createDirectory: { request in
             if let creationReason { throw FileBrowserError.message(creationReason) }
@@ -65,8 +70,12 @@ public struct FileBrowserSource {
                 guard connection.relayClient.fileTransferEpoch == epoch else { throw FileBrowserError.message("Upload connection changed. Choose the files again.") }
             }
             try Task.checkCancellation()
-            let response = try await connection.sendCommand(BrowseFiles(operation), paneId: paneID ?? "", timeout: 10).get()
+            let binding = operation.usesSourcePane ? inputBinding : nil
+            let response = try await connection.relayClient.sendCommand(BrowseFiles(operation), paneId: paneID ?? "", timeout: 10, inputBinding: binding).get()
             try Task.checkCancellation()
+            if let binding, let paneID {
+                _ = try binding.expectedPane(current: connection.relayClient.workspaceInputState.binding(paneID: paneID))
+            }
             guard let files = response.fileBrowser else { throw FileBrowserError.message("The Host returned no file data.") }
             return files
         }

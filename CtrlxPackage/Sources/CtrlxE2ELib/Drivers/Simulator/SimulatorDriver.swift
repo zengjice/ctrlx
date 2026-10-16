@@ -152,6 +152,14 @@ public actor SimulatorDriver {
         installedAppPath = appPath
     }
 
+    public func dataContainer(bundleId: String) async throws -> String {
+        guard let udid else { throw SimulatorDriverError.simulatorNotRunning }
+        let result = try await processRunner.runOrThrow(
+            "/usr/bin/xcrun", arguments: ["simctl", "get_app_container", udid, bundleId, "data"]
+        )
+        return result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Launch an app in the simulator.
     ///
     /// When the XCTest runner is up we route the launch through its

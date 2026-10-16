@@ -7,6 +7,32 @@ import Testing
 struct TerminalFitRequestTests {
     private enum FitError: Error { case failed }
 
+    @Test("A retired Host's Fit result cannot fail or mark the restored terminal fitted", arguments: [false, true])
+    func retiredHost(fails: Bool) async throws {
+        let requests = ["@1", "@2"].map {
+            TerminalFitRequest(hostID: "host-a", sessionName: "dev", windowTarget: $0, columns: 100, rows: 35)
+        }
+        var current = true
+        var attempted: [String] = []
+        var succeeded: [String] = []
+        try await TerminalFitRequest.perform(requests, isCurrent: { _ in current }, willStart: { _ in }, resize: { request in
+            attempted.append(request.windowTarget)
+            await Task.yield()
+            current = false
+            if fails {
+                throw FitError.failed
+            }
+        }, didSucceed: { succeeded.append($0.windowTarget) })
+        #expect(attempted == ["@1"])
+        #expect(succeeded.isEmpty)
+
+        try await TerminalFitRequest.perform(requests, isCurrent: { _ in current }, willStart: { _ in
+            Issue.record("A stale plan must not invalidate the current Fit cache")
+        }, resize: { _ in Issue.record("A stale plan must not resize a replacement window") }, didSucceed: { _ in
+            Issue.record("A stale plan must not mark a replacement window fitted")
+        })
+    }
+
     @Test("Failed and unattempted split targets remain retryable", arguments: [nil, "host-a"] as [String?], [0, 1])
     func partialFailure(hostID: String?, failingIndex: Int) async throws {
         let requests = ["@1", "@2"].map {

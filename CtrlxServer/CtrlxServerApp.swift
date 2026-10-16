@@ -51,7 +51,8 @@ struct TmuxPaneMirrorApp: App {
 
         // E2E test support: use in-memory storage to avoid polluting real UserDefaults/Keychain
         if CommandLine.arguments.contains("--e2e-test") {
-            let prefs = PreferencesService.inMemory()
+            let restartStorage = E2EPersistentStorage.fromArguments()
+            let prefs = restartStorage?.preferences ?? PreferencesService.inMemory()
 
             // Suppress first-launch dialogs (launch-at-login prompt)
             prefs.setBool(true, AppSettings.Keys.hasAskedAboutLaunchAtLogin.rawValue)
@@ -177,7 +178,7 @@ struct TmuxPaneMirrorApp: App {
 
             prepareDependencies {
                 $0[PreferencesService.self] = prefs
-                $0[SecretsService.self] = .inMemory()
+                $0[SecretsService.self] = restartStorage?.secrets ?? .inMemory()
                 let testRoot: URL
                 if let index = CommandLine.arguments.firstIndex(of: "--ctrlx-state-root"), index + 1 < CommandLine.arguments.count {
                     testRoot = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
@@ -305,14 +306,19 @@ struct TmuxPaneMirrorApp: App {
                 let dynamicEntries: [String: FakeEntry] = [
                     "generated": .folder(generatedChildren),
                 ]
-                $0[FileSystemLoadingService.self] = .inMemory(tree: fakeTree, dynamicEntries: dynamicEntries)
-                $0[FileTextSearchService.self] = .inMemory(tree: fakeTree, dynamicEntries: dynamicEntries)
+                let liveWorkspaceContent = CommandLine.arguments.contains("--e2e-live-workspace-content")
+                if !liveWorkspaceContent {
+                    $0[FileSystemLoadingService.self] = .inMemory(tree: fakeTree, dynamicEntries: dynamicEntries)
+                    $0[FileTextSearchService.self] = .inMemory(tree: fakeTree, dynamicEntries: dynamicEntries)
+                }
                 // Git tab (issue #258): in-memory provider that starts clean and
                 // flips to the fixture changes when a scenario sets the sentinel
                 // file (issue #573), so the eagerly-loaded badge only appears
                 // where a scenario asks for it. Falls back to the always-dirty
                 // mock if no sentinel path was provided.
-                if let gitChangesFilePath {
+                if liveWorkspaceContent {
+                    $0[GitWorkbenchProviderClient.self] = .liveValue
+                } else if let gitChangesFilePath {
                     try? FileManager.default.removeItem(atPath: gitChangesFilePath)
                     $0[GitWorkbenchProviderClient.self] = .e2e(changesFilePath: gitChangesFilePath)
                 } else {
@@ -454,6 +460,7 @@ struct TmuxPaneMirrorApp: App {
         .defaultLaunchBehavior(
             (coordinator.settings.openPanesWindowOnLaunch || showingTmuxInstallGuide) ? .presented : .suppressed
         )
+        .restorationBehavior(coordinator.settings.restoresWorkspaceOnLaunch ? .disabled : .automatic)
         .onChange(of: totalPendingSessionCount, initial: true) { _, newValue in
             // Routed through DockIconService (not NSApp.dockTile directly) so
             // the badge survives .accessory → .regular activation-policy

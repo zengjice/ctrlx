@@ -115,20 +115,19 @@ public actor MacOSDriver {
     // MARK: - App Activation
 
     /// Bring the app to the front and make its key window active.
-    /// Uses `NSRunningApplication.activate` via AppleScript so the app
-    /// passes both `NSApp.isActive` and `window.isKeyWindow` checks.
+    /// Verify the focused AX application's PID, avoiding same-name AppleScript
+    /// process resolution and NSRunningApplication's cached activation state.
     public func activate() async throws {
         let pid = try requirePID()
         logger.info("Activating app (pid \(pid))")
-        let script = """
-        tell application "System Events"
-            tell (first process whose unix id is \(pid))
-                set frontmost to true
-            end tell
-        end tell
-        delay 0.3
-        """
-        try await runAppleScript(script)
+        MacOSAccessibility.focusApp(appPID: pid)
+        try await Polling.waitUntil(
+            description: "isolated test app PID \(pid) to become frontmost",
+            timeout: 2,
+            pollInterval: 0.1
+        ) {
+            MacOSAccessibility.focusedAppPID() == pid
+        }
     }
 
     /// Make the app resign active by bringing Finder to the front. After this
@@ -356,47 +355,32 @@ public actor MacOSDriver {
         }
     }
 
-    /// Right-click on an element to open its context menu, then click a menu item.
-    /// Combines right-click with polling for the context menu item to appear.
+    /// Open a native context menu and select an item, preferring process-scoped AX actions.
     public func contextMenuClick(elementTitle: String, menuItem: String) async throws {
         let pid = try requirePID()
         logger.info("Context menu click: '\(elementTitle)' → '\(menuItem)'")
 
-        // Retry the whole right-click → find-menu-item sequence, because a
-        // session row is a moving target and a single attempt is racy:
-        //   • A "working" row re-renders continuously (animated busy spinner)
-        //     and its title is exposed only through a 1pt / opacity-0 AX
-        //     overlay leaf, so that leaf can momentarily lack a resolvable
-        //     frame — `rightClick` then finds no clickable frame and returns
-        //     false without clicking.
-        //   • An unselected row swallows the first right-click into row
-        //     selection: selecting a session reloads the detail pane's
-        //     terminal mirror, and that re-layout dismisses the just-opened
-        //     context menu, so the menu item never appears on that attempt.
-        // Retrying covers both — the row becomes clickable, and a second
-        // right-click on the now-selected, settled row opens the menu cleanly.
-        // Escape between attempts closes any half-open menu so the next
-        // right-click starts clean and never lands inside an open menu. The
-        // fast path (row already clickable, menu opens) returns on the first
-        // attempt without ever pressing Escape, so existing scenarios are
-        // unaffected.
+        // Prefer the control's AX action so another app cannot receive the click.
+        // Retry a menu dismissed by the session row's selection/re-layout.
+        // Controls without AXShowMenu still require verified foreground focus.
         try await waitForAXElement(pid: pid, titled: elementTitle, timeout: 5)
 
         let overallDeadline = Date().addingTimeInterval(10)
         while Date() < overallDeadline {
-            // Right-click to open the context menu. A false return means the
-            // matched leaf had no resolvable frame yet (no click performed) —
-            // wait and retry rather than treating it as fatal.
-            guard MacOSAccessibility.rightClick(appPID: pid, titled: elementTitle) else {
-                try await Task.sleep(for: .milliseconds(300))
-                continue
+            let requestedViaAX = MacOSAccessibility.requestContextMenu(appPID: pid, titled: elementTitle)
+            if !requestedViaAX {
+                try await activate()
+                guard MacOSAccessibility.rightClick(appPID: pid, titled: elementTitle) else {
+                    try await Task.sleep(for: .milliseconds(300))
+                    continue
+                }
             }
 
             // Poll for the menu item (context menu needs time to appear).
             let menuItemDeadline = Date().addingTimeInterval(2)
             while Date() < menuItemDeadline {
                 try await Task.sleep(for: .milliseconds(300))
-                if MacOSAccessibility.press(appPID: pid, titled: menuItem) {
+                if MacOSAccessibility.pressMenuItem(appPID: pid, titled: menuItem, allowMouseFallback: !requestedViaAX) {
                     return
                 }
             }
@@ -584,6 +568,25 @@ public actor MacOSDriver {
         end tell
         """
         try await runAppleScript(script)
+    }
+
+    public func setFocusedText(_ text: String) throws {
+        let app = try AXUIElementCreateApplication(requirePID())
+        var focused: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+            let focused, CFGetTypeID(focused) == AXUIElementGetTypeID()
+        else { throw MacOSDriverError.accessibilityFailed("No focused native text field") }
+        let element = focused as! AXUIElement
+        var role: CFTypeRef?
+        _ = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+        guard let role = role as? String, [kAXTextAreaRole, kAXTextFieldRole].contains(role) else {
+            throw MacOSDriverError.accessibilityFailed("Focused element is not a native text field")
+        }
+        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
+        guard result == .success else {
+            throw MacOSDriverError.accessibilityFailed("Unable to set focused text: \(result.rawValue)")
+        }
     }
 
     /// Type text into the macOS app via AppleScript keystroke.
@@ -1152,6 +1155,7 @@ public actor MacOSDriver {
 public enum MacOSDriverError: Error, LocalizedError {
     case appNotRunning
     case appleScriptFailed(String)
+    case accessibilityFailed(String)
     case windowNotFound(String)
     case elementNotFound(String)
     case hookEventFailed(String)
@@ -1164,6 +1168,8 @@ public enum MacOSDriverError: Error, LocalizedError {
             "macOS app is not running"
         case let .appleScriptFailed(message):
             "AppleScript failed: \(message)"
+        case let .accessibilityFailed(message):
+            "Accessibility failed: \(message)"
         case let .windowNotFound(title):
             "Window not found: \(title)"
         case let .elementNotFound(title):

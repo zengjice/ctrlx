@@ -20,6 +20,7 @@ struct RemoteWindowTabBar: View {
     let windows: [TmuxWindow]
     let selectedWindow: TmuxWindow?
     let isHostConnected: Bool
+    let hasCurrentHostState: Bool
     /// In-app browser tabs scoped to this remote session. Empty when no
     /// terminal-link click has spawned a tab yet.
     let openBrowserTabs: [BrowserTab]
@@ -112,6 +113,10 @@ struct RemoteWindowTabBar: View {
         )
     }
 
+    private var persistableTabOrder: [TabDragPayload]? {
+        hasCurrentHostState ? effectiveTabOrder : nil
+    }
+
     /// Effective order restricted to entries visible on the left section in
     /// split mode (everything that hasn't been dragged into the right pane).
     private var leftSectionOrder: [TabDragPayload] {
@@ -154,15 +159,11 @@ struct RemoteWindowTabBar: View {
         // Persist the reconciled order so newly-appended windows / browsers
         // and pruned entries survive view rebuilds and session switches. The
         // computed value is idempotent so this can't loop.
-        .onChange(of: effectiveTabOrder) { _, new in
+        .onChange(of: persistableTabOrder, initial: true) { _, new in
+            // Disconnect clears the live pane list, not the saved tab order.
+            guard let new else { return }
             if sessionTabs?.tabOrder != new {
                 sessionTabs?.tabOrder = new
-            }
-        }
-        .onAppear {
-            let computed = effectiveTabOrder
-            if sessionTabs?.tabOrder != computed {
-                sessionTabs?.tabOrder = computed
             }
         }
     }

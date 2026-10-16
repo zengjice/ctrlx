@@ -3,10 +3,10 @@ import CtrlxNetworking
 
 struct CloseConfirmation {
     enum Target {
-        case session(String)
-        case window(LocalTmuxWindow)
-        case remoteWindow(TmuxWindow, hostId: String)
-        case remoteSession(sessionName: String, hostId: String)
+        case session(String, identity: WorkspacePaneIdentity)
+        case window(LocalTmuxWindow, identity: WorkspacePaneIdentity)
+        case remoteWindow(TmuxWindow, hostId: String, binding: ViewerWorkspaceInputBinding)
+        case remoteSession(sessionName: String, hostId: String, binding: ViewerWorkspaceInputBinding)
     }
 
     let target: Target
@@ -37,10 +37,10 @@ struct CloseConfirmation {
 
     var targetName: String {
         switch target {
-        case let .session(name): name
-        case let .window(window): windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
-        case let .remoteWindow(window, _): windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
-        case let .remoteSession(name, _): name
+        case let .session(name, _): name
+        case let .window(window, _): windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
+        case let .remoteWindow(window, _, _): windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
+        case let .remoteSession(name, _, _): name
         }
     }
 

@@ -36,7 +36,27 @@ Files rows expose only their own selection/close actions, not terminal operation
   fresh pane membership before lookup/creation; reuse remains possible at the
   30-tab session limit. Source moves/renames update descriptors without changing
   UUIDs. Closing a shared tab or removing its source pane removes it on all clients.
-  Host restart starts a fresh catalog: persisted raw tmux IDs never resurrect tabs.
+  Opens capture the source's persistent pane and tmux incarnation before any path
+  lookup or queued UI work. Capable Viewers send that identity in
+  `CommandMessage.expectedWorkspacePane` under `supportsWorkspaceInputIdentity`;
+  the Host checks it against fresh metadata before reusing or allocating a tab.
+  A newer published route snapshot invalidates an older pending source query.
+  Late replies are checked again before client adoption, including after catalog
+  refresh. Reused numeric pane IDs cannot inherit old tabs; a live pane move keeps
+  its Files UUID. Peers without the identity capability retain legacy behavior.
+  Source-directory and repository-link reads retain the same source binding.
+  The Host checks the actual tmux incarnation/persistent pane in the directory
+  query and again after filesystem work, so a stale published pane cache cannot
+  admit a replaced terminal's result. Viewers check before sending and after the
+  reply. Explicit absolute-path navigation/previews and Home without a source
+  pane remain independent of terminal lifetime.
+  With workspace recovery enabled, the Host restores catalog UUIDs only after
+  mapping their saved persistent session/window/pane identities to live routes.
+  The client restores its directory, expanded folders and selected file separately;
+  an unavailable file keeps its selection and reports the read error. Without
+  recovery the Host starts a fresh catalog. Persisted raw tmux IDs alone never
+  resurrect tabs. Implementation and acceptance status are tracked in
+  [workspace recovery](v3.0.76/IMPLEMENTATION_PLAN.md).
 - `SessionStateMessage.supportsPaneFiles` / `fileTabs` advertise the catalog.
   `BrowseFiles.tabs` opens/closes through the same service as local Mac actions,
   off the terminal keyboard receive loop. Old Hosts reject these actions before
@@ -55,6 +75,10 @@ Files rows expose only their own selection/close actions, not terminal operation
   while releasing hidden preview buffers. Only a fresh Host catalog or unpairing
   removes those identities. Mac shares a presentation registry across its main and
   detached workbenches, so one Host ID cannot create duplicate local tabs.
+  Session-state publication and recovery identity/ownership remapping run in the
+  same MainActor turn before SwiftUI reconciles the Files catalog. Do not queue
+  that callback into a separate task: new runtime numbers can otherwise route
+  through an old native-window owner during Host reconstruction.
   Reusing Files from another workbench moves the live tab and triggers the same
   selection/split repair and empty-workbench cleanup as a cross-window tab drag.
 - On Mac, closing the selected left Files tab returns to its live source window

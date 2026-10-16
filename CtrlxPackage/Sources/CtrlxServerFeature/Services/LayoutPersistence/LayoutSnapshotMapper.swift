@@ -103,11 +103,13 @@
         static func snapshot(
             from tabs: SessionFileTabsState,
             fileBrowser: FileBrowserState?,
+            includeHostFiles: Bool = false,
+            includeUnavailableFiles: Bool = false,
             windowIndexForId: (String) -> Int?
         ) -> SavedFolderLayout {
             // Deleted tabs reference files that no longer exist — don't persist them.
             let liveFileTabs = tabs.openFileTabs.filter {
-                !$0.isDeleted && tabs.directoryTabs[$0.id]?.hostTab == nil && (!$0.isDirectory || tabs.directoryTabs[$0.id]?.snapshot != nil)
+                (includeUnavailableFiles || !$0.isDeleted) && (includeHostFiles || tabs.directoryTabs[$0.id]?.hostTab == nil) && (!$0.isDirectory || tabs.directoryTabs[$0.id]?.snapshot != nil)
             }
             let fileTabs = liveFileTabs.map {
                 SavedFileTab(id: $0.id, path: $0.path, directoryPath: $0.directoryPath, browser: tabs.directoryTabs[$0.id]?.snapshot)
@@ -214,10 +216,11 @@
             _ layout: SavedFolderLayout,
             to tabs: SessionFileTabsState,
             fileBrowser: FileBrowserState?,
+            includeHostFiles: Bool = false,
             windowIdForIndex: (Int) -> String?,
             makeBrowserState: (BrowserTab) -> BrowserTabState
         ) {
-            let hostDirectories = tabs.directoryTabs.filter { $0.value.hostTab != nil }
+            let hostDirectories = tabs.directoryTabs.filter { !includeHostFiles && $0.value.hostTab != nil }
             let hostIDs = Set(hostDirectories.keys)
             let hostFiles = tabs.openFileTabs.filter { hostIDs.contains($0.id) }
             func isHostFile(_ payload: TabDragPayload) -> Bool {
@@ -233,7 +236,7 @@
             let liveSplitRatio = tabs.splitRatio
 
             // File tabs — ids preserved so SavedTabRef.file references stay valid.
-            let privateFiles = layout.fileTabs.filter { $0.browser?.hostOwned != true && !hostIDs.contains($0.id) }
+            let privateFiles = layout.fileTabs.filter { (includeHostFiles || $0.browser?.hostOwned != true) && !hostIDs.contains($0.id) }
             tabs.openFileTabs = privateFiles.map {
                 OpenFileTab(id: $0.id, path: $0.path, directoryPath: $0.directoryPath, isDirectory: $0.browser != nil)
             }
@@ -329,7 +332,7 @@
             }
         }
 
-        private static func runtimePayload(
+        static func runtimePayload(
             for ref: SavedTabRef,
             windowIdForIndex: (Int) -> String?,
             restoredFileIds: Set<UUID>,

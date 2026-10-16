@@ -1,14 +1,84 @@
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
-import CtrlxPluginProtocol
 import Testing
 @testable import CodexPluginCore
 
 /// Lifecycle + auto-launch behavior of the core itself (the pieces not covered
 /// by the translator / keystroke / scanner / installer / correlation suites).
 struct CodexPluginCoreTests {
+    @Test("Verified Codex recovery binds automatic support to the recorded CLI version and disables shared daemon")
+    func nativeResumeVerifiedVersion() async throws {
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { _, roots, _ in try #require(roots.first) }
+        } operation: {
+            let core = makeCore()
+            let descriptor = try await core.recoveryDescriptor(sessionID: UUID().uuidString, projectPath: "/project", invocation: .init(executable: "/tools/codex", arguments: [], version: "codex-cli 0.162.1"))
+            #expect(descriptor.automaticResumeUnavailableReason == nil)
+            #expect(descriptor.cliVersion == "codex-cli 0.162.1")
+            #expect(try await core.commandForResume(descriptor).command.args.last == "--no-daemon")
+        }
+    }
+
+    @Test("Native recovery records the observed config/profile/permissions but excludes prompts, images and old telemetry")
+    func nativeResumeInvocation() async throws {
+        let id = UUID().uuidString
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { _, roots, _ in
+                #expect(roots == ["/original/account"])
+                return "/original/account"
+            }
+        } operation: {
+            let core = makeCore()
+            let invocation = AgentResumeInvocation(executable: "/tools/codex", arguments: ["resume", "old-id", "secret prompt", "-p", "work", "-s", "read-only", "-a", "on-request", "-c", "model_reasoning_effort=high", "-c", "otel.log_user_prompt=false", "--image", "/secret/image.png"], configurationRoots: ["CODEX_HOME": "/original/account"], version: "fixture-version")
+            let descriptor = try await core.recoveryDescriptor(sessionID: id, projectPath: "/project", invocation: invocation)
+            #expect(descriptor.arguments == ["--profile", "work", "--sandbox", "read-only", "--ask-for-approval", "on-request", "--config", "model_reasoning_effort=high"])
+            #expect(descriptor.automaticResumeUnavailableReason != nil)
+            let encoded = try String(decoding: JSONEncoder().encode(descriptor), as: UTF8.self)
+            #expect(!encoded.contains("secret") && !encoded.contains("old-id") && !encoded.contains("otel"))
+            let launch = try await core.commandForResume(descriptor)
+            #expect(launch.command.command == "/tools/codex")
+            #expect(launch.command.args == ["resume", id, "-C", "/project"] + descriptor.arguments)
+            await #expect(throws: AgentResumeConfigurationError.self) {
+                try await core.recoveryDescriptor(sessionID: id, projectPath: "/project", invocation: .init(executable: "/tools/codex", arguments: ["--remote", "unix:///private/agent.sock"], configurationRoots: ["CODEX_HOME": "/original/account"]))
+            }
+        }
+    }
+
+    @Test("Recovery resumes the recorded Codex identity/root without a prompt or Auto-run")
+    func nativeResume() async throws {
+        let id = UUID().uuidString
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { sessionID, _, layout in
+                #expect(sessionID == id && layout == .codex)
+                return "/Host/original codex"
+            }
+        } operation: {
+            let core = makeCore()
+            try await core.initialize(makeEnv(settings: JSONEncoder().encode(CodexSettings(autoRun: false, exportTelemetry: false))), host: MockPluginHost())
+            let descriptor = try await core.recoveryDescriptor(sessionID: id, projectPath: "/Host/project")
+            _ = try await core.applySettings(JSONEncoder().encode(CodexSettings(commandPath: "/tools/codex", autoRun: false, additionalConfigFolders: ["/Host/another account"], exportTelemetry: false)))
+            let resumed = try await withDependencies {
+                $0[AgentForkHistoryClient.self].root = { sessionID, roots, _ in
+                    #expect(sessionID == id && roots == ["/Host/original codex"])
+                    return "/Host/original codex"
+                }
+            } operation: { try await core.commandForResume(descriptor) }
+            #expect(resumed.command.command == "/tools/codex")
+            #expect(resumed.command.args == ["resume", id, "-C", "/Host/project"])
+            #expect(resumed.command.env == ["CODEX_HOME": "/Host/original codex"])
+            await #expect(throws: AgentForkError.self) {
+                try await withDependencies {
+                    $0[AgentForkHistoryClient.self].root = { _, _, _ in throw AgentForkError("History removed") }
+                } operation: { try await core.commandForResume(descriptor) }
+            }
+            await #expect(throws: AgentForkError.self) { try await core.recoveryDescriptor(sessionID: "--last", projectPath: "/Host/project") }
+            await core.shutdown()
+        }
+    }
+
     @Test("Native Fork uses the exact ID and target cwd, preserves config root and telemetry, independent of Auto-run")
     func nativeFork() async throws {
         let id = UUID().uuidString
@@ -28,7 +98,7 @@ struct CodexPluginCoreTests {
             #expect(command.args.contains("otel.log_user_prompt=false"))
             #expect(command.env == ["CODEX_HOME": "/Host/custom codex"])
             #expect(fork.unsetEnvironment.isEmpty)
-            _ = await core.applySettings(try JSONEncoder().encode(CodexSettings(autoRun: false, exportTelemetry: false)))
+            _ = try await core.applySettings(JSONEncoder().encode(CodexSettings(autoRun: false, exportTelemetry: false)))
             let withoutTelemetry = try await core.commandForFork(sessionID: id, projectPath: "/Host/new repo")
             #expect(withoutTelemetry.command.args == ["fork", id, "-C", "/Host/new repo"])
             await #expect(throws: AgentForkError.self) { try await core.commandForFork(sessionID: "--last", projectPath: "/repo") }
@@ -161,10 +231,10 @@ struct CodexPluginCoreTests {
         try await core.initialize(makeEnv(otlpEndpoint: endpoint), host: MockPluginHost())
         let automatic = await core.commandForLaunch(projectPath: "/fixture")
         #expect(await core.terminalTelemetryArguments() == automatic?.args)
-        _ = await core.applySettings(try JSONEncoder().encode(CodexSettings(autoRun: false)))
+        _ = try await core.applySettings(JSONEncoder().encode(CodexSettings(autoRun: false)))
         #expect(await core.commandForLaunch(projectPath: "/fixture") == nil)
         #expect(await core.terminalTelemetryArguments() == automatic?.args)
-        _ = await core.applySettings(try JSONEncoder().encode(CodexSettings(exportTelemetry: false)))
+        _ = try await core.applySettings(JSONEncoder().encode(CodexSettings(exportTelemetry: false)))
         #expect(await core.terminalTelemetryArguments().isEmpty)
         await core.shutdown()
     }

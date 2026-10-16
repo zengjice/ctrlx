@@ -40,6 +40,9 @@ public actor TestOrchestrator {
     private let reporter: (any TestProgressReporter)?
     private var screenshotCounter = 0
     private var isolateAPISockets = false
+    private var liveWorkspaceContent = false
+    private var persistentE2EStorage = false
+    private var iosStateRoot: String?
     /// Paths of scripts copied to TMPDIR via `injectScript`, cleaned up after each scenario.
     private var injectedScriptPaths: [String] = []
 
@@ -160,6 +163,8 @@ public actor TestOrchestrator {
 
         context.clear()
         isolateAPISockets = scenario.tags.contains("isolated-api")
+        liveWorkspaceContent = scenario.tags.contains("live-workspace-content")
+        persistentE2EStorage = scenario.tags.contains("persistent-e2e-storage")
         screenshotCounter = 0
         injectedScriptPaths.removeAll()
 
@@ -184,12 +189,13 @@ public actor TestOrchestrator {
         // machine's real ~/Downloads (which would trip a TCC consent prompt).
         context.set("downloadsDirPath", value: downloadsDirPath(for: 0))
         context.set("scenarioName", value: scenarioDirName)
-        context.set("macOSAppPath", value: macOSAppPath)
+        context.set("macOSAppPath", value: URL(fileURLWithPath: macOSAppPath).standardizedFileURL.path)
         // Instance 0's `--ctrlx-state-root`, so scenarios can pre-seed
         // plugin state (e.g. a codex `settings.json`) before the app launches
         // and place watched fixture files (e.g. a codex `config.toml`) inside
         // the per-scenario sandbox the orchestrator already cleans up.
         context.set("ctrlxStateRoot", value: ctrlxStateRootPath(for: 0))
+        context.set("ctrlxStateRoot1", value: ctrlxStateRootPath(for: 1))
         // Instance 0's OTLP receiver endpoint, pre-seeded with the preferred
         // `--otlp-port` the launch args pass (`defaultOTLPPort + 0`). Telemetry
         // scenarios POST synthetic OTLP here via `${otlpEndpoint}`, so the curl
@@ -360,6 +366,10 @@ public actor TestOrchestrator {
         }
         occupiedPortSockets.removeAll()
         try? await simulatorDriver.terminateApp()
+        if let iosStateRoot {
+            try? FileManager.default.removeItem(atPath: iosStateRoot)
+            self.iosStateRoot = nil
+        }
         let instanceKeys = Array(macDrivers.keys)
         for driver in macDrivers.values {
             try? await driver.terminateApp()
@@ -554,6 +564,16 @@ public actor TestOrchestrator {
                 "--e2e-test", "--server-url", "ws://127.0.0.1:\(serverPort)",
                 "--test-accessibility-port", "\(SimulatorDriver.defaultTestAccessibilityPort)",
             ]
+            if persistentE2EStorage {
+                if iosStateRoot == nil {
+                    let container = try await simulatorDriver.dataContainer(bundleId: iosBundleId())
+                    iosStateRoot = "\(container)/tmp/ctrlx-recovery-\(UUID().uuidString)"
+                }
+                if let iosStateRoot {
+                    context.set("iosStateRoot", value: iosStateRoot)
+                    iosArgs += ["--e2e-persistent-storage", "--ctrlx-state-root", iosStateRoot]
+                }
+            }
             if let appVersion {
                 iosArgs += ["--app-version", appVersion]
             }
@@ -707,6 +727,12 @@ public actor TestOrchestrator {
             if isolateAPISockets {
                 // Opt in: existing CLI fixtures explicitly use the legacy socket.
                 arguments += ["--e2e-api-socket", stateRoot + "/api.sock"]
+            }
+            if liveWorkspaceContent {
+                arguments += ["--e2e-live-workspace-content"]
+            }
+            if persistentE2EStorage {
+                arguments += ["--e2e-persistent-storage"]
             }
             arguments += ["--e2e-seed-projects"]
             // Pin the advertised device name so screenshots are portable across
@@ -887,6 +913,9 @@ public actor TestOrchestrator {
 
         case let .macPaste(instance):
             try await macDriver(for: instance).paste()
+
+        case let .macSetFocusedText(text, instance):
+            try await macDriver(for: instance).setFocusedText(context.resolve(text))
 
         case let .macDropFilesOnPane(paneId, paths, instance):
             let resolvedPaneId = context.resolve(paneId)

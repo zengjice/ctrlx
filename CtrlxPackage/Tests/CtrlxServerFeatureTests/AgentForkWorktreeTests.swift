@@ -339,21 +339,29 @@ struct AgentForkWorktreeTests {
                         ";", "set-option", "-t", original.sessionName, "default-command", "exec /bin/tcsh -f",
                     ], nil, nil)
                     #expect(defaults.isSuccess)
-                    let source = try #require(AgentForkSource(pane: PaneState(
+                    let source = try #require(try AgentForkSource(pane: PaneState(
                         paneId: original.paneId, sessionName: original.sessionName, tmuxWindowId: "@0", currentPath: fixture.source,
-                        agentSession: .init(paneId: original.paneId, pluginID: pluginID == "codex" ? "codex" : "claude-code"), claudeSessionID: UUID().uuidString
+                        agentSession: .init(paneId: original.paneId, pluginID: pluginID == "codex" ? "codex" : "claude-code"), claudeSessionID: UUID().uuidString,
+                        workspaceIdentity: #require(tmux.panes.first { $0.paneId == original.paneId }?.workspaceIdentity)
                     )))
                     let service = AgentForkService(
                         source: { $0 == source.paneID ? source : nil }, core: { _ in core },
                         refresh: { _ = await tmux.refreshPanes() },
-                        launch: { session, name, prepared in
-                            try await tmux.newWindow(sessionName: session, workingDirectory: prepared.workingDirectory,
-                                windowName: name, runCommand: prepared.forkRunCommand(shell: tmux.loginShellPath),
-                                extraEnvironment: prepared.extraEnvironment + ["FORK_TEST_AGENT=\(pluginID)"], forceLoginShell: true)
+                        launch: { source, name, prepared in
+                            try await tmux.newWindow(
+                                sessionName: source.sessionName,
+                                workingDirectory: prepared.workingDirectory,
+                                windowName: name,
+                                runCommand: prepared.forkRunCommand(shell: tmux.loginShellPath),
+                                extraEnvironment: prepared.extraEnvironment + ["FORK_TEST_AGENT=\(pluginID)"],
+                                forceLoginShell: true,
+                                expectedWorkspacePane: source.workspaceIdentity,
+                                expectedSourcePaneID: source.paneID
+                            )
                         }
                     )
                     let plan = try await service.prepare(source)
-                    let worktree = mode.worktree ? ForkAgentSession.Worktree(name: "probe", expectedHead: try #require(plan.worktree).head) : nil
+                    let worktree = try mode.worktree ? ForkAgentSession.Worktree(name: "probe", expectedHead: #require(plan.worktree).head) : nil
                     let name = mode.worktree ? "probe" : "我的 Fork probe"
                     let request = ForkAgentSession(source: source, windowName: name, worktree: worktree)
                     let paneID = try await service.fork(request)

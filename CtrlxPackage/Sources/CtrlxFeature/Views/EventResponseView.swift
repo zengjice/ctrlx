@@ -5,7 +5,7 @@ import SwiftUI
 /// Closure the response views call to submit a structured `AgentResponse` back
 /// to the host (which routes it to `core.deliverResponse`). iOS sends structured
 /// choices only — it never builds agent-specific keystrokes (spec §7.1).
-typealias ResponseSender = @MainActor (AgentResponse) async -> Void
+typealias ResponseSender = @MainActor (AgentResponse) async -> Bool
 
 // MARK: - Agent Response Request → View
 

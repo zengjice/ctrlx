@@ -442,6 +442,14 @@ final public class AppSettings {
 
     // MARK: - Launch at Login Settings
 
+    var workspaceRecoveryMode: WorkspaceRecoveryMode = .layoutAndAgents {
+        didSet { preferences.setString(workspaceRecoveryMode.rawValue, Keys.workspaceRecoveryMode) }
+    }
+
+    public var restoresWorkspaceOnLaunch: Bool {
+        workspaceRecoveryMode != .disabled
+    }
+
     /// Whether the app should launch at login (synced with system login items)
     public var launchAtLogin: Bool = Defaults.launchAtLogin {
         didSet { preferences.setBool(launchAtLogin, Keys.launchAtLogin) }
@@ -541,9 +549,10 @@ final public class AppSettings {
         ) ?? Defaults.editorOverrideMode
 
         // Launch at Login
+        self.workspaceRecoveryMode = WorkspaceRecoveryMode(rawValue: preferences.string(Keys.workspaceRecoveryMode) ?? "") ?? .layoutAndAgents
         self.launchAtLogin = preferences.optionalBool(Keys.launchAtLogin) ?? Defaults.launchAtLogin
         self.hasAskedAboutLaunchAtLogin = preferences.optionalBool(Keys.hasAskedAboutLaunchAtLogin) ?? Defaults.hasAskedAboutLaunchAtLogin
-        quickPhrasePairingsLoaded = true
+        self.quickPhrasePairingsLoaded = true
         updateQuickPhraseSyncPairings()
     }
 
@@ -575,6 +584,7 @@ final public class AppSettings {
     // MARK: - Keys
 
     public enum Keys: String {
+        case workspaceRecoveryMode
         case fontName
         case fontSize
         case scrollbackLines
@@ -898,8 +908,10 @@ final public class AppSettings {
         for rename in SessionRenameMapping.detectNames(from: oldPaneIDs, to: newPaneIDs) {
             order = RemoteSessionOrder.replacing(rename.oldName, with: rename.newName, in: order)
         }
-        setLocalSessionOrder(RemoteSessionOrder.applying(order, to: newPaneIDs.keys.sorted(), sessionName: { $0 }))
+        setLocalSessionOrder(RemoteSessionOrder.applying(order, to: Set(newPaneIDs.keys).union(pendingRecoverySessionNames).sorted(), sessionName: { $0 }))
     }
+
+    @ObservationIgnored var pendingRecoverySessionNames: Set<String> = []
 
     public func setRemoteSessionOrder(_ sessionNames: [String], for hostId: String) {
         let normalized = RemoteSessionOrder.normalized(sessionNames)

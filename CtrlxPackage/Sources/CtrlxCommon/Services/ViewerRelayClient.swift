@@ -100,6 +100,7 @@ final public class ViewerRelayClient {
     public private(set) var isHostConnected = false
 
     public private(set) var hostSupportsTerminalPaste = false
+    public private(set) var workspaceInputState = ViewerWorkspaceInputState()
     public private(set) var hostSupportsCodexQuestionAcknowledgement = false
     public private(set) var hostSupportsDirectoryCreation = false
     public private(set) var hostSupportsSessionWorktrees = false
@@ -250,7 +251,7 @@ final public class ViewerRelayClient {
     public var onAgentNotification: (@Sendable (AgentNotificationMessage) -> Void)?
 
     /// Called when session state is received from host
-    public var onSessionState: (@Sendable (SessionStateMessage) -> Void)?
+    public var onSessionState: (@MainActor @Sendable (SessionStateMessage) -> Void)?
 
     /// Per-pane terminal stream handlers, keyed by pane ID.
     /// Multiple panes can receive stream data concurrently.
@@ -525,13 +526,16 @@ final public class ViewerRelayClient {
     public func sendCommand<C: CommandSpec>(
         _ command: C,
         paneId: String,
-        timeout: TimeInterval = 15
+        timeout: TimeInterval = 15,
+        inputBinding: ViewerWorkspaceInputBinding? = nil
     ) async -> Result<C.Response, Error> {
         guard state.isConnected else {
             return .failure(ViewerRelayClientError.notConnected)
         }
 
         switch command.commandType {
+        case let .sendKeystroke(spec) where spec.acknowledgeCompletion == true && !workspaceInputState.supportsIdentity:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to confirm draft submission"))
         case let .sendDroppedFiles(spec) where spec.expectedAgent != nil && !hostSupportsAgentImageInput:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add annotated screenshots to an Agent"))
         case .browseSimulator where !hostSupportsSimulatorViewing:
@@ -573,7 +577,69 @@ final public class ViewerRelayClient {
             break
         }
 
-        let commandMessage = CommandMessage(paneId: paneId, command: command.commandType)
+        let targetBinding: ViewerWorkspaceInputBinding?
+        switch command.commandType {
+        case .startTerminalStream,
+             .sendKeystroke,
+             .sendRawInput,
+             .pasteTerminalText,
+             .expandCodexQuestions,
+             .submitEditorContent,
+             .cancelEditorSession,
+             .setYoloMode,
+             .markHandled,
+             .splitTmuxPane,
+             .selectTmuxPane,
+             .cancelOperation:
+            targetBinding = workspaceInputState.binding(paneID: paneId)
+        case .resizeTmuxPane,
+             .selectTmuxWindow:
+            targetBinding = workspaceInputState.windowBinding(target: paneId)
+        case let .killTmuxWindow(spec):
+            targetBinding = workspaceInputState.windowBinding(target: spec.windowId)
+        case let .setWindowName(spec):
+            targetBinding = workspaceInputState.windowBinding(target: spec.windowId)
+        case let .killTmuxSession(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .renameTmuxSession(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSessionDescription(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSessionColor(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSessionEmoji(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSessionState(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .prepareAgentFork(spec):
+            targetBinding = workspaceInputState.binding(paneID: spec.source.paneID)
+        case let .forkAgentSession(spec):
+            targetBinding = workspaceInputState.binding(paneID: spec.source.paneID)
+        case let .createTmuxWindow(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .moveTmuxWindows(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSharedTerminalLayout(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .checkRunningProcesses(spec):
+            switch spec.target {
+            case let .window(id): targetBinding = workspaceInputState.windowBinding(target: id)
+            case let .session(name): targetBinding = workspaceInputState.sessionBinding(name: name)
+            }
+        case let .browseFiles(spec):
+            targetBinding = spec.operation.usesSourcePane && !paneId.isEmpty ? workspaceInputState.binding(paneID: paneId) : nil
+        default:
+            targetBinding = nil
+        }
+        let expectedWorkspacePane: WorkspacePaneIdentity?
+        if let current = targetBinding {
+            do {
+                expectedWorkspacePane = try (inputBinding ?? current).expectedPane(current: current)
+            } catch { return .failure(error) }
+        } else {
+            expectedWorkspacePane = nil
+        }
+        let commandMessage = CommandMessage(paneId: paneId, command: command.commandType, expectedWorkspacePane: expectedWorkspacePane)
 
         // Fire-and-forget: just write to the WebSocket and return a synthetic success.
         // The command type declares it doesn't need a response, so no handler or timeout.
@@ -653,20 +719,20 @@ final public class ViewerRelayClient {
     /// the enum variant to the underlying generic method. Useful when the caller doesn't
     /// need the response (fire-and-forget style).
     @discardableResult
-    public func send(_ command: CommandType, paneId: String) async -> Bool {
+    public func send(_ command: CommandType, paneId: String, inputBinding: ViewerWorkspaceInputBinding? = nil) async -> Bool {
         switch command {
         case let .sendKeystroke(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .pasteTerminalText(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .expandCodexQuestions(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .cancelOperation(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .startTerminalStream(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .stopTerminalStream(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .createTmuxSession(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .listSessionDirectories(spec):
@@ -674,61 +740,61 @@ final public class ViewerRelayClient {
         case let .createSessionDirectory(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .browseFiles(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .browseSimulator(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .browseBrowser(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .resizeTmuxPane(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .setSharedTerminalLayout(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setYoloMode(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .markHandled(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .renameTmuxSession(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setSessionDescription(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setSessionColor(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setSessionEmoji(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setSessionState(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setWindowName(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .moveTmuxWindows(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .splitTmuxPane(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .selectTmuxPane(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .selectTmuxWindow(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .createTmuxWindow(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .prepareAgentFork(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .prepareSessionWorktree(spec):
             return await (try? sendCommand(spec, paneId: "").get()) != nil
         case let .forkAgentSession(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .submitEditorContent(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .cancelEditorSession(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .sendRawInput(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .checkRunningProcesses(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .killTmuxWindow(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .killTmuxSession(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .sendDroppedFiles(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         }
     }
 
@@ -788,18 +854,25 @@ final public class ViewerRelayClient {
         sessionId: String,
         pluginId: String,
         requestId: String,
-        response: AgentResponse
+        response: AgentResponse,
+        inputBinding: ViewerWorkspaceInputBinding? = nil
     ) async -> Bool {
         guard state.isConnected else {
             logger.debug("Not connected, cannot submit agent response")
             return false
         }
+        let expectedWorkspacePane: WorkspacePaneIdentity?
+        do {
+            let current = workspaceInputState.binding(paneID: sessionId)
+            expectedWorkspacePane = try (inputBinding ?? current).expectedPane(current: current)
+        } catch { return false }
         let message = AgentResponseSubmissionMessage(
             pairId: pairId ?? "",
             sessionId: sessionId,
             pluginId: pluginId,
             requestId: requestId,
-            response: response
+            response: response,
+            expectedWorkspacePane: expectedWorkspacePane
         )
         return await sendEncrypted(.agentResponseSubmission(message))
     }
@@ -1068,6 +1141,7 @@ final public class ViewerRelayClient {
 
         case let .sessionState(sessionState):
             logger.info("Received session state from host")
+            workspaceInputState.update(sessionState)
             hostSupportsTerminalPaste = sessionState.supportsTerminalPaste == true
             hostSupportsCodexQuestionAcknowledgement = sessionState.supportsCodexQuestionAcknowledgement == true
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
@@ -1107,6 +1181,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
@@ -1158,6 +1233,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
@@ -1193,6 +1269,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
@@ -1210,6 +1287,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
@@ -1513,6 +1591,7 @@ final public class ViewerRelayClient {
         resetFileUploads()
         resetBrowserState()
         hostSupportsTerminalPaste = false
+        workspaceInputState.invalidate()
         hostSupportsCodexQuestionAcknowledgement = false
         hostSupportsDirectoryCreation = false
         hostSupportsSessionWorktrees = false

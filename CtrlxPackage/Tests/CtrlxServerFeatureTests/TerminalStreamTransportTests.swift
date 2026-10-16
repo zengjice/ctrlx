@@ -72,11 +72,12 @@
                             data: Data(bytes[offset..<min(offset + fragmentSize, bytes.count)])
                         )
                     }
+                    let leases = ["viewer-a": UUID(), "viewer-b": UUID()]
                     let admitted = TerminalTransportTranscript()
                     let sendNext: @MainActor @Sendable () async -> Void = { [frames, admitted, manager] in
                         let frame = frames[admitted.messages.count]
                         admitted.receive(frame)
-                        await manager.sendTerminalStream(frame, to: ["viewer-a", "viewer-b"])
+                        await manager.sendTerminalStream(frame, to: ["viewer-a", "viewer-b"], leaseIDs: leases)
                     }
                     await withTaskGroup(of: Void.self) { group in
                         for _ in frames.indices {
@@ -88,6 +89,7 @@
                     }
                     for peer in peers {
                         #expect(peer.transcript.messages.map(\.id) == admitted.messages.map(\.id))
+                        #expect(peer.transcript.messages.allSatisfy { $0.leaseId == leases[peer.pairID] })
                         #expect(peer.transcript.bytes == Data(bytes))
                         #expect(peer.transcript.firstLine == "(base) Office ➜  feature-bug git:(feature-bug) cat")
                         #expect(peer.transcript.terminal.getCursorLocation().x == 48)

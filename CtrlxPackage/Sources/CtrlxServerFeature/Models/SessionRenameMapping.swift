@@ -18,7 +18,14 @@ struct SessionRenameMapping: Equatable, Sendable {
         let newPaneIDs = Dictionary(grouping: newPanes, by: \.sessionName)
             .mapValues { Set($0.map(\.paneId)) }
 
-        return detectNames(from: oldPaneIDs, to: newPaneIDs).map { oldName, newName in
+        return detectNames(from: oldPaneIDs, to: newPaneIDs).compactMap { oldName, newName in
+            let oldIdentities = Dictionary(uniqueKeysWithValues: oldPanes
+                .filter { $0.sessionName == oldName }
+                .map { ($0.paneId, $0.workspaceIdentity) })
+            guard
+                newPanes.filter({ $0.sessionName == newName }).allSatisfy({
+                    oldIdentities[$0.paneId] == .some($0.workspaceIdentity)
+                }) else { return nil }
             let oldByPaneID = Dictionary(uniqueKeysWithValues: oldPanes
                 .filter { $0.sessionName == oldName }
                 .map { ($0.paneId, $0.windowId) })
@@ -58,12 +65,15 @@ struct RemoteSessionStructure: Equatable {
     struct Location: Equatable {
         let sessionName: String
         let windowID: String
+        let identity: WorkspacePaneIdentity?
     }
 
     let locations: [PaneKey: Location]
+    let scopes: [String: WorkspaceIdentityScope]
 
-    init(panes: [PaneKey: PaneState]) {
-        self.locations = panes.mapValues { Location(sessionName: $0.sessionName, windowID: $0.windowId) }
+    init(panes: [PaneKey: PaneState], scopes: [String: WorkspaceIdentityScope] = [:]) {
+        self.locations = panes.mapValues { Location(sessionName: $0.sessionName, windowID: $0.windowId, identity: $0.workspaceIdentity) }
+        self.scopes = scopes
     }
 
     /// The catalog and pane store are delivered separately. Wait for matching routing
@@ -80,14 +90,19 @@ struct RemoteSessionStructure: Equatable {
     }
 
     func renames(from previous: Self) -> [(hostID: String, mapping: SessionRenameMapping)] {
-        Set(previous.locations.keys.map(\.pairId)).sorted().flatMap { hostID in
+        Set(previous.locations.keys.map(\.pairId)).sorted().flatMap { hostID -> [(hostID: String, mapping: SessionRenameMapping)] in
+            guard previous.scopes[hostID] == scopes[hostID] else { return [] }
             let old = previous.locations.filter { $0.key.pairId == hostID }
             let new = locations.filter { $0.key.pairId == hostID }
             let oldGroups = Dictionary(grouping: old, by: { $0.value.sessionName })
                 .mapValues { Set($0.map(\.key.paneId)) }
             let newGroups = Dictionary(grouping: new, by: { $0.value.sessionName })
                 .mapValues { Set($0.map(\.key.paneId)) }
-            return SessionRenameMapping.detectNames(from: oldGroups, to: newGroups).map { oldName, newName in
+            return SessionRenameMapping.detectNames(from: oldGroups, to: newGroups).compactMap { oldName, newName -> (hostID: String, mapping: SessionRenameMapping)? in
+                guard
+                    new.filter({ $0.value.sessionName == newName }).allSatisfy({ key, location in
+                        old[key]?.identity == location.identity
+                    }) else { return nil }
                 let windowIDs = Dictionary(new.compactMap { key, location -> (String, String)? in
                     guard location.sessionName == newName, let source = old[key], source.sessionName == oldName else { return nil }
                     return (source.windowID, location.windowID)

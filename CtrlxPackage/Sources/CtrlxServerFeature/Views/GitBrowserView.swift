@@ -3,6 +3,35 @@ import CtrlxCommon
 import GitWorkbench
 import SwiftUI
 
+struct GitRecoveryContent<Content: View>: View {
+    let entry: GitStoreEntry
+    @ViewBuilder let content: () -> Content
+    @State private var retry = 0
+
+    var body: some View {
+        Group {
+            if entry.pendingRecovery == nil {
+                content()
+            } else if let issue = entry.recoveryIssue {
+                VStack(spacing: 12) {
+                    Text("Git view could not be restored").font(.headline)
+                    Text(issue).foregroundStyle(.secondary).textSelection(.enabled)
+                    HStack {
+                        Button("Retry") { retry += 1 }
+                        Button("Open Git without saved selection") { entry.openWithoutSavedSelection() }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView("Restoring Git view…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: retry) { await entry.load() }
+    }
+}
+
 /// The Git tab's content (issue #258): a thin wrapper around the third-party
 /// ``GitWorkbenchView`` so the rest of the app deals with a Ctrlx-shaped
 /// view and a single place to attach an accessibility identifier for E2E.

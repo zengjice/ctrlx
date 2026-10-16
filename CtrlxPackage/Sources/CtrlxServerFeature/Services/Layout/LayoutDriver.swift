@@ -64,22 +64,25 @@
         /// the same MirrorWindowManager path the CLI's `set-title` uses.
         public typealias DescriptionApplier = @Sendable (
             _ description: String?,
-            _ sessionName: String
-        ) async -> Void
+            _ sessionName: String,
+            _ identity: WorkspacePaneIdentity
+        ) async throws -> Void
         /// Applies a session-scoped color (or clears it when nil) through the
         /// same MirrorWindowManager path the CLI's `set-color` uses.
         public typealias ColorApplier = @Sendable (
             _ color: SessionColor?,
-            _ sessionName: String
-        ) async -> Void
+            _ sessionName: String,
+            _ identity: WorkspacePaneIdentity
+        ) async throws -> Void
         /// Applies a per-pane progress override through the same
         /// MirrorWindowManager path the CLI's `set-progress` uses. Treated as
         /// a no-op when the pane isn't yet tracked (the apply driver makes
         /// sure paneStates is refreshed first).
         public typealias ProgressApplier = @Sendable (
             _ progress: TerminalProgressState?,
-            _ paneId: String
-        ) async -> Void
+            _ paneId: String,
+            _ identity: WorkspacePaneIdentity
+        ) async throws -> Void
 
         let tmuxAccessor: TmuxAccessor
         let descriptionApplier: DescriptionApplier
@@ -103,6 +106,8 @@
             self.processRunner = processRunner
             self.logger = logger
         }
+
+        private typealias PaneTarget = (info: PaneInfo, identity: WorkspacePaneIdentity)
 
         // MARK: - Apply
 
@@ -139,9 +144,15 @@
                 throw DriverError.alreadyExists(name: config.sessionName)
             }
 
+            let existing: PaneTarget? = if exists, !dryRun {
+                try await tmux.captureWorkspacePane(target: TmuxService.sessionTarget(config.sessionName))
+            } else {
+                nil
+            }
+
             if exists, !rebuild {
                 planned.append("session '\(config.sessionName)' exists — re-applying description/color, running on_apply hooks, selecting")
-                if !dryRun {
+                if let existing {
                     // Re-apply description + color on warm-attach so editing
                     // the YAML and re-running `ctrlx apply` updates the
                     // sidebar without forcing the user into `--rebuild`.
@@ -151,29 +162,32 @@
                     // users with state from a config they thought they had
                     // already shipped.
                     if let description = config.description, !description.isEmpty {
-                        await descriptionApplier(description, config.sessionName)
+                        try await descriptionApplier(description, config.sessionName, existing.identity)
                     }
                     // Always push the configured color (including nil → clear)
                     // so removing `color:` from the YAML and re-applying
                     // actually clears the dot rather than silently leaving
                     // the previous choice in place.
-                    await colorApplier(config.color, config.sessionName)
+                    try await colorApplier(config.color, config.sessionName, existing.identity)
                 }
                 try await runHooks(
                     config.onApply,
                     scope: "on_apply",
                     planned: &planned,
                     dryRun: dryRun,
-                    shellEnvironment: shellEnvironment
+                    shellEnvironment: shellEnvironment,
+                    sessionName: config.sessionName,
+                    identity: existing?.identity,
+                    tmux: tmux
                 )
-                if !dryRun, !detach {
+                if let existing, !detach {
                     // Trailing `:` resolves to the session's current window
                     // unambiguously. `:!` (last/previous window) fails with
                     // "can't find window: !" when the session has no window
                     // history yet — i.e. a single-window session that's never
                     // been switched away from — which made warm-attach apply
                     // exit non-zero.
-                    try await tmux.selectWindow("\(config.sessionName):")
+                    try await tmux.selectSession(config.sessionName, expectedWorkspacePane: existing.identity)
                 }
                 return Result(
                     sessionName: config.sessionName,
@@ -185,8 +199,8 @@
 
             if exists, rebuild {
                 planned.append("--rebuild: closing existing session '\(config.sessionName)'")
-                if !dryRun {
-                    try await tmux.killSession(config.sessionName)
+                if let existing {
+                    try await tmux.killSession(config.sessionName, expectedWorkspacePane: existing.identity)
                 }
             }
 
@@ -227,16 +241,20 @@
                 "session.create name=\(config.sessionName) path=\(sessionDir ?? "$HOME")"
             )
             let createdName: String
+            let bootstrap: PaneTarget?
             if dryRun {
                 createdName = config.sessionName
+                bootstrap = nil
             } else {
-                let (name, _) = try await tmux.createSession(
+                let created = try await tmux.createSession(
                     baseName: config.sessionName,
                     width: 200,
                     height: 50,
                     workingDirectory: sessionDir
                 )
+                let name = created.sessionName
                 createdName = name
+                bootstrap = try await tmux.captureWorkspacePane(target: created.paneId, expectedServerID: created.serverID)
                 if name != config.sessionName {
                     // createSession uniquifies on collision; under apply we
                     // already proved the name was free. Still, surface drift
@@ -252,7 +270,8 @@
                     try await tmux.setSessionEnvironment(
                         sessionName: createdName,
                         name: key,
-                        value: value
+                        value: value,
+                        expectedWorkspacePane: bootstrap?.identity
                     )
                 }
             }
@@ -260,31 +279,31 @@
                 planned.append("session.set_option \(key)=\(value)")
                 if !dryRun {
                     try await tmux.setOption(
-                        target: createdName,
+                        target: TmuxService.sessionTarget(createdName),
                         name: key,
                         value: value,
-                        scope: .session
+                        scope: .session,
+                        expectedWorkspacePane: bootstrap?.identity
                     )
                 }
             }
             if let description = config.description, !description.isEmpty {
                 planned.append("session.set_title \(description)")
-                if !dryRun {
-                    await descriptionApplier(description, createdName)
+                if let bootstrap {
+                    try await descriptionApplier(description, createdName, bootstrap.identity)
                 }
             }
             if let color = config.color {
                 planned.append("session.set_color \(color.rawValue)")
-                if !dryRun {
-                    await colorApplier(color, createdName)
+                if let bootstrap {
+                    try await colorApplier(color, createdName, bootstrap.identity)
                 }
             }
 
-            // Walk windows top-down. Window 0 is the bootstrap from
-            // createSession; we rename + repopulate it in place to avoid a
-            // visible "two windows then collapse" flicker.
+            // Reuse the actual bootstrap window, including a nonzero base-index.
+            var focusedWindow: PaneTarget?
             for (windowIndex, window) in config.windows.enumerated() {
-                try await applyWindow(
+                let target = try await applyWindow(
                     window,
                     windowIndex: windowIndex,
                     sessionName: createdName,
@@ -295,8 +314,12 @@
                     configDirectory: configDirectory,
                     shellEnvironment: shellEnvironment,
                     claudeCommandPath: claudeCommandPath,
-                    tmux: tmux
+                    tmux: tmux,
+                    bootstrap: bootstrap
                 )
+                if window.focus, focusedWindow == nil {
+                    focusedWindow = target
+                }
             }
 
             // on_create hooks fire after the session is fully built; tmuxp's
@@ -307,34 +330,36 @@
                 scope: "on_create",
                 planned: &planned,
                 dryRun: dryRun,
-                shellEnvironment: shellEnvironment
+                shellEnvironment: shellEnvironment,
+                sessionName: createdName,
+                identity: bootstrap?.identity,
+                tmux: tmux
             )
             try await runHooks(
                 config.onApply,
                 scope: "on_apply",
                 planned: &planned,
                 dryRun: dryRun,
-                shellEnvironment: shellEnvironment
+                shellEnvironment: shellEnvironment,
+                sessionName: createdName,
+                identity: bootstrap?.identity,
+                tmux: tmux
             )
 
             // Focus the requested pane/window before the final select so the
             // session lands on the user's intended view.
-            if
-                let focusWindow = config.windows.first(where: { $0.focus }),
-                let target = focusWindow.tmuxTarget(sessionName: createdName, fallbackIndex: nil) {
-                planned.append("window.select \(target)")
-                if !dryRun {
-                    try? await tmux.selectWindow(target)
+            if let focusIndex = config.windows.firstIndex(where: { $0.focus }) {
+                let target = config.windows[focusIndex].tmuxTarget(sessionName: createdName, fallbackIndex: focusIndex)
+                planned.append("window.select \(target ?? createdName)")
+                if let focusedWindow {
+                    try await tmux.selectWindow(focusedWindow.info.stableWindowId, expectedWorkspacePane: focusedWindow.identity)
                 }
             }
 
             if !detach {
                 planned.append("session.select \(createdName)")
-                if !dryRun {
-                    // See above: `:!` fails on freshly built sessions
-                    // (no previous-window history). Trailing `:` resolves to
-                    // the session's current window unambiguously.
-                    try await tmux.selectWindow("\(createdName):")
+                if let bootstrap {
+                    try await tmux.selectSession(createdName, expectedWorkspacePane: bootstrap.identity)
                 }
             }
 
@@ -359,8 +384,9 @@
             configDirectory: String?,
             shellEnvironment: [String: String],
             claudeCommandPath: String,
-            tmux: TmuxService
-        ) async throws {
+            tmux: TmuxService,
+            bootstrap: PaneTarget?
+        ) async throws -> PaneTarget? {
             // First pane's `start_directory` is the window's effective cwd —
             // the bootstrap pane has no separate creation step that would honor
             // it otherwise. Cascade: pane > window > session.
@@ -375,43 +401,38 @@
 
             let firstPaneId: String
             let actualIndex: Int
+            let windowPane: PaneTarget?
             if windowIndex == 0 {
-                // Bootstrap window already exists at index 0 from createSession.
                 planned.append("window[0]: rename '\(windowName ?? "<auto>")' (in place)")
-                actualIndex = 0
-                if !dryRun, let windowName, !windowName.isEmpty {
-                    try? await tmux.renameWindow(target: "\(sessionName):0", name: windowName)
-                }
-                if !dryRun {
-                    let panes = await tmux.refreshPanes()
-                    let bootstrap = panes.first { $0.sessionName == sessionName && $0.windowIndex == 0 }
-                    firstPaneId = bootstrap?.paneId ?? "%0"
-                } else {
-                    firstPaneId = "%dryrun-w0p0"
+                windowPane = bootstrap
+                actualIndex = bootstrap?.info.windowIndex ?? 0
+                firstPaneId = bootstrap?.info.paneId ?? "%dryrun-w0p0"
+                if let bootstrap, let windowName, !windowName.isEmpty {
+                    try await tmux.renameWindow(target: bootstrap.info.stableWindowId, name: windowName, expectedWorkspacePane: bootstrap.identity)
                 }
             } else {
                 planned.append(
                     "window.create name=\(windowName ?? "<auto>") index=\(window.index.map(String.init) ?? "<next>") path=\(windowDir ?? "$HOME")"
                 )
-                if dryRun {
-                    // In dry-run honor the requested index so the planned
-                    // actions reflect what tmux would actually pick. Without
-                    // an explicit index, fall through to the loop counter as
-                    // an approximation.
-                    actualIndex = window.index ?? windowIndex
-                    firstPaneId = "%dryrun-w\(actualIndex)p0"
-                } else {
+                if let bootstrap {
                     let newPaneId = try await tmux.newWindow(
                         sessionName: sessionName,
                         workingDirectory: windowDir,
                         windowName: windowName,
-                        windowIndex: window.index
+                        windowIndex: window.index,
+                        expectedWorkspacePane: bootstrap.identity
                     )
-                    firstPaneId = newPaneId
-                    let panes = await tmux.refreshPanes()
-                    actualIndex = panes
-                        .first(where: { $0.paneId == newPaneId })?
-                        .windowIndex ?? window.index ?? windowIndex
+                    let captured = try await tmux.captureWorkspacePane(target: newPaneId, expectedServerID: bootstrap.identity.serverID)
+                    guard captured.identity.sessionID == bootstrap.identity.sessionID else {
+                        throw TmuxError.commandFailed(message: "The layout session changed. Apply the layout again.")
+                    }
+                    windowPane = captured
+                    firstPaneId = captured.info.paneId
+                    actualIndex = captured.info.windowIndex
+                } else {
+                    windowPane = nil
+                    actualIndex = window.index ?? windowIndex
+                    firstPaneId = "%dryrun-w\(actualIndex)p0"
                 }
             }
 
@@ -423,12 +444,13 @@
 
             for (key, value) in window.options {
                 planned.append("window[\(actualIndex)].set_option \(key)=\(value)")
-                if !dryRun {
+                if let windowPane {
                     try await tmux.setOption(
-                        target: "\(sessionName):\(actualIndex)",
+                        target: windowPane.info.stableWindowId,
                         name: key,
                         value: value,
-                        scope: .window
+                        scope: .window,
+                        expectedWorkspacePane: windowPane.identity
                     )
                 }
             }
@@ -436,7 +458,9 @@
             // Build pane list. The first pane already exists; later panes are
             // splits off the previously-created one.
             var paneIds: [String] = [firstPaneId]
-            for paneOffset in 1..<window.panes.count {
+            var identities: [String: WorkspacePaneIdentity] = [:]
+            identities[firstPaneId] = windowPane?.identity
+            for paneOffset in window.panes.indices.dropFirst() {
                 let pane = window.panes[paneOffset]
                 let paneDir = resolvedDirectory(
                     start: pane.startDirectory,
@@ -456,25 +480,34 @@
                         // which split came from which parent anyway.
                         horizontal: true,
                         workingDirectory: paneDir,
-                        shellCommand: pane.shell
+                        shellCommand: pane.shell,
+                        expectedWorkspacePane: windowPane?.identity
                     )
+                    let captured = try await tmux.captureWorkspacePane(target: newId, expectedServerID: windowPane?.identity.serverID)
+                    guard
+                        captured.identity.sessionID == windowPane?.identity.sessionID,
+                        captured.identity.windowID == windowPane?.identity.windowID else {
+                        throw TmuxError.commandFailed(message: "The layout window changed. Apply the layout again.")
+                    }
+                    identities[newId] = captured.identity
                     paneIds.append(newId)
                 }
             }
 
             // Apply layout once all panes exist so tmux can size the window
             // proportionally.
-            if let layout = window.layout, !layout.isEmpty, !dryRun {
-                try? await tmux.selectLayout(target: "\(sessionName):\(actualIndex)", layout: layout)
+            if let layout = window.layout, !layout.isEmpty, let windowPane {
+                try await tmux.selectLayout(target: windowPane.info.stableWindowId, layout: layout, expectedWorkspacePane: windowPane.identity)
             }
 
             // Send shell_command_before + per-pane shell + shell_command lines.
             for (paneOffset, pane) in window.panes.enumerated() {
                 let paneId = paneIds[paneOffset]
+                let identity = identities[paneId]
                 if pane.sleepBefore > 0 {
                     planned.append("sleep \(pane.sleepBefore)s before pane[\(paneOffset)] commands")
                     if !dryRun {
-                        try? await Task.sleep(for: .seconds(pane.sleepBefore))
+                        try await Task.sleep(for: .seconds(pane.sleepBefore))
                     }
                 }
 
@@ -486,8 +519,8 @@
                 if paneOffset == 0, let shell = pane.shell, !shell.isEmpty {
                     planned.append("pane[\(paneOffset)] exec \(shell)")
                     if !dryRun {
-                        try await tmux.sendKeys(paneId, keys: "exec \(shell)", literal: true)
-                        try await tmux.sendKeys(paneId, keys: "Enter")
+                        try await tmux.sendKeys(paneId, keys: "exec \(shell)", literal: true, expectedWorkspacePane: identity)
+                        try await tmux.sendKeys(paneId, keys: "Enter", expectedWorkspacePane: identity)
                     }
                 }
 
@@ -505,9 +538,9 @@
                     planned.append("pane[\(paneOffset)] send: \(payload)")
                     if !dryRun {
                         if !payload.isEmpty {
-                            try await tmux.sendKeys(paneId, keys: payload, literal: true)
+                            try await tmux.sendKeys(paneId, keys: payload, literal: true, expectedWorkspacePane: identity)
                         }
-                        try await tmux.sendKeys(paneId, keys: "Enter")
+                        try await tmux.sendKeys(paneId, keys: "Enter", expectedWorkspacePane: identity)
                     }
                 }
 
@@ -517,10 +550,10 @@
                     planned.append("pane[\(paneOffset)] send: \(payload)")
                     if !dryRun {
                         if !payload.isEmpty {
-                            try await tmux.sendKeys(paneId, keys: payload, literal: true)
+                            try await tmux.sendKeys(paneId, keys: payload, literal: true, expectedWorkspacePane: identity)
                         }
                         if pane.enter {
-                            try await tmux.sendKeys(paneId, keys: "Enter")
+                            try await tmux.sendKeys(paneId, keys: "Enter", expectedWorkspacePane: identity)
                         }
                     }
                 }
@@ -528,7 +561,7 @@
                 if pane.sleepAfter > 0 {
                     planned.append("sleep \(pane.sleepAfter)s after pane[\(paneOffset)] commands")
                     if !dryRun {
-                        try? await Task.sleep(for: .seconds(pane.sleepAfter))
+                        try await Task.sleep(for: .seconds(pane.sleepAfter))
                     }
                 }
 
@@ -540,8 +573,8 @@
                 // any new OSC sequence the pane emits.
                 if let progress = pane.progress {
                     planned.append("pane[\(paneOffset)] set_progress \(progress.accessibilityValueString)")
-                    if !dryRun {
-                        await progressApplier(progress, paneId)
+                    if let identity {
+                        try await progressApplier(progress, paneId, identity)
                     }
                 }
             }
@@ -551,9 +584,10 @@
                 let target = paneIds[focusOffset]
                 planned.append("pane.select \(target)")
                 if !dryRun {
-                    try? await tmux.selectPane(target)
+                    try await tmux.selectPane(target, expectedWorkspacePane: identities[target])
                 }
             }
+            return windowPane
         }
 
         // MARK: - Hooks
@@ -563,17 +597,22 @@
             scope: String,
             planned: inout [String],
             dryRun: Bool,
-            shellEnvironment: [String: String]
+            shellEnvironment: [String: String],
+            sessionName: String,
+            identity: WorkspacePaneIdentity?,
+            tmux: TmuxService
         ) async throws {
             for hook in hooks {
                 planned.append("\(scope): \(hook.cmd)")
                 if !dryRun {
+                    try await tmux.checkWorkspaceSession(sessionName, identity: identity)
                     let result = try await runShellCommand(
                         hook.cmd,
                         cwd: hook.cwd,
                         env: hook.env,
                         shellEnvironment: shellEnvironment
                     )
+                    try await tmux.checkWorkspaceSession(sessionName, identity: identity)
                     if !result.isSuccess {
                         throw DriverError.hookFailed(
                             cmd: hook.cmd,
@@ -692,9 +731,15 @@
 
     extension LayoutConfig.Window {
         func tmuxTarget(sessionName: String, fallbackIndex: Int?) -> String? {
-            if let index { return "\(sessionName):\(index)" }
-            if let name { return "\(sessionName):\(name)" }
-            if let fallbackIndex { return "\(sessionName):\(fallbackIndex)" }
+            if let index {
+                return "\(sessionName):\(index)"
+            }
+            if let name {
+                return "\(sessionName):\(name)"
+            }
+            if let fallbackIndex {
+                return "\(sessionName):\(fallbackIndex)"
+            }
             return nil
         }
     }

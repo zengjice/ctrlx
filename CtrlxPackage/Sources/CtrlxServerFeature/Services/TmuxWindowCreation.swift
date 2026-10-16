@@ -1,6 +1,6 @@
 import CtrlxNetworking
-import Foundation
 import CtrlxPluginProtocol
+import Foundation
 
 /// One Host-side entry point for local UI and Viewer requests. Plugin commands
 /// and environment never come from the Viewer. Validate before creating a pane.
@@ -18,7 +18,8 @@ enum TmuxWindowCreation {
     }
 
     @MainActor
-    static func create(_ request: CreateTmuxWindow, core: (any PluginCore)?, tmux: TmuxService) async throws -> String {
+    static func create(_ request: CreateTmuxWindow, core: (any PluginCore)?, tmux: TmuxService, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> String {
+        let identity = expectedWorkspacePane ?? tmux.panes.first { $0.sessionName == request.sessionName }?.workspaceIdentity
         let prepared = try await prepare(request, core: core)
         let name = prepared.launch.map { URL(fileURLWithPath: $0.command).lastPathComponent }
         return try await tmux.newWindow(
@@ -26,7 +27,8 @@ enum TmuxWindowCreation {
             workingDirectory: prepared.workingDirectory,
             windowName: name,
             runCommand: prepared.runCommand,
-            extraEnvironment: prepared.extraEnvironment
+            extraEnvironment: prepared.extraEnvironment,
+            expectedWorkspacePane: identity
         )
     }
 }

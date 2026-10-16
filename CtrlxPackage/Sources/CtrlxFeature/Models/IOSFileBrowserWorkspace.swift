@@ -29,6 +29,16 @@ final class IOSFileBrowserWorkspace {
 
     var tabs: [FileBrowserTab] = []
     var selectedID: UUID?
+    let recoveryID = UUID()
+    var recoveryReference: ViewerWorkspaceReference?
+    var recoveryScope: WorkspaceIdentityScope?
+    var restoredWindowID: String?
+    var restoredPaneID: String?
+    var hasPendingTerminalSelection = false
+    var unavailableFileSources: Set<UUID> = []
+    var restoredFileIDs: Set<UUID> = []
+    var restoresFolderDefaults = true
+    @ObservationIgnored var onSaveRecovery: (() -> Void)?
     @ObservationIgnored private var context: Context?
     @ObservationIgnored @Dependency(PreferencesService.self) private var preferences
 
@@ -40,9 +50,13 @@ final class IOSFileBrowserWorkspace {
         tabs.filter { $0.hostTab == nil }.compactMap(\.snapshot)
     }
 
+    var recoverySnapshots: [FileBrowserTab.Snapshot] {
+        tabs.compactMap(\.snapshot)
+    }
+
     func updateContext(_ context: Context?) {
         guard let context, self.context != context, let name = context.storageKey else { return }
-        let shouldRestore = self.context == nil && tabs.allSatisfy { $0.hostTab != nil }
+        let shouldRestore = restoresFolderDefaults && self.context == nil && tabs.allSatisfy { $0.hostTab != nil }
         self.context = context
         // Seed once. A directory change moves the save target without replacing live tabs.
         guard shouldRestore else {
@@ -54,10 +68,11 @@ final class IOSFileBrowserWorkspace {
             let saved = try? JSONDecoder().decode([FileBrowserTab.Snapshot].self, from: data) else { return }
         // Host catalogs can arrive before the session page establishes its context.
         var seen = Set(tabs.map(\.id))
-        tabs += saved.filter { $0.hostOwned != true && seen.insert($0.id).inserted }.prefix(30).map(FileBrowserTab.init(snapshot:))
+        tabs += saved.filter { $0.hostOwned != true && seen.insert($0.id).inserted }.prefix(30).map { FileBrowserTab(snapshot: $0) }
     }
 
     func save() {
+        onSaveRecovery?()
         guard let storageKey = context?.storageKey, let data = try? JSONEncoder().encode(snapshots) else { return }
         preferences.setData(value: data, forKey: storageKey)
     }

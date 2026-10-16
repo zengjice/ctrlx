@@ -1,3 +1,4 @@
+import CtrlxCommon
 import CtrlxNetworking
 
 enum NewSessionSizing {
@@ -17,11 +18,13 @@ enum NewSessionSizing {
         let hostID: String
         let sessionName: String
         private(set) var paneID: String?
+        private let sessionBinding: ViewerWorkspaceInputBinding?
 
-        init(hostID: String, sessionName: String, paneID: String) {
+        init(hostID: String, sessionName: String, paneID: String, sessionBinding: ViewerWorkspaceInputBinding? = nil) {
             self.hostID = hostID
             self.sessionName = sessionName
             self.paneID = paneID
+            self.sessionBinding = sessionBinding
         }
 
         func matches(hostID: String, sessionName: String) -> Bool {
@@ -32,9 +35,17 @@ enum NewSessionSizing {
             isAvailable: Bool,
             paneIDs: [String]?,
             measuredRequest: ResizeTmuxPane?,
-            isPresentationReady: Bool = true
+            isPresentationReady: Bool = true,
+            currentSessionBinding: ViewerWorkspaceInputBinding? = nil
         ) -> ResizeTmuxPane? {
             guard let paneID else { return nil }
+            if let sessionBinding {
+                do { _ = try sessionBinding.expectedPane(current: currentSessionBinding ?? .unavailable) }
+                catch {
+                    self.paneID = nil
+                    return nil
+                }
+            }
             guard isAvailable else {
                 self.paneID = nil
                 return nil

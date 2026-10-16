@@ -70,11 +70,16 @@
                 #endif
                 agentBackgroundMonitoring.noteSceneActive(scenePhase == .active)
                 agentBackgroundMonitoring.prepare()
+                await fileWorkspaces.prepareRecovery()
+                fileWorkspaces.retainHosts(Set(settings.pairedHosts.map(\.id)))
                 await initializeConnectionManager()
                 setupConnectionManagerHandlers()
                 await autoConnectIfNeeded()
             }
-            .onChange(of: connectionManager?.managedHostIDs ?? []) { _, hostIDs in
+            .onChange(of: connectionManager?.managedHostIDs ?? []) {
+                fileWorkspaces.retainHosts(Set(settings.pairedHosts.map(\.id)))
+            }
+            .onChange(of: settings.pairedHosts.map(\.id)) { _, hostIDs in
                 fileWorkspaces.retainHosts(Set(hostIDs))
             }
             .onChange(of: scenePhase) { _, newPhase in
@@ -82,6 +87,18 @@
             }
             .onChange(of: settings.agentBackgroundMonitoringEnabled) { _, enabled in
                 handleAgentBackgroundMonitoringPreferenceChange(enabled)
+            }
+            .alert("Workspace Recovery", isPresented: .init(
+                get: { fileWorkspaces.recoveryError != nil },
+                set: {
+                    if !$0 {
+                        fileWorkspaces.dismissRecoveryError()
+                    }
+                }
+            )) {
+                Button("OK") { fileWorkspaces.dismissRecoveryError() }
+            } message: {
+                Text(fileWorkspaces.recoveryError ?? "")
             }
         }
 
@@ -101,6 +118,9 @@
         /// When returning to foreground, we immediately attempt reconnection to avoid
         /// waiting for exponential backoff timers.
         private func handleScenePhaseChange(_ phase: ScenePhase) {
+            if phase != .active {
+                Task { await fileWorkspaces.flushRecovery() }
+            }
             // Keep the notification service's foreground flag in sync so the
             // backgrounded-only local-notification fallback fires correctly.
             pushService.setAppActive(phase == .active)
@@ -232,25 +252,23 @@
 
             connectionManager.onSessionState = {
                 [weak connectionManager, pushService, sessionStore, fileWorkspaces, agentBackgroundMonitoring] state in
-                Task { @MainActor in
-                    guard let client = connectionManager?.connection(for: state.pairId)?.relayClient else { return }
-                    fileWorkspaces.update(state, client: client)
-                    sessionStore.handleStateUpdate(state)
-                    agentBackgroundMonitoring.handle(state) { notification in
-                        guard
-                            agentBackgroundMonitoring.reserveNotificationDelivery(
-                                for: notification
-                            ) else { return }
-                        pushService.scheduleLocalNotification(
-                            title: notification.title,
-                            subtitle: notification.subtitle,
-                            body: notification.body,
-                            paneId: notification.paneId,
-                            hostId: notification.hostId,
-                            delay: 1,
-                            backgroundOnly: true
-                        )
-                    }
+                guard let client = connectionManager?.connection(for: state.pairId)?.relayClient else { return }
+                fileWorkspaces.update(state, client: client)
+                sessionStore.handleStateUpdate(state)
+                agentBackgroundMonitoring.handle(state) { notification in
+                    guard
+                        agentBackgroundMonitoring.reserveNotificationDelivery(
+                            for: notification
+                        ) else { return }
+                    pushService.scheduleLocalNotification(
+                        title: notification.title,
+                        subtitle: notification.subtitle,
+                        body: notification.body,
+                        paneId: notification.paneId,
+                        hostId: notification.hostId,
+                        delay: 1,
+                        backgroundOnly: true
+                    )
                 }
             }
 

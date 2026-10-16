@@ -3,6 +3,7 @@
     import CtrlxCommon
     import CtrlxNetworking
     import Dependencies
+    import Foundation
     import Observation
     import Testing
     @testable import CtrlxServerFeature
@@ -35,6 +36,38 @@
                 pluginID: "codex", sessionID: "session-\(paneId)",
                 state: state, tmuxPane: paneId, projectPath: nil
             )
+        }
+
+        @Test("Delayed attention and Yolo actions cannot mutate a replacement pane", arguments: [false, true])
+        func replacementPaneActions(restarted: Bool) {
+            let manager = makeWindowManager()
+            let original = WorkspacePaneIdentity(serverID: "10:100", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            var replacement = original
+            if restarted {
+                replacement.serverID = "11:100"
+            } else {
+                replacement.paneID = UUID()
+            }
+            manager.setPaneStatesForPreview([PaneState(
+                paneId: "%7",
+                agentSession: AgentSession(paneId: "%7", pluginID: "codex", state: .doneWorking(summary: "New task")),
+                workspaceIdentity: replacement
+            )])
+            #expect(!manager.setYoloMode(enabled: true, for: "%7", expectedWorkspacePane: original))
+            #expect(!manager.markSessionHandled(paneId: "%7", expectedWorkspacePane: original))
+            #expect(!manager.isYoloModeEnabled(for: "%7"))
+            #expect(manager.paneStates["%7"]?.agentSession?.needsAttention == true)
+            #expect(!manager.setYoloMode(enabled: true, for: "%8", expectedWorkspacePane: replacement))
+            #expect(manager.paneStates["%8"] == nil)
+
+            // Moving the same physical pane between windows does not retire it.
+            var moved = replacement
+            moved.windowID = UUID()
+            moved.sessionID = UUID()
+            #expect(manager.setYoloMode(enabled: true, for: "%7", expectedWorkspacePane: moved))
+            #expect(manager.markSessionHandled(paneId: "%7", expectedWorkspacePane: moved))
+            #expect(manager.isYoloModeEnabled(for: "%7"))
+            #expect(manager.paneStates["%7"]?.agentSession?.state == .idle)
         }
 
         private func acknowledge(

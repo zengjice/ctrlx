@@ -188,6 +188,123 @@ Key files: `EditorOverride.swift` (pure helpers + `EditorOverrideMode`/`VisualPr
 
 `baseEnvironmentVars` (injected via tmux `-e`, so they reach both app-launched and manually-typed `claude`) sets the Claude rendering/update flags **and** the OTEL export vars that point Claude Code at the Mac-local `OTLPReceiver` (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_*` → `http://127.0.0.1:<OTLPReceiver.advertisedPort>`; issue #597). No content gates are enabled. The endpoint port is `OTLPReceiver.advertisedPort` — the port the receiver **actually bound** (its preferred port, or a fallback candidate when that was taken), published before any pane can be created, so the bind and the advertisement can't drift. When the receiver failed to bind every candidate, the OTEL block is skipped entirely (no dead endpoints). The property is computed per creation, not cached, so it always reads the settled bind.
 
+### Prompt editor request lifetime
+
+`EditorSessionManager` creates a new UUID for each live `ctrlx edit` request.
+Mac Viewer submit/cancel commands include that UUID as optional
+`expectedSessionID`; the Host checks it against the currently active editor
+before writing or cancelling, without suspending between validation and the
+operation. A replaced or completed request returns failure. Old commands without
+the field remain decodable and keep their legacy active-pane targeting.
+
+The Viewer also retains the terminal binding from the displayed editor, so a
+known Host/tmux incarnation change rejects a delayed outgoing action. Only a
+successful Host response clears the submitted text, and later edits survive that
+response. Restored workspace drafts are text only and never recreate editor
+requests or submit callbacks.
+
+The local API captures the original pane identity before reading its temporary
+file. Publication and submit require that same physical pane. Discovery retires
+an editor whose pane disappears or changes before broadcasting replacement
+metadata, returns an error to the waiting CLI, and retains its text against the
+original persistent UUID. It never assigns that draft to a recycled pane number.
+A live pane moved to another window/session keeps its editor.
+
+The Host registers the editor completion continuation before publishing its
+state, allowing a fast Viewer response while the broadcast awaits transport.
+File-write failure leaves the request, continuation and edits available for
+retry; it must not be reported as successful submission.
+
+### Closing terminals across workspace reconstruction
+
+Mac and iOS close actions retain the target identity from before the running-
+process query and confirmation dialog. On capable Hosts, process queries and
+close commands carry that original identity. A session check follows the physical
+session, independently of its current children; a window check follows the physical
+window. Replacement targets produce an error and require a fresh user action.
+Older Hosts keep the existing optional-field compatibility path.
+
+Ordinary tmux discovery assigns missing session/window/pane UUIDs independently
+of recovery snapshots. Turning recovery off or failing to read a journal does
+not leave new live terminals without an identity. Discovery and recovery capture
+only fill empty metadata on the originally observed tmux server, then reread its
+actual values; concurrent captures cannot overwrite each other's UUIDs. Identity
+assignment runs in batches of at most 16 guarded commands so large workspaces
+stay below tmux's command-message limit. A failed batch leaves existing UUIDs
+intact; the next discovery/capture fills only still-missing identities. Local
+close actions wait for this metadata rather than creating an unbound confirmation.
+
+`TmuxService` validates the expected identity before entering the recovery close
+transaction, then tmux checks the captured server/object identity in the same
+command queue as `kill-*`. The close and journal update remain serialized, so a
+checkpoint cannot recreate an explicitly deleted item. This does not authorize
+replay of other queued operations; outstanding recovery acceptance is tracked in
+[Stage 4](v3.0.76/STAGE4_TODO.md).
+
+Window-name editors similarly retain the window binding from when editing
+began. Discovery can update the tab underneath an open editor without retargeting
+its Save action. Mac local, Mac Viewer and iOS use the physical window ID;
+capable Viewer commands carry the original identity, and tmux checks the server
+and window UUID in the same queue as `rename-window`. A replaced pane inside the
+same window does not invalidate a window rename. Rejection is shown to the user;
+older Hosts retain the optional-identity path.
+
+Session-name editors capture the original session action on Mac and iOS, including
+the Viewer's binding before any queued task. The Host checks the actual tmux server
+and session UUID in the same queue as `rename-session`, after checking name
+availability. Replacing a child window or pane does not retire a session editor.
+Private layout migration requires matching persistent identities when available;
+recycled pane numbers alone cannot establish that a reconstructed session was
+renamed. Identity-free snapshots retain the existing legacy rename detection.
+
+Session descriptions, colors, emoji and manual state changes use the same
+session binding. Description/emoji editors retain their original callbacks;
+the iOS More sheet keeps them through dismissal and the subsequent editor.
+Persistent metadata checks the server/session before listing window overrides,
+clearing each override and writing the session option. The Host acknowledges
+only after persistence succeeds, and cached rows update only if they still
+belong to that session. Manual state remains transient and checks the current
+session identity before changing its cached panes. Failures reach the client
+instead of being reported as successful saves.
+
+New-window requests retain the originating session binding from the Mac/iOS
+button or Agent dialog through launch preparation and the tmux mutation. Pending
+selection must still refer to that session when the reply/snapshot arrives.
+iOS retains this binding until the created tab's delayed automatic Fit is consumed.
+`new-session` and `new-window` return their physical server incarnation and pane
+ID in the creation command itself; later naming and startup input are conditional
+on that original server/pane. Discovery may assign persistent UUIDs afterward.
+This also avoids assuming that the first window and pane indexes are zero.
+New-session replies additionally carry the captured server incarnation and Host
+state-root identity in optional `createdPaneScope`. Local selection checks the
+created server; Mac/iOS Viewers wait for a matching live catalog before adopting
+the pane number. iOS carries the resolved session binding into delayed Fit.
+Older Hosts retain the previous numeric-ID behavior; a capable Host with missing
+creation identity does not silently fall back to it.
+
+Local CLI mutations resolve their target once and retain its workspace identity
+through subsequent awaits. Layout application keeps the original session and
+each created pane through metadata, options, splits, delayed input and focus;
+it checks the session before and after each host-shell hook. It stops after a
+target change without replaying remaining commands on reconstructed objects.
+Already-running user hooks are ordinary shell processes, not cancellable
+transactions. Bootstrap windows use their actual creation result and indexes.
+
+Window reorder and shared-layout requests also carry the original session
+binding. Reorder checks it while listing windows, applying each swap and rolling
+back a partial failure; a replacement session is never the rollback destination.
+UI continuations recheck identity before migrating selection/tab state. Shared
+layout debounce resolves the final layout after SwiftUI settles while retaining
+the originating session. The Host validates tmux identity and any newer cached
+identity before accepting the canonical layout. Existing window-set validation
+and optional-field compatibility remain in force.
+
+The discovery callback synchronizes `MirrorWindowManager` before publishing its
+snapshot. It cannot rely on a later UI observer or the periodic caller to do so:
+a broadcast sent first would retain an old identity indefinitely during otherwise
+quiet polling. This synchronization performs no additional tmux query and keeps
+Viewer snapshot construction read-only.
+
 ### TmuxControlClient (`CtrlxServerFeature/Services/TmuxControlClient.swift`)
 
 Actor managing a `tmux -C attach -f ignore-size` control connection for commands, event notifications, snapshots, and live pane output.
@@ -315,6 +432,18 @@ tmux ──pipe-pane──→ FIFO ──→ PipePaneReader ──OSC side effec
   projects, input, process discovery and plugin logs.
 - `CtrlxServerFeature/Plugins/AgentResponseSubmissionGuard.swift`: validates
   current request identity before delivering responses.
+- `CtrlxServerFeature/Plugins/PluginResponseContext.swift`: retains the original
+  physical pane, plugin, conversation and form request through response delivery.
+  Native core calls inherit the context; sidecars retain it through their ordered
+  response notifications. Each text/key sink revalidates it, and tmux checks the
+  actual server/pane identity in the same queue as the write. Live pane moves
+  remain valid; reconstructed terminals and retracted requests do not.
+
+Structured Viewer responses use the existing workspace-input capability to carry
+an optional expected pane identity. Old Hosts retain their compatibility path.
+iOS notification actions wait for the first usable pane snapshot as well as the
+encrypted connection before submitting. Submission still acknowledges transport,
+not native Agent consumption; persisted drafts are not cleared on that basis.
 
 `AppCoordinator.setupPluginRuntime()` wires these services. Shared state uses
 `AgentSession.pluginID` / `AgentState`; agent-specific payload parsing and
@@ -544,6 +673,11 @@ subsequent reconciliations need no further file-descriptor inspection. A native
 event arriving during recovery always takes precedence. Writes are serialized per pane and
 do not block live status/notification delivery.
 
+Workspace checkpoints cache only successfully verified resume descriptors for
+the same source and process incarnation. A failed native-history lookup remains
+visible in the saved pane and is retried on later checkpoints, because the
+history file may be written after the Agent's initial lifecycle notification.
+
 On iOS, open the window-title menu → **Fork → In Current Directory / In New
 Worktree…**. The selected pane is the default source when there are multiple
 recognized Agents. Mac and iOS share `AgentForkPanel`, including worktree review,
@@ -553,8 +687,13 @@ or touches local Git. Creation is serialized with New Terminal/New Agent. The
 returned pane is selected when state arrives, unless the user has manually
 changed windows or left the screen while creation was pending.
 
-`AgentForkService` rechecks the captured pane/window/session/Agent UUID/cwd on
-the Host before launching in a new window of the same tmux session. It uses
+`AgentForkService` rechecks the captured pane/window/session/Agent UUID/cwd and
+workspace incarnation through preparation, checkout and cached retries. Sources
+without the optional workspace identity still decode; the Host captures its
+current identity before asynchronous work. Actual creation guards both source
+pane and parent session in the tmux command queue. Mac/iOS retain the original
+Viewer binding and reject replaced sessions before adopting the returned pane
+or issuing delayed Fit. It launches in a new window of the same tmux session using
 `codex fork <UUID> -C <cwd>` or `claude --resume <UUID> --fork-session`, preserving
 the source's config root and existing telemetry shell integration. Configuration
 overrides are applied to the Agent invocation after login startup files, scoped
@@ -778,6 +917,13 @@ untouched. A real local clear pushes the existing session snapshot/badge update;
 a remote clear updates `SessionStore` and sends the existing `MarkHandled`
 command to its host. Dock totals and task markers continue to derive from these
 same stores. Regression coverage: `VisiblePaneAttentionTests`.
+
+Queued `MarkHandled` and Yolo toggles retain the pane identity observed by the
+caller. Capable Viewers reject a retired binding before transport, and the Host
+checks the supplied identity before clearing attention or enabling auto-approval.
+iOS detail services retain their original binding through teardown; an old service
+cannot clear a replacement pane's local attention state. Live moves of the same
+physical pane remain valid, and older peers keep the optional-identity path.
 
 ### SleepPreventionService (`CtrlxServerFeature/Managers/SleepPreventionManager.swift`)
 

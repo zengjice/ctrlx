@@ -188,7 +188,7 @@ enum MacOSAccessibility {
     /// status text — the press "succeeds" against static text and the menu
     /// never gets clicked. Returns false when no open menu contains a match.
     @discardableResult
-    static func pressMenuItem(appPID: pid_t, titled: String) -> Bool {
+    static func pressMenuItem(appPID: pid_t, titled: String, allowMouseFallback: Bool = true) -> Bool {
         let unscoped = findAllRawElements(appPID: appPID, matching: .anyTextMatches(titled))
         let matches = unscoped.filter(hasMenuAncestor)
         guard !matches.isEmpty else {
@@ -209,10 +209,30 @@ enum MacOSAccessibility {
             return true
         }
 
+        guard allowMouseFallback else { return false }
         logger.info("pressMenuItem: AXPress failed for '\(titled)', falling back to CGEvent click")
         if let center = matches.lazy.compactMap({ centerOfElement($0) }).first {
             clickAtPoint(center)
             return true
+        }
+        return false
+    }
+
+    /// Requests the matched control's native context menu without global mouse input.
+    /// The caller must observe the menu: modal tracking can time out the AX reply
+    /// even when the menu opened successfully.
+    static func requestContextMenu(appPID: pid_t, titled: String) -> Bool {
+        let matches = findAllRawElements(appPID: appPID, matching: .anyTextMatches(titled))
+        let (buttons, others) = partitionByRole(matches)
+        for element in buttons + others {
+            var actions: CFArray?
+            guard
+                AXUIElementCopyActionNames(element, &actions) == .success,
+                (actions as? [String])?.contains(kAXShowMenuAction) == true else { continue }
+            AXUIElementSetMessagingTimeout(element, 0.5)
+            let result = AXUIElementPerformAction(element, kAXShowMenuAction as CFString)
+            logger.info("Requested AXShowMenu for '\(titled)' (PID \(appPID), result \(result.rawValue))")
+            return result == .success || result == .cannotComplete
         }
         return false
     }
@@ -693,6 +713,20 @@ enum MacOSAccessibility {
     }
 
     // MARK: - Private: Root Elements
+
+    /// Read the focused process directly; System Events can resolve a same-named
+    /// application's object specifier to a different running instance.
+    static func focusedAppPID() -> pid_t? {
+        var value: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as CFString, &value
+            ) == .success,
+            let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(value as! AXUIElement, &pid) == .success else { return nil }
+        return pid
+    }
 
     /// Collect all root-level AXUIElements for the app, combining both
     /// `kAXChildren` and `kAXWindows` to cover popovers, sheets, and dialogs.

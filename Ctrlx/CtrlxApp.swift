@@ -29,7 +29,8 @@ struct CtrlxApp: App {
 
         // E2E test support: use in-memory storage to avoid polluting real UserDefaults/Keychain
         if CommandLine.arguments.contains("--e2e-test") {
-            let prefs = PreferencesService.inMemory()
+            let restartStorage = E2EPersistentStorage.fromArguments()
+            let prefs = restartStorage?.preferences ?? PreferencesService.inMemory()
 
             // E2E test support: override server URL via launch argument
             if let idx = CommandLine.arguments.firstIndex(of: "--server-url"),
@@ -40,7 +41,7 @@ struct CtrlxApp: App {
 
             prepareDependencies {
                 $0[PreferencesService.self] = prefs
-                $0[SecretsService.self] = .inMemory()
+                $0[SecretsService.self] = restartStorage?.secrets ?? .inMemory()
             }
 
             #if DEBUG

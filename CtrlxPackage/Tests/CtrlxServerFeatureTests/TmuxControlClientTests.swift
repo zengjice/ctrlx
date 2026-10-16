@@ -19,21 +19,22 @@
         var terminations: [PipePaneReaderTermination] = []
 
         func pipePaneReader(
-            _ paneId: String,
+            _ reader: PipePaneReader,
+            paneId: String,
             didReceiveNotification notification: TerminalStreamMessage.TerminalNotification
         ) {
             notifications.append(notification)
         }
 
-        func pipePaneReader(_ paneId: String, didReceiveTitle title: String) {
+        func pipePaneReader(_ reader: PipePaneReader, paneId: String, didReceiveTitle title: String) {
             titles.append(title)
         }
 
-        func pipePaneReader(_ paneId: String, didReceiveClipboard content: String) {
+        func pipePaneReader(_ reader: PipePaneReader, paneId: String, didReceiveClipboard content: String) {
             clipboards.append(content)
         }
 
-        func pipePaneReader(_ paneId: String, didReceiveProgress progress: TerminalProgressState) {
+        func pipePaneReader(_ reader: PipePaneReader, paneId: String, didReceiveProgress progress: TerminalProgressState) {
             self.progress.append(progress)
         }
 
@@ -240,6 +241,8 @@
                     try await client.connect(sessionTarget: created.sessionName)
                     let firstPID = try #require(await client.testProcessIdentifier)
                     #expect(processExists(firstPID))
+                    let firstFlags = try await client.sendCommand("display-message -p '#{client_flags}'")
+                    #expect(firstFlags.output.split(separator: ",").contains("ignore-size"))
 
                     await client.disconnect()
                     #expect(await client.testProcessIdentifier == nil)
@@ -251,6 +254,8 @@
                     let secondPID = try #require(await client.testProcessIdentifier)
                     #expect(secondPID != firstPID)
                     #expect(processExists(secondPID))
+                    let secondFlags = try await client.sendCommand("display-message -p '#{client_flags}'")
+                    #expect(secondFlags.output.split(separator: ",").contains("ignore-size"))
                     await client.disconnect()
                     #expect(!processExists(secondPID))
 
@@ -755,7 +760,10 @@
                 let reader = PipePaneReader(paneId: "%5")
                 let path = await reader.testFifoPath
                 let expectedDir = FileManager.default.temporaryDirectory.path
-                #expect(path == "\(expectedDir)/ctrlx-pipe-5.fifo")
+                #expect(path.hasPrefix("\(expectedDir)/ctrlx-pipe-5-"))
+                #expect(path.hasSuffix(".fifo"))
+                let replacement = PipePaneReader(paneId: "%5")
+                #expect(await replacement.testFifoPath != path)
             }
         }
 

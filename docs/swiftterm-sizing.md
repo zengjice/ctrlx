@@ -389,6 +389,11 @@ target only after its resize succeeds. Failed and unattempted targets remain ret
 by a new click; geometry/snapshot updates alone never retry them. Each plan captures
 its Host, session and window before awaiting, so completion cannot update a newly
 selected target's baseline. Hosts, tabs and scenes keep separate baselines.
+With workspace identities, the plan also retains its original physical window.
+The Host checks that identity in the tmux queue both when reading the layout and
+when applying the resize. A restarted server or reused window ID rejects the old
+plan; selecting another pane in the same live window does not. Viewer automatic
+Fit waits for usable identity metadata before consuming its pending request.
 The click waits for the system double-click interval and excludes drag/word/row
 selection, links, modifiers, mouse-reporting terminal apps, voice holds and IME
 composition. Typing, scrolling, hiding/removing the terminal or losing focus cancels

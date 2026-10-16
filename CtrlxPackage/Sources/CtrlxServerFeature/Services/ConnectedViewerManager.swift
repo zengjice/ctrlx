@@ -303,12 +303,13 @@ final public class ConnectedViewerManager {
     /// Send terminal stream data only to viewers subscribed to its pane.
     public func sendTerminalStream(
         _ streamMessage: TerminalStreamMessage,
-        to viewerIds: Set<String>
+        to viewerIds: Set<String>,
+        leaseIDs: [String: UUID] = [:]
     ) async {
         // Admission is synchronous on the main actor. Child tasks can run in any
         // order, so they must not be responsible for enqueueing terminal bytes.
         let sends = viewerIds.compactMap { viewerId in
-            connections[viewerId]?.enqueueTerminalStream(streamMessage)
+            connections[viewerId]?.enqueueTerminalStream(streamMessage.withLeaseId(leaseIDs[viewerId]))
         }
         await withTaskGroup(of: Void.self) { group in
             for send in sends {

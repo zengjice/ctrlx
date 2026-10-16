@@ -82,12 +82,26 @@ final public class FileBrowserTab: Identifiable {
         sourcePaneID = tab.sourcePaneID
     }
 
-    public convenience init(snapshot: Snapshot) {
-        // Pane IDs are process-lifetime handles, never persisted/rebound after restart.
-        self.init(id: snapshot.id, path: snapshot.path)
-        self.includeHidden = snapshot.includeHidden
-        self.expanded = Set(snapshot.expanded)
-        self.selectedFile = snapshot.selectedFile
+    public convenience init(snapshot: Snapshot, sourcePaneID: String? = nil) {
+        self.init(id: snapshot.id, path: snapshot.path, sourcePaneID: sourcePaneID)
+        restoreNavigation(snapshot)
+    }
+
+    /// Restore private navigation only after the caller verifies the source.
+    /// Host ownership and request/download state are deliberately kept live.
+    public func restoreNavigation(_ snapshot: Snapshot) {
+        guard snapshot.id == id else { return }
+        if path != snapshot.path {
+            navigate(snapshot.path)
+        }
+        includeHidden = snapshot.includeHidden
+        expanded = Set(snapshot.expanded)
+        selectedFile = snapshot.selectedFile
+    }
+
+    public func restoreSourcePane(_ paneID: String?) {
+        guard hostTab == nil else { return }
+        sourcePaneID = paneID
     }
 
     public func releasePreview() {

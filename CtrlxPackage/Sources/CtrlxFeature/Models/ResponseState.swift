@@ -28,10 +28,13 @@ final public class ResponseState {
     /// Whether the stop hook summary section is expanded (used by StopResponseView).
     public var isSummaryExpanded = false
 
-    /// Unsubmitted text for the synthesized reply-after-stop composer. Keeping
-    /// this on the per-turn response state lets a handled flip preserve the
-    /// draft, while a real `working` transition discards it with the state.
-    public var replyDraft = ""
+    /// Unsubmitted composer text, or free-text answers extracted from a blocking
+    /// form. Recovery stores only text, never approvals or request continuations.
+    public let recoveryDraftID = UUID()
+    @ObservationIgnored var onReplyDraftChange: ((String) -> Void)?
+    public var replyDraft = "" {
+        didSet { onReplyDraftChange?(replyDraft) }
+    }
 
     /// Reference to the session store for persistence
     private weak var sessionStore: SessionStore?

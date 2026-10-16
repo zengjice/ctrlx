@@ -19,6 +19,10 @@ public struct PaneInfo: Identifiable, Sendable, Hashable {
     public let windowIndex: Int
     /// tmux's stable window id (for example `@3`).
     public let tmuxWindowId: String?
+    public let workspaceIdentity: WorkspacePaneIdentity?
+    /// Available before recovery UUIDs have been assigned to the pane.
+    public let tmuxServerID: String?
+    let tmuxSessionID: String?
     /// The pane index within the window
     public let paneIndex: Int
     /// The command currently running in the pane
@@ -80,13 +84,19 @@ public struct PaneInfo: Identifiable, Sendable, Hashable {
         isWindowActive: Bool = false,
         customDescription: String? = nil,
         customColor: SessionColor? = nil,
-        customEmoji: String? = nil
+        customEmoji: String? = nil,
+        workspaceIdentity: WorkspacePaneIdentity? = nil,
+        tmuxServerID: String? = nil,
+        tmuxSessionID: String? = nil
     ) {
         self.paneId = paneId
         self.target = target
         self.sessionName = sessionName
         self.windowIndex = windowIndex
         self.tmuxWindowId = tmuxWindowId
+        self.workspaceIdentity = workspaceIdentity
+        self.tmuxServerID = tmuxServerID ?? workspaceIdentity?.serverID
+        self.tmuxSessionID = tmuxSessionID
         self.paneIndex = paneIndex
         self.command = command
         self.currentPath = currentPath
@@ -123,7 +133,8 @@ public extension PaneInfo {
     /// Expected field order (separated by `fieldSeparator`):
     /// id, session, window, pane, command, path, width, height, active,
     /// title, layout, windowName, windowActive, customColor, customEmoji,
-    /// customDescription, tmuxWindowId.
+    /// customDescription, tmuxWindowId, tmuxServerID, persistent session/window/pane UUIDs,
+    /// tmuxSessionID. Trailing identity fields are optional for legacy records.
     init?(fromTmuxOutput line: String) {
         let components = line.split(separator: Self.fieldSeparator, omittingEmptySubsequences: false).map(String.init)
         guard components.count >= 9 else { return nil }
@@ -178,6 +189,17 @@ public extension PaneInfo {
             self.customDescription = nil
         }
         self.target = "\(sessionName):\(windowIndex).\(paneIndex)"
+        self.tmuxServerID = components.count > 17 && !components[17].isEmpty ? components[17] : nil
+        self.tmuxSessionID = components.count > 21 && !components[21].isEmpty ? components[21] : nil
+        if
+            components.count >= 21, !components[17].isEmpty,
+            let session = UUID(uuidString: components[18]),
+            let window = UUID(uuidString: components[19]),
+            let pane = UUID(uuidString: components[20]) {
+            self.workspaceIdentity = .init(serverID: components[17], sessionID: session, windowID: window, paneID: pane)
+        } else {
+            self.workspaceIdentity = nil
+        }
     }
 
     /// Creates a new PaneState from this pane's metadata.
@@ -200,7 +222,8 @@ public extension PaneInfo {
             isWindowActive: isWindowActive,
             customDescription: customDescription,
             customColor: customColor,
-            customEmoji: customEmoji
+            customEmoji: customEmoji,
+            workspaceIdentity: workspaceIdentity
         )
     }
 
@@ -208,6 +231,11 @@ public extension PaneInfo {
     /// Claude session, terminal title, yolo mode, and other runtime state.
     @discardableResult
     func updateMetadata(of state: inout PaneState) -> Bool {
+        if let previous = state.workspaceIdentity, !previous.isSamePane(as: workspaceIdentity) {
+            // A reused tmux number must not inherit an old Agent, request or editor.
+            state = makePaneState()
+            return true
+        }
         guard
             state.target != target
             || state.sessionName != sessionName
@@ -225,6 +253,7 @@ public extension PaneInfo {
             || state.customDescription != customDescription
             || state.customColor != customColor
             || state.customEmoji != customEmoji
+            || state.workspaceIdentity != workspaceIdentity
         else { return false }
 
         state.target = target
@@ -243,6 +272,7 @@ public extension PaneInfo {
         state.customDescription = customDescription
         state.customColor = customColor
         state.customEmoji = customEmoji
+        state.workspaceIdentity = workspaceIdentity
         return true
     }
 }

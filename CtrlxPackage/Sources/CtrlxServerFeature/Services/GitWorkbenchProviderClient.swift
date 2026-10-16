@@ -32,7 +32,7 @@ public struct GitWorkbenchProviderClient: Sendable {
 extension GitWorkbenchProviderClient: DependencyKey {
     /// Live provider backed by the system `git` CLI.
     public static let liveValue = GitWorkbenchProviderClient { url in
-        CLIGitProvider(repositoryURL: url)
+        WorkspaceGitProvider.live(base: CLIGitProvider(repositoryURL: url), directory: url.path)
     }
 
     /// Deterministic fixtures for previews. `.zero` artificial latency means the

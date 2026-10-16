@@ -61,7 +61,10 @@ Scans `~/.codex/sessions/` (or `$CODEX_HOME/sessions/`) date-partitioned rollout
 Codex keeps `~/.ctrlx/codex-sessions/<tmux_pane>.json` (`{session_id, cwd,
 started_at}`), written on a session-start event that carries a `TMUX_PANE`. When a
 later frame omits the pane, the core resolves it by `session_id` from this store.
-The app does not know about this file.
+The app does not know about this file. A non-default `PluginEnv.stateDir` stores
+these records in its own `codex-sessions/` subdirectory, so isolated Hosts cannot
+reconcile or remove each other's records when tmux pane numbers overlap. The
+default installed Host keeps the legacy location above.
 
 ## Ingress bridge (install)
 `install()` writes `codex-hook-bridge.py` into the plugin state dir and registers it

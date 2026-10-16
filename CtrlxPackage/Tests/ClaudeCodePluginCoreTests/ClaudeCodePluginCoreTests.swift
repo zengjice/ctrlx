@@ -1,8 +1,8 @@
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
-import CtrlxPluginProtocol
 import Testing
 @testable import ClaudeCodePluginCore
 
@@ -10,6 +10,81 @@ import Testing
 /// by the translator / keystroke / scanner / installer suites).
 @Suite("ClaudeCodePluginCore")
 struct ClaudeCodePluginCoreTests {
+    @Test("Verified Claude recovery binds automatic support to the recorded CLI version")
+    func nativeResumeVerifiedVersion() async throws {
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { _, roots, _ in try #require(roots.first) }
+        } operation: {
+            let core = ClaudeCodePluginCore()
+            let descriptor = try await core.recoveryDescriptor(sessionID: UUID().uuidString, projectPath: "/project", invocation: .init(executable: "/tools/claude", arguments: [], version: "2.1.276 (Claude Code)"))
+            #expect(descriptor.automaticResumeUnavailableReason == nil)
+            #expect(descriptor.cliVersion == "2.1.276 (Claude Code)")
+            #expect(try await core.commandForResume(descriptor).command.args == ["--resume", descriptor.sessionID])
+        }
+    }
+
+    @Test("An explicitly set Claude root stays explicit even when it is the default directory")
+    func nativeResumeInvocation() async throws {
+        let id = UUID().uuidString
+        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").resolvingSymlinksInPath().path
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { _, roots, _ in
+                #expect(roots == [root])
+                return root
+            }
+        } operation: {
+            let core = ClaudeCodePluginCore()
+            let descriptor = try await core.recoveryDescriptor(sessionID: id, projectPath: "/project", invocation: .init(executable: "/tools/claude", arguments: ["--resume", "old-id", "--fork-session", "--model", "sonnet", "--permission-mode", "plan", "private prompt"], configurationRoots: ["CLAUDE_CONFIG_DIR": root], version: "fixture-version"))
+            #expect(!descriptor.usesDefaultConfiguration)
+            #expect(descriptor.automaticResumeUnavailableReason != nil)
+            let launch = try await core.commandForResume(descriptor)
+            #expect(launch.command.command == "/tools/claude")
+            #expect(launch.command.args == ["--resume", id, "--model", "sonnet", "--permission-mode", "plan"])
+            #expect(launch.command.env == ["CLAUDE_CONFIG_DIR": root] && launch.unsetEnvironment.isEmpty)
+            let encoded = try String(decoding: JSONEncoder().encode(descriptor), as: UTF8.self)
+            #expect(!encoded.contains("private prompt") && !encoded.contains("old-id"))
+            await #expect(throws: AgentResumeConfigurationError.self) {
+                try await core.recoveryDescriptor(sessionID: id, projectPath: "/project", invocation: .init(executable: "/tools/claude", arguments: ["--settings", "/temporary/settings.json"], configurationRoots: ["CLAUDE_CONFIG_DIR": root]))
+            }
+        }
+    }
+
+    @Test("Recovery preserves Claude default/custom configuration semantics and never forks", arguments: [false, true])
+    func nativeResume(defaultConfiguration: Bool) async throws {
+        let id = UUID().uuidString
+        let root = defaultConfiguration
+            ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").resolvingSymlinksInPath().path
+            : "/Host/original claude"
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { sessionID, _, layout in
+                #expect(sessionID == id && layout == .claude)
+                return root
+            }
+        } operation: {
+            let core = ClaudeCodePluginCore()
+            try await core.initialize(makeEnv(settings: JSONEncoder().encode(ClaudeCodeSettings(autoRun: false))), host: MockPluginHost())
+            let descriptor = try await core.recoveryDescriptor(sessionID: id, projectPath: "/Host/project")
+            _ = try await core.applySettings(JSONEncoder().encode(ClaudeCodeSettings(commandPath: "/tools/claude", autoRun: false, additionalConfigFolders: ["/Host/another account"])))
+            let resumed = try await withDependencies {
+                $0[AgentForkHistoryClient.self].root = { sessionID, roots, _ in
+                    #expect(sessionID == id && roots == [root])
+                    return root
+                }
+            } operation: { try await core.commandForResume(descriptor) }
+            #expect(resumed.command.command == "/tools/claude")
+            #expect(resumed.command.args == ["--resume", id])
+            #expect(resumed.command.env == (defaultConfiguration ? [:] : ["CLAUDE_CONFIG_DIR": root]))
+            #expect(resumed.unsetEnvironment == (defaultConfiguration ? ["CLAUDE_CONFIG_DIR"] : []))
+            await #expect(throws: AgentForkError.self) {
+                try await withDependencies {
+                    $0[AgentForkHistoryClient.self].root = { _, _, _ in throw AgentForkError("History removed") }
+                } operation: { try await core.commandForResume(descriptor) }
+            }
+            await #expect(throws: AgentForkError.self) { try await core.recoveryDescriptor(sessionID: "--continue", projectPath: "/Host/project") }
+            await core.shutdown()
+        }
+    }
+
     @Test("Native Fork resumes the exact ID into a new conversation, preserving custom config root with Auto-run off")
     func nativeFork() async throws {
         let id = UUID().uuidString

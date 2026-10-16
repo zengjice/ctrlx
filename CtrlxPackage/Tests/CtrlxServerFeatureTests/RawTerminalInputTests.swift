@@ -53,7 +53,7 @@
                     return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
                 }
             } operation: {
-                let executor = TmuxCommandExecutor(tmuxService: TmuxService(tmuxPath: "/unused")) { pane, bytes in
+                let executor = TmuxCommandExecutor(tmuxService: TmuxService(tmuxPath: "/unused")) { pane, bytes, _ in
                     #expect(pane == "%7")
                     #expect(bytes == data)
                     calls.withValue { $0 += 1 }
@@ -103,7 +103,7 @@
                     return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
                 }
             } operation: {
-                let executor = TmuxCommandExecutor(tmuxService: TmuxService(tmuxPath: "/unused")) { _, _ in
+                let executor = TmuxCommandExecutor(tmuxService: TmuxService(tmuxPath: "/unused")) { _, _, _ in
                     switch failure {
                     case 0: throw TmuxControlError.timeout
                     case 1: throw CocoaError(.fileWriteUnknown)
@@ -166,7 +166,7 @@
                         // TmuxService captures its dependency at init, so use this
                         // scoped instance for the executor's fallback spy as well.
                         let inputTmux = TmuxService(tmuxPath: tmuxPath, socketPath: socket)
-                        let executor = TmuxCommandExecutor(tmuxService: inputTmux) { pane, bytes in
+                        let executor = TmuxCommandExecutor(tmuxService: inputTmux) { pane, bytes, _ in
                             try await streams.sendRawBytesIfConnected(paneId: pane, data: bytes)
                         }
                         let started = ContinuousClock.now

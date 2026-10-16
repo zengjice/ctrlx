@@ -43,6 +43,40 @@ graph TB
     TS --> IV
 ```
 
+## Subscription identity during workspace recovery
+
+`StartTerminalStream` and `StopTerminalStream` carry the Viewer's lease UUID.
+Hosts advertising `supportsTerminalStreamIdentity` also include that lease in
+**every** `TerminalStreamMessage`. Each Viewer's lease is stamped before its
+ordered send queue admits the frame. Snapshot metadata and chunks use the same
+captured lease even if a replacement starts while transmission is suspended.
+Mac and iOS discard frames for an obsolete lease; capable Hosts cannot fall back
+to untagged frames. The optional fields preserve old-peer decoding and the
+legacy Host path.
+
+A start request also keeps its original workspace pane binding. Guarded capture
+checks the server incarnation and persistent pane ID in the same tmux command
+batch as history, visible cells and cursor. Bootstrap boundaries and completion
+barriers cannot activate a replacement lease. Discovery retires guarded streams
+when the actual pane identity changes, including reused runtime numbers.
+
+The control manager reads the actual tmux server identity on each new connection.
+Output and dimension callbacks carry that connection's identity; a retired
+connection cannot keep publishing callbacks. Readers accept only their own
+server's output, including panes which do not yet have recovery UUIDs. A
+same-server reconnect gates output behind a new snapshot to recover missed bytes.
+
+Reader creation and replacement share a per-pane operation gate. Fresh starts
+resolve the pane's live session route, rather than requiring the old session to
+exist. Reader cleanup is pinned to its original server. Each reader has a private
+FIFO filename, and queued OSC callbacks include the exact reader instance, so
+late cleanup/events cannot affect its replacement. Mac native terminal views
+also change lifetime when the server/persistent pane identity changes; view
+teardown cancels pending bootstrap and releases any late subscription result.
+
+The remaining signed-App recovery acceptance is tracked in
+`v3.0.76/STAGE4_TODO.md`.
+
 ## Component Details
 
 ### 1. Tmux Data Capture (Mac)
@@ -87,7 +121,7 @@ sequenceDiagram
 - `CtrlxServerFeature/Services/TmuxService.swift`
 
 **PipePaneReader** is an actor that:
-- Manages a per-pane FIFO (`/tmp/ctrlx-pipe-<id>.fifo`) for scan-only OSC parsing. One reader instance per tmux pane lives for the pane's full lifetime
+- Manages a per-pane FIFO (`/tmp/ctrlx-pipe-<id>-<reader-uuid>.fifo`) for scan-only OSC parsing. One reader instance per tmux pane lives for the pane's full lifetime
 - Reads raw PTY bytes via `pipe-pane -O` piped through the FIFO
 - Parses OSC 9/777/9;4/0/2/52 notification, title, clipboard, and progress events without rebuilding terminal data
 - Uses AsyncStream + single consumer task for strict FIFO ordering of data chunks

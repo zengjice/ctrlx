@@ -8,7 +8,8 @@ struct TerminalCloseConfirmationTests {
     func targetSnapshot() {
         let confirmation = TerminalCloseConfirmation(
             target: (hostId: "office", sessionName: "coding"),
-            runningProcesses: [process(paneIndex: 0, name: "codex")]
+            runningProcesses: [process(paneIndex: 0, name: "codex")],
+            inputBinding: .legacy(pairID: "office")
         )
 
         #expect(confirmation.target.hostId == "office")
@@ -25,7 +26,8 @@ struct TerminalCloseConfirmationTests {
                 process(paneIndex: 0, name: "node"),
                 process(paneIndex: 0, name: "codex"),
                 process(paneIndex: 0, name: "node"),
-            ]
+            ],
+            inputBinding: .legacy(pairID: "office")
         )
 
         #expect(confirmation.message == "The following processes are still running:\nTerminal 0: codex, node\nTerminal 2: sleep")

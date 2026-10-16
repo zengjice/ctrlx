@@ -17,8 +17,14 @@ struct AgentForkTests {
 
     @Test("Only recognized native Agent conversations can be forked; window reordering preserves identity")
     func sourceIdentity() throws {
-        var pane = PaneState(paneId: "%12", sessionName: "work", tmuxWindowId: "@4", currentPath: "/repo",
-                             agentSession: .init(paneId: "%12", pluginID: "codex"), claudeSessionID: UUID().uuidString)
+        var pane = PaneState(
+            paneId: "%12",
+            sessionName: "work",
+            tmuxWindowId: "@4",
+            currentPath: "/repo",
+            agentSession: .init(paneId: "%12", pluginID: "codex"),
+            claudeSessionID: UUID().uuidString
+        )
         let source = try #require(AgentForkSource(pane: pane))
         pane.windowIndex = 10
         #expect(AgentForkSource(pane: pane) == source)
@@ -33,10 +39,50 @@ struct AgentForkTests {
         #expect(AgentForkSource(pane: pane) == nil)
     }
 
+    @Test("Fork source retains workspace identity and accepts omitted identity only from legacy requests")
+    func workspaceIdentityWire() throws {
+        let identity = WorkspacePaneIdentity(serverID: "11:22", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        var pane = PaneState(
+            paneId: "%1",
+            sessionName: "work",
+            tmuxWindowId: "@2",
+            currentPath: "/repo",
+            agentSession: .init(paneId: "%1", pluginID: "codex"),
+            claudeSessionID: UUID().uuidString,
+            workspaceIdentity: identity
+        )
+        let current = try #require(AgentForkSource(pane: pane))
+        let data = try JSONEncoder().encode(current)
+        let decoded = try JSONDecoder().decode(AgentForkSource.self, from: data)
+        #expect(decoded.workspaceIdentity == identity)
+        #expect(decoded == current)
+        var legacyJSON = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacyJSON.removeValue(forKey: "workspaceIdentity")
+        let legacy = try JSONDecoder().decode(AgentForkSource.self, from: JSONSerialization.data(withJSONObject: legacyJSON))
+        #expect(legacy.workspaceIdentity == nil)
+        #expect(legacy.matches(current))
+        #expect(!current.matches(legacy))
+        pane.workspaceIdentity?.serverID = "33:44"
+        let restored = try #require(AgentForkSource(pane: pane))
+        #expect(!current.matches(restored))
+        #expect(current != restored)
+        struct LegacySource: Decodable {
+            let paneID, sessionID, pluginID, sessionName, windowID, workingDirectory: String
+        }
+        let oldPeer = try JSONDecoder().decode(LegacySource.self, from: data)
+        #expect(oldPeer.paneID == current.paneID && oldPeer.sessionID == current.sessionID)
+    }
+
     @Test("Native UUID, Host scope and worktree options survive the command wire")
     func wire() throws {
-        let source = try #require(AgentForkSource(pane: .init(paneId: "%9", sessionName: "office", tmuxWindowId: "@3", currentPath: "/repo 'space'",
-            agentSession: .init(paneId: "%9", pluginID: "claude-code"), claudeSessionID: UUID().uuidString)))
+        let source = try #require(AgentForkSource(pane: .init(
+            paneId: "%9",
+            sessionName: "office",
+            tmuxWindowId: "@3",
+            currentPath: "/repo 'space'",
+            agentSession: .init(paneId: "%9", pluginID: "claude-code"),
+            claudeSessionID: UUID().uuidString
+        )))
         let request = ForkAgentSession(source: source, windowName: "feature", worktree: .init(name: "feature", expectedHead: "abc", allowUncommittedChanges: true))
         let command = CommandMessage(paneId: "", command: request.commandType)
         let decoded = try JSONDecoder().decode(CommandMessage.self, from: JSONEncoder().encode(command))
@@ -77,7 +123,9 @@ struct AgentForkTests {
 
     @Test("Worktree names cannot escape the primary repository or become Git options")
     func worktreeNames() {
-        for name in ["codex-123", "feature.x", "fix_42"] { #expect(AgentForkWorktree.isValidName(name)) }
+        for name in ["codex-123", "feature.x", "fix_42"] {
+            #expect(AgentForkWorktree.isValidName(name))
+        }
         for name in ["", "..", ".hidden", "../other", "a/b", "--force", "a b", "a\n", "HEAD", "a..b", "a.", "a.lock", String(repeating: "x", count: 81)] {
             #expect(!AgentForkWorktree.isValidName(name))
         }

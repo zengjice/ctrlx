@@ -1,8 +1,10 @@
+import CtrlxCommon
 import CtrlxNetworking
 
 struct TerminalCloseConfirmation<Target> {
     let target: Target
     let runningProcesses: [RunningProcessInfo]
+    let inputBinding: ViewerWorkspaceInputBinding
 
     var message: String {
         let grouped = Dictionary(grouping: runningProcesses) { $0.paneIndex }

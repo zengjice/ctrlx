@@ -26,8 +26,9 @@ extension FileBrowserClient: DependencyKey {
 }
 
 extension FileBrowserSource {
-    static func local(paneID: String?, tmux: TmuxService, windows: MirrorWindowManager) -> Self {
-        Self(id: "local", paneID: paneID, createDirectory: { request in
+    static func local(paneID: String?, tmux: TmuxService, windows: MirrorWindowManager, expectedWorkspacePane: WorkspacePaneIdentity? = nil) -> Self {
+        let identity = expectedWorkspacePane ?? paneID.flatMap { windows.paneStates[$0]?.workspaceIdentity }
+        return Self(id: "local", paneID: paneID, createDirectory: { request in
             @Dependency(SessionDirectoryClient.self) var client
             return try await client.create(request)
         }, localFileURL: { info in
@@ -35,45 +36,75 @@ extension FileBrowserSource {
             return try await client.localFileURL(info)
         }) { operation in
             @Dependency(FileBrowserClient.self) var client
-            if case let .repositoryInfo(path, context) = operation {
-                @MainActor
-                func isCurrent() -> Bool {
-                    guard let paneID, let pane = windows.paneStates[paneID] else { return false }
-                    return RepositoryFileContext(pane: pane) == context
-                }
-                guard isCurrent() else { throw FileBrowserError.message("The source Agent's workspace changed. Open a link from the current session.") }
-                let entry = try await client.repositoryFile(path, context.projectDirectory)
+
+            @MainActor
+            func validateSource() throws {
                 try Task.checkCancellation()
-                guard isCurrent() else { throw FileBrowserError.message("The source Agent's workspace changed. Try again.") }
-                return .info(entry)
+                guard operation.usesSourcePane else { return }
+                let pane = paneID.flatMap { windows.paneStates[$0] }
+                guard identity?.isSamePane(as: pane?.workspaceIdentity) ?? (pane?.workspaceIdentity == nil) else {
+                    throw FileBrowserError.message("The source terminal changed. Select the restored terminal and try again.")
+                }
+                if case let .repositoryInfo(_, context) = operation {
+                    guard let pane, RepositoryFileContext(pane: pane) == context else {
+                        throw FileBrowserError.message("The source Agent's workspace changed. Open a link from the current session.")
+                    }
+                }
             }
-            var request = operation
-            if case let .list(nil, offset, hidden) = operation {
-                // Resolve only at open/explicit follow. A later cd must not move an
-                // already open browser, and each split must use its own pane ID.
-                var candidates: [String] = []
-                if let paneID, paneID.hasPrefix("%"), paneID.dropFirst().allSatisfy(\.isNumber) {
-                    if let path = windows.paneStates[paneID]?.agentSession?.detectedProjectPath {
+
+            @MainActor
+            func sourceDirectory() async throws -> String? {
+                guard let paneID, paneID.first == "%", UInt64(paneID.dropFirst()) != nil else { return nil }
+                let read = ["display-message", "-p", "-t", paneID, "#{pane_current_path}"]
+                let arguments = try identity.map { try WorkspaceTerminalInputGuard.arguments(target: paneID, identity: $0, commands: [read]) } ?? read
+                let result = try await tmux.runTmuxCommand(arguments)
+                try validateSource()
+                if identity != nil {
+                    guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
+                    try WorkspaceTerminalInputGuard.validate(output: result.stdoutString)
+                }
+                return result.isSuccess ? result.stdoutString.trimmingCharacters(in: .newlines) : nil
+            }
+
+            try validateSource()
+            let response: FileBrowserResponse
+            if case let .repositoryInfo(path, context) = operation {
+                response = try await .info(client.repositoryFile(path, context.projectDirectory))
+            } else {
+                var request = operation
+                if case let .list(nil, offset, hidden) = operation {
+                    // Resolve only at open/explicit follow. A later cd must not move an
+                    // already open browser, and each split must use its own pane ID.
+                    var candidates: [String] = []
+                    if let paneID, let path = windows.paneStates[paneID]?.agentSession?.detectedProjectPath {
                         candidates.append(path)
                     }
-                    let result = try await tmux.runTmuxCommand(["display-message", "-p", "-t", paneID, "#{pane_current_path}"])
-                    if result.isSuccess {
-                        candidates.append(result.stdoutString.trimmingCharacters(in: .newlines))
+                    if let path = try await sourceDirectory() {
+                        candidates.append(path)
                     }
+                    candidates.append("~/")
+                    @Dependency(SessionDirectoryClient.self) var directories
+                    var directory: String?
+                    for candidate in candidates {
+                        do { directory = try await directories.resolve(candidate)
+                            break
+                        } catch is CancellationError { throw CancellationError() }
+                        catch { continue } // A deleted cwd falls back to Home.
+                    }
+                    guard let directory else { throw FileBrowserError.message("The Host home directory is unavailable.") }
+                    try validateSource()
+                    request = .list(path: directory, offset: offset, includeHidden: hidden)
                 }
-                candidates.append("~/")
-                @Dependency(SessionDirectoryClient.self) var directories
-                var directory: String?
-                for candidate in candidates {
-                    do { directory = try await directories.resolve(candidate)
-                        break
-                    } catch is CancellationError { throw CancellationError() }
-                    catch { continue } // A closed pane/deleted cwd falls back to Home.
-                }
-                guard let directory else { throw FileBrowserError.message("The Host home directory is unavailable.") }
-                request = .list(path: directory, offset: offset, includeHidden: hidden)
+                response = try await client.request(request)
             }
-            return try await client.request(request)
+            try validateSource()
+            if operation.usesSourcePane, identity != nil {
+                // The published pane cache can lag behind a tmux restart. Check the
+                // actual server again before returning a source-derived result.
+                _ = try await sourceDirectory()
+                try Task.checkCancellation()
+            }
+            return response
         }
     }
 }

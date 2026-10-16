@@ -88,9 +88,126 @@ The `SimulatorDriver` manages the runner lifecycle:
 4. Sends the target app's `bundleId` in requests so the runner inspects the correct app
 5. Kills the runner process on cleanup
 
+### Mac process targeting
+
+Context-menu actions prefer the target process's `AXShowMenu` and an observed
+menu item. A modal menu can open even when the AX action returns
+`cannotComplete`; that return alone is not success. Controls without that action
+use mouse input only after checking the focused application's PID through the
+system-wide Accessibility element. Do not infer that PID from a System Events
+application-process name: multiple running copies of CtrlX can resolve to the
+wrong same-named instance. `NSRunningApplication.isActive` is also cached until
+its caller's main run loop advances.
+
 ### Storage isolation
 
 Both apps accept `--e2e-test` as a launch argument. When present, `prepareDependencies` (swift-dependencies) overrides `PreferencesService` and `SecretsService` with in-memory implementations. This prevents E2E tests from writing to real UserDefaults or Keychain.
+
+Restart scenarios can opt into the `persistent-e2e-storage` tag. The runner
+adds `--e2e-persistent-storage`; together with `--e2e-test` and an explicit
+`--ctrlx-state-root`, this stores fixture preferences and pairing keys in
+`e2e-storage.json` under that instance's private root (directory 0700, file 0600).
+It permits real encrypted reconnection after App relaunch without using the
+installed App's UserDefaults or Keychain. A missing root argument or corrupt
+fixture file fails the test setup. The default remains
+in-memory, and production launches do not opt into this store. On iOS the runner
+creates a unique root inside the installed Simulator app's data container,
+exposes it as `${iosStateRoot}` and removes it after terminating the test app.
+Use a disposable Simulator for recovery acceptance.
+
+### Recovery with native Agent iOS
+
+`Workspace Linked Windows` checks two sessions sharing a physical split tmux
+window at different indexes. It preserves the existing deduplicated UI and
+physical-window ownership across App restart and simulated boot reconstruction;
+it does not add a second presentation of the same pane for every tmux link.
+
+`Workspace Recovery Modes` switches the real General-settings picker between
+layout-only, layout plus Agents, and Off. It uses four native conversations in
+private roots and a loopback model fixture. Its private `session.list` API
+heartbeat measures MainActor round trips during native resume; transport and
+serialization are included. Launch-at-login combinations use an injected
+service in `WorkspaceRecoveryPolicyTests`, leaving system login registration
+for separately authorized hardware/reboot acceptance.
+
+`Workspace CLI Continuations` uses an isolated signed Host's API socket to
+exercise normal CLI mutation/layout behavior with nonzero tmux indexes, reject
+input from a layout whose pane identity changes during a wait, and accept a
+fresh request afterward. It preserves an unrelated original process. This
+does not simulate an OS reboot; server-replacement interleavings are unit-tested.
+It also edits a native prompt, retires that request on pane-identity replacement,
+checks the original file and saved draft, then submits a fresh editor normally.
+
+`Workspace New Sessions` exercises local and remote Mac session creation,
+automatic selection, terminal output and preservation of the original process.
+`Workspace New Session Agent iOS Host` provides a private paired Host for native
+iOS creation/selection/Fit checks. Write `complete.done` containing `ready` only
+after the owned guest's checks pass; the fixture then verifies the original PID.
+
+`Workspace Fork` uses real native histories and loopback model fixtures to
+check local/Viewer stale-source rejection and successful Fork. Its private
+Host restarts with a temporarily missing Claude history, then verifies a later
+checkpoint recovers that descriptor without replacing the original processes.
+`Workspace Fork Agent iOS Host` is the manual companion for the same Fork
+interaction on an owned Agent iOS guest; write `complete.done` containing
+`ready` only after stale rejection and fresh creation/selection pass. It then
+checks the new native conversation, unchanged original PIDs and no new prompts.
+
+When Simulator.app is unavailable, use the installed `ctrlx:agent-ios` skill
+and an owned disposable guest. `Workspace Agent iOS Host` is an explicitly
+selected manual companion (excluded from default unattended runs); it starts
+an isolated Host/Relay and writes `pairing-code.txt` under the fixture base.
+Drive the iOS app with Agent iOS observation/input. Launch with `--e2e-test`,
+`--e2e-persistent-storage`, the local Relay URL and an explicit random
+`ctrlx-recovery-*` root inside that installed app's data container. Agent iOS
+launch does not support arguments; use `simctl --set <private-set>` only for
+that test bootstrap, then activate/observe with Agent iOS. Reinstall can change
+that container UUID: rediscover the retained root before relaunching.
+
+The companion waits for `captured.done`, `offline.done`, `restored.done`,
+`prepare-reboot.done` and `complete.done` containing `ready`. Acknowledge only
+after the matching `workspace_ios_recovery.py` fixture and native UI checks
+pass. Host phase files identify when it has stopped/restarted. Follow the same
+sequence as `WorkspaceIOSRecoveryScenario`: capture Files/draft state, offline
+relaunch, ordinary reconnect, simulated boot/tmux rebuild with a collision
+session, and another iOS relaunch. Saved drafts must not reach tmux; preserve
+source identity, private navigation and live process checks. Close the owned
+guest and stop the isolated companion after evidence capture.
+
+`Plugin Response Agent iOS Host` uses the same native guest bootstrap for a
+focused response check. It stages the Echo sidecar, creates a private `cat` pane
+and writes `pairing-code.txt`. Drive both the built-in `echo` and `echo-sidecar`
+permission forms, verify their text/key output in that private pane, then write
+`complete.done` containing `ready`. It is also manual-only; a completed Host
+companion alone is not proof of the guest interactions or terminal output.
+
+`Workspace Close Identity` is a focused Mac Host/Viewer scenario: hold session
+and window confirmations open, replace the target's persistent UUID, verify the
+old confirmation leaves its process alive, then verify a fresh close succeeds.
+Real private-tmux unit tests separately exercise server reconstruction with all
+UUIDs reused. The manual Agent iOS companion can support the same close check;
+record native actions and actual process survival/deletion separately from the
+companion result. Its reuse for a close check does not repeat plugin-form tests.
+
+`Workspace Identity With Recovery Off` starts with a saved workspace, disables
+recovery in General settings, then creates new sessions/windows. It repeats the
+Host/Viewer close checks above and verifies that the recovery journal stays
+unchanged. This covers live identity discovery without periodic recovery capture.
+
+`Workspace Recovery Performance` runs without a Relay or paired Viewer. Supply
+an unused `--ctrlx-state-root /tmp/cx-workspace-performance-<name>` and matching
+`--tmux-socket /tmp/cx-workspace-performance-<name>.sock`; it refuses other roots.
+It creates 12 sessions / 48 windows / 96 idle `cat` panes, opens the isolated
+App's main window through its status menu, and compares enabled/disabled idle
+capture with continuous pane resizing. The fixture records journal generations
+and mtimes, final-layout save delay, App/child CPU, memory and loopback response
+latency through an existing MainActor endpoint. It asserts deduplication and
+bounded write coalescing, without machine-specific CPU/latency pass thresholds.
+CPU counters use the host's Mach timebase. Reports are in the state root's
+`evidence/performance-*.json`; retain them before removing that root. This is a
+Debug-App workload measurement, not native Agent startup, physical display
+removal or real OS-reboot acceptance. Record competing machine workloads when
+comparing numbers; loopback timings include transport and sampling overhead.
 
 ### Tmux socket isolation
 

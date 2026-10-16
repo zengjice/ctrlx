@@ -35,12 +35,17 @@ final class DetachedTerminalWindows {
 
     private(set) var workspaces: [UUID: DetachedTerminalWorkspace] = [:]
     let mainTabs = WorkbenchTabStore()
+    var mainSceneID = UUID()
     private(set) var presentationRevision = 0
     var targets: Set<DetachedTerminalTarget> {
         Set(workspaces.values.flatMap(\.members))
     }
 
     var mainRequest: Request?
+    var restoredWindowIDs: [UUID] = []
+    @ObservationIgnored weak var mainWindow: NSWindow?
+    @ObservationIgnored var restoredFrames: [UUID: CGRect] = [:]
+    @ObservationIgnored var restoredMainFrame: CGRect?
     @ObservationIgnored private var windows: [UUID: NSWindow] = [:]
     @ObservationIgnored private var positions: [UUID: CGPoint] = [:]
     @ObservationIgnored private var closeObservers: [UUID: NSObjectProtocol] = [:]
@@ -275,6 +280,9 @@ final class DetachedTerminalWindows {
             NotificationCenter.default.removeObserver(observer)
         }
         windows[id] = window
+        if let frame = restoredFrames.removeValue(forKey: id) {
+            Self.restoreFrame(frame, to: window)
+        }
         closeObservers[id] = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: nil) { [weak self, weak window] _ in
             MainActor.assumeIsolated {
                 guard let self, let window else { return }
@@ -357,6 +365,46 @@ final class DetachedTerminalWindows {
             x: max(visibleFrame.minX, min(origin.x, visibleFrame.maxX - size.width)),
             y: max(visibleFrame.minY, min(origin.y, visibleFrame.maxY - size.height))
         )
+    }
+
+    static func restoreFrame(_ frame: CGRect, to window: NSWindow) {
+        guard let screen = NSScreen.screens.first(where: { $0.visibleFrame.intersects(frame) }) ?? NSScreen.main else { return }
+        let size = CGSize(width: min(max(400, frame.width), screen.visibleFrame.width), height: min(max(250, frame.height), screen.visibleFrame.height))
+        window.setFrame(CGRect(origin: clampedOrigin(frame.origin, size: size, visibleFrame: screen.visibleFrame), size: size), display: true)
+    }
+
+    var mainFrame: CGRect? {
+        restoredMainFrame ?? mainWindow?.frame
+    }
+
+    func restoreMainFrame(_ frame: CGRect) {
+        restoredMainFrame = frame
+        applyRestoredMainFrame()
+    }
+
+    func applyRestoredMainFrame() {
+        // SwiftUI applies its initial window size when ordering the window on
+        // screen. Keep the saved frame until that initial presentation finishes.
+        guard let window = mainWindow, window.isVisible, let frame = restoredMainFrame else { return }
+        restoredMainFrame = nil
+        Self.restoreFrame(frame, to: window)
+    }
+
+    func frame(for workspaceID: UUID) -> CGRect? {
+        windows[workspaceID]?.frame ?? restoredFrames[workspaceID]
+    }
+
+    func restoreWorkspace(id: UUID, members: [DetachedTerminalTarget], session: String, frame: CGRect?, fallbackAnchor: DetachedTerminalTarget? = nil) -> DetachedTerminalWorkspace? {
+        if let existing = workspaces[id] {
+            return existing
+        }
+        guard let anchor = members.first ?? fallbackAnchor, members.allSatisfy({ !targets.contains($0) }) else { return nil }
+        let workspace = DetachedTerminalWorkspace(id: id, target: anchor, sessionName: session)
+        workspace.members = members
+        workspaces[id] = workspace
+        restoredFrames[id] = frame
+        restoredWindowIDs.append(id)
+        return workspace
     }
 
     /// A returning right-side tab must not also become the left renderer.

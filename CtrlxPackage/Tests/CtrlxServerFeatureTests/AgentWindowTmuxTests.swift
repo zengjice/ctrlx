@@ -13,7 +13,7 @@ struct AgentWindowTmuxTests {
         try await withDependencies {
             $0[ProcessRunner.self].run = { _, arguments, _, _ in
                 calls.withValue { $0.append(arguments) }
-                return ProcessResult(exitCode: 0, stdout: Data((arguments.contains("new-window") ? "%42:9\n" : "").utf8), stderr: Data())
+                return ProcessResult(exitCode: 0, stdout: Data((arguments.contains("new-window") ? "123:456\u{1f}%42\n" : "").utf8), stderr: Data())
             }
         } operation: {
             let tmux = TmuxService(tmuxPath: "/test/tmux")
@@ -30,9 +30,11 @@ struct AgentWindowTmuxTests {
         #expect(creation.contains("CODEX_HOME=/Host/config"))
         #expect(creation.contains("codex"))
         #expect(!creation.contains("new-session"))
-        #expect(calls.value.filter { $0.contains("send-keys") } == [
-            ["send-keys", "-t", "%42", "codex '-c' 'otel.log_user_prompt=false'", "Enter"],
-        ])
+        let sends = calls.value.filter { $0.contains { $0.contains("send-keys") } }
+        #expect(sends.count == 1)
+        let send = try #require(sends.first)
+        #expect(send.contains("%42"))
+        #expect(send.contains { $0.contains("codex '-c' 'otel.log_user_prompt=false'".posixSingleQuoted) })
         #expect(!calls.value.contains { $0.contains("resize-window") || $0.contains("split-window") })
     }
 
@@ -42,24 +44,24 @@ struct AgentWindowTmuxTests {
         try await withDependencies {
             $0[ProcessRunner.self].run = { _, arguments, _, _ in
                 calls.withValue { $0.append(arguments) }
-                return ProcessResult(exitCode: 0, stdout: Data((arguments.contains("new-window") ? "%42:9\n" : "").utf8), stderr: Data())
+                return ProcessResult(exitCode: 0, stdout: Data((arguments.contains("new-window") ? "123:456\u{1f}%42\n" : "").utf8), stderr: Data())
             }
         } operation: {
             _ = try await TmuxService(tmuxPath: "/test/tmux").newWindow(sessionName: "existing")
         }
-        #expect(!calls.value.contains { $0.contains("send-keys") })
-        #expect(calls.value.contains { $0.contains("rename-window") && $0.contains("terminal 1") })
+        #expect(!calls.value.contains { $0.contains { $0.contains("send-keys") } })
+        #expect(calls.value.contains { $0.contains { $0.contains("rename-window") && $0.contains("terminal 1") } })
     }
 
     @Test("Creation failure never injects input; send failure is reported, not retried", arguments: ["new-window", "send-keys"])
-    func failures(failingCommand: String) async throws {
+    func failures(failingCommand: String) async {
         let calls = LockIsolated<[[String]]>([])
         await withDependencies {
             $0[ProcessRunner.self].run = { _, arguments, _, _ in
                 calls.withValue { $0.append(arguments) }
                 return ProcessResult(
-                    exitCode: arguments.contains(failingCommand) ? 1 : 0,
-                    stdout: Data((arguments.contains("new-window") ? "%42:9\n" : "").utf8),
+                    exitCode: arguments.contains { $0.contains(failingCommand) } ? 1 : 0,
+                    stdout: Data((arguments.contains("new-window") ? "123:456\u{1f}%42\n" : "").utf8),
                     stderr: Data("fixture failure".utf8)
                 )
             }
@@ -69,7 +71,7 @@ struct AgentWindowTmuxTests {
             }
         }
         #expect(calls.value.filter { $0.contains("new-window") }.count == 1)
-        #expect(calls.value.filter { $0.contains("send-keys") }.count == (failingCommand == "new-window" ? 0 : 1))
+        #expect(calls.value.filter { $0.contains { $0.contains("send-keys") } }.count == (failingCommand == "new-window" ? 0 : 1))
     }
 
     @Test("Agent windows retain the opted-in editor override")
@@ -78,7 +80,7 @@ struct AgentWindowTmuxTests {
         try await withDependencies {
             $0[ProcessRunner.self].run = { _, arguments, _, _ in
                 calls.withValue { $0.append(arguments) }
-                return ProcessResult(exitCode: 0, stdout: Data((arguments.contains("new-window") ? "%42:9\n" : "").utf8), stderr: Data())
+                return ProcessResult(exitCode: 0, stdout: Data((arguments.contains("new-window") ? "123:456\u{1f}%42\n" : "").utf8), stderr: Data())
             }
         } operation: {
             let tmux = TmuxService(tmuxPath: "/test/tmux")
@@ -86,10 +88,11 @@ struct AgentWindowTmuxTests {
             tmux.overrideVisualInShellPanes = true
             _ = try await tmux.newWindow(sessionName: "existing", windowName: "codex", runCommand: "codex")
         }
-        let send = try #require(calls.value.first(where: { $0.contains("send-keys") }))
-        #expect(send[3].contains("VISUAL="))
-        #expect(send[3].hasSuffix("; codex"))
-        #expect(calls.value.filter { $0.contains("send-keys") }.count == 1)
+        let send = try #require(calls.value.first(where: { $0.contains { $0.contains("send-keys") } }))
+        let body = try #require(send.first { $0.contains("send-keys") })
+        #expect(body.contains("VISUAL="))
+        #expect(body.contains("; codex"))
+        #expect(calls.value.filter { $0.contains { $0.contains("send-keys") } }.count == 1)
     }
 
     @Test("Isolated live tmux: new Agent window keeps the original pane, cwd and launch env")
@@ -119,7 +122,9 @@ struct AgentWindowTmuxTests {
                 var screen = ""
                 for _ in 0..<30 {
                     screen = try await tmux.capturePaneText(pane)
-                    if screen.contains("AGENT_PROBE[ready][") { break }
+                    if screen.contains("AGENT_PROBE[ready][") {
+                        break
+                    }
                     try await Task.sleep(for: .milliseconds(100))
                 }
                 #expect(screen.contains("AGENT_PROBE[ready]["))

@@ -12,6 +12,124 @@ import Vapor
 @MainActor
 @Suite("File requests across Viewer reconnects", .serialized)
 struct FileBrowserConnectionTests {
+    @Test("Source-bound Files replies are rejected after Host reconstruction", arguments: [
+        FileBrowserOperation.tabs(.open(sessionName: "test", new: false)),
+        .list(path: nil, offset: 0, includeHidden: false),
+        .repositoryInfo(path: "README.md", context: .init(pluginID: "codex", sessionID: "conversation", projectDirectory: "/Host/old")),
+    ])
+    func retiredFilesOpen(operation: FileBrowserOperation) async throws {
+        let originalVersion = VersionCompatibility.appVersionOverride
+        VersionCompatibility.appVersionOverride = "3.0.75"
+        defer { VersionCompatibility.appVersionOverride = originalVersion }
+        let relay = PhraseTestRelay()
+        let app = try await Application.make(.testing)
+        app.webSocket("api", "ws", maxFrameSize: .init(integerLiteral: RelayPayloadLimits.maxWebSocketFrameBytes)) { _, ws in
+            ws.onBinary { ws, bytes in
+                let data = Data(bytes.readableBytesView)
+                Task { await relay.receive(data, from: ws) }
+            }
+        }
+        try await app.asyncBoot()
+        try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+        do {
+            let port = try #require(app.http.server.shared.localAddress?.port)
+            let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
+            let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
+            let host = ConnectedViewer(pairedViewer: .init(
+                id: "pair", deviceName: "Viewer", partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(), partnerPublicKeyId: viewerEncryption.keyId
+            ), e2eeService: hostEncryption)
+            let connection = ViewerConnection(pairedDevice: .init(
+                id: "pair", hostName: "Host", username: "test", partnerPublicKey: hostEncryption.publicKey.base64EncodedString(), partnerPublicKeyId: hostEncryption.keyId
+            ), e2eeService: viewerEncryption)
+            let viewer = connection.relayClient
+            let hostID = UUID()
+            let original = WorkspacePaneIdentity(serverID: "100:1", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            let current = LockIsolated(original)
+            let staleTab = HostFileTab(sessionName: "test", windowID: "@1", sourcePaneID: "%7", initialDirectory: "/Host/old")
+            let (gate, release) = AsyncStream<Void>.makeStream()
+            defer { release.finish() }
+            var commands = 0
+            host.onSessionStateRequest = {
+                .init(
+                    pairId: "",
+                    paneStates: ["%7": .init(
+                        paneId: "%7", sessionName: "test", tmuxWindowId: "@1", workspaceIdentity: current.value
+                    )],
+                    supportsFileBrowsing: true,
+                    supportsRepositoryFileLinks: true,
+                    supportsPaneFiles: true,
+                    fileTabs: [],
+                    workspaceIdentity: .init(hostID: hostID, serverID: current.value.serverID),
+                    supportsWorkspaceInputIdentity: true
+                )
+            }
+            host.onCommand = { command in
+                guard case let .browseFiles(spec) = command.command else {
+                    Issue.record("Unexpected command")
+                    return .failure(for: command.id, error: "Unexpected command")
+                }
+                #expect(command.expectedWorkspacePane == (spec.operation.usesSourcePane ? original : nil))
+                commands += 1
+                for await _ in gate {
+                    break
+                }
+                let files: FileBrowserResponse = switch spec.operation {
+                case .tabs: .tab(staleTab)
+                case .list: .listing(.init(directory: "/Host/old", homeDirectory: "/Host", entries: [], nextOffset: nil, revision: "1"))
+                default: .info(.init(path: "/Host/old/README.md", name: "README.md", kind: .text, size: 0, revision: "1"))
+                }
+                return .init(commandId: command.id, success: true, fileBrowser: files)
+            }
+            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test", publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
+            do {
+                await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
+                try await waitUntil { host.isViewerConnected && viewer.hostSupportsPaneFiles }
+                let source = FileBrowserSource.remote(hostID: "pair", paneID: "%7", connection: connection)
+                let pending = Task {
+                    if case .tabs = operation {
+                        return try await FileBrowserResponse.tab(HostFileTabClient.open(connection: connection, sessionName: "test", paneID: "%7"))
+                    }
+                    return try await source.request(operation)
+                }
+                defer { pending.cancel() }
+                try await waitUntil { commands == 1 }
+                let rebuilt = WorkspacePaneIdentity(serverID: "200:2", sessionID: original.sessionID, windowID: original.windowID, paneID: original.paneID)
+                current.setValue(rebuilt)
+                await host.pushSessionState()
+                try await waitUntil { viewer.workspaceInputState.catalog?.scope.serverID == rebuilt.serverID }
+                release.finish()
+                await #expect(throws: (any Error).self) { try await pending.value }
+                #expect(viewer.fileTabs.isEmpty)
+                // A file-link path lookup may finish only after reconstruction.
+                // Its original binding must reject the open before transmission.
+                await #expect(throws: (any Error).self) {
+                    if case .tabs = operation {
+                        _ = try await HostFileTabClient.open(connection: connection, sessionName: "test", paneID: "%7", inputBinding: .pane(pairID: "pair", hostID: hostID, identity: original))
+                    } else {
+                        _ = try await source.request(operation)
+                    }
+                }
+                #expect(commands == 1)
+                // Browsing an explicit path remains useful after its terminal exits.
+                _ = try await source.request(.info(path: "/Host/old/README.md"))
+                #expect(commands == 2)
+                #expect(await relay.errors.isEmpty)
+            } catch {
+                await viewer.disconnect()
+                await host.disconnect()
+                throw error
+            }
+            await viewer.disconnect()
+            await host.disconnect()
+        } catch {
+            await app.server.shutdown()
+            try await app.asyncShutdown()
+            throw error
+        }
+        await app.server.shutdown()
+        try await app.asyncShutdown()
+    }
+
     @Test
     func browserCapabilitySlowFramesAndReconnect() async throws {
         let originalVersion = VersionCompatibility.appVersionOverride

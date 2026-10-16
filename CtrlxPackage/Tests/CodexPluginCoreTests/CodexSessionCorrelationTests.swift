@@ -14,6 +14,16 @@ struct CodexSessionCorrelationTests {
         return (CodexSessionCorrelation(root: root), root)
     }
 
+    @Test("The default plugin keeps legacy correlations while isolated state roots stay separate")
+    func stateDirectoryScope() {
+        let home = URL(fileURLWithPath: "/tmp/codex-correlation-home-\(UUID())")
+        let legacy = home.appendingPathComponent(".ctrlx/codex-sessions").path
+        #expect(CodexSessionCorrelation.live(home: home).root.path == legacy)
+        #expect(CodexSessionCorrelation.live(stateDirectory: home.appendingPathComponent(".ctrlx/state/plugins/codex"), home: home).root.path == legacy)
+        let isolated = home.appendingPathComponent("private-state/plugins/codex")
+        #expect(CodexSessionCorrelation.live(stateDirectory: isolated, home: home).root.path == isolated.appendingPathComponent("codex-sessions").path)
+    }
+
     @Test("record then read round-trips by pane")
     func roundTripByPane() throws {
         let (store, root) = makeStore()

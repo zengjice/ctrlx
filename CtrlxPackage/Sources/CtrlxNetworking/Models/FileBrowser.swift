@@ -26,6 +26,16 @@ public enum FileBrowserOperation: Codable, Sendable, Equatable {
     case download(path: String, offset: Int, revision: String)
     case upload(FileBrowserUploadOperation)
     case search(path: String, query: String, mode: FileBrowserSearchMode, includeHidden: Bool)
+
+    /// These operations resolve a terminal source; explicit Host paths do not.
+    public var usesSourcePane: Bool {
+        switch self {
+        case .tabs(.open),
+             .list(nil, _, _),
+             .repositoryInfo: true
+        default: false
+        }
+    }
 }
 
 public enum FileBrowserSearchMode: String, Codable, Sendable, CaseIterable {

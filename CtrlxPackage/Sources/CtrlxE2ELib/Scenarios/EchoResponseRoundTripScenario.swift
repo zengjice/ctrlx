@@ -15,11 +15,37 @@ import Foundation
 /// (there is no standalone `.prompt` state), so this exercises the structured
 /// `deliverResponse` path rather than the free-text reply-after-stop keystroke
 /// pipeline. The echo `sessionID` is the tmux pane id, so the host's `sendText`
-/// resolves the session straight back to that pane (`resolvePluginPaneTarget`) and
+/// binds the response to that pane's original workspace identity and
 /// the submitted text is observable via `capture-pane`. This proves
 /// `deliverResponse` reached the core AND that the core drove delivery (the spec's
 /// requirement).
 public enum EchoResponseRoundTripScenario {
+    /// Pair a native Agent iOS guest, then validate both in-process and sidecar
+    /// responses before writing `complete.done`. No Simulator.app runner needed.
+    public static let agentIOSHost = CtrlxE2ELib.scenario(
+        "Plugin Response Agent iOS Host",
+        tags: ["manual", "plugin", "response", "macos-only", "isolated-api", "persistent-e2e-storage"]
+    ) {
+        TestStep.macStageSidecarFixture(id: "echo-sidecar")
+        TestStep.tmuxCreateSession(name: "response-ios", width: 100, height: 35)
+        TestStep.tmuxCommand(arguments: ["respawn-pane", "-k", "-t", "response-ios:0.0", "/bin/cat"])
+        TestStep.startServer
+        TestStep.verifyServerHealth
+        TestStep.launchMacApp()
+        TestStep.macOpenSettings()
+        TestStep.macWaitForWindow(titled: "General", timeout: 10)
+        TestStep.macSelectSettingsTab("Remote Access")
+        TestStep.macClickButton(titled: "Generate Pairing Code")
+        TestStep.macWaitForElement(titled: "Copy Code", timeout: 10)
+        TestStep.macClickButton(titled: "Copy Code")
+        TestStep.macReadClipboard(storeAs: "pairingCode")
+        TestStep.writeFile(path: "${ctrlxStateRoot}/../pairing-code.txt", content: "${pairingCode}")
+        TestStep.waitForFileContains(
+            path: "${ctrlxStateRoot}/../complete.done", substring: "ready",
+            storeAs: "plugin-response-agent-ios", timeout: 900
+        )
+    }
+
     public static let scenario = CtrlxE2ELib.scenario(
         "Echo Response Round Trip",
         tags: ["plugin", "ingress", "echo", "response"]

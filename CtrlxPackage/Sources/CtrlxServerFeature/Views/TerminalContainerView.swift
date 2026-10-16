@@ -168,6 +168,8 @@ struct TerminalContainerView: NSViewRepresentable {
         private(set) var quickActionEndpoint: TerminalQuickActionEndpoint?
         private weak var quickActionRouter: TerminalQuickActionRouter?
         private var subscriptionId: UUID?
+        private var connectionTask: Task<Void, Never>?
+        private var isStopped = false
         private var streamState: StreamState = .disconnected
         private var columns = 80
         private var rows = 24
@@ -382,9 +384,10 @@ struct TerminalContainerView: NSViewRepresentable {
                 self?.handleTitleChange(title)
             }
 
-            // Start connection
-            Task {
-                await connect(paneState: paneState, tmuxService: tmuxService)
+            // The native view owns bootstrap as well as the eventual subscription.
+            connectionTask = Task { [weak self] in
+                guard let self, !Task.isCancelled, !self.isStopped else { return }
+                await self.connect(paneState: paneState, tmuxService: tmuxService)
             }
         }
 
@@ -518,6 +521,9 @@ struct TerminalContainerView: NSViewRepresentable {
         }
 
         func stop() {
+            isStopped = true
+            connectionTask?.cancel()
+            connectionTask = nil
             terminalView.cancelVoiceInputPress()
             terminalView.voiceInputRouter = nil
             terminalView.voiceInputEndpoint = nil
@@ -561,6 +567,8 @@ struct TerminalContainerView: NSViewRepresentable {
         // MARK: Connection
 
         private func connect(paneState: PaneState, tmuxService: TmuxService) async {
+            let expectedWorkspacePane = paneState.workspaceIdentity
+            let paneID = paneState.paneId
             updateState(.connecting)
 
             // Get initial dimensions from tmux. Rows must match the tmux pane
@@ -572,6 +580,7 @@ struct TerminalContainerView: NSViewRepresentable {
                 updateTerminalDimensions(cols: paneState.width, rows: paneState.height)
             }
 
+            guard !Task.isCancelled, !isStopped else { return }
             clear()
 
             // Subscribe to stream
@@ -581,25 +590,31 @@ struct TerminalContainerView: NSViewRepresentable {
             }
 
             do {
-                let target = paneState.target
+                let target = paneID
                 // Note: onTitleChange is intentionally omitted here. Title changes are detected
                 // locally by SwiftTerm's delegate (terminalView.onTitleChange) and then reported
                 // back to PaneStreamManager via reportTitleChange(), which forwards to other
                 // subscribers. This avoids a circular callback loop.
                 let result = try await paneStreamManager.subscribe(
-                    paneId: paneState.paneId,
+                    paneId: paneID,
                     target: target,
+                    expectedWorkspacePane: expectedWorkspacePane,
                     onData: { [weak self] data in
                         self?.handleData(data)
                     },
                     onDimensionChange: { [weak self] newWidth, newHeight in
-                        self?.handleStreamDimensionChange(width: newWidth, height: newHeight)
+                        guard let self, !self.isStopped else { return }
+                        self.handleStreamDimensionChange(width: newWidth, height: newHeight)
                     },
                     onResync: { [weak self] result in
                         self?.handleResync(result)
                     }
                 )
 
+                guard !Task.isCancelled, !isStopped else {
+                    await paneStreamManager.unsubscribe(result.subscriptionId)
+                    return
+                }
                 subscriptionId = result.subscriptionId
                 updateState(.connected)
 
@@ -616,6 +631,7 @@ struct TerminalContainerView: NSViewRepresentable {
                 // the enable sequences so SwiftTerm enters the correct mode.
                 await syncMouseMode(target: target, tmuxService: tmuxService)
             } catch {
+                guard !Task.isCancelled, !isStopped else { return }
                 updateState(.error(error.localizedDescription))
             }
         }
@@ -623,6 +639,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // MARK: Title Handling
 
         private func handleTitleChange(_ title: String) {
+            guard !isStopped else { return }
             // Notify the parent view
             onTitleChange?(title)
 
@@ -639,6 +656,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // MARK: Data Handling
 
         private func handleData(_ data: Data) {
+            guard !isStopped else { return }
             feedCoalescer.enqueue(data)
         }
 
@@ -684,6 +702,7 @@ struct TerminalContainerView: NSViewRepresentable {
         }
 
         private func handleResync(_ result: Result<PaneStreamManager.SubscriptionResult, Error>) {
+            guard !isStopped else { return }
             switch result {
             case let .success(snapshot):
                 updateTerminalDimensions(cols: snapshot.width, rows: snapshot.height)

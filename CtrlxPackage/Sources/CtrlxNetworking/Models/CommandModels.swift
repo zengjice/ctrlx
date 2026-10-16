@@ -415,9 +415,13 @@ public struct SendKeystroke: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
 
     public let keystrokes: [TmuxKey]
+    /// Used for a draft submission, not continuous typing. Requires the Host's
+    /// workspace-input capability before a Viewer may rely on this response.
+    public let acknowledgeCompletion: Bool?
 
-    public init(_ keystrokes: [TmuxKey]) {
+    public init(_ keystrokes: [TmuxKey], acknowledgeCompletion: Bool? = nil) {
         self.keystrokes = keystrokes
+        self.acknowledgeCompletion = acknowledgeCompletion
     }
 
     public var commandType: CommandType {
@@ -1023,9 +1027,12 @@ public struct SubmitEditorContent: CommandSpec, Equatable {
 
     /// The edited content to write back to the temp file
     public let content: String
+    /// The live editor request, never a recovered draft ID. Optional for older peers.
+    public let expectedSessionID: UUID?
 
-    public init(content: String) {
+    public init(content: String, expectedSessionID: UUID? = nil) {
         self.content = content
+        self.expectedSessionID = expectedSessionID
     }
 
     public var commandType: CommandType {
@@ -1036,8 +1043,11 @@ public struct SubmitEditorContent: CommandSpec, Equatable {
 /// Cancel an active editor session from a viewer. Returns success/failure.
 public struct CancelEditorSession: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
+    public let expectedSessionID: UUID?
 
-    public init() { }
+    public init(expectedSessionID: UUID? = nil) {
+        self.expectedSessionID = expectedSessionID
+    }
 
     public var commandType: CommandType {
         .cancelEditorSession(self)
@@ -1298,8 +1308,9 @@ public extension CommandType {
     /// (e.g. keystrokes) return `false` to avoid wasting bandwidth.
     var requiresResponse: Bool {
         switch self {
-        case .sendKeystroke,
-             .sendRawInput,
+        case let .sendKeystroke(spec):
+            spec.acknowledgeCompletion == true
+        case .sendRawInput,
              .stopTerminalStream:
             false
         default:
@@ -1317,16 +1328,23 @@ public struct CommandMessage: Codable, Sendable, Identifiable {
     public let command: CommandType
     public let timestamp: Date
 
+    /// Optional, capability-gated identity for terminal input, layout/selection, close and source-bound Files.
+    /// Window actions compare server/window identity, independently of the active pane.
+    /// Captured with the queue/action, never inferred from a recycled runtime ID.
+    public let expectedWorkspacePane: WorkspacePaneIdentity?
+
     public init(
         id: UUID = UUID(),
         paneId: String,
         command: CommandType,
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        expectedWorkspacePane: WorkspacePaneIdentity? = nil
     ) {
         self.id = id
         self.paneId = paneId
         self.command = command
         self.timestamp = timestamp
+        self.expectedWorkspacePane = expectedWorkspacePane
     }
 }
 
@@ -1352,6 +1370,8 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let error: String?
     /// Optional pane ID returned by commands that create or affect panes
     public let paneId: String?
+    /// Incarnation captured by session creation, before any delayed response.
+    public let createdPaneScope: WorkspaceIdentityScope?
     /// Running processes returned by `checkRunningProcesses` command
     public let runningProcesses: [RunningProcessInfo]?
     public let directoryListing: SessionDirectoryListing?
@@ -1370,6 +1390,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         success: Bool,
         error: String? = nil,
         paneId: String? = nil,
+        createdPaneScope: WorkspaceIdentityScope? = nil,
         runningProcesses: [RunningProcessInfo]? = nil,
         directoryListing: SessionDirectoryListing? = nil,
         createdDirectory: String? = nil,
@@ -1384,6 +1405,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.success = success
         self.error = error
         self.paneId = paneId
+        self.createdPaneScope = createdPaneScope
         self.runningProcesses = runningProcesses
         self.directoryListing = directoryListing
         self.createdDirectory = createdDirectory

@@ -14,6 +14,7 @@
         private(set) var sentText: [(sessionID: String, text: String)] = []
         private(set) var sentKeys: [(sessionID: String, keys: [PluginTmuxKey])] = []
         private(set) var logLines: [LogLine] = []
+        private(set) var responseContexts: [PluginResponseContext?] = []
 
         func setProjects(_ projects: [AgentProject]) async {
             projectsCalls.append(projects)
@@ -24,10 +25,12 @@
         }
 
         func sendText(sessionID: String, _ text: String) async {
+            responseContexts.append(PluginResponseContext.current)
             sentText.append((sessionID, text))
         }
 
         func sendKeys(sessionID: String, _ keys: [PluginTmuxKey]) async {
+            responseContexts.append(PluginResponseContext.current)
             sentKeys.append((sessionID, keys))
         }
 
@@ -214,6 +217,88 @@
 
     @Suite("SidecarPluginCore marshalling")
     struct SidecarPluginCoreTests {
+        @Test("Sidecar text and key notifications keep the original response scope across RPC awaits")
+        func responseContext() async throws {
+            let mock = MockSidecarProcess()
+            let (started, signalStarted) = AsyncStream<Void>.makeStream()
+            let (resume, signalResume) = AsyncStream<Void>.makeStream()
+            defer {
+                signalStarted.finish()
+                signalResume.finish()
+            }
+            await mock.onRequest { method, _ in
+                guard method == SidecarRPC.deliverResponse else { return .success(.object([:])) }
+                signalStarted.yield()
+                for await _ in resume {
+                    break
+                }
+                do {
+                    try await mock.pushNotification(HostRPC.sendText, .object(["sessionID": .string("%7"), "text": .string("feedback")]))
+                    try await mock.pushNotification(HostRPC.sendKeys, .object(["sessionID": .string("%7"), "keys": JSONValue(encoding: [PluginTmuxKey.enter])]))
+                } catch { Issue.record("Sidecar notification failed: \(error)") }
+                return .success(.object([:]))
+            }
+            let core = try await mock.makeCore(manifestID: "echo")
+            let host = MockPluginHost()
+            try await core.initialize(mock.env, host: host)
+            let pane = PaneState(paneId: "%7", workspaceIdentity: .init(serverID: "100:1", sessionID: UUID(), windowID: UUID(), paneID: UUID()))
+            let context = try PluginResponseContext(pluginID: "echo", pane: pane, requestID: nil)
+            let pending = Task {
+                await PluginResponseContext.$current.withValue(context) {
+                    await core.deliverResponse(sessionID: "%7", requestID: "original", .prompt(text: "feedback"))
+                }
+            }
+            for await _ in started {
+                break
+            }
+            // A second call must not replace the first call's notification scope.
+            await core.deliverResponse(sessionID: "%7", requestID: "replacement", .prompt(text: "wrong"))
+            signalResume.finish()
+            await pending.value
+            let contexts = await host.responseContexts
+            #expect(contexts.count == 2)
+            #expect(contexts.allSatisfy { $0?.workspaceIdentity == context.workspaceIdentity })
+            #expect(await host.sentText.first?.text == "feedback")
+            #expect(await host.sentKeys.first?.keys == [.enter])
+            await core.shutdown()
+        }
+
+        @Test("A timed-out response retires the stream before late input or another reply")
+        func timedOutResponse() async throws {
+            let mock = MockSidecarProcess()
+            let (resume, signalResume) = AsyncStream<Void>.makeStream()
+            let (sent, signalSent) = AsyncStream<Void>.makeStream()
+            defer {
+                signalResume.finish()
+                signalSent.finish()
+            }
+            await mock.onRequest { method, _ in
+                guard method == SidecarRPC.deliverResponse else { return .success(.object([:])) }
+                for await _ in resume {
+                    break
+                }
+                do {
+                    try await mock.pushNotification(HostRPC.sendText, .object(["sessionID": .string("%7"), "text": .string("late reply")]))
+                } catch { Issue.record("Sidecar notification failed: \(error)") }
+                signalSent.yield()
+                return .success(.object([:]))
+            }
+            let core = try await mock.makeCore(manifestID: "echo")
+            let host = MockPluginHost()
+            try await core.initialize(mock.env, host: host)
+            // Exercise the production RPC deadline rather than a simulated error.
+            await core.deliverResponse(sessionID: "%7", requestID: "expired", .prompt(text: "old"))
+            signalResume.finish()
+            for await _ in sent {
+                break
+            }
+            await core.deliverResponse(sessionID: "%7", requestID: "new", .prompt(text: "new"))
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(await host.sentText.isEmpty)
+            #expect(await host.sentKeys.isEmpty)
+            await core.shutdown()
+        }
+
         @Test("handleIngress marshals translate_event and decodes the returned PluginEvent")
         func translateEvent() async throws {
             let mock = MockSidecarProcess()

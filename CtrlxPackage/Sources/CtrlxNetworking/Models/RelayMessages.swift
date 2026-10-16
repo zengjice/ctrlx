@@ -26,6 +26,10 @@ public struct PeerHelloMessage: Codable, Sendable {
 /// Complete session state for sync between host and viewer
 public struct SessionStateMessage: Codable, Sendable {
     public let pairId: String
+    /// Absent on older Hosts. Presence enables persistent workspace references.
+    public let workspaceIdentity: WorkspaceIdentityScope?
+    public let supportsWorkspaceInputIdentity: Bool?
+    public let supportsTerminalStreamIdentity: Bool?
     /// Unified per-pane state keyed by pane ID
     public let paneStates: [String: PaneState]
     /// Discovered agent projects on the host (each tagged by `pluginID`).
@@ -105,9 +109,15 @@ public struct SessionStateMessage: Codable, Sendable {
         browserTabs: [RemoteBrowserTab]? = nil,
         supportsSimulatorViewing: Bool? = nil,
         simulatorTabs: [RemoteSimulatorTab]? = nil,
-        supportsPaneFiles: Bool? = nil, fileTabs: [HostFileTab]? = nil
+        supportsPaneFiles: Bool? = nil, fileTabs: [HostFileTab]? = nil,
+        workspaceIdentity: WorkspaceIdentityScope? = nil,
+        supportsWorkspaceInputIdentity: Bool? = nil,
+        supportsTerminalStreamIdentity: Bool? = nil
     ) {
         self.pairId = pairId
+        self.workspaceIdentity = workspaceIdentity
+        self.supportsWorkspaceInputIdentity = supportsWorkspaceInputIdentity
+        self.supportsTerminalStreamIdentity = supportsTerminalStreamIdentity
         self.paneStates = paneStates
         self.agentProjects = agentProjects
         self.homeDirectory = homeDirectory
@@ -169,7 +179,10 @@ public struct SessionStateMessage: Codable, Sendable {
             browserTabs: browserTabs,
             supportsSimulatorViewing: supportsSimulatorViewing,
             simulatorTabs: simulatorTabs,
-            supportsPaneFiles: supportsPaneFiles, fileTabs: fileTabs
+            supportsPaneFiles: supportsPaneFiles, fileTabs: fileTabs,
+            workspaceIdentity: workspaceIdentity,
+            supportsWorkspaceInputIdentity: supportsWorkspaceInputIdentity,
+            supportsTerminalStreamIdentity: supportsTerminalStreamIdentity
         )
     }
 }
@@ -223,6 +236,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// `windowIndex`, this does not change when windows are reordered.
     /// Optional for wire compatibility with older hosts.
     public var tmuxWindowId: String?
+    public var workspaceIdentity: WorkspacePaneIdentity?
 
     /// The pane index within the window
     public var paneIndex: Int
@@ -411,13 +425,15 @@ public struct PaneState: Codable, Sendable, Identifiable {
         permissionMode: String? = nil,
         permissionModeTrigger: String? = nil,
         telemetry: SessionTelemetry? = nil,
-        recap: SessionRecap? = nil
+        recap: SessionRecap? = nil,
+        workspaceIdentity: WorkspacePaneIdentity? = nil
     ) {
         self.paneId = paneId
         self.target = target
         self.sessionName = sessionName
         self.windowIndex = windowIndex
         self.tmuxWindowId = tmuxWindowId
+        self.workspaceIdentity = workspaceIdentity
         self.paneIndex = paneIndex
         self.command = command
         self.currentPath = currentPath

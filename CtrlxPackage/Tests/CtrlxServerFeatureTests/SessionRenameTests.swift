@@ -1,4 +1,5 @@
 import CtrlxCommon
+import CtrlxNetworking
 import Dependencies
 import Foundation
 import Testing
@@ -6,7 +7,7 @@ import Testing
 
 @Suite("Tmux session rename")
 struct SessionRenameTests {
-    private func pane(_ paneID: String, session: String, window: Int, index: Int = 0) -> PaneInfo {
+    private func pane(_ paneID: String, session: String, window: Int, index: Int = 0, identity: WorkspacePaneIdentity? = nil) -> PaneInfo {
         PaneInfo(
             paneId: paneID,
             target: "\(session):\(window).\(index)",
@@ -17,7 +18,8 @@ struct SessionRenameTests {
             currentPath: "/tmp",
             width: 80,
             height: 24,
-            isActive: index == 0
+            isActive: index == 0,
+            workspaceIdentity: identity
         )
     }
 
@@ -125,6 +127,20 @@ struct SessionRenameTests {
         #expect(rename.oldName == "old")
         #expect(rename.newName == "new")
         #expect(rename.windowIDs == ["old:0": "new:0", "old:1": "new:1"])
+    }
+
+    @Test("Recycled pane numbers cannot migrate a replacement session's private state")
+    func ignoresReconstructedSession() {
+        let identity = WorkspacePaneIdentity(serverID: "1:2", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let old = [pane("%1", session: "old", window: 0, identity: identity)]
+        #expect(SessionRenameMapping.detect(from: old, to: [pane("%1", session: "new", window: 0, identity: identity)]).count == 1)
+        var restarted = identity
+        restarted.serverID = "3:4"
+        var replaced = identity
+        replaced.sessionID = UUID()
+        for current in [restarted, replaced, nil] {
+            #expect(SessionRenameMapping.detect(from: old, to: [pane("%1", session: "new", window: 0, identity: current)]).isEmpty)
+        }
     }
 
     @Test("Moving only part of a session is not treated as a rename")

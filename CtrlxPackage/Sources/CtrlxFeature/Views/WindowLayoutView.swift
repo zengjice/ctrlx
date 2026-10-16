@@ -19,6 +19,7 @@
         let automaticallyFitOnEntry: Bool
 
         @Environment(SessionStore.self) private var sessionStore
+        @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
         @Environment(ViewerConnectionManager.self) private var connectionManager
         @Environment(AgentBackgroundMonitoringService.self) private var backgroundMonitoring
 
@@ -28,6 +29,7 @@
         private struct FilesOpenRequest: Equatable {
             let paneID: String
             let new: Bool
+            let inputBinding: ViewerWorkspaceInputBinding
         }
 
         @State private var pendingFilesRequest: FilesOpenRequest?
@@ -109,6 +111,7 @@
 
         /// Rename-window alert state: the window being renamed (if any).
         @State private var renamingWindow: TmuxWindow?
+        @State private var renamingWindowBinding = ViewerWorkspaceInputBinding.unavailable
 
         /// Text bound to the rename-window alert field.
         @State private var renameWindowText = ""
@@ -127,6 +130,8 @@
             self.relayClient = relayClient
             self.settings = settings
             self.fileWorkspace = fileWorkspace
+            self._selectedWindowId = State(initialValue: fileWorkspace.restoredWindowID)
+            self._activePaneId = State(initialValue: fileWorkspace.restoredPaneID)
             self._initialSessionFit = initialSessionFit
             self.automaticallyFitOnEntry = automaticallyFitOnEntry
             self._isKeyboardActive = State(initialValue: settings.showTerminalKeyboardOnEntry)
@@ -151,8 +156,9 @@
 
         /// The current window data from the session store
         private var window: TmuxWindow? {
+            guard !fileWorkspace.hasPendingTerminalSelection else { return nil }
             if let selectedWindowId {
-                return sessionStore.window(id: selectedWindowId, hostId: hostId)
+                return sessionWindows.first { $0.id == selectedWindowId }
             }
             // Default to the active window in the session
             return sessionWindows.first(where: \.isWindowActive) ?? sessionWindows.first
@@ -241,6 +247,12 @@
                         ))
                         .background(Color(.systemBackground))
                         .id(tab.id)
+                } else if let tab = fileWorkspace.selected, fileWorkspace.unavailableFileSources.contains(tab.id) {
+                    ContentUnavailableView(
+                        "Files Source Unavailable",
+                        symbol: .exclamationmarkTriangle,
+                        description: "The saved Files tab will reconnect when its original terminal is available."
+                    )
                 } else if let tab = fileWorkspace.selected {
                     WorkspaceFileBrowserView(tab: tab, source: .remote(
                         hostID: hostId,
@@ -354,13 +366,17 @@
             fileWorkspace.save()
         }
 
+        private func saveRecoverySelection() {
+            fileWorkspaces.recordSelection(workspace: fileWorkspace, window: window, paneID: activePaneId)
+        }
+
         private var fileLinkContent: some View {
             browserContent
                 .task(id: pendingFilesRequest) {
                     guard let request = pendingFilesRequest else { return }
                     let paneID = request.paneID
                     do {
-                        let descriptor = try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: paneID, new: request.new)
+                        let descriptor = try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: paneID, new: request.new, inputBinding: request.inputBinding)
                         try Task.checkCancellation()
                         guard pendingFilesRequest == request, sessionWindows.contains(where: { $0.panes.contains { $0.paneId == paneID } }) else { return }
                         let tab = fileWorkspace.adopt(descriptor)
@@ -417,7 +433,8 @@
                 .onChange(of: fileWorkspaceContext, initial: true) { _, context in
                     fileWorkspace.updateContext(context)
                 }
-                .onChange(of: fileWorkspace.snapshots) { _, _ in saveFileWorkspace() }
+                .onChange(of: fileWorkspace.recoverySnapshots) { _, _ in saveFileWorkspace() }
+                .onChange(of: fileWorkspace.selectedID) { _, _ in saveFileWorkspace() }
                 .onChange(of: relayClient.simulatorTabs) { _, _ in
                     if let id = selectedSimulatorID, !sessionSimulators.contains(where: { $0.id == id }) {
                         selectedSimulatorID = nil
@@ -475,7 +492,7 @@
                 ) {
                     if let confirmation = closeConfirmation {
                         Button("Close Anyway", role: .destructive) {
-                            performCloseWindow(confirmation.target)
+                            performCloseWindow(confirmation.target, inputBinding: confirmation.inputBinding)
                         }
                         .keyboardShortcut(.defaultAction)
                     }
@@ -513,11 +530,18 @@
                     Button("Save") {
                         let trimmed = renameWindowText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if let target = renamingWindow, !trimmed.isEmpty {
+                            let binding = renamingWindowBinding
                             Task {
-                                _ = await relayClient.sendCommand(
+                                let result = await relayClient.sendCommand(
                                     SetWindowName(windowId: target.stableId, name: trimmed),
-                                    paneId: ""
+                                    paneId: "", inputBinding: binding
                                 )
+                                if case let .failure(error) = result {
+                                    commandError = error.localizedDescription
+                                }
+                                if case let .success(response) = result, !response.success {
+                                    commandError = response.error
+                                }
                             }
                         }
                         renamingWindow = nil
@@ -538,11 +562,12 @@
                 connection: connectionManager.connection(for: hostId)
             )
             let fileContext = RepositoryFileContext(pane: pane)
+            let inputBinding = relayClient.workspaceInputState.binding(paneID: request.paneID)
             do {
                 let destination = try await TerminalFileDestination.resolve(
                     path: request.path, context: fileContext, source: source
                 )
-                let descriptor = try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: request.paneID)
+                let descriptor = try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: request.paneID, inputBinding: inputBinding)
                 try Task.checkCancellation()
                 guard
                     pendingFileLink == request, window?.id == origin.id,
@@ -593,6 +618,8 @@
         private var terminalLifecycleContent: some View {
             presentedContent
                 .task {
+                    saveRecoverySelection()
+                    fileWorkspaces.selectSession(fileWorkspace.recoveryReference)
                     if automaticallyFitOnEntry {
                         requestAutomaticTabFit()
                     }
@@ -678,7 +705,6 @@
                     pendingBrowserLink = nil
                     pendingFileLink = nil
                     showsWindowTabs = false
-                    fileWorkspace.selectedID = nil
                 }
                 .onChange(of: activeService?.session?.state) {
                     if activeSessionHasBlockingForm {
@@ -700,6 +726,7 @@
                     lastWrittenClipboardContent = content
                 }
                 .onChange(of: activePaneId) { oldValue, newValue in
+                    saveRecoverySelection()
                     terminalInputRevision &+= 1
                     updateActiveService()
                     // Mark session as handled when switching to a pane with attention
@@ -708,10 +735,17 @@
                     // When oldValue is nil, it's the initial assignment from onAppear
                     // — skip it to avoid redirecting the host's tmux focus on load.
                     guard oldValue != nil, let newValue else { return }
+                    let binding = relayClient.workspaceInputState.binding(paneID: newValue)
                     Task {
-                        await sendCommand(.selectTmuxPane, paneId: newValue)
+                        await sendCommand(.selectTmuxPane, paneId: newValue, inputBinding: binding)
                     }
                 }
+                .onChange(of: relayClient.workspaceInputState.sessionBinding(name: sessionName)) { _, current in
+                    if !windowCreation.validateSessionBinding(current) {
+                        initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
+                    }
+                }
+                .onChange(of: selectedWindowId) { saveRecoverySelection() }
         }
 
         @ToolbarContentBuilder
@@ -847,7 +881,7 @@
                     cancelCreationFollowUp()
                     isKeyboardActive = false
                     quickActionPresentation.dismiss()
-                    pendingFilesRequest = .init(paneID: paneID, new: operation == .openAnotherFiles)
+                    pendingFilesRequest = .init(paneID: paneID, new: operation == .openAnotherFiles, inputBinding: relayClient.workspaceInputState.binding(paneID: paneID))
                 case .openBrowser:
                     guard
                         let paneID = FileBrowserTab.sourcePaneID(
@@ -867,6 +901,7 @@
                     agentForkConfiguration = forkConfiguration(window: target, usingWorktree: usingWorktree)
                 case .rename:
                     renameWindowText = target.windowName
+                    renamingWindowBinding = relayClient.workspaceInputState.windowBinding(target: target.stableId)
                     renamingWindow = target
                 case .close:
                     guard sessionWindows.count > 1 else { return }
@@ -936,6 +971,7 @@
         }
 
         private func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String? = nil) {
+            fileWorkspace.hasPendingTerminalSelection = false
             browserSelection.selectedID = nil
             selectedSimulatorID = nil
             fileWorkspace.selectedID = nil
@@ -946,7 +982,8 @@
             )
             requestAutomaticTabFit(windowID: target.stableId)
             if relayClient.isHostConnected {
-                Task { await sendCommand(.selectTmuxWindow, paneId: target.stableId) }
+                let binding = relayClient.workspaceInputState.windowBinding(target: target.stableId)
+                Task { await sendCommand(.selectTmuxWindow, paneId: target.stableId, inputBinding: binding) }
             }
         }
 
@@ -969,7 +1006,8 @@
         }
 
         private func agentTabConfiguration() -> NewAgentTabConfiguration {
-            NewAgentTabConfiguration(
+            let binding = relayClient.workspaceInputState.sessionBinding(name: sessionName)
+            return NewAgentTabConfiguration(
                 id: .init(hostID: hostId, sessionName: sessionName),
                 initialDirectory: newWindowDirectory,
                 agents: sessionStore.launchAgents(for: hostId),
@@ -981,15 +1019,16 @@
                 unavailableReason: sessionStore.agentWindowLaunchUnavailableReason(
                     hostID: hostId, isConnected: relayClient.isHostConnected
                 ),
-                start: { request in try await createWindow(request) }
+                start: { request in try await createWindow(request, binding: binding) }
             )
         }
 
         private func createTerminalWindow() {
             let request = CreateTmuxWindow(sessionName: sessionName, workingDirectory: newWindowDirectory)
+            let binding = relayClient.workspaceInputState.sessionBinding(name: sessionName)
             Task {
                 do {
-                    try await createWindow(request)
+                    try await createWindow(request, binding: binding)
                 } catch {
                     commandError = error.localizedDescription
                 }
@@ -1001,7 +1040,8 @@
         }
 
         private func forkConfiguration(window: TmuxWindow, usingWorktree: Bool) -> AgentForkConfiguration {
-            AgentForkConfiguration(
+            let inputState = relayClient.workspaceInputState
+            return AgentForkConfiguration(
                 sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
                 usingWorktree: usingWorktree,
                 prepare: { source in
@@ -1009,18 +1049,18 @@
                         throw AgentForkError(reason)
                     }
                     let response = try await connectionManager.sendCommand(
-                        PrepareAgentFork(source: source), paneId: "", hostId: hostId, timeout: 30
+                        PrepareAgentFork(source: source), paneId: "", hostId: hostId, timeout: 30, inputBinding: inputState.binding(paneID: source.paneID)
                     ).get()
                     guard let preparation = response.forkPreparation else {
                         throw AgentForkError("Host returned no Fork preparation.")
                     }
                     return preparation
                 },
-                fork: { request in try await createAgentFork(request) }
+                fork: { request in try await createAgentFork(request, inputState: inputState) }
             )
         }
 
-        private func createAgentFork(_ request: ForkAgentSession) async throws {
+        private func createAgentFork(_ request: ForkAgentSession, inputState: ViewerWorkspaceInputState) async throws {
             guard !isCreatingWindow else { throw AgentForkError("A window is already being created. Please wait.") }
             if let reason = agentForkUnavailableReason {
                 throw AgentForkError(reason)
@@ -1029,14 +1069,16 @@
             isCreatingWindow = true
             automaticTabFit.cancel()
             initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
-            let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit)
+            let sessionBinding = inputState.sessionBinding(name: sessionName)
+            let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit, sessionBinding: sessionBinding)
             defer {
                 isCreatingWindow = false
                 if windowCreation.revision == revision, windowCreation.paneID == nil {
                     windowCreation.cancel()
                 }
             }
-            let response = try await connectionManager.sendCommand(request, paneId: "", hostId: hostId, timeout: 180).get()
+            let response = try await connectionManager.sendCommand(request, paneId: "", hostId: hostId, timeout: 180, inputBinding: inputState.binding(paneID: request.source.paneID)).get()
+            _ = try sessionBinding.expectedPane(current: relayClient.workspaceInputState.sessionBinding(name: sessionName))
             guard let paneId = response.paneId else {
                 throw AgentForkError("Host returned no new pane. Check its windows before retrying.")
             }
@@ -1047,7 +1089,7 @@
             await connectionManager.requestSessionState(for: hostId)
         }
 
-        private func createWindow(_ request: CreateTmuxWindow) async throws {
+        private func createWindow(_ request: CreateTmuxWindow, binding: ViewerWorkspaceInputBinding) async throws {
             automaticTabFit.cancel()
             guard !isCreatingWindow else {
                 throw NewAgentTabConfiguration.LaunchError("A window is already being created. Please wait.")
@@ -1063,14 +1105,15 @@
             }
             isCreatingWindow = true
             initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
-            let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit)
+            let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit, sessionBinding: binding)
             defer {
                 isCreatingWindow = false
                 if windowCreation.revision == revision, windowCreation.paneID == nil {
                     windowCreation.cancel()
                 }
             }
-            let response = try await relayClient.sendCommand(request, paneId: "").get()
+            let response = try await relayClient.sendCommand(request, paneId: "", inputBinding: binding).get()
+            _ = try binding.expectedPane(current: relayClient.workspaceInputState.sessionBinding(name: sessionName))
             guard let paneId = response.paneId else {
                 throw NewAgentTabConfiguration.LaunchError("Host returned no new pane. Check its windows before retrying.")
             }
@@ -1082,6 +1125,18 @@
         }
 
         private func reconcileWindowSelection(candidates: [WindowSelectionCandidate]) {
+            if !windowCreation.validateSessionBinding(relayClient.workspaceInputState.sessionBinding(name: sessionName)) {
+                initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
+            }
+            guard !fileWorkspace.hasPendingTerminalSelection else { return }
+            if
+                let restored = fileWorkspace.restoredWindowID,
+                selectedWindowId == nil || (selectedWindowId == restored && activePaneId == nil),
+                candidates.contains(where: { $0.windowId == restored }) {
+                selectedWindowId = restored
+                activePaneId = fileWorkspace.restoredPaneID
+                return
+            }
             let decision = WindowSelectionReconciliation.resolve(
                 selectedWindowId: selectedWindowId,
                 candidates: candidates,
@@ -1108,6 +1163,13 @@
 
         private func windowContent(_ window: TmuxWindow) -> some View {
             VStack(spacing: 0) {
+                if let activePaneId {
+                    IOSWorkspaceDraftView(
+                        paneID: activePaneId,
+                        hostID: hostId,
+                        activeDraftID: activeService?.responseState?.recoveryDraftID
+                    )
+                }
                 // Response view for active pane's Claude session (full width, above layout)
                 if
                     terminalIsVisible,
@@ -1143,6 +1205,10 @@
                                     paneId: activeService.paneId
                                 )
                             }
+                            if !succeeded {
+                                commandError = "Couldn't send the response. Check the current request and try again."
+                            }
+                            return succeeded
                         },
                         state: responseState
                     )
@@ -1294,7 +1360,7 @@
                 telemetry: pane.telemetry,
                 // Tiled panes pass `responseState: .constant(nil)`, so no response
                 // form is shown here and the submit closure is never invoked.
-                submitResponse: { _ in },
+                submitResponse: { _ in false },
                 onTerminalInput: { keys in
                     observeTerminalInput(
                         keys,
@@ -1406,7 +1472,8 @@
         private var resizeToFitRequest: ResizeTmuxPane? {
             guard
                 relayClient.hostSupportsTerminalFit,
-                let window, let layout = TmuxLayoutParser.parse(window.windowLayout) else { return nil }
+                let window, let layout = TmuxLayoutParser.parse(window.windowLayout),
+                relayClient.workspaceInputState.windowBinding(target: window.stableId) != .unavailable else { return nil }
             return TerminalViewportSizing.request(layout: layout, paneGrids: viewportGrids)
         }
 
@@ -1454,7 +1521,8 @@
                 isAvailable: relayClient.isHostConnected && relayClient.hostSupportsTerminalFit,
                 paneIDs: window?.panes.map(\.paneId),
                 measuredRequest: resizeToFitRequest,
-                isPresentationReady: !creationSheetIsPresented && !showsWindowTabs
+                isPresentationReady: !creationSheetIsPresented && !showsWindowTabs,
+                currentSessionBinding: relayClient.workspaceInputState.sessionBinding(name: sessionName)
             )
             // Consume before dispatch, including failures; never retry on later
             // keyboard, rotation, reconnect or geometry changes.
@@ -1468,9 +1536,12 @@
 
         private func resizeWindow(_ request: ResizeTmuxPane, windowID: String) {
             isResizing = true
+            let binding = relayClient.workspaceInputState.windowBinding(target: windowID)
             Task {
                 defer { isResizing = false }
-                let result = await relayClient.sendCommand(request, paneId: windowID)
+                let result = await relayClient.sendCommand(request, paneId: windowID, inputBinding: binding)
+                do { _ = try binding.expectedPane(current: relayClient.workspaceInputState.windowBinding(target: windowID)) }
+                catch { return }
                 if case let .failure(error) = result {
                     commandError = "Failed to resize: \(error.localizedDescription)"
                 }
@@ -1493,8 +1564,9 @@
                     cancelCreationFollowUp()
                     automaticTabFit.cancel()
                     isSplitting = true
+                    let binding = relayClient.workspaceInputState.binding(paneID: activePaneId)
                     Task {
-                        await sendCommand(.splitTmuxPane(direction: .horizontal), paneId: activePaneId)
+                        await sendCommand(.splitTmuxPane(direction: .horizontal), paneId: activePaneId, inputBinding: binding)
                         isSplitting = false
                     }
                 } label: {
@@ -1507,8 +1579,9 @@
                     cancelCreationFollowUp()
                     automaticTabFit.cancel()
                     isSplitting = true
+                    let binding = relayClient.workspaceInputState.binding(paneID: activePaneId)
                     Task {
-                        await sendCommand(.splitTmuxPane(direction: .vertical), paneId: activePaneId)
+                        await sendCommand(.splitTmuxPane(direction: .vertical), paneId: activePaneId, inputBinding: binding)
                         isSplitting = false
                     }
                 } label: {
@@ -1533,11 +1606,18 @@
             }
             // Only recreate if the pane changed
             if activeService?.paneId != activePaneId {
+                let reference = fileWorkspaces.catalogs[hostId]?.reference(paneID: activePaneId)
                 activeService = SessionDetailService(
                     paneId: activePaneId,
                     hostId: hostId,
                     sessionStore: sessionStore,
-                    relayClient: relayClient
+                    relayClient: relayClient,
+                    onDraftChange: { [fileWorkspaces] id, text in
+                        if let reference {
+                            fileWorkspaces.recordDraft(id: id, pane: reference, text: text)
+                        }
+                    },
+                    onDraftSubmitted: { [fileWorkspaces] id, text in fileWorkspaces.discardDraft(id, submittedText: text) }
                 )
             }
         }
@@ -1651,9 +1731,9 @@
             return true
         }
 
-        private func sendCommand(_ command: CommandType, paneId: String) async {
+        private func sendCommand(_ command: CommandType, paneId: String, inputBinding: ViewerWorkspaceInputBinding? = nil) async {
             cursorNavigationCancellations[paneId]?()
-            await relayClient.send(command, paneId: paneId)
+            await relayClient.send(command, paneId: paneId, inputBinding: inputBinding)
         }
 
         private func sendVoiceKeys(_ keys: [TmuxKey]) {
@@ -1713,27 +1793,31 @@
         // MARK: - Close Window
 
         private func requestCloseWindow(_ window: TmuxWindow) {
+            let binding = relayClient.workspaceInputState.windowBinding(target: window.stableId)
             Task {
                 let spec = CheckRunningProcesses(target: .window(window.stableId))
-                let result = await relayClient.sendCommand(spec, paneId: "")
+                let result = await relayClient.sendCommand(spec, paneId: "", inputBinding: binding)
                 if case let .success(response) = result {
                     let processes = response.runningProcesses ?? []
                     if processes.isEmpty {
-                        performCloseWindow(window)
+                        performCloseWindow(window, inputBinding: binding)
                     } else {
                         closeConfirmation = TerminalCloseConfirmation(
                             target: window,
-                            runningProcesses: processes
+                            runningProcesses: processes,
+                            inputBinding: binding
                         )
                     }
+                } else if case let .failure(error) = result {
+                    commandError = error.localizedDescription
                 }
             }
         }
 
-        private func performCloseWindow(_ window: TmuxWindow) {
+        private func performCloseWindow(_ window: TmuxWindow, inputBinding: ViewerWorkspaceInputBinding) {
             Task {
                 let spec = KillTmuxWindow(windowId: window.stableId)
-                let result = await relayClient.sendCommand(spec, paneId: "")
+                let result = await relayClient.sendCommand(spec, paneId: "", inputBinding: inputBinding)
                 if case .success = result {
                     // Select another window if the closed one was selected
                     // (the host will push updated state via pushSessionStateToAll)

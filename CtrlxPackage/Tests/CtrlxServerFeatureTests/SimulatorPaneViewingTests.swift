@@ -194,7 +194,7 @@
                 }
             }
 
-            static func pane(session: String, window: Int, stableID: String? = nil, paneID: String = "%1") -> PaneInfo {
+            static func pane(session: String, window: Int, stableID: String? = nil, paneID: String = "%1", identity: WorkspacePaneIdentity? = nil) -> PaneInfo {
                 PaneInfo(
                     paneId: paneID,
                     target: "\(session):\(window).0",
@@ -206,7 +206,8 @@
                     currentPath: "/fixture",
                     width: 80,
                     height: 24,
-                    isActive: true
+                    isActive: true,
+                    workspaceIdentity: identity
                 )
             }
 
@@ -335,6 +336,7 @@
                 do {
                     _ = try await run(["new-session", "-d", "-s", "work", "/bin/sleep 60"])
                     fixture.pane = try #require(await tmux.refreshPanes().first)
+                    let initialQueries = queries.withLock { $0 }
                     #expect((await fixture.action("open")).ok)
                     #expect((await fixture.action("open", ["new": .bool(true)])).ok)
                     let state = try #require(fixture.created.first)
@@ -344,13 +346,27 @@
                     tabs.rightSide = [.browser(state.id)]
                     tabs.selectedRight = .browser(state.id)
                     let broadcasts = Mutex<[[RemoteSimulatorTab]]>([])
-                    AppCoordinator.wirePaneRefresh(tmuxService: tmux, agentSimulator: fixture.service) {
+                    let windowManager = withDependencies {
+                        $0[PreferencesService.self] = .inMemory()
+                        $0[LoginItemService.self] = .previewValue
+                    } operation: {
+                        MirrorWindowManager(
+                            settings: AppSettings(), tmuxService: tmux,
+                            paneStreamManager: PaneStreamManager(tmuxService: tmux, controlClientManager: TmuxControlClientManager()),
+                            editorSessionManager: EditorSessionManager()
+                        )
+                    }
+                    windowManager.updatePaneStates(from: tmux.panes)
+                    let publishedPanes = Mutex<[[String: PaneState]]>([])
+                    AppCoordinator.wirePaneRefresh(tmuxService: tmux, windowManager: windowManager, agentSimulator: fixture.service) {
+                        publishedPanes.withLock { $0.append(windowManager.paneStates) }
                         broadcasts.withLock { $0.append(fixture.service.sharedSimulatorTabs) }
                     }
                     let oldPane = fixture.pane
                     fixture.pane = Fixture.pane(
                         session: "renamed", window: oldPane.windowIndex,
-                        stableID: oldPane.tmuxWindowId, paneID: oldPane.paneId
+                        stableID: oldPane.tmuxWindowId, paneID: oldPane.paneId,
+                        identity: oldPane.workspaceIdentity
                     )
                     let rename = try #require(SessionRenameMapping.detect(from: [oldPane], to: [fixture.pane]).first)
                     if migrateBeforeRefresh {
@@ -370,6 +386,7 @@
                     #expect(published.count == 1)
                     #expect(published.first?.count == 2)
                     #expect(published.first?.allSatisfy { $0.sessionName == "renamed" } == true)
+                    #expect(publishedPanes.withLock { $0.first?.values.allSatisfy { $0.sessionName == "renamed" } } == true)
                     #expect(fixture.sessionTabs["renamed"] === tabs && fixture.sessionTabs["work"] == nil)
                     #expect(tabs.openBrowserTabs.map(\.id) == [state.id, extra.id])
                     #expect(tabs.selectedBrowserTabId == extra.id)
@@ -381,8 +398,16 @@
                         try await fixture.service.handleSimulator(.init(sessionName: "work", tabID: state.id))
                     }
                     _ = await tmux.refreshPanes()
-                    #expect(queries.withLock { $0 } == 3)
+                    #expect(queries.withLock { $0 } == initialQueries + 2)
                     #expect(broadcasts.withLock { $0.count } == 1)
+
+                    // Even an identity-only change must reach the Viewer before
+                    // a new editor captures its target; the visible name is unchanged.
+                    let replacementID = UUID()
+                    _ = try await run(["set-option", "-t", "renamed", WorkspaceTmuxRecovery.sessionKey, replacementID.uuidString])
+                    _ = await tmux.refreshPanes()
+                    try await wait { publishedPanes.withLock { $0.count == 2 } }
+                    #expect(publishedPanes.withLock { $0.last?.values.first?.workspaceIdentity?.sessionID } == replacementID)
                 } catch {
                     await fixture.service.shutdown()
                     _ = try? await run(["kill-server"])

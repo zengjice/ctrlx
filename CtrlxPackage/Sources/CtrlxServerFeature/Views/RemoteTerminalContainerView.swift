@@ -136,6 +136,10 @@ struct RemoteTerminalContainerView: View {
                 onStreamEnd?()
             }
         }
+        .onChange(of: connection.relayClient.workspaceInputState.binding(paneID: paneId)) { _, binding in
+            guard binding != .unavailable else { return }
+            streamRetryGeneration &+= 1
+        }
         // Tear down any in-flight upload or auto-dismiss timer when the view
         // is removed from the hierarchy (e.g. window closed mid-failure),
         // so detached tasks don't survive the view that owned them.
@@ -942,6 +946,8 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
         private func startStreaming() async {
             guard let connection, let paneId else { return }
+            let inputBinding = connection.relayClient.workspaceInputState.binding(paneID: paneId)
+            guard inputBinding != .unavailable else { return }
             var startMode = recoveryPolicy.nextStartMode()
 
             // A single retry covers a command response lost during a healthy
@@ -977,6 +983,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 let result = await connection.relayClient.sendCommand(
                     StartTerminalStream(leaseId: leaseId),
                     paneId: paneId,
+                    inputBinding: inputBinding
                 )
 
                 guard streamAttemptId == attemptId else { return }
@@ -1013,6 +1020,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
         private func beginStreamAttempt(leaseId: UUID) -> UUID {
             keystrokeDebouncer?.cancelAll()
+            keystrokeDebouncer = nil
             keyCoalescer.reset()
             bootstrapPolicy.beginAttempt()
             bootstrapBuffer.reset()
@@ -1042,6 +1050,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             terminalView.preserveUserScroll = false
             terminalView.isHidden = true
             keystrokeDebouncer?.cancelAll()
+            keystrokeDebouncer = nil
             keyCoalescer.reset()
             updateState(.connecting)
         }
@@ -1076,6 +1085,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         // MARK: - Stream Message Handling
 
         private func handleStreamMessage(_ message: TerminalStreamMessage) {
+            guard
+                message.matchesLease(
+                    activeLeaseId,
+                    requiresLease: connection?.relayClient.workspaceInputState.supportsStreamIdentity == true
+                ) else { return }
             switch message.updateType {
             case let .initialState(state):
                 guard let data = Data(base64Encoded: state.contentBase64) else { return }

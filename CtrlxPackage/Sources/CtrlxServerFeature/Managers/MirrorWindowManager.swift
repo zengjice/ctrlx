@@ -291,7 +291,10 @@ final public class MirrorWindowManager {
     /// call after every pane refresh; existing canonical layouts are never
     /// overwritten, so a layout changed by either peer always wins over a late
     /// disk read.
+    var defersWorkspaceLayoutInitialization = false
+
     public func initializeSharedTerminalLayoutsIfNeeded() {
+        guard !defersWorkspaceLayoutInitialization else { return }
         let windowsBySession = Dictionary(
             grouping: TmuxWindow.groupPanes(
                 paneStates.values.filter { !$0.sessionName.isEmpty }
@@ -913,8 +916,13 @@ final public class MirrorWindowManager {
     /// (`doneWorking`) goes idle; an `awaiting*` form is owed an explicit response
     /// so it survives viewing — the guard now lives inside `AgentSession.markHandled`.
     /// - Parameter paneId: The pane ID whose session should be marked handled
-    public func markSessionHandled(paneId: String) {
+    @discardableResult
+    public func markSessionHandled(paneId: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) -> Bool {
+        if let expectedWorkspacePane, paneStates[paneId]?.workspaceIdentity?.isSamePane(as: expectedWorkspacePane) != true {
+            return false
+        }
         paneStates[paneId]?.agentSession?.markHandled()
+        return true
     }
 
     // MARK: - CLI Session State Override
@@ -947,11 +955,27 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - state: The override to apply, or `nil` to clear.
     ///   - sessionName: The tmux session name.
-    public func setCLISessionState(_ state: CLISessionState?, forSession sessionName: String) {
-        for (paneId, paneState) in paneStates where paneState.sessionName == sessionName {
-            paneStates[paneId]?.cliSessionState = state
+    @discardableResult
+    public func setCLISessionState(_ state: CLISessionState?, forSession sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) -> Bool {
+        let paneIDs = sessionPaneIDs(named: sessionName, matching: expectedWorkspacePane)
+        guard !paneIDs.isEmpty else { return false }
+        for paneID in paneIDs {
+            paneStates[paneID]?.cliSessionState = state
         }
         Task { await onSessionMetadataChanged?() }
+        return true
+    }
+
+    private func sessionPaneIDs(named name: String, matching identity: WorkspacePaneIdentity?) -> [String] {
+        paneStates.compactMap { paneID, state in
+            guard state.sessionName == name else {
+                return nil
+            }
+            if let identity, !identity.isSameSession(as: state.workspaceIdentity) {
+                return nil
+            }
+            return paneID
+        }
     }
 
     /// Clears the manual state override on `paneId` and every sibling pane in
@@ -980,13 +1004,18 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - enabled: Whether to enable or disable yolo mode
     ///   - paneId: The pane ID to set yolo mode for
-    public func setYoloMode(enabled: Bool, for paneId: String) {
+    @discardableResult
+    public func setYoloMode(enabled: Bool, for paneId: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) -> Bool {
+        if let expectedWorkspacePane, paneStates[paneId]?.workspaceIdentity?.isSamePane(as: expectedWorkspacePane) != true {
+            return false
+        }
         if paneStates[paneId] != nil {
             paneStates[paneId]?.yoloMode = enabled
         } else {
             // Create minimal state if needed
             paneStates[paneId] = PaneState(paneId: paneId, yoloMode: enabled)
         }
+        return true
     }
 
     /// Whether yolo mode is enabled for the given pane
@@ -1002,17 +1031,14 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - description: The description text, or nil to clear
     ///   - sessionName: The tmux session name
-    public func setSessionDescription(_ description: String?, for sessionName: String) {
-        let normalizedDescription = description?.isEmpty == true ? nil : description
-        // Optimistic local update for immediate UI feedback; tmux remains the source
-        // of truth and the next refresh reconciles from it.
-        for (paneId, state) in paneStates where state.sessionName == sessionName {
-            paneStates[paneId]?.customDescription = normalizedDescription
+    public func setSessionDescription(_ description: String?, for sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        let identity = expectedWorkspacePane ?? paneStates.values.first(where: { $0.sessionName == sessionName })?.workspaceIdentity
+        let value = description?.isEmpty == true ? nil : description
+        try await tmuxService.setSessionDescription(value, for: sessionName, expectedWorkspacePane: identity)
+        for paneID in sessionPaneIDs(named: sessionName, matching: identity) {
+            paneStates[paneID]?.customDescription = value
         }
-        Task { [tmuxService] in
-            try? await tmuxService.setSessionDescription(normalizedDescription, for: sessionName)
-            await onSessionMetadataChanged?()
-        }
+        await onSessionMetadataChanged?()
     }
 
     // MARK: - Session Colors
@@ -1022,23 +1048,14 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - color: The color, or nil to clear
     ///   - sessionName: The tmux session name
-    public func setSessionColor(_ color: SessionColor?, for sessionName: String) {
-        // Optimistic local update for immediate UI feedback; tmux remains the source
-        // of truth and the next refresh reconciles from it.
-        for (paneId, state) in paneStates where state.sessionName == sessionName {
-            paneStates[paneId]?.customColor = color
+    public func setSessionColor(_ color: SessionColor?, for sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        let identity = expectedWorkspacePane ?? paneStates.values.first(where: { $0.sessionName == sessionName })?.workspaceIdentity
+        let value = color
+        try await tmuxService.setSessionColor(value, for: sessionName, expectedWorkspacePane: identity)
+        for paneID in sessionPaneIDs(named: sessionName, matching: identity) {
+            paneStates[paneID]?.customColor = value
         }
-        Task { [tmuxService, logger] in
-            do {
-                try await tmuxService.setSessionColor(color, for: sessionName)
-            } catch {
-                logger.warning("Failed to persist session color", metadata: [
-                    "session": "\(sessionName)",
-                    "error": "\(error)",
-                ])
-            }
-            await onSessionMetadataChanged?()
-        }
+        await onSessionMetadataChanged?()
     }
 
     // MARK: - Session Emoji
@@ -1048,24 +1065,14 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - emoji: The emoji string, or nil/empty to clear
     ///   - sessionName: The tmux session name
-    public func setSessionEmoji(_ emoji: String?, for sessionName: String) {
-        let normalizedEmoji = emoji?.isEmpty == true ? nil : emoji
-        // Optimistic local update for immediate UI feedback; tmux remains the source
-        // of truth and the next refresh reconciles from it.
-        for (paneId, state) in paneStates where state.sessionName == sessionName {
-            paneStates[paneId]?.customEmoji = normalizedEmoji
+    public func setSessionEmoji(_ emoji: String?, for sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        let identity = expectedWorkspacePane ?? paneStates.values.first(where: { $0.sessionName == sessionName })?.workspaceIdentity
+        let value = emoji?.isEmpty == true ? nil : emoji
+        try await tmuxService.setSessionEmoji(value, for: sessionName, expectedWorkspacePane: identity)
+        for paneID in sessionPaneIDs(named: sessionName, matching: identity) {
+            paneStates[paneID]?.customEmoji = value
         }
-        Task { [tmuxService, logger] in
-            do {
-                try await tmuxService.setSessionEmoji(normalizedEmoji, for: sessionName)
-            } catch {
-                logger.warning("Failed to persist session emoji", metadata: [
-                    "session": "\(sessionName)",
-                    "error": "\(error)",
-                ])
-            }
-            await onSessionMetadataChanged?()
-        }
+        await onSessionMetadataChanged?()
     }
 
     // MARK: - Git Branch Detection

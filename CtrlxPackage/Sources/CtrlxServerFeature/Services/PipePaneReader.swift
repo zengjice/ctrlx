@@ -41,12 +41,13 @@
     @MainActor
     protocol PipePaneReaderDelegate: AnyObject, Sendable {
         func pipePaneReader(
-            _ paneId: String,
+            _ reader: PipePaneReader,
+            paneId: String,
             didReceiveNotification notification: TerminalStreamMessage.TerminalNotification
         )
-        func pipePaneReader(_ paneId: String, didReceiveTitle title: String)
-        func pipePaneReader(_ paneId: String, didReceiveClipboard content: String)
-        func pipePaneReader(_ paneId: String, didReceiveProgress progress: TerminalProgressState)
+        func pipePaneReader(_ reader: PipePaneReader, paneId: String, didReceiveTitle title: String)
+        func pipePaneReader(_ reader: PipePaneReader, paneId: String, didReceiveClipboard content: String)
+        func pipePaneReader(_ reader: PipePaneReader, paneId: String, didReceiveProgress progress: TerminalProgressState)
         func pipePaneReader(
             _ reader: PipePaneReader,
             paneId: String,
@@ -80,6 +81,7 @@
         private var isStopping = false
         private var terminationReported = false
         private var streamGeneration: UUID?
+        private var attachedServerID: String?
 
         // Delivery
         private weak var delegate: (any PipePaneReaderDelegate)?
@@ -118,7 +120,7 @@
                 !sanitized.isEmpty && sanitized.allSatisfy(\.isNumber),
                 "Pane ID must contain only digits after stripping '%', got: \(paneId)"
             )
-            self.fifoPath = fifoDirectory.appendingPathComponent("ctrlx-pipe-\(sanitized).fifo").path
+            self.fifoPath = fifoDirectory.appendingPathComponent("ctrlx-pipe-\(sanitized)-\(UUID().uuidString).fifo").path
         }
 
         // MARK: - Public API
@@ -137,13 +139,24 @@
         /// - Parameter sessionName: The tmux session name for the control client
         func startPipePane(
             controlClientManager: TmuxControlClientManager,
-            sessionName: String
+            sessionName: String,
+            expectedServerID: String? = nil
         ) async throws {
             guard !isRunning else {
                 logger.warning("pipe-pane already running for \(paneId)")
                 return
             }
 
+            let serverID = try await controlClientManager.serverIdentity(for: sessionName)
+            guard expectedServerID == nil || expectedServerID == serverID else {
+                throw TmuxControlError.commandFailed(message: "The tmux server changed before reader startup.")
+            }
+            attachedServerID = serverID
+            defer {
+                if !isRunning {
+                    cleanupFifo()
+                }
+            }
             isStopping = false
             terminationReported = false
             notificationParser.scanOnly = true
@@ -168,11 +181,13 @@
             // Step 2: Stop any existing pipe-pane for this pane, then start new one
             _ = try? await controlClientManager.sendCommand(
                 "pipe-pane -t '\(paneId)'",
-                sessionName: sessionName
+                sessionName: sessionName,
+                expectedServerID: serverID
             )
             _ = try await controlClientManager.sendCommand(
                 "pipe-pane -O -t '\(paneId)' 'exec cat > \"\(fifoPath)\"'",
-                sessionName: sessionName
+                sessionName: sessionName,
+                expectedServerID: serverID
             )
 
             logger.debug("pipe-pane command sent for \(paneId)")
@@ -282,7 +297,8 @@
             // Stop pipe-pane in tmux (this terminates the cat process)
             _ = try? await controlClientManager.sendCommand(
                 "pipe-pane -t '\(paneId)'",
-                sessionName: sessionName
+                sessionName: sessionName,
+                expectedServerID: attachedServerID
             )
 
             // Clean up FIFO
@@ -371,6 +387,7 @@
             compactPendingDelegateEvents()
             recordDelegateQueue()
             return DelegateDelivery(
+                reader: self,
                 paneId: paneId,
                 delegate: WeakDelegate(delegate),
                 events: events
@@ -385,6 +402,7 @@
         }
 
         private struct DelegateDelivery: Sendable {
+            let reader: PipePaneReader
             let paneId: String
             let delegate: WeakDelegate
             let events: [DelegateEvent]
@@ -394,13 +412,13 @@
                 for event in events {
                     switch event {
                     case let .notification(notification):
-                        delegate.value?.pipePaneReader(paneId, didReceiveNotification: notification)
+                        delegate.value?.pipePaneReader(reader, paneId: paneId, didReceiveNotification: notification)
                     case let .title(title):
-                        delegate.value?.pipePaneReader(paneId, didReceiveTitle: title)
+                        delegate.value?.pipePaneReader(reader, paneId: paneId, didReceiveTitle: title)
                     case let .clipboard(clipboard):
-                        delegate.value?.pipePaneReader(paneId, didReceiveClipboard: clipboard)
+                        delegate.value?.pipePaneReader(reader, paneId: paneId, didReceiveClipboard: clipboard)
                     case let .progress(progress):
-                        delegate.value?.pipePaneReader(paneId, didReceiveProgress: progress)
+                        delegate.value?.pipePaneReader(reader, paneId: paneId, didReceiveProgress: progress)
                     }
                 }
             }

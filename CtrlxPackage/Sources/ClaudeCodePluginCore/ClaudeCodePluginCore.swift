@@ -1,8 +1,8 @@
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
-import CtrlxPluginProtocol
 
 /// The Claude Code agent, behind the agent-blind `PluginCore` contract (spec §4).
 /// An in-process actor constructed from the compile-time registry.
@@ -16,7 +16,7 @@ import CtrlxPluginProtocol
 /// (`~/.claude.json`, transcripts) and hook payloads, so it must never trap —
 /// `do/try/catch` around every decode, no force-unwraps, skip-and-log malformed
 /// entries.
-public actor ClaudeCodePluginCore: AgentSessionForking, AgentPluginMaintenance {
+public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, AgentPluginMaintenance {
     public static let pluginID = "claude-code"
 
     private var host: (any PluginHost)?
@@ -258,6 +258,65 @@ public actor ClaudeCodePluginCore: AgentSessionForking, AgentPluginMaintenance {
                 env: usesDefaultRoot ? [:] : ["CLAUDE_CONFIG_DIR": root]
             ),
             unsetEnvironment: usesDefaultRoot ? ["CLAUDE_CONFIG_DIR"] : []
+        )
+    }
+
+    /// Verified with scripts/verify-workspace-agent-resume.py (idle/interrupted/approval).
+    private static let verifiedResumeVersion = "2.1.276 (Claude Code)"
+
+    public func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation? = nil) async throws -> AgentResumeDescriptor {
+        guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Claude Code conversation ID.") }
+        @Dependency(AgentForkHistoryClient.self) var history
+        let defaultRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").resolvingSymlinksInPath().path
+        let roots = invocation.map { [$0.configurationRoots["CLAUDE_CONFIG_DIR"] ?? defaultRoot] }
+            ?? ([defaultRoot] + [ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]].compactMap { $0 } + settings.additionalConfigFolders)
+        let root = try await history.root(sessionID, roots, .claude)
+        let arguments = try Self.resumeArguments(invocation?.arguments ?? [])
+        return AgentResumeDescriptor(
+            pluginID: Self.pluginID,
+            sessionID: sessionID,
+            projectPath: projectPath,
+            configurationRoot: root,
+            usesDefaultConfiguration: invocation.map { $0.configurationRoots["CLAUDE_CONFIG_DIR"] == nil } ?? (root == defaultRoot),
+            executable: invocation?.executable,
+            cliVersion: invocation?.version,
+            arguments: arguments,
+            automaticResumeUnavailableReason: invocation?.version == Self.verifiedResumeVersion ? nil : (invocation.map { "Automatic resume has not been verified for Claude Code \($0.version ?? "unknown version")." }
+                ?? "The original process invocation was not recorded.")
+        )
+    }
+
+    private static func resumeArguments(_ arguments: [String]) throws -> [String] {
+        try AgentResumeArguments.capture(
+            arguments,
+            values: ["--model", "--permission-mode", "--effort", "--fallback-model", "--agent"],
+            flags: ["--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--brief", "--disable-slash-commands", "--chrome", "--no-chrome"],
+            ignoredValues: ["--resume", "--name"],
+            ignoredFlags: ["--continue", "--fork-session"],
+            aliases: ["-r": "--resume", "-c": "--continue", "-n": "--name"]
+        )
+    }
+
+    public func commandForResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch {
+        guard
+            descriptor.pluginID == Self.pluginID, UUID(uuidString: descriptor.sessionID) != nil,
+            descriptor.configurationRoot.hasPrefix("/"), descriptor.projectPath.hasPrefix("/") else {
+            throw AgentForkError("Invalid Claude Code recovery identity.")
+        }
+        @Dependency(AgentForkHistoryClient.self) var history
+        let root = try await history.root(descriptor.sessionID, [descriptor.configurationRoot], .claude)
+        let defaultRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").resolvingSymlinksInPath().path
+        guard !descriptor.usesDefaultConfiguration || root == defaultRoot else {
+            throw AgentForkError("The recorded default Claude configuration directory has changed.")
+        }
+        guard try Self.resumeArguments(descriptor.arguments) == descriptor.arguments else { throw AgentForkError("Invalid Claude Code recovery options.") }
+        return AgentForkLaunch(
+            command: LaunchCommand(
+                command: descriptor.executable ?? settings.commandPath,
+                args: ["--resume", descriptor.sessionID] + descriptor.arguments,
+                env: descriptor.usesDefaultConfiguration ? [:] : ["CLAUDE_CONFIG_DIR": root]
+            ),
+            unsetEnvironment: descriptor.usesDefaultConfiguration ? ["CLAUDE_CONFIG_DIR"] : []
         )
     }
 

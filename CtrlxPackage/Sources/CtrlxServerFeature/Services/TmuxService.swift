@@ -1,5 +1,6 @@
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
 import Logging
@@ -87,6 +88,7 @@ enum PaneSurfaceRetry {
     @MainActor
     static func localWindow(
         containing paneId: String,
+        serverID: String? = nil,
         attempts: Int = PaneSurfaceRetry.attempts,
         delay: Duration = PaneSurfaceRetry.delay,
         windows: @escaping @MainActor () -> [LocalTmuxWindow],
@@ -96,7 +98,7 @@ enum PaneSurfaceRetry {
 
         for attempt in 0..<attempts {
             if let window = windows().first(where: { window in
-                window.panes.contains(where: { $0.paneId == paneId })
+                window.panes.contains(where: { $0.paneId == paneId && (serverID == nil || $0.tmuxServerID == serverID) })
             }) {
                 return window
             }
@@ -322,6 +324,44 @@ final public class TmuxService {
         }
         return vars
     }
+
+    func workspaceRecoveryClient() -> WorkspaceTmuxClient {
+        @Dependency(WorkspaceRecoverySystem.self) var system
+        return WorkspaceTmuxRecovery(
+            run: { [self] in try await runTmuxCommand($0) },
+            shell: { [self] in await recoveryShell() },
+            system: system
+        ).client
+    }
+
+    private func recoveryShell() async -> (command: String, environment: [String]) {
+        let command = await instrumentedShellCommand() ?? defaultCommandWrapper
+        return (command, terminalEnvironmentVars)
+    }
+
+    func workspaceAgentPane(_ runtimeID: String) async throws -> WorkspaceRecoveryAgentPane {
+        let result = try await runTmuxCommand(["display-message", "-p", "-t", runtimeID, WorkspaceAgentTerminal.inspectionFormat])
+        return try WorkspaceAgentTerminal.parse(result)
+    }
+
+    func launchWorkspaceAgent(runtimeID: String, pane: WorkspaceRecoveryPane, record: WorkspaceRecoveryAgentLaunch, command: AgentForkLaunch?) async throws {
+        @Dependency(WorkspaceRecoverySystem.self) var system
+        guard system.directoryExists(pane.directory) else { throw WorkspaceRecoveryError("The original working directory is unavailable: \(pane.directory)") }
+        let process: [String]
+        if let command {
+            let prepared = SessionLaunchPreparation(workingDirectory: pane.directory, fork: command)
+            guard let invocation = try prepared.forkRunCommand(shell: loginShellPath) else { throw WorkspaceRecoveryError("The Agent did not provide a resume command.") }
+            let line = overrideCommandPrefix().map { "\($0); \(invocation)" } ?? invocation
+            process = [loginShellPath, "-l", "-i", "-c", line + " && exec " + loginShellPath.posixSingleQuoted + " -l"]
+        } else {
+            process = ["/bin/sh", "-c", await recoveryShell().command]
+        }
+        let arguments = WorkspaceAgentTerminal.launchArguments(runtimeID: runtimeID, pane: pane, record: record, process: process, environment: terminalEnvironmentVars)
+        let result = try await runTmuxCommand(arguments)
+        try WorkspaceAgentTerminal.verifyLaunch(result, record: record)
+    }
+
+    @ObservationIgnored var workspaceCloseHandler: WorkspaceRecoveryCloseHandler?
 
     @ObservationIgnored
     @Dependency(ProcessRunner.self) private var processRunner
@@ -552,7 +592,7 @@ final public class TmuxService {
     private static var paneListFormat: String {
         // Keep live routing and UI parsing on the same field contract.
         let sep = String(PaneInfo.fieldSeparator)
-        return "#{pane_id}\(sep)#{session_name}\(sep)#{window_index}\(sep)#{pane_index}\(sep)#{pane_current_command}\(sep)#{pane_current_path}\(sep)#{pane_width}\(sep)#{pane_height}\(sep)#{pane_active}\(sep)#{pane_title}\(sep)#{window_layout}\(sep)#{window_name}\(sep)#{window_active}\(sep)#{\(Self.colorOptionKey)}\(sep)#{\(Self.emojiOptionKey)}\(sep)#{\(Self.descriptionOptionKey)}\(sep)#{window_id}"
+        return "#{pane_id}\(sep)#{session_name}\(sep)#{window_index}\(sep)#{pane_index}\(sep)#{pane_current_command}\(sep)#{pane_current_path}\(sep)#{pane_width}\(sep)#{pane_height}\(sep)#{pane_active}\(sep)#{pane_title}\(sep)#{window_layout}\(sep)#{window_name}\(sep)#{window_active}\(sep)#{\(Self.colorOptionKey)}\(sep)#{\(Self.emojiOptionKey)}\(sep)#{\(Self.descriptionOptionKey)}\(sep)#{window_id}\(sep)#{pid}:#{start_time}\(sep)#{\(WorkspaceTmuxRecovery.sessionKey)}\(sep)#{\(WorkspaceTmuxRecovery.windowKey)}\(sep)#{\(WorkspaceTmuxRecovery.paneKey)}\(sep)#{session_id}"
     }
 
     /// Queries tmux and folds every signal into a single `RefreshOutcome`.
@@ -569,7 +609,7 @@ final public class TmuxService {
     ///    - Anything else → `.keep` (tmux glitched on list-panes; sessions
     ///      always have at least one pane, so non-empty list-sessions means
     ///      list-panes lied).
-    private func queryRefreshOutcome(attachedSessions: Set<String>) async -> RefreshOutcome {
+    private func queryRefreshOutcome(attachedSessions: Set<String>, assignIdentities: Bool = true) async -> RefreshOutcome {
         // Fields are joined with ASCII Unit Separator (U+001F) — see
         // `PaneInfo.fieldSeparator`. Using `|` here used to break parsing as
         // soon as `pane_title` contained a `|` (Codex CLI does this when it
@@ -613,6 +653,17 @@ final public class TmuxService {
         let parsed = lines
             .compactMap { PaneInfo(fromTmuxOutput: $0) }
             .filter { !$0.sessionName.hasPrefix(EditorOverride.probeSessionPrefix) }
+        if assignIdentities {
+            do {
+                if try await assignWorkspaceIdentities(parsed) {
+                    // Publish the metadata actually stored by tmux, including
+                    // UUIDs a concurrent recovery capture may have assigned.
+                    return await queryRefreshOutcome(attachedSessions: attachedSessions, assignIdentities: false)
+                }
+            } catch {
+                return .keep(reason: "Cannot assign terminal identities", lastError: error.localizedDescription)
+            }
+        }
         let sorted = parsed.sorted { pane1, pane2 in
             let pane1Attached = attachedSessions.contains(pane1.sessionName)
             let pane2Attached = attachedSessions.contains(pane2.sessionName)
@@ -654,6 +705,59 @@ final public class TmuxService {
             reason: "list-panes empty + list-sessions inconclusive (sessionCount=\(sessionLines.count) sessionsSucceeded=\(listSessionsSucceeded) rawLines=\(lines.count) parsed=\(parsed.count) stdoutPrefix=\(stdoutPrefix))",
             lastError: nil
         )
+    }
+
+    private func assignWorkspaceIdentities(_ panes: [PaneInfo]) async throws -> Bool {
+        var assigned: Set<String> = []
+        var assignments: [[String]] = []
+        // Include linked sessions before deduplicating physical panes.
+        for pane in panes where pane.workspaceIdentity == nil {
+            guard let server = pane.tmuxServerID, let session = pane.tmuxSessionID, let window = pane.tmuxWindowId else { continue }
+            for (target, scope, key) in [
+                (session, [String](), WorkspaceTmuxRecovery.sessionKey),
+                (window, ["-w"], WorkspaceTmuxRecovery.windowKey),
+                (pane.paneId, ["-p"], WorkspaceTmuxRecovery.paneKey),
+            ] where assigned.insert(target).inserted {
+                assignments.append(WorkspaceTmuxRecovery.identityAssignment(serverID: server, target: target, scope: scope, key: key))
+            }
+        }
+        guard !assignments.isEmpty else { return false }
+        for batch in WorkspaceTmuxRecovery.identityAssignmentBatches(assignments) {
+            try Task.checkCancellation()
+            let result = try await runTmuxCommand(batch)
+            guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
+        }
+        return true
+    }
+
+    /// Resolve a CLI operation once; subsequent awaits must retain this identity.
+    func captureWorkspacePane(target: String, expectedServerID: String? = nil) async throws -> (info: PaneInfo, identity: WorkspacePaneIdentity) {
+        func read(_ target: String) async throws -> PaneInfo {
+            let result = try await runTmuxCommand(["display-message", "-p", "-t", target, Self.paneListFormat])
+            guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
+            guard let pane = PaneInfo(fromTmuxOutput: result.stdoutString.trimmingCharacters(in: .newlines)) else {
+                throw TmuxError.invalidPane(target: target)
+            }
+            return pane
+        }
+        let original = try await read(target)
+        guard expectedServerID == nil || original.tmuxServerID == expectedServerID else {
+            throw TmuxError.commandFailed(message: "The terminal changed while resolving the command. Try again.")
+        }
+        if let identity = original.workspaceIdentity {
+            return (original, identity)
+        }
+        _ = try await assignWorkspaceIdentities([original])
+        let current = try await read(original.paneId)
+        guard
+            current.tmuxServerID == original.tmuxServerID,
+            current.tmuxSessionID == original.tmuxSessionID,
+            current.tmuxWindowId == original.tmuxWindowId,
+            let identity = current.workspaceIdentity
+        else {
+            throw TmuxError.commandFailed(message: "The terminal changed while resolving the command. Try again.")
+        }
+        return (current, identity)
     }
 
     /// Detects tmux panes that have a running coding-agent process as a descendant.
@@ -1073,6 +1177,16 @@ final public class TmuxService {
         )
     }
 
+    func paneStreamTarget(_ paneID: String) async throws -> (sessionName: String, serverID: String, persistentPaneID: UUID?) {
+        let format = "#{session_name}\u{1F}#{pid}:#{start_time}\u{1F}#{\(WorkspaceTmuxRecovery.paneKey)}"
+        let result = try await runTmuxCommand(["display-message", "-p", "-t", paneID, format])
+        let fields = result.stdoutString.trimmingCharacters(in: .newlines).components(separatedBy: "\u{1F}")
+        guard result.isSuccess, fields.count == 3, !fields[0].isEmpty, !fields[1].isEmpty else {
+            throw TmuxError.invalidPane(target: paneID)
+        }
+        return (fields[0], fields[1], UUID(uuidString: fields[2]))
+    }
+
     /// Captures pane content for streaming using control mode commands.
     ///
     /// Unlike `capturePaneWithScrollbackForStreaming` (which uses subprocesses), this sends
@@ -1094,6 +1208,8 @@ final public class TmuxService {
         controlClientManager: TmuxControlClientManager,
         sessionName: String,
         scrollbackLineLimit: Int = TerminalScrollbackPolicy.defaultLineLimit,
+        expectedWorkspacePane: WorkspacePaneIdentity? = nil,
+        expectedServerID: String? = nil,
         onSnapshotBoundary: (@MainActor @Sendable () -> Void)? = nil
     ) async throws -> Data {
         // Address the pane by its stable tmux pane ID rather than a
@@ -1115,12 +1231,17 @@ final public class TmuxService {
         commands.append("capture-pane -t '\(paneId)' -p -e -N")
         commands.append("display-message -t '\(paneId)' -p '#{cursor_x},#{cursor_y},#{cursor_flag}'")
 
+        if expectedWorkspacePane != nil {
+            commands.append("display-message -t '\(paneId)' -p '#{pid}:#{start_time}|#{\(WorkspaceTmuxRecovery.paneKey)}'")
+        }
+
         // History, visible cells and cursor must be from ONE tmux event-loop
         // turn. Separate awaited commands can combine an old cursor/history
         // with a new screen, corrupting subsequent relative cursor movement.
-        let responses = try await controlClientManager.sendCommandList(
+        var responses = try await controlClientManager.sendCommandList(
             commands,
             sessionName: sessionName,
+            expectedServerID: expectedServerID ?? expectedWorkspacePane?.serverID,
             onResponse: { response in
                 guard !response.isError else { return }
                 onSnapshotBoundary?()
@@ -1129,6 +1250,13 @@ final public class TmuxService {
 
         guard responses.count == commands.count, !responses.contains(where: \.isError) else {
             throw TmuxError.invalidPane(target: paneId)
+        }
+
+        if let expectedWorkspacePane {
+            let actual = responses.removeLast().output.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard actual == "\(expectedWorkspacePane.serverID)|\(expectedWorkspacePane.paneID.uuidString)" else {
+                throw TmuxError.commandFailed(message: "The terminal changed before streaming began. Select the restored terminal and try again.")
+            }
         }
 
         return processCapturePaneForStreaming(
@@ -2077,9 +2205,12 @@ final public class TmuxService {
     ///
     /// Used for escape sequences (e.g., mouse events) that can't be represented
     /// as TmuxKey values and must be forwarded to the terminal application as-is.
-    public func sendRawBytes(_ target: String, data: Data) async throws {
+    public func sendRawBytes(_ target: String, data: Data, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
         var args = ["send-keys", "-t", target, "-H"]
         args.append(contentsOf: data.map { String(format: "%02x", $0) })
+        if let expectedWorkspacePane {
+            return try await sendWorkspaceInput([args], target: target, identity: expectedWorkspacePane)
+        }
         let result = try await runTmuxCommand(args)
         guard result.isSuccess else {
             throw TmuxError.commandFailed(message: result.stderrString)
@@ -2091,7 +2222,7 @@ final public class TmuxService {
     ///   - target: The pane target
     ///   - keys: The keys to send (can be literal text or tmux key names like "Enter", "C-c")
     ///   - literal: If true, sends keys literally without interpreting special names
-    public func sendKeys(_ target: String, keys: String, literal: Bool = false) async throws {
+    public func sendKeys(_ target: String, keys: String, literal: Bool = false, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
         var args = ["send-keys", "-t", target]
         if literal {
             args.append("-l") // Disable key name lookup
@@ -2100,6 +2231,9 @@ final public class TmuxService {
             // tmux parses that user text as another send-keys flag and drops
             // this and every later input batch after returning an error.
             args.append("--")
+        }
+        if let expectedWorkspacePane {
+            return try await sendWorkspaceInput([args + [keys]], target: target, identity: expectedWorkspacePane)
         }
         args.append(escapeTmuxSemicolon(keys))
 
@@ -2116,9 +2250,12 @@ final public class TmuxService {
     /// - Parameters:
     ///   - target: The pane target
     ///   - keys: Array of tmux key names (e.g., ["Enter", "Up", "C-c"])
-    public func sendBatchKeys(_ target: String, keys: [String]) async throws {
+    public func sendBatchKeys(_ target: String, keys: [String], expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
         guard !keys.isEmpty else { return }
         var args = ["send-keys", "-t", target]
+        if let expectedWorkspacePane {
+            return try await sendWorkspaceInput([args + keys], target: target, identity: expectedWorkspacePane)
+        }
         for key in keys {
             args.append(escapeTmuxSemicolon(key))
         }
@@ -2133,13 +2270,13 @@ final public class TmuxService {
     /// concatenated into a single `send-keys -l`, runs of named keys go through
     /// `sendBatchKeys`, and a `.delay` flushes the current batch then sleeps.
     /// Shared by the keystroke-command path and the plugin `sendKeys` sink.
-    public func sendKeystrokes(_ target: String, keys: [TmuxKey]) async throws {
+    public func sendKeystrokes(_ target: String, keys: [TmuxKey], expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
         var batch: [TmuxKey] = []
         var batchIsLiteral = false
 
         for key in keys {
             if case let .delay(milliseconds) = key {
-                try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral)
+                try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral, expectedWorkspacePane: expectedWorkspacePane)
                 batchIsLiteral = false
                 try await Task.sleep(for: .milliseconds(milliseconds))
                 continue
@@ -2147,21 +2284,21 @@ final public class TmuxService {
 
             let isLiteral = key.requiresLiteralMode
             if !batch.isEmpty, isLiteral != batchIsLiteral {
-                try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral)
+                try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral, expectedWorkspacePane: expectedWorkspacePane)
             }
             batchIsLiteral = isLiteral
             batch.append(key)
         }
 
-        try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral)
+        try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral, expectedWorkspacePane: expectedWorkspacePane)
     }
 
-    private func flushKeystrokeBatch(_ target: String, keys: inout [TmuxKey], literal: Bool) async throws {
+    private func flushKeystrokeBatch(_ target: String, keys: inout [TmuxKey], literal: Bool, expectedWorkspacePane: WorkspacePaneIdentity?) async throws {
         guard !keys.isEmpty else { return }
         if literal {
-            try await sendKeys(target, keys: keys.map(\.tmuxKeyName).joined(), literal: true)
+            try await sendKeys(target, keys: keys.map(\.tmuxKeyName).joined(), literal: true, expectedWorkspacePane: expectedWorkspacePane)
         } else {
-            try await sendBatchKeys(target, keys: keys.map(\.tmuxKeyName))
+            try await sendBatchKeys(target, keys: keys.map(\.tmuxKeyName), expectedWorkspacePane: expectedWorkspacePane)
         }
         keys.removeAll()
     }
@@ -2185,7 +2322,8 @@ final public class TmuxService {
         target: String,
         content: String,
         bufferName: String,
-        preserveLineFeeds: Bool = false
+        preserveLineFeeds: Bool = false,
+        expectedWorkspacePane: WorkspacePaneIdentity? = nil
     ) async throws {
         // Tmux's `-` form reads from stdin, but our ProcessRunner doesn't
         // expose stdin — write to a tmp file and pass the path instead.
@@ -2198,14 +2336,11 @@ final public class TmuxService {
         try Data(content.utf8).write(to: tmpURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: tmpURL) }
 
-        let load = try await runTmuxCommand([
+        let loadArguments = [
             "load-buffer",
             "-b", bufferName,
             tmpURL.path,
-        ])
-        guard load.isSuccess else {
-            throw TmuxError.commandFailed(message: load.stderrString)
-        }
+        ]
 
         var pasteArguments = [
             "paste-buffer",
@@ -2215,6 +2350,13 @@ final public class TmuxService {
             "-t", target,
         ]
         if preserveLineFeeds { pasteArguments.append("-r") }
+        if let expectedWorkspacePane {
+            return try await sendWorkspaceInput([loadArguments, pasteArguments], target: target, identity: expectedWorkspacePane)
+        }
+        let load = try await runTmuxCommand(loadArguments)
+        guard load.isSuccess else {
+            throw TmuxError.commandFailed(message: load.stderrString)
+        }
         let paste = try await runTmuxCommand(pasteArguments)
         guard paste.isSuccess else {
             throw TmuxError.commandFailed(message: paste.stderrString)
@@ -2248,11 +2390,10 @@ final public class TmuxService {
     }
 
     /// Local and Viewer Fit keep the current split tree and relative sizes.
-    public func fitWindow(_ target: String, width: Int, height: Int) async throws {
-        let snapshot = try await runTmuxCommand([
+    public func fitWindow(_ target: String, width: Int, height: Int, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        let snapshot = try await runWorkspaceCommand([[
             "display-message", "-p", "-t", target, "#{window_id}\t#{window_layout}",
-        ])
-        guard snapshot.isSuccess else { throw TmuxError.commandFailed(message: snapshot.stderrString) }
+        ]], target: target, identity: expectedWorkspacePane, scope: .window)
         let fields = snapshot.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\t")
         guard fields.count == 2, let layout = TmuxLayoutParser.parse(fields[1]),
               let fitted = TmuxWindowFitLayout.layoutString(layout, width: width, height: height) else {
@@ -2260,11 +2401,10 @@ final public class TmuxService {
         }
         guard layout.width != width || layout.height != height else { return }
         // One tmux command queue: no intermediate layout is published by us.
-        let result = try await runTmuxCommand([
-            "resize-window", "-t", fields[0], "-x", String(width), "-y", String(height),
-            ";", "select-layout", "-t", fields[0], fitted,
-        ])
-        guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
+        _ = try await runWorkspaceCommand([
+            ["resize-window", "-t", fields[0], "-x", String(width), "-y", String(height)],
+            ["select-layout", "-t", fields[0], fitted],
+        ], target: fields[0], identity: expectedWorkspacePane, scope: .window)
         await refreshPanes()
     }
 
@@ -2279,14 +2419,11 @@ final public class TmuxService {
         _ target: String,
         horizontal: Bool,
         workingDirectory: String? = nil,
-        shellCommand: String? = nil
+        shellCommand: String? = nil,
+        expectedWorkspacePane: WorkspacePaneIdentity? = nil
     ) async throws -> String {
         let flag = horizontal ? "-h" : "-v"
         var args = [
-            // Old CtrlX builds may have copied NO_COLOR from the app into this
-            // session. Clear it before spawning another shell in the session.
-            "set-environment", "-u", "-t", target, "NO_COLOR",
-            ";",
             "split-window",
             flag,
             "-t", target,
@@ -2310,26 +2447,21 @@ final public class TmuxService {
             args.append(command)
         }
 
-        let result = try await runTmuxCommand(args)
-
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
+        // Clear legacy NO_COLOR only after validating the original target too.
+        let result = try await runWorkspaceCommand([
+            ["set-environment", "-u", "-t", target, "NO_COLOR"], args,
+        ], target: target, identity: expectedWorkspacePane)
 
         return result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Selects (focuses) a tmux pane
     /// - Parameter target: The pane target to select (e.g., "%5")
-    public func selectPane(_ target: String) async throws {
-        let result = try await runTmuxCommand([
+    public func selectPane(_ target: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        _ = try await runWorkspaceCommand([[
             "select-pane",
             "-t", target,
-        ])
-
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
+        ]], target: target, identity: expectedWorkspacePane)
 
         // Sync the local cache so `pane_active` reflects the change before the
         // 5-second polling timer next fires. Without this, switching sessions
@@ -2341,15 +2473,21 @@ final public class TmuxService {
 
     /// Selects (switches to) a tmux window
     /// - Parameter target: The window target to select (e.g., "session:0")
-    public func selectWindow(_ target: String) async throws {
-        let result = try await runTmuxCommand([
+    public func selectWindow(_ target: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        _ = try await runWorkspaceCommand([[
             "select-window",
             "-t", target,
-        ])
+        ]], target: target, identity: expectedWorkspacePane, scope: .window)
+    }
 
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
+    func selectSession(_ name: String, expectedWorkspacePane: WorkspacePaneIdentity?) async throws {
+        let target = Self.sessionTarget(name)
+        _ = try await runWorkspaceCommand([["select-window", "-t", target]], target: target, identity: expectedWorkspacePane, scope: .session)
+    }
+
+    func checkWorkspaceSession(_ name: String, identity: WorkspacePaneIdentity?) async throws {
+        let target = Self.sessionTarget(name)
+        _ = try await runWorkspaceCommand([["display-message", "-p", ""]], target: target, identity: identity, scope: .session)
     }
 
     /// Creates a new tmux window in an existing session
@@ -2365,8 +2503,11 @@ final public class TmuxService {
         windowIndex: Int? = nil,
         runCommand: String? = nil,
         extraEnvironment: [String] = [],
-        forceLoginShell: Bool = false
+        forceLoginShell: Bool = false,
+        expectedWorkspacePane: WorkspacePaneIdentity? = nil,
+        expectedSourcePaneID: String? = nil
     ) async throws -> String {
+        let identity = expectedWorkspacePane ?? panes.first { $0.sessionName == sessionName }?.workspaceIdentity
         // Trailing colon tells tmux "target session with window unspecified" so it auto-picks
         // the next free index. Without it, tmux fills the target from the best-attached
         // client's current window and new-window then tries that exact index — which fails
@@ -2381,14 +2522,9 @@ final public class TmuxService {
             target = Self.sessionTarget(sessionName)
         }
         var args = [
-            // A session created by an older CtrlX build may retain NO_COLOR
-            // even after the app is upgraded. Remove that stale session value
-            // before the new shell inherits it.
-            "set-environment", "-u", "-t", target, "NO_COLOR",
-            ";",
             "new-window",
             "-t", target,
-            "-P", "-F", "#{pane_id}:#{window_index}",
+            "-P", "-F", TmuxCreatedPane.format,
         ] + (terminalEnvironmentVars + extraEnvironment).flatMap { ["-e", $0] }
 
         if let workingDirectory {
@@ -2410,16 +2546,15 @@ final public class TmuxService {
             args.append(command)
         }
 
-        let result = try await runTmuxCommand(args)
-
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
+        // Remove legacy NO_COLOR only while the originating session still exists.
+        var commands = [["set-environment", "-u", "-t", target, "NO_COLOR"], args]
+        if let expectedSourcePaneID {
+            guard let identity = expectedWorkspacePane else { throw TmuxError.commandFailed(message: "The source terminal identity is unavailable. Reopen Fork.") }
+            commands = try [WorkspaceTerminalInputGuard.arguments(target: expectedSourcePaneID, identity: identity, commands: commands)]
         }
-
-        let output = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-        let components = output.split(separator: ":", maxSplits: 1).map(String.init)
-        let paneId = components.first ?? output
-        let windowIndex = components.count >= 2 ? components[1] : nil
+        let result = try await runWorkspaceCommand(commands, target: Self.sessionTarget(sessionName), identity: identity, scope: .session)
+        let created = try TmuxCreatedPane(output: result.stdoutString)
+        let paneId = created.paneID
 
         // Name the new window "terminal N" so the tab shows a stable label
         // instead of the running command. tmux's auto-rename is implicitly
@@ -2427,25 +2562,23 @@ final public class TmuxService {
         // returns so concurrent calls see each other's creations and avoid
         // picking the same number. Skip when the caller already supplied a name
         // — overriding it would defeat the point of `--name`.
-        if windowName == nil, let windowIndex {
+        if windowName == nil {
             let existingNames = await listWindowNames(in: sessionName)
             let nextName = Self.nextTerminalWindowName(existingNames: existingNames)
-            _ = try? await renameWindow(
-                target: Self.windowTarget(in: sessionName, windowIndex: windowIndex),
-                name: nextName
-            )
+            try await runCreatedPaneCommand([["rename-window", "-t", paneId, nextName]], created: created)
         }
 
         // Launch only in the newly returned pane, using the same login-shell,
         // telemetry and editor-override path as project/session creation.
         do {
-            try await runInitialCommand(runCommand, in: paneId)
+            try await runInitialCommand(runCommand, in: created)
         } catch {
             throw TmuxError.commandFailed(message: "Window created (\(paneId)), but agent launch failed: \(error.localizedDescription). Check that tab before retrying.")
         }
 
         // Refresh to pick up the new window
         await refreshPanes()
+        try await runCreatedPaneCommand([["display-message", "-p", "-t", paneId, "#{pane_id}"]], created: created)
 
         return paneId
     }
@@ -2454,23 +2587,19 @@ final public class TmuxService {
     /// - Parameters:
     ///   - target: The window target in the form `sessionName:windowIndex`.
     ///   - name: The new window name.
-    public func renameWindow(target: String, name: String) async throws {
-        let result = try await runTmuxCommand([
+    public func renameWindow(target: String, name: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        _ = try await runWorkspaceCommand([[
             "rename-window",
             "-t", target,
             name,
-        ])
-
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
+        ]], target: target, identity: expectedWorkspacePane, scope: .window)
     }
 
     /// Renames an existing tmux session without recreating its panes.
     ///
     /// The caller owns the subsequent pane refresh because it also needs to
     /// migrate UI state keyed by the old session name before observers prune it.
-    public func renameSession(from sessionName: String, to requestedName: String) async throws {
+    public func renameSession(from sessionName: String, to requestedName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
         let currentName = sessionName
         guard !currentName.isEmpty else {
             throw TmuxError.invalidSessionName(reason: "the current name is empty")
@@ -2487,14 +2616,11 @@ final public class TmuxService {
             throw TmuxError.sessionAlreadyExists(name: newName)
         }
 
-        let result = try await runTmuxCommand([
+        _ = try await runWorkspaceCommand([[
             "rename-session",
             "-t", Self.sessionTarget(currentName),
             newName,
-        ])
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
+        ]], target: Self.sessionTarget(currentName), identity: expectedWorkspacePane, scope: .session)
     }
 
     /// Trims and validates a tmux session name supplied by the user.
@@ -2575,20 +2701,19 @@ final public class TmuxService {
     /// UI state that intentionally stores executable tmux targets can migrate
     /// before the refreshed pane snapshot is published.
     @discardableResult
-    public func moveWindows(in sessionName: String, to requestedIds: [String]) async throws -> [String: String] {
+    public func moveWindows(in sessionName: String, to requestedIds: [String], expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> [String: String] {
         guard windowReordersInFlight.insert(sessionName).inserted else {
             throw TmuxError.invalidWindowOrder(reason: "another reorder is already in progress")
         }
         defer { windowReordersInFlight.remove(sessionName) }
 
+        let identity = expectedWorkspacePane ?? panes.first(where: { $0.sessionName == sessionName })?.workspaceIdentity
+        let target = Self.sessionTarget(sessionName)
         let sep = String(PaneInfo.fieldSeparator)
-        let listed = try await runTmuxCommand([
+        let listed = try await runWorkspaceCommand([[
             "list-windows", "-t", Self.sessionTarget(sessionName),
             "-F", "#{window_id}\(sep)#{window_index}",
-        ])
-        guard listed.isSuccess else {
-            throw TmuxError.commandFailed(message: listed.stderrString)
-        }
+        ]], target: target, identity: identity, scope: .session)
 
         let original = try listed.stdoutString
             .split(separator: "\n")
@@ -2614,27 +2739,17 @@ final public class TmuxService {
 
         var applied = 0
         for swap in swaps {
-            let result: ProcessResult
             do {
-                result = try await runTmuxCommand([
+                _ = try await runWorkspaceCommand([[
                     "swap-window", "-d",
                     "-s", swap.sourceId,
                     "-t", Self.windowTarget(in: sessionName, windowIndex: "\(swap.targetIndex)"),
-                ])
+                ]], target: target, identity: identity, scope: .session)
             } catch {
                 if applied > 0 {
-                    await restoreWindowOrder(original, in: sessionName)
+                    await restoreWindowOrder(original, in: sessionName, identity: identity)
                 }
                 throw error
-            }
-            guard result.isSuccess else {
-                // A sequence of tmux commands is not atomic. Restore the
-                // original logical order after a partial failure whenever the
-                // socket is still usable, then report the original error.
-                if applied > 0 {
-                    await restoreWindowOrder(original, in: sessionName)
-                }
-                throw TmuxError.commandFailed(message: result.stderrString)
             }
             applied += 1
         }
@@ -2650,15 +2765,15 @@ final public class TmuxService {
         })
     }
 
-    private func restoreWindowOrder(_ original: [WindowPosition], in sessionName: String) async {
+    private func restoreWindowOrder(_ original: [WindowPosition], in sessionName: String, identity: WorkspacePaneIdentity?) async {
         let desired = original.sorted { $0.index < $1.index }.map(\.stableId)
         let sep = String(PaneInfo.fieldSeparator)
+        let target = Self.sessionTarget(sessionName)
         guard
-            let listed = try? await runTmuxCommand([
+            let listed = try? await runWorkspaceCommand([[
                 "list-windows", "-t", Self.sessionTarget(sessionName),
                 "-F", "#{window_id}\(sep)#{window_index}",
-            ]),
-            listed.isSuccess
+            ]], target: target, identity: identity, scope: .session)
         else { return }
         let current = listed.stdoutString.split(separator: "\n").compactMap { line -> WindowPosition? in
             let fields = line.split(separator: PaneInfo.fieldSeparator, omittingEmptySubsequences: false)
@@ -2668,12 +2783,11 @@ final public class TmuxService {
         guard let rollback = try? Self.windowReorderSwaps(current: current, desiredIds: desired) else { return }
         for swap in rollback {
             guard
-                let result = try? await runTmuxCommand([
+                (try? await runWorkspaceCommand([[
                     "swap-window", "-d",
                     "-s", swap.sourceId,
                     "-t", Self.windowTarget(in: sessionName, windowIndex: "\(swap.targetIndex)"),
-                ]),
-                result.isSuccess
+                ]], target: target, identity: identity, scope: .session)) != nil
             else { return }
         }
     }
@@ -2717,53 +2831,41 @@ final public class TmuxService {
         ])
     }
 
-    /// Kills a tmux session by name
-    /// - Parameter sessionName: The name of the session to kill
-    public func killSession(_ sessionName: String) async throws {
-        let result = try await runTmuxCommand([
-            "kill-session",
-            "-t", Self.sessionTarget(sessionName),
-        ])
-
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
-
-        // Refresh panes to reflect the killed session
-        await refreshPanes()
+    /// Kills a tmux session by name.
+    public func killSession(_ sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        try await closeTarget(.session, target: Self.sessionTarget(sessionName), expected: expectedWorkspacePane)
     }
 
-    /// Kills a single tmux pane by its pane ID.
-    /// If the pane is the last one in its window/session, tmux will close the window/session automatically.
-    /// - Parameter paneId: The pane ID to kill (e.g. "%0")
-    public func killPane(_ paneId: String) async throws {
-        let result = try await runTmuxCommand([
-            "kill-pane",
-            "-t", paneId,
-        ])
-
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
-
-        // Refresh panes to reflect the killed pane
-        await refreshPanes()
+    /// Killing the last pane also closes its window/session.
+    public func killPane(_ paneId: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        try await closeTarget(.pane, target: paneId, expected: expectedWorkspacePane)
     }
 
-    /// Kills a single tmux window by its target (e.g., "session:0").
-    /// If the window is the last one in its session, tmux will close the session automatically.
-    /// - Parameter windowTarget: The window target to kill (e.g., "mysession:0")
-    public func killWindow(_ windowTarget: String) async throws {
-        let result = try await runTmuxCommand([
-            "kill-window",
-            "-t", windowTarget,
-        ])
+    /// Kills a physical window, including its links in other sessions.
+    public func killWindow(_ windowTarget: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        try await closeTarget(.window, target: windowTarget, expected: expectedWorkspacePane)
+    }
 
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
+    func workspaceCloseRequest(_ kind: WorkspaceRecoveryCloseRequest.Kind, target: String, expected: WorkspacePaneIdentity?) async throws -> WorkspaceRecoveryCloseRequest {
+        let identity = try await runTmuxCommand(["display-message", "-p", "-t", target, kind.captureFormat])
+        guard identity.isSuccess else { throw TmuxError.commandFailed(message: identity.stderrString) }
+        return try WorkspaceRecoveryCloseRequest(kind: kind, output: identity.stdoutString, expected: expected)
+    }
+
+    private func closeTarget(_ kind: WorkspaceRecoveryCloseRequest.Kind, target: String, expected: WorkspacePaneIdentity?) async throws {
+        if workspaceCloseHandler != nil || expected != nil {
+            let request = try await workspaceCloseRequest(kind, target: target, expected: expected)
+            if let handler = workspaceCloseHandler {
+                try await handler { [self] in
+                    try await request.closedTarget(runTmuxCommand(request.arguments))
+                }
+            } else {
+                _ = try await request.closedTarget(runTmuxCommand(request.arguments))
+            }
+        } else {
+            let result = try await runTmuxCommand(["kill-\(kind.rawValue)", "-t", target])
+            guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
         }
-
-        // Refresh panes to reflect the killed window
         await refreshPanes()
     }
 
@@ -2792,27 +2894,8 @@ final public class TmuxService {
     /// - Parameters:
     ///   - description: The description text, or `nil` to clear the option.
     ///   - sessionName: The tmux session name.
-    public func setSessionDescription(_ description: String?, for sessionName: String) async throws {
-        await sweepWindowOverrides(of: Self.descriptionOptionKey, in: sessionName)
-
-        let target = Self.sessionTarget(sessionName)
-        if let description {
-            let result = try await runTmuxCommand([
-                "set-option", "-t", target,
-                Self.descriptionOptionKey, description,
-            ])
-            guard result.isSuccess else {
-                throw TmuxError.commandFailed(message: result.stderrString)
-            }
-        } else {
-            let result = try await runTmuxCommand([
-                "set-option", "-u", "-t", target,
-                Self.descriptionOptionKey,
-            ])
-            guard result.isSuccess else {
-                throw TmuxError.commandFailed(message: result.stderrString)
-            }
-        }
+    public func setSessionDescription(_ description: String?, for sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        try await setSessionOption(Self.descriptionOptionKey, value: description, in: sessionName, expectedWorkspacePane: expectedWorkspacePane)
     }
 
     /// Persists the custom color for a session as a tmux user option.
@@ -2822,27 +2905,8 @@ final public class TmuxService {
     /// - Parameters:
     ///   - color: The color, or `nil` to clear the option.
     ///   - sessionName: The tmux session name.
-    public func setSessionColor(_ color: SessionColor?, for sessionName: String) async throws {
-        await sweepWindowOverrides(of: Self.colorOptionKey, in: sessionName)
-
-        let target = Self.sessionTarget(sessionName)
-        if let color {
-            let result = try await runTmuxCommand([
-                "set-option", "-t", target,
-                Self.colorOptionKey, color.rawValue,
-            ])
-            guard result.isSuccess else {
-                throw TmuxError.commandFailed(message: result.stderrString)
-            }
-        } else {
-            let result = try await runTmuxCommand([
-                "set-option", "-u", "-t", target,
-                Self.colorOptionKey,
-            ])
-            guard result.isSuccess else {
-                throw TmuxError.commandFailed(message: result.stderrString)
-            }
-        }
+    public func setSessionColor(_ color: SessionColor?, for sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        try await setSessionOption(Self.colorOptionKey, value: color?.rawValue, in: sessionName, expectedWorkspacePane: expectedWorkspacePane)
     }
 
     /// Persists the custom emoji for a session as a tmux user option.
@@ -2852,47 +2916,29 @@ final public class TmuxService {
     /// - Parameters:
     ///   - emoji: The emoji string, or `nil` to clear the option.
     ///   - sessionName: The tmux session name.
-    public func setSessionEmoji(_ emoji: String?, for sessionName: String) async throws {
-        await sweepWindowOverrides(of: Self.emojiOptionKey, in: sessionName)
-
-        let target = Self.sessionTarget(sessionName)
-        if let emoji, !emoji.isEmpty {
-            let result = try await runTmuxCommand([
-                "set-option", "-t", target,
-                Self.emojiOptionKey, emoji,
-            ])
-            guard result.isSuccess else {
-                throw TmuxError.commandFailed(message: result.stderrString)
-            }
-        } else {
-            let result = try await runTmuxCommand([
-                "set-option", "-u", "-t", target,
-                Self.emojiOptionKey,
-            ])
-            guard result.isSuccess else {
-                throw TmuxError.commandFailed(message: result.stderrString)
-            }
-        }
+    public func setSessionEmoji(_ emoji: String?, for sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        try await setSessionOption(Self.emojiOptionKey, value: emoji?.isEmpty == true ? nil : emoji, in: sessionName, expectedWorkspacePane: expectedWorkspacePane)
     }
 
-    /// Clears any window-level override for `optionKey` across every window in
-    /// `sessionName`. Errors are intentionally swallowed: the override may not
-    /// exist (the common case), and this is best-effort defensive cleanup.
-    private func sweepWindowOverrides(of optionKey: String, in sessionName: String) async {
-        guard
-            let windows = try? await runTmuxCommand([
-                "list-windows", "-t", Self.sessionTarget(sessionName), "-F", "#{window_index}",
-            ]), windows.isSuccess else { return }
-        let indexes = windows.stdoutString
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        for index in indexes {
-            _ = try? await runTmuxCommand([
-                "set-option", "-wu", "-t", Self.windowTarget(in: sessionName, windowIndex: index),
-                optionKey,
-            ])
+    private func setSessionOption(_ key: String, value: String?, in sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity?) async throws {
+        let target = Self.sessionTarget(sessionName)
+        let windows = try await runWorkspaceCommand(
+            [["list-windows", "-t", target, "-F", "#{window_index}"]],
+            target: target, identity: expectedWorkspacePane, scope: .session
+        )
+        for index in windows.stdoutString.split(separator: "\n") {
+            let windowTarget = Self.windowTarget(in: sessionName, windowIndex: String(index))
+            _ = try await runWorkspaceCommand(
+                [["set-option", "-wu", "-t", windowTarget, key]],
+                target: windowTarget, identity: expectedWorkspacePane, scope: .session
+            )
         }
+        let command = if let value {
+            ["set-option", "-t", target, key, value]
+        } else {
+            ["set-option", "-u", "-t", target, key]
+        }
+        _ = try await runWorkspaceCommand([command], target: target, identity: expectedWorkspacePane, scope: .session)
     }
 
     /// Sets a tmux session-scoped environment variable.
@@ -2908,7 +2954,8 @@ final public class TmuxService {
     public func setSessionEnvironment(
         sessionName: String,
         name: String,
-        value: String?
+        value: String?,
+        expectedWorkspacePane: WorkspacePaneIdentity? = nil
     ) async throws {
         let target = Self.sessionTarget(sessionName)
         let args: [String] = if let value {
@@ -2916,10 +2963,7 @@ final public class TmuxService {
         } else {
             ["set-environment", "-u", "-t", target, name]
         }
-        let result = try await runTmuxCommand(args)
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
+        _ = try await runWorkspaceCommand([args], target: target, identity: expectedWorkspacePane, scope: .session)
     }
 
     /// Applies a tmux layout (preset name or dumped layout string) to a window.
@@ -2929,15 +2973,12 @@ final public class TmuxService {
     /// - Parameters:
     ///   - target: The tmux window target (e.g. `session:0`).
     ///   - layout: The layout name or dumped hex string.
-    public func selectLayout(target: String, layout: String) async throws {
-        let result = try await runTmuxCommand([
+    public func selectLayout(target: String, layout: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        _ = try await runWorkspaceCommand([[
             "select-layout",
             "-t", target,
             layout,
-        ])
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
+        ]], target: target, identity: expectedWorkspacePane, scope: .window)
     }
 
     /// Sets a tmux option at session, window, or global scope.
@@ -2961,7 +3002,8 @@ final public class TmuxService {
         target: String,
         name: String,
         value: String,
-        scope: TmuxOptionScope
+        scope: TmuxOptionScope,
+        expectedWorkspacePane: WorkspacePaneIdentity? = nil
     ) async throws {
         var args = ["set-option"]
         switch scope {
@@ -2969,10 +3011,7 @@ final public class TmuxService {
         case .window: args.append("-w")
         }
         args.append(contentsOf: ["-t", target, name, value])
-        let result = try await runTmuxCommand(args)
-        guard result.isSuccess else {
-            throw TmuxError.commandFailed(message: result.stderrString)
-        }
+        _ = try await runWorkspaceCommand([args], target: target, identity: expectedWorkspacePane, scope: scope == .session ? .session : .window)
     }
 
     /// Captures the current contents of a pane as plain text (no escape sequences).
@@ -3229,6 +3268,12 @@ final public class TmuxService {
         }
     }
 
+    public struct CreatedSession: Sendable {
+        public let sessionName: String
+        public let paneId: String
+        public let serverID: String
+    }
+
     /// Creates a new tmux session with the specified name and dimensions.
     /// If a session with the given name already exists, appends a number suffix.
     /// - Parameters:
@@ -3240,7 +3285,7 @@ final public class TmuxService {
     ///   - firstWindowName: Name for the first window. The explicit name also
     ///     disables tmux's automatic-rename so the tab doesn't track the
     ///     running command.
-    /// - Returns: Tuple containing the actual session name and the pane ID of the first pane
+    /// Returns the physical tmux incarnation along with the created session.
     public func createSession(
         baseName: String,
         width: Int,
@@ -3249,7 +3294,7 @@ final public class TmuxService {
         runCommand: String? = nil,
         extraEnvironment: [String] = [],
         firstWindowName: String = "terminal 1"
-    ) async throws -> (sessionName: String, paneId: String) {
+    ) async throws -> CreatedSession {
         // Get existing session names
         let existingNames = await getExistingSessionNames()
 
@@ -3282,7 +3327,7 @@ final public class TmuxService {
             "set-option", "-g", "default-command", defaultCommandWrapper,
             ";",
             "new-session",
-            "-d",
+            "-d", "-P", "-F", TmuxCreatedPane.format,
             "-s", sessionName,
             "-n", firstWindowName,
             "-x", String(width),
@@ -3313,34 +3358,22 @@ final public class TmuxService {
         // list).
         await applyTerminalFeatureOptions()
 
-        // Get the pane ID of the first pane in the new session
-        // Target format: session:window.pane (first window, first pane)
-        let windowIndex = 0
-        let paneIndex = 0
-        let firstPaneTarget = "=\(sessionName):\(windowIndex).\(paneIndex)"
-        let paneIdResult = try await runTmuxCommand([
-            "display-message",
-            "-t", firstPaneTarget,
-            "-p", "#{pane_id}",
-        ])
+        let created = try TmuxCreatedPane(output: result.stdoutString)
+        let paneId = created.paneID
 
-        guard paneIdResult.isSuccess else {
-            throw TmuxError.commandFailed(message: "Session created but could not get pane ID")
-        }
-
-        let paneId = paneIdResult.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        try await runInitialCommand(runCommand, in: paneId)
+        try await runInitialCommand(runCommand, in: created)
 
         // Refresh panes to include the new session
         await refreshPanes()
+        try await runCreatedPaneCommand([["display-message", "-p", "-t", paneId, "#{pane_id}"]], created: created)
 
-        return (sessionName: sessionName, paneId: paneId)
+        return CreatedSession(sessionName: sessionName, paneId: paneId, serverID: created.serverID)
     }
 
     /// Both new sessions and agent windows must retain plugin arguments/env,
     /// shell aliases and the explicit VISUAL override without duplicating it.
-    private func runInitialCommand(_ runCommand: String?, in paneId: String) async throws {
+    private func runInitialCommand(_ runCommand: String?, in created: TmuxCreatedPane) async throws {
+        let paneId = created.paneID
         if let runCommand, !runCommand.isEmpty {
             // App-launched agents are typed into a login shell that has already
             // sourced the user's rc files — so when the override is active we
@@ -3350,15 +3383,9 @@ final public class TmuxService {
             // chained form runs the command through the shell, so aliases /
             // functions for the agent still resolve.
             let line = overrideCommandPrefix().map { "\($0); \(runCommand)" } ?? runCommand
-            let result = try await runTmuxCommand([
-                "send-keys",
-                "-t", paneId,
-                line,
-                "Enter",
-            ])
-            guard result.isSuccess else {
-                throw TmuxError.commandFailed(message: result.stderrString)
-            }
+            try await runCreatedPaneCommand([[
+                "send-keys", "-t", paneId, line, "Enter",
+            ]], created: created)
             // The override is now asserted on this pane's command line; mark it so
             // the new-pane injector never also types into it.
             if overrideVisualInShellPanes {
@@ -3557,7 +3584,7 @@ final public class TmuxService {
     /// session-name match; the trailing `:` disambiguates the target as a
     /// session (rather than a window or pane) so `set-option`, `list-windows`,
     /// etc. resolve to the right scope.
-    private static func sessionTarget(_ sessionName: String) -> String {
+    static func sessionTarget(_ sessionName: String) -> String {
         "=\(sessionName):"
     }
 

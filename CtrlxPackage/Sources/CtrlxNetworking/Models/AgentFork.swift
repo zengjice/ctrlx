@@ -8,10 +8,15 @@ public struct AgentForkSource: Codable, Sendable, Equatable, Identifiable {
     public let sessionName: String
     public let windowID: String
     public let workingDirectory: String
-    public var id: String { paneID }
+    public let workspaceIdentity: WorkspacePaneIdentity?
+    public var id: String {
+        paneID
+    }
 
     public static func unavailableReason(panes: [PaneState]) -> String? {
-        if panes.contains(where: { AgentForkSource(pane: $0) != nil }) { return nil }
+        if panes.contains(where: { AgentForkSource(pane: $0) != nil }) {
+            return nil
+        }
         let supported = panes.filter { ["codex", "claude-code"].contains($0.agentSession?.pluginID ?? "") }
         guard !supported.isEmpty else { return "Fork requires a recognized Codex or Claude Code conversation." }
         if supported.allSatisfy({ $0.claudeSessionID.flatMap(UUID.init(uuidString:)) == nil }) {
@@ -21,11 +26,12 @@ public struct AgentForkSource: Codable, Sendable, Equatable, Identifiable {
     }
 
     public init?(pane: PaneState) {
-        guard let agent = pane.agentSession,
-              agent.pluginID == "codex" || agent.pluginID == "claude-code",
-              let sessionID = pane.claudeSessionID, UUID(uuidString: sessionID) != nil,
-              let directory = pane.currentPath, directory.hasPrefix("/"),
-              !directory.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        guard
+            let agent = pane.agentSession,
+            agent.pluginID == "codex" || agent.pluginID == "claude-code",
+            let sessionID = pane.claudeSessionID, UUID(uuidString: sessionID) != nil,
+            let directory = pane.currentPath, directory.hasPrefix("/"),
+            !directory.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
         else { return nil }
         self.paneID = pane.paneId
         self.sessionID = sessionID
@@ -33,6 +39,16 @@ public struct AgentForkSource: Codable, Sendable, Equatable, Identifiable {
         self.sessionName = pane.sessionName
         self.windowID = pane.stableWindowId
         self.workingDirectory = directory
+        self.workspaceIdentity = pane.workspaceIdentity
+    }
+
+    /// Legacy peers omit workspace identity. The Host captures its current
+    /// identity after this initial match, before any asynchronous preparation.
+    public func matches(_ current: Self) -> Bool {
+        paneID == current.paneID && sessionID == current.sessionID && pluginID == current.pluginID
+            && sessionName == current.sessionName && windowID == current.windowID
+            && workingDirectory == current.workingDirectory
+            && (workspaceIdentity == nil || workspaceIdentity == current.workspaceIdentity)
     }
 }
 
@@ -84,8 +100,13 @@ public struct AgentForkPreparation: Codable, Sendable, Equatable {
 public struct PrepareAgentFork: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
     public let source: AgentForkSource
-    public init(source: AgentForkSource) { self.source = source }
-    public var commandType: CommandType { .prepareAgentFork(self) }
+    public init(source: AgentForkSource) {
+        self.source = source
+    }
+
+    public var commandType: CommandType {
+        .prepareAgentFork(self)
+    }
 }
 
 public struct ForkAgentSession: CommandSpec, Equatable {
@@ -116,8 +137,9 @@ public struct ForkAgentSession: CommandSpec, Equatable {
 
     public func validateName() throws {
         if let windowName {
-            guard !windowName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  !windowName.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+            guard
+                !windowName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                !windowName.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
             else { throw AgentForkError("Enter a window name without line breaks or control characters.") }
         }
         if let worktree {
@@ -129,11 +151,19 @@ public struct ForkAgentSession: CommandSpec, Equatable {
             }
         }
     }
-    public var commandType: CommandType { .forkAgentSession(self) }
+
+    public var commandType: CommandType {
+        .forkAgentSession(self)
+    }
 }
 
 public struct AgentForkError: Error, LocalizedError, Sendable {
     public let message: String
-    public init(_ message: String) { self.message = message }
-    public var errorDescription: String? { message }
+    public init(_ message: String) {
+        self.message = message
+    }
+
+    public var errorDescription: String? {
+        message
+    }
 }

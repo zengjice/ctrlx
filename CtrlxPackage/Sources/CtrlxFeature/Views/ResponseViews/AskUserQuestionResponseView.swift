@@ -80,13 +80,30 @@ struct AskUserQuestionResponseView: View {
     }
 
     var body: some View {
-        if state.response != nil {
-            completionFeedback
-        } else if isReadyForReview {
-            summaryView
-        } else if let question = currentQuestion {
-            questionContent(question)
+        Group {
+            if state.response != nil {
+                completionFeedback
+            } else if isReadyForReview {
+                summaryView
+            } else if let question = currentQuestion {
+                questionContent(question)
+            }
         }
+        .onChange(of: recoveryText) {
+            if state.response == nil {
+                state.replyDraft = recoveryText
+            }
+        }
+    }
+
+    /// Preserve authored text, never selected approvals or a submit continuation.
+    private var recoveryText: String {
+        questions.enumerated().compactMap { index, question in
+            let text = index == currentQuestionIndex && !isReadyForReview
+                ? customInputText
+                : (draftAnswers[index] ?? collectedAnswers[index])?.customText ?? ""
+            return text.isEmpty ? nil : "\(question.question)\n\(text)"
+        }.joined(separator: "\n\n")
     }
 
     // MARK: - Completion Feedback
@@ -571,8 +588,8 @@ struct AskUserQuestionResponseView: View {
                 freeText: collected.customText
             ))
         }
-        await submit(.askUserQuestion(answers: answers))
-        state.isSending = false
+        defer { state.isSending = false }
+        guard await submit(.askUserQuestion(answers: answers)) else { return }
         state.response = .allQuestionsAnswered
     }
 }
@@ -663,7 +680,7 @@ private extension AskUserQuestionRequest {
                 AskUserQuestionResponseView(
                     request: request,
                     isConnected: true,
-                    submit: { _ in },
+                    submit: { _ in true },
                     state: state
                 )
             }
@@ -685,7 +702,7 @@ private extension AskUserQuestionRequest {
                 AskUserQuestionResponseView(
                     request: request,
                     isConnected: true,
-                    submit: { _ in },
+                    submit: { _ in true },
                     state: state
                 )
             }
@@ -707,7 +724,7 @@ private extension AskUserQuestionRequest {
                 AskUserQuestionResponseView(
                     request: request,
                     isConnected: true,
-                    submit: { _ in },
+                    submit: { _ in true },
                     state: state
                 )
             }

@@ -352,7 +352,7 @@
             } message: {
                 Text(coordinator.pasteError ?? "")
             }
-            .task(id: StreamTaskID(isConnected: isConnected, retryGeneration: streamRetryGeneration)) {
+            .task(id: StreamTaskID(isConnected: isConnected, retryGeneration: streamRetryGeneration, inputBinding: relayClient.workspaceInputState.binding(paneID: paneId))) {
                 await synchronizeStreamingWithConnection()
             }
             .onAppear {
@@ -751,7 +751,7 @@
         // MARK: - Streaming
 
         private func synchronizeStreamingWithConnection() async {
-            guard isConnected else {
+            guard isConnected, relayClient.workspaceInputState.binding(paneID: paneId) != .unavailable else {
                 coordinator.prepareForReconnect()
                 return
             }
@@ -760,6 +760,7 @@
         }
 
         private func startStreaming() async {
+            let inputBinding = relayClient.workspaceInputState.binding(paneID: paneId)
             var startMode = coordinator.nextStartMode()
 
             // One retry handles a command response lost during an otherwise
@@ -783,7 +784,9 @@
                 let handlerRegistrationId = relayClient.registerTerminalStreamHandler(
                     for: currentPaneId
                 ) { message in
-                    guard currentCoordinator.streamSessionId == streamSessionId else { return }
+                    guard
+                        currentCoordinator.streamSessionId == streamSessionId,
+                        message.matchesLease(leaseId, requiresLease: relayClient.workspaceInputState.supportsStreamIdentity) else { return }
                     currentCoordinator.handleStreamMessage(message)
                 }
                 coordinator.setHandlerRegistrationId(handlerRegistrationId)
@@ -807,7 +810,8 @@
                 coordinator.willSendStartRequest()
                 let result = await relayClient.sendCommand(
                     StartTerminalStream(leaseId: leaseId),
-                    paneId: paneId
+                    paneId: paneId,
+                    inputBinding: inputBinding
                 )
 
                 guard coordinator.streamSessionId == streamSessionId else { return }
@@ -879,6 +883,7 @@
         private struct StreamTaskID: Equatable {
             let isConnected: Bool
             let retryGeneration: Int
+            let inputBinding: ViewerWorkspaceInputBinding
         }
     }
 
@@ -943,6 +948,7 @@
             terminalState?.cancelCursorNavigation?()
             terminalState?.cancelQuestionCheck?()
             keystrokeDebouncer?.cancelAll()
+            keystrokeDebouncer = nil
         }
 
         func voiceInputContext() -> String? {
@@ -2056,7 +2062,7 @@
                 terminalTitle: .init(get: { nil }, set: { _ in }),
                 isConnected: true,
                 settings: settings,
-                submitResponse: { _ in }
+                submitResponse: { _ in true }
             )
         }
         .environment(ViewerRelayClient())
