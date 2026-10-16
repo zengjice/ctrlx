@@ -789,6 +789,16 @@
                     Toggle("Auto-connect on launch", isOn: $settings.autoReconnect)
                 }
 
+                Section {
+                    @Bindable var settings = settings
+                    Toggle("Debug Mode", isOn: $settings.debugModeEnabled)
+                        .accessibilityIdentifier("debug-mode-toggle")
+                } header: {
+                    Text("Diagnostics")
+                } footer: {
+                    Text("Show additional diagnostic information across CtrlX. Off by default on this device.")
+                }
+
                 // About Section
                 Section("About") {
                     LabeledContent("Version") {

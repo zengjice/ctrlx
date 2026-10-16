@@ -228,6 +228,15 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            Section {
+                Toggle("Debug Mode", isOn: $settings.debugModeEnabled)
+                    .accessibilityIdentifier("debug-mode-toggle")
+            } header: {
+                Text("Diagnostics")
+            } footer: {
+                Text("Show additional diagnostic information across CtrlX. Off by default on this device.")
+            }
+
             Section("Updates") {
                 if !UpdaterController.isConfigured {
                     Text("Updates are not configured for this build.")

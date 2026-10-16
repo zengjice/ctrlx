@@ -169,12 +169,15 @@ terminal above its input controls; native reply fields show it below their edito
 Neither terminal overlay changes the terminal's size. The strip remains visible
 during correction; cancelling it discards the recording without inserting text.
 If neither corrector can run, the recognized text is still inserted once without
-Return. With **Voice Input Diagnostics → Debug Mode** enabled in settings,
+Return. With the app-wide **Diagnostics → Debug Mode** enabled in settings
+(Mac: **General**; iOS: the main settings page),
 only after the input surface accepts it, the same strip shows
 **Voice Input**, explaining that context-aware correction was unavailable
 and pointing to Voice Input settings. A rejected correction similarly identifies
 that the original transcription was kept. An accepted unchanged response is not
-a failure. Debug Mode is device-local and off by default on both Mac and iOS.
+a failure. Debug Mode belongs to the application's general settings, is device-local
+and off by default on both Mac and iOS. Voice completion feedback is currently its
+only consumer; it is not a voice-specific setting.
 When off, successful insertion closes the strip without a completion/correction
 notice or retained transcript-review evidence. Recording previews and permission,
 recording or insertion errors remain available regardless of this setting.

@@ -57,6 +57,7 @@
         // MARK: - UserDefaults Keys
 
         public enum Keys: String {
+            case debugModeEnabled
             case deviceId
             case customDeviceName
             case pairedHosts
@@ -83,6 +84,11 @@
         @Dependency(PreferencesService.self) private var preferences
 
         // MARK: - Properties
+
+        /// App-wide diagnostics, stored locally on this device.
+        public var debugModeEnabled = false {
+            didSet { preferences.setBool(debugModeEnabled, Keys.debugModeEnabled) }
+        }
 
         /// Device-local phrase library, independent of sessions and agent plugins.
         let quickPhrases = QuickPhraseStore()
@@ -224,6 +230,7 @@
         /// independent `@Observable` state — mutations on one instance will not
         /// trigger observation updates on another.
         public init() {
+            self.debugModeEnabled = preferences.optionalBool(Keys.debugModeEnabled) ?? false
             // Load or generate device ID
             if let savedDeviceId = preferences.string(Keys.deviceId) {
                 self.deviceId = savedDeviceId

@@ -361,9 +361,9 @@ struct VoiceInputDeliveryTests {
             $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
         } operation: {
-            let settings = VoiceCorrectionSettings()
+            @Dependency(PreferencesService.self) var preferences
             if debugEnabled {
-                settings.debugModeEnabled = true
+                preferences.setBool(true, "debugModeEnabled")
             }
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { result, _, _, _, _ in
                 .init(text: result.bestAvailableTranscript, outcome: .unavailable)
@@ -447,9 +447,9 @@ struct VoiceInputDeliveryTests {
             try await wait { voice.completedTranscript != nil }
             #expect(voice.takeCompletedTranscript() == "纠错结果")
             // The setting is read at delivery, even for an existing controller.
-            let settings = VoiceCorrectionSettings()
+            @Dependency(PreferencesService.self) var preferences
             if debugEnabled {
-                settings.debugModeEnabled = true
+                preferences.setBool(true, "debugModeEnabled")
             }
             voice.recordDelivery(enqueued: true)
             #expect(voice.isFeedbackVisible == debugEnabled)

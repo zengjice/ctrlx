@@ -12,10 +12,6 @@
             didSet { preferences.setString(language.rawValue, "voiceInputLanguage") }
         }
 
-        public var debugModeEnabled = false {
-            didSet { preferences.setBool(debugModeEnabled, "voiceInputDebugModeEnabled") }
-        }
-
         public var provider: VoiceCorrectionProvider = .volcengineArk {
             didSet { preferences.setString(provider.rawValue, "voiceCorrectionProvider") }
         }
@@ -30,7 +26,6 @@
 
         public init() {
             self.language = VoiceInputLanguage(rawValue: preferences.string("voiceInputLanguage") ?? "") ?? .system
-            self.debugModeEnabled = preferences.optionalBool("voiceInputDebugModeEnabled") ?? false
             self.provider = VoiceCorrectionProvider(
                 rawValue: preferences.string("voiceCorrectionProvider") ?? ""
             ) ?? .volcengineArk

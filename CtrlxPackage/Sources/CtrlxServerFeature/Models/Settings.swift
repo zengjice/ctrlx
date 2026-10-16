@@ -248,6 +248,11 @@ final public class AppSettings {
 
     // MARK: - Behavior Settings
 
+    /// App-wide diagnostics, stored locally on this device.
+    public var debugModeEnabled = false {
+        didSet { preferences.setBool(debugModeEnabled, Keys.debugModeEnabled) }
+    }
+
     /// Whether to open the panes window when the app launches
     public var openPanesWindowOnLaunch: Bool = Defaults.openPanesWindowOnLaunch {
         didSet { preferences.setBool(openPanesWindowOnLaunch, Keys.openPanesWindowOnLaunch) }
@@ -463,6 +468,7 @@ final public class AppSettings {
     // MARK: - Initialization
 
     public init() {
+        self.debugModeEnabled = preferences.optionalBool(Keys.debugModeEnabled) ?? false
         self.fontName = preferences.string(Keys.fontName) ?? Defaults.fontName
         // Clamp on load so a persisted/synced value that predates these
         // bounds (or otherwise lands outside them) is corrected immediately
@@ -584,6 +590,7 @@ final public class AppSettings {
     // MARK: - Keys
 
     public enum Keys: String {
+        case debugModeEnabled
         case workspaceRecoveryMode
         case fontName
         case fontSize

@@ -222,7 +222,7 @@
         }
 
         public func recordDelivery(enqueued: Bool) {
-            let showDiagnostics = enqueued && preferences.optionalBool("voiceInputDebugModeEnabled") == true
+            let showDiagnostics = enqueued && preferences.optionalBool("debugModeEnabled") == true
             correctionNotice = showDiagnostics ? pendingCorrectionNotice : nil
             if !showDiagnostics {
                 reviewTranscripts = nil
