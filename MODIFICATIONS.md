@@ -7,6 +7,26 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.78 — App-wide debug mode and quieter voice input
+
+- Add a device-local Debug Mode setting on Mac and iOS, off by default. Keep
+  it in the application's general diagnostics settings rather than the voice
+  settings; voice completion feedback is currently its only consumer.
+- Successful voice insertion closes its feedback strip without completion or
+  correction notices by default. Debug Mode retains those notices and copyable
+  transcript-review evidence. Recording previews and permission, recording and
+  insertion errors remain visible regardless of the setting.
+- Release validation: the bounded serial Swift regression passed with 3,462
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Voice delivery tests cover Debug Mode on and off. Both boundary
+  checks, 63 publisher/COS tests, 22 bundled-skill tests, the website build,
+  signed Mac Release build and arm64 iOS Simulator build passed. The six changed
+  Swift files have no formatting findings on changed lines; one pre-existing
+  whole-file SwiftFormat finding remains. Interactive microphone and settings
+  UI acceptance were not rerun in this release workflow.
+- Distribution: Mac build 11 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.77 — Compact permission-mode icons
 
 - Show permission modes as compact icons on Mac and iOS for both Codex and
