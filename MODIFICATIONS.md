@@ -7,6 +7,22 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.77 — Compact permission-mode icons
+
+- Show permission modes as compact icons on Mac and iOS for both Codex and
+  Claude Code, including session lists, terminal status bars and session details.
+  Keep mode-specific colors and the red bypass warning; retain mode names in
+  accessibility labels and Mac hover help.
+- Release validation: the bounded serial Swift regression passed with 3,462
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Permission-mode presentation tests, both boundary checks, 63
+  publisher/COS tests, 22 bundled-skill tests, the website build, signed Mac
+  Release build and arm64 iOS Simulator build passed. The changed Swift file
+  passes SwiftFormat. Full UI and screen-reader acceptance were not rerun in
+  this release workflow.
+- Distribution: Mac build 10 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.76 — Workspace recovery, browser extensions and faster local files
 
 - Restore saved tmux topology, directories, main/detached window layouts,
