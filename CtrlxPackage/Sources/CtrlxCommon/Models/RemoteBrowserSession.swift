@@ -1,16 +1,20 @@
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Observation
 
 /// One visible Viewer surface: at most one frame and one ordered input request.
 @MainActor @Observable
-public final class RemoteBrowserSession {
+final public class RemoteBrowserSession {
     public private(set) var tab: RemoteBrowserTab
     public private(set) var frame: RemoteBrowserFrame?
     public private(set) var controlID: UUID?
     public private(set) var error: String?
     public private(set) var frameError: String?
     public private(set) var isTakingControl = false
+    public let managesExtensions: Bool
+    public private(set) var extensionSurface: RemoteBrowserExtensionSurface = .manager
+    @ObservationIgnored private let anchorTabID: UUID
     @ObservationIgnored private let surfaceID = UUID()
     @ObservationIgnored private let send: @MainActor (BrowseBrowser) async throws -> RemoteBrowserResponse
     @ObservationIgnored private var watching = false
@@ -20,13 +24,24 @@ public final class RemoteBrowserSession {
     @ObservationIgnored private var inputEpoch = UUID()
     @ObservationIgnored public var frameMaxDimension: Int?
 
-    public init(tab: RemoteBrowserTab, send: @escaping @MainActor (BrowseBrowser) async throws -> RemoteBrowserResponse) {
-        self.tab = tab; self.send = send
+    public init(tab: RemoteBrowserTab, managesExtensions: Bool = false, send: @escaping @MainActor (BrowseBrowser) async throws -> RemoteBrowserResponse) {
+        self.tab = tab
+        self.anchorTabID = tab.id
+        self.managesExtensions = managesExtensions
+        self.send = send
     }
 
-    public convenience init(tab: RemoteBrowserTab, client: ViewerRelayClient) {
-        self.init(tab: tab) { request in
-            let result = try await client.sendCommand(request, paneId: "", timeout: 8).get()
+    public convenience init(tab: RemoteBrowserTab, client: ViewerRelayClient, managesExtensions: Bool = false) {
+        self.init(tab: tab, managesExtensions: managesExtensions) { request in
+            let timeout: TimeInterval
+            switch request.operation {
+            case .extensions(.prepareStore),
+                 .extensions(.install),
+                 .extensions(.remove),
+                 .extensions(.setEnabled): timeout = 120
+            default: timeout = 8
+            }
+            let result = try await client.sendCommand(request, paneId: "", timeout: timeout).get()
             guard result.success, let response = result.browser else {
                 throw ViewerRelayClientError.commandFailed(result.error ?? "Missing browser response")
             }
@@ -35,9 +50,46 @@ public final class RemoteBrowserSession {
     }
 
     private func request(_ operation: RemoteBrowserOperation, generation: UInt64? = nil) -> BrowseBrowser {
-        BrowseBrowser(sessionName: tab.sessionName, tabID: tab.id, surfaceID: surfaceID, controlID: controlID,
-                      generation: generation ?? frame?.generation,
-                      frameMaxDimension: operation == .frame ? frameMaxDimension : nil, operation: operation)
+        BrowseBrowser(
+            sessionName: tab.sessionName,
+            tabID: anchorTabID,
+            surfaceID: surfaceID,
+            controlID: controlID,
+            generation: generation ?? frame?.generation,
+            frameMaxDimension: operation == .frame ? frameMaxDimension : nil,
+            operation: scoped(operation)
+        )
+    }
+
+    private func scoped(_ operation: RemoteBrowserOperation) -> RemoteBrowserOperation {
+        guard managesExtensions else { return operation }
+        switch operation {
+        case .frame: return .extensions(.frame)
+        case .takeControl: return .extensions(.acquire)
+        case .releaseControl: return .extensions(.release)
+        case let .text(text): return .extensions(.text(text))
+        case let .key(key): return .extensions(.key(key))
+        case let .pointer(pointer): return .extensions(.pointer(pointer))
+        case let .fit(width, height): return .extensions(.fit(width: width, height: height))
+        default: return operation
+        }
+    }
+
+    public func performExtension(_ operation: RemoteBrowserExtensionOperation) async throws -> RemoteBrowserResponse {
+        guard managesExtensions, watching, let controlID else {
+            throw ViewerRelayClientError.commandFailed("Take extension control first.")
+        }
+        let current = epoch
+        let result = try await send(request(.extensions(operation)))
+        guard watching, epoch == current, self.controlID == controlID, !Task.isCancelled else { throw CancellationError() }
+        if let surface = result.extensions?.surface {
+            extensionSurface = surface
+        }
+        if operation == .openWindow || operation == .showSurface(.page) || operation == .showSurface(.manager) {
+            invalidateInput()
+            frame = nil
+        }
+        return result
     }
 
     public func watch() async {
@@ -45,24 +97,53 @@ public final class RemoteBrowserSession {
         watching = true
         let current = epoch
         var first = true
-        defer { if epoch == current { stop() } }
+        defer {
+            if epoch == current {
+                stop()
+            }
+        }
         while !Task.isCancelled, watching, epoch == current {
+            if managesExtensions && controlID == nil {
+                do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+                continue
+            }
             let sent = request(.frame)
             do {
                 let response = try await send(sent)
                 try Task.checkCancellation()
+                if managesExtensions, epoch == current, sent.controlID != controlID {
+                    continue
+                }
+                if managesExtensions, epoch == current, response.controlID == nil {
+                    error = "Extension control was released on the Host. Take Control again to continue."
+                    releaseControl()
+                    continue
+                }
                 guard epoch == current, let frame = response.frame, frame.isValid else { return }
-                if self.frame != frame { self.frame = frame }
+                if self.frame != frame {
+                    self.frame = frame
+                }
                 frameError = nil
-                if let tab = response.tab { self.tab = tab }
+                if let tab = response.tab {
+                    self.tab = tab
+                }
+                if let surface = response.extensions?.surface {
+                    extensionSurface = surface
+                }
                 if controlID == sent.controlID, controlID != response.controlID {
                     invalidateInput()
                     controlID = response.controlID
                 }
-                if first, !tab.isAgentOwned, !tab.isControlled { await takeControl() }
+                if first, !managesExtensions, !tab.isAgentOwned, !tab.isControlled, tab.isExtensionWindow != true {
+                    await takeControl()
+                }
                 first = false
             } catch is CancellationError { return }
-            catch { if epoch == current { frameError = error.localizedDescription } }
+            catch {
+                if epoch == current {
+                    frameError = error.localizedDescription
+                }
+            }
             do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
         }
     }
@@ -74,6 +155,43 @@ public final class RemoteBrowserSession {
         frame = nil
     }
 
+    public func prepareExtensionPackage(file url: URL, replacingID: String?, progress: (Double) -> Void) async throws -> RemoteBrowserExtensionPreview {
+        guard managesExtensions, let grant = controlID else { throw ViewerRelayClientError.commandFailed("Take extension control first.") }
+        @Dependency(FileBrowserUploadReader.self) var reader
+        let file = try await reader.open(url)
+        do {
+            guard
+                controlID == grant, file.size > 0, file.size <= 64 * 1_024 * 1_024,
+                ["zip", "crx"].contains(url.pathExtension.lowercased()) else {
+                throw ViewerRelayClientError.commandFailed("Choose a ZIP or CRX3 package up to 64 MiB while extension control is active.")
+            }
+            _ = try await performExtension(.beginUpload(id: file.id, name: file.name, size: file.size, replacingID: replacingID))
+            var offset = 0
+            while offset < file.size {
+                try Task.checkCancellation()
+                let data = try await reader.read(file.id)
+                guard controlID == grant, !data.isEmpty else { throw CancellationError() }
+                let response = try await performExtension(.appendUpload(id: file.id, offset: offset, data: data))
+                offset += data.count
+                guard response.extensions?.uploadOffset == offset else { throw ViewerRelayClientError.commandFailed("The Host did not acknowledge the complete package chunk.") }
+                progress(Double(offset) / Double(file.size))
+            }
+            let checksum = try await reader.finish(file.id)
+            guard controlID == grant else { throw CancellationError() }
+            let response = try await performExtension(.finishUpload(id: file.id, sha256: checksum))
+            guard let preview = response.extensions?.prepared else { throw ViewerRelayClientError.commandFailed("The Host did not return package permissions.") }
+            await reader.close(file.id)
+            return preview
+        } catch {
+            // Best effort: disconnect/expiry also removes the private Host upload.
+            if controlID == grant {
+                _ = try? await performExtension(.cancelUpload(file.id))
+            }
+            await reader.close(file.id)
+            throw error
+        }
+    }
+
     public func takeControl() async {
         guard watching, !isTakingControl, controlID == nil else { return }
         isTakingControl = true
@@ -82,19 +200,38 @@ public final class RemoteBrowserSession {
         do {
             let result = try await send(request(.takeControl))
             guard watching, epoch == current, !Task.isCancelled else {
-                if let id = result.controlID { release(id) }
+                if let id = result.controlID {
+                    release(id)
+                }
                 return
             }
             controlID = result.controlID
-            if let tab = result.tab { self.tab = tab }
+            if let tab = result.tab {
+                self.tab = tab
+            }
             error = nil
-        } catch { if epoch == current { self.error = error.localizedDescription } }
+            if managesExtensions, controlID != nil {
+                _ = try await performExtension(tab.isExtensionWindow == true ? .openWindow : .showSurface(.manager))
+            }
+        } catch {
+            if epoch == current {
+                self.error = error.localizedDescription
+                if managesExtensions {
+                    releaseControl()
+                }
+            }
+        }
     }
 
     public func releaseControl() {
         invalidateInput()
-        if let id = controlID { release(id) }
+        if let id = controlID {
+            release(id)
+        }
         controlID = nil
+        if managesExtensions {
+            frame = nil
+        }
     }
 
     private func invalidateInput() {
@@ -105,13 +242,21 @@ public final class RemoteBrowserSession {
     }
 
     private func release(_ id: UUID) {
-        let message = BrowseBrowser(sessionName: tab.sessionName, tabID: tab.id, surfaceID: surfaceID,
-                                    controlID: id, operation: .releaseControl)
+        let message = BrowseBrowser(
+            sessionName: tab.sessionName,
+            tabID: anchorTabID,
+            surfaceID: surfaceID,
+            controlID: id,
+            operation: scoped(.releaseControl)
+        )
         // Best effort on disappearance. Host also releases on disconnect/expiry.
         Task { [send] in _ = try? await send(message) }
     }
 
-    public func dismissError() { error = nil; frameError = nil }
+    public func dismissError() {
+        error = nil
+        frameError = nil
+    }
 
     public func submit(_ operation: RemoteBrowserOperation) {
         guard let frame else { return }
@@ -120,15 +265,22 @@ public final class RemoteBrowserSession {
 
     public func submit(_ operation: RemoteBrowserOperation, generation: UInt64) {
         guard watching, let controlID else { return }
-        if case let .pointer(new) = operation, new.kind == .move,
-           let last = inputs.last, last.1 == generation, case let .pointer(old) = last.0, old.kind == .move {
+        if
+            case let .pointer(new) = operation, new.kind == .move,
+            let last = inputs.last, last.1 == generation, case let .pointer(old) = last.0, old.kind == .move {
             inputs[inputs.count - 1] = (operation, generation)
-        } else if case let .pointer(new) = operation, new.kind == .scroll,
-                  let last = inputs.last, last.1 == generation,
-                  case let .pointer(old) = last.0, old.kind == .scroll, old.modifiers == new.modifiers {
-            inputs[inputs.count - 1] = (.pointer(.init(.scroll, x: new.x, y: new.y, modifiers: new.modifiers,
-                deltaX: max(-4096, min(4096, old.deltaX + new.deltaX)),
-                deltaY: max(-4096, min(4096, old.deltaY + new.deltaY)))), generation)
+        } else if
+            case let .pointer(new) = operation, new.kind == .scroll,
+            let last = inputs.last, last.1 == generation,
+            case let .pointer(old) = last.0, old.kind == .scroll, old.modifiers == new.modifiers {
+            inputs[inputs.count - 1] = (.pointer(.init(
+                .scroll,
+                x: new.x,
+                y: new.y,
+                modifiers: new.modifiers,
+                deltaX: max(-4_096, min(4_096, old.deltaX + new.deltaX)),
+                deltaY: max(-4_096, min(4_096, old.deltaY + new.deltaY))
+            )), generation)
         } else {
             guard inputs.count < 32 else {
                 error = "Connection is too slow for more input. Control was released; no input will be replayed."
@@ -142,15 +294,21 @@ public final class RemoteBrowserSession {
         let inputGeneration = inputEpoch
         inputTask = Task { [weak self] in
             guard let self else { return }
-            defer { if self.inputEpoch == inputGeneration { self.inputTask = nil } }
-            while !Task.isCancelled, self.epoch == current, self.inputEpoch == inputGeneration,
-                  self.controlID == controlID, !self.inputs.isEmpty {
+            defer {
+                if self.inputEpoch == inputGeneration {
+                    self.inputTask = nil
+                }
+            }
+            while
+                !Task.isCancelled, self.epoch == current, self.inputEpoch == inputGeneration,
+                self.controlID == controlID, !self.inputs.isEmpty {
                 let (operation, generation) = self.inputs.removeFirst()
                 do {
                     _ = try await self.send(self.request(operation, generation: generation))
                 } catch {
-                    guard !Task.isCancelled, self.epoch == current,
-                          self.inputEpoch == inputGeneration, self.controlID == controlID else { return }
+                    guard
+                        !Task.isCancelled, self.epoch == current,
+                        self.inputEpoch == inputGeneration, self.controlID == controlID else { return }
                     self.error = error.localizedDescription
                     self.inputs.removeAll()
                     self.releaseControl()

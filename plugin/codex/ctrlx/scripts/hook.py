@@ -11,12 +11,7 @@ SOCKET_PATH = os.path.expanduser("~/.ctrlx/state/ingress.sock")
 MAX_SKILL_BYTES = 5000
 
 
-def emit_file_link_context(payload):
-    if not isinstance(payload, dict) or payload.get("hook_event_name") != "SessionStart":
-        return
-
-    # Use the bundled skill as the single source for the output convention.
-    skill = Path(__file__).resolve().parent.parent / "skills/file-links/SKILL.md"
+def read_skill_body(skill):
     try:
         with skill.open("rb") as source:
             data = source.read(MAX_SKILL_BYTES + 1)
@@ -29,8 +24,28 @@ def emit_file_link_context(payload):
     header, separator, body = text.partition("\n---\n")
     if not header.startswith("---\n") or not separator or not body.strip():
         return
+    return body.strip()
+
+
+def emit_session_context(payload):
+    if not isinstance(payload, dict) or payload.get("hook_event_name") != "SessionStart":
+        return
+
+    # Bundled entrypoints remain the single source for these early instructions.
+    skills = Path(__file__).resolve().parent.parent / "skills"
+    contexts = []
+    for name in ("file-links", "agent-ios"):
+        skill = skills / name / "SKILL.md"
+        body = read_skill_body(skill)
+        if body:
+            if name == "agent-ios":
+                body = (f"Skill source: `{skill}`. Resolve relative references from this file.\n\n"
+                        + body)
+            contexts.append(body)
+    if not contexts:
+        return
     print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "SessionStart", "additionalContext": body.strip(),
+        "hookEventName": "SessionStart", "additionalContext": "\n\n".join(contexts),
     }}))
 
 
@@ -58,7 +73,7 @@ def main():
     except Exception:
         return
 
-    emit_file_link_context(payload)
+    emit_session_context(payload)
 
 
 if __name__ == "__main__":

@@ -113,6 +113,7 @@ final public class ViewerRelayClient {
     public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
     public private(set) var hostSupportsBrowserSharing = false
+    public private(set) var hostSupportsBrowserExtensions = false
     public private(set) var hostSupportsPaneBrowser = false
     public private(set) var hostSupportsAgentImageInput = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
@@ -543,6 +544,9 @@ final public class ViewerRelayClient {
         case .browseBrowser where !hostSupportsBrowserSharing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
         case let .browseBrowser(spec):
+            if case .extensions = spec.operation, !hostSupportsBrowserExtensions {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage browser extensions"))
+            }
             if case .openPane = spec.operation, !hostSupportsPaneBrowser {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open a pane's browser"))
             }
@@ -1153,6 +1157,7 @@ final public class ViewerRelayClient {
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
+            hostSupportsBrowserExtensions = sessionState.supportsBrowserExtensions == true
             hostSupportsPaneBrowser = sessionState.supportsPaneBrowser == true
             hostSupportsAgentImageInput = sessionState.supportsAgentImageInput == true
             browserTabs = sessionState.browserTabs ?? []
@@ -1641,6 +1646,7 @@ final public class ViewerRelayClient {
 
     private func resetBrowserState() {
         hostSupportsBrowserSharing = false
+        hostSupportsBrowserExtensions = false
         hostSupportsSimulatorViewing = false
         hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false

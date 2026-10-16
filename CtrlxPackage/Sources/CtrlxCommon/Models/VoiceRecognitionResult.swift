@@ -5,12 +5,14 @@ struct VoiceRecognitionResult: Sendable {
     let alternativeTranscripts: [String]
     let liveTranscript: String
     let diagnosticID: String
+    let localeIdentifier: String
 
     init(
         primaryTranscript: String,
         alternativeTranscripts: [String] = [],
         liveTranscript: String = "",
-        diagnosticID: String = UUID().uuidString
+        diagnosticID: String = UUID().uuidString,
+        localeIdentifier: String = VoiceInputLanguage.system.localeIdentifier
     ) {
         self.primaryTranscript = primaryTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         self.alternativeTranscripts = Self.uniqueNonempty(
@@ -19,10 +21,25 @@ struct VoiceRecognitionResult: Sendable {
         )
         self.liveTranscript = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         self.diagnosticID = diagnosticID
+        self.localeIdentifier = localeIdentifier
     }
 
     var bestAvailableTranscript: String {
-        primaryTranscript.isEmpty ? liveTranscript : primaryTranscript
+        prefersLiveTranscript ? liveTranscript : primaryTranscript
+    }
+
+    var prefersLiveTranscript: Bool {
+        VoiceTranscriptFidelity.shouldPreferLive(liveTranscript, over: primaryTranscript)
+    }
+
+    func withLocale(_ identifier: String) -> Self {
+        Self(
+            primaryTranscript: primaryTranscript,
+            alternativeTranscripts: alternativeTranscripts,
+            liveTranscript: liveTranscript,
+            diagnosticID: diagnosticID,
+            localeIdentifier: identifier
+        )
     }
 
     private static func uniqueNonempty(_ values: [String], excluding excluded: String) -> [String] {
@@ -53,7 +70,9 @@ struct VoiceRecognitionCandidateAccumulator {
         self.maximumCandidateCount = max(1, maximumCandidateCount)
     }
 
-    mutating func append(primary: String, alternatives: [String]) {
+    mutating func append(primary: String, alternatives: [String], isFinal: Bool = true) {
+        // Progressive file replay also emits revisions of the same segment.
+        guard isFinal else { return }
         let options = uniqueSegmentOptions(primary: primary, alternatives: alternatives)
         guard !options.isEmpty else { return }
 

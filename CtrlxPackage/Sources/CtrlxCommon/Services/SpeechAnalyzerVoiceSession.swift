@@ -9,6 +9,9 @@
         typealias UpdateHandler = @MainActor @Sendable (String) -> Void
 
         private let audioEngine = AVAudioEngine()
+        private let audioMonitor = VoiceInputAudioMonitor()
+        private var onFailure: UpdateHandler?
+        private var preferredLocale = Locale.current
         private let contextualTerms: [String]
         private let diagnosticID: String
 
@@ -28,7 +31,14 @@
             self.diagnosticID = diagnosticID
         }
 
-        func start(onUpdate: @escaping UpdateHandler) async throws {
+        func start(
+            localeIdentifier: String,
+            canStart: @escaping @MainActor @Sendable () -> Bool,
+            onFailure: @escaping UpdateHandler,
+            onUpdate: @escaping UpdateHandler
+        ) async throws {
+            preferredLocale = Locale(identifier: localeIdentifier)
+            self.onFailure = onFailure
             let transcriber = try await ModernSpeechTranscriber.preferred(for: preferredLocale)
             try Task.checkCancellation()
             let modules = [transcriber.module]
@@ -76,6 +86,7 @@
             do {
                 try await analyzer.start(inputSequence: inputSequence)
                 try Task.checkCancellation()
+                guard canStart() else { throw VoiceInputStartError.targetChanged }
                 try startAudioInput(
                     analyzerFormat: analyzerFormat,
                     inputContinuation: inputContinuation
@@ -117,9 +128,13 @@
                     do {
                         try Task.checkCancellation()
                         onStage(.accurateTranscription)
-                        recognitionResult = try await transcribeRecordedAudio(
+                        recognitionResult = try await Self.transcribeRecording(
                             at: recordingURL,
-                            liveTranscript: liveText
+                            localeIdentifier: preferredLocale.identifier,
+                            contextualTerms: contextualTerms,
+                            accurate: true,
+                            liveTranscript: liveText,
+                            diagnosticID: diagnosticID
                         )
                     } catch {
                         accurateResultError = error
@@ -151,9 +166,11 @@
             cleanup()
         }
 
-        private var preferredLocale: Locale {
-            let identifier = Locale.preferredLanguages.first ?? Locale.current.identifier
-            return Locale(identifier: identifier)
+        private func recognitionFailed(_ error: Error) {
+            resultError = error
+            if !isFinishing {
+                onFailure?(error.localizedDescription)
+            }
         }
 
         private func makeResultTask(
@@ -173,7 +190,7 @@
                         }
                     } catch is CancellationError {
                     } catch {
-                        self?.resultError = error
+                        self?.recognitionFailed(error)
                     }
                 }
 
@@ -189,7 +206,7 @@
                         }
                     } catch is CancellationError {
                     } catch {
-                        self?.resultError = error
+                        self?.recognitionFailed(error)
                     }
                 }
             }
@@ -209,6 +226,9 @@
             analyzerFormat: AVAudioFormat,
             inputContinuation: AsyncStream<AnalyzerInput>.Continuation
         ) throws {
+            audioMonitor.start(engine: audioEngine) { [weak self] message in
+                self?.onFailure?(message)
+            }
             #if os(iOS)
                 let audioSession = AVAudioSession.sharedInstance()
                 try audioSession.setCategory(.playAndRecord, mode: .spokenAudio, options: .duckOthers)
@@ -247,6 +267,7 @@
         }
 
         private func stopAudioInput() {
+            audioMonitor.stop()
             if audioEngine.isRunning {
                 audioEngine.stop()
             }
@@ -267,15 +288,26 @@
             #endif
         }
 
-        private func transcribeRecordedAudio(
+        static func transcribeRecording(
             at url: URL,
-            liveTranscript: String
+            localeIdentifier: String,
+            contextualTerms: [String],
+            accurate: Bool,
+            liveTranscript: String = "",
+            diagnosticID: String = UUID().uuidString
         ) async throws -> VoiceRecognitionResult {
-            let transcriber = try await ModernSpeechTranscriber.accurate(for: preferredLocale)
+            try Task.checkCancellation()
+            let locale = Locale(identifier: localeIdentifier)
+            let transcriber: ModernSpeechTranscriber = if accurate {
+                try await ModernSpeechTranscriber.accurate(for: locale)
+            } else {
+                try await ModernSpeechTranscriber.preferred(for: locale)
+            }
+            try Task.checkCancellation()
             let modules = [transcriber.module]
             VoiceInputDiagnostics.recognizer(
                 transcriber.diagnosticName,
-                stage: "final",
+                stage: accurate ? "final" : "live-replay",
                 locale: transcriber.selectedLocale,
                 id: diagnosticID
             )
@@ -286,6 +318,7 @@
                 ) {
                 try await installationRequest.downloadAndInstall()
             }
+            try Task.checkCancellation()
 
             let options = SpeechAnalyzer.Options(
                 priority: .userInitiated,
@@ -295,6 +328,7 @@
             let context = AnalysisContext()
             context.contextualStrings[.general] = contextualTerms
             try await analyzer.setContext(context)
+            try Task.checkCancellation()
 
             let audioFile = try AVAudioFile(forReading: url)
             let resultTask = Task {
@@ -310,7 +344,9 @@
                 } else {
                     await analyzer.cancelAndFinishNow()
                 }
-                return try await resultTask.value
+                let result = try await resultTask.value
+                try Task.checkCancellation()
+                return result.withLocale(localeIdentifier)
             } catch {
                 resultTask.cancel()
                 await analyzer.cancelAndFinishNow()
@@ -320,6 +356,7 @@
         }
 
         private func cleanup() {
+            onFailure = nil
             audioRecorder?.discard()
             audioRecorder = nil
             analyzer = nil
@@ -334,11 +371,10 @@
     @available(iOS 26.0, macOS 26.0, *)
     private extension ModernSpeechTranscriber {
         static func preferred(for locale: Locale) async throws -> Self {
-            let speechLocale: Locale?
-            if SpeechTranscriber.isAvailable {
-                speechLocale = await SpeechTranscriber.supportedLocale(equivalentTo: locale)
+            let speechLocale: Locale? = if SpeechTranscriber.isAvailable {
+                await SpeechTranscriber.supportedLocale(equivalentTo: locale)
             } else {
-                speechLocale = nil
+                nil
             }
             let dictationLocale = await DictationTranscriber.supportedLocale(equivalentTo: locale)
 
@@ -400,14 +436,16 @@
                 for try await result in transcriber.results {
                     accumulator.append(
                         primary: String(result.text.characters),
-                        alternatives: result.alternatives.map { String($0.characters) }
+                        alternatives: result.alternatives.map { String($0.characters) },
+                        isFinal: result.isFinal
                     )
                 }
             case let .dictation(transcriber):
                 for try await result in transcriber.results {
                     accumulator.append(
                         primary: String(result.text.characters),
-                        alternatives: result.alternatives.map { String($0.characters) }
+                        alternatives: result.alternatives.map { String($0.characters) },
+                        isFinal: result.isFinal
                     )
                 }
             }

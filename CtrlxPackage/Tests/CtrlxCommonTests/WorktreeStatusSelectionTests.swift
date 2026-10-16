@@ -11,16 +11,42 @@ struct WorktreeStatusSelectionTests {
         .init(path: "/repo/other", branch: "other", pendingCommitCount: 2),
     ])
 
-    @Test("A session badge counts each worktree once and opens the full repository")
+    @Test("A session badge and its detail rows include only the session's worktrees")
     func selection() {
         let selection = WorktreeStatusSelection(repositories: [repository], paths: Set(["/repo/ux", "/repo/ux"]))
         #expect(selection.badgeText == "ux · 3 to main")
         #expect(selection.repositories == [repository])
+        #expect(selection.selectedRepositories == [RepositoryWorktreeStatus(
+            id: repository.id,
+            worktrees: [.init(path: "/repo/ux", branch: "ux", pendingCommitCount: 3)]
+        )])
         #expect(WorktreeStatusSelection(repositories: [repository], paths: ["/repo"]).badgeText == nil)
         #expect(WorktreeStatusSelection(repositories: [repository], paths: ["/repo/ux", "/repo/other"]).badgeText == "2 worktrees to merge")
         #expect(WorktreeStatusSelection(repositories: [repository], paths: ["/repo/ux-extra"]).repositories.isEmpty)
         let unknown = RepositoryWorktreeStatus(id: "unknown", worktrees: [.init(path: "/unknown", branch: nil, unavailableReason: "Detached")])
         #expect(WorktreeStatusSelection(repositories: [unknown]).hasUnavailableStatus)
+    }
+
+    @Test("Host and Git overviews retain complete repositories; an empty session selects nothing")
+    func overviewScope() {
+        let overview = WorktreeStatusSelection(repositories: [repository])
+        #expect(overview.repositories == [repository])
+        #expect(overview.selectedRepositories == [repository])
+        #expect(WorktreeStatusSelection(repositories: [repository], paths: []).selectedRepositories.isEmpty)
+        #expect(WorktreeStatusSelection(repositories: [repository], paths: ["/repo/ux-extra"]).selectedRepositories.isEmpty)
+    }
+
+    @Test("Scoped detail rows preserve repository errors and legacy base metadata")
+    func scopedMetadata() {
+        let unavailable = RepositoryWorktreeStatus(
+            id: repository.id, worktrees: repository.worktrees,
+            unavailableReason: "No unique local base branch", baseBranch: nil
+        )
+        let selection = WorktreeStatusSelection(repositories: [unavailable], paths: ["/repo/ux"])
+        #expect(selection.selectedRepositories == [RepositoryWorktreeStatus(
+            id: unavailable.id, worktrees: [.init(path: "/repo/ux", branch: "ux", pendingCommitCount: 3)],
+            unavailableReason: unavailable.unavailableReason, baseBranch: nil
+        )])
     }
 
     @Test("Compact session status distinguishes pending, merged, unavailable and unrelated worktrees")
@@ -58,6 +84,9 @@ struct WorktreeStatusSelectionTests {
         let multiple = WorktreeStatusSelection(repositories: repositories, paths: Set(["/repo/ux", "/second/fix", "/second/fix"]))
         #expect(multiple.pending.count == 2)
         #expect(multiple.badgeText == "2 worktrees to merge")
+        #expect(multiple.selectedRepositories.map(\.id) == [repository.id, master.id])
+        #expect(multiple.selectedRepositories.map(\.baseBranch) == ["main", "master"])
+        #expect(multiple.selectedRepositories.flatMap(\.worktrees).map(\.path) == ["/repo/ux", "/second/fix"])
         let mixed = WorktreeStatusSelection(repositories: repositories, paths: ["/repo/ux", "/second/merged", "/second/unknown"])
         #expect(mixed.status == .pending)
         #expect(mixed.statusDescription == "ux · 3 to main · Some comparisons unavailable")

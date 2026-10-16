@@ -164,7 +164,7 @@ Neither terminal overlay changes the terminal's size. The strip remains visible
 during correction; cancelling it discards the recording without inserting text.
 If neither corrector can run, the recognized text is still inserted once without
 Return. Only after the input surface accepts it, the same strip shows
-**Transcription Only**, explaining that context-aware correction was unavailable
+**Voice Input**, explaining that context-aware correction was unavailable
 and pointing to Voice Input settings. A rejected correction similarly identifies
 that the original transcription was kept. An accepted unchanged response is not
 a failure. The notice does not reopen recording, steal focus or intercept terminal
@@ -173,10 +173,16 @@ Empty recordings (including whitespace or control-only results) skip correction
 without a failure notice; native reply fields do not change the draft or report
 a successful insertion. Cancelled recordings and failed insertions never claim
 that uncorrected text was inserted.
-Mac Escape interception is active only during recording/finalization and scoped
-to the recording's native window; inactive controls and other windows keep their
+Mac Escape interception is active during model preparation, recording and finalization,
+and scoped to the recording's native window; inactive controls and other windows keep their
 normal Escape behavior. App deactivation or switching native windows cancels it.
-System permission prompts during preparation are not treated as cancellation.
+Only system authorization waits are exempt from native-window cancellation; an asset
+download is not an authorization wait. The captured native window, app foreground
+and input target are revalidated immediately before starting microphone audio.
+Audio engine configuration changes that stop the engine, iOS audio interruptions,
+and live recognition errors end recording with an explicit error and no insertion.
+Observers are removed before normal stop; queued notifications from a previous
+recording cannot cancel a new one.
 iOS toolbar/hardware Escape cancels active dictation before forwarding terminal
 input, including when the preview belongs to the parent multi-pane view.
 The result is bound to the captured Host/pane and local input revision; Mac also
@@ -184,7 +190,11 @@ checks its native endpoint/focus revision. Switching away and back does not revi
 it. Delivery consumes the result before enqueueing, so duplicate completion
 observers or a failed enqueue cannot retry it. Ordinary shells are supported.
 Pending agent forms and external editors disable dictation into the terminal.
-There is no global hotkey, clipboard replacement or extra Host/Relay command.
+There is no global hotkey or extra Host/Relay command. After a changed correction,
+a rejected correction or an incomplete second pass, the strip offers a **Transcripts**
+menu to copy the original/live/second-pass evidence. It never replaces or resends
+terminal input. Evidence stays in memory until dismissal, cancellation, leaving
+the input surface or starting another recording; it is not written to history.
 
 `CtrlxCommon` owns `VoiceInputController`, `TerminalVoiceInputSession`, the preview,
 typed context snapshot, SpeechAnalyzer/legacy recognizers, vocabulary, candidate
@@ -214,7 +224,14 @@ terminal background, but CtrlX does not claim to know the remote Agent's full
 current draft or changes made from another client. Local revision checks prevent
 local stale insertion, not cross-device draft conflicts.
 
-The shared vocabulary includes common Git terms such as `main`, `master`, `develop`,
+**Dictation Language** is a device-local preference (`voiceInputLanguage`), defaulting
+to System Language. Explicit Chinese, English and Japanese choices are available.
+The selected locale is resolved once at recording start and used by live recognition,
+the accurate pass, provider prompts and on-device correction availability. Changing
+settings during a recording does not change that recording's language.
+
+The shared vocabulary includes short Chinese UI terms (`会话`, `标签页`, `自适应`,
+`语音输入`) and common Git terms such as `main`, `master`, `develop`,
 `diff` and `rebase`, and adds at most eight short, deduplicated terms from the captured
 session/window names and the current directory's basename. It never mines arbitrary
 terminal output or scans files. Live recognition, the accurate second pass and
@@ -228,7 +245,7 @@ dictionary: ordinary Chinese (`我妹妹`, `还没合入`), Chinese terminology 
 and explicitly named branches must not be rewritten just because context mentions
 `main`. Both provider and on-device correction use these shared instructions.
 The recognizer choice is unchanged; supplying vocabulary does not guarantee speech
-biasing. Apple documents `AnalysisContext.contextualStrings` for
+biasing. `绘画` is never globally replaced with `会话`; meaning and context must agree. Apple documents `AnalysisContext.contextualStrings` for
 [`DictationTranscriber`](https://developer.apple.com/documentation/speech/analysiscontext/contextualstrings).
 Compare recognizers on the same recorded speech before changing their priority.
 
@@ -252,10 +269,19 @@ Legacy-budget regressions include the bundled 145-character utterance with produ
 vocabulary, both without context and with long terminal output; prompt changes must
 leave room for the complete utterance and its response reserve.
 
-Shared validation rejects altered literal numbers, versions, addresses, prefixed
-paths, flags, assignments and backtick-delimited code. Prompts additionally require
-preserving all clauses, negations and conditions. These are conservative checks,
-not a semantic guarantee: natural-language homophone correction remains model-based.
+Shared validation rejects altered literal numbers, versions, addresses, paths,
+flags, assignments, backtick-delimited code, code-shaped identifiers and common
+unquoted command/subcommand pairs (for example `git status`). It also rejects large
+omissions (at least eight content characters lost and less than 75% retained),
+changed explicit negation/condition/restriction markers and changed guarded actions.
+These deliberately conservative checks are not a semantic guarantee: the original
+is retained when a correction is rejected, and legitimate paraphrases may be rejected.
+
+A nonempty accurate pass does not automatically win. Lost intent markers, or a
+substantially shorter result with missing live clauses, retain the live transcript.
+Repeated identical clauses alone do not force the longer result. Both recognition
+versions remain available as evidence for correction and for the recovery menu.
+This is an omission guard, not proof that the live recognizer is always right.
 
 Mac **Settings → Voice Input** and the existing iOS settings use the same component
 for provider credentials, model choices and bundled-sample model tests. Existing
@@ -310,6 +336,45 @@ bytes during preview and one final text insertion without Return. Compare actual
 speech with the live, accurate and corrected text; bundled text-only model scores
 do not measure recognition accuracy. Capture stage timings separately for cold
 asset preparation, recording finalization and correction before changing timeouts.
+
+### Voice quality evaluation
+
+The bundled provider benchmark is a **text correction** test, not an ASR accuracy
+measurement. Models failing any critical preservation sample (intent/conditions,
+literals, explicit branch names, unrelated context or full-utterance retention)
+are listed with failed sample IDs but cannot be saved as winners. Eligible models
+rank by score, then residual errors and processing time. **Cancel Model Test**,
+leaving settings or deactivating the app cancels the task and its in-flight request;
+no further samples/models start. Completed models may remain visible, labelled
+with the cancelled status.
+
+On iOS/macOS 26+, **Voice Input → Evaluate a Recording** provides a repeatable local
+comparison. Choose a short CAF/M4A/WAV (or another Apple-supported audio file), enter
+the exact reference transcript (up to 4,000 characters), and optionally supply topic
+context. It replays that same file through the production progressive recognizer
+and accurate recognizer, applies the production transcript selection rule, and
+optionally invokes the configured correction pipeline. Correction is **off by
+default**; enabling provider correction may consume API credits. Evaluation requests
+speech authorization but never microphone authorization and does not record audio.
+
+The report includes each transcript and alternatives, language/OS/vocabulary,
+selected fallback, correction outcome/model, processing times, unmatched reference
+characters, missing domain terms, and intent/literal preservation. Unmatched
+characters can also represent substitutions: inspect the actual transcripts before
+calling them omissions. `configuredCorrectionModel` records the requested model;
+`correctionModel` records the model that produced the accepted or rejected candidate
+(`on-device` for Apple Intelligence), and is absent if no candidate was evaluated.
+`correctionDidFallback` records whether an unavailable provider led to an on-device
+attempt, including when that fallback was also unavailable. A rejected candidate
+retains the original transcript; it is not a successful correction.
+Replay timings measure file processing, not real-time
+microphone latency. Export JSON to retain the report; it includes reference,
+transcripts and optional context, but no API key or audio. Reports are otherwise
+memory-only. Closing settings, cancelling, or backgrounding the app stops evaluation.
+The existing text tests and injected file-runner tests validate this workflow without
+opening a microphone, invoking a paid provider, or claiming measured ASR improvement.
+Use the same consented recording, reference and context across languages/models to
+collect real quality evidence; record actual microphone latency separately.
 
 ## iOS custom input buttons
 

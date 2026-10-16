@@ -13,6 +13,7 @@ public struct RemoteBrowserView: View {
     @State private var viewport = CGSize.zero
     @State private var keyboardRequested = false
     @State private var isAnnotating = false
+    @State private var showsExtensions = false
     @FocusState private var editingAddress: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
@@ -51,6 +52,12 @@ public struct RemoteBrowserView: View {
             HStack {
                 Label("Host · Chromium", symbol: .globe).font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                if client.hostSupportsBrowserExtensions {
+                    Button {
+                        session.releaseControl()
+                        showsExtensions = true
+                    } label: { Label("Browser Extensions", symbol: .puzzlepiece).labelStyle(.iconOnly) }
+                }
                 if session.controlID != nil {
                     Button {
                         if let text = clipboard.getString(), !text.isEmpty { session.submit(.text(text)) }
@@ -64,7 +71,7 @@ public struct RemoteBrowserView: View {
                         keyboardRequested = false
                         session.releaseControl()
                     }
-                } else {
+                } else if session.tab.isExtensionWindow != true {
                     Button(session.tab.isControlled ? "Read Only · Take Control" : "Take Control") {
                         Task { await session.takeControl() }
                     }
@@ -111,8 +118,8 @@ public struct RemoteBrowserView: View {
                 }.padding(8)
             }
         }
-        .task(id: scenePhase == .active && client.isHostConnected && client.hostSupportsBrowserSharing) {
-            guard scenePhase == .active, client.isHostConnected, client.hostSupportsBrowserSharing else {
+        .task(id: !showsExtensions && scenePhase == .active && client.isHostConnected && client.hostSupportsBrowserSharing) {
+            guard !showsExtensions, scenePhase == .active, client.isHostConnected, client.hostSupportsBrowserSharing else {
                 session.stop(); image = nil; displayedFrame = nil; return
             }
             await session.watch()
@@ -126,6 +133,9 @@ public struct RemoteBrowserView: View {
         .onChange(of: displayScale) { _, _ in updateFrameResolution() }
         .onDisappear { session.stop() }
         .accessibilityIdentifier("remote-browser-page")
+        .sheet(isPresented: $showsExtensions) {
+            RemoteBrowserExtensionsView(tab: session.tab, client: client)
+        }
     }
 
     private func navigate() {
@@ -202,7 +212,7 @@ public enum RemoteBrowserGeometry {
 #if os(macOS)
 import AppKit
 
-private struct RemoteBrowserCanvas: NSViewRepresentable {
+struct RemoteBrowserCanvas: NSViewRepresentable {
     let image: CGImage?
     let frame: RemoteBrowserFrame?
     let acceptsInput: Bool
@@ -313,7 +323,7 @@ final class BrowserCanvasNSView: NSView, @preconcurrency NSTextInputClient {
 #elseif os(iOS)
 import UIKit
 
-private struct RemoteBrowserCanvas: UIViewRepresentable {
+struct RemoteBrowserCanvas: UIViewRepresentable {
     let image: CGImage?
     let frame: RemoteBrowserFrame?
     let acceptsInput: Bool
@@ -333,9 +343,9 @@ private struct RemoteBrowserCanvas: UIViewRepresentable {
     static func dismantleUIView(_ view: BrowserCanvasUIView, coordinator: ()) { view.keyboard.resignFirstResponder() }
 }
 
-private final class BrowserCanvasUIView: UIView {
+final class BrowserCanvasUIView: UIView {
     let picture = UIImageView()
-    let keyboard = BrowserKeyboardInput()
+    fileprivate let keyboard = BrowserKeyboardInput()
     var pageSize = CGSize.zero
     var acceptsInput = false
     var send: (RemoteBrowserOperation) -> Void = { _ in }

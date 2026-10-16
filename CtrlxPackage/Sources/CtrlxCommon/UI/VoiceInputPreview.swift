@@ -19,7 +19,7 @@
         package var body: some View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(voice.correctionNotice == nil ? voice.stage.label : "Transcription Only")
+                    Text(voice.correctionNotice == nil ? voice.stage.label : "Voice Input")
                         .font(.caption2)
                         .foregroundStyle(voice.correctionNotice == nil ? Color.secondary : .orange)
                         .lineLimit(1)
@@ -32,6 +32,18 @@
                         .accessibilityIdentifier("voice-preview-transcript")
                 }
                 .allowsHitTesting(false)
+                if voice.phase == .idle, let review = voice.reviewTranscripts {
+                    Menu("Transcripts") {
+                        Button("Copy Original Transcription") { voice.copyTranscript(review.bestAvailableTranscript) }
+                        if !review.liveTranscript.isEmpty, review.liveTranscript != review.bestAvailableTranscript {
+                            Button("Copy Live Transcription") { voice.copyTranscript(review.liveTranscript) }
+                        }
+                        if !review.primaryTranscript.isEmpty, review.primaryTranscript != review.bestAvailableTranscript {
+                            Button("Copy Second Pass") { voice.copyTranscript(review.primaryTranscript) }
+                        }
+                    }
+                    .fixedSize()
+                }
                 Button(action: dismiss) {
                     Label(voice.correctionNotice == nil ? "Cancel Voice Input" : "Dismiss Voice Notice", symbol: .xmark)
                         .labelStyle(.iconOnly)

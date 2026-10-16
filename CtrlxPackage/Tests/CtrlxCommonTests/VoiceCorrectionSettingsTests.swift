@@ -79,7 +79,7 @@
                     return "saved-fixture-key"
                 }
                 $0[SecretsService.self] = secrets
-                $0[VoiceCorrectionAvailabilityClient.self] = .init(onDevice: { status.value })
+                $0[VoiceCorrectionAvailabilityClient.self] = .init(onDevice: { _ in status.value })
             } operation: {
                 let settings = VoiceCorrectionSettings()
                 let model = VoiceCorrectionSettingsModel()
@@ -102,7 +102,7 @@
             try await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
                 $0[SecretsService.self] = .inMemory()
-                $0[VoiceCorrectionAvailabilityClient.self] = .init(onDevice: { .unavailable("Device not supported") })
+                $0[VoiceCorrectionAvailabilityClient.self] = .init(onDevice: { _ in .unavailable("Device not supported") })
             } operation: {
                 let settings = VoiceCorrectionSettings()
                 let model = VoiceCorrectionSettingsModel()
@@ -116,6 +116,8 @@
                 )
                 #expect(result.text == "绑定服用")
                 #expect(result.outcome == .unavailable)
+                #expect(result.modelID == nil)
+                #expect(result.didFallback)
                 #expect(result.notice != nil)
             }
         }

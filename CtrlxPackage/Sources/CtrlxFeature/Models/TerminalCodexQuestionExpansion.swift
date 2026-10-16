@@ -8,6 +8,7 @@ import Foundation
 @MainActor
 final class TerminalCodexQuestionExpansion {
     @Dependency(\.continuousClock) private var clock
+    private let isFrameComplete: @MainActor () -> Bool
     private let readPrompt: @MainActor () -> CodexQuestionPrompt?
     private let enqueue: @MainActor (Int, @escaping @MainActor (Bool) -> Void) -> Bool
     private var lastHandledCount: Int?
@@ -19,9 +20,11 @@ final class TerminalCodexQuestionExpansion {
     private var pendingTask: Task<Void, Never>?
 
     init(
+        isFrameComplete: @escaping @MainActor () -> Bool = { true },
         readPrompt: @escaping @MainActor () -> CodexQuestionPrompt?,
         enqueue: @escaping @MainActor (Int, @escaping @MainActor (Bool) -> Void) -> Bool
     ) {
+        self.isFrameComplete = isFrameComplete
         self.readPrompt = readPrompt
         self.enqueue = enqueue
     }
@@ -38,12 +41,20 @@ final class TerminalCodexQuestionExpansion {
 
     func schedule() {
         guard !isInvalidated else { return }
+        // Partial synchronized output is not a new prompt. Keep the original
+        // deadline and resume from SwiftTerm's frame-completion event.
+        guard isFrameComplete() else { return }
         guard let prompt = readPrompt(), prompt.count != lastHandledCount else {
             cancelPending()
             return
         }
         guard inFlightID == nil else { return }
-        guard candidate != prompt else { return }
+        if candidate == prompt {
+            if pendingTask == nil {
+                enqueue(prompt)
+            }
+            return
+        }
         cancelPending()
         candidate = prompt
         let token = generation
@@ -53,28 +64,28 @@ final class TerminalCodexQuestionExpansion {
             catch { return }
             guard let self, !Task.isCancelled, generation == token else { return }
             pendingTask = nil
-            candidate = nil
-            guard readPrompt() == prompt else {
+            schedule()
+        }
+    }
+
+    private func enqueue(_ prompt: CodexQuestionPrompt) {
+        candidate = nil
+        let requestID = UUID()
+        inFlightID = requestID
+        let queued = enqueue(prompt.count) { [weak self] handled in
+            guard let self, !isInvalidated, inFlightID == requestID else { return }
+            inFlightID = nil
+            if handled {
+                lastHandledCount = prompt.count
+            }
+            // A failed attempt waits for a later native event, rather than
+            // polling the same footer. Observe a changed queue immediately.
+            if handled || (isFrameComplete() && readPrompt()?.count != prompt.count) {
                 schedule()
-                return
             }
-            let requestID = UUID()
-            inFlightID = requestID
-            let queued = enqueue(prompt.count) { [weak self] handled in
-                guard let self, !isInvalidated, inFlightID == requestID else { return }
-                inFlightID = nil
-                if handled {
-                    lastHandledCount = prompt.count
-                }
-                // A failed attempt waits for a later native event, rather than
-                // polling the same footer. Observe a changed queue immediately.
-                if handled || readPrompt()?.count != prompt.count {
-                    schedule()
-                }
-            }
-            if !queued {
-                inFlightID = nil
-            }
+        }
+        if !queued {
+            inFlightID = nil
         }
     }
 

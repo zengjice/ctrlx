@@ -36,6 +36,10 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }
 
     var runtime: (any CXBrowserRuntime)?
+    var extensionStore: BrowserExtensionStore?
+    var extensionOperationInProgress = false
+    var extensionControl: BrowserExtensionControl?
+    var extensionCleanupTask: Task<Void, Never>?
     private var workspaces: [UUID: AgentBrowserWorkspace] = [:]
     private(set) var tabs: [String: AgentBrowserTabState] = [:]
     private let parkingID = UUID()
@@ -84,8 +88,9 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }
 
     /// Tests inject the native boundary without starting Chromium or touching a profile.
-    init(runtime: any CXBrowserRuntime) {
+    init(runtime: any CXBrowserRuntime, extensionStore: BrowserExtensionStore? = nil) {
         self.runtime = runtime
+        self.extensionStore = extensionStore
         self.startRuntime = Self.createAndStartRuntime
         super.init()
     }
@@ -140,6 +145,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
             profile: profile.resolvingSymlinksInPath().path,
             state: state.resolvingSymlinksInPath().path
         )
+        service.extensionStore = BrowserExtensionStore(profile: profile)
         return runtime
     }
 
@@ -452,6 +458,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         state.sourceAgent = parent.flatMap { tabs[$0]?.sourceAgent } ?? imageTargetForPane(paneID)
         state.windowID = parent.flatMap { tabs[$0]?.windowID } ?? route["window"]
         state.parentID = parent.flatMap(UUID.init(uuidString:))
+        state.isExtensionWindow = route["presentation"] == "extensionWindow"
         state.isPrimary = parent == nil && route["primary"] != "false"
         state.suppressInitialSelection = (parent == nil && route["remote"] == "true")
             || parent.flatMap { tabs[$0]?.isRemotelyControlled } == true
@@ -517,6 +524,75 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         runtime?.showDevTools(tab.identifier)
     }
 
+    func openExtensionWindow(_ tab: AgentBrowserTabState) async throws -> AgentBrowserTabState {
+        guard
+            !closing, !tab.isClosed, !tab.isRemotelyControlled, tab.manualTarget?.hostID == nil, tabs[tab.identifier] === tab,
+            let runtime, runtime.responds(to: #selector(CXBrowserRuntime.openExtensionWindow(forTab:completion:))) else {
+            throw ManualBrowserError.creation("This page cannot open an extension window. Update the Host if this capability is unavailable.")
+        }
+        let identifier: String = try await withCheckedThrowingContinuation { continuation in
+            runtime.openExtensionWindow?(forTab: tab.identifier) { identifier, error in
+                if let error {
+                    continuation.resume(throwing: ManualBrowserError.creation(error))
+                } else if let identifier {
+                    continuation.resume(returning: identifier)
+                } else {
+                    continuation.resume(throwing: ManualBrowserError.creation("Chromium did not return an extension window."))
+                }
+            }
+        }
+        guard !closing, let result = tabs[identifier], !result.isClosed, result.isExtensionWindow else {
+            throw ManualBrowserError.creation("The extension window was closed before it could be opened.")
+        }
+        // Creating/selecting the associated workspace tab raises the main
+        // window. Reveal Chromium after those callbacks have completed.
+        showBrowserWindow(result)
+        return result
+    }
+
+    func showExtensionManager(_ tab: AgentBrowserTabState) async throws {
+        guard
+            !closing, !tab.isClosed, !tab.isRemotelyControlled, tab.manualTarget?.hostID == nil, tabs[tab.identifier] === tab,
+            let runtime, runtime.responds(to: #selector(CXBrowserRuntime.showExtensionManager(forTab:completion:))) else {
+            throw ManualBrowserError.creation("Extension management is unavailable for this page. Update the Host if needed.")
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            runtime.showExtensionManager?(forTab: tab.identifier) { error in
+                if let error {
+                    continuation.resume(throwing: ManualBrowserError.creation(error))
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func extensionRuntime(for tab: AgentBrowserTabState, controlID: UUID? = nil) throws -> any CXBrowserRuntime {
+        if let controlID {
+            guard
+                let control = extensionControl, control.lease.id == controlID,
+                control.anchorID == tab.id, control.lease.expires > .now else {
+                throw RemoteBrowserError.message("Extension control expired. Take Control again.")
+            }
+        } else if extensionControl != nil || tab.isRemotelyControlled {
+            throw RemoteBrowserError.message("A Viewer controls browser extensions. Take control back first.")
+        }
+        guard
+            !closing, !tab.isClosed, tab.manualTarget?.hostID == nil,
+            tabs[tab.identifier] === tab, let runtime,
+            runtime.responds(to: #selector(CXBrowserRuntime.requestBrowserExtensions(forTab:request:completion:))) else {
+            throw ManualBrowserError.creation("Extension management is unavailable for this page. Update the Host if needed.")
+        }
+        return runtime
+    }
+
+    func showBrowserWindow(_ tab: AgentBrowserTabState) {
+        guard
+            !closing, !tab.isClosed, !tab.isRemotelyControlled, tab.manualTarget?.hostID == nil,
+            tabs[tab.identifier] === tab, tab.isExtensionWindow else { return }
+        runtime?.showBrowserWindow?(tab.identifier)
+    }
+
     func close(_ tab: AgentBrowserTabState) {
         guard !tab.isClosed, !detachingTabs.contains(tab.identifier) else { return }
         runtime?.closeTab(tab.identifier)
@@ -524,6 +600,9 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
 
     func shutdown() async {
         closing = true
+        releaseExtensionControl()
+        await extensionCleanupTask?.value
+        extensionCleanupTask = nil
         publishTask?.cancel()
         publishTask = nil
         controlExpiryTask?.cancel()
@@ -631,6 +710,7 @@ final class AgentBrowserTabState {
     var isPrimary = true
     var suppressInitialSelection = false
     var isRemotelyControlled = false
+    var isExtensionWindow = false
     var sourceAgent: AgentImageTarget?
 
     init(

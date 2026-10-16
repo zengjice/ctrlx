@@ -621,6 +621,16 @@
         private var lastQuestionDiagnostic: String?
         private var questionCheckTask: Task<Void, Never>?
         private var questionCheckID: UUID?
+        private var deferredQuestionCheck: QuestionCheck?
+        private var isFeedingTerminalData = false
+
+        private struct QuestionCheck {
+            let id: UUID
+            let prompt: CodexQuestionPrompt
+            let questionID: String?
+            let inputRevision: UInt64
+        }
+
         private var lastQuestionCount: Int?
         private var questionInputRevision: UInt64 = 0
 
@@ -907,9 +917,7 @@
                 lastQuestionCount = currentQuestionPrompt?.count
             }
             questionInputRevision &+= 1
-            questionCheckTask?.cancel()
-            questionCheckTask = nil
-            questionCheckID = nil
+            cancelQuestionCheck()
             scheduleQuestionCheck(delay: .seconds(1))
 
             if let controlKey = TerminalControlKeyMapper.key(
@@ -2081,13 +2089,22 @@
         }
 
         func feed(byteArray: ArraySlice<UInt8>) {
+            isFeedingTerminalData = true
+            defer {
+                isFeedingTerminalData = false
+                scheduleQuestionCheck()
+            }
             terminalView.feed(byteArray: byteArray)
             extractAndClearPayloads(afterFeeding: byteArray)
             scheduleURLUnderlineUpdate(contentChanged: true)
-            scheduleQuestionCheck()
         }
 
         func feedPreservingScroll(_ bytes: ArraySlice<UInt8>) {
+            isFeedingTerminalData = true
+            defer {
+                isFeedingTerminalData = false
+                scheduleQuestionCheck()
+            }
             let savedPosition = scrollPosition
             // Consider "at bottom" if:
             // - Position >= 0.999 (actually at bottom)
@@ -2099,7 +2116,6 @@
                 terminalView.scroll(toPosition: savedPosition)
             }
             scheduleURLUnderlineUpdate(contentChanged: true)
-            scheduleQuestionCheck()
         }
 
         // MARK: - Codex question auto-expansion
@@ -2133,8 +2149,19 @@
             return CodexQuestionPrompt(lines: lines, cursorRow: row - start, cursorColumn: terminal.buffer.x)
         }
 
+        private var isQuestionFrameComplete: Bool {
+            !isFeedingTerminalData && !getTerminal().synchronizedOutputActive
+        }
+
         fileprivate func scheduleQuestionCheck(delay: Duration = .milliseconds(350)) {
-            guard questionCheckTask == nil, onExpandCodexQuestions != nil else { return }
+            guard isQuestionFrameComplete, questionCheckTask == nil, onExpandCodexQuestions != nil else { return }
+            if let check = deferredQuestionCheck {
+                deferredQuestionCheck = nil
+                questionCheckTask = Task { @MainActor [weak self] in
+                    await self?.performQuestionCheck(check)
+                }
+                return
+            }
             guard let candidate = currentQuestionPrompt else {
                 reportQuestionCheck("unrecognized-composer-or-footer", count: nil)
                 return
@@ -2148,36 +2175,50 @@
                 return
             }
             reportQuestionCheck("scheduled", count: candidate.count)
-            let questionID = codexQuestionID
-            let revision = questionInputRevision
-            let checkID = UUID()
-            questionCheckID = checkID
+            let check = QuestionCheck(
+                id: UUID(), prompt: candidate, questionID: codexQuestionID,
+                inputRevision: questionInputRevision
+            )
+            questionCheckID = check.id
             questionCheckTask = Task { @MainActor [weak self] in
                 do { try await Task.sleep(for: delay) } catch { return }
-                guard let self else { return }
-                var shouldRecheck = true
-                defer {
-                    if self.questionCheckID == checkID {
-                        self.questionCheckTask = nil
-                        self.questionCheckID = nil
-                        if shouldRecheck {
-                            self.scheduleQuestionCheck()
-                        }
+                await self?.performQuestionCheck(check)
+            }
+        }
+
+        private func performQuestionCheck(_ check: QuestionCheck) async {
+            guard !Task.isCancelled, questionCheckID == check.id else { return }
+            // The deadline may fall inside a synchronized redraw. Wait for its
+            // completion event without restarting the 350 ms stability window.
+            guard isQuestionFrameComplete else {
+                questionCheckTask = nil
+                deferredQuestionCheck = check
+                reportQuestionCheck("waiting-for-frame", count: check.prompt.count)
+                return
+            }
+            var shouldRecheck = true
+            defer {
+                if questionCheckID == check.id {
+                    questionCheckTask = nil
+                    questionCheckID = nil
+                    if shouldRecheck {
+                        scheduleQuestionCheck()
                     }
                 }
-                guard !Task.isCancelled, self.questionInputRevision == revision,
-                      self.canExpandCodexQuestions, self.currentQuestionPrompt == candidate
-                else { return }
-                let handled = await self.onExpandCodexQuestions?(candidate.count, questionID) ?? false
-                guard !Task.isCancelled, self.questionCheckID == checkID else { return }
-                self.reportQuestionCheck(handled ? "acknowledged" : "not-acknowledged", count: candidate.count)
-                if handled {
-                    self.lastQuestionCount = candidate.count
-                }
-                // No timer loop after a rejected attempt. Later native output
-                // or eligibility changes can retry the same queue.
-                shouldRecheck = handled || self.currentQuestionPrompt != candidate
             }
+            guard
+                questionInputRevision == check.inputRevision,
+                canExpandCodexQuestions, currentQuestionPrompt == check.prompt
+            else { return }
+            let handled = await onExpandCodexQuestions?(check.prompt.count, check.questionID) ?? false
+            guard !Task.isCancelled, questionCheckID == check.id else { return }
+            reportQuestionCheck(handled ? "acknowledged" : "not-acknowledged", count: check.prompt.count)
+            if handled {
+                lastQuestionCount = check.prompt.count
+            }
+            // No timer loop after a rejected attempt. Later native output
+            // or eligibility changes can retry the same queue.
+            shouldRecheck = handled || (isQuestionFrameComplete && currentQuestionPrompt != check.prompt)
         }
 
         private func reportQuestionCheck(_ reason: String, count: Int?) {
@@ -2197,6 +2238,7 @@
             questionCheckTask?.cancel()
             questionCheckTask = nil
             questionCheckID = nil
+            deferredQuestionCheck = nil
         }
 
         func scroll(toPosition position: Double) {

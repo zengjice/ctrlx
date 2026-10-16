@@ -10,6 +10,14 @@ enum VoiceInputVocabulary {
         "terminal",
         "viewer",
         "Voice",
+        "会话",
+        "标签页",
+        "自适应",
+        "分栏",
+        "工作区",
+        "剪贴板",
+        "语音输入",
+        "自动排序",
     ]
 
     private static let agentTerms = [

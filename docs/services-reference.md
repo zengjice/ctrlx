@@ -87,6 +87,13 @@ native wrapper checks a stable screen after 350 ms; only the key window's focuse
 visible terminal at the live bottom is eligible (no editor overlay, text selection,
 mouse drag or marked IME text). Typing postpones the check. It neither changes
 focus nor sends Enter/answers, and does not change the agent's working state.
+Mac and iOS inspect completed terminal frames: synchronized output in progress
+preserves an existing stability deadline. If that deadline expires mid-frame,
+the native frame-completion event resumes the check, revalidating the live prompt
+and input eligibility before sending. Parsing an output chunk also defers checks
+until the whole chunk and any viewport restoration finish. Continuous status
+redraws therefore cannot keep restarting the wait. Cancellation or a new question
+identity discards a check waiting for frame completion.
 
 Local panes call `TmuxService.expandCodexQuestions`; viewers enqueue the additive
 `ExpandCodexQuestions(expectedCount:expectedQuestionID:)` intent behind existing keyboard input.
@@ -142,7 +149,8 @@ when their reason changes.
 On iOS, `TerminalCodexQuestionExpansion` runs outside SwiftUI observable state.
 The selected pane's native wrapper reads at most nine live rows, after parsing
 terminal output, and checks again after 350 ms. Unrelated output does not extend
-the deadline; a changed/partial footer does. It requires the input proxy's focus,
+the deadline; a changed or unrecognized footer in a completed frame does. It
+requires the input proxy's focus,
 an active scene, a ready stream, both native viewports at the bottom, no copy/menu,
 IME, cursor-navigation operation, drag or mouse-scroll momentum, and no blocking
 response form/quick-action overlay. Typing, stream reset, resize, focus loss and
@@ -1085,10 +1093,11 @@ it once. Different worktrees and repositories compare independently. Any pending
 worktree takes icon priority, with a tooltip note if other comparisons are
 unavailable; without pending commits, any unavailable comparison takes priority
 over the merged checkmark. The detail list names each repository's base.
-Status buttons
-open the complete associated repository list; the Host section's Worktrees
-entry remains available when everything is merged. The local Mac Git page also
-has a Worktrees entry. Mac uses a popover and iOS a sheet; their contents follow
+Session status buttons list only worktrees referenced by terminal panes across
+that session's tabs, with each worktree shown once. The Host section's Worktrees
+entry shows the complete repository list and remains available when everything
+is merged. The local Mac Git page's Worktrees entry shows its complete associated
+repository. Mac uses a popover and iOS a sheet; their contents follow
 incoming snapshots. A missing comparison shows its reason instead of claiming
 that the branch is merged. “No commits pending merge” is not a clean-worktree or
 safe-to-delete assertion.
@@ -1190,6 +1199,14 @@ Background APNs and tap-to-open routing are retained. Codex tool-hook questions
 offer tap-to-open rather than fabricated answer buttons; actual structured forms
 retain their existing answer actions. Update the Host for new question detection
 and iOS for foreground alerts; Relay changes are unnecessary.
+
+On Mac, notification taps resolve `(hostId, paneId)` against current pane metadata
+and this Mac's window ownership. A detached terminal selects its tab and restores
+and activates its owning native window; a terminal in the main window uses the
+Sessions window. Moving a tab or closing its detached window before opening an
+older notification therefore follows the current owner. Activation retries target
+only that native window, do not reselect/refit the tab, and are cancelled by a newer
+notification navigation. The notification payload does not store window ownership.
 
 See [push notifications](push-notifications-plan.md) for design/history and
 actionable replies, and [self-hosting](self-hosting.md) for current configuration.

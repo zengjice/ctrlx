@@ -43,13 +43,17 @@ extension AgentBrowserService {
             url: String(tab.url.prefix(8_192)),
             isLoading: tab.isLoading,
             isAgentOwned: !tab.owner.isEmpty,
-            isControlled: remoteControls[tab.id] != nil,
+            isControlled: tab.isRemotelyControlled,
             sourceAgent: tab.sourceAgent,
-            sourcePaneID: tab.paneID.isEmpty ? nil : tab.paneID
+            sourcePaneID: tab.paneID.isEmpty ? nil : tab.paneID,
+            isExtensionWindow: tab.isExtensionWindow ? true : nil
         )
     }
 
     func releaseBrowserControl(_ tabID: UUID) {
+        if extensionControl?.anchorID == tabID || extensionControl?.pageID == tabID {
+            releaseExtensionControl()
+        }
         guard remoteControls.removeValue(forKey: tabID) != nil else { return }
         _ = runtime?.setHumanControl(nil, forTab: tabID.uuidString)
         tabs[tabID.uuidString]?.isRemotelyControlled = false
@@ -57,25 +61,31 @@ extension AgentBrowserService {
     }
 
     func disconnectBrowserViewer(_ viewerID: String) {
+        if extensionControl?.lease.viewerID == viewerID {
+            releaseExtensionControl()
+        }
         for (tab, lease) in remoteControls where lease.viewerID == viewerID {
             releaseBrowserControl(tab)
         }
     }
 
     func expireBrowserControls() {
+        if let control = extensionControl, control.lease.expires <= .now {
+            releaseExtensionControl()
+        }
         for (tab, lease) in remoteControls where lease.expires <= .now {
             releaseBrowserControl(tab)
         }
     }
 
-    private func startControlExpiry() {
+    func startControlExpiry() {
         guard controlExpiryTask == nil else { return }
         controlExpiryTask = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
                 guard let self else { return }
                 self.expireBrowserControls()
-                if self.remoteControls.isEmpty {
+                if self.remoteControls.isEmpty && self.extensionControl == nil {
                     break
                 }
             }
@@ -110,7 +120,12 @@ extension AgentBrowserService {
             throw RemoteBrowserError.message("This Host browser tab is no longer available in the session.")
         }
         switch request.operation {
+        case let .extensions(operation):
+            return try await handleBrowserExtensions(operation, request: request, tab: tab, viewerID: viewerID)
         case .close:
+            guard extensionControl?.anchorID != tabID, extensionControl?.pageID != tabID else {
+                throw RemoteBrowserError.message("Release extension control before closing this page.")
+            }
             if let lease = remoteControls[tabID] {
                 guard lease.viewerID == viewerID else { throw RemoteBrowserError.message("Another viewer controls this page.") }
             } else {
@@ -121,6 +136,12 @@ extension AgentBrowserService {
             runtime.closeTab(tabID.uuidString)
             return RemoteBrowserResponse()
         case .takeControl:
+            guard extensionControl?.anchorID != tabID, extensionControl?.pageID != tabID else {
+                throw RemoteBrowserError.message("This page belongs to an extension control grant.")
+            }
+            guard !tab.isExtensionWindow else {
+                throw RemoteBrowserError.message("Use extension window control for this page. A page control grant cannot control Chrome's native window.")
+            }
             if let lease = remoteControls[tabID] {
                 guard lease.viewerID == viewerID, lease.surfaceID == request.surfaceID else {
                     throw RemoteBrowserError.message("Another viewer controls this page. Ask them to release it, or take it back on the Host.")

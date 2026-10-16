@@ -87,6 +87,49 @@ access are tracked in the [Agent Browser TODO](agent-browser-todo.md), with per-
 implementation status. Verified public capabilities and remaining limits are in
 the [capability audit](agent-browser-capability-audit.md).
 
+## Browser extensions
+
+The browser's **Extensions** button provides Chrome Web Store link/ID installation,
+ZIP/CRX import, permission review, enable/disable, manual update and removal.
+Extensions are installed in the source **Host's CtrlX profile** and apply across
+its sessions. They do not install into system Chrome or a Viewer's local profile.
+The first version supports Manifest V3 and signed CRX3; ZIP packages are identified
+as unsigned. Store downloads are signature-checked and loaded from Host-managed
+directories, with manual **Update → Check Chrome Web Store** rather than Chrome's
+automatic store updates. Native Chromium may require an additional confirmation.
+
+On Mac Host, choose **Open in Extension Window** for pages that need extension
+actions. This opens a separate CtrlX-owned Chrome-style window with its native
+toolbar and extension popups. Existing embedded pages remain available, but
+extensions relying on Chrome's active-tab/window APIs need the extension window.
+Installations and extension settings persist across restarts; open pages remain
+transient.
+
+Mac Viewer and iOS use **Browser Extensions → Take Extension Control**. This is
+separate from ordinary page control. The **Window** view carries the Host's full
+native window and child popups, with pointer, scrolling, text/paste and supported
+editing keys; **Fit Host Window** changes the shared Host window size. Host input
+takes control back. Closing/backgrounding the panel, losing the connection or
+closing the source releases its grant. Newer capabilities are required on both
+ends; an old Host never causes installation on the Viewer as a fallback.
+
+An install attempt consumes its permission preview. If the Host reports an error
+or timeout, the Viewer returns to the list and can **Refresh** without releasing
+control. Packages submitted to Chromium are retained because installation may
+still complete; a busy runtime must finish before further management operations.
+Failures before submission clean up the unused package.
+
+Local acceptance covers Mac Host/Viewer and iOS Simulator, package/wire/control
+tests, real ENV-Plugin 3.4.12 request-header effects and persistence, and Mac store
+installation/manual replacement. ENV debugger API coexistence was checked;
+native messaging helpers and all-extension compatibility were not. This is not
+physical-device or cross-machine distribution acceptance. See the
+[implementation and evidence record](browser-extensions-design.md) for exact
+checks and retained runtime limitations. If store downloads fail only in CtrlX,
+check process-specific proxy rules as well as domain connectivity: a local Surge
+DIRECT rule for CtrlX caused the documented TLS failure despite successful curl
+and differently named Foundation requests.
+
 ## Embedded routing
 
 The shared `agent-browser` skill (packaged for Codex and Claude Code) defaults
