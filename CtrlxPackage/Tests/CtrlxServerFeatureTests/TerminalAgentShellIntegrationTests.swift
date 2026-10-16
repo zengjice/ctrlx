@@ -266,7 +266,7 @@ struct TerminalAgentShellIntegrationTests {
             }
             $0[ProcessRunner.self].run = { _, args, _, _ in
                 calls.withValue { $0.append(args) }
-                return ProcessResult(exitCode: 0, stdout: Data((args.contains("new-window") ? "%42:9\n" : "%42\n").utf8), stderr: Data())
+                return Self.tmuxResult(for: args)
             }
         } operation: {
             let tmux = TmuxService(tmuxPath: "/fixture/tmux")
@@ -281,7 +281,7 @@ struct TerminalAgentShellIntegrationTests {
         #expect(prepared.value == [defaults, defaults, defaults])
         #expect(calls.value.filter { $0.last?.contains("CTRLX_SHELL_ORIGINAL_ZDOTDIR") == true }.count == 3)
         #expect(calls.value.contains { $0.last == "custom-shell --flag" })
-        #expect(!calls.value.contains { $0.contains("send-keys") })
+        #expect(!calls.value.contains { $0.contains { $0 == "send-keys" || $0.hasPrefix("'send-keys' ") } })
     }
 
     @Test("Failed startup-file preparation does not block New Terminal")
@@ -292,7 +292,7 @@ struct TerminalAgentShellIntegrationTests {
             $0[TerminalAgentShellFiles.self].prepare = { _ in throw CocoaError(.fileWriteOutOfSpace) }
             $0[ProcessRunner.self].run = { _, args, _, _ in
                 calls.withValue { $0.append(args) }
-                return ProcessResult(exitCode: 0, stdout: Data("%42:9\n".utf8), stderr: Data())
+                return Self.tmuxResult(for: args)
             }
         } operation: {
             let tmux = TmuxService(tmuxPath: "/fixture/tmux")
@@ -300,7 +300,10 @@ struct TerminalAgentShellIntegrationTests {
             let pane = try await tmux.newWindow(sessionName: "fixture", windowName: "terminal")
             #expect(pane == "%42")
         }
-        #expect(!calls.value.contains { $0.contains("send-keys") || $0.last?.contains("CTRLX_SHELL_ORIGINAL_ZDOTDIR") == true })
+        #expect(!calls.value.contains {
+            $0.contains { $0 == "send-keys" || $0.hasPrefix("'send-keys' ") }
+                || $0.last?.contains("CTRLX_SHELL_ORIGINAL_ZDOTDIR") == true
+        })
     }
 
     @Test("Fork explicitly execs the validated shell with telemetry on, off or unavailable", arguments: ["enabled", "disabled", "unavailable"])
@@ -309,12 +312,14 @@ struct TerminalAgentShellIntegrationTests {
         let calls = LockIsolated<[[String]]>([])
         try await withDependencies {
             $0[TerminalAgentShellFiles.self].prepare = { _ in
-                if telemetry == "unavailable" { throw CocoaError(.fileWriteOutOfSpace) }
+                if telemetry == "unavailable" {
+                    throw CocoaError(.fileWriteOutOfSpace)
+                }
                 return "/temporary/init dir"
             }
             $0[ProcessRunner.self].run = { _, args, _, _ in
                 calls.withValue { $0.append(args) }
-                return ProcessResult(exitCode: 0, stdout: Data("%42:9\n".utf8), stderr: Data())
+                return Self.tmuxResult(for: args)
             }
         } operation: {
             let tmux = TmuxService(tmuxPath: "/fixture/tmux")
@@ -333,9 +338,25 @@ struct TerminalAgentShellIntegrationTests {
             #expect(startup.contains("TERM_PROGRAM=iTerm.app"))
             #expect(startup.contains("CTRLX_SHELL_ORIGINAL_ZDOTDIR") == (telemetry == "enabled"))
             #expect(!creation.contains { $0.hasPrefix("CODEX_HOME=") })
-            let input = try #require(calls.value.first { $0.contains("send-keys") })
-            #expect(input.contains("( export 'CODEX_HOME=/fork root' && codex 'fork' 'exact-session' )"))
+            let input = try #require(calls.value.first { $0.contains { $0.hasPrefix("'send-keys' ") } })
+            #expect(input.contains("if-shell"))
+            #expect(input.contains("#{==:#{pid}:#{start_time},123:456}"))
+            #expect(input.contains("%42"))
+            let command = "( export 'CODEX_HOME=/fork root' && codex 'fork' 'exact-session' )"
+            #expect(input.contains { $0.contains(command.posixSingleQuoted) })
         }
+    }
+
+    private static func tmuxResult(for arguments: [String]) -> ProcessResult {
+        let output: String
+        if arguments.contains("new-session") || arguments.contains("new-window") {
+            output = "123:456\u{1f}%42\n"
+        } else if arguments.contains("split-window") {
+            output = "%42\n"
+        } else {
+            output = ""
+        }
+        return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
     }
 
     /// Real zsh and a harmless fake Codex executable; no agent/network calls or
