@@ -6,11 +6,19 @@ import SwiftUI
 @MainActor @Observable
 package final class VoiceInputController {
     var phase = VoiceInputPhase.idle
+    var isAwaitingAuthorization = false
     var stage = VoiceInputStage.recording
     var transcript = ""
     var completedTranscript: String?
     var errorMessage: String?
     var correctionNotice: String?
+    var reviewTranscripts: ReviewTranscripts?
+    struct ReviewTranscripts { var bestAvailableTranscript = ""
+        var liveTranscript = ""
+        var primaryTranscript = ""
+    }
+
+    func copyTranscript(_ text: String) { }
     var isFeedbackVisible: Bool {
         phase != .idle || correctionNotice != nil
     }
@@ -85,14 +93,17 @@ final class TerminalVoiceInputSession {
     var stops = 0
     var cancellations = 0
     var needsPermission = false
+    var canStart: (@MainActor @Sendable () -> Bool)?
     var correctionUnavailable = false
     var isPresented: Bool {
         voice.phase != .idle
     }
 
-    func toggle(in _: TerminalPhraseContext, snapshot _: VoiceInputContextSnapshot?, selection _: VoiceCorrectionSettings?) {
+    func toggle(in _: TerminalPhraseContext, snapshot _: VoiceInputContextSnapshot?, selection _: VoiceCorrectionSettings?, canStart: @escaping @MainActor @Sendable () -> Bool = { true }) {
         switch voice.phase.tapAction {
         case .start:
+            self.canStart = canStart
+            voice.isAwaitingAuthorization = needsPermission
             voice.correctionNotice = nil
             voice.completedTranscript = nil
             voice.phase = needsPermission ? .requestingPermission : .recording
@@ -104,6 +115,15 @@ final class TerminalVoiceInputSession {
             stops += 1
         case .cancelPreparation: cancel()
         case .none: break
+        }
+    }
+
+    func completePreparation() {
+        voice.isAwaitingAuthorization = false
+        if canStart?() == true {
+            voice.phase = .recording
+        } else {
+            cancel()
         }
     }
 
@@ -122,6 +142,7 @@ final class TerminalVoiceInputSession {
     }
 
     func cancel() {
+        voice.isAwaitingAuthorization = false
         voice.correctionNotice = nil
         if isPresented {
             cancellations += 1
@@ -333,6 +354,21 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 try await wait("target change cancels hold") { session.voice.phase == .idle }
                 precondition(session.stops == 2 && router.inserted.count == 2)
                 precondition(router.voiceInputHold?.state != .pressed)
+                // Permission waits may temporarily deactivate the app. Even if
+                // the key-window event was missed, the real start predicate must
+                // reject a different native window after preparation completes.
+                session.needsPermission = true
+                try await click(anchor)
+                try await wait("preparing in original window") { session.voice.phase == .requestingPermission }
+                let other = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+                other.isReleasedWhenClosed = false
+                other.makeKeyAndOrderFront(nil)
+                try await wait("other window key") { other.isKeyWindow }
+                precondition(session.voice.phase == .requestingPermission, "Permission wait is exempt")
+                session.completePreparation()
+                precondition(session.voice.phase == .idle && router.inserted.count == 2)
+                other.close()
+                print("PASS: stale native window cannot start audio after preparation")
                 window.close()
                 print("PASS: inline preview, stable viewport/focus, microphone stop, cancel, scoped Escape")
                 print("PASS: native hold/release, pending permission, changed target")

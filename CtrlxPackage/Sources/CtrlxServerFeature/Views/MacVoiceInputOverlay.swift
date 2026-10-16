@@ -24,7 +24,7 @@ struct MacVoiceInputOverlay: ViewModifier {
             .background {
                 // System permission prompts may deactivate the app during preparation.
                 MacVoiceInputCancellation(
-                    isActive: session.voice.phase == .recording || session.voice.phase == .finalizing,
+                    isActive: session.voice.phase != .idle && !session.voice.isAwaitingAuthorization,
                     onCancel: session.cancel
                 )
             }

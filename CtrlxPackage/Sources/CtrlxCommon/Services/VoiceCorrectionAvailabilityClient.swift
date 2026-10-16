@@ -24,18 +24,18 @@
 
     @DependencyClient
     struct VoiceCorrectionAvailabilityClient {
-        var onDevice: @Sendable () -> VoiceCorrectionAvailability = { .unavailable("Not checked") }
+        var onDevice: @Sendable (_ localeIdentifier: String) -> VoiceCorrectionAvailability = { _ in .unavailable("Not checked") }
     }
 
     extension VoiceCorrectionAvailabilityClient: DependencyKey {
-        static let testValue = Self(onDevice: { .unavailable("Unavailable in tests") })
-        static let liveValue = Self(onDevice: {
+        static let testValue = Self(onDevice: { _ in .unavailable("Unavailable in tests") })
+        static let liveValue = Self(onDevice: { localeIdentifier in
             #if canImport(FoundationModels)
                 if #available(iOS 26.0, macOS 26.0, *) {
                     let model = SystemLanguageModel(useCase: .general, guardrails: .permissiveContentTransformations)
                     switch model.availability {
                     case .available:
-                        let locale = Locale(identifier: Locale.preferredLanguages.first ?? Locale.current.identifier)
+                        let locale = Locale(identifier: localeIdentifier)
                         return model.supportsLocale(locale)
                             ? .available : .unavailable("Current language is not supported")
                     case let .unavailable(reason):

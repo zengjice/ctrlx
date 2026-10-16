@@ -51,24 +51,28 @@ struct VoiceInputProvenanceTests {
     ])
     func fallbackPolicy(_ outcome: VoiceCorrectionAttempt) async {
         var calls: [VoiceTranscriptCorrectionRoute] = []
-        let result = await VoiceTranscriptCorrectionRouting.run(original: "原文8080", hasProviderSelection: true) { route in
+        let result = await VoiceTranscriptCorrectionRouting.run(original: "原文8080", providerModelID: "cloud-model") { route in
             calls.append(route)
             return route == .provider ? outcome : .accepted("校正8080")
         }
         #expect(calls == (outcome == .unavailable ? [.provider, .onDevice] : [.provider]))
         #expect(result.text == (outcome == .unavailable ? "校正8080" : "原文8080"))
         #expect(result.outcome == (outcome == .rejected(.changedLiterals) ? .rejected : .accepted))
+        #expect(result.modelID == (outcome == .unavailable ? "on-device" : "cloud-model"))
+        #expect(result.didFallback == (outcome == .unavailable))
         #expect((result.notice == nil) == (result.outcome == .accepted))
     }
 
     @MainActor
     @Test("Unavailable routes retain the transcript and report that correction was skipped")
     func unavailableCorrection() async {
-        let result = await VoiceTranscriptCorrectionRouting.run(original: "复用 pane", hasProviderSelection: true) { _ in
+        let result = await VoiceTranscriptCorrectionRouting.run(original: "复用 pane", providerModelID: "cloud-model") { _ in
             .unavailable
         }
         #expect(result.text == "复用 pane")
         #expect(result.outcome == .unavailable)
+        #expect(result.modelID == nil)
+        #expect(result.didFallback)
         #expect(result.notice != nil)
     }
 
@@ -81,6 +85,8 @@ struct VoiceInputProvenanceTests {
         )
         #expect(result.text.isEmpty)
         #expect(result.outcome == .emptyInput)
+        #expect(result.modelID == nil)
+        #expect(!result.didFallback)
         #expect(result.notice == nil)
         #expect(stages.isEmpty)
     }
@@ -89,7 +95,8 @@ struct VoiceInputProvenanceTests {
     @Test("Empty accurate recognition still preserves a nonempty live transcript")
     func liveTranscriptIsNotEmptyInput() async {
         let result = await withDependencies {
-            $0[VoiceCorrectionAvailabilityClient.self] = .init(onDevice: { .unavailable("Unavailable for test") })
+            $0[PreferencesService.self] = .inMemory()
+            $0[VoiceCorrectionAvailabilityClient.self] = .init(onDevice: { _ in .unavailable("Unavailable for test") })
         } operation: {
             await VoiceTranscriptCorrector.correct(
                 .init(primaryTranscript: "", liveTranscript: "保留实时转写"), contextualTerms: []
@@ -105,13 +112,15 @@ struct VoiceInputProvenanceTests {
     func cancelledCorrection() async {
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return await VoiceTranscriptCorrectionRouting.run(original: "原文", hasProviderSelection: true) { _ in
+            return await VoiceTranscriptCorrectionRouting.run(original: "原文", providerModelID: "cloud-model") { _ in
                 Issue.record("Cancelled routes must not run")
                 return .unavailable
             }
         }
         let result = await task.value
         #expect(result.outcome == .cancelled)
+        #expect(result.modelID == nil)
+        #expect(!result.didFallback)
         #expect(result.notice == nil)
     }
 
@@ -175,14 +184,13 @@ struct VoiceInputDeliveryTests {
     @Test("Host, pane, edits, submission, readiness and blocking forms invalidate delivery", arguments: 0..<6)
     func staleCapture(_ change: Int) throws {
         var capture = try #require(TerminalVoiceInputCapture(context: context()))
-        let changed: TerminalPhraseContext
-        switch change {
-        case 0: changed = context(host: "host-b")
-        case 1: changed = context(pane: "%2")
-        case 2: changed = context(revision: 1)
-        case 3: changed = context(connected: false)
-        case 4: changed = context(ready: false)
-        default: changed = context(blocking: true)
+        let changed: TerminalPhraseContext = switch change {
+        case 0: context(host: "host-b")
+        case 1: context(pane: "%2")
+        case 2: context(revision: 1)
+        case 3: context(connected: false)
+        case 4: context(ready: false)
+        default: context(blocking: true)
         }
         #expect(capture.take("迟到结果", in: changed) == nil)
         #expect(capture.take("回到原窗口也不能复活", in: context()) == nil)
@@ -193,6 +201,7 @@ struct VoiceInputDeliveryTests {
         guard #available(macOS 26.0, iOS 26.0, *) else { return }
         let recorder = Recorder()
         try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
         } operation: {
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { result, _, _, _, stage in
@@ -229,11 +238,12 @@ struct VoiceInputDeliveryTests {
         let recorder = Recorder(), gate = CorrectionGate()
         defer { gate.resume("") }
         try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
         } operation: {
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { _, _, _, _, stage in
                 stage(.providerCorrection)
-                return .init(text: await gate.result(), outcome: .unavailable)
+                return await .init(text: gate.result(), outcome: .unavailable)
             })
             let session = TerminalVoiceInputSession(voice: voice)
             session.toggle(in: context(), snapshot: nil, selection: nil)
@@ -264,6 +274,7 @@ struct VoiceInputDeliveryTests {
         guard #available(macOS 26.0, iOS 26.0, *) else { return }
         let recorder = Recorder()
         try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
         } operation: {
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder })
@@ -289,6 +300,7 @@ struct VoiceInputDeliveryTests {
         let gate = CorrectionGate()
         defer { gate.resume("") }
         try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
         } operation: {
             var recordings: [Recorder] = []
@@ -299,8 +311,8 @@ struct VoiceInputDeliveryTests {
                 return recorder
             }, correct: { result, _, _, _, _ in
                 correctionCount += 1
-                return .init(
-                    text: correctionCount == 1 ? await gate.result() : result.bestAvailableTranscript,
+                return await .init(
+                    text: correctionCount == 1 ? gate.result() : result.bestAvailableTranscript,
                     outcome: .unavailable
                 )
             })
@@ -346,6 +358,7 @@ struct VoiceInputDeliveryTests {
         guard #available(macOS 26.0, iOS 26.0, *) else { return }
         let recorder = Recorder()
         try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
         } operation: {
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { result, _, _, _, _ in
@@ -388,6 +401,7 @@ struct VoiceInputDeliveryTests {
         guard #available(macOS 26.0, iOS 26.0, *) else { return }
         let recorder = Recorder(result: .init(primaryTranscript: transcript))
         try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
         } operation: {
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder })
@@ -406,6 +420,36 @@ struct VoiceInputDeliveryTests {
             #expect(!voice.isFeedbackVisible)
             #expect(voice.errorMessage == nil)
             #expect(voice.takeCompletedTranscript() == nil)
+        }
+    }
+
+    @Test("Changed corrections retain original evidence for copy, without a second insertion")
+    func originalTranscriptRecovery() async throws {
+        guard #available(macOS 26.0, iOS 26.0, *) else { return }
+        let recorder = Recorder()
+        let clipboard = ClipboardClient.previewValue
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[ClipboardClient.self] = clipboard
+            $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
+        } operation: {
+            let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { _, _, _, _, _ in
+                .init(text: "纠错结果", outcome: .accepted)
+            })
+            voice.toggleRecording(context: nil, correctionSelection: nil)
+            try await wait { voice.phase == .recording }
+            voice.toggleRecording(context: nil, correctionSelection: nil)
+            try await wait { voice.completedTranscript != nil }
+            #expect(voice.takeCompletedTranscript() == "纠错结果")
+            voice.recordDelivery(enqueued: true)
+            let review = try #require(voice.reviewTranscripts)
+            #expect(review.bestAvailableTranscript == "精确转写")
+            voice.copyTranscript(review.bestAvailableTranscript)
+            #expect(clipboard.getString() == "精确转写")
+            #expect(voice.takeCompletedTranscript() == nil)
+            voice.dismissCorrectionNotice()
+            #expect(voice.reviewTranscripts == nil)
+            #expect(!voice.isFeedbackVisible)
         }
     }
 
@@ -430,7 +474,12 @@ struct VoiceInputDeliveryTests {
             self.result = result
         }
 
-        func start(onUpdate: @escaping @MainActor @Sendable (String) -> Void) async throws {
+        func start(
+            localeIdentifier: String,
+            canStart: @escaping @MainActor @Sendable () -> Bool,
+            onFailure: @escaping @MainActor @Sendable (String) -> Void,
+            onUpdate: @escaping @MainActor @Sendable (String) -> Void
+        ) async throws {
             update = onUpdate
         }
 

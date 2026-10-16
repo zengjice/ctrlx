@@ -119,7 +119,10 @@ struct MacVoiceInputButton: View {
             guard let captured = TerminalVoiceInputRequest(router: router, context: context) else { return }
             willStart()
             request = captured
-            session.toggle(in: context, snapshot: contextProvider(), selection: settings.selection)
+            let window = NSApp.keyWindow
+            session.toggle(in: context, snapshot: contextProvider(), selection: settings.selection) { [weak window] in
+                NSApp.isActive && window?.isKeyWindow == true && captured.isValid(router: router, context: context)
+            }
             if voice.phase == .idle {
                 request = nil
             }

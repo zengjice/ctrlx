@@ -14,16 +14,22 @@
         ) async -> VoiceCorrectionResult
 
         public private(set) var phase: VoiceInputPhase = .idle
+        public private(set) var isAwaitingAuthorization = false
         public private(set) var stage: VoiceInputStage = .preparing
         public private(set) var transcript = ""
         /// Only successful finalization publishes a result for one-shot input surfaces.
         public private(set) var completedTranscript: String?
         public var errorMessage: String?
         public private(set) var correctionNotice: String?
+        private(set) var reviewTranscripts: VoiceRecognitionResult?
         @ObservationIgnored private var pendingCorrectionNotice: String?
 
         @ObservationIgnored private var audioEngine: AVAudioEngine?
         @ObservationIgnored @Dependency(VoiceInputAuthorization.self) private var authorization
+        @ObservationIgnored @Dependency(PreferencesService.self) private var preferences
+        @ObservationIgnored private let audioMonitor = VoiceInputAudioMonitor()
+        @ObservationIgnored private var canStartRecording: @MainActor @Sendable () -> Bool = { true }
+        @ObservationIgnored private var localeIdentifier = VoiceInputLanguage.system.localeIdentifier
         @ObservationIgnored private let ownership: VoiceInputRecordingOwnership
         @ObservationIgnored private var recordingLease: UUID?
         @ObservationIgnored private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -74,17 +80,25 @@
             phase != .idle || correctionNotice != nil
         }
 
+        func copyTranscript(_ text: String) {
+            @Dependency(ClipboardClient.self) var clipboard
+            clipboard.setString(text)
+        }
+
         public func dismissCorrectionNotice() {
             correctionNotice = nil
+            reviewTranscripts = nil
         }
 
         private func beginRecording(
             context: VoiceInputContextSnapshot?,
-            correctionSelection: VoiceCorrectionSelection?
+            correctionSelection: VoiceCorrectionSelection?,
+            canStart: @escaping @MainActor @Sendable () -> Bool
         ) {
             guard phase == .idle else { return }
             errorMessage = nil
             correctionNotice = nil
+            reviewTranscripts = nil
             pendingCorrectionNotice = nil
             guard let lease = ownership.acquire() else {
                 errorMessage = "Voice input is already active in another window, or is still stopping."
@@ -98,7 +112,10 @@
             recognitionContext = context
             contextualTerms = VoiceInputVocabulary.terms(for: context)
             self.correctionSelection = correctionSelection
+            canStartRecording = canStart
+            localeIdentifier = (VoiceInputLanguage(rawValue: preferences.string("voiceInputLanguage") ?? "") ?? .system).localeIdentifier
             transcript = ""
+            isAwaitingAuthorization = true
             phase = .requestingPermission
 
             permissionTask = Task { [weak self] in
@@ -121,6 +138,7 @@
                     return
                 }
 
+                isAwaitingAuthorization = false
                 do {
                     try await startRecognition()
                 } catch {
@@ -143,13 +161,15 @@
 
         public func toggleRecording(
             context: VoiceInputContextSnapshot?,
-            correctionSelection: VoiceCorrectionSelection?
+            correctionSelection: VoiceCorrectionSelection?,
+            canStart: @escaping @MainActor @Sendable () -> Bool = { true }
         ) {
             switch phase.tapAction {
             case .start:
                 beginRecording(
                     context: context,
-                    correctionSelection: correctionSelection
+                    correctionSelection: correctionSelection,
+                    canStart: canStart
                 )
             case .cancelPreparation:
                 cancel()
@@ -161,7 +181,10 @@
         }
 
         public func cancel() {
+            isAwaitingAuthorization = false
+            canStartRecording = { true }
             correctionNotice = nil
+            reviewTranscripts = nil
             pendingCorrectionNotice = nil
             finishTiming()
             let preparation = permissionTask
@@ -200,6 +223,12 @@
 
         public func recordDelivery(enqueued: Bool) {
             correctionNotice = enqueued ? pendingCorrectionNotice : nil
+            if !enqueued {
+                reviewTranscripts = nil
+            }
+            if enqueued, correctionNotice == nil, reviewTranscripts != nil {
+                correctionNotice = "Voice input inserted. Original transcripts are available to copy."
+            }
             pendingCorrectionNotice = nil
             finishTiming()
             VoiceInputDiagnostics.delivery(enqueued: enqueued, id: diagnosticID)
@@ -244,7 +273,14 @@
             modernSession = session
 
             do {
-                try await session.start { [weak self, weak session] updatedTranscript in
+                try await session.start(
+                    localeIdentifier: localeIdentifier,
+                    canStart: canStartRecording,
+                    onFailure: { [weak self, weak session] message in
+                        guard let self, let session, modernSession === session else { return }
+                        finishPermissionRequest(message: message)
+                    }
+                ) { [weak self, weak session] updatedTranscript in
                     guard
                         let self, let session, modernSession === session,
                         phase == .requestingPermission || phase == .recording,
@@ -270,7 +306,7 @@
         }
 
         private func startLegacyRecognition() throws {
-            let localeIdentifier = Locale.preferredLanguages.first ?? Locale.current.identifier
+            guard canStartRecording() else { throw VoiceInputStartError.targetChanged }
             guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)) else {
                 throw VoiceInputError.unsupportedLanguage
             }
@@ -318,6 +354,9 @@
             }
             hasAudioTap = true
 
+            audioMonitor.start(engine: audioEngine) { [weak self] message in
+                self?.finishPermissionRequest(message: message)
+            }
             audioEngine.prepare()
             try audioEngine.start()
             phase = .recording
@@ -347,11 +386,13 @@
             let contextualTerms = contextualTerms
             finalizationTask = Task { [weak self, session, terminalContext, correctionSelection, contextualTerms] in
                 do {
-                    let recognition = try await session.finish { [weak self] stage in
+                    let result = try await session.finish { [weak self] stage in
                         guard !Task.isCancelled else { return }
                         self?.updateStage(stage)
                     }
                     guard !Task.isCancelled, let self else { return }
+                    let recognition = result.withLocale(localeIdentifier)
+                    reviewTranscripts = recognition
                     modernSession = nil
                     let correctedTranscript = await correct(
                         recognition, contextualTerms, terminalContext, correctionSelection,
@@ -369,8 +410,9 @@
                     if fallbackTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         finishPermissionRequest(message: error.localizedDescription)
                     } else {
+                        reviewTranscripts = VoiceRecognitionResult(primaryTranscript: fallbackTranscript, diagnosticID: diagnosticID, localeIdentifier: localeIdentifier)
                         let correctedTranscript = await correct(
-                            VoiceRecognitionResult(primaryTranscript: fallbackTranscript, diagnosticID: diagnosticID),
+                            VoiceRecognitionResult(primaryTranscript: fallbackTranscript, diagnosticID: diagnosticID, localeIdentifier: localeIdentifier),
                             contextualTerms, terminalContext, correctionSelection,
                             { [weak self] stage in
                                 guard !Task.isCancelled else { return }
@@ -385,12 +427,21 @@
         }
 
         private func completeModernRecognition(_ result: VoiceCorrectionResult) {
+            canStartRecording = { true }
             updateStage(.ready)
             finalizationTask = nil
             recognitionContext = nil
             correctionSelection = nil
             transcript = VoiceInputTextComposer.terminalTranscript(result.text)
-            pendingCorrectionNotice = result.notice
+            if transcript.isEmpty {
+                reviewTranscripts = nil
+            } else if
+                let reviewTranscripts, result.outcome != .rejected,
+                !reviewTranscripts.prefersLiveTranscript,
+                reviewTranscripts.bestAvailableTranscript == result.text {
+                self.reviewTranscripts = nil
+            }
+            pendingCorrectionNotice = transcript.isEmpty ? nil : result.notice
             completedTranscript = transcript
             if let lease = recordingLease {
                 recordingLease = nil
@@ -457,8 +508,10 @@
             finalizationTask = Task {
                 [weak self, completedTranscript, terminalContext, correctionSelection, contextualTerms] in
                 guard let self else { return }
+                let recognition = VoiceRecognitionResult(primaryTranscript: completedTranscript, diagnosticID: diagnosticID, localeIdentifier: localeIdentifier)
+                reviewTranscripts = recognition
                 let correctedTranscript = await correct(
-                    VoiceRecognitionResult(primaryTranscript: completedTranscript, diagnosticID: diagnosticID),
+                    recognition,
                     contextualTerms, terminalContext, correctionSelection,
                     { [weak self] stage in
                         guard !Task.isCancelled else { return }
@@ -471,6 +524,7 @@
         }
 
         private func stopAudioInput() {
+            audioMonitor.stop()
             guard let audioEngine else { return }
             if audioEngine.isRunning {
                 audioEngine.stop()

@@ -59,7 +59,8 @@ enum VoiceCorrectionBudget {
             } else if !evidence.alternativeTranscripts.isEmpty || !evidence.liveTranscript.isEmpty {
                 evidence = VoiceRecognitionResult(
                     primaryTranscript: recognition.bestAvailableTranscript,
-                    diagnosticID: recognition.diagnosticID
+                    diagnosticID: recognition.diagnosticID,
+                    localeIdentifier: recognition.localeIdentifier
                 )
             } else {
                 return nil

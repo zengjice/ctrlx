@@ -44,12 +44,13 @@ package struct TerminalVoiceInputCapture {
 
         package func toggle(
             in context: TerminalPhraseContext,
-            snapshot: VoiceInputContextSnapshot?, selection: VoiceCorrectionSelection?
+            snapshot: VoiceInputContextSnapshot?, selection: VoiceCorrectionSelection?,
+            canStart: @escaping @MainActor @Sendable () -> Bool = { true }
         ) {
             if voice.phase == .idle {
                 guard let capture = TerminalVoiceInputCapture(context: context) else { return }
                 self.capture = capture
-                voice.toggleRecording(context: snapshot, correctionSelection: selection)
+                voice.toggleRecording(context: snapshot, correctionSelection: selection, canStart: canStart)
                 if voice.phase == .idle {
                     self.capture = nil
                 }
