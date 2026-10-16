@@ -169,11 +169,16 @@ terminal above its input controls; native reply fields show it below their edito
 Neither terminal overlay changes the terminal's size. The strip remains visible
 during correction; cancelling it discards the recording without inserting text.
 If neither corrector can run, the recognized text is still inserted once without
-Return. Only after the input surface accepts it, the same strip shows
+Return. With **Voice Input Diagnostics → Debug Mode** enabled in settings,
+only after the input surface accepts it, the same strip shows
 **Voice Input**, explaining that context-aware correction was unavailable
 and pointing to Voice Input settings. A rejected correction similarly identifies
 that the original transcription was kept. An accepted unchanged response is not
-a failure. The notice does not reopen recording, steal focus or intercept terminal
+a failure. Debug Mode is device-local and off by default on both Mac and iOS.
+When off, successful insertion closes the strip without a completion/correction
+notice or retained transcript-review evidence. Recording previews and permission,
+recording or insertion errors remain available regardless of this setting.
+The notice does not reopen recording, steal focus or intercept terminal
 Escape; dismiss it with its close button, or start another recording to clear it.
 Empty recordings (including whitespace or control-only results) skip correction
 without a failure notice; native reply fields do not change the draft or report
@@ -196,8 +201,8 @@ checks its native endpoint/focus revision. Switching away and back does not revi
 it. Delivery consumes the result before enqueueing, so duplicate completion
 observers or a failed enqueue cannot retry it. Ordinary shells are supported.
 Pending agent forms and external editors disable dictation into the terminal.
-There is no global hotkey or extra Host/Relay command. After a changed correction,
-a rejected correction or an incomplete second pass, the strip offers a **Transcripts**
+There is no global hotkey or extra Host/Relay command. In Debug Mode, after a changed
+correction, a rejected correction or an incomplete second pass, the strip offers a **Transcripts**
 menu to copy the original/live/second-pass evidence. It never replaces or resends
 terminal input. Evidence stays in memory until dismissal, cancellation, leaving
 the input surface or starting another recording; it is not written to history.

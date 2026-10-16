@@ -228,6 +228,14 @@
                 isAPIKeyVisible = false
                 benchmarkRequest = nil
             }
+            Section {
+                Toggle("Debug Mode", isOn: $settings.debugModeEnabled)
+                    .accessibilityIdentifier("voice-input-debug-mode")
+            } header: {
+                Text("Voice Input Diagnostics")
+            } footer: {
+                Text("Show correction details and original transcripts after voice input is inserted. Off by default on each device.")
+            }
             if #available(iOS 26.0, macOS 26.0, *) {
                 VoiceRecordingEvaluationSection(settings: settings, isModelTesting: model.isBusy, isEvaluating: $isEvaluating)
             }

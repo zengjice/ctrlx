@@ -353,14 +353,18 @@ struct VoiceInputDeliveryTests {
         }
     }
 
-    @Test("Uncorrected speech is inserted once; dismiss or restart clears its notice", arguments: [false, true])
-    func uncorrectedNotice(_ restart: Bool) async throws {
+    @Test("Uncorrected speech is inserted once; only debug mode shows its notice", arguments: [false, true], [false, true])
+    func uncorrectedNotice(restart: Bool, debugEnabled: Bool) async throws {
         guard #available(macOS 26.0, iOS 26.0, *) else { return }
         let recorder = Recorder()
         try await withDependencies {
             $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
         } operation: {
+            let settings = VoiceCorrectionSettings()
+            if debugEnabled {
+                settings.debugModeEnabled = true
+            }
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { result, _, _, _, _ in
                 .init(text: result.bestAvailableTranscript, outcome: .unavailable)
             })
@@ -380,8 +384,9 @@ struct VoiceInputDeliveryTests {
             }
             #expect(inserted == ["精确转写"])
             #expect(voice.phase == .idle)
-            #expect(voice.correctionNotice != nil)
-            #expect(voice.isFeedbackVisible)
+            #expect((voice.correctionNotice != nil) == debugEnabled)
+            #expect(voice.isFeedbackVisible == debugEnabled)
+            #expect(voice.reviewTranscripts == nil)
             #expect(!session.cancelIfPresented())
             #expect(voice.errorMessage == nil)
             if restart {
@@ -423,8 +428,8 @@ struct VoiceInputDeliveryTests {
         }
     }
 
-    @Test("Changed corrections retain original evidence for copy, without a second insertion")
-    func originalTranscriptRecovery() async throws {
+    @Test("Changed corrections retain copyable evidence only in debug mode", arguments: [false, true])
+    func originalTranscriptRecovery(debugEnabled: Bool) async throws {
         guard #available(macOS 26.0, iOS 26.0, *) else { return }
         let recorder = Recorder()
         let clipboard = ClipboardClient.previewValue
@@ -441,11 +446,23 @@ struct VoiceInputDeliveryTests {
             voice.toggleRecording(context: nil, correctionSelection: nil)
             try await wait { voice.completedTranscript != nil }
             #expect(voice.takeCompletedTranscript() == "纠错结果")
+            // The setting is read at delivery, even for an existing controller.
+            let settings = VoiceCorrectionSettings()
+            if debugEnabled {
+                settings.debugModeEnabled = true
+            }
             voice.recordDelivery(enqueued: true)
-            let review = try #require(voice.reviewTranscripts)
-            #expect(review.bestAvailableTranscript == "精确转写")
-            voice.copyTranscript(review.bestAvailableTranscript)
-            #expect(clipboard.getString() == "精确转写")
+            #expect(voice.isFeedbackVisible == debugEnabled)
+            #expect((voice.correctionNotice != nil) == debugEnabled)
+            if debugEnabled {
+                let review = try #require(voice.reviewTranscripts)
+                #expect(review.bestAvailableTranscript == "精确转写")
+                voice.copyTranscript(review.bestAvailableTranscript)
+                #expect(clipboard.getString() == "精确转写")
+            } else {
+                #expect(voice.reviewTranscripts == nil)
+                #expect(clipboard.getString() == nil)
+            }
             #expect(voice.takeCompletedTranscript() == nil)
             voice.dismissCorrectionNotice()
             #expect(voice.reviewTranscripts == nil)

@@ -222,11 +222,12 @@
         }
 
         public func recordDelivery(enqueued: Bool) {
-            correctionNotice = enqueued ? pendingCorrectionNotice : nil
-            if !enqueued {
+            let showDiagnostics = enqueued && preferences.optionalBool("voiceInputDebugModeEnabled") == true
+            correctionNotice = showDiagnostics ? pendingCorrectionNotice : nil
+            if !showDiagnostics {
                 reviewTranscripts = nil
             }
-            if enqueued, correctionNotice == nil, reviewTranscripts != nil {
+            if showDiagnostics, correctionNotice == nil, reviewTranscripts != nil {
                 correctionNotice = "Voice input inserted. Original transcripts are available to copy."
             }
             pendingCorrectionNotice = nil

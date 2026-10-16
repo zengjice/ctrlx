@@ -21,6 +21,8 @@ struct VoiceInputSharedTests {
         } operation: {
             let settings = VoiceCorrectionSettings()
             #expect(settings.language == .system)
+            #expect(!settings.debugModeEnabled)
+            settings.debugModeEnabled = true
             settings.language = .simplifiedChinese
             #expect(VoiceCorrectionSettings().language == .simplifiedChinese)
             #expect(settings.provider == .volcengineArk)
@@ -29,6 +31,9 @@ struct VoiceInputSharedTests {
             settings.modelID = "new-model"
             settings.saveTestedModelIDs([" new-model ", "new-model", ""], for: .volcengineArk)
             let restored = VoiceCorrectionSettings()
+            #expect(restored.debugModeEnabled)
+            restored.debugModeEnabled = false
+            #expect(!VoiceCorrectionSettings().debugModeEnabled)
             #expect(restored.modelID == "new-model")
             #expect(restored.modelIDs(for: .volcengineArk) == ["new-model"])
             restored.resetTestedModels(for: .volcengineArk)
@@ -43,6 +48,7 @@ struct VoiceInputSharedTests {
         } operation: {
             let settings = VoiceCorrectionSettings()
             #expect(settings.selection == nil)
+            #expect(!settings.debugModeEnabled)
             #expect(settings.modelIDs(for: .volcengineArk) == VoiceCorrectionProvider.volcengineArk.recommendedModelIDs)
         }
     }
