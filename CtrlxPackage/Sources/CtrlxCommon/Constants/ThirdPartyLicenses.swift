@@ -71,6 +71,7 @@ public extension ThirdPartyLicense {
         ThirdPartyLicense(name: "Yams", license: "MIT", url: URL(staticString: "https://github.com/jpsim/Yams")),
         ThirdPartyLicense(name: "SFSymbolsMacro", license: "MIT", url: URL(staticString: "https://github.com/gpambrozio/SFSymbolsMacro")),
         ThirdPartyLicense(name: "GitWorkbench", license: "MIT", url: URL(staticString: "https://github.com/gpambrozio/GitWorkbench")),
+        ThirdPartyLicense(name: "ZIPFoundation", license: "MIT", url: URL(staticString: "https://github.com/weichsel/ZIPFoundation")),
         ThirdPartyLicense(name: "Unicode CLDR emoji data", license: "Unicode License", url: URL(staticString: "https://cldr.unicode.org")),
         ThirdPartyLicense(name: "SwiftFormat", license: "MIT", url: URL(staticString: "https://github.com/nicklockwood/SwiftFormat"), usage: .buildTools),
         ThirdPartyLicense(name: "Astro", license: "MIT", url: URL(staticString: "https://github.com/withastro/astro"), usage: .website),

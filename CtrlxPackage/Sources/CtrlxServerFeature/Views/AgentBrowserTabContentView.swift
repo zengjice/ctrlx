@@ -9,6 +9,8 @@ struct AgentBrowserTabContentView: View {
     let state: AgentBrowserTabState
     @State private var address = ""
     @State private var isAnnotating = false
+    @State private var extensionError: String?
+    @State private var showsExtensions = false
     @FocusState private var editingAddress: Bool
 
     var body: some View {
@@ -30,44 +32,73 @@ struct AgentBrowserTabContentView: View {
                         .help("This page is controlled by a Viewer")
                 } else {
                     Text(state.manualTarget == nil ? "Codex · \(state.owner.prefix(6))" : "Chromium")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help(state.manualTarget == nil
-                          ? "Shared Agent Browser logins; only this Codex instance controls this tab"
-                          : "Shared CtrlX Chromium logins; this tab is not controlled by an agent")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help(state.manualTarget == nil
+                            ? "Shared Agent Browser logins; only this Codex instance controls this tab"
+                            : "Shared CtrlX Chromium logins; this tab is not controlled by an agent")
                 }
-                if state.isLoading { ProgressView().controlSize(.small) }
+                if state.isLoading {
+                    ProgressView().controlSize(.small)
+                }
+                if state.manualTarget?.hostID == nil {
+                    Menu {
+                        Button(action: openExtensionWindow) { Label("Open in Extension Window", symbol: .arrowUpRightSquare) }
+                        Button { showsExtensions = true } label: { Label("Manage Extensions", symbol: .puzzlepiece) }
+                    } label: { Label("Extensions", symbol: .puzzlepiece) }
+                        .help("Extensions for this Host's browser")
+                        .accessibilityIdentifier("agent-browser-extensions")
+                        .disabled(state.isClosed || state.isRemotelyControlled)
+                }
                 Button {
                     state.service.showDevTools(state)
                 } label: { Label("Developer Tools", symbol: .wrenchAndScrewdriver) }
-                .help("Open Developer Tools for this Chromium tab")
-                .accessibilityIdentifier("agent-browser-developer-tools")
-                .disabled(state.isClosed || state.isRemotelyControlled)
+                    .help("Open Developer Tools for this Chromium tab")
+                    .accessibilityIdentifier("agent-browser-developer-tools")
+                    .disabled(state.isClosed || state.isRemotelyControlled)
             }
             .labelStyle(.iconOnly)
             .disabled(isAnnotating)
             .buttonStyle(.borderless)
             .padding(8)
             Divider()
-            BrowserAnnotationSurface(preferredTarget: state.sourceAgent,
-                requiresRecipientSelection: !state.owner.isEmpty && state.sourceAgent == nil,
-                capture: { try await state.service.annotationScreenshot(state) },
-                onEditingChanged: { editing in
-                    isAnnotating = editing
-                    if editing { state.view.window?.makeFirstResponder(nil) }
-                }) {
-                EmbeddedAgentBrowserView(state: state)
-                .overlay {
-                    if state.isRemotelyControlled {
-                        Color.black.opacity(0.05)
-                            .contentShape(Rectangle())
-                            .onTapGesture {}
+            if state.isExtensionWindow {
+                VStack(spacing: 12) {
+                    Label("Extension Window", symbol: .puzzlepiece)
+                        .font(.headline)
+                    Text("This page is open in a separate CtrlX browser window.")
+                        .foregroundStyle(.secondary)
+                    Button("Show Window") { state.service.showBrowserWindow(state) }
+                        .disabled(state.isClosed || state.isRemotelyControlled)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                BrowserAnnotationSurface(
+                    preferredTarget: state.sourceAgent,
+                    requiresRecipientSelection: !state.owner.isEmpty && state.sourceAgent == nil,
+                    capture: { try await state.service.annotationScreenshot(state) },
+                    onEditingChanged: { editing in
+                        isAnnotating = editing
+                        if editing {
+                            state.view.window?.makeFirstResponder(nil)
+                        }
                     }
+                ) {
+                    EmbeddedAgentBrowserView(state: state)
+                        .overlay {
+                            if state.isRemotelyControlled {
+                                Color.black.opacity(0.05)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { }
+                            }
+                        }
                 }
             }
         }
         .onChange(of: state.url, initial: true) { _, url in
-            if !editingAddress { address = url == "about:blank" ? "" : url }
+            if !editingAddress {
+                address = url == "about:blank" ? "" : url
+            }
         }
         .task {
             if state.requestsInitialAddressFocus {
@@ -76,6 +107,25 @@ struct AgentBrowserTabContentView: View {
             }
         }
         .accessibilityIdentifier("agent-browser-tab-content")
+        .sheet(isPresented: $showsExtensions) { BrowserExtensionsView(tab: state) }
+        .alert("Browser Extensions", isPresented: Binding(
+            get: { extensionError != nil }, set: {
+                if !$0 {
+                    extensionError = nil
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) { extensionError = nil }
+        } message: {
+            Text(extensionError ?? "")
+        }
+    }
+
+    private func openExtensionWindow() {
+        Task {
+            do { _ = try await state.service.openExtensionWindow(state) }
+            catch { extensionError = error.localizedDescription }
+        }
     }
 
     private func navigate() {
@@ -88,15 +138,24 @@ struct AgentBrowserTabContentView: View {
 
 private struct EmbeddedAgentBrowserView: NSViewRepresentable {
     let state: AgentBrowserTabState
-    private var view: NSView { state.view }
-    func makeCoordinator() -> AgentBrowserTabState { state }
+    private var view: NSView {
+        state.view
+    }
+
+    func makeCoordinator() -> AgentBrowserTabState {
+        state
+    }
 
     func makeNSView(context: Context) -> NSView {
         let host = NSView()
         attach(to: host)
         return host
     }
-    func updateNSView(_ host: NSView, context: Context) { attach(to: host) }
+
+    func updateNSView(_ host: NSView, context: Context) {
+        attach(to: host)
+    }
+
     private func attach(to host: NSView) {
         guard view.superview !== host else { return }
         view.removeFromSuperview()
@@ -105,20 +164,33 @@ private struct EmbeddedAgentBrowserView: NSViewRepresentable {
         view.autoresizingMask = [.width, .height]
         host.addSubview(view)
     }
+
     static func dismantleNSView(_ host: NSView, coordinator: AgentBrowserTabState) {
         // Detach only: switching tabs must not close Chromium or reload the page.
-        if coordinator.view.superview === host { coordinator.service.park(coordinator) }
+        if coordinator.view.superview === host {
+            coordinator.service.park(coordinator)
+        }
     }
 }
 
 struct AgentBrowserWorkspaceAnchor: NSViewRepresentable {
     let workspace: AgentBrowserWorkspace
-    func makeNSView(context: Context) -> Anchor { Anchor(workspace: workspace) }
-    func updateNSView(_ view: Anchor, context: Context) {}
+    func makeNSView(context: Context) -> Anchor {
+        Anchor(workspace: workspace)
+    }
+
+    func updateNSView(_ view: Anchor, context: Context) { }
     final class Anchor: NSView {
         let workspace: AgentBrowserWorkspace
-        init(workspace: AgentBrowserWorkspace) { self.workspace = workspace; super.init(frame: .zero) }
-        required init?(coder: NSCoder) { nil }
+        init(workspace: AgentBrowserWorkspace) {
+            self.workspace = workspace
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) {
+            nil
+        }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             workspace.window = window

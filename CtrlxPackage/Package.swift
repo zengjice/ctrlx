@@ -30,6 +30,7 @@ func macOnlyDependencies() -> [Package.Dependency] {
             .package(url: "https://github.com/gonzalezreal/textual", from: "0.5.0"),
             .package(url: "https://github.com/jpsim/Yams", from: "5.0.0"),
             .package(url: "https://github.com/gpambrozio/GitWorkbench", exact: "1.6.0"),
+            .package(url: "https://github.com/weichsel/ZIPFoundation", exact: "0.9.20"),
         ]
     #else
         return []
@@ -48,9 +49,9 @@ func macOnlyTargetDependencies(for target: String) -> [Target.Dependency] {
         case "CtrlxFeature":
             return [.swiftTerm]
         case "CtrlxServerFeature":
-            return [.target(name: "CtrlxBrowserBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorProtocol", condition: .when(platforms: [.macOS])), .swiftTerm, .sparkle, .textual, .projectNavigator, .files, .gitWorkbench, .gitWorkbenchGitKit]
+            return [.target(name: "CtrlxBrowserBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorProtocol", condition: .when(platforms: [.macOS])), .swiftTerm, .sparkle, .textual, .projectNavigator, .files, .gitWorkbench, .gitWorkbenchGitKit, .product(name: "ZIPFoundation", package: "ZIPFoundation", condition: .when(platforms: [.macOS]))]
         case "CtrlxServerFeatureTests":
-            return [.swiftTerm]
+            return [.swiftTerm, .product(name: "ZIPFoundation", package: "ZIPFoundation", condition: .when(platforms: [.macOS]))]
         case "CtrlxExternalServerTests":
             return [.swiftTerm, "CtrlxCommon"]
         case "CtrlxE2E":

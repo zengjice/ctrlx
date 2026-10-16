@@ -34,6 +34,16 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)requestBrowserTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData * _Nullable result, NSString * _Nullable error))completion;
 - (void)beginShutdown;
 - (BOOL)finishShutdown;
+@optional
+// Human-only Chrome-style windows share this Host's profile. Older native
+// bundles omit these selectors; callers must report unavailable capability.
+- (void)openExtensionWindowForTab:(NSString *)identifier completion:(void (^)(NSString * _Nullable identifier, NSString * _Nullable error))completion NS_SWIFT_NAME(openExtensionWindow(forTab:completion:));
+- (void)showExtensionManagerForTab:(NSString *)identifier completion:(void (^)(NSString * _Nullable error))completion NS_SWIFT_NAME(showExtensionManager(forTab:completion:));
+- (void)showBrowserWindow:(NSString *)identifier;
+- (void)requestBrowserExtensionsForTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData * _Nullable result, NSString * _Nullable error))completion NS_SWIFT_NAME(requestBrowserExtensions(forTab:request:completion:));
+// Explicit profile/window grant. Ordinary page control cannot call this surface.
+- (BOOL)setExtensionControl:(nullable NSString *)token forTab:(NSString *)identifier;
+- (void)requestExtensionSurfaceForTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData * _Nullable result, NSString * _Nullable error))completion NS_SWIFT_NAME(requestExtensionSurface(forTab:request:completion:));
 @end
 
 // Call before SwiftUI's App.main creates NSApplication. Absence of the optional

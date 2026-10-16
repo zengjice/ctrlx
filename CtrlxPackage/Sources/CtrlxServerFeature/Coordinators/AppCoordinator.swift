@@ -3650,6 +3650,7 @@
                     supportsFileUploads: true,
                     supportsRepositoryFileLinks: true,
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
+                    supportsBrowserExtensions: await self?.agentBrowser.supportsBrowserExtensions,
                     supportsPaneBrowser: await self?.agentBrowser.supportsBrowserSharing,
                     supportsAgentImageInput: true,
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs,

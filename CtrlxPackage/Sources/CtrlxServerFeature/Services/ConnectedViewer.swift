@@ -778,7 +778,7 @@ final public class ConnectedViewer: Identifiable {
 
         case let .command(command):
             let isPreviewFrame: Bool? = switch command.command {
-            case let .browseBrowser(request): request.operation == .frame
+            case let .browseBrowser(request): request.operation == .frame || request.operation == .extensions(.frame)
             case .browseSimulator: true
             default: nil
             }

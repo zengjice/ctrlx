@@ -28,7 +28,7 @@ endfunction()
 
 add_library(browser_runtime SHARED EmbeddedBrowser.mm AutomationBridge.mm)
 target_include_directories(browser_runtime PRIVATE "${CEF_ROOT}")
-target_link_libraries(browser_runtime PRIVATE libcef_dll_wrapper ${CEF_STANDARD_LIBS} "-framework ImageIO" "-framework CoreGraphics")
+target_link_libraries(browser_runtime PRIVATE libcef_dll_wrapper ${CEF_STANDARD_LIBS} "-framework ImageIO" "-framework CoreGraphics" "-framework ScreenCaptureKit")
 target_compile_options(browser_runtime PRIVATE -fobjc-arc)
 set_target_properties(browser_runtime PROPERTIES OUTPUT_NAME CtrlXAgentBrowser
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Embedded/Frameworks")

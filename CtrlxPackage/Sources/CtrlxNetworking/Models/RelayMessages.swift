@@ -72,6 +72,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// Explicit fit preserves the Host window's pane topology and proportions.
     public let supportsTerminalFit: Bool?
     public let supportsBrowserSharing: Bool?
+    public let supportsBrowserExtensions: Bool?
     public let supportsPaneBrowser: Bool?
     public let supportsAgentImageInput: Bool?
     public let browserTabs: [RemoteBrowserTab]?
@@ -100,6 +101,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsFileUploads: Bool? = nil,
         supportsRepositoryFileLinks: Bool? = nil,
         supportsBrowserSharing: Bool? = nil,
+        supportsBrowserExtensions: Bool? = nil,
         supportsPaneBrowser: Bool? = nil,
         supportsAgentImageInput: Bool? = nil,
         browserTabs: [RemoteBrowserTab]? = nil,
@@ -130,6 +132,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsCodexQuestionAcknowledgement = supportsCodexQuestionAcknowledgement
         self.supportsTerminalFit = supportsTerminalFit
         self.supportsBrowserSharing = supportsBrowserSharing
+        self.supportsBrowserExtensions = supportsBrowserExtensions
         self.supportsPaneBrowser = supportsPaneBrowser
         self.supportsAgentImageInput = supportsAgentImageInput
         self.browserTabs = browserTabs
@@ -164,6 +167,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsFileUploads: supportsFileUploads,
             supportsRepositoryFileLinks: supportsRepositoryFileLinks,
             supportsBrowserSharing: supportsBrowserSharing,
+            supportsBrowserExtensions: supportsBrowserExtensions,
             supportsPaneBrowser: supportsPaneBrowser,
             supportsAgentImageInput: supportsAgentImageInput,
             browserTabs: browserTabs,

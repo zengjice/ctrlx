@@ -31,6 +31,7 @@ authors and contributors.
 | [SwiftFormat](https://github.com/nicklockwood/SwiftFormat) (build tool) | MIT |
 | [SFSymbolsMacro](https://github.com/gpambrozio/SFSymbolsMacro) (fork of [lukepistrol/SFSymbolsMacro](https://github.com/lukepistrol/SFSymbolsMacro)) | MIT |
 | [GitWorkbench](https://github.com/gpambrozio/GitWorkbench) | MIT |
+| [ZIPFoundation](https://github.com/weichsel/ZIPFoundation) | MIT |
 
 Transitive dependencies from the Apple, Vapor, and Point-Free ecosystems are
 Apache-2.0 or MIT; the pinned set is in
