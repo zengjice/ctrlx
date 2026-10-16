@@ -10,6 +10,7 @@ struct FileBrowserClient: Sendable {
     var request: @Sendable (FileBrowserOperation) async throws -> FileBrowserResponse
     var repositoryFile: @Sendable (_ path: String, _ projectDirectory: String) async throws -> FileBrowserEntry
     var localFileURL: @Sendable (FileBrowserEntry) async throws -> URL
+    var localPreview: @Sendable (FileBrowserEntry) async throws -> Data
 }
 
 extension FileBrowserClient: DependencyKey {
@@ -21,7 +22,8 @@ extension FileBrowserClient: DependencyKey {
             return try await HostFileBrowser.shared.request($0)
         },
         repositoryFile: { try await HostFileBrowser.shared.repositoryFile(path: $0, projectDirectory: $1) },
-        localFileURL: { try await HostFileBrowser.shared.localFileURL($0) }
+        localFileURL: { try await HostFileBrowser.shared.localFileURL($0) },
+        localPreview: { try await HostFileBrowser.shared.localPreview($0) }
     )
 }
 
@@ -34,6 +36,9 @@ extension FileBrowserSource {
         }, localFileURL: { info in
             @Dependency(FileBrowserClient.self) var client
             return try await client.localFileURL(info)
+        }, localPreview: { info in
+            @Dependency(FileBrowserClient.self) var client
+            return try await client.localPreview(info)
         }) { operation in
             @Dependency(FileBrowserClient.self) var client
 
@@ -113,6 +118,10 @@ extension FileBrowserSource {
 actor HostFileBrowser {
     static let shared = HostFileBrowser()
     private let files = FileManager.default
+    // Two bounded previews (at most 16 MiB total) survive tab switches. Every
+    // hit still validates the live file; viewers never use this cache.
+    private var previews: [(info: FileBrowserEntry, data: Data)] = []
+    private var directoryPageSnapshot: (path: String, hidden: Bool, revision: String, entries: [FileBrowserEntry])?
 
     func request(_ request: FileBrowserOperation) throws -> FileBrowserResponse {
         try Task.checkCancellation()
@@ -168,6 +177,22 @@ actor HostFileBrowser {
         }
         guard revision(value) == info.revision else { throw FileBrowserError.message("File changed. Refresh and try again.") }
         return URL(fileURLWithPath: path)
+    }
+
+    func localPreview(_ info: FileBrowserEntry) throws -> Data {
+        let path = try localFileURL(info).path
+        if let index = previews.firstIndex(where: { $0.info == info }) {
+            let preview = previews.remove(at: index)
+            previews.append(preview)
+            return preview.data
+        }
+        let data = try read(path: path, offset: 0, revision: info.revision, wholeFile: true)
+        previews.removeAll { $0.info.path == info.path }
+        previews.append((info, data))
+        if previews.count > 2 {
+            previews.removeFirst()
+        }
+        return data
     }
 
     private func resolve(_ input: String) throws -> String {
@@ -229,18 +254,32 @@ actor HostFileBrowser {
         guard files.isReadableFile(atPath: path), files.isExecutableFile(atPath: path) else {
             throw FileBrowserError.message("Cannot read Host directory: \(path)")
         }
-        var entries = try directoryEntries(path: path, hidden: hidden)
-        entries.sort {
-            if ($0.kind == .directory) != ($1.kind == .directory) {
-                return $0.kind == .directory
+        let directoryRevision = revision(before)
+        let entries: [FileBrowserEntry]
+        if
+            offset > 0, let snapshot = directoryPageSnapshot,
+            snapshot.path == path, snapshot.hidden == hidden, snapshot.revision == directoryRevision {
+            entries = snapshot.entries
+        } else {
+            directoryPageSnapshot = nil
+            entries = try directoryEntries(path: path, hidden: hidden).sorted {
+                if ($0.kind == .directory) != ($1.kind == .directory) {
+                    return $0.kind == .directory
+                }
+                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
             }
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
-        guard try revision(before) == revision(metadata(path)) else { throw FileBrowserError.message("Directory changed. Refresh and try again.") }
+        guard try directoryRevision == revision(metadata(path)) else { throw FileBrowserError.message("Directory changed. Refresh and try again.") }
+        // Reuse only continuation pages. Opening/refreshing offset zero always
+        // enumerates afresh, including child metadata and hidden flags.
+        if entries.count <= 10_000 {
+            directoryPageSnapshot = (path, hidden, directoryRevision, entries)
+        }
         var page: [FileBrowserEntry] = []
         var bytes = 0
+        let encoder = JSONEncoder()
         for item in entries.dropFirst(offset).prefix(FileBrowserLimits.directoryPageSize) {
-            let count = try JSONEncoder().encode(item).count
+            let count = try encoder.encode(item).count
             guard bytes + count <= 128 * 1_024 else { break }
             page.append(item)
             bytes += count
@@ -321,7 +360,7 @@ actor HostFileBrowser {
         return entries
     }
 
-    private func read(path: String, offset: Int, revision expected: String, download: Bool = false) throws -> Data {
+    private func read(path: String, offset: Int, revision expected: String, download: Bool = false, wholeFile: Bool = false) throws -> Data {
         guard offset >= 0 else { throw FileBrowserError.message("Invalid file offset.") }
         // O_NONBLOCK + fstat avoids hanging on a FIFO or a replaced special file.
         let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
@@ -339,11 +378,21 @@ actor HostFileBrowser {
             download || kind != .unsupported, offset <= before.st_size else {
             throw FileBrowserError.message("This file is too large or its format cannot be previewed.")
         }
-        var data = Data(count: min(FileBrowserLimits.chunkBytes, Int(before.st_size) - offset))
-        let count = data.withUnsafeMutableBytes { bytes in
-            pread(fd, bytes.baseAddress, bytes.count, off_t(offset))
+        var data = Data(count: min(wholeFile ? limit : FileBrowserLimits.chunkBytes, Int(before.st_size) - offset))
+        var count = 0
+        while count < data.count {
+            try Task.checkCancellation()
+            let length = min(FileBrowserLimits.chunkBytes, data.count - count)
+            let received = data.withUnsafeMutableBytes { bytes in
+                pread(fd, bytes.baseAddress?.advanced(by: count), length, off_t(offset + count))
+            }
+            guard received >= 0 else { throw posixError(path) }
+            guard received > 0 else { throw FileBrowserError.message("File changed. Refresh its preview.") }
+            count += received
+            if !wholeFile {
+                break
+            }
         }
-        guard count >= 0 else { throw posixError(path) }
         data.count = count
         var after = stat()
         guard

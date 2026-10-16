@@ -87,8 +87,9 @@ Files rows expose only their own selection/close actions, not terminal operation
   transfer to another workbench or passive removal from another client never
   steals focus or requests Fit. Remaining right-side content, including local
   Git, keeps a valid selection.
-- Refresh is explicit. There is no background directory polling; previews release
-  their data when hidden. Reopening reloads current Host contents.
+- Refresh is explicit. There is no background directory polling; views release
+  their preview data when hidden. Reopening validates current Host contents;
+  local previews can reuse the Host's bounded, revision-checked memory cache.
 
 `HostFileTabServiceTests`, `IOSFileBrowserWorkspaceStoreTests` and
 `DetachedTerminalWindowsTests` cover concurrent reuse, extras, re-entry/reconnect,
@@ -427,9 +428,31 @@ Disconnect cancels pending work and prevents old-connection replies.
   Files, symbolic links and unknown entry types retain metadata checks. Hidden
   listings include dot-prefixed names and entries marked with macOS `UF_HIDDEN`;
   otherwise both are skipped before sorting and pagination.
-- Reads: regular files only, 128 KiB chunks; text up to 512 KiB, images/PDFs up to
-  8 MiB. Descriptor/path revisions are checked around reads; mixed-version data
-  is never shown. Directory page revisions are also checked before appending.
+  Continuation pages reuse the latest sorted directory snapshot (at most 10,000
+  entries), after checking its path, hidden setting and directory revision.
+  Offset zero always enumerates again, so reopening/Refresh picks up changed
+  child metadata and hidden flags. Larger directories retain uncached paging.
+  Previewing a listed file always reads its current metadata independently.
+- Reads: regular files only; text up to 512 KiB, images/PDFs up to 8 MiB. Remote
+  previews keep the 128 KiB wire chunks. Local previews use one in-process request
+  and one open descriptor, retaining cancellation and descriptor/path revision
+  checks. The Host keeps only the two latest local preview byte buffers (at most
+  16 MiB total, no disk cache); every reuse checks current readability and file
+  revision. The UI also rechecks the final revision before displaying data, so
+  stale, replaced or deleted files cannot revive a cached preview. Media and
+  Office still use their validated local URLs. Directory page revisions are
+  checked before appending.
+
+  Reproduce the local I/O comparison with
+  `CTRLX_FILES_PERFORMANCE=1 ./scripts/unit-tests.sh -- --filter HostFilesPerformanceTests`.
+  A 2026-10-16 isolated Debug comparison against `640d36e` measured 1201-entry
+  full directory pagination at 132.7 → 24.7 ms (median of five); first 8 MiB
+  preview loading at 10.1 → 4.6 ms, and four subsequent hide/reopen loads at
+  6.80 → 0.32 ms (median). Each old preview made 64 chunk requests; the local
+  path makes none. The fixture uses warm filesystem caches and synthetic bytes;
+  these are file-loading timings, not image decoding, visible frame latency or
+  browser/simulator FPS measurements. Native browser and simulator rendering
+  paths are unchanged by this optimization.
 - Explicit downloads: regular files up to 1 GiB, the same 128 KiB encrypted
   chunks and revision checks, written one chunk at a time off the UI actor.
   This does not relax the inline-preview or search bounds. Even empty files

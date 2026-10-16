@@ -17,6 +17,8 @@ public struct FileBrowserSource {
     public let createDirectory: (@MainActor (CreateSessionDirectory) async throws -> String)?
     /// Only local Host sources provide this. Remote paths must never become Viewer file URLs.
     public let localFileURL: (@MainActor (FileBrowserEntry) async throws -> URL)?
+    /// In-process Host preview read; remote sources keep the bounded wire chunks.
+    public let localPreview: (@MainActor (FileBrowserEntry) async throws -> Data)?
     public let request: @MainActor (FileBrowserOperation) async throws -> FileBrowserResponse
 
     public init(id: String, paneID: String?, unavailableReason: String? = nil,
@@ -25,6 +27,7 @@ public struct FileBrowserSource {
                 creationUnavailableReason: String? = nil,
                 createDirectory: (@MainActor (CreateSessionDirectory) async throws -> String)? = nil,
                 localFileURL: (@MainActor (FileBrowserEntry) async throws -> URL)? = nil,
+                localPreview: (@MainActor (FileBrowserEntry) async throws -> Data)? = nil,
                 request: @escaping @MainActor (FileBrowserOperation) async throws -> FileBrowserResponse) {
         self.id = id
         self.paneID = paneID
@@ -34,6 +37,7 @@ public struct FileBrowserSource {
         self.creationUnavailableReason = creationUnavailableReason ?? (createDirectory == nil ? "Folder creation is unavailable on this Host." : nil)
         self.createDirectory = createDirectory
         self.localFileURL = localFileURL
+        self.localPreview = localPreview
         self.request = request
     }
 

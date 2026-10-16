@@ -9,6 +9,85 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct HostFileBrowserTests {
+    @Test("Local previews validate cached files after edits, replacement and deletion")
+    func localPreviewCacheFreshness() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let host = HostFileBrowser()
+        let url = root.appendingPathComponent("preview.png")
+        for index in 1...3 {
+            let bytes = Data(repeating: UInt8(index), count: 2 * FileBrowserLimits.chunkBytes + 1)
+            try bytes.write(to: url, options: index == 2 ? .atomic : [])
+            guard case let .info(info) = try await host.request(.info(path: url.path)) else {
+                Issue.record("Missing file info")
+                return
+            }
+            #expect(try await host.localPreview(info) == bytes)
+            #expect(try await host.localPreview(info) == bytes)
+        }
+        guard case let .info(old) = try await host.request(.info(path: url.path)) else { return }
+        try Data("replacement".utf8).write(to: url, options: .atomic)
+        await #expect(throws: FileBrowserError.self) { try await host.localPreview(old) }
+        try FileManager.default.removeItem(at: url)
+        await #expect(throws: (any Error).self) { try await host.localPreview(old) }
+    }
+
+    @Test("Local preview reads preserve size, regular-file and cancellation guards")
+    func localPreviewBounds() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let host = HostFileBrowser()
+        let oversized = root.appendingPathComponent("large.txt")
+        try Data(repeating: 65, count: FileBrowserLimits.maximumTextBytes + 1).write(to: oversized)
+        let unsupported = root.appendingPathComponent("archive.zip")
+        try Data([1]).write(to: unsupported)
+        let fifo = root.appendingPathComponent("pipe.png")
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+        for path in [root, oversized, unsupported, fifo] {
+            guard case let .info(info) = try await host.request(.info(path: path.path)) else { return }
+            await #expect(throws: FileBrowserError.self) { try await host.localPreview(info) }
+        }
+        let empty = root.appendingPathComponent("empty.txt")
+        try Data().write(to: empty)
+        guard case let .info(info) = try await host.request(.info(path: empty.path)) else { return }
+        #expect(try await host.localPreview(info) == Data())
+        let task = Task { () throws -> Data in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await host.localPreview(info)
+        }
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
+    @Test("Directory continuation snapshots refresh after directory changes and explicit refresh")
+    func directorySnapshotInvalidation() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0..<201 {
+            try Data().write(to: root.appendingPathComponent("file\(index).txt"))
+        }
+        let host = HostFileBrowser()
+        guard case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)) else { return }
+        let last = root.appendingPathComponent("file200.txt")
+        try Data("changed".utf8).write(to: last)
+        guard case let .listing(second) = try await host.request(.list(path: root.path, offset: 200, includeHidden: false)) else { return }
+        #expect(second.revision == first.revision)
+        #expect(second.entries.first?.size == 0, "Continuation uses the same directory snapshot")
+        _ = try await host.request(.list(path: root.path, offset: 0, includeHidden: false))
+        guard case let .listing(refreshed) = try await host.request(.list(path: root.path, offset: 200, includeHidden: false)) else { return }
+        #expect(refreshed.entries.first?.size == 7)
+        try FileManager.default.removeItem(at: last)
+        guard case let .listing(removed) = try await host.request(.list(path: root.path, offset: 200, includeHidden: false)) else { return }
+        #expect(removed.revision != first.revision)
+        #expect(removed.entries.isEmpty)
+        let hidden = root.appendingPathComponent("file199.txt")
+        #expect(chflags(hidden.path, UInt32(UF_HIDDEN)) == 0)
+        guard
+            case let .listing(filtered) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
+            case let .listing(inclusive) = try await host.request(.list(path: root.path, offset: 0, includeHidden: true)) else { return }
+        #expect(filtered.entries.count == 199)
+        #expect(inclusive.entries.count == 200)
+    }
+
     private func fixture() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-files-test-\(UUID())")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

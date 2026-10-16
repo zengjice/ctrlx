@@ -5,6 +5,54 @@ import Testing
 
 @MainActor
 struct FileBrowserTabTests {
+    @Test("Local previews use the direct read; media still use their native URL")
+    func directLocalPreview() async {
+        let tab = FileBrowserTab()
+        let info = FileBrowserEntry(path: "/host/file.txt", name: "file.txt", kind: .text, size: 5, revision: "1")
+        tab.selectedFile = info.path
+        var reads = 0
+        let source = FileBrowserSource(id: "local", paneID: nil, localPreview: { item in
+            #expect(item == info)
+            reads += 1
+            return Data("hello".utf8)
+        }) { operation in
+            guard case .info = operation else { throw FileBrowserError.message("Must not use wire chunks") }
+            return .info(info)
+        }
+        await tab.loadPreview(source: source)
+        #expect(reads == 1)
+        #expect(tab.previewData == Data("hello".utf8))
+        #expect(tab.previewError == nil)
+        tab.releasePreview()
+        #expect(tab.previewData == nil)
+    }
+
+    @Test("Direct preview errors or changed files never fall back to chunk reads", arguments: ["error", "short", "changed", "binary"])
+    func invalidDirectPreview(mode: String) async {
+        let tab = FileBrowserTab()
+        tab.selectedFile = "/host/file.txt"
+        var infoReads = 0
+        let source = FileBrowserSource(id: "local", paneID: nil, localPreview: { _ in
+            if mode == "error" {
+                throw FileBrowserError.message("Read failed")
+            }
+            return mode == "short" ? Data() : mode == "binary" ? Data([0]) : Data([65])
+        }) { operation in
+            guard case .info = operation else { throw FileBrowserError.message("Must not retry through chunks") }
+            infoReads += 1
+            return .info(.init(
+                path: "/host/file.txt",
+                name: "file.txt",
+                kind: .text,
+                size: 1,
+                revision: mode == "changed" && infoReads > 1 ? "2" : "1"
+            ))
+        }
+        await tab.loadPreview(source: source)
+        #expect(tab.previewData == nil)
+        #expect(tab.previewError != nil)
+    }
+
     @Test("Files source stays inside the window whose menu was used")
     func scopedSourcePane() {
         let panes = ["%1", "%2"]
@@ -23,7 +71,7 @@ struct FileBrowserTabTests {
         let source = FileBrowserSource(id: "local", paneID: nil, localFileURL: { item in
             #expect(item == info)
             return URL(fileURLWithPath: item.path)
-        }) { operation in
+        }, localPreview: { _ in throw FileBrowserError.message("Media must not load preview bytes") }) { operation in
             if case .info = operation { return .info(info) }
             reads += 1
             throw FileBrowserError.message("A local movie must not be transferred")
@@ -156,13 +204,21 @@ struct FileBrowserTabTests {
         #expect(tab.error?.contains("Directory changed") == true)
     }
 
-    @Test func leavingTabDiscardsLatePreview() async {
+    @Test(arguments: [false, true])
+    func leavingTabDiscardsLatePreview(direct: Bool) async {
         let tab = FileBrowserTab(path: "/host")
         tab.selectedFile = "/host/a"
         let entry = FileBrowserEntry(path: "/host/a", name: "a", kind: .text, size: 1, revision: "1")
         let (gate, release) = AsyncStream<Void>.makeStream()
         let (started, notify) = AsyncStream<Void>.makeStream()
-        let source = FileBrowserSource(id: "host", paneID: nil) { operation in
+        let localRead: @MainActor (FileBrowserEntry) async throws -> Data = { _ in
+            notify.yield()
+            for await _ in gate {
+                break
+            }
+            return Data("a".utf8)
+        }
+        let source = FileBrowserSource(id: "host", paneID: nil, localPreview: direct ? localRead : nil) { operation in
             if case .info = operation { return .info(entry) }
             notify.yield()
             for await _ in gate { break }

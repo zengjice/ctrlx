@@ -280,15 +280,21 @@ final public class FileBrowserTab: Identifiable {
                 throw FileBrowserError.message("This format or size cannot be previewed here. Open it in another app.")
             }
             var data = Data()
-            while data.count < info.size {
-                try Task.checkCancellation()
-                guard
-                    case let .chunk(chunk) = try await source.request(.read(path: info.path, offset: data.count, revision: info.revision)),
-                    chunk.path == info.path, chunk.revision == info.revision, chunk.offset == data.count,
-                    !chunk.data.isEmpty, chunk.data.count <= FileBrowserLimits.chunkBytes, data.count + chunk.data.count <= info.size else {
-                    throw FileBrowserError.message("File changed or the Host returned an invalid file chunk. Refresh its preview.")
+            if let localPreview = source.localPreview {
+                data = try await localPreview(info)
+                guard data.count == info.size else { throw FileBrowserError.message("File changed. Refresh its preview.") }
+            } else {
+                data.reserveCapacity(info.size)
+                while data.count < info.size {
+                    try Task.checkCancellation()
+                    guard
+                        case let .chunk(chunk) = try await source.request(.read(path: info.path, offset: data.count, revision: info.revision)),
+                        chunk.path == info.path, chunk.revision == info.revision, chunk.offset == data.count,
+                        !chunk.data.isEmpty, chunk.data.count <= FileBrowserLimits.chunkBytes, data.count + chunk.data.count <= info.size else {
+                        throw FileBrowserError.message("File changed or the Host returned an invalid file chunk. Refresh its preview.")
+                    }
+                    data.append(chunk.data)
                 }
-                data.append(chunk.data)
             }
             // Revalidate even the last chunk/empty file; do not display mixed revisions.
             guard case let .info(current) = try await source.request(.info(path: info.path)), current.revision == info.revision else {
