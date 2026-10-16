@@ -260,6 +260,7 @@
         private var wakeObserverTask: Task<Void, Never>?
         @ObservationIgnored
         private var e2eReconnectObserverTask: Task<Void, Never>?
+        @ObservationIgnored private var paneActivationTask: Task<Void, Never>?
 
         /// 30-minute trial-expiry monitoring loop (Task 14): refreshes
         /// `licenseManager.status` and fires any pending 48h/24h alerts.
@@ -533,6 +534,8 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
+            paneActivationTask?.cancel()
+            paneActivationTask = nil
             agentPluginCheckTask?.cancel()
             agentPluginCheckTask = nil
             await apiSocketServer.stop()
@@ -3785,9 +3788,7 @@
         }
 
         /// Wires the notification tap handler on the delegate directly.
-        /// Always opens the panes view with the tapped session selected —
-        /// a local pane, or a remote host's session when the banner carried a
-        /// `hostId` (viewer-mode agent notification).
+        /// Reveals the owning native window for local and remote panes.
         private func setupNotificationTapHandler() {
             ForegroundNotificationDelegate.shared.onTapped = { [weak self] paneId, hostId in
                 guard let self else { return }
@@ -3835,26 +3836,28 @@
             }
         }
 
-        /// Brings the panes window forward with `paneId` selected and the app
-        /// activated. Shared by the notification-tap handler and the CLI
-        /// `select-session` command so both surface a local session the same way.
+        /// Shared by notification taps and the CLI `select-session` command.
         private func revealLocalPane(_ paneId: String) {
-            NSApp.setActivationPolicy(.regular)
-            pendingMenuBarSelection = .local(paneId: paneId)
-            NotificationCenter.default.post(name: .openPanesWindow, object: nil)
-            Self.forceActivate()
+            revealPane(.local(paneId: paneId))
         }
 
-        /// Brings the panes window forward with a *remote* host's session
-        /// selected. Used by the notification-tap handler when the tapped banner
-        /// came from a connected remote host (viewer mode). Falls back to the raw
-        /// id for the display name if the host is no longer paired.
+        /// Remote notifications resolve panes within their originating Host.
         private func revealRemotePane(hostId: String, paneId: String) {
-            NSApp.setActivationPolicy(.regular)
             let hostName = settings.getHostPairing(id: hostId)?.displayName ?? hostId
-            pendingMenuBarSelection = .remote(hostId: hostId, hostName: hostName, paneId: paneId)
-            NotificationCenter.default.post(name: .openPanesWindow, object: nil)
-            Self.forceActivate()
+            revealPane(.remote(hostId: hostId, hostName: hostName, paneId: paneId))
+        }
+
+        private func revealPane(_ selection: PendingMenuBarSelection) {
+            paneActivationTask?.cancel()
+            pendingMenuBarSelection = nil
+            NSApp.setActivationPolicy(.regular)
+            let workspaceID = detachedWindows.reveal(
+                selection, localPanes: tmuxService.panes, remoteSessions: remoteSessionStore
+            ) {
+                pendingMenuBarSelection = selection
+                NotificationCenter.default.post(name: .openPanesWindow, object: nil)
+            }
+            forceActivate(workspaceID: workspaceID)
         }
 
         /// Reveals a local tmux session by resolving its active window's active
@@ -3872,13 +3875,16 @@
 
         /// Force-activates the app from a non-interactive context (e.g., notification tap).
         /// Retries activation multiple times to overcome macOS focus-stealing prevention.
-        private static func forceActivate() {
-            Task { @MainActor in
+        private func forceActivate(workspaceID: UUID?) {
+            paneActivationTask = Task { @MainActor [weak self] in
                 for delay in [100, 300, 500] {
-                    try? await Task.sleep(for: .milliseconds(delay))
-                    NSApp.activate(ignoringOtherApps: true)
-                    for window in NSApp.windows where window.isVisible && window.level == .normal {
-                        window.orderFrontRegardless()
+                    do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
+                    guard !Task.isCancelled, let self else { return }
+                    if let workspaceID, detachedWindows.workspaces[workspaceID] == nil {
+                        return
+                    }
+                    detachedWindows.focusNativeWindow(workspaceID: workspaceID) {
+                        NSApp.activate(ignoringOtherApps: true)
                     }
                 }
             }
@@ -3887,6 +3893,7 @@
         deinit {
             wakeObserverTask?.cancel()
             e2eReconnectObserverTask?.cancel()
+            paneActivationTask?.cancel()
             licenseMonitorTask?.cancel()
         }
 

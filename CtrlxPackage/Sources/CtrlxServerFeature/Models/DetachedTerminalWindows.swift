@@ -41,6 +41,7 @@ final class DetachedTerminalWindows {
     }
 
     var mainRequest: Request?
+    @ObservationIgnored private weak var mainWindow: NSWindow?
     @ObservationIgnored private var windows: [UUID: NSWindow] = [:]
     @ObservationIgnored private var positions: [UUID: CGPoint] = [:]
     @ObservationIgnored private var closeObservers: [UUID: NSObjectProtocol] = [:]
@@ -269,7 +270,11 @@ final class DetachedTerminalWindows {
         attach(window, toWorkspace: workspace.id)
     }
 
-    func attach(_ window: NSWindow, toWorkspace id: UUID) {
+    func attach(_ window: NSWindow, toWorkspace id: UUID?) {
+        guard let id else {
+            mainWindow = window
+            return
+        }
         guard workspaces[id] != nil, windows[id] !== window else { return }
         if let observer = closeObservers.removeValue(forKey: id) {
             NotificationCenter.default.removeObserver(observer)
@@ -333,14 +338,50 @@ final class DetachedTerminalWindows {
             let target = DetachedTerminalTarget(hostID: hostID, windowID: windowID),
             let workspace = workspace(containing: target) else { return false }
         workspace.select(target)
-        if let window = windows[workspace.id] {
-            // A disconnected display must not strand the window off-screen.
-            if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
-                window.center()
-            }
-            window.deminiaturize(nil)
-            window.makeKeyAndOrderFront(nil)
+        focusNativeWindow(workspaceID: workspace.id)
+        return true
+    }
+
+    /// Resolve ownership when the notification is opened, not when it was delivered.
+    func reveal(
+        _ selection: PendingMenuBarSelection,
+        localPanes: [PaneInfo], remoteSessions: SessionStore?,
+        openMain: () -> Void
+    ) -> UUID? {
+        let hostID: String?
+        let windowID: String?
+        switch selection {
+        case let .local(paneID):
+            hostID = nil
+            windowID = localPanes.first { $0.paneId == paneID }?.stableWindowId
+        case let .remote(host, _, paneID):
+            hostID = host
+            windowID = remoteSessions?.paneState(for: paneID, hostId: host)?.stableWindowId
         }
+        if let windowID, focus(hostID: hostID, windowID: windowID) {
+            return owner(hostID: hostID, windowID: windowID)
+        }
+        openMain()
+        return nil
+    }
+
+    /// Activation retries must not reselect tabs or bring unrelated windows forward.
+    @discardableResult
+    func focusNativeWindow(workspaceID: UUID?, activate: () -> Void = { }) -> Bool {
+        let window = if let workspaceID {
+            windows[workspaceID]
+        } else {
+            mainWindow
+        }
+        guard let window else { return false }
+        activate()
+        // A disconnected display must not strand the window off-screen.
+        if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
+            window.center()
+        }
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         return true
     }
 

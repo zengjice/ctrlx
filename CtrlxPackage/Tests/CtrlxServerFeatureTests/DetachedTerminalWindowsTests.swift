@@ -440,7 +440,7 @@ struct DetachedTerminalWindowsTests {
         )
         window.isReleasedWhenClosed = false
         state.reserve(target)
-        window.contentView = NSHostingView(rootView: DetachedTerminalRegistration(target: target, windows: state))
+        window.contentView = NSHostingView(rootView: WorkbenchWindowRegistration(workspaceID: state.owner(hostID: nil, windowID: "@19"), windows: state))
         window.contentView?.layoutSubtreeIfNeeded()
         window.contentView = NSView()
         #expect(state.targets.contains(target))

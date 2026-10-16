@@ -321,6 +321,7 @@ public struct MainView: View {
 
     private var fileLinkWorkspace: some View {
         workspaceContent
+            .background(WorkbenchWindowRegistration(workspaceID: detachedWorkspace?.id, windows: coordinator.detachedWindows))
             .environment(\.workbenchWindowID, detachedWorkspace?.id)
             .environment(\.terminalQuickActions, terminalQuickActions)
             .environment(\.terminalContentClick, fitClickedTerminal)

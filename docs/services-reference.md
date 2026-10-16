@@ -1054,6 +1054,14 @@ offer tap-to-open rather than fabricated answer buttons; actual structured forms
 retain their existing answer actions. Update the Host for new question detection
 and iOS for foreground alerts; Relay changes are unnecessary.
 
+On Mac, notification taps resolve `(hostId, paneId)` against current pane metadata
+and this Mac's window ownership. A detached terminal selects its tab and restores
+and activates its owning native window; a terminal in the main window uses the
+Sessions window. Moving a tab or closing its detached window before opening an
+older notification therefore follows the current owner. Activation retries target
+only that native window, do not reselect/refit the tab, and are cancelled by a newer
+notification navigation. The notification payload does not store window ownership.
+
 See [push notifications](push-notifications-plan.md) for design/history and
 actionable replies, and [self-hosting](self-hosting.md) for current configuration.
 Current entry points:
