@@ -10,10 +10,10 @@ CtrlX Codex / Claude Code 会话的实时 iOS Simulator 界面查看、操作、
 图片不因此启动模拟器。完整操作步骤移至同技能的 `references/workflow.md`，按需读取。
 
 两种插件的现有 `SessionStart` hook 在 tmux 内成功转发生命周期事件后，将这个简短入口
-与 `file-links` 正文一起写入一次 `additionalContext`；覆盖 startup / resume / clear /
+与 `file-links` 及 `agent-browser` 的简短正文一起写入一次 `additionalContext`；覆盖 startup / resume / clear /
 compact / fork，无需先隐式选中技能，也不在启动 hook 中执行 CLI 或启动设备。输出附带
 已安装技能的实际路径，用于解析相对参考链接。各技能独立读取，缺失、不可读、格式损坏
-或超过 5000 字节只跳过自身，不影响另一份上下文及原事件。
+或超过 5000 字节只跳过自身，不影响其余上下文及原事件。
 
 Codex 新会话用 `ctrlx ios run -- codex`，原生 Claude Code 在 CtrlX 本地终端直接运行
 `claude`；`run` 仍只接受 Codex。Host 同时识别原生 `claude` 和

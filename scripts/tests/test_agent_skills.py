@@ -124,6 +124,7 @@ class SkillResources(unittest.TestCase):
 @unittest.skipUnless(shutil.which("rsync"), "rsync required for bundle sync")
 class PluginSessionContext(unittest.TestCase):
     sources = ("startup", "resume", "clear", "compact", "fork")
+    entrypoints = ("file-links", "agent-ios", "agent-browser")
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="cx-hooks-", dir="/tmp")
@@ -183,7 +184,7 @@ class PluginSessionContext(unittest.TestCase):
     def skill_context(self, plugin, name):
         skill = (self.plugins[plugin] / "skills" / name / "SKILL.md").resolve()
         body = skill.read_text().split("---", 2)[2].strip()
-        if name == "agent-ios":
+        if name != "file-links":
             return f"Skill source: `{skill}`. Resolve relative references from this file.\n\n{body}"
         return body
 
@@ -210,7 +211,7 @@ class PluginSessionContext(unittest.TestCase):
 
     def test_session_start_forwards_event_and_emits_canonical_body(self):
         for plugin in self.plugins:
-            contexts = [self.skill_context(plugin, name) for name in ("file-links", "agent-ios")]
+            contexts = [self.skill_context(plugin, name) for name in self.entrypoints]
             for source in self.sources:
                 with self.subTest(plugin=plugin, source=source):
                     payload = {"hook_event_name": "SessionStart", "source": source,
@@ -222,7 +223,8 @@ class PluginSessionContext(unittest.TestCase):
 
     def test_reads_current_bundled_skill_not_a_second_copy(self):
         bodies = {"file-links": "# Repository references\n\nFixture: `<repo:报告.md>` (line 12).",
-                  "agent-ios": "# Simulator fixture\n\nRead [workflow](references/workflow.md)."}
+                  "agent-ios": "# Simulator fixture\n\nRead [workflow](references/workflow.md).",
+                  "agent-browser": "# Browser fixture\n\nRead [workflow](references/workflow.md)."}
         for plugin, path in self.plugins.items():
             with self.subTest(plugin=plugin):
                 for name, body in bodies.items():
@@ -255,7 +257,7 @@ class PluginSessionContext(unittest.TestCase):
                     b"---\nname: file-links\n---\n\xff",
                     b"---\nname: file-links\n---\n" + b"x" * 5001, None)
         for plugin, path in self.plugins.items():
-            names = ("file-links", "agent-ios")
+            names = self.entrypoints
             for name in names:
                 skill = path / "skills" / name / "SKILL.md"
                 original = skill.read_bytes()
@@ -278,7 +280,7 @@ class PluginSessionContext(unittest.TestCase):
     def test_no_context_when_all_entrypoints_are_missing(self):
         for plugin, path in self.plugins.items():
             with self.subTest(plugin=plugin):
-                for name in ("file-links", "agent-ios"):
+                for name in self.entrypoints:
                     (path / "skills" / name / "SKILL.md").unlink()
                 self.assertEqual(self.run_hook(plugin, {"hook_event_name": "SessionStart"}), b"")
 
