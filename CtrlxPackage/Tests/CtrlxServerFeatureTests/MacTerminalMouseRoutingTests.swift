@@ -258,6 +258,86 @@
             }
         }
 
+        @Test("Window copy dispatch targets only the focused Codex pane", arguments: [0, 1], [false, true])
+        func codexCopy(paneIndex: Int, localSelection: Bool) throws {
+            let clipboard = ClipboardClient.previewValue
+            try withDependencies {
+                $0[ClipboardClient.self] = clipboard
+            } operation: {
+                let (window, panes) = makeTerminalWindow(key: true)
+                defer { withExtendedLifetime(window) { } }
+                var rawInput = [[Data](), [Data]()]
+                var keys: [TmuxKey] = []
+                for (index, pane) in panes.enumerated() {
+                    pane.scrollingAgentID = "codex"
+                    pane.onRawInput = { rawInput[index].append($0) }
+                    pane.onInput = { keys.append(contentsOf: $0) }
+                }
+                let view = panes[paneIndex]
+                if localSelection {
+                    try drag(in: view)
+                } else {
+                    // A TUI draws its own selection without a SwiftTerm selection.
+                    view.feed(byteArray: Array("\u{1b}[H\u{1b}[7malpha\u{1b}[0m bravo".utf8)[...])
+                    view.focusTerminal()
+                    #expect(view.getSelectedTextTrimmed() == nil)
+                }
+                clipboard.setString("previous clipboard")
+
+                #expect(try window.performKeyEquivalent(with: copyEvent(in: window)))
+
+                #expect(rawInput[1 - paneIndex].isEmpty)
+                #expect(keys.isEmpty)
+                if localSelection {
+                    #expect(rawInput[paneIndex].isEmpty)
+                    #expect(clipboard.getString() == "pha br")
+                    #expect(view.getSelectedTextTrimmed() == "pha br")
+                } else {
+                    #expect(rawInput[paneIndex] == [Data("\u{1b}[99;9u".utf8)])
+                    #expect(clipboard.getString() == "previous clipboard")
+                }
+            }
+        }
+
+        @Test("Application copy leaves other agents, editors and modified shortcuts alone", arguments: ["shell", "otherAgent", "editor", "textField", "control", "option", "shift", "disconnected"])
+        func codexCopyExclusions(action: String) throws {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[1]
+            view.scrollingAgentID = "codex"
+            view.focusTerminal()
+            var rawInput: [Data] = []
+            var keys: [TmuxKey] = []
+            var modifiers: NSEvent.ModifierFlags = .command
+            view.onRawInput = { rawInput.append($0) }
+            view.onInput = { keys.append(contentsOf: $0) }
+            switch action {
+            case "shell": view.scrollingAgentID = nil
+            case "otherAgent": view.scrollingAgentID = "claude-code"
+            case "editor": view.isEditorActive = true
+            case "textField":
+                let editor = NSTextView(frame: .zero)
+                window.contentView?.addSubview(editor)
+                window.makeFirstResponder(editor)
+            case "control": modifiers.insert(.control)
+            case "option": modifiers.insert(.option)
+            case "shift": modifiers.insert(.shift)
+            default: view.onRawInput = nil
+            }
+
+            #expect(try !view.performKeyEquivalent(with: copyEvent(in: window, modifiers: modifiers)))
+            #expect(rawInput.isEmpty)
+            #expect(keys.isEmpty)
+        }
+
+        private func copyEvent(in window: NSWindow, modifiers: NSEvent.ModifierFlags = .command) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "c",
+                charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8
+            ))
+        }
+
         @Test("An app can explicitly capture Shift mouse input")
         func applicationShiftCapture() throws {
             let (window, panes) = makeTerminalWindow()

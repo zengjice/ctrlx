@@ -597,8 +597,8 @@
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
 
-        /// Pane metadata, not text/title matching. Used only for precise wheel
-        /// sensitivity while the terminal is in the alternate screen.
+        /// Pane metadata, not text/title matching. Used for precise wheel
+        /// sensitivity and forwarding copy to Codex's application-owned selection.
         var scrollingAgentID: String? {
             didSet {
                 if oldValue != scrollingAgentID { scrollOverlay?.resetScrollGesture() }
@@ -1463,6 +1463,15 @@
                 // Copy selected text to clipboard
                 if terminalView.getSelection() != nil {
                     copySelectionToClipboard()
+                    return true
+                }
+                if
+                    scrollingAgentID == "codex",
+                    event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+                    let onRawInput {
+                    // CSI-u preserves Command (Super); TmuxKey conversion would
+                    // lose that modifier. Never substitute interrupting Ctrl+C.
+                    onRawInput(Data("\u{1b}[99;9u".utf8))
                     return true
                 }
                 return false

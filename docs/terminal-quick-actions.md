@@ -59,6 +59,12 @@ Command-backtick is left to macOS window switching. Standard copy/paste and
 Command-comma settings remain, and no application-wide Control or Escape handler
 intercepts ordinary terminal input. Escape remains local to open panels.
 
+Command-C copies the terminal's local selection first. In a recognized Codex
+pane with no local selection, it forwards Command-C unchanged as CSI-u so Codex
+can copy its own composer/transcript selection through the existing clipboard
+path. This applies to local and remote Mac terminals, only in the focused pane;
+it never substitutes Control-C or forwards copy to an ordinary shell.
+
 ## Status bar
 
 macOS offers **Commands** (`/`) and **Quick Phrases** as labeled, bordered buttons
