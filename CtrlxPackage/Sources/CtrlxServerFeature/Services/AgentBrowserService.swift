@@ -34,6 +34,7 @@ struct ManualBrowserTarget: Equatable, Sendable {
 final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostDelegate {
     public static func prepareApplication() {
         _ = CXBrowserPrepareApplication()
+        CXBrowserSetDiagnosticsDelegate(AppKitDiagnostics.shared)
     }
 
     var runtime: (any CXBrowserRuntime)?

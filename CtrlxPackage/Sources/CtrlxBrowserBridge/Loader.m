@@ -23,6 +23,12 @@ void CXBrowserSetTerminationDelegate(id<CXBrowserTerminationDelegate> delegate) 
     if (setDelegate) setDelegate(delegate);
 }
 
+void CXBrowserSetDiagnosticsDelegate(id<CXApplicationDiagnosticsDelegate> delegate) {
+    if (!library || loadError) return;
+    void (*setDelegate)(id<CXApplicationDiagnosticsDelegate>) = dlsym(library, "CXEmbeddedBrowserSetDiagnosticsDelegate");
+    if (setDelegate) setDelegate(delegate);
+}
+
 id<CXBrowserRuntime> CXBrowserCreateRuntime(void) {
     if (!library || loadError) return nil;
     id (*create)(void) = dlsym(library, "CXEmbeddedBrowserCreateRuntime");

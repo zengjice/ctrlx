@@ -518,7 +518,17 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
 @property(nonatomic) BOOL handlingSendEvent;
 @end
 static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
+static __weak id<CXApplicationDiagnosticsDelegate> applicationDiagnosticsDelegate;
 @implementation CXBrowserApplication
+- (void)reportException:(NSException *)exception {
+  @try {
+    if (NSThread.isMainThread) [applicationDiagnosticsDelegate recordAppKitException:exception];
+  } @catch (NSException *diagnosticFailure) {
+    NSLog(@"CtrlX could not capture AppKit diagnostics (%@)", diagnosticFailure.name);
+  }
+  // Preserve AppKit's reporting/crash policy; a snapshot is not recovery.
+  [super reportException:exception];
+}
 - (BOOL)isHandlingSendEvent { return self.handlingSendEvent; }
 - (void)sendEvent:(NSEvent *)event {
   if (extensionInputDepth == 0 && extensionSurface && extensionSurface->Active() && ExtensionControlOwnsWindow(event.window) &&
@@ -942,4 +952,7 @@ extern "C" __attribute__((visibility("default"))) id CXEmbeddedBrowserCreateRunt
 }
 extern "C" __attribute__((visibility("default"))) void CXEmbeddedBrowserSetTerminationDelegate(id<CXBrowserTerminationDelegate> delegate) {
   applicationTerminationDelegate = delegate;
+}
+extern "C" __attribute__((visibility("default"))) void CXEmbeddedBrowserSetDiagnosticsDelegate(id<CXApplicationDiagnosticsDelegate> delegate) {
+  applicationDiagnosticsDelegate = delegate;
 }

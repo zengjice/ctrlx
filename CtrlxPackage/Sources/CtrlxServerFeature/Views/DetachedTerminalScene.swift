@@ -42,16 +42,29 @@ extension EnvironmentValues {
 struct WorkbenchWindowRegistration: NSViewRepresentable {
     let workspaceID: UUID?
     let windows: DetachedTerminalWindows
+    var diagnosticContext: AppKitWindowDiagnosticContext?
 
     func makeNSView(context: Context) -> RegistrationView {
-        RegistrationView(workspaceID: workspaceID, windows: windows)
+        let view = RegistrationView(workspaceID: workspaceID, windows: windows)
+        view.diagnosticContext = diagnosticContext
+        return view
     }
 
-    func updateNSView(_ view: RegistrationView, context: Context) { }
+    func updateNSView(_ view: RegistrationView, context: Context) {
+        view.diagnosticContext = diagnosticContext
+    }
 
     final class RegistrationView: NSView {
         let workspaceID: UUID?
         let windows: DetachedTerminalWindows
+        private weak var diagnosticWindow: NSWindow?
+        var diagnosticContext: AppKitWindowDiagnosticContext? {
+            didSet {
+                if let window {
+                    AppKitDiagnostics.shared.setContext(diagnosticContext, for: window)
+                }
+            }
+        }
 
         init(workspaceID: UUID?, windows: DetachedTerminalWindows) {
             self.workspaceID = workspaceID
@@ -65,8 +78,13 @@ struct WorkbenchWindowRegistration: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            if let diagnosticWindow, diagnosticWindow !== window {
+                AppKitDiagnostics.shared.setContext(nil, for: diagnosticWindow)
+            }
+            diagnosticWindow = window
             if let window {
                 windows.attach(window, toWorkspace: workspaceID)
+                AppKitDiagnostics.shared.setContext(diagnosticContext, for: window)
             }
         }
     }

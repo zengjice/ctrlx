@@ -6,6 +6,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)tryToTerminateWithoutModalLoop;
 @end
 
+@protocol CXApplicationDiagnosticsDelegate <NSObject>
+// Synchronous: AppKit may terminate the process immediately after reporting.
+- (void)recordAppKitException:(NSException *)exception;
+@end
+
 // CEF stays in a separately built native library. Swift/SPM clients need only
 // this small AppKit contract, never CEF headers or a downloaded SDK to compile.
 @protocol CXBrowserHostDelegate <NSObject>
@@ -53,6 +58,7 @@ NS_ASSUME_NONNULL_BEGIN
 // native library is supported for ordinary SPM/tests and non-browser builds.
 FOUNDATION_EXPORT BOOL CXBrowserPrepareApplication(void);
 FOUNDATION_EXPORT void CXBrowserSetTerminationDelegate(id<CXBrowserTerminationDelegate> delegate);
+FOUNDATION_EXPORT void CXBrowserSetDiagnosticsDelegate(id<CXApplicationDiagnosticsDelegate> delegate);
 FOUNDATION_EXPORT id<CXBrowserRuntime> _Nullable CXBrowserCreateRuntime(void);
 FOUNDATION_EXPORT NSString * _Nullable CXBrowserLoadError(void);
 NS_ASSUME_NONNULL_END

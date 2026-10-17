@@ -14,13 +14,13 @@ struct WorkbenchWindowTitle: ToolbarContent {
         } else {
             titleItem
         }
-        ToolbarItem(placement: .automatic) {
+        ToolbarItem(id: "ctrlx.toolbar.spacer", placement: .automatic) {
             Spacer()
         }
     }
 
     private var titleItem: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
+        ToolbarItem(id: "ctrlx.toolbar.title", placement: .navigation) {
             Text(title)
                 .font(.headline)
                 .lineLimit(1)

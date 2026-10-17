@@ -8,6 +8,32 @@ dated acceptance paragraphs retain their original test scope, not a fresh run.
 
 ## macOS Services
 
+### AppKit layout diagnostics
+
+`AppKitDiagnostics` synchronously records the first toolbar/window-layout
+exception reported through the native `CXBrowserApplication` per launch. The
+bridge always forwards the exception to AppKit afterward, including when
+diagnostics fail; this is evidence collection, not recovery or a layout fix.
+It runs independently of the optional debug UI setting.
+
+Reports live in `~/Library/Logs/CtrlX/AppKit/` (directory 0700, JSON files 0600),
+retaining at most five reports. E2E launches require `--ctrlx-state-root` and
+write only to its `appkit-diagnostics/` child. Snapshots include build/OS identity,
+stack frames, window role, sanitized connection state, stable toolbar item IDs,
+cached geometry and constraints. Native view addresses can be matched to AppKit's
+`NSToolbarItemViewer` loop warning. Collection never requests layout, fitting or
+intrinsic sizes, and excludes exception reasons/userInfo, window titles, labels,
+terminal content, drafts and URLs.
+
+`AppKitDiagnosticsTests` covers capture, context updates, no relayout/content
+collection, synchronous failure handling, retention and E2E storage isolation.
+The isolated signed-app probe `CtrlxPackage/AgentBrowser/tests/appkit_diagnostics.py`
+verifies capture before AppKit terminates and superclass forwarding when the
+diagnostics delegate throws. It injects a synthetic exception, not the original
+intermittent constraint loop. Prepare an app with `prepare_upstream_probe.sh`,
+then run it through `scripts/clean-build.py use-artifact --path <fixture> --
+python3 CtrlxPackage/AgentBrowser/tests/appkit_diagnostics.py <fixture>/CtrlX.app`.
+
 ### FileBrowserClient / HostFileBrowser
 
 Dependency-injected Host filesystem operations for Mac Host, Mac Viewer and iOS

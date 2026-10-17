@@ -378,7 +378,16 @@ public struct MainView: View {
 
     private var fileLinkWorkspace: some View {
         workspaceContent
-            .background(WorkbenchWindowRegistration(workspaceID: detachedWorkspace?.id, windows: coordinator.detachedWindows))
+            .background(WorkbenchWindowRegistration(
+                workspaceID: detachedWorkspace?.id,
+                windows: coordinator.detachedWindows,
+                diagnosticContext: AppKitWindowDiagnosticContext(
+                    kind: detachedWorkspace == nil ? .main : .detached,
+                    connection: coordinator.connectedViewerManager?.combinedState ?? .disconnected,
+                    paired: settings.isPaired,
+                    remote: selectedRemoteSession != nil
+                )
+            ))
             .environment(\.workbenchWindowID, detachedWorkspace?.id)
             .environment(\.terminalQuickActions, terminalQuickActions)
             .environment(\.terminalContentClick, fitClickedTerminal)
@@ -2521,7 +2530,7 @@ public struct MainView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         if detachedWorkspace == nil {
-            ToolbarItem(placement: .navigation) {
+            ToolbarItem(id: "ctrlx.toolbar.session-switcher", placement: .navigation) {
                 Button { showingSessionSwitcher = true } label: {
                     Label("Switch Session", symbol: .magnifyingglass)
                 }
@@ -2530,11 +2539,11 @@ public struct MainView: View {
             }
         }
         WorkbenchWindowTitle(title: workspaceTitle)
-        ToolbarItem(placement: .automatic) {
+        ToolbarItem(id: "ctrlx.toolbar.trial", placement: .automatic) {
             TrialStatusToolbarItem()
         }
 
-        ToolbarItem(placement: .automatic) {
+        ToolbarItem(id: "ctrlx.toolbar.connection", placement: .automatic) {
             connectionStatusView
         }
 
