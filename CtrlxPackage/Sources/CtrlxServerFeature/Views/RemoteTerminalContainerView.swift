@@ -355,7 +355,7 @@ struct RemoteTerminalContainerView: View {
                 .foregroundStyle(.tertiary)
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(settings.theme.workspaceSecondaryTextColor)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(settings.theme.chromeBackgroundColor)

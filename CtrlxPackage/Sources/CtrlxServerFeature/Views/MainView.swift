@@ -424,6 +424,8 @@ public struct MainView: View {
         .containerBackground(settings.theme.workspaceBackgroundColor, for: .window)
         .toolbarBackground(settings.theme.chromeBackgroundColor, for: .windowToolbar)
         .preferredColorScheme(settings.theme.workspaceColorScheme)
+        .foregroundStyle(settings.theme.workspacePrimaryTextColor)
+        .tint(settings.theme.workspaceAccentColor)
         .navigationTitle(workspaceTitle)
         .toolbar(removing: .title)
         .toolbar {

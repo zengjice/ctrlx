@@ -1003,6 +1003,7 @@ final public class AppSettings {
 public enum TerminalTheme: String, CaseIterable, Sendable {
     case defaultDark = "Default Dark"
     case defaultLight = "Default Light"
+    case codexLight = "Codex Light"
     case solarizedDark = "Solarized Dark"
     case solarizedLight = "Solarized Light"
     case anysphereDark = "Anysphere Dark"

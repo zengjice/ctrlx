@@ -86,7 +86,9 @@ struct SessionSidebarRow: View {
                     gitBranch: activeWindowMetadata.gitBranch,
                     // The plugin model dropped the per-event buffer (spec §16),
                     // so there's no "latest event" subtitle to surface.
-                    latestEvent: nil
+                    latestEvent: nil,
+                    primaryTextColor: settings.theme.sidebarPrimaryTextColor,
+                    secondaryTextColor: settings.theme.workspaceSecondaryTextColor
                 )
 
                 // OTEL meter + model + permission-mode chip (issue #597), shown

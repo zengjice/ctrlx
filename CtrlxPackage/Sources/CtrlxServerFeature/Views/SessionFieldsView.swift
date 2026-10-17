@@ -19,6 +19,8 @@ struct SessionFieldsView: View {
     let latestEvent: String?
     /// Remote host's home directory for proper path abbreviation (nil for local sessions)
     var homeDirectory: String?
+    var primaryTextColor: Color = .primary
+    var secondaryTextColor: Color = .secondary
 
     var body: some View {
         let visibleFields = fields.compactMap { field -> (SidebarField, String)? in
@@ -31,19 +33,19 @@ struct SessionFieldsView: View {
                 // Fallback: always show session name when no configured fields have values
                 Text(sessionName)
                     .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(primaryTextColor)
                     .lineLimit(1)
             } else {
                 ForEach(Array(visibleFields.enumerated()), id: \.element.0) { index, entry in
                     if index == 0 {
                         Text(entry.1)
                             .font(.body.weight(.medium))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(primaryTextColor)
                             .lineLimit(1)
                     } else {
                         Text(entry.1)
                             .font(entry.0 == .latestEvent ? .caption2 : .caption)
-                            .foregroundStyle(entry.0 == .latestEvent ? .tertiary : .secondary)
+                            .foregroundStyle(entry.0 == .latestEvent ? AnyShapeStyle(.tertiary) : AnyShapeStyle(secondaryTextColor))
                             .lineLimit(entry.0 == .latestEvent ? 2 : 1)
                     }
                 }

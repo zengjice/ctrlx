@@ -70,6 +70,16 @@ struct TerminalThemePalette: Sendable {
         0x989898, 0xFC6B83, 0x70B489, 0xF1B467,
         0x87A6C4, 0xB48EAD, 0x88C0D0, 0xFFFFFF,
     ].map(TerminalRGB.init(hex:))
+
+    /// Based on Codex Light's syntax colors. Bright chromatic slots stay dark
+    /// enough for white backgrounds, including when bold promotes an ANSI color.
+    /// White slots retain their terminal meaning for backgrounds/reverse video.
+    static let codexLightANSI: [TerminalRGB] = [
+        0x0D0D0D, 0xD53538, 0x008809, 0xBD5800,
+        0x0169CC, 0x751ED9, 0x007F8B, 0xCDCDCD,
+        0x666666, 0xD53538, 0x008809, 0xBD5800,
+        0x0071EA, 0x751ED9, 0x007F8B, 0xFFFFFF,
+    ].map(TerminalRGB.init(hex:))
 }
 
 /// Colors for the application surfaces surrounding a terminal. Keeping these
@@ -110,9 +120,7 @@ struct TerminalWorkspacePalette: Equatable, Sendable {
 }
 
 extension TerminalTheme {
-    /// SwiftUI colors for the terminal workbench chrome. Anysphere Dark uses
-    /// Coterm's layered surfaces; existing themes retain their previous
-    /// palette-derived appearance.
+    /// SwiftUI colors for the terminal workbench chrome.
     var sidebarBackgroundColor: SwiftUI.Color {
         workspacePalette.sidebarBackground.swiftUIColor
     }
@@ -135,7 +143,8 @@ extension TerminalTheme {
 
     var selectedSidebarRowBackgroundColor: SwiftUI.Color {
         switch self {
-        case .anysphereDark:
+        case .anysphereDark,
+             .codexLight:
             workspacePalette.selectedSidebarRow.swiftUIColor
         default:
             SwiftUI.Color.accentColor.opacity(0.2)
@@ -146,11 +155,35 @@ extension TerminalTheme {
         SwiftUI.Color(nsColor: palette.foreground.nativeColor)
     }
 
+    var workspacePrimaryTextColor: SwiftUI.Color {
+        self == .codexLight ? workspaceForegroundColor : .primary
+    }
+
+    var workspaceSecondaryTextColor: SwiftUI.Color {
+        self == .codexLight ? SwiftUI.Color(nsColor: TerminalRGB(hex: 0x626262).nativeColor) : .secondary
+    }
+
+    var sidebarPrimaryTextColor: SwiftUI.Color {
+        self == .codexLight ? SwiftUI.Color(nsColor: TerminalRGB(hex: 0x212121).nativeColor) : .primary
+    }
+
+    var workspaceAccentColor: SwiftUI.Color {
+        self == .codexLight ? SwiftUI.Color(nsColor: TerminalRGB(hex: 0x0169CC).nativeColor) : .accentColor
+    }
+
+    var usesSubtleTabBorder: Bool {
+        self == .anysphereDark || self == .codexLight
+    }
+
     var workspaceColorScheme: SwiftUI.ColorScheme {
         switch self {
-        case .defaultDark, .solarizedDark, .anysphereDark:
+        case .defaultDark,
+             .solarizedDark,
+             .anysphereDark:
             .dark
-        case .defaultLight, .solarizedLight:
+        case .defaultLight,
+             .solarizedLight,
+             .codexLight:
             .light
         }
     }
@@ -159,6 +192,15 @@ extension TerminalTheme {
         let terminalPalette = palette
 
         return switch self {
+        case .codexLight:
+            TerminalWorkspacePalette(
+                sidebarBackground: .init(hex: 0xFCFCFC),
+                workspaceBackground: .init(hex: 0xFFFFFF),
+                chromeBackground: .init(hex: 0xFCFCFC),
+                activeTabBackground: .init(hex: 0xFFFFFF),
+                border: .init(hex: 0xE5E5E5),
+                selectedSidebarRow: .init(hex: 0xEDEDED)
+            )
         case .anysphereDark:
             TerminalWorkspacePalette(
                 sidebarBackground: .init(hex: 0x141414),
@@ -175,7 +217,7 @@ extension TerminalTheme {
                 chromeBackground: .init(color: terminalPalette.background),
                 activeTabBackground: .init(color: terminalPalette.foreground, alpha: 0x14),
                 border: .init(color: terminalPalette.foreground, alpha: 0x73),
-                // Non-Anysphere themes continue using the system accent color.
+                // Other themes continue using the system accent color.
                 selectedSidebarRow: .init(color: terminalPalette.background)
             )
         }
@@ -195,6 +237,12 @@ extension TerminalTheme {
                 foreground: TerminalRGB(hex: 0x1A1A1A),
                 background: TerminalRGB(hex: 0xF2F2F2),
                 ansiColors: TerminalThemePalette.swiftTermDefaultANSI
+            )
+        case .codexLight:
+            TerminalThemePalette(
+                foreground: TerminalRGB(hex: 0x0D0D0D),
+                background: TerminalRGB(hex: 0xFFFFFF),
+                ansiColors: TerminalThemePalette.codexLightANSI
             )
         case .solarizedDark:
             TerminalThemePalette(

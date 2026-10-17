@@ -1174,6 +1174,21 @@ command, currentPath, width, height, isActive
 - **Coding agents:** owned by plugin settings/registry, not per-agent fields in AppSettings
 - **Prompt editor (Ctrl-G):** editorOverrideMode (`ask` / `overrideInCtrlxSessions` / `useMyEditor`) — see [Editor Override](#editor-override-ctrl-g)
 
+Mac **Settings → General → Terminal → Theme** includes **Codex Light**. Its
+white terminal (`#FFFFFF` / `#0D0D0D`), near-white sidebar/tab bar (`#FCFCFC`),
+gray secondary text (`#626262`) and blue accent (`#0169CC`) share the existing
+theme setting across local, remote and detached workspaces. Sidebar selection
+uses neutral gray when selected-session highlighting is enabled.
+
+The palette is based on the bundled Codex Light theme in ChatGPT for Mac
+26.820.60940 (7119). ANSI red/green/yellow/blue/magenta follow its syntax colors;
+cyan is adapted for white backgrounds. Bright chromatic ANSI slots retain dark,
+readable colors, while white slots keep their conventional background/reverse
+video meaning. SwiftTerm rendering, rich-text copy and new-shell OSC 10/11
+declarations use the same palette. Agent-emitted RGB colors are preserved;
+code-block/diff syntax themes remain controlled by the Agent (for example,
+Codex's `/theme`). Switching CtrlX themes does not rewrite Agent configuration.
+
 ### PairedViewer / PairedHost
 
 `PairedViewer` in `CtrlxServerFeature/Models/Settings.swift` describes a peer

@@ -170,7 +170,7 @@ struct RemoteWindowTabBar: View {
 
     @ViewBuilder
     private var tabBarDivider: some View {
-        if settings.theme == .anysphereDark {
+        if settings.theme.usesSubtleTabBorder {
             Rectangle()
                 .fill(settings.theme.workspaceBorderColor)
                 .frame(height: 1)
