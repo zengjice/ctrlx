@@ -65,6 +65,47 @@ Chromium pages remain transient across App restarts. The `vercel` / `ctrlx`
 automation-backend selection is independent. If Chromium is unavailable, report
 an error rather than substituting WebKit or the system browser.
 
+### External applications
+
+Clicking an application-protocol link (for example Feishu authorization) opens
+the registered application on the **Host Mac**, without a second confirmation.
+The original webpage and its login state stay in place. Mac/iOS Viewers use the
+same Host launch path; a page banner reports the application opened on the Host,
+or explains that no handler is registered / the system could not open it. Native
+application interaction still takes place on the Host, outside browser sharing.
+
+CEF navigation and popup callbacks share a one-use human activation. It comes
+only from AppKit page clicks / Enter / Space, or typed Viewer input with a valid
+page control lease. It expires after five seconds and can follow iframe,
+asynchronous, popup and HTTP redirect paths; a completed destination load,
+another navigation, source closure or control change invalidates it. Agent CDP
+commands cannot manufacture an activation and clear a prior human activation.
+Load completion is armed only after the requested destination commits in
+`OnLoadStart`, and is matched to that browser/frame. An earlier document's
+completion cannot revoke a pending same-tab or popup redirect, even when the
+browser, frame and URL are reused. A committed destination may launch during
+loading; its completion still revokes the activation.
+Normal web, browser-internal, script and file protocols never enter this OS
+handoff path. This does not grant local-network permissions, change site security
+policy, copy browser credentials or rewrite authentication callbacks.
+
+The optional `RemoteBrowserTab.externalApplicationNotice` is display-only and
+backward compatible; no new remote launch command or Relay change is required.
+The Host keeps the full application URL locally and passes it intact to macOS.
+Only the application name or error message is shared with Viewers.
+
+Validation: `BrowserExternalApplicationTests` covers Host dispatch, exact URLs,
+launch errors and stale Viewer leases; the existing remote protocol/control/session
+suites remain passing. `tests/external_application.mm` checks activation expiry,
+consumption and protocol filtering. `tests/external_applications.py` runs against
+the isolated signed probe app and verifies AppKit clicks, iframe/async/popup/HTTP
+redirect handoffs (including old-document completion during pending same-tab,
+same-URL reload and popup redirects), committed destination load policy,
+duplicate suppression, Agent refusal and Viewer input/revocation. The native
+fixture asserts callback order before releasing delayed HTTP responses.
+Its launch recorder substitutes the OS handoff, so it does not open personal apps
+or establish real Feishu tenant authorization / physical-iPhone acceptance.
+
 Regression coverage: `PaneBrowserOpeningTests`, `AgentBrowserRoutingTests`,
 `RemoteBrowserProtocolTests` and the connection capability test cover reuse,
 plain panes, source revalidation, ownership/leases, cancellation, parking and

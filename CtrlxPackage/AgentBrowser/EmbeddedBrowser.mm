@@ -3,6 +3,7 @@
 #import "../Sources/CtrlxBrowserBridge/include/CtrlxBrowserBridge.h"
 #include "AgentBrowser.h"
 #include "Ownership.h"
+#include "ExternalApplication.h"
 #include <atomic>
 #include <map>
 #include "include/cef_app.h"
@@ -50,6 +51,75 @@ static std::atomic_size_t pendingDevTools{0};
 static std::map<int, CefRefPtr<CefBrowser>> extensionTools;
 static std::map<int, int> extensionWindows;
 static void ReleaseExtensionControlFor(NSString *identifier);
+static std::map<int, std::shared_ptr<ExternalApplicationActivation>> externalActivations;
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+static NSMutableArray *externalApplicationProbe;
+static NSMutableArray *externalApplicationLoads;
+static void ProbeExternalApplicationLoad(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+    NSString *event, const CefString& url) {
+  if (frame->IsMain() && externalApplicationLoads)
+    [externalApplicationLoads addObject:@{@"event": event, @"browser": @(browser->GetIdentifier()),
+      @"frame": @(frame->GetIdentifier().ToString().c_str()), @"url": @(url.ToString().c_str())}];
+}
+#endif
+
+void AgentBrowserCancelHumanInput(CefRefPtr<CefBrowser> browser) {
+  CEF_REQUIRE_UI_THREAD();
+  auto found = externalActivations.find(browser->GetIdentifier());
+  if (found != externalActivations.end()) { found->second->Cancel(); externalActivations.erase(found); }
+}
+
+void AgentBrowserHumanInput(CefRefPtr<CefBrowser> browser, const std::string& control) {
+  CEF_REQUIRE_UI_THREAD();
+  const int id = browser->GetIdentifier();
+  AgentBrowserCancelHumanInput(browser);
+  if (!runtime.isReady || !identifiers.contains(id)) return;
+  externalActivations[id] = std::make_shared<ExternalApplicationActivation>(identifiers.at(id).UTF8String, control);
+}
+
+static void OpenExternalApplication(CefRefPtr<CefBrowser> browser, const CefString& url) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!runtime.isReady || !ExternalApplicationURL(@(url.ToString().c_str()))) return;
+  auto found = externalActivations.find(browser->GetIdentifier());
+  if (found == externalActivations.end() || !found->second->Consume()) return;
+  auto activation = found->second;
+  auto source = AgentBrowserTarget(@(activation->source.c_str()));
+  if (!source || !source->IsValid() || AgentBrowserHumanControlToken(source) != activation->control) return;
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+  if (externalApplicationProbe) {
+    [externalApplicationProbe addObject:@{@"source": @(activation->source.c_str()), @"url": @(url.ToString().c_str()),
+                                          @"control": @(activation->control.c_str())}];
+    return; // Isolated native acceptance observes dispatch without launching personal apps.
+  }
+#endif
+  if ([runtime.delegate respondsToSelector:@selector(browserTab:openExternalURL:controlToken:)])
+    [runtime.delegate browserTab:@(activation->source.c_str()) openExternalURL:@(url.ToString().c_str())
+                   controlToken:activation->control.empty() ? nil : @(activation->control.c_str())];
+}
+
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+NSDictionary *ProbeExternalApplication(CefRefPtr<CefBrowser> browser, NSDictionary *request) {
+  NSString *action = request[@"action"];
+  if ([action isEqual:@"start"]) {
+    externalApplicationProbe = [NSMutableArray array];
+    externalApplicationLoads = [NSMutableArray array];
+  }
+  if ([action isEqual:@"click"]) {
+    NSView *view = (__bridge NSView*)browser->GetHost()->GetWindowHandle();
+    [view.window makeKeyAndOrderFront:nil];
+    NSPoint point = NSMakePoint([request[@"x"] doubleValue], [request[@"y"] doubleValue]);
+    if (!view.isFlipped) point.y = view.bounds.size.height - point.y;
+    point = [view convertPoint:point toView:nil];
+    for (auto type : {NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp}) {
+      NSEvent *event = [NSEvent mouseEventWithType:type location:point modifierFlags:0
+        timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil
+        eventNumber:1 clickCount:1 pressure:1];
+      [NSApp sendEvent:event];
+    }
+  }
+  return @{@"events": [externalApplicationProbe copy] ?: @[], @"loads": [externalApplicationLoads copy] ?: @[]};
+}
+#endif
 
 static void RevealWindow(CefRefPtr<CefBrowser> browser) {
   NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
@@ -159,6 +229,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
     browsers[browser->GetIdentifier()] = browser;
+    if (popupActivation_) externalActivations[browser->GetIdentifier()] = popupActivation_;
     NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
     if (!extensionWindow_) {
       view.frame = container_.bounds;
@@ -183,6 +254,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   }
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
+    AgentBrowserCancelHumanInput(browser);
     ReleaseExtensionControlFor(identifier_);
     CloseDevToolsFor(browser);
     RemoveAgentBrowserTab(browser);
@@ -200,10 +272,14 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
       const CefString& url, const CefString&, WindowOpenDisposition, bool,
       const CefPopupFeatures&, CefWindowInfo& info, CefRefPtr<CefClient>& client,
       CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
-    if (runtime.closing || browsers.size() >= 64 || (!url.empty() && !WebURL(url))) return true;
+    if (!url.empty() && !WebURL(url)) { OpenExternalApplication(browser, url); return true; }
+    if (runtime.closing || browsers.size() >= 64) return true;
     NSView *container = [runtime.delegate browserContainerForRoute:route_];
     if (!container) return true;
-    client = new EmbeddedClient(AgentBrowserOwner(browser), container, route_, identifier_, extensionWindow_);
+    auto popup = new EmbeddedClient(AgentBrowserOwner(browser), container, route_, identifier_, extensionWindow_);
+    auto activation = externalActivations.find(browser->GetIdentifier());
+    if (activation != externalActivations.end()) popup->popupActivation_ = activation->second;
+    client = popup;
     if (extensionWindow_) info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
     else {
       info.SetAsChild((__bridge void *)container, CefRect(0, 0, container.bounds.size.width, container.bounds.size.height));
@@ -218,14 +294,44 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     client = new DevToolsClient(browser->GetIdentifier());
   }
   bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
-      CefRefPtr<CefRequest> request, bool, bool) override {
+      CefRefPtr<CefRequest> request, bool, bool redirect) override {
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+    ProbeExternalApplicationLoad(browser, frame, @"before-browse", request->GetURL());
+#endif
+    if (ExternalApplicationURL(@(request->GetURL().ToString().c_str()))) {
+      OpenExternalApplication(browser, request->GetURL()); return true;
+    }
     if (!frame->IsMain()) return false;
     if (!WebURL(request->GetURL())) return true;
+    auto activation = externalActivations.find(browser->GetIdentifier());
+    if (activation != externalActivations.end() && request->GetURL() != "about:blank")
+      activation->second->Navigation(browser->GetIdentifier(), request->GetURL(), redirect);
     AgentBrowserNavigation(browser);
     return false;
   }
+  bool OnOpenURLFromTab(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>,
+      const CefString& url, WindowOpenDisposition, bool) override {
+    if (WebURL(url)) return false;
+    OpenExternalApplication(browser, url); return true;
+  }
+  void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int) override {
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+    ProbeExternalApplicationLoad(browser, frame, @"load-end", frame->GetURL());
+#endif
+    if (!frame->IsMain() || frame->GetURL() == "about:blank") return;
+    auto activation = externalActivations.find(browser->GetIdentifier());
+    if (activation != externalActivations.end())
+      activation->second->Loaded(browser->GetIdentifier(), frame->GetIdentifier());
+  }
   void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType) override {
-    if (frame->IsMain()) AgentBrowserNavigation(browser);
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+    ProbeExternalApplicationLoad(browser, frame, @"load-start", frame->GetURL());
+#endif
+    if (!frame->IsMain()) return;
+    auto activation = externalActivations.find(browser->GetIdentifier());
+    if (activation != externalActivations.end())
+      activation->second->Committed(browser->GetIdentifier(), frame->GetIdentifier(), frame->GetURL());
+    AgentBrowserNavigation(browser);
   }
   void Changed(CefRefPtr<CefBrowser> browser) {
     if (!identifier_) return;
@@ -260,6 +366,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   NSString *identifier_;
   NSString *title_;
   bool extensionWindow_;
+  std::shared_ptr<ExternalApplicationActivation> popupActivation_;
   IMPLEMENT_REFCOUNTING(EmbeddedClient);
 };
 
@@ -377,7 +484,7 @@ static void OpenTab(std::string owner, int pid, std::string url, bool newTab,
       CefURLParts currentParts, destinationParts;
       const bool same = CefParseURL(browser->GetMainFrame()->GetURL(), currentParts) && CefParseURL(url, destinationParts) &&
           CefString(&currentParts.spec) == CefString(&destinationParts.spec);
-      if (!same) browser->GetMainFrame()->LoadURL(url);
+      if (!same) { AgentBrowserCancelHumanInput(browser); browser->GetMainFrame()->LoadURL(url); }
       [runtime.delegate browserTabSelected:identifiers.at(*existing)];
       done(browser, nil);
       return;
@@ -433,6 +540,20 @@ static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
       event.type == NSEventTypeLeftMouseDragged || event.type == NSEventTypeRightMouseDown ||
       event.type == NSEventTypeRightMouseUp || event.type == NSEventTypeScrollWheel;
     if (pointer && !view.isHiddenOrHasHiddenAncestor && NSPointInRect([view convertPoint:event.locationInWindow fromView:nil], view.bounds)) return;
+  }
+  if (runtime.started && (event.type == NSEventTypeLeftMouseDown ||
+      (event.type == NSEventTypeKeyDown && !event.isARepeat && (event.keyCode == 36 || event.keyCode == 49 || event.keyCode == 76)))) {
+    for (auto& [id, browser] : browsers) {
+      NSView *view = (__bridge NSView*)browser->GetHost()->GetWindowHandle();
+      if (!view.window || event.window != view.window || view.isHiddenOrHasHiddenAncestor) continue;
+      NSView *target = event.type == NSEventTypeLeftMouseDown
+        ? [view.window.contentView hitTest:[view.window.contentView convertPoint:event.locationInWindow fromView:nil]]
+        : ([view.window.firstResponder isKindOfClass:NSView.class] ? (NSView*)view.window.firstResponder : nil);
+      if (target && [target isDescendantOf:view]) {
+        AgentBrowserHumanInput(browser, extensionInputDepth ? AgentBrowserHumanControlToken(browser) : "");
+        break;
+      }
+    }
   }
   if (runtime.started) { CefScopedSendingEvent scope; [super sendEvent:event]; }
   else [super sendEvent:event];
@@ -546,11 +667,11 @@ static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
 }
 - (void)navigateTab:(NSString *)identifier url:(NSString *)url {
   auto browser = AgentBrowserTarget(identifier);
-  if (browser && WebURL(url.UTF8String)) browser->GetMainFrame()->LoadURL(url.UTF8String);
+  if (browser && WebURL(url.UTF8String)) { AgentBrowserCancelHumanInput(browser); browser->GetMainFrame()->LoadURL(url.UTF8String); }
 }
-- (void)goBack:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->GoBack(); }
-- (void)goForward:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->GoForward(); }
-- (void)reloadTab:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->Reload(); }
+- (void)goBack:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserCancelHumanInput(browser); browser->GoBack(); } }
+- (void)goForward:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserCancelHumanInput(browser); browser->GoForward(); } }
+- (void)reloadTab:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserCancelHumanInput(browser); browser->Reload(); } }
 - (void)showDevTools:(NSString *)identifier {
   if (!self.started || self.closing) return;
   // Creating native Chromium windows must not reenter a Swift main-actor job.

@@ -46,7 +46,8 @@ extension AgentBrowserService {
             isControlled: tab.isRemotelyControlled,
             sourceAgent: tab.sourceAgent,
             sourcePaneID: tab.paneID.isEmpty ? nil : tab.paneID,
-            isExtensionWindow: tab.isExtensionWindow ? true : nil
+            isExtensionWindow: tab.isExtensionWindow ? true : nil,
+            externalApplicationNotice: tab.externalApplicationNotice
         )
     }
 

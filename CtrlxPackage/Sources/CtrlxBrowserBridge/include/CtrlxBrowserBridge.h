@@ -15,6 +15,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)browserTabChanged:(NSString *)identifier title:(NSString *)title url:(NSString *)url loading:(BOOL)loading;
 - (void)browserTabSelected:(NSString *)identifier;
 - (void)browserTabClosed:(NSString *)identifier;
+@optional
+// Native runtime supplies a one-use, observed human activation, never page JS.
+- (void)browserTab:(NSString *)identifier openExternalURL:(NSString *)url controlToken:(nullable NSString *)controlToken;
 @end
 
 @protocol CXBrowserRuntime <NSObject>

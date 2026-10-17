@@ -16,6 +16,8 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
     public let sourcePaneID: String?
     /// Native Chrome UI has a separate control scope from the page viewport.
     public let isExtensionWindow: Bool?
+    /// Optional display-only result. Launch requests never come from Viewers.
+    public let externalApplicationNotice: BrowserExternalApplicationNotice?
 
     public init(
         id: UUID,
@@ -29,7 +31,8 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
         isControlled: Bool = false,
         sourceAgent: AgentImageTarget? = nil,
         sourcePaneID: String? = nil,
-        isExtensionWindow: Bool? = nil
+        isExtensionWindow: Bool? = nil,
+        externalApplicationNotice: BrowserExternalApplicationNotice? = nil
     ) {
         self.id = id
         self.sessionName = sessionName
@@ -43,6 +46,19 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
         self.sourceAgent = sourceAgent
         self.sourcePaneID = sourcePaneID
         self.isExtensionWindow = isExtensionWindow
+        self.externalApplicationNotice = externalApplicationNotice
+    }
+}
+
+public struct BrowserExternalApplicationNotice: Codable, Sendable, Equatable, Identifiable {
+    public let id: UUID
+    public let message: String
+    public let isError: Bool
+
+    public init(id: UUID = UUID(), message: String, isError: Bool) {
+        self.id = id
+        self.message = message
+        self.isError = isError
     }
 }
 

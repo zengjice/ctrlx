@@ -50,6 +50,9 @@
     client.browser = tabs_.at(client.tab).browser;
     client.generation = tabs_.at(client.tab).generation;
     int browserID = client.browser->GetIdentifier();
+    if ([command isEqual:@"probe.external-app"]) {
+      Reply(id, ProbeExternalApplication(client.browser, request)); return true;
+    }
     if ([command isEqual:@"probe.remote-view"]) {
       NSView* view = (__bridge NSView*)client.browser->GetHost()->GetWindowHandle();
       if ([request[@"action"] isEqual:@"start"]) {

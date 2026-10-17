@@ -95,6 +95,9 @@ struct AgentBrowserTabContentView: View {
                 }
             }
         }
+        .overlay(alignment: .bottom) {
+            BrowserExternalApplicationBanner(notice: state.externalApplicationNotice)
+        }
         .onChange(of: state.url, initial: true) { _, url in
             if !editingAddress {
                 address = url == "about:blank" ? "" : url

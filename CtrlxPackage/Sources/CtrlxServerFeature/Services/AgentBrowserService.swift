@@ -1,6 +1,7 @@
 import AppKit
 import CtrlxBrowserBridge
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Logging
 import Observation
@@ -80,6 +81,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     private let startRuntime: @MainActor (AgentBrowserService) throws -> any CXBrowserRuntime
     private var startupError: (any Error)?
     private var closing = false
+    @Dependency(ExternalApplicationClient.self) private var externalApplication
     private let logger = Logger(label: "com.ctrlx.agent-browser")
 
     public override init() {
@@ -503,6 +505,30 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         publishBrowserTabs()
     }
 
+    public func browserTab(_ identifier: String, openExternalURL address: String, controlToken: String?) {
+        guard
+            !closing, let tab = tabs[identifier], !tab.isClosed,
+            tab.manualTarget?.hostID == nil, let url = URL(string: address) else { return }
+        // This callback is private to the native runtime. Recheck the Viewer
+        // grant at the OS boundary, including expiry before its next sweep.
+        let extensionLease = extensionControl.flatMap {
+            $0.anchorID == tab.id || $0.pageID == tab.id ? $0.lease : nil
+        }
+        let lease = remoteControls[tab.id] ?? extensionLease
+        if let controlToken {
+            guard let lease, lease.id.uuidString == controlToken, lease.expires > .now else { return }
+        } else if lease != nil {
+            return
+        }
+        do {
+            let name = try externalApplication.open(url)
+            tab.externalApplicationNotice = BrowserExternalApplicationNotice(message: "Opened \(name) on the Host Mac.", isError: false)
+        } catch {
+            tab.externalApplicationNotice = BrowserExternalApplicationNotice(message: error.localizedDescription, isError: true)
+        }
+        publishBrowserTabs()
+    }
+
     func navigate(_ tab: AgentBrowserTabState, url: String) {
         runtime?.navigateTab(tab.identifier, url: url)
     }
@@ -712,6 +738,7 @@ final class AgentBrowserTabState {
     var isRemotelyControlled = false
     var isExtensionWindow = false
     var sourceAgent: AgentImageTarget?
+    var externalApplicationNotice: BrowserExternalApplicationNotice?
 
     init(
         id: UUID,

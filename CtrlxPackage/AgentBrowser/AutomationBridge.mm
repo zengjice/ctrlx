@@ -414,6 +414,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if (it == clients_.end() || !it->second.busy) return;
     if (!Authorized(id)) return;
     auto browser = it->second.browser;
+    AgentBrowserCancelHumanInput(browser);
     const int message = ++nextMessage_;
     auto parsed = CefParseJSON(JSON(params), JSON_PARSER_RFC);
     pending_.emplace(std::pair{browser->GetIdentifier(), message}, Pending{id, it->second.generation, std::move(done)});
@@ -566,6 +567,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if ([command isEqual:@"navigate"]) {
       NSString* destination = request[@"url"];
       if (!ValidURL(destination)) { Reply(id, nil, @"Invalid HTTP(S) URL."); return; }
+      AgentBrowserCancelHumanInput(client.browser);
       client.browser->GetMainFrame()->LoadURL(destination.UTF8String);
       Reply(id, @{}); return;
     }
@@ -707,6 +709,7 @@ bool AssignAgentBrowserTab(NSString* tab, NSString* run) { return bridge && brid
 bool AgentBrowserTabBusy(CefRefPtr<CefBrowser> browser) { return bridge && bridge->Busy(browser); }
 bool SetAgentBrowserHumanControl(NSString* tab, NSString* token) { return bridge && bridge->SetHumanControl(tab, token); }
 bool AgentBrowserHumanControlled(CefRefPtr<CefBrowser> browser) { return bridge && bridge->HumanControlled(browser); }
+std::string AgentBrowserHumanControlToken(CefRefPtr<CefBrowser> browser) { return bridge ? bridge->HumanControlToken(browser) : ""; }
 void RequestRemoteBrowserTab(NSString* tab, NSData* request, void (^completion)(NSData*, NSString*)) {
   if (bridge) bridge->RemoteRequest(tab, request, completion);
   else completion(nil, @"Browser stopped.");

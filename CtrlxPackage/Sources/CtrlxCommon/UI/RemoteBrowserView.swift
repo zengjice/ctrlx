@@ -117,6 +117,7 @@ public struct RemoteBrowserView: View {
                     Button { session.dismissError() } label: { Label("Dismiss", symbol: .xmark) }.labelStyle(.iconOnly)
                 }.padding(8)
             }
+            BrowserExternalApplicationBanner(notice: session.tab.externalApplicationNotice)
         }
         .task(id: !showsExtensions && scenePhase == .active && client.isHostConnected && client.hostSupportsBrowserSharing) {
             guard !showsExtensions, scenePhase == .active, client.isHostConnected, client.hostSupportsBrowserSharing else {

@@ -89,6 +89,7 @@
     auto found = tabs_.find(id);
     if (found == tabs_.end()) return false;
     if (!token.length) {
+      AgentBrowserCancelHumanInput(found->second.browser);
       humanControl_.erase(id);
       auto pointer = remotePressedPointers_.find(id);
       if (pointer != remotePressedPointers_.end()) {
@@ -104,6 +105,7 @@
     // offer Take Control again after it finishes, without replaying anything.
     if (humanControl_.contains(id) || Busy(found->second.browser)) return false;
     for (auto& [key, deadline] : engineCaptures_) if (key.first == found->second.browser->GetIdentifier()) return false;
+    AgentBrowserCancelHumanInput(found->second.browser);
     humanControl_[id] = token.UTF8String;
     // Resume any earlier network interception before handing the page to a
     // person; an Agent cannot keep requests paused while its commands are gated.
@@ -113,6 +115,13 @@
   bool HumanControlled(CefRefPtr<CefBrowser> browser) {
     for (auto& [id, tab] : tabs_) if (tab.browser->IsSame(browser)) return humanControl_.contains(id);
     return false;
+  }
+  std::string HumanControlToken(CefRefPtr<CefBrowser> browser) {
+    for (auto& [id, tab] : tabs_) if (tab.browser->IsSame(browser)) {
+      auto found = humanControl_.find(id);
+      return found == humanControl_.end() ? "" : found->second;
+    }
+    return "";
   }
   void RemoteRequest(NSString* identifier, NSData* bytes, void (^completion)(NSData*, NSString*)) {
     CEF_REQUIRE_UI_THREAD();
@@ -209,8 +218,10 @@
     }
     if ([action isEqual:@"navigate"]) {
       if (!ValidURL(request[@"url"]) && ![request[@"url"] isEqual:@"about:blank"]) { reply(nil, @"Invalid HTTP(S) URL."); return; }
+      AgentBrowserCancelHumanInput(browser);
       browser->GetMainFrame()->LoadURL([request[@"url"] UTF8String]); reply(@{}, nil); return;
     }
+    if ([@[@"back", @"forward", @"reload", @"close"] containsObject:action]) AgentBrowserCancelHumanInput(browser);
     if ([action isEqual:@"back"]) { browser->GoBack(); reply(@{}, nil); return; }
     if ([action isEqual:@"forward"]) { browser->GoForward(); reply(@{}, nil); return; }
     if ([action isEqual:@"reload"]) { browser->Reload(); reply(@{}, nil); return; }
@@ -240,6 +251,8 @@
       NSString* button = request[@"button"] ?: @"none";
       if (![@[@"none", @"left", @"right", @"middle"] containsObject:button]) { reply(nil, @"Invalid pointer button."); return; }
       params[@"type"] = type; params[@"button"] = button;
+      if ([type isEqual:@"mousePressed"] && [button isEqual:@"left"])
+        AgentBrowserHumanInput(browser, lease.UTF8String);
       if ([type isEqual:@"mousePressed"] || ([type isEqual:@"mouseMoved"] && remotePressedPointers_.contains(id)))
         remotePressedPointers_[id] = [params mutableCopy];
       if ([type isEqual:@"mouseReleased"]) remotePressedPointers_.erase(id);
@@ -251,6 +264,8 @@
       // CDP's virtual key code is required by Chromium for editing shortcuts.
       NSMutableString* shortcut = [NSMutableString string];
       const int mask = [request[@"modifiers"] intValue];
+      if (mask == 0 && ([@[@"Enter", @"Return", @" ", @"Space"] containsObject:key]))
+        AgentBrowserHumanInput(browser, lease.UTF8String);
       for (auto pair : {std::pair{1, @"Alt+"}, {2, @"Control+"}, {4, @"Meta+"}, {8, @"Shift+"}})
         if (mask & pair.first) [shortcut appendString:pair.second];
       [shortcut appendString:[key.lowercaseString isEqual:@"a"] ? @"A" : key];

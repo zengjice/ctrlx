@@ -180,6 +180,7 @@
     if (humanControl_.contains(engineGrants_.at(token).tab)) {
       EngineError(connection, wireID, @"A person is controlling this page. Wait for Return to Agent."); return;
     }
+    AgentBrowserCancelHumanInput(tab.browser);
     NSString* session = request[@"sessionId"] ?: @"";
     if (![method isKindOfClass:NSString.class] || ![params isKindOfClass:NSDictionary.class] ||
         ![session isKindOfClass:NSString.class] ||
