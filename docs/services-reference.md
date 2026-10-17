@@ -103,6 +103,12 @@ The current recognizer accepts `shift` (case-insensitive) or `⇧`, followed by
 `⇧← to answer`, `Shift + Left to answer`, and `⇧ + ← to answer`.
 Only the complete nearby footer is joined across wrapped rows; modifier/arrow
 order is not arbitrary, and other keys or additional modifiers are rejected.
+The known `⚠ weekly limit: N% left · /status` and
+`⚠ weekly limit: only N% left` warnings may follow the answer hint before the
+composer, including word wrapping within the same eight preceding live rows.
+Only a complete weekly-limit suffix is accepted; unknown warnings, incomplete
+suffixes and intervening output still fail closed. Warning changes are
+presentation-only and cannot re-arm a dismissed question.
 Braille animation is ignored only around known footer/empty-composer structure,
 not inside a user's draft. Source: `CtrlxCommon/Models/CodexQuestionPrompt.swift`.
 Age is presentation-only: ticks neither restart the 350 ms stability check nor
@@ -185,7 +191,7 @@ to force eligibility. Counts enter the same `KeystrokeDebouncer` FIFO as text an
 mouse input, with a two-second acknowledgement timeout. Pending acknowledgements
 suppress duplicate enqueues; queue cancellation reports failure to the scheduler.
 Host-wide dedup also covers an iPhone and Mac viewing the same pane.
-Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionExpansionTests`,
+Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionPromptUsageWarningTests`, `CodexQuestionExpansionTests`,
 `CodexQuestionShellWrapperTests`, `TerminalCodexQuestionExpansionTests` and
 `KeystrokeDebouncerTests`; wire compatibility is covered by
 `CodexQuestionAcknowledgementTests` and the isolated encrypted relay fixture in

@@ -4,8 +4,8 @@ import Foundation
 /// Read the live screen, never scrollback or raw output chunks. Unknown layouts
 /// are left alone; Shift+Left remains available manually.
 public struct CodexQuestionPrompt: Equatable, Sendable {
-    // Presentation-only timer ticks must not restart the stability check or
-    // re-arm a queue the user dismissed with Escape.
+    /// Presentation-only timer ticks must not restart the stability check or
+    /// re-arm a queue the user dismissed with Escape.
     public let count: Int
 
     public init?(lines: [String], cursorRow: Int, cursorColumn: Int) {
@@ -27,9 +27,10 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
         } else {
             // Don't treat a partial/unknown footer as an empty queue. Otherwise
             // a repaint could re-arm the same questions after Escape.
-            guard composer == "› Ask Codex to do anything", !footer.contains(where: {
-                $0.contains("Queued follow-up") || $0.contains("to answer") || $0.hasPrefix("?")
-            }) else { return nil }
+            guard
+                composer == "› Ask Codex to do anything", !footer.contains(where: {
+                    $0.contains("Queued follow-up") || $0.contains("to answer") || $0.hasPrefix("?")
+                }) else { return nil }
             self.count = 0
         }
     }
@@ -39,20 +40,46 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
         // nearby rows tolerates wrapping without scanning history or skipping text.
         for start in footer.indices {
             var words = footer[start...].joined(separator: " ").split(whereSeparator: \.isWhitespace)
-            if words.first == "•" { words.removeFirst() }
-            guard words.count >= 7, words[0] == "Queued", words[1] == "follow-up", words[2] == "inputs",
-                  words[3] == "?", let count = Int(words[4]), (1...999).contains(count),
-                  words[5] == (count == 1 ? "question" : "questions")
+            if words.first == "•" {
+                words.removeFirst()
+            }
+            guard
+                words.count >= 7, words[0] == "Queued", words[1] == "follow-up", words[2] == "inputs",
+                words[3] == "?", let count = Int(words[4]), (1...999).contains(count),
+                words[5] == (count == 1 ? "question" : "questions")
             else { continue }
-            let suffix = words.dropFirst(6)
+            var suffix = words.dropFirst(6)
+            // Codex places its usage warning between Questions and the composer.
+            // Accept only the complete known suffix, including wrapped rows.
+            if let warningIndex = suffix.firstIndex(of: "⚠") {
+                guard isWeeklyLimitWarning(suffix[warningIndex...]) else { continue }
+                suffix = suffix[..<warningIndex]
+            }
             for ageLength in 0...min(4, suffix.count) {
-                if isElapsedSuffix(suffix.prefix(ageLength)),
-                   isAnswerHint(suffix.dropFirst(ageLength).joined(separator: " ")) {
+                if
+                    isElapsedSuffix(suffix.prefix(ageLength)),
+                    isAnswerHint(suffix.dropFirst(ageLength).joined(separator: " ")) {
                     return count
                 }
             }
         }
         return nil
+    }
+
+    private static func isWeeklyLimitWarning(_ words: ArraySlice<Substring>) -> Bool {
+        guard words.starts(with: ["⚠", "weekly", "limit:"]) else { return false }
+        var suffix = words.dropFirst(3)
+        if suffix.first == "only" {
+            suffix = suffix.dropFirst()
+        }
+        guard let percentage = suffix.first, percentage.last == "%" else { return false }
+        let digits = percentage.dropLast()
+        guard
+            !digits.isEmpty, digits.utf8.allSatisfy({ (48...57).contains($0) }),
+            let remaining = Int(digits), (0...100).contains(remaining)
+        else { return false }
+        let tail = suffix.dropFirst()
+        return tail.elementsEqual(["left"]) || tail.elementsEqual(["left", "·", "/status"])
     }
 
     private static func isAnswerHint(_ text: String) -> Bool {
@@ -76,8 +103,9 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
             default: return false
             }
             let digits = component.dropLast().utf8
-            guard rank < previousRank, !digits.isEmpty,
-                  digits.allSatisfy({ (48...57).contains($0) })
+            guard
+                rank < previousRank, !digits.isEmpty,
+                digits.allSatisfy({ (48...57).contains($0) })
             else { return false }
             previousRank = rank
         }
@@ -86,7 +114,7 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
 
     private static func withoutParticles(_ text: String) -> String {
         String(String.UnicodeScalarView(text.unicodeScalars.map {
-            (0x2800...0x28ff).contains($0.value) ? UnicodeScalar(32)! : $0
+            (0x2800...0x28FF).contains($0.value) ? UnicodeScalar(32)! : $0
         }))
     }
 }
@@ -98,7 +126,7 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
 public struct CodexQuestionExpansionState: Sendable {
     public private(set) var count = 0
 
-    public init() {}
+    public init() { }
 
     public mutating func observe(_ newCount: Int) -> Bool {
         defer { count = newCount }

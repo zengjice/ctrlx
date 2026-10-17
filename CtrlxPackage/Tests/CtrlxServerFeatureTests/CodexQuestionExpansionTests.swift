@@ -16,6 +16,11 @@
             "⇧← to answer", "⇧ + ← to answer", "Shift + Left to answer",
         ]
         private nonisolated static let supportedSuffixes = ["", " · 14s", " · 1m 02s"]
+        private nonisolated static let usageWarnings = [
+            ["                              ⚠ weekly limit: 8% left · /status"],
+            ["⚠ weekly limit: only 1% left"],
+            ["⚠ weekly limit:", "8% left ·", "/status"],
+        ]
 
         private nonisolated static func screen(
             count: Int = 4,
@@ -125,6 +130,50 @@
             let decoded = try JSONDecoder().decode(CommandMessage.self, from: JSONEncoder().encode(command))
             #expect(decoded.command == .expandCodexQuestions(ExpandCodexQuestions(expectedCount: 4)))
             #expect(decoded.command.requiresResponse)
+        }
+
+        @Test("Usage warnings fit within the native terminal's live footer read", arguments: usageWarnings)
+        func nativeUsageWarning(warning: [String]) {
+            let view = InteractiveTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+            view.getTerminal().resize(cols: 69, rows: 24)
+            var lines = Self.screen(count: 1, hint: "⇧← to answer", suffix: " · 19s")
+            lines.insert(contentsOf: warning + [""], at: 5)
+            let cursorRow = 6 + warning.count
+            let bytes = Array(("\u{1b}[?1049h\u{1b}[1;1H" + lines.joined(separator: "\r\n") + "\u{1b}[\(cursorRow + 1);3H").utf8)
+            view.feed(byteArray: bytes[...])
+            #expect(view.currentQuestionPrompt?.count == 1)
+            #expect(!view.canExpandCodexQuestions)
+        }
+
+        @Test("Host rechecks warning footers and opens only once with the current identity and empty composer", arguments: usageWarnings)
+        func hostUsageWarning(warning: [String]) async throws {
+            let commands = LockIsolated<[[String]]>([])
+            let composer = LockIsolated("› draft")
+            try await withDependencies {
+                $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                    commands.withValue { $0.append(arguments) }
+                    var lines = Self.screen(count: 1, composer: composer.value, hint: "⇧← to answer", suffix: " · 19s")
+                    lines.insert(contentsOf: warning + [""], at: 5)
+                    let output = arguments.contains("capture-pane")
+                        ? "codex\t2\t\(6 + warning.count)\t0\n" + lines.joined(separator: "\n") : ""
+                    return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
+                }
+            } operation: {
+                let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
+                tmux.recordCodexQuestion(paneID: "%7", questionID: "session:new")
+                let draft = try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "session:new")
+                #expect(!draft)
+                composer.setValue("› Ask Codex to do anything")
+                let stale = try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "session:old")
+                let wrongCount = try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 2, expectedQuestionID: "session:new")
+                #expect(!stale && !wrongCount)
+                #expect(!commands.value.contains { $0.contains("send-keys") })
+                for _ in 0..<2 {
+                    let handled = try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "session:new")
+                    #expect(handled)
+                }
+            }
+            #expect(commands.value.filter { $0.contains("send-keys") } == [["send-keys", "-t", "%7", "S-Left"]])
         }
 
         @Test("Host and multiple viewers share one deduplicated opener", arguments: supportedHints)
