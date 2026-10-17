@@ -7,6 +7,36 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.79 — Mac themes, browser app handoff and layout diagnostics
+
+- Add Codex Light for Mac local, remote and detached workspaces, with a shared
+  terminal/sidebar/tab palette and readable ANSI colors. Agent-emitted RGB
+  colors and Agent syntax-theme settings remain independent.
+- Allow human-activated application links in the embedded browser to open the
+  registered app on the Host Mac. Preserve the original webpage, report launch
+  results to Viewers and reject automatic or Agent-originated handoffs.
+- Capture private, bounded AppKit toolbar/window-layout exception diagnostics
+  before forwarding the exception to AppKit. This collects evidence; it does
+  not claim to fix or recover from the original intermittent layout failure.
+- Recognize Codex question prompts followed by complete weekly-usage warnings,
+  without rearming dismissed questions when only the warning changes.
+- Add iOS window/file tab reordering and an optional image confirmation sheet,
+  off by default. Preserve selection and upload target identity, save local
+  file-tab order and show failed uploads for manual retry.
+- Release validation: the bounded serial Swift regression passed with 3,486
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. The first run stalled in the existing process-provenance probe;
+  the complete identical-scope rerun passed. Both boundary checks, 63 publisher/COS
+  tests, 22 bundled-skill tests, the website build, signed Mac Release build and
+  arm64 iOS Simulator build passed. Isolated signed-App acceptance passed 21
+  external-application checks and both AppKit diagnostic scenarios; native
+  activation/URL core tests also passed. SwiftFormat reports findings in four
+  files, including the new banner line following existing indentation; a clean
+  whole-file formatting pass is not claimed. Theme UI, real third-party app
+  handoff and full iOS UI acceptance were not rerun in this release workflow.
+- Distribution: Mac build 12 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.78 — App-wide debug mode and quieter voice input
 
 - Add a device-local Debug Mode setting on Mac and iOS, off by default. Keep
