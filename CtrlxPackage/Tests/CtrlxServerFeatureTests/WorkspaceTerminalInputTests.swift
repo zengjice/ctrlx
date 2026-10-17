@@ -726,6 +726,63 @@ struct WorkspaceTerminalInputTests {
         }
     }
 
+    @Test("Image drops reject replaced panes before receipt and immediately before paste", arguments: ["before", "during", "fresh", "legacy"], [false, true])
+    func droppedFilesIdentity(phase: String, restartServer: Bool) async throws {
+        let filename = "identity-drop-\(UUID()).png"
+        let temporaryDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+        defer {
+            // Only remove directories containing this test's unique payload.
+            let directories = (try? FileManager.default.contentsOfDirectory(at: temporaryDirectory, includingPropertiesForKeys: nil)) ?? []
+            for directory in directories where directory.lastPathComponent.hasPrefix("ctrlx-drop-")
+                && FileManager.default.fileExists(atPath: directory.appendingPathComponent(filename).path) {
+                try? FileManager.default.removeItem(at: directory)
+            }
+        }
+        try await withTmux { tmux, _, run in
+            let original = try await setup(run, paneID: UUID())
+            let replace: @Sendable () async throws -> Void = {
+                if restartServer {
+                    _ = try await run(["kill-server"])
+                    _ = try await run(["new-session", "-d", "-s", "input", "-x", "120", "-y", "30", "/bin/cat"])
+                }
+                _ = try await run(["set-option", "-t", "input", WorkspaceTmuxRecovery.sessionKey, original.sessionID.uuidString])
+                _ = try await run(["set-option", "-w", "-t", "@0", WorkspaceTmuxRecovery.windowKey, original.windowID.uuidString])
+                _ = try await run(["set-option", "-p", "-t", "%0", WorkspaceTmuxRecovery.paneKey, (restartServer ? original.paneID : UUID()).uuidString])
+            }
+            if phase == "before" {
+                try await replace()
+            }
+            let intercepted = LockIsolated(false)
+            await withDependencies {
+                $0[ProcessRunner.self].run = { executable, arguments, environment, timeout in
+                    if
+                        phase == "during", arguments.contains(where: { $0.contains("load-buffer") }),
+                        !intercepted.withValue({ value in
+                            let previous = value
+                            value = true
+                            return previous
+                        }) {
+                        try await replace()
+                    }
+                    return try await ProcessRunner.liveValue.run(executable: executable, arguments: arguments, environment: environment, timeout: timeout)
+                }
+            } operation: {
+                let spec = SendDroppedFiles(files: [.init(name: filename, data: Data([1, 2, 3]))])
+                let result = await AppCoordinator.handleSendDroppedFiles(
+                    command: .init(paneId: "%0", command: spec.commandType, expectedWorkspacePane: phase == "legacy" ? nil : original),
+                    spec: spec, tmuxService: tmux,
+                    currentPane: { _ in .init(paneId: "%0", workspaceIdentity: original) }
+                )
+                #expect(result.success == (phase == "fresh" || phase == "legacy"))
+            }
+            #expect(intercepted.value == (phase == "during"))
+            try await Task.sleep(for: .milliseconds(100))
+            let screen = try await run(["capture-pane", "-p", "-J", "-t", "%0"]).stdoutString
+            #expect(screen.contains(filename) == (phase == "fresh" || phase == "legacy"))
+            #expect(try await run(["list-buffers", "-F", "#{buffer_name}"]).stdoutString.isEmpty)
+        }
+    }
+
     @Test("Input checks the actual tmux server, including recycled runtime and persistent pane IDs")
     func restart() async throws {
         try await withTmux { tmux, _, run in

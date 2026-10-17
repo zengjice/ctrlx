@@ -3,6 +3,23 @@ import Testing
 
 @Suite("Window selection reconciliation")
 struct WindowSelectionReconciliationTests {
+    @Test("Reordering window indexes keeps the focused pane, including a non-active split pane")
+    func reorderedWindows() {
+        let candidates = [
+            WindowSelectionCandidate(windowId: "work:1", paneId: "%2", isActive: true, paneIDs: ["%2"]),
+            WindowSelectionCandidate(windowId: "work:3", paneId: "%1", isActive: false, paneIDs: ["%1", "%3"]),
+        ]
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:1", candidates: candidates, selectedPaneId: "%3"
+        ) == .select(windowId: "work:3", paneId: "%3"))
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:3", candidates: candidates, selectedPaneId: "%3"
+        ) == .unchanged)
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:1", candidates: candidates, createdPaneId: "%2", selectedPaneId: "%3"
+        ) == .select(windowId: "work:1", paneId: "%2"))
+    }
+
     @Test("Both swipe directions follow picker order, not IDs or the Host active flag")
     func adjacentWindow() {
         let candidates = [

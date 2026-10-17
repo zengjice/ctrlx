@@ -18,7 +18,16 @@
         let isCreatingWindow: Bool
         let forkUnavailableReason: String?
         let onChoose: (WindowTabAction) -> Void
+        let onReorderWindows: ([String]) async throws -> Void
+        let onReorderFiles: ([UUID]) -> Void
         @Environment(\.dismiss) private var dismiss
+        @State private var pendingWindowOrder: [String]?
+        @State private var reorderError: String?
+
+        private var orderedWindows: [TmuxWindow] {
+            guard let pendingWindowOrder else { return windows }
+            return RemoteSessionOrder.applying(pendingWindowOrder, to: windows, sessionName: \.stableId)
+        }
 
         var body: some View {
             VStack(spacing: 0) {
@@ -31,14 +40,28 @@
 
                 List {
                     Section("Windows") {
-                        ForEach(windows, id: \.stableId) { window in
+                        ForEach(orderedWindows, id: \.stableId) { window in
                             windowRow(window)
+                                .moveDisabled(!isConnected || pendingWindowOrder != nil)
+                        }
+                        .onMove { source, destination in
+                            guard isConnected, pendingWindowOrder == nil else { return }
+                            let ids = windows.map(\.stableId)
+                            let reordered = RemoteSessionOrder.moving(ids, fromOffsets: source, toOffset: destination)
+                            if reordered != ids {
+                                pendingWindowOrder = reordered
+                            }
                         }
                     }
                     if !files.isEmpty {
                         Section("Files") {
                             ForEach(files) { tab in
                                 fileRow(tab)
+                            }
+                            .onMove { source, destination in
+                                var ids = files.map(\.id)
+                                ids.move(fromOffsets: source, toOffset: destination)
+                                onReorderFiles(ids)
                             }
                         }
                     }
@@ -95,6 +118,26 @@
                 }
             }
             .accessibilityIdentifier("window-tabs-panel")
+            .task(id: pendingWindowOrder) {
+                guard let order = pendingWindowOrder else { return }
+                defer { pendingWindowOrder = nil }
+                do {
+                    try await onReorderWindows(order)
+                } catch is CancellationError { }
+                catch { reorderError = error.localizedDescription }
+            }
+            .alert("Could Not Reorder Tabs", isPresented: .init(
+                get: { reorderError != nil },
+                set: {
+                    if !$0 {
+                        reorderError = nil
+                    }
+                }
+            )) {
+                Button("OK") { reorderError = nil }
+            } message: {
+                Text(reorderError ?? "")
+            }
         }
 
         private func windowRow(_ window: TmuxWindow) -> some View {

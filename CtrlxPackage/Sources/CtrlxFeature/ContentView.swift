@@ -690,6 +690,9 @@
                 Section {
                     @Bindable var settings = settings
 
+                    Toggle("Confirm Before Sending Images", isOn: $settings.confirmImageUploads)
+                        .accessibilityIdentifier("confirm-image-uploads-toggle")
+
                     Toggle("Agent Quick Input", isOn: $settings.agentQuickInputEnabled)
 
                     if #available(iOS 26.0, *) {

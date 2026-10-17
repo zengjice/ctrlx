@@ -159,6 +159,16 @@ struct TerminalPasteTransportTests {
                     #expect(events.last == "file-end")
                 }
                 if !questions {
+                    var legacyDrop: CommandMessage?
+                    host.onCommand = { command in
+                        legacyDrop = command
+                        return .success(for: command.id)
+                    }
+                    let imageDrop = SendDroppedFiles(files: [.init(name: "image.png", data: Data([1, 2, 3]))])
+                    let legacyBinding = viewer.workspaceInputState.binding(paneID: "%7")
+                    #expect(try await viewer.sendCommand(imageDrop, paneId: "%7", inputBinding: legacyBinding).get().success)
+                    #expect(legacyDrop?.command == imageDrop.commandType)
+                    #expect(legacyDrop?.expectedWorkspacePane == nil)
                     let responses = LockIsolated<[AgentResponseSubmissionMessage]>([])
                     host.onAgentResponseSubmission = { response in responses.withValue { $0.append(response) } }
                     #expect(await viewer.submitAgentResponse(sessionId: "%7", pluginId: "echo", requestId: "legacy", response: .prompt(text: "old Host")))
@@ -263,6 +273,7 @@ struct TerminalPasteTransportTests {
                         workspaceIdentity: original
                     )))
                     let actions: [(CommandType, String, ViewerWorkspaceInputBinding)] = [
+                        (imageDrop.commandType, "%7", editorBinding),
                         (SetYoloMode(enabled: true).commandType, "%7", editorBinding),
                         (MarkHandled().commandType, "%7", editorBinding),
                         (SplitTmuxPane(direction: .horizontal).commandType, "%7", editorBinding),

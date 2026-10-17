@@ -191,7 +191,13 @@ final class IOSFileBrowserWorkspaceStore {
             return .init(snapshot: snapshot, source: source)
         }
         let ids = Set(snapshots.map { $0.snapshot.id })
-        record.files = snapshots + (previous?.files.filter { $0.snapshot.hostOwned == true && !ids.contains($0.snapshot.id) } ?? [])
+        record.files = snapshots
+        // Keep missing Host tabs in their saved slots while the catalog arrives
+        // in parts. The live tabs still retain the user's latest relative order.
+        let previousFiles = previous?.files.filter { ids.contains($0.snapshot.id) || $0.snapshot.hostOwned == true } ?? []
+        for (index, file) in previousFiles.enumerated() where !ids.contains(file.snapshot.id) {
+            record.files.insert(file, at: min(index, record.files.count))
+        }
         if let selectedID = workspace.selectedID {
             record.selectedFileID = selectedID
         } else if !record.files.contains(where: { $0.snapshot.id == record.selectedFileID && $0.snapshot.hostOwned == true && !ids.contains($0.snapshot.id) }) {
@@ -228,6 +234,7 @@ final class IOSFileBrowserWorkspaceStore {
                 workspace.unavailableFileSources.remove(file.snapshot.id)
             }
         }
+        workspace.tabs = RemoteSessionOrder.applying(saved.files.map { $0.snapshot.id.uuidString }, to: workspace.tabs, sessionName: { $0.id.uuidString })
         if let id = saved.selectedWindowID {
             let window = ViewerWorkspaceReference(pairID: reference.pairID, hostID: reference.hostID, sessionID: reference.sessionID, windowID: id)
             let runtimeID = catalog.resolve(window)?.windowID

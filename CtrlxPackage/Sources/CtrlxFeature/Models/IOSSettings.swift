@@ -69,6 +69,7 @@
             case terminalFontSize
             case terminalKeyboardControlPosition
             case showTerminalKeyboardOnEntry
+            case confirmImageUploads
             case agentQuickInputEnabled
             case agentBackgroundMonitoringEnabled
             case newSessionName
@@ -158,6 +159,10 @@
         /// Whether a newly opened terminal session starts with keyboard input active.
         public var showTerminalKeyboardOnEntry = false {
             didSet { preferences.setBool(showTerminalKeyboardOnEntry, Keys.showTerminalKeyboardOnEntry) }
+        }
+
+        public var confirmImageUploads = false {
+            didSet { preferences.setBool(confirmImageUploads, Keys.confirmImageUploads) }
         }
 
         /// Whether agent panes use the optional response field above the terminal.
@@ -255,6 +260,7 @@
                 storedValue: preferences.string(Keys.terminalKeyboardControlPosition)
             )
             self.showTerminalKeyboardOnEntry = preferences.optionalBool(Keys.showTerminalKeyboardOnEntry) ?? false
+            self.confirmImageUploads = preferences.optionalBool(Keys.confirmImageUploads) ?? false
             self.agentQuickInputEnabled = preferences.optionalBool(Keys.agentQuickInputEnabled) ?? false
             self.agentBackgroundMonitoringEnabled = preferences.optionalBool(
                 Keys.agentBackgroundMonitoringEnabled
@@ -282,7 +288,7 @@
             // notifications even if the user hasn't changed pairings since
             // upgrading.
             mirrorHostNamesToAppGroup()
-            quickPhrasePairingsLoaded = true
+            self.quickPhrasePairingsLoaded = true
             updateQuickPhraseSyncPairings()
         }
 

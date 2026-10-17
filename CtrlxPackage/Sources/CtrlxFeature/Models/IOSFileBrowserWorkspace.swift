@@ -110,6 +110,12 @@ final class IOSFileBrowserWorkspace {
         close(selectedID)
     }
 
+    func reorder(_ ids: [UUID]) {
+        guard ids.count == tabs.count, Set(ids) == Set(tabs.map(\.id)) else { return }
+        tabs = ids.compactMap { id in tabs.first { $0.id == id } }
+        save()
+    }
+
     func close(_ id: UUID) {
         tabs.removeAll { $0.id == id }
         if selectedID == id {

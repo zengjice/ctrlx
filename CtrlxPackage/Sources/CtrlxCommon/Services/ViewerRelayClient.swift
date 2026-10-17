@@ -586,6 +586,7 @@ final public class ViewerRelayClient {
         case .startTerminalStream,
              .sendKeystroke,
              .sendRawInput,
+             .sendDroppedFiles,
              .pasteTerminalText,
              .expandCodexQuestions,
              .submitEditorContent,

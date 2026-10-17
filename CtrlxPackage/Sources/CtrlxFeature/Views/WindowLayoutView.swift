@@ -157,6 +157,10 @@
         /// The current window data from the session store
         private var window: TmuxWindow? {
             guard !fileWorkspace.hasPendingTerminalSelection else { return nil }
+            // Window indexes change during reordering; the focused pane does not.
+            if let activePaneId, let owner = sessionWindows.first(where: { $0.panes.contains { $0.paneId == activePaneId } }) {
+                return owner
+            }
             if let selectedWindowId {
                 return sessionWindows.first { $0.id == selectedWindowId }
             }
@@ -466,7 +470,9 @@
                             if pendingWindowTabAction == nil {
                                 pendingWindowTabAction = action
                             }
-                        }
+                        },
+                        onReorderWindows: reorderWindows,
+                        onReorderFiles: fileWorkspace.reorder
                     )
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
@@ -748,8 +754,7 @@
                 .onChange(of: selectedWindowId) { saveRecoverySelection() }
         }
 
-        @ToolbarContentBuilder
-        private var windowToolbar: some ToolbarContent {
+        @ToolbarContentBuilder private var windowToolbar: some ToolbarContent {
             // Title opens the tab picker; each row owns its window actions.
             ToolbarItem(placement: .principal) {
                 Button {
@@ -970,6 +975,32 @@
             }
         }
 
+        private func reorderWindows(_ ids: [String]) async throws {
+            guard relayClient.isHostConnected else {
+                throw NSError(domain: "WindowTabs", code: 1, userInfo: [NSLocalizedDescriptionKey: "Host is offline. Reconnect before reordering tabs."])
+            }
+            guard ids.count == sessionWindows.count, Set(ids) == Set(sessionWindows.map(\.stableId)) else {
+                throw NSError(domain: "WindowTabs", code: 2, userInfo: [NSLocalizedDescriptionKey: "The tabs changed during the drag. Try again."])
+            }
+            let binding = relayClient.workspaceInputState.sessionBinding(name: sessionName)
+            let response = try await relayClient.sendCommand(
+                MoveTmuxWindows(sessionName: sessionName, windowIds: ids), paneId: "", inputBinding: binding
+            ).get()
+            guard response.success else {
+                throw NSError(domain: "WindowTabs", code: 3, userInfo: [NSLocalizedDescriptionKey: response.error ?? "The Host could not reorder the tabs."])
+            }
+            // The acknowledgement and refreshed snapshot may arrive in either order.
+            for _ in 0..<20 {
+                try Task.checkCancellation()
+                _ = try binding.expectedPane(current: relayClient.workspaceInputState.sessionBinding(name: sessionName))
+                if sessionWindows.map(\.stableId) == ids {
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            throw NSError(domain: "WindowTabs", code: 4, userInfo: [NSLocalizedDescriptionKey: "The Host reordered the tabs, but its refreshed state has not arrived yet."])
+        }
+
         private func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String? = nil) {
             fileWorkspace.hasPendingTerminalSelection = false
             browserSelection.selectedID = nil
@@ -1140,7 +1171,8 @@
             let decision = WindowSelectionReconciliation.resolve(
                 selectedWindowId: selectedWindowId,
                 candidates: candidates,
-                createdPaneId: windowCreation.paneID
+                createdPaneId: windowCreation.paneID,
+                selectedPaneId: activePaneId
             )
 
             switch decision {
@@ -1622,8 +1654,7 @@
             }
         }
 
-        @ViewBuilder
-        private var sessionInfoPopover: some View {
+        @ViewBuilder private var sessionInfoPopover: some View {
             if let activeService {
                 NavigationStack {
                     SessionInfoView(

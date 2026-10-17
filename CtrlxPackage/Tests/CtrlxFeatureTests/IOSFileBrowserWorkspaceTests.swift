@@ -7,6 +7,28 @@ import Testing
 
 @MainActor @Suite("iOS Host Files presentation")
 struct IOSFileBrowserWorkspaceTests {
+    @Test("File tab reorder preserves selection, persists order and rejects stale or duplicate lists")
+    func reorderFiles() throws {
+        try withDependencies { $0[PreferencesService.self] = .inMemory() } operation: {
+            let workspace = IOSFileBrowserWorkspace()
+            let context = try context("/host/project")
+            workspace.updateContext(context)
+            let first = FileBrowserTab(path: "/host/first")
+            let second = FileBrowserTab(path: "/host/second")
+            workspace.tabs = [first, second]
+            workspace.selectedID = first.id
+            workspace.reorder([second.id, first.id])
+            #expect(workspace.tabs.map(\.id) == [second.id, first.id])
+            #expect(workspace.selected === first)
+            workspace.reorder([first.id, first.id])
+            workspace.reorder([first.id, UUID()])
+            #expect(workspace.tabs.map(\.id) == [second.id, first.id])
+            let restored = IOSFileBrowserWorkspace()
+            restored.updateContext(context)
+            #expect(restored.tabs.map(\.path) == ["/host/second", "/host/first"])
+        }
+    }
+
     private func descriptor(_ pane: String = "%1") -> HostFileTab {
         .init(sessionName: "work", windowID: "@1", sourcePaneID: pane, initialDirectory: "/host/project")
     }

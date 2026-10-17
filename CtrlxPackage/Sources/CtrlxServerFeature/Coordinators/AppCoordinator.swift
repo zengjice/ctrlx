@@ -4227,7 +4227,7 @@
             guard result.success else { throw AgentImageError.message(result.error ?? "Could not add the screenshot.") }
         }
 
-        private static func handleSendDroppedFiles(
+        static func handleSendDroppedFiles(
             command: CommandMessage,
             spec: SendDroppedFiles,
             tmuxService: TmuxService,
@@ -4272,6 +4272,11 @@
             let panes = await tmuxService.refreshPanes()
             guard panes.contains(where: { $0.paneId == command.paneId }) else {
                 return .failure(for: command.id, error: "Pane \(command.paneId) not found")
+            }
+            if
+                let expected = command.expectedWorkspacePane,
+                !expected.isSamePane(as: panes.first(where: { $0.paneId == command.paneId })?.workspaceIdentity) {
+                return .failure(for: command.id, error: "The terminal changed before the files arrived. Select the restored terminal and try again.")
             }
 
             if
@@ -4343,7 +4348,8 @@
                 try await tmuxService.loadAndPasteBuffer(
                     target: command.paneId,
                     content: spec.expectedAgent == nil ? content : " \(content) ",
-                    bufferName: "ctrlx-drop-\(UUID().uuidString.prefix(8))"
+                    bufferName: "ctrlx-drop-\(UUID().uuidString.prefix(8))",
+                    expectedWorkspacePane: command.expectedWorkspacePane
                 )
                 return .success(for: command.id)
             } catch {

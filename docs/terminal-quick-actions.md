@@ -115,7 +115,25 @@ send from the terminal. Existing terminal input is never cleared automatically.
 
 On iOS, the first-row **+ / Attachments** menu owns image input (Photo Library,
 image files, Camera and Paste Image); there is no duplicate image button at the
-top right. In Bottom Bar mode, a single tap in an empty terminal input surface
+top right. **Confirm Before Sending Images** in Settings is device-local and
+off by default. All four sources then prepare/compress and insert the images
+directly, without Return. Turning it on restores the compressed-image review
+sheet. A failed upload opens that sheet with the remaining images and error for
+manual retry. Preparation and sending retain the original pane/input identity;
+switching targets cancels the batch rather than redirecting it. Capable Viewers
+attach this identity to `SendDroppedFiles`; the Host checks it on receipt and
+atomically with the final tmux paste. Both clients need the updated upload path;
+Hosts without workspace input identity retain legacy behavior.
+
+The iOS **Tabs** sheet supports native long-press dragging within **Windows**
+and **Files**. Terminal/Agent windows use the same Host `MoveTmuxWindows` command
+as Mac, updating tmux and connected viewers. The selected pane survives changed
+window indexes; disconnected or pending window reorders are disabled, and failed
+moves show an error. Files ordering is viewer-local and saved with its workspace.
+Recovery applies that order to matching Host tab UUIDs as their catalog arrives;
+new tabs follow the saved tabs without resetting live reorders.
+
+In Bottom Bar mode, a single tap in an empty terminal input surface
 shows/hides the keyboard; with draft text, it places the cursor and opens the
 keyboard (or keeps it open), so editing can resume after hiding it. Native
 Codex placeholder text is recognized as empty without adding a CtrlX placeholder.

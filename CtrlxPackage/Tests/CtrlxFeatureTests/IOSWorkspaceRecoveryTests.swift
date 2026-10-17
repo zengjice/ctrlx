@@ -20,6 +20,66 @@ struct IOSWorkspaceRecoveryTests {
         )], supportsPaneFiles: true, fileTabs: includeFiles ? [.init(id: file, sessionName: name, windowID: windowRuntime, sourcePaneID: runtime, initialDirectory: "/Host/project")] : [], workspaceIdentity: .init(hostID: root ?? host, serverID: server))
     }
 
+    @Test("Host Files restore their saved order through partial catalogs and subsequent live reorders", arguments: [false, true])
+    func fileOrder(partialCatalog: Bool) async throws {
+        let disk = IOSWorkspaceRecoveryStore.inMemory()
+        try await withDependencies {
+            $0[IOSWorkspaceRecoveryStore.self] = disk
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let client = ViewerRelayClient()
+            let initial = state()
+            func catalog(_ files: [HostFileTab]) -> SessionStateMessage {
+                .init(
+                    pairId: initial.pairId,
+                    paneStates: initial.paneStates,
+                    supportsPaneFiles: true,
+                    fileTabs: files,
+                    workspaceIdentity: initial.workspaceIdentity
+                )
+            }
+            let a = try #require(initial.fileTabs?.first)
+            let b = HostFileTab(sessionName: "project", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/Host/B")
+            let c = HostFileTab(sessionName: "project", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/Host/C")
+            let first = IOSFileBrowserWorkspaceStore()
+            await first.prepareRecovery()
+            first.update(catalog([a, b]), client: client)
+            let workspace = try #require(first.workspace(hostID: "pair", sessionName: "project"))
+            let privateFile = FileBrowserTab(path: "/Host/private")
+            workspace.tabs.append(privateFile)
+            workspace.selectedID = b.id
+            workspace.reorder([b.id, privateFile.id, a.id])
+            await first.flushRecovery()
+            #expect(try await disk.load()?.sessions.first?.files.map(\.snapshot.id) == [b.id, privateFile.id, a.id])
+
+            let second = IOSFileBrowserWorkspaceStore()
+            await second.prepareRecovery()
+            if partialCatalog {
+                let partial = catalog([a])
+                second.update(partial, client: client)
+                second.update(partial, client: client)
+                await second.flushRecovery()
+                #expect(try await disk.load()?.sessions.first?.files.map(\.snapshot.id) == [b.id, privateFile.id, a.id])
+            }
+            let complete = catalog([a, b, c])
+            second.update(complete, client: client)
+            let restored = try #require(second.workspace(hostID: "pair", sessionName: "project"))
+            #expect(restored.tabs.map(\.id) == [b.id, privateFile.id, a.id, c.id])
+            #expect(restored.selectedID == b.id)
+            let selected = restored.selected
+            restored.reorder([c.id, a.id, b.id, privateFile.id])
+            second.update(complete, client: client)
+            #expect(restored.tabs.map(\.id) == [c.id, a.id, b.id, privateFile.id])
+            #expect(restored.selected === selected)
+            await second.flushRecovery()
+
+            let third = IOSFileBrowserWorkspaceStore()
+            await third.prepareRecovery()
+            third.update(complete, client: client)
+            #expect(third.workspace(hostID: "pair", sessionName: "project")?.tabs.map(\.id) == [c.id, a.id, b.id, privateFile.id])
+        }
+    }
+
     @Test("Cold restore follows UUIDs through renamed sessions and new runtime IDs, preserving Files and drafts")
     func restore() async throws {
         let disk = IOSWorkspaceRecoveryStore.inMemory()

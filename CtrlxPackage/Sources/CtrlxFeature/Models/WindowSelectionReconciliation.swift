@@ -23,11 +23,19 @@ enum WindowSelectionReconciliation: Equatable, Sendable {
     static func resolve(
         selectedWindowId: String?,
         candidates: [WindowSelectionCandidate],
-        createdPaneId: String? = nil
+        createdPaneId: String? = nil,
+        selectedPaneId: String? = nil
     ) -> Self {
-        if let createdPaneId,
-           let candidate = candidates.first(where: { $0.paneId == createdPaneId || $0.paneIDs.contains(createdPaneId) }) {
+        if
+            let createdPaneId,
+            let candidate = candidates.first(where: { $0.paneId == createdPaneId || $0.paneIDs.contains(createdPaneId) }) {
             return .select(windowId: candidate.windowId, paneId: createdPaneId)
+        }
+        if
+            let selectedPaneId,
+            let candidate = candidates.first(where: { $0.paneId == selectedPaneId || $0.paneIDs.contains(selectedPaneId) }),
+            candidate.windowId != selectedWindowId {
+            return .select(windowId: candidate.windowId, paneId: selectedPaneId)
         }
         guard let selectedWindowId else {
             guard let candidate = preferredCandidate(in: candidates) else {
