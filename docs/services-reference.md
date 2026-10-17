@@ -654,11 +654,37 @@ Codex runs with `CODEX_NON_INTERACTIVE=1`; CtrlX neither installs npm nor invoke
 package-manager removal. Installers download their own native architecture and
 manage their own package verification and updates.
 
+Recognized Homebrew and official native installations also offer **Update** and
+**Repair Launch**. These are explicit actions, never startup side effects. Homebrew
+updates its existing cask (including Claude Code's `claude-code` versus
+`claude-code@latest`) with automatic cleanup disabled. Native Codex reuses the
+official installer with its original installation directory and `CODEX_HOME`;
+native Claude Code uses `claude update`, preserving its configured release channel.
+Custom wrappers, npm layouts, and direct immutable version paths remain usable
+but must be updated using their original installer. Updating or repairing preserves
+working commands, so shell aliases/functions survive. If a previously broken
+default command becomes runnable only through a known fallback outside PATH,
+the successful operation also applies the normal guarded path repair and refreshes
+plugin settings immediately; no additional **Check Again** is needed.
+
+Installation and updates verify the resulting official Developer ID signatures
+before clearing download quarantine, then probe the CLI version. Repair Launch
+performs the same signature/quarantine checks without downloading an update and
+is available even when the version probe fails. Codex validates its main binary,
+code-mode host, and bundled ripgrep against OpenAI's team and executable IDs;
+Claude Code validates its binary against Anthropic's team and ID. All signatures
+must pass before any attribute is removed. Only those verified files and Codex's
+known package directories are touched, never arbitrary package contents or other
+versions. A changed launcher, escaped helper symlink, incomplete package, or
+failed signature stops the operation. This does not disable Gatekeeper globally,
+change signing, or automate Keychain, privacy, or administrator permission prompts.
+
 `AgentCLIProcess` streams bounded logs from private temporary files, supplies no
 interactive stdin, and stops its owned process group on cancellation or timeout.
 Closing the setup window continues the job; quitting CtrlX cancels it. Logs are
 kept in memory for this launch and can be copied. Cancellation is not rollback:
-the remaining installation is rechecked. Each successful install verifies the
+the remaining installation is rechecked. Install, update and repair share the
+same serial job, cancellation and activity log. Each successful install verifies the
 native launcher and writes its absolute path to the plugin settings, preserving
 other fields and refusing to replace a command changed during installation.
 Existing launchers found only in known fallback locations outside the cached GUI

@@ -63,6 +63,8 @@
         }
 
         var install: @Sendable (InstallableAgentCLI, _ event: @Sendable (AgentCLIInstallEvent) async -> Void) async throws -> Void
+        var managedInstallation: @Sendable (InstallableAgentCLI, _ command: String) async -> AgentCLIManagedInstallation? = { _, _ in nil }
+        var maintain: @Sendable (AgentCLIMaintenanceAction, AgentCLIManagedInstallation, _ event: @Sendable (AgentCLIInstallEvent) async -> Void) async throws -> Void
     }
 
     extension AgentCLIClient: DependencyKey {
@@ -74,27 +76,20 @@
                     return await inspect(agent, command: command, searchPath: path)
                 },
                 install: { agent, event in
-                    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-cli-install-\(UUID().uuidString)")
-                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                    defer { try? FileManager.default.removeItem(at: directory) }
-                    let script = directory.appendingPathComponent("install.sh")
-                    await event(.phase("Downloading official installer"))
-                    let download = try await AgentCLIProcess.run(
-                        executable: "/usr/bin/curl",
-                        arguments: ["--fail", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "20", "--max-time", "120", "--output", script.path, agent.installerURL],
-                        timeout: 130, output: { await event(.output($0)) }
-                    )
-                    guard download == 0 else { throw AgentCLIError(message: "Official installer download failed (exit \(download)). See the log below.") }
-                    try Task.checkCancellation()
-                    await event(.phase("Running official installer"))
-                    let environment = agent == .codex
-                        ? ["CODEX_NON_INTERACTIVE": "1", "CODEX_INSTALL_DIR": URL(fileURLWithPath: agent.nativePath()).deletingLastPathComponent().path]
-                        : [:]
-                    let exit = try await AgentCLIProcess.run(
-                        executable: agent.installerShell, arguments: [script.path], environment: environment,
-                        timeout: 20 * 60, output: { await event(.output($0)) }
-                    )
-                    guard exit == 0 else { throw AgentCLIError(message: "Official installer failed (exit \(exit)). See the log below.") }
+                    try await AgentCLIMaintenance.installOfficial(agent, event: event)
+                    guard let installation = AgentCLIManagedInstallation.discover(agent, launcherPath: agent.nativePath()) else {
+                        throw AgentCLIError(message: "Installer finished, but its native installation layout could not be verified.")
+                    }
+                    try await AgentCLIMaintenance.repair(installation, event: event)
+                },
+                managedInstallation: { agent, command in
+                    @Dependency(LoginShellPath.self) var loginPath
+                    let path = ProcessRunner.effectivePath(resolved: loginPath.resolve(), inherited: ProcessInfo.processInfo.environment["PATH"])
+                    guard let executable = executable(agent, command: command, searchPath: path)?.path else { return nil }
+                    return AgentCLIManagedInstallation.discover(agent, launcherPath: executable)
+                },
+                maintain: { action, installation, event in
+                    try await AgentCLIMaintenance.perform(action, installation: installation, event: event)
                 }
             )
         }
@@ -104,6 +99,30 @@
             _ agent: InstallableAgentCLI, command: String, searchPath: String,
             home: URL = FileManager.default.homeDirectoryForCurrentUser
         ) async -> AgentCLIAvailability {
+            guard let resolved = executable(agent, command: command, searchPath: searchPath, home: home) else {
+                return .missing
+            }
+            let executable = resolved.path
+            guard FileManager.default.isExecutableFile(atPath: executable) else {
+                return .unavailable("Configured command is missing or not executable: \(command). Check its path in Agents settings.")
+            }
+            do {
+                let output = VersionOutput()
+                let exit = try await AgentCLIProcess.run(executable: executable, arguments: ["--version"], environment: ["PATH": searchPath], timeout: 5, output: { await output.append($0) })
+                let version = await output.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard exit == 0, !version.isEmpty else {
+                    return .unavailable("\(executable) could not report its version (exit \(exit)). Check the command in Agents settings.")
+                }
+                return .available(path: executable, version: String(version.prefix(200)), requiresPathRepair: resolved.requiresPathRepair)
+            } catch {
+                return .unavailable("Cannot run \(executable): \(error.localizedDescription)")
+            }
+        }
+
+        private static func executable(
+            _ agent: InstallableAgentCLI, command: String, searchPath: String,
+            home: URL = FileManager.default.homeDirectoryForCurrentUser
+        ) -> (path: String, requiresPathRepair: Bool)? {
             let explicitPath = command.contains("/")
             let commandCandidates = explicitPath ? [NSString(string: command).expandingTildeInPath]
                 : searchPath.split(separator: ":").map { URL(fileURLWithPath: String($0)).appendingPathComponent(command).path }
@@ -116,21 +135,11 @@
             }
             guard let executable = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
                 if command == agent.command, !candidates.contains(where: { FileManager.default.fileExists(atPath: $0) }) {
-                    return .missing
+                    return nil
                 }
-                return .unavailable("Configured command is missing or not executable: \(command). Check its path in Agents settings.")
+                return (candidates.first ?? command, false)
             }
-            do {
-                let output = VersionOutput()
-                let exit = try await AgentCLIProcess.run(executable: executable, arguments: ["--version"], environment: ["PATH": searchPath], timeout: 5, output: { await output.append($0) })
-                let version = await output.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard exit == 0, !version.isEmpty else {
-                    return .unavailable("\(executable) could not report its version (exit \(exit)). Check the command in Agents settings.")
-                }
-                return .available(path: executable, version: String(version.prefix(200)), requiresPathRepair: !commandCandidates.contains(executable))
-            } catch {
-                return .unavailable("Cannot run \(executable): \(error.localizedDescription)")
-            }
+            return (executable, !commandCandidates.contains(executable))
         }
 
         private actor VersionOutput {

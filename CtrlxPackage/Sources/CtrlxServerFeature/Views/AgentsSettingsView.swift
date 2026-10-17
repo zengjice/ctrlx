@@ -85,7 +85,7 @@
                 HStack {
                     Text("Codex & Claude Code CLI").foregroundStyle(.secondary)
                     Spacer()
-                    Button(coordinator.agentCLIInstallations?.isInstalling == true ? "View Installation…" : "Agent Setup…") {
+                    Button(coordinator.agentCLIInstallations?.isPerformingOperation == true ? "View Agent Setup…" : "Agent Setup…") {
                         coordinator.agentCLIInstallations?.dismissStartupPrompt()
                         coordinator.agentCLIInstallations?.refresh()
                         openWindow(id: "agent-cli-setup")

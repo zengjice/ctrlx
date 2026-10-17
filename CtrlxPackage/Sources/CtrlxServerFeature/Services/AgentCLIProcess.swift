@@ -2,7 +2,19 @@
     import CtrlxCommon
     import Darwin
     import Dependencies
+    import DependenciesMacros
     import Foundation
+
+    @DependencyClient
+    struct AgentCLIProcessClient: Sendable {
+        var run: @Sendable (_ executable: String, _ arguments: [String], _ environment: [String: String], _ timeout: TimeInterval, _ output: @Sendable (String) async -> Void) async throws -> Int32
+    }
+
+    extension AgentCLIProcessClient: DependencyKey {
+        static let liveValue = Self(run: { executable, arguments, environment, timeout, output in
+            try await AgentCLIProcess.run(executable: executable, arguments: arguments, environment: environment, timeout: timeout, output: output)
+        })
+    }
 
     enum AgentCLIProcess {
         /// Regular-file output avoids a full pipe stalling installers or inherited pipe handles

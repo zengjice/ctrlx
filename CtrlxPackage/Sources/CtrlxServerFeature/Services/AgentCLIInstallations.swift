@@ -6,6 +6,7 @@
 
     struct AgentCLIInstallation {
         var availability: AgentCLIAvailability?
+        var managedInstallation: AgentCLIManagedInstallation?
         var phase: String?
         var startedAt: Date?
         var error: String?
@@ -35,7 +36,7 @@
     final class AgentCLIInstallations {
         private(set) var entries: [InstallableAgentCLI: AgentCLIInstallation] = [:]
         private(set) var isBusy = false
-        private(set) var isInstalling = false
+        private(set) var isPerformingOperation = false
         private(set) var startupPromptPending = false
         private(set) var commandRevision = 0
         var remindAtStartup: Bool {
@@ -101,14 +102,25 @@
         func install(_ selected: Set<InstallableAgentCLI>) {
             guard !isBusy else { return }
             let agents = InstallableAgentCLI.allCases.filter { selected.contains($0) && missing.contains($0) }
+            perform(agents)
+        }
+
+        func maintain(_ agent: InstallableAgentCLI, action: AgentCLIMaintenanceAction) {
+            guard !isBusy, entries[agent]?.managedInstallation != nil else { return }
+            perform([agent], action: action)
+        }
+
+        private func perform(_ agents: [InstallableAgentCLI], action: AgentCLIMaintenanceAction? = nil) {
             guard !agents.isEmpty else { return }
+            let expectedCommands = Dictionary(uniqueKeysWithValues: agents.map { ($0, command($0)) })
+            let targets = entries.compactMapValues(\.managedInstallation)
             startupPromptPending = false
             isBusy = true
-            isInstalling = true
+            isPerformingOperation = true
             operation = Task {
                 defer {
                     isBusy = false
-                    isInstalling = false
+                    isPerformingOperation = false
                     operation = nil
                 }
                 for agent in agents {
@@ -117,29 +129,47 @@
                     entries[agent]?.log = ""
                     entries[agent]?.startedAt = Date()
                     entries[agent]?.phase = "Checking installation"
-                    // The user may have installed it elsewhere since the prompt appeared.
-                    await check(agent)
-                    guard entries[agent]?.availability == .missing else {
-                        entries[agent]?.phase = nil
-                        entries[agent]?.startedAt = nil
-                        continue
-                    }
-                    let expectedCommand = command(agent)
+                    let expectedCommand = expectedCommands[agent] ?? command(agent)
                     do {
                         try Task.checkCancellation()
-                        try await client.install(agent) { [weak self] event in await self?.receive(event, for: agent) }
-                        entries[agent]?.phase = "Verifying installation"
-                        let result = await client.inspect(agent, agent.nativePath())
-                        guard case let .available(path, _, _) = result else {
-                            throw AgentCLIError(message: "Installer finished, but the native CLI could not be verified. Check the log and Agents command path.")
+                        if let action {
+                            let currentTarget = await client.managedInstallation(agent, expectedCommand)
+                            guard let target = targets[agent], currentTarget == target, command(agent) == expectedCommand else {
+                                throw AgentCLIError(message: "The agent installation or command changed. Check again before retrying.")
+                            }
+                            try await client.maintain(action, target) { [weak self] event in await self?.receive(event, for: agent) }
+                            entries[agent]?.phase = "Verifying agent launch"
+                            let result = await client.inspect(agent, expectedCommand)
+                            guard command(agent) == expectedCommand, case .available = result else {
+                                throw AgentCLIError(message: "The operation finished, but the configured agent could not be verified. Check the log and Agents command path.")
+                            }
+                            try await repairCommandPathIfNeeded(result, for: agent, expectedCommand: expectedCommand)
+                            entries[agent]?.availability = result
+                            entries[agent]?.managedInstallation = await client.managedInstallation(agent, expectedCommand)
+                        } else {
+                            // The user may have installed it elsewhere since the prompt appeared.
+                            await check(agent)
+                            if entries[agent]?.availability == .missing {
+                                guard command(agent) == expectedCommand else {
+                                    throw AgentCLIError(message: "Command settings changed. Check again.")
+                                }
+                                try Task.checkCancellation()
+                                try await client.install(agent) { [weak self] event in await self?.receive(event, for: agent) }
+                                entries[agent]?.phase = "Verifying installation"
+                                let result = await client.inspect(agent, agent.nativePath())
+                                guard case let .available(path, _, _) = result else {
+                                    throw AgentCLIError(message: "Installer finished, but the native CLI could not be verified. Check the log and Agents command path.")
+                                }
+                                try await useInstalledCommand(agent, path, expectedCommand)
+                                commandRevision += 1
+                                entries[agent]?.availability = result
+                                entries[agent]?.managedInstallation = await client.managedInstallation(agent, path)
+                            }
                         }
-                        try await useInstalledCommand(agent, path, expectedCommand)
-                        commandRevision += 1
-                        entries[agent]?.availability = result
                     } catch {
                         // Cancellation is not rollback. Recheck using an uncancelled task before offering Retry.
                         await Task { await check(agent) }.value
-                        entries[agent]?.error = Task.isCancelled ? "Installation cancelled. Any completed files were kept." : error.localizedDescription
+                        entries[agent]?.error = Task.isCancelled ? "Operation cancelled. Any completed files were kept." : error.localizedDescription
                     }
                     entries[agent]?.phase = nil
                     entries[agent]?.startedAt = nil
@@ -163,22 +193,29 @@
         private func check(_ agent: InstallableAgentCLI) async {
             let expectedCommand = command(agent)
             let result = await client.inspect(agent, expectedCommand)
+            let managedInstallation = await client.managedInstallation(agent, expectedCommand)
             guard !Task.isCancelled else { return }
             entries[agent, default: .init()].error = nil
             guard command(agent) == expectedCommand else {
                 entries[agent]?.availability = .unavailable("Command settings changed. Check again.")
+                entries[agent]?.managedInstallation = nil
                 return
             }
             entries[agent, default: .init()].availability = result
-            // Preserve PATH-resolved names so shell aliases and functions still apply at launch.
-            if expectedCommand == agent.command, case let .available(path, _, true) = result {
-                do {
-                    try await useInstalledCommand(agent, path, expectedCommand)
-                    commandRevision += 1
-                } catch {
-                    entries[agent]?.error = error.localizedDescription
-                }
+            entries[agent]?.managedInstallation = managedInstallation
+            do {
+                try await repairCommandPathIfNeeded(result, for: agent, expectedCommand: expectedCommand)
+            } catch {
+                entries[agent]?.error = error.localizedDescription
             }
+        }
+
+        private func repairCommandPathIfNeeded(_ result: AgentCLIAvailability, for agent: InstallableAgentCLI, expectedCommand: String) async throws {
+            // Preserve PATH-resolved names so shell aliases and functions still apply at launch.
+            guard expectedCommand == agent.command, case let .available(path, _, true) = result else { return }
+            try Task.checkCancellation()
+            try await useInstalledCommand(agent, path, expectedCommand)
+            commandRevision += 1
         }
 
         private func receive(_ event: AgentCLIInstallEvent, for agent: InstallableAgentCLI) {

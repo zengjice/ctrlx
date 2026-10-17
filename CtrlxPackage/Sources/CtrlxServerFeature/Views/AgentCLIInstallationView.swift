@@ -43,41 +43,44 @@
         var body: some View {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Agent Setup").font(.title2.bold())
-                Text("Install missing CLIs on this Mac using their official native installers. Sign in when you first open an agent.")
+                Text("Install, update, or repair agents on this Mac. Sign in when you first open an agent.")
                     .foregroundStyle(.secondary)
-                ForEach(InstallableAgentCLI.allCases) { agent in
-                    agentRow(agent)
-                }
-                Toggle("Remind me at startup when an agent is missing", isOn: $installations.remindAtStartup)
-                    .accessibilityIdentifier("agentCLIReminder")
-                DisclosureGroup("Installation log", isExpanded: $showsLog) {
-                    ScrollView {
-                        Text(log.isEmpty ? "No installation output yet." : log)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(InstallableAgentCLI.allCases) { agent in
+                            agentRow(agent)
+                        }
+                        Toggle("Remind me at startup when an agent is missing", isOn: $installations.remindAtStartup)
+                            .accessibilityIdentifier("agentCLIReminder")
+                        DisclosureGroup("Activity log", isExpanded: $showsLog) {
+                            ScrollView {
+                                Text(log.isEmpty ? "No output yet." : log)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(height: 140)
+                            Button("Copy Log") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(log, forType: .string)
+                            }
+                            .disabled(log.isEmpty)
+                        }
                     }
-                    .frame(minHeight: 100, maxHeight: 220)
-                    Button("Copy Log") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(log, forType: .string)
-                    }
-                    .disabled(log.isEmpty)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Spacer(minLength: 0)
                 HStack {
-                    if installations.isInstalling {
-                        Button("Cancel Installation") { installations.cancel() }
+                    if installations.isPerformingOperation {
+                        Button("Cancel") { installations.cancel() }
                             .accessibilityIdentifier("agentCLICancel")
                     } else {
                         Button("Check Again") { installations.refresh() }.disabled(installations.isBusy)
                     }
                     Spacer()
-                    Button(installations.isInstalling ? "Continue in Background" : installations.missing.isEmpty ? "Done" : "Later") { close() }
+                    Button(installations.isPerformingOperation ? "Continue in Background" : installations.missing.isEmpty ? "Done" : "Later") { close() }
                     if !installations.missing.isEmpty {
                         Button("Install Selected") {
                             installations.install(selected)
-                            showsLog = true
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(installations.isBusy || selected.isDisjoint(with: installations.missing))
@@ -87,6 +90,11 @@
             }
             .padding(24)
             .onAppear { installations.dismissStartupPrompt() }
+            .onChange(of: installations.isPerformingOperation, initial: true) {
+                if installations.isPerformingOperation {
+                    showsLog = true
+                }
+            }
             .accessibilityIdentifier("agentCLISetup")
         }
 
@@ -119,6 +127,25 @@
                     } else {
                         availability(entry.availability, agent: agent)
                     }
+                }
+                if let installation = entry.managedInstallation {
+                    HStack {
+                        Text(installation.source.label).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Update") {
+                            installations.maintain(agent, action: .update)
+                        }
+                        .accessibilityIdentifier("agentCLIUpdate-\(agent.id)")
+                        Button("Repair Launch") {
+                            installations.maintain(agent, action: .repair)
+                        }
+                        .help("Verify official signatures and clear download quarantine for this installation.")
+                        .accessibilityIdentifier("agentCLIRepair-\(agent.id)")
+                    }
+                    .disabled(installations.isBusy)
+                } else if case .available = entry.availability {
+                    Text("Manage updates with this installation’s original installer.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if let error = entry.error {
                     Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
