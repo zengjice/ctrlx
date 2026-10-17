@@ -636,9 +636,41 @@ Actor executing commands from paired Mac/iOS Viewers.
 
 ### Plugin installation and settings
 
+Mac **Agent Setup** installs the Codex / Claude Code CLI itself. This is separate
+from installing the CtrlX integration inside either agent. `AgentCLIInstallations`
+checks once after Host startup without blocking workspace restoration. A single
+setup window is offered only when the main workbench becomes active and a CLI is
+missing; closing it defers this launch, and its startup reminder toggle persists.
+Settings → Agents → Agent Setup always provides a manual entry point.
+
+Detection honors configured commands, the login-shell PATH, and known native
+locations, and runs a bounded `--version` probe. Working npm/Homebrew installs
+count as installed. Broken commands and invalid custom paths are shown as errors,
+not invitations to overwrite an installation. Installation requires clicking
+**Install Selected**, runs sequentially in one app-owned job, and uses the
+[official Codex standalone installer](https://learn.chatgpt.com/docs/codex/cli)
+or [Claude Code native installer](https://code.claude.com/docs/en/setup).
+Codex runs with `CODEX_NON_INTERACTIVE=1`; CtrlX neither installs npm nor invokes
+package-manager removal. Installers download their own native architecture and
+manage their own package verification and updates.
+
+`AgentCLIProcess` streams bounded logs from private temporary files, supplies no
+interactive stdin, and stops its owned process group on cancellation or timeout.
+Closing the setup window continues the job; quitting CtrlX cancels it. Logs are
+kept in memory for this launch and can be copied. Cancellation is not rollback:
+the remaining installation is rechecked. Each successful install verifies the
+native launcher and writes its absolute path to the plugin settings, preserving
+other fields and refusing to replace a command changed during installation.
+Existing launchers found only in known fallback locations outside the cached GUI
+PATH are adopted in the same way. Commands already resolved through PATH remain
+unchanged, preserving shell aliases and functions when launching sessions. New
+sessions and plugin checks work without restarting CtrlX. **Open**
+starts a normal local agent session for first-run sign-in. CLI installation does
+not silently install its CtrlX plugin, log into accounts, or modify remote Hosts.
+
 `PluginCore.install(configRoot:)`, `uninstall` and `installStatus` are the
 shared contract in `CtrlxPluginProtocol/PluginCore.swift`. Built-in cores own
-their CLI installation implementations: `ClaudeCodeCLIInstaller.swift` and
+their CLI-driven plugin installation implementations: `ClaudeCodeCLIInstaller.swift` and
 `CodexCLIInstaller.swift` in their respective core modules. Config roots are
 scoped by the plugin, not hard-coded into shared settings UI.
 

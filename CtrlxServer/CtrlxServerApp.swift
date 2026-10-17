@@ -505,6 +505,13 @@ struct TmuxPaneMirrorApp: App {
             }
         }
 
+        Window("Agent Setup", id: "agent-cli-setup") {
+            AgentCLIInstallationView().environment(coordinator)
+        }
+        .defaultSize(width: 620, height: 460)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
         // Reuse one overview window without changing the selected workspace.
         Window("Dashboard", id: "dashboard") {
             MacDashboardView().environment(coordinator)

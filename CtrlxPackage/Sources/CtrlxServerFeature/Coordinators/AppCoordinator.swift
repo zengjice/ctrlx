@@ -196,6 +196,8 @@
 
         var agentSettingsSelection: String?
         private(set) var agentPluginInstallations: AgentPluginInstallations?
+        private(set) var agentCLIInstallations: AgentCLIInstallations?
+        var pendingAgentCLILaunch: String?
         @ObservationIgnored private var agentPluginCheckTask: Task<Void, Never>?
 
         /// The single agent-blind event dispatcher; its sinks are wired to the
@@ -487,6 +489,7 @@
             // session.
             pluginUpdateManager?.start()
             startAgentPluginVersionCheck()
+            startAgentCLICheck()
             await setupViewerConnectionManager()
             await autoConnectIfConfigured()
 
@@ -550,6 +553,7 @@
             await workspaceRecovery?.stop()
             await hostDashboard.stop()
             agentPluginCheckTask?.cancel()
+            await agentCLIInstallations?.stop()
             agentPluginCheckTask = nil
             await apiSocketServer.stop()
             // Simulator commands must not consume the quit deadline before independent cleanup runs.
@@ -1599,6 +1603,26 @@
             }
             guard let core = await enabledCore(id) else { return .agentUnavailable }
             return await core.installStatus(configRoot: configRoot)
+        }
+
+        private func startAgentCLICheck() {
+            guard !isE2ETest, agentCLIInstallations == nil else { return }
+            let installations = AgentCLIInstallations(
+                command: { [weak self] agent in
+                    let data = self?.pluginSettingsData(id: agent.id) ?? Data()
+                    return AgentCLICommandSettings.command(in: data, agent: agent)
+                },
+                useInstalledCommand: { [weak self] agent, path, expectedCommand in
+                    guard let self else { throw CancellationError() }
+                    let data = pluginSettingsData(id: agent.id)
+                    let updated = try AgentCLICommandSettings.adopting(path, expectedCommand: expectedCommand, agent: agent, data: data)
+                    if let error = await setPluginSettings(id: agent.id, updated) {
+                        throw AgentCLIError(message: error)
+                    }
+                }
+            )
+            agentCLIInstallations = installations
+            installations.start()
         }
 
         private func startAgentPluginVersionCheck() {

@@ -407,8 +407,11 @@ public struct MainView: View {
             .onChange(of: selectedRemoteWindowId) { pendingFileLink = nil }
             .onChange(of: selectedRemoteSession) { pendingFileLink = nil }
             .onChange(of: automaticTabFitInput) { fitSelectedTerminalIfReady() }
+            .onChange(of: coordinator.pendingAgentCLILaunch, initial: true) { launchInstalledAgentIfNeeded() }
+            .onChange(of: creatingSelection) { launchInstalledAgentIfNeeded() }
             .onChange(of: appearsActive) {
                 guard appearsActive else { return }
+                launchInstalledAgentIfNeeded()
                 if automaticTabFit.target == nil {
                     requestAutomaticTabFit(windowID: focusedTerminalWindowID)
                 }
@@ -417,11 +420,20 @@ public struct MainView: View {
             .onDisappear { automaticTabFit.cancel() }
     }
 
+    private func launchInstalledAgentIfNeeded() {
+        guard
+            detachedWorkspace == nil, appearsActive, creatingSelection == nil,
+            let pluginID = coordinator.pendingAgentCLILaunch else { return }
+        coordinator.pendingAgentCLILaunch = nil
+        createNewSession(request: .directory(path: FileManager.default.homeDirectoryForCurrentUser.path, pluginID: pluginID))
+    }
+
     @ViewBuilder private var workspaceLifecycle: some View {
         @Bindable var coordinator = coordinator
 
         VStack(spacing: 0) {
             if detachedWorkspace == nil {
+                AgentCLIStartupPrompt()
                 AgentPluginUpdateBanner()
                 WorkspaceRecoveryStatusView()
             }
