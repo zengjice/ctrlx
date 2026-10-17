@@ -997,14 +997,3 @@ final public class AppSettings {
         launchAtLogin = enabled
     }
 }
-
-// MARK: - Terminal Theme
-
-public enum TerminalTheme: String, CaseIterable, Sendable {
-    case defaultDark = "Default Dark"
-    case defaultLight = "Default Light"
-    case codexLight = "Codex Light"
-    case solarizedDark = "Solarized Dark"
-    case solarizedLight = "Solarized Light"
-    case anysphereDark = "Anysphere Dark"
-}

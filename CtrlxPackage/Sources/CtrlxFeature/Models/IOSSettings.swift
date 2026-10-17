@@ -65,6 +65,7 @@
             case externalServerURL
             case autoReconnect
             case appearanceMode
+            case terminalTheme
             case terminalFontName
             case terminalFontSize
             case terminalKeyboardControlPosition
@@ -134,6 +135,10 @@
         /// `.preferredColorScheme(_:)` on the iOS root view.
         public var appearanceMode: AppearanceMode = .system {
             didSet { preferences.setString(appearanceMode.rawValue, Keys.appearanceMode) }
+        }
+
+        public var terminalTheme: TerminalTheme = .defaultDark {
+            didSet { preferences.setString(terminalTheme.rawValue, Keys.terminalTheme) }
         }
 
         /// Font name for terminal snapshot display
@@ -254,6 +259,7 @@
             self.appearanceMode = AppearanceMode(rawValue: preferences.string(Keys.appearanceMode) ?? "") ?? .system
 
             // Terminal settings with iOS-appropriate defaults
+            self.terminalTheme = TerminalTheme(rawValue: preferences.string(Keys.terminalTheme) ?? "") ?? .defaultDark
             self.terminalFontName = preferences.string(Keys.terminalFontName) ?? "Menlo"
             self.terminalFontSize = preferences.optionalDouble(Keys.terminalFontSize) ?? 10
             self.terminalKeyboardControlPosition = TerminalKeyboardControlPosition(

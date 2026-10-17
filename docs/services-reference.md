@@ -1221,6 +1221,12 @@ declarations use the same palette. Agent-emitted RGB colors are preserved;
 code-block/diff syntax themes remain controlled by the Agent (for example,
 Codex's `/theme`). Switching CtrlX themes does not rewrite Agent configuration.
 
+iOS **Settings → Terminal → Terminal Theme** uses the same palettes, including
+Codex Light. The choice is stored on that device, independently of app appearance
+and the Host's theme, and defaults to Default Dark. Changing it updates existing
+terminal text, ANSI colors, cursor, canvas and scroll-view backgrounds without
+reconnecting or clearing the terminal. Explicit Agent RGB colors remain unchanged.
+
 ### PairedViewer / PairedHost
 
 `PairedViewer` in `CtrlxServerFeature/Models/Settings.swift` describes a peer

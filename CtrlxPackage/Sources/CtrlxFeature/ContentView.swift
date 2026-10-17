@@ -653,6 +653,13 @@
                 Section {
                     @Bindable var settings = settings
 
+                    Picker("Terminal Theme", selection: $settings.terminalTheme) {
+                        ForEach(TerminalTheme.allCases, id: \.self) { theme in
+                            Text(theme.rawValue).tag(theme)
+                        }
+                    }
+                    .accessibilityIdentifier("terminal-theme-picker")
+
                     Picker("Keyboard Control", selection: $settings.terminalKeyboardControlPosition) {
                         ForEach(TerminalKeyboardControlPosition.allCases, id: \.self) { position in
                             Text(position.displayName).tag(position)
@@ -684,7 +691,7 @@
                 } header: {
                     Text("Terminal")
                 } footer: {
-                    Text("Choose the keyboard's initial state and control position, and customize the terminal font.")
+                    Text("Customize this device's terminal colors and font, and choose the keyboard's initial state and control position. Agent-generated colors follow the Agent's own theme.")
                 }
 
                 Section {

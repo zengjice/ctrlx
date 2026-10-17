@@ -65,6 +65,20 @@ enum TerminalCursorTapNavigation {
     /// }
     /// ```
     final class InteractiveTerminalView: TerminalView {
+        private var appliedTheme: TerminalTheme?
+
+        func applyTheme(_ theme: TerminalTheme) {
+            guard appliedTheme != theme else { return }
+            let palette = theme.palette
+            installColors(palette.swiftTermANSIColors)
+            nativeForegroundColor = palette.foreground.nativeColor
+            nativeBackgroundColor = palette.background.nativeColor
+            layer.backgroundColor = palette.background.nativeColor.cgColor
+            caretColor = palette.foreground.nativeColor
+            caretTextColor = palette.background.nativeColor
+            appliedTheme = theme
+        }
+
         /// Callback invoked when the user types. The keys are ready for relay transmission.
         /// Marked @MainActor for Swift 6 strict concurrency safety.
         var onInput: (@MainActor ([TmuxKey]) -> Void)?

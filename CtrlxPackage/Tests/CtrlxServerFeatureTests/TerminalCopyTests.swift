@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import CtrlxCommon
     import Testing
     @testable import CtrlxServerFeature
     @testable import SwiftTerm

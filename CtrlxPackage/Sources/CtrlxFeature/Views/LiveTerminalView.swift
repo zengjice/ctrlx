@@ -242,6 +242,8 @@
 
                 // Keep the copy action reachable when the navigation bar is hidden.
                 terminalContent
+                    .foregroundStyle(Color(uiColor: settings.terminalTheme.palette.foreground.nativeColor))
+                    .background(Color(uiColor: settings.terminalTheme.palette.background.nativeColor))
                     .overlay(alignment: .topTrailing) {
                         if hideNavigationBar {
                             HStack(spacing: 8) {
@@ -564,6 +566,7 @@
                     )
                     TerminalStreamContainerView(
                         terminalState: state,
+                        theme: settings.terminalTheme,
                         scrollingAgentID: scrollingAgentID,
                         codexQuestionID: codexQuestionID,
                         inputEnabled: inputPresentation.inputEnabled,
@@ -1492,8 +1495,9 @@
     ///
     /// Uses `InteractiveTerminalView` which keeps its shortcut accessory available
     /// independently from the software keyboard.
-    private struct TerminalStreamContainerView: UIViewRepresentable {
+    struct TerminalStreamContainerView: UIViewRepresentable {
         let terminalState: TerminalState
+        let theme: TerminalTheme
         let scrollingAgentID: String?
         let codexQuestionID: String?
 
@@ -1544,8 +1548,7 @@
             terminalView.translatesAutoresizingMaskIntoConstraints = false
 
             // Configure terminal
-            terminalView.nativeForegroundColor = UIColor(white: 0.9, alpha: 1)
-            terminalView.nativeBackgroundColor = UIColor.black
+            terminalView.applyTheme(theme)
             terminalView.isScrollEnabled = true
             terminalView.inputAssistantItem.leadingBarButtonGroups = []
             terminalView.inputAssistantItem.trailingBarButtonGroups = []
@@ -1569,7 +1572,7 @@
             // retain the Host's exact pixel dimensions; resizing the terminal
             // renderer to fill the viewport silently changes its rows/columns.
             let scrollView = BottomAnchoredTerminalScrollView()
-            scrollView.backgroundColor = .black
+            scrollView.backgroundColor = theme.palette.background.nativeColor
             scrollView.showsHorizontalScrollIndicator = true
             scrollView.showsVerticalScrollIndicator = false
             scrollView.alwaysBounceVertical = false
@@ -1583,7 +1586,8 @@
             context.coordinator.outerScrollView = scrollView
 
             let canvasView = UIView()
-            canvasView.backgroundColor = .black
+            canvasView.backgroundColor = theme.palette.background.nativeColor
+            context.coordinator.canvasView = canvasView
             canvasView.translatesAutoresizingMaskIntoConstraints = false
             scrollView.addSubview(canvasView)
             canvasView.addSubview(terminalView)
@@ -1726,6 +1730,10 @@
         func updateUIView(_ scrollView: UIScrollView, context: Context) {
             guard let terminalView = context.coordinator.terminalView else { return }
 
+            terminalView.applyTheme(theme)
+            scrollView.backgroundColor = theme.palette.background.nativeColor
+            context.coordinator.canvasView?.backgroundColor = theme.palette.background.nativeColor
+
             // A UIViewRepresentable may outlive many value-type SwiftUI views.
             // Refresh callbacks on every update so the native terminal never
             // sends through the host, pane, or monitoring state captured by its
@@ -1771,6 +1779,7 @@
             var terminalView: InteractiveTerminalView?
             weak var terminalState: TerminalState?
             weak var outerScrollView: BottomAnchoredTerminalScrollView?
+            weak var canvasView: UIView?
             var windowSwipe: TerminalWindowSwipeGesture?
             var cellSize: CGSize = .zero
             var widthConstraint: NSLayoutConstraint?
