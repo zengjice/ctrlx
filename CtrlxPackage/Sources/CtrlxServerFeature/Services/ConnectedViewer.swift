@@ -798,7 +798,8 @@ final public class ConnectedViewer: Identifiable {
                 return
             }
             let isFileRequest: Bool = switch command.command {
-            case .browseFiles,
+            case .readDashboard,
+                 .browseFiles,
                  .createSessionDirectory,
                  .prepareSessionWorktree: true
             case let .createTmuxSession(spec): spec.worktree != nil

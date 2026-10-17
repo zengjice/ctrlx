@@ -16,13 +16,14 @@ import Foundation
 /// (`~/.claude.json`, transcripts) and hook payloads, so it must never trap —
 /// `do/try/catch` around every decode, no force-unwraps, skip-and-log malformed
 /// entries.
-public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, AgentPluginMaintenance {
+public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, AgentPluginMaintenance, AgentAccountReporting {
     public static let pluginID = "claude-code"
 
     private var host: (any PluginHost)?
     private var settings = ClaudeCodeSettings()
 
     private let scanner = ClaudeCodeScanner()
+    private let accountReporter = ClaudeAccountReporter()
 
     @Dependency(ProcessRunner.self) private var processRunner
     @Dependency(StopFinalityClassifier.self) private var stopFinalityClassifier
@@ -39,6 +40,12 @@ public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, Ag
     #endif
 
     public init() { }
+
+    public func dashboardAccounts() async -> [DashboardAccount] {
+        let defaultRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+        let paths = [ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]].compactMap { $0 } + settings.additionalConfigFolders
+        return await accountReporter.accounts(command: command, roots: [defaultRoot] + paths.map { URL(fileURLWithPath: $0) })
+    }
 
     // MARK: - Lifecycle
 

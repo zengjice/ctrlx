@@ -41,6 +41,12 @@ Real reboot/login and physical display-removal acceptance are deferred by the
 user's 2026-10-16 decision.
 The existing folder-template persistence contract remains in the layout document above.
 
+The [Dashboard design](dashboard-design.md) defines the Mac/iOS overview of shared
+Agent account quotas, Host resources and collected usage. The first implementation
+has passed focused tests, Mac/iOS Simulator builds and isolated UI acceptance.
+The document records source conditions and remaining Claude subscription,
+cross-physical-Host and iPhone acceptance.
+
 ## How to read status and history
 
 - **Current references** above describe the intended present contract. Some also

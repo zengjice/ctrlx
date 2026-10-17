@@ -410,6 +410,15 @@ public protocol CommandSpec: Codable, Sendable {
 
 // MARK: - Concrete Command Specs
 
+/// A bounded Host snapshot, independent of terminal/session state.
+public struct ReadDashboard: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+    public init() { }
+    public var commandType: CommandType {
+        .readDashboard(self)
+    }
+}
+
 /// Send keystrokes to a tmux pane. Returns success/failure.
 public struct SendKeystroke: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
@@ -1075,6 +1084,7 @@ public struct PasteTerminalText: CommandSpec, Equatable {
 /// This enum is the wire format - it's what gets encoded and sent over the network.
 /// Each case holds its corresponding CommandSpec struct.
 public enum CommandType: Codable, Sendable, Equatable {
+    case readDashboard(ReadDashboard)
     /// Send keystrokes to a tmux pane
     case sendKeystroke(SendKeystroke)
     /// Paste one complete clipboard payload without synthesizing Enter keys.
@@ -1381,6 +1391,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let fileBrowser: FileBrowserResponse?
     public let browser: RemoteBrowserResponse?
     public let simulator: RemoteSimulatorResponse?
+    public let dashboard: DashboardSnapshot?
     /// True only after the Host sent the opener or already handled this queue.
     /// Missing on older Hosts; a generic success is not an acknowledgement.
     public let codexQuestionsHandled: Bool?
@@ -1399,6 +1410,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         fileBrowser: FileBrowserResponse? = nil,
         browser: RemoteBrowserResponse? = nil,
         simulator: RemoteSimulatorResponse? = nil,
+        dashboard: DashboardSnapshot? = nil,
         codexQuestionsHandled: Bool? = nil
     ) {
         self.commandId = commandId
@@ -1414,6 +1426,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.fileBrowser = fileBrowser
         self.browser = browser
         self.simulator = simulator
+        self.dashboard = dashboard
         self.codexQuestionsHandled = codexQuestionsHandled
     }
 

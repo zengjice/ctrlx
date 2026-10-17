@@ -2530,6 +2530,13 @@ public struct MainView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         if detachedWorkspace == nil {
+            ToolbarItem(id: "ctrlx.toolbar.dashboard", placement: .automatic) {
+                Button { openWindow(id: "dashboard") } label: {
+                    Label("Dashboard", symbol: .gaugeWithDotsNeedle50percent)
+                }
+                .help("Dashboard")
+                .accessibilityIdentifier("dashboard-open")
+            }
             ToolbarItem(id: "ctrlx.toolbar.session-switcher", placement: .navigation) {
                 Button { showingSessionSwitcher = true } label: {
                     Label("Switch Session", symbol: .magnifyingglass)

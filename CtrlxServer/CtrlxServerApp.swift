@@ -505,6 +505,13 @@ struct TmuxPaneMirrorApp: App {
             }
         }
 
+        // Reuse one overview window without changing the selected workspace.
+        Window("Dashboard", id: "dashboard") {
+            MacDashboardView().environment(coordinator)
+        }
+        .defaultSize(width: 720, height: 760)
+        .defaultLaunchBehavior(.suppressed)
+
         // About window - custom CtrlX provenance and build information
         Window("About CtrlX", id: "about") {
             AboutWindowView()

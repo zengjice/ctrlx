@@ -16,7 +16,7 @@ import Foundation
 /// `docs/plugins/codex.md`.
 ///
 /// Defensive by mandate (spec §13): never trap on hostile on-disk data.
-public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPluginMaintenance {
+public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPluginMaintenance, AgentAccountReporting {
     public static let pluginID = "codex"
 
     private var host: (any PluginHost)?
@@ -27,6 +27,7 @@ public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPl
     private let correlationWasInjected: Bool
     private let configReader = CodexConfigReader()
     private let postureReader = CodexRolloutPostureReader()
+    private let accountReporter = CodexAccountReporter()
 
     @Dependency(ProcessRunner.self) private var processRunner
 
@@ -90,6 +91,10 @@ public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPl
     }
 
     // MARK: - Lifecycle
+
+    public func dashboardAccounts() async -> [DashboardAccount] {
+        await accountReporter.accounts(command: command, roots: codexHomeRoots())
+    }
 
     public func initialize(_ env: PluginEnv, host: any PluginHost) async throws {
         if !correlationWasInjected {

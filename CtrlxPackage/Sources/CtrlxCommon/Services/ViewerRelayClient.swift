@@ -118,6 +118,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsAgentImageInput = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
     public private(set) var hostSupportsSimulatorViewing = false
+    public private(set) var hostSupportsDashboard = false
     public private(set) var simulatorTabs: [RemoteSimulatorTab] = []
 
     func rememberOpenedBrowser(_ tab: RemoteBrowserTab) {
@@ -535,6 +536,8 @@ final public class ViewerRelayClient {
         }
 
         switch command.commandType {
+        case .readDashboard where !hostSupportsDashboard:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view its Dashboard"))
         case let .sendKeystroke(spec) where spec.acknowledgeCompletion == true && !workspaceInputState.supportsIdentity:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to confirm draft submission"))
         case let .sendDroppedFiles(spec) where spec.expectedAgent != nil && !hostSupportsAgentImageInput:
@@ -726,6 +729,8 @@ final public class ViewerRelayClient {
     @discardableResult
     public func send(_ command: CommandType, paneId: String, inputBinding: ViewerWorkspaceInputBinding? = nil) async -> Bool {
         switch command {
+        case let .readDashboard(spec):
+            return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .sendKeystroke(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .pasteTerminalText(spec):
@@ -1163,6 +1168,7 @@ final public class ViewerRelayClient {
             hostSupportsAgentImageInput = sessionState.supportsAgentImageInput == true
             browserTabs = sessionState.browserTabs ?? []
             hostSupportsSimulatorViewing = sessionState.supportsSimulatorViewing == true
+            hostSupportsDashboard = sessionState.supportsDashboard == true
             simulatorTabs = sessionState.simulatorTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             onSessionState?(sessionState)
@@ -1649,6 +1655,7 @@ final public class ViewerRelayClient {
         hostSupportsBrowserSharing = false
         hostSupportsBrowserExtensions = false
         hostSupportsSimulatorViewing = false
+        hostSupportsDashboard = false
         hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false
     }

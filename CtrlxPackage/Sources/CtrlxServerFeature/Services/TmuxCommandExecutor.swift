@@ -117,6 +117,7 @@ public actor TmuxCommandExecutor {
                  .listSessionDirectories,
                  .createSessionDirectory,
                  .prepareSessionWorktree,
+                 .readDashboard,
                  .browseFiles,
                  .browseBrowser,
                  .browseSimulator,

@@ -530,6 +530,41 @@ Two **aggregate** consumers built on the same OTEL stream, surfacing data that o
 - **iOS reply-after-stop summary persistence (issue #707)** — the agent's last-message summary shown in the iOS reply box (`StopResponseView`) rides the transient `AgentState.doneWorking(summary:)`, which viewing the session flips to `.idle` (`markHandled`), so navigating away and back used to lose it. `SessionStore.lastTurnSummaryByPane` caches it per pane with the **same lifecycle as `PaneState.recap`** (set on `doneWorking`, cleared on `working`/session-end) so it survives the handled-flip and re-entry; `SessionDetailService.replyForm` falls back to that cache, then to `recap.summary` for a fresh reconnect where the cache is empty. Telemetry-independent, so it works even when no recap was stamped. (The expanded summary also scrolls within a capped height so a long message isn't cropped.)
 - **Cost/usage overview** — `UsageAggregationStore` (`CtrlxServerFeature/Telemetry/UsageAggregationStore.swift`) is an `actor` persisting per-`(project, day)` totals as JSON under `~/.ctrlx/state/usage-aggregates.json` (so they survive session end **and** app restart). It folds each telemetry snapshot into the bucket as a *delta* against a persisted per-session baseline — cumulative OTEL counters are attributed to the day they occur, with no double-counting across a restart. `overview(asOf:)` builds the wire `UsageOverview` (today totals, a top-N per-project ranking, a per-day trend). It rides the existing `SessionStateMessage` as an optional field (`usageOverview`, `decodeIfPresent`-friendly like `agentProjects`), is shown atop the iOS session list and Mac sidebar as a collapsed one-line "Today" cell (`UsageOverviewView` in `CtrlxCommon` — a disclosure chevron expands it in place to the Projects/Recent-days details, transient state, always starts collapsed), and powers the Mac menu-bar "today" total.
 
+### Dashboard
+
+`HostDashboardService` owns demand-driven resource and account caches. Local Mac
+windows call `AppCoordinator.dashboardSnapshot()`; paired Viewers use encrypted
+`ReadDashboard` commands only after `supportsDashboard == true`. These commands
+use the bounded file-request queue so resource sampling does not block keyboard
+input, and do not rebroadcast `SessionStateMessage`.
+
+- `DashboardResourceSampler` shares a 5-second CPU/memory sample and a 60-second
+  disk refresh. Disk I/O runs independently, with at most one refresh in flight;
+  snapshots return the previous disk observation while it runs, so an unresponsive
+  volume cannot hold CPU/memory, account responses or file-request slots. Failed
+  refreshes are also throttled. CPU is a whole-machine 0–100% delta; the first
+  sample after a long idle period establishes a new baseline. Disk identities deduplicate work paths
+  on the same volume. Failures are reported per resource.
+- Plugins may implement `AgentAccountReporting`. Codex uses read-only app-server
+  account/rate-limit RPCs. Its stdin pipe suppresses SIGPIPE so a child closing
+  input produces a catchable write error rather than terminating the Host.
+  Claude Code uses the standard claude.ai profile/usage
+  endpoints only when its local credential is readable; API-key login and custom
+  credential endpoints are unsupported. Credentials never enter the wire model,
+  and existing statusline configuration is untouched. Queries are shared across
+  Viewers, limited to once per minute, and never start a model turn.
+- `DashboardStore` polls while its view is active and retains a small local
+  snapshot cache. `DashboardOverview` deduplicates Host state UUIDs and verified
+  provider/account/workspace/pool identities, preserving source observation times.
+  Shared quotas are never summed. Today’s observed usage uses each Host’s date;
+  legacy usage without reliable date context remains visible in Host details.
+- `DashboardView` is shared by the reusable Mac window and iOS Sessions status
+  sheet. Selecting a Host only changes the Dashboard; opening a session is an
+  explicit navigation action.
+
+See [Dashboard design and validation](dashboard-design.md) for scope, data-source
+conditions, merge rules, and current acceptance evidence.
+
 ### ConnectedViewerManager (`CtrlxServerFeature/Services/ConnectedViewerManager.swift`)
 
 `@Observable @MainActor` managing connections to all paired Viewer devices.

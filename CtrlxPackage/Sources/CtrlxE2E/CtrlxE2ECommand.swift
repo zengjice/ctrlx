@@ -361,6 +361,8 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
         SessionColorSyncScenario.scenario,
         SessionStateMenuScenario.scenario,
         SessionEmojiSyncScenario.scenario,
+        WorkspaceDashboardScenario.scenario,
+        WorkspaceDashboardScenario.macScenario,
         AppearanceModeScenario.scenario,
         RenameViewerDeviceScenario.scenario,
         TerminalEnvVarsScenario.scenario,

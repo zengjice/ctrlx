@@ -81,6 +81,7 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsAgentImageInput: Bool?
     public let browserTabs: [RemoteBrowserTab]?
     public let supportsSimulatorViewing: Bool?
+    public let supportsDashboard: Bool?
     public let simulatorTabs: [RemoteSimulatorTab]?
 
     public init(
@@ -110,6 +111,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsAgentImageInput: Bool? = nil,
         browserTabs: [RemoteBrowserTab]? = nil,
         supportsSimulatorViewing: Bool? = nil,
+        supportsDashboard: Bool? = nil,
         simulatorTabs: [RemoteSimulatorTab]? = nil,
         supportsPaneFiles: Bool? = nil, fileTabs: [HostFileTab]? = nil,
         workspaceIdentity: WorkspaceIdentityScope? = nil,
@@ -147,6 +149,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsAgentImageInput = supportsAgentImageInput
         self.browserTabs = browserTabs
         self.supportsSimulatorViewing = supportsSimulatorViewing
+        self.supportsDashboard = supportsDashboard
         self.simulatorTabs = simulatorTabs
     }
 
@@ -182,6 +185,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsAgentImageInput: supportsAgentImageInput,
             browserTabs: browserTabs,
             supportsSimulatorViewing: supportsSimulatorViewing,
+            supportsDashboard: supportsDashboard,
             simulatorTabs: simulatorTabs,
             supportsPaneFiles: supportsPaneFiles, fileTabs: fileTabs,
             workspaceIdentity: workspaceIdentity,

@@ -33,6 +33,8 @@
         @State private var closeError: String?
         @State private var isClosingSession = false
         @State private var attemptedNavigationRecovery = false
+        @State private var showingDashboard = false
+        @State private var dashboardDestination: SessionNavigation?
 
         var body: some View {
             Group {
@@ -43,6 +45,17 @@
                 }
             }
             .navigationTitle("Sessions")
+            .sheet(isPresented: $showingDashboard, onDismiss: {
+                if let destination = dashboardDestination {
+                    dashboardDestination = nil
+                    navigationPath.append(destination)
+                }
+            }) {
+                IOSDashboardView { host, session in
+                    dashboardDestination = SessionNavigation(sessionName: session, hostId: host)
+                }
+                .presentationDetents([.large])
+            }
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SessionNavigation.self) { destination in
                 SessionWorkspaceDestination(
@@ -69,7 +82,10 @@
                     .accessibilityLabel("Settings")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    overallConnectionStatusView
+                    Button { showingDashboard = true } label: { overallConnectionStatusView }
+                        .accessibilityLabel(overallConnectionStatusText)
+                        .accessibilityHint("Open Dashboard")
+                        .accessibilityIdentifier("dashboard-open")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     EditButton()

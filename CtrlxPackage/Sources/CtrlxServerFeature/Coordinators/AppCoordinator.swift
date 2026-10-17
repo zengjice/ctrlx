@@ -48,6 +48,7 @@
 
         public let agentBrowser: AgentBrowserService
         public let agentSimulator = AgentSimulatorService()
+        private let hostDashboard = HostDashboardService()
         let hostFileTabs = HostFileTabService()
         var workspaceRecovery: WorkspaceRecoveryController?
         let recoveredWorkspaceDrafts = WorkspaceRecoveryDrafts()
@@ -547,6 +548,7 @@
             paneActivationTask?.cancel()
             paneActivationTask = nil
             await workspaceRecovery?.stop()
+            await hostDashboard.stop()
             agentPluginCheckTask?.cancel()
             agentPluginCheckTask = nil
             await apiSocketServer.stop()
@@ -1969,6 +1971,26 @@
             return overview.isEmpty ? nil : overview
         }
 
+        public func dashboardSnapshot() async throws -> DashboardSnapshot {
+            guard let hostID = workspaceRecovery?.snapshot?.hostID else {
+                throw ViewerRelayClientError.commandFailed("Host workspace identity is not ready.")
+            }
+            let sources = (pluginRegistry?.active ?? [:]).sorted { $0.key < $1.key }.map { id, core in
+                HostDashboardService.Source(
+                    id: id, name: pluginRegistry?.manifest(id)?.displayName ?? id,
+                    reporter: core as? any AgentAccountReporting
+                )
+            }
+            let usage = await usageStore?.overview(asOf: Date())
+            let working = Set(windowManager.paneStates.values.compactMap { pane in
+                pane.agentSession?.isWorking == true ? pane.agentSession?.paneId : nil
+            }).count
+            return await hostDashboard.snapshot(
+                hostID: hostID, paths: tmuxService.panes.map(\.currentPath), sources: sources,
+                usage: usage, workingAgentCount: working
+            )
+        }
+
         /// On session end (issue #598): fold the pane's final telemetry into the
         /// durable usage store, push a one-shot end-of-session recap, then evict the
         /// session's live state from both the store baselines and the OTLP receiver
@@ -3250,6 +3272,12 @@
             let tmux = tmuxService
             let editorManager = editorSessionManager
             connectionManager.onCommand = { [weak self, executor, streamService, tmux, winManager, editorManager, paneStreaming, weak connectionManager] viewerId, command in
+                if case .readDashboard = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        return try await CommandResponseMessage(commandId: command.id, success: true, dashboard: self.dashboardSnapshot())
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .browseSimulator(spec) = command.command {
                     guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
                         return .failure(for: command.id, error: "Session no longer exists.")
@@ -3702,6 +3730,7 @@
                     supportsAgentImageInput: true,
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs,
                     supportsSimulatorViewing: await self?.agentSimulator.supportsSimulatorViewing,
+                    supportsDashboard: true,
                     simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs,
                     supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs,
                     workspaceIdentity: workspaceIdentity,
