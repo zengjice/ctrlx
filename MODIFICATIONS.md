@@ -7,6 +7,37 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.82 — Reliable quotas, Codex questions and Mac light themes
+
+- Prevent Codex quota queries from stalling during child-process cleanup. Observe
+  exit asynchronously within the existing 20-second deadline; retain the last
+  quota and observation time on failure, with an explicit timeout status.
+- Isolate Host account queries per plugin so a slow provider cannot stop other
+  accounts refreshing. Keep the one-minute query interval, mark overdue sources
+  unavailable and discard responses from removed or stopped sources.
+- Normalize unwritten terminal cells and resolve Unicode graphemes when reading
+  Codex question prompts on Mac and iOS. Preserve actual drafts, cursor guards
+  and the terminal buffer; improve recognition diagnostics without logging text.
+- Apply the shared Codex light-theme color adaptation to local, remote and
+  detached Mac terminals. Repaint existing content when the theme or Agent
+  changes, retaining inverse-video contrast and original terminal data.
+- Replace a blocking cleanup wait in the tmux Fit test fixture with the existing
+  asynchronous process runner, preserving its layout and ownership assertions.
+- Release validation: the bounded serial Swift regression passed with 3,570
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. All 24 focused tests passed, including repeated quota queries,
+  timeout/cancellation, terminal recognition, native Mac color rendering and
+  tmux layout preservation. Three fresh theme screenshots were reviewed.
+- Both boundary checks, 89 publisher/COS/distributed-installer tests, website
+  build and changed-line SwiftFormat checks passed. There are 54 existing format
+  findings in the Mac terminal file and one existing personal shell-wrapper
+  argument-forwarding failure; the distributed installer passed all 26 tests.
+- Signed Mac and iOS device-SDK Release builds passed. Expired local iOS
+  provisioning profiles were renewed through Xcode automatic signing. Physical
+  iPhone UI interaction and multi-Mac runtime acceptance were not rerun here.
+- Distribution: Mac build 15 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.81 — Dashboard quicklook, quota alerts and iOS terminal input
 
 - Show waiting panes, account quota summaries and Dashboard access in the Mac
