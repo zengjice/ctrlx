@@ -141,13 +141,23 @@ enum TerminalCursorTapNavigation {
             },
             readPrompt: { [weak self] in
                 guard let self else { return nil }
-                let prompt = currentQuestionPrompt
-                let reason = questionExpansionBlockReason ?? (prompt == nil ? "unrecognized-composer-or-footer" : "eligible")
+                let prompt: CodexQuestionPrompt?
+                let recognitionReason: String
+                do throws(CodexQuestionPrompt.RecognitionError) {
+                    prompt = try CodexQuestionPrompt(terminal: getTerminal())
+                    recognitionReason = "eligible"
+                } catch {
+                    prompt = nil
+                    recognitionReason = error.rawValue
+                }
+                let blockReason = questionExpansionBlockReason
+                let reason = blockReason ?? recognitionReason
                 if lastQuestionDiagnostic != reason {
                     lastQuestionDiagnostic = reason
-                    Self.questionLogger.notice("iOS question check: reason=\(reason, privacy: .public)")
+                    let terminal = getTerminal()
+                    Self.questionLogger.notice("iOS question check: reason=\(reason, privacy: .public) cursor=\(terminal.buffer.x),\(terminal.buffer.y) grid=\(terminal.cols)x\(terminal.rows)")
                 }
-                return canExpandCodexQuestions ? prompt : nil
+                return blockReason == nil ? prompt : nil
             },
             enqueue: { [weak self] count, completion in self?.onExpandCodexQuestions?(count, completion) ?? false }
         )
@@ -486,10 +496,6 @@ enum TerminalCursorTapNavigation {
 
         // MARK: - Codex Questions
 
-        var canExpandCodexQuestions: Bool {
-            questionExpansionBlockReason == nil
-        }
-
         var questionExpansionBlockReason: String? {
             // SwiftTerm still presents its copy menu with UIMenuController;
             // observe that menu, not a separate UIEditMenuInteraction.
@@ -518,17 +524,6 @@ enum TerminalCursorTapNavigation {
                 !canScroll || scrollPosition == 1 else { return "scrollback" }
             guard !terminal.synchronizedOutputActive else { return "synchronized-output" }
             return nil
-        }
-
-        var currentQuestionPrompt: CodexQuestionPrompt? {
-            let terminal = getTerminal()
-            let row = terminal.buffer.y
-            guard row >= 0, row < terminal.rows else { return nil }
-            let firstRow = max(0, row - 8)
-            let lines = (firstRow...row).map {
-                terminal.getLine(row: $0)?.translateToString(trimRight: true) ?? ""
-            }
-            return CodexQuestionPrompt(lines: lines, cursorRow: row - firstRow, cursorColumn: terminal.buffer.x)
         }
 
         func scheduleQuestionCheck() {

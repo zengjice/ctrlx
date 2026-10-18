@@ -111,6 +111,11 @@ suffixes and intervening output still fail closed. Warning changes are
 presentation-only and cannot re-arm a dismissed question.
 Braille animation is ignored only around known footer/empty-composer structure,
 not inside a user's draft. Source: `CtrlxCommon/Models/CodexQuestionPrompt.swift`.
+Mac/iOS native readers resolve terminal-owned graphemes, convert unwritten NUL cells
+to spaces and skip the trailing cells of wide glyphs. This preserves word gaps
+and actual draft text without changing the terminal buffer; tmux's textual Host
+recheck still uses the same strict parser. The native reader lives in
+`CtrlxCommon/Utilities/CodexQuestionPrompt+Terminal.swift`.
 Age is presentation-only: ticks neither restart the 350 ms stability check nor
 re-arm a dismissed queue. Other shortcuts, arbitrary suffixes, incomplete hints
 and drafts still fail closed. Mac/iOS-side
@@ -176,7 +181,9 @@ inside the existing encrypted payload. The `CodexQuestions` OSLog category recor
 Host refusal/send results, client eligibility (focus, selection, scrollback and
 composer recognition), deduplication and acknowledgement results without
 question/draft content or hook IDs. Native eligibility diagnostics are emitted only
-when their reason changes.
+when their reason changes. Recognition failures distinguish an invalid cursor row,
+a cursor away from the input start, an unknown/nonempty composer and an unknown
+footer. iOS also records cursor coordinates and grid dimensions, never row text.
 
 On iOS, `TerminalCodexQuestionExpansion` runs outside SwiftUI observable state.
 The selected pane's native wrapper reads at most nine live rows, after parsing
@@ -191,7 +198,7 @@ to force eligibility. Counts enter the same `KeystrokeDebouncer` FIFO as text an
 mouse input, with a two-second acknowledgement timeout. Pending acknowledgements
 suppress duplicate enqueues; queue cancellation reports failure to the scheduler.
 Host-wide dedup also covers an iPhone and Mac viewing the same pane.
-Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionPromptUsageWarningTests`, `CodexQuestionExpansionTests`,
+Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionPromptUsageWarningTests`, `CodexQuestionTerminalTests`, `CodexQuestionExpansionTests`,
 `CodexQuestionShellWrapperTests`, `TerminalCodexQuestionExpansionTests` and
 `KeystrokeDebouncerTests`; wire compatibility is covered by
 `CodexQuestionAcknowledgementTests` and the isolated encrypted relay fixture in
@@ -199,6 +206,11 @@ Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionPromptUsageWarningTests`
 footer passed manual acceptance on iPhone Air with the updated Host (2026-09-30).
 The complete UIKit focus/scroll/menu matrix still needs on-device acceptance;
 the scheduler and Host guards run in unit tests.
+The 2026-10-19 blank-cell change passed 75 focused tests and an iOS Simulator
+build, including real SwiftTerm buffer fixtures with Unicode drafts. The recurring
+3.0.81 (14) iPhone failure was traced to local recognition, but its actual parser
+inputs were not captured before the device became unavailable. This change has
+not yet passed physical-device acceptance for that reproduction.
 
 ### Editor Override (Ctrl-G)
 

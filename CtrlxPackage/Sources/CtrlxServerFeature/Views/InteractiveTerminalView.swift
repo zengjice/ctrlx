@@ -2147,15 +2147,7 @@
         }
 
         var currentQuestionPrompt: CodexQuestionPrompt? {
-            let terminal = getTerminal()
-            let row = terminal.buffer.y
-            guard row >= 0, row < terminal.rows else { return nil }
-            // Only the composer and its nearby footer, never scan scrollback.
-            let start = max(0, row - 8)
-            let lines = (start...row).map {
-                terminal.getLine(row: $0)?.translateToString(trimRight: true) ?? ""
-            }
-            return CodexQuestionPrompt(lines: lines, cursorRow: row - start, cursorColumn: terminal.buffer.x)
+            try? CodexQuestionPrompt(terminal: getTerminal())
         }
 
         private var isQuestionFrameComplete: Bool {
@@ -2171,8 +2163,11 @@
                 }
                 return
             }
-            guard let candidate = currentQuestionPrompt else {
-                reportQuestionCheck("unrecognized-composer-or-footer", count: nil)
+            let candidate: CodexQuestionPrompt
+            do {
+                candidate = try CodexQuestionPrompt(terminal: getTerminal())
+            } catch {
+                reportQuestionCheck(error.rawValue, count: nil)
                 return
             }
             if let reason = questionExpansionBlockReason {

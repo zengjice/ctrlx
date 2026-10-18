@@ -4,12 +4,25 @@ import Foundation
 /// Read the live screen, never scrollback or raw output chunks. Unknown layouts
 /// are left alone; Shift+Left remains available manually.
 public struct CodexQuestionPrompt: Equatable, Sendable {
+    public enum RecognitionError: String, Error, Sendable {
+        case cursorOutsideScreen = "cursor-outside-screen"
+        case cursorNotAtStart = "cursor-not-at-start"
+        case unrecognizedComposer = "unrecognized-composer"
+        case unrecognizedFooter = "unrecognized-footer"
+    }
+
     /// Presentation-only timer ticks must not restart the stability check or
     /// re-arm a queue the user dismissed with Escape.
     public let count: Int
 
     public init?(lines: [String], cursorRow: Int, cursorColumn: Int) {
-        guard lines.indices.contains(cursorRow), cursorColumn == 2 else { return nil }
+        guard let prompt = try? Self(validating: lines, cursorRow: cursorRow, cursorColumn: cursorColumn) else { return nil }
+        self = prompt
+    }
+
+    public init(validating lines: [String], cursorRow: Int, cursorColumn: Int) throws(RecognitionError) {
+        guard lines.indices.contains(cursorRow) else { throw .cursorOutsideScreen }
+        guard cursorColumn == 2 else { throw .cursorNotAtStart }
         let rawComposer = lines[cursorRow]
         // Codex can animate braille particles over its empty placeholder. Do
         // not strip braille from actual user input (no known placeholder).
@@ -17,7 +30,7 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
             ? Self.withoutParticles(rawComposer) : rawComposer).trimmingCharacters(in: .whitespaces)
         // Only a known empty composer is safe. In particular, don't select a
         // character in a draft, even when its cursor happens to be at column 2.
-        guard composer == "›" || composer == "› Ask Codex to do anything" else { return nil }
+        guard composer == "›" || composer == "› Ask Codex to do anything" else { throw .unrecognizedComposer }
 
         let footer = lines.prefix(cursorRow).suffix(8)
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -30,7 +43,7 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
             guard
                 composer == "› Ask Codex to do anything", !footer.contains(where: {
                     $0.contains("Queued follow-up") || $0.contains("to answer") || $0.hasPrefix("?")
-                }) else { return nil }
+                }) else { throw .unrecognizedFooter }
             self.count = 0
         }
     }
