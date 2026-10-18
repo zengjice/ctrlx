@@ -8,10 +8,11 @@
         @Environment(SessionStore.self) private var sessionStore
         @Environment(ViewerConnectionManager.self) private var connectionManager
         @Environment(IOSSettings.self) private var settings
+        @Environment(DashboardStore.self) private var dashboardStore
         @Environment(\.dismiss) private var dismiss
 
         var body: some View {
-            DashboardView(endpoints: endpoints, sessions: sessions, openSession: { host, session in
+            DashboardView(store: dashboardStore, endpoints: endpoints, sessions: sessions, openSession: { host, session in
                 openSession(host, session)
                 dismiss()
             }, close: { dismiss() })

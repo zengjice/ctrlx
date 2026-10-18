@@ -16,6 +16,7 @@
     struct SessionListView: View {
         @Binding var navigationPath: NavigationPath
         let onOpenSettings: () -> Void
+        let onOpenDashboard: () -> Void
 
         @Environment(SessionStore.self) private var sessionStore
         @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
@@ -33,8 +34,6 @@
         @State private var closeError: String?
         @State private var isClosingSession = false
         @State private var attemptedNavigationRecovery = false
-        @State private var showingDashboard = false
-        @State private var dashboardDestination: SessionNavigation?
 
         var body: some View {
             Group {
@@ -45,17 +44,6 @@
                 }
             }
             .navigationTitle("Sessions")
-            .sheet(isPresented: $showingDashboard, onDismiss: {
-                if let destination = dashboardDestination {
-                    dashboardDestination = nil
-                    navigationPath.append(destination)
-                }
-            }) {
-                IOSDashboardView { host, session in
-                    dashboardDestination = SessionNavigation(sessionName: session, hostId: host)
-                }
-                .presentationDetents([.large])
-            }
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SessionNavigation.self) { destination in
                 SessionWorkspaceDestination(
@@ -82,7 +70,7 @@
                     .accessibilityLabel("Settings")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingDashboard = true } label: { overallConnectionStatusView }
+                    Button(action: onOpenDashboard) { overallConnectionStatusView }
                         .accessibilityLabel(overallConnectionStatusText)
                         .accessibilityHint("Open Dashboard")
                         .accessibilityIdentifier("dashboard-open")
@@ -1239,7 +1227,7 @@
             Group {
                 if let connectionManager {
                     NavigationStack(path: $navigationPath) {
-                        SessionListView(navigationPath: $navigationPath, onOpenSettings: { })
+                        SessionListView(navigationPath: $navigationPath, onOpenSettings: { }, onOpenDashboard: { })
                             .environment(sessionStore)
                             .environment(fileWorkspaces)
                             .environment(connectionManager)

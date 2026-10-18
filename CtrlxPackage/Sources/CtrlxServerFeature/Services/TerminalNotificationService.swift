@@ -1,4 +1,5 @@
 #if os(macOS)
+    import CtrlxCommon
     import CtrlxNetworking
     import Dependencies
     import DependenciesMacros
@@ -170,6 +171,11 @@
     final class ForegroundNotificationDelegate: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
         static let shared = ForegroundNotificationDelegate()
 
+        @MainActor
+        static func install() {
+            UNUserNotificationCenter.current().delegate = shared
+        }
+
         /// Handler called on the main actor when a notification is tapped.
         /// `hostId` is non-nil when the notification came from a remote host
         /// (viewer mode), so the tap reveals that host's remote session.
@@ -191,6 +197,12 @@
             didReceive response: UNNotificationResponse
         ) async {
             let userInfo = response.notification.request.content.userInfo
+            if userInfo[DashboardNotificationClient.userInfoKey] as? Bool == true {
+                await MainActor.run {
+                    NotificationCenter.default.post(name: DashboardNotificationClient.openNotification, object: nil)
+                }
+                return
+            }
 
             if userInfo["licenseAlert"] as? Bool == true {
                 // Schedule after didReceive returns — the system may reclaim focus

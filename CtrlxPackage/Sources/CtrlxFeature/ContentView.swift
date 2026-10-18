@@ -15,6 +15,7 @@
         @State private var settings = IOSSettings()
         @State private var connectionManager: ViewerConnectionManager?
         @State private var sessionStore = SessionStore()
+        @State private var dashboardStore = DashboardStore()
         @State private var fileWorkspaces = IOSFileBrowserWorkspaceStore()
         @State private var initializationError: String?
 
@@ -58,6 +59,7 @@
             }
             .environment(settings)
             .environment(sessionStore)
+            .environment(dashboardStore)
             .environment(fileWorkspaces)
             .environment(agentBackgroundMonitoring)
             .preferredColorScheme(settings.appearanceMode.colorScheme)
@@ -75,6 +77,14 @@
                 await initializeConnectionManager()
                 setupConnectionManagerHandlers()
                 await autoConnectIfNeeded()
+            }
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                await dashboardStore.monitor {
+                    settings.pairedHosts.map {
+                        .remote($0, manager: connectionManager, usage: sessionStore.usageOverview(for: $0.id))
+                    }
+                }
             }
             .onChange(of: connectionManager?.managedHostIDs ?? []) {
                 fileWorkspaces.retainHosts(Set(settings.pairedHosts.map(\.id)))
@@ -405,6 +415,8 @@
 
         @State private var sessionsNavigationPath = NavigationPath()
         @State private var showingSettings = false
+        @State private var showingDashboard = false
+        @State private var dashboardDestination: SessionNavigation?
 
         @State private var pushService = PushNotificationService.shared
         /// Tracks the currently displayed session pane ID for deep link deduplication.
@@ -420,10 +432,15 @@
             NavigationStack(path: $sessionsNavigationPath) {
                 SessionListView(
                     navigationPath: $sessionsNavigationPath,
-                    onOpenSettings: { showingSettings = true }
+                    onOpenSettings: { showingSettings = true },
+                    onOpenDashboard: { showingDashboard = true }
                 )
             }
-            .sheet(isPresented: $showingSettings) {
+            .sheet(isPresented: $showingSettings, onDismiss: {
+                if pushService.pendingDashboard {
+                    openDashboardNotification()
+                }
+            }) {
                 NavigationStack {
                     SettingsView()
                         .toolbar {
@@ -440,7 +457,29 @@
                 // here so toggling the picker updates the sheet's chrome.
                 .preferredColorScheme(settings.appearanceMode.colorScheme)
             }
+            .sheet(isPresented: $showingDashboard, onDismiss: {
+                if let destination = dashboardDestination {
+                    dashboardDestination = nil
+                    // Replacing a one-entry path does not trigger the count observer.
+                    currentlyDisplayedPaneId = nil
+                    sessionsNavigationPath = NavigationPath()
+                    sessionsNavigationPath.append(destination)
+                }
+            }) {
+                IOSDashboardView { host, session in
+                    dashboardDestination = SessionNavigation(sessionName: session, hostId: host)
+                }
+                .presentationDetents([.large])
+            }
+            .onChange(of: pushService.pendingDashboard) { _, pending in
+                if pending {
+                    openDashboardNotification()
+                }
+            }
             .task {
+                if pushService.pendingDashboard {
+                    openDashboardNotification()
+                }
                 await connectIfNeeded()
             }
             .onChange(of: pushService.pendingDeepLink) { _, _ in
@@ -463,6 +502,15 @@
                     handleDeepLink(deepLink)
                 }
             }
+        }
+
+        private func openDashboardNotification() {
+            if showingSettings {
+                showingSettings = false
+                return
+            }
+            pushService.pendingDashboard = false
+            showingDashboard = true
         }
 
         /// Navigate to a specific session when a deep link is received.

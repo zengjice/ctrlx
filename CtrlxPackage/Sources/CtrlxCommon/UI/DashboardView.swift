@@ -17,16 +17,18 @@ public struct DashboardView: View {
     private let sessions: @MainActor (String) -> [DashboardSessionLink]
     private let openSession: @MainActor (String, String) -> Void
     private let close: (@MainActor () -> Void)?
-    @State private var store = DashboardStore()
+    private let store: DashboardStore
     @State private var path: [String] = []
     @Environment(\.scenePhase) private var scenePhase
 
     public init(
+        store: DashboardStore,
         endpoints: @escaping @MainActor () -> [DashboardEndpoint],
         sessions: @escaping @MainActor (String) -> [DashboardSessionLink] = { _ in [] },
         openSession: @escaping @MainActor (String, String) -> Void = { _, _ in },
         close: (@MainActor () -> Void)? = nil
     ) {
+        self.store = store
         self.endpoints = endpoints
         self.sessions = sessions
         self.openSession = openSession
@@ -46,6 +48,15 @@ public struct DashboardView: View {
                         Text("Account information appears when a supported Host is reachable.").foregroundStyle(.secondary)
                     }
                     ForEach(accounts) { account in DashboardAccountRow(group: account) }
+                }
+                Section {
+                    Toggle("Low quota alerts", isOn: Binding(get: { store.lowQuotaAlertsEnabled }, set: { store.lowQuotaAlertsEnabled = $0 }))
+                    if let error = store.notificationError {
+                        Text(error).font(.caption).foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("Alerts at 10% remaining. On iPhone, checks only while the app is open.")
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Section("Hosts") {
                     ForEach(hosts) { host in

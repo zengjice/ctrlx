@@ -41,10 +41,18 @@ public struct KeyboardModifiers: OptionSet, Sendable {
 extension KeyboardModifiers: CustomStringConvertible {
     public var description: String {
         var parts: [String] = []
-        if contains(.command) { parts.append("command") }
-        if contains(.shift) { parts.append("shift") }
-        if contains(.option) { parts.append("option") }
-        if contains(.control) { parts.append("control") }
+        if contains(.command) {
+            parts.append("command")
+        }
+        if contains(.shift) {
+            parts.append("shift")
+        }
+        if contains(.option) {
+            parts.append("option")
+        }
+        if contains(.control) {
+            parts.append("control")
+        }
         return parts.isEmpty ? "[]" : parts.joined(separator: "+")
     }
 }
@@ -381,6 +389,8 @@ public enum TestStep: Sendable {
     case macWaitForElementQueryToDisappear(ElementQuery, timeout: TimeInterval = 10, instance: Int = 0)
     /// Open the Panes window via the status item menu
     case macOpenPanesWindow(instance: Int = 0)
+    /// Verify the quicklook sections and open Dashboard through the status menu.
+    case macOpenDashboardWindow(instance: Int = 0)
     /// Move the macOS app window to a screen position
     case macMoveWindow(x: Int, y: Int, instance: Int = 0)
     /// Resize the macOS app window

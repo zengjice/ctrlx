@@ -1,4 +1,5 @@
 #if os(iOS)
+    import CtrlxCommon
     import Dependencies
     import DependenciesMacros
     import Foundation
@@ -131,6 +132,7 @@
 
         /// Deep link info from a tapped notification.
         public var pendingDeepLink: DeepLinkInfo?
+        public var pendingDashboard = false
 
         /// Information needed to deep link to a specific session
         public struct DeepLinkInfo: Equatable {
@@ -268,6 +270,10 @@
         /// Handle a notification response (user tapped on notification).
         public func handleNotificationResponse(_ response: UNNotificationResponse) {
             let userInfo = response.notification.request.content.userInfo
+            if userInfo[DashboardNotificationClient.userInfoKey] as? Bool == true {
+                pendingDashboard = true
+                return
+            }
 
             if
                 let paneId = userInfo["paneId"] as? String,

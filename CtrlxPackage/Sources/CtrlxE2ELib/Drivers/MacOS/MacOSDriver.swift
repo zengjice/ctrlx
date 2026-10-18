@@ -471,6 +471,25 @@ public actor MacOSDriver {
         try await runAppleScript(script)
     }
 
+    public func openDashboardWindow() async throws {
+        let script = try """
+        tell application "System Events"
+            tell (first process whose unix id is \(requirePID()))
+                click menu bar item 1 of menu bar 2
+                delay 0.5
+                tell menu 1 of menu bar item 1 of menu bar 2
+                    if not (exists menu item "Needs attention") then error "Missing attention section"
+                    if not (exists menu item "Accounts") then error "Missing accounts section"
+                    if not (exists menu item "All Sessions") then error "Missing session submenu"
+                    click menu item "Dashboard…"
+                end tell
+            end tell
+        end tell
+        delay 1
+        """
+        try await runAppleScript(script)
+    }
+
     /// Move the macOS app window to a screen position via AX.
     public func moveWindow(x: Int, y: Int) async throws {
         let pid = try requirePID()
@@ -478,10 +497,14 @@ public actor MacOSDriver {
         var lastReason = "(no attempt recorded)"
         for attempt in 1...3 {
             let result = MacOSAccessibility.moveWindowDetailed(appPID: pid, x: x, y: y)
-            if result.success { return }
+            if result.success {
+                return
+            }
             lastReason = result.reason
             logger.info("Move attempt \(attempt)/3 failed: \(lastReason)")
-            if attempt < 3 { try await Task.sleep(for: .milliseconds(250)) }
+            if attempt < 3 {
+                try await Task.sleep(for: .milliseconds(250))
+            }
         }
         throw MacOSDriverError.appleScriptFailed(
             "Failed to move window to (\(x), \(y)) after 3 attempts — \(lastReason)"
@@ -495,10 +518,14 @@ public actor MacOSDriver {
         var lastReason = "(no attempt recorded)"
         for attempt in 1...3 {
             let result = MacOSAccessibility.resizeWindowDetailed(appPID: pid, width: width, height: height)
-            if result.success { return }
+            if result.success {
+                return
+            }
             lastReason = result.reason
             logger.info("Resize attempt \(attempt)/3 failed: \(lastReason)")
-            if attempt < 3 { try await Task.sleep(for: .milliseconds(250)) }
+            if attempt < 3 {
+                try await Task.sleep(for: .milliseconds(250))
+            }
         }
         throw MacOSDriverError.appleScriptFailed(
             "Failed to resize window to \(width)x\(height) after 3 attempts — \(lastReason)"

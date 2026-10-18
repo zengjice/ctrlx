@@ -7,6 +7,57 @@ import Testing
 @MainActor
 struct DashboardStoreTests {
     @Test
+    func sharedStoreAlertsOnceAndToggleStartsWithSilentBaseline() async {
+        let sink = AlertSink()
+        await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[DashboardNotificationClient.self].notify = { alert in await sink.append(alert) }
+        } operation: {
+            let store = DashboardStore()
+            let hostID = UUID()
+            @MainActor
+            func endpoint(used: Double) -> DashboardEndpoint {
+                .init(host: .init(id: "local", name: "This Mac", isConnected: true, isSupported: true)) {
+                    let now = Date()
+                    return .init(hostID: hostID, generatedAt: now, timeZoneIdentifier: "UTC", accounts: [
+                        .init(
+                            id: "default",
+                            pluginID: "codex",
+                            providerName: "Codex",
+                            label: "Personal",
+                            configurationLabel: "Default",
+                            identity: .init(providerID: "codex", accountID: "person", workspaceID: "personal", poolID: "codex"),
+                            authentication: .signedIn,
+                            availability: .available,
+                            quotaObservedAt: now,
+                            windows: [.init(id: "week", title: "7 days", usedPercent: used)]
+                        ),
+                    ])
+                }
+            }
+            await store.refresh([endpoint(used: 80)])
+            await store.refresh([endpoint(used: 95)])
+            await store.refresh([endpoint(used: 95)])
+            #expect(await sink.count == 1)
+            #expect(store.quotaSummaries().first?.isLow == true)
+            store.lowQuotaAlertsEnabled = false
+            await store.refresh([endpoint(used: 80)])
+            await store.refresh([endpoint(used: 95)])
+            #expect(await sink.count == 1)
+            store.lowQuotaAlertsEnabled = true
+            await store.refresh([endpoint(used: 95)])
+            #expect(await sink.count == 1)
+        }
+    }
+
+    private actor AlertSink {
+        var count = 0
+        func append(_: DashboardQuotaAlert) {
+            count += 1
+        }
+    }
+
+    @Test
     func unsupportedAndOfflineHostsAreNeverQueried() async {
         await withDependencies { $0[PreferencesService.self] = .inMemory() } operation: {
             let store = DashboardStore()

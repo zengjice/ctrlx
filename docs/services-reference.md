@@ -553,14 +553,31 @@ input, and do not rebroadcast `SessionStateMessage`.
   credential endpoints are unsupported. Credentials never enter the wire model,
   and existing statusline configuration is untouched. Queries are shared across
   Viewers, limited to once per minute, and never start a model turn.
-- `DashboardStore` polls while its view is active and retains a small local
-  snapshot cache. `DashboardOverview` deduplicates Host state UUIDs and verified
+- `DashboardStore` is shared by the Dashboard and quota monitor in each client,
+  and retains a small local snapshot cache. Mac monitors every 30 seconds while
+  running; iOS monitors only while foregrounded. An open Dashboard refreshes
+  resources every 5 seconds. Host account queries remain limited to once per minute. `DashboardOverview` deduplicates Host state UUIDs and verified
   provider/account/workspace/pool identities, preserving source observation times.
   Shared quotas are never summed. Today’s observed usage uses each Host’s date;
   legacy usage without reliable date context remains visible in Host details.
 - `DashboardView` is shared by the reusable Mac window and iOS Sessions status
   sheet. Selecting a Host only changes the Dashboard; opening a session is an
   explicit navigation action.
+
+- The Mac status menu puts waiting panes first (including their Host), followed by
+  per-account quota summaries and a Dashboard action. Other sessions remain under
+  All Sessions. A summary names the limiting quota window and keeps Host sources;
+  stale observations are labelled and never light the low-quota indicator.
+- `DashboardQuotaAlertTracker` shares the same account grouping on Mac and iOS.
+  It alerts when a window crosses to 10% remaining, once per observed quota cycle;
+  first observations, new accounts and already-low reset cycles are silent.
+  Unverified identities and failed, offline, expired, older-than-five-minute or conflicting readings cannot
+  trigger alerts. Sample ages are normalized from the Host clock; quota reset deadlines retain
+  the provider’s absolute timestamp, matching the Dashboard.
+  One local notification combines windows crossing together for an account.
+  The Dashboard's Low quota alerts switch is local to each client; notifications
+  respect existing OS authorization, and taps open the Dashboard. No new Relay
+  push or iOS background sampling is introduced.
 
 See [Dashboard design and validation](dashboard-design.md) for scope, data-source
 conditions, merge rules, and current acceptance evidence.

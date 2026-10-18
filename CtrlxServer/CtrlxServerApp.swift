@@ -547,11 +547,12 @@ struct TmuxPaneMirrorApp: App {
         // Menu bar extra - always visible, main entry point to the app
         MenuBarExtra {
             MenuBarExtraView()
+                .labelStyle(.titleAndIcon)
                 .environment(coordinator.windowManager)
                 .environment(coordinator.settings)
                 .environment(coordinator)
         } label: {
-            MenuBarLabel(pendingCount: totalPendingSessionCount)
+            MenuBarLabel(pendingCount: totalPendingSessionCount, lowQuotaCount: coordinator.dashboardStore.quotaSummaries().filter(\.isLow).count)
                 .task {
                     coordinator.settings.applyAppearance()
                     // Capture the Settings-opening action once at launch so a
@@ -565,6 +566,7 @@ struct TmuxPaneMirrorApp: App {
                 .task(id: showingTmuxInstallGuide) {
                     guard !showingTmuxInstallGuide else { return }
                     await coordinator.setupAllServices()
+                    await coordinator.dashboardStore.monitor(endpoints: coordinator.dashboardEndpoints)
                 }
         }
     }

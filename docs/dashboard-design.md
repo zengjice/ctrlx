@@ -250,7 +250,7 @@ Agent 特有的身份与额度读取放在插件能力中，公共 UI 使用统�
 - 已验证 Codex CLI 0.162.1 的 `initialize`、`account/read`、`account/rateLimits/read` 只读调用；未创建对话或发起模型请求。实际返回包含 `accountId` 与 `rateLimitsByLimitId`，本次主要窗口是 10080 分钟，说明窗口时长必须由数据驱动。认证元数据包含账号与用户标识；跨两台真实 Host 的去重仍待验证。
 - 本机 Claude Code 2.1.276 的 `auth status` 返回 `api_key`，没有订阅账号信息；不能用它证明 Claude 订阅额度已通过真账号验收。订阅路径已实现并通过隔离样本测试，不写入或覆盖自定义 statusline；真实订阅账号验收仍未完成。
 - 已实现共享数据模型、样本新旧判断、Host/账号去重、日期口径和离线缓存。`ReadDashboard` 通过独立命令响应返回，`supportsDashboard` 显式声明能力；旧 Host 不接收新命令。
-- 已实现 Host 按需资源采集与统一额度缓存：资源请求共享 5 秒缓存，磁盘通常 60 秒更新，账号查询至多每分钟一次；关闭页面后不继续轮询。首次 CPU 采样只建立基线，长时间未查看后重新建立基线。
+- 已实现 Host 按需资源采集与统一额度缓存：资源请求共享 5 秒缓存，磁盘通常 60 秒更新，账号查询至多每分钟一次；首版关闭页面后不继续轮询；后续快览监测见 11.2。首次 CPU 采样只建立基线，长时间未查看后重新建立基线。
 - 磁盘改为独立的单任务后台刷新，快照不等待磁盘；读取期间返回旧磁盘数据与原采样时间，首次读取显示等待状态。无响应的文件系统调用可能仍在后台等待，但不会阻塞其余 Dashboard 数据或因轮询反复创建任务。Codex stdin 写端设置 `F_SETNOSIGPIPE`，子进程断开输入时返回可捕获错误。
 - 已接入 Mac 独立窗口和 iOS 在线状态入口，共用账号、Host、用量界面；账号明细保留每个来源的登录状态和采样时间。详情进入会话才改变工作对象。
 - Codex 实际服务端 `accountId` 与本机认证配置匹配已核实。Claude 使用其 CLI 同样读取的只读 `/api/oauth/profile`、`/api/oauth/usage`，不修改 statusline；仅支持可读取凭证的标准 claude.ai 登录，不自动刷新或写入凭证，其他方式明确不可用。只读接口属于 CLI 实现细节，服务商变更时可能需要更新适配。
@@ -268,3 +268,17 @@ Agent 特有的身份与额度读取放在插件能力中，公共 UI 使用统�
 - 本地证据保存在 `.build-local/dashboard-full-tests.log`、`.build-local/dashboard-macos-build.log`、`.build-local/dashboard-ios-build.log` 和 `.build-local/dashboard-acceptance/`，不进入 Git。
 
 尚未覆盖：真实 Claude 订阅账号、两台物理 Mac 的共享账号，以及 iPhone 真机。已通过的模型/协议测试与同机隔离实例不能代替这些环境的验收。未运行包含 Apple Intelligence 评估的完整未过滤测试集。
+
+### 11.2 菜单快览与低额度提醒（2026-10-18）
+
+- Mac 菜单顶部显示待处理 pane，点击沿用本地／远程 Host 的精确定位；其后按账号显示额度最低的窗口、剩余百分比和来源 Host，点击打开 Dashboard。其他会话收进 All Sessions。
+- 菜单栏保留待处理数量；有新鲜、可信的低额度账号时增加警示图标。账号未知、来源冲突或旧观测不会冒充当前低额度。
+- 每个客户端共享一个 DashboardStore。Mac 常驻每 30 秒读取快照，iOS 仅前台读取；打开 Dashboard 时仍按 5 秒更新资源。Host 的账号查询缓存保持每分钟至多一次。
+- 剩余额度从高于 10% 跨到 10% 或更低时通知。同账号多 Host 合并、同一窗口同周期只提示一次、同次多个窗口合成一条；首次读取、换账号及首次读到已低额度的新周期不提示。断线、失败、过期、冲突及过旧数据不参与触发。
+- Dashboard 增加本客户端 Low quota alerts 开关，默认开启；使用已有系统通知授权，点击通知进入 Dashboard。本版不新增 Relay 推送或 iOS 挂起后的额度采样。
+- 参考 Agent HUD Open 的信息分层和提醒语义，未引入其依赖或 UI 框架。
+- Claude `get_usage` 只读探测：本机 CLI 2.1.276 在禁用 hooks、不发送 prompt 的独立临时工作目录中，约 4.19 秒返回成功控制响应；字段包含 `rate_limits`、`rate_limits_available`、`subscription_type`。当前 API Key 登录返回 `rate_limits_available: false`，不足以验收订阅数据及账号身份绑定，因此本版保留原 HTTP 查询实现。没有读取或输出凭证，也未改变用户 CLI 配置。
+- 专项测试 `Dashboard|ClaudeAccountTests` 共 36 项通过，覆盖跨阈值、周期去重、共享账号、离线／过期／冲突观测、开关重建基线，以及 Host 时钟偏差与服务商绝对重置时间。Mac 与 iOS Simulator Debug 完整构建通过；SwiftFormat、差异空白检查、品牌和技术边界检查通过。
+- 隔离的 Mac Host／Viewer 自动化验收 58 步通过，实际检查菜单的 Needs attention、Accounts、All Sessions，并从两端菜单打开 Dashboard、显示提醒开关与机器资源。截图人工检查；不以动态账号数据执行像素基线比较。运行证据在 `.build-local/dashboard-quicklook-acceptance/`，专项测试与构建日志在 `.build-local/dashboard-quicklook-*.log`，不进入 Git。
+- 本轮未验证 iPhone 真机、真实系统通知投递或 Claude 订阅账号；iOS 前台提醒规则与两端共享同一模型并由专项测试覆盖。本轮没有替换用户安装的 App，也未发布。
+- 审查修复：iOS 从 Dashboard 切换会话时显式清空旧通知的 pane 去重标记，避免导航深度不变时遗漏清理；仅关闭 Dashboard 保留标记。`test_dashboard_notification_navigation` 将生产导航回调载入离屏 SwiftUI，验证通知 A → Dashboard B → 通知 A、无选择关闭、重复通知及返回列表；旧回调对照失败，修复后通过。该验证不等同于真实 iOS 系统通知投递。

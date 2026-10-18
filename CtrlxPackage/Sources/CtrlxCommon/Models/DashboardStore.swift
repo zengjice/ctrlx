@@ -48,12 +48,38 @@ final public class DashboardStore {
     public private(set) var hosts: [DashboardHost] = []
     public private(set) var isRefreshing = false
     public private(set) var cacheError: String?
+    public private(set) var notificationError: String?
+    public var lowQuotaAlertsEnabled: Bool {
+        didSet {
+            preferences.setBool(lowQuotaAlertsEnabled, "dashboard.lowQuotaAlerts")
+            quotaAlerts = DashboardQuotaAlertTracker()
+        }
+    }
+
     @ObservationIgnored @Dependency(PreferencesService.self) private var preferences
+    @ObservationIgnored @Dependency(DashboardNotificationClient.self) private var notifications
+    @ObservationIgnored private var quotaAlerts = DashboardQuotaAlertTracker()
     @ObservationIgnored private var restored = false
     @ObservationIgnored private var lastSavedAt: Date?
     private static let key = "dashboard.snapshots.v1"
 
-    public init() { }
+    public init() {
+        @Dependency(PreferencesService.self) var preferences
+        self.lowQuotaAlertsEnabled = preferences.optionalBool("dashboard.lowQuotaAlerts") ?? true
+    }
+
+    public func quotaSummaries(at date: Date = Date()) -> [DashboardQuotaSummary] {
+        DashboardOverview.accounts(in: hosts).map { DashboardQuotaSummary(group: $0, at: date) }
+    }
+
+    /// A lightweight account monitor; the open Dashboard still requests its faster resource refresh.
+    public func monitor(endpoints: @MainActor () -> [DashboardEndpoint]) async {
+        while !Task.isCancelled {
+            await refresh(endpoints())
+            do { try await Task.sleep(for: .seconds(30)) }
+            catch { return }
+        }
+    }
 
     public func refresh(_ endpoints: [DashboardEndpoint]) async {
         guard !isRefreshing else { return }
@@ -93,6 +119,14 @@ final public class DashboardStore {
             }
         }
         guard !Task.isCancelled else { return }
+        if lowQuotaAlertsEnabled {
+            for alert in quotaAlerts.update(hosts: hosts, at: Date()) {
+                do {
+                    try await notifications.notify(alert)
+                    notificationError = nil
+                } catch { notificationError = "Could not deliver a low-quota notification." }
+            }
+        }
         if lastSavedAt.map({ Date().timeIntervalSince($0) >= 60 }) ?? true {
             do {
                 try preferences.setData(JSONEncoder().encode(hosts), Self.key)

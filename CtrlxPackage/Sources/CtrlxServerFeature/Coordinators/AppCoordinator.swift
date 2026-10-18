@@ -49,6 +49,17 @@
         public let agentBrowser: AgentBrowserService
         public let agentSimulator = AgentSimulatorService()
         private let hostDashboard = HostDashboardService()
+        public let dashboardStore = DashboardStore()
+
+        public func dashboardEndpoints() -> [DashboardEndpoint] {
+            [DashboardEndpoint(
+                host: DashboardHost(id: "local", name: "This Mac", isLocal: true, isConnected: true, isSupported: true),
+                read: { try await self.dashboardSnapshot() }
+            )] + settings.pairedHosts.map {
+                .remote($0, manager: viewerConnectionManager, usage: remoteSessionStore?.usageOverview(for: $0.id))
+            }
+        }
+
         let hostFileTabs = HostFileTabService()
         var workspaceRecovery: WorkspaceRecoveryController?
         let recoveredWorkspaceDrafts = WorkspaceRecoveryDrafts()
@@ -3900,6 +3911,7 @@
         /// Wires the notification tap handler on the delegate directly.
         /// Reveals the owning native window for local and remote panes.
         private func setupNotificationTapHandler() {
+            ForegroundNotificationDelegate.install()
             ForegroundNotificationDelegate.shared.onTapped = { [weak self] paneId, hostId in
                 guard let self else { return }
                 if let hostId {

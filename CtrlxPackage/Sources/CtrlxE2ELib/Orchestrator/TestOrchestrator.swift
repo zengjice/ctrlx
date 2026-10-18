@@ -951,6 +951,9 @@ public actor TestOrchestrator {
         case let .macOpenPanesWindow(instance):
             try await macDriver(for: instance).openPanesWindow()
 
+        case let .macOpenDashboardWindow(instance):
+            try await macDriver(for: instance).openDashboardWindow()
+
         case let .macMoveWindow(x, y, instance):
             let p = staged(x: x, y: y, instance: instance)
             try await macDriver(for: instance).moveWindow(x: p.x, y: p.y)
@@ -1449,9 +1452,9 @@ public actor TestOrchestrator {
     private func locateEchoSidecarBinary(sourceFile: String = #file) throws -> URL {
         let fm = FileManager.default
 
-        /// Walk up from `start` until a directory containing `CtrlxPackage/Package.swift`
-        /// (repo root) OR `Package.swift` directly (the package root itself) is found.
-        /// Returns the `CtrlxPackage` directory in either case.
+        // Walk up from `start` until a directory containing `CtrlxPackage/Package.swift`
+        // (repo root) OR `Package.swift` directly (the package root itself) is found.
+        // Returns the `CtrlxPackage` directory in either case.
         func packageRoot(from start: URL) -> URL? {
             var dir = start
             for _ in 0..<20 {
@@ -1467,7 +1470,9 @@ public actor TestOrchestrator {
                     return dir
                 }
                 let parent = dir.deletingLastPathComponent()
-                if parent == dir { break }
+                if parent == dir {
+                    break
+                }
                 dir = parent
             }
             return nil
@@ -1494,7 +1499,9 @@ public actor TestOrchestrator {
             for config in ["debug", "release"] {
                 let candidate = root.appendingPathComponent(".build/\(config)/EchoPluginSidecar")
                 searched.append(candidate.path)
-                if fm.isExecutableFile(atPath: candidate.path) { return candidate }
+                if fm.isExecutableFile(atPath: candidate.path) {
+                    return candidate
+                }
             }
         }
         throw OrchestratorError.configurationError(
@@ -1614,9 +1621,9 @@ public actor TestOrchestrator {
         let dir = zdotDirShimPath
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
-        /// `if`-form (not `[[ -f … ]] && source …`) so a missing user dotfile
-        /// (~/.zlogin rarely exists) doesn't leave the startup file exiting 1 —
-        /// exit-status prompt themes would flag `$? = 1` at the first prompt.
+        // `if`-form (not `[[ -f … ]] && source …`) so a missing user dotfile
+        // (~/.zlogin rarely exists) doesn't leave the startup file exiting 1 —
+        // exit-status prompt themes would flag `$? = 1` at the first prompt.
         func delegating(to file: String, in root: String) -> String {
             """
             # Written by the CtrlX E2E orchestrator. Delegates to the user's

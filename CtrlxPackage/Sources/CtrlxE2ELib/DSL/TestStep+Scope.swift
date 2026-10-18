@@ -108,7 +108,8 @@ public extension TestStep {
             return .macOS(instance: instance)
         case let .macWaitForElementQueryToDisappear(_, _, instance):
             return .macOS(instance: instance)
-        case let .macOpenPanesWindow(instance):
+        case let .macOpenPanesWindow(instance),
+             let .macOpenDashboardWindow(instance):
             return .macOS(instance: instance)
         case let .macMoveWindow(_, _, instance):
             return .macOS(instance: instance)
