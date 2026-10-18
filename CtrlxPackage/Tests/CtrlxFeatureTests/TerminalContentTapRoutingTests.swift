@@ -3,7 +3,7 @@ import Testing
 
 @Suite("Terminal single-tap ownership")
 struct TerminalContentTapRoutingTests {
-    @Test("Selection, links and input gates precede keyboard toggling and remote input", arguments: 0..<64)
+    @Test("Selection, links and input gates precede keyboard toggling and remote input", arguments: 0..<128)
     func routing(combination: Int) {
         let selected = combination & 1 != 0
         let link = combination & 2 != 0
@@ -11,9 +11,10 @@ struct TerminalContentTapRoutingTests {
         let mouse = combination & 8 != 0
         let live = combination & 16 != 0
         let empty = combination & 32 != 0
+        let plain = combination & 64 != 0
         let action = TerminalContentTapRouting.action(
             selectionActive: selected, hasLink: link, canSendInput: enabled,
-            mouseModeActive: mouse, isLiveScreen: live, isEmptyInputArea: empty
+            mouseModeActive: mouse, isLiveScreen: live, isEmptyInputArea: empty, isPlainTerminal: plain
         )
         if selected {
             #expect(action == .ignore)
@@ -21,7 +22,7 @@ struct TerminalContentTapRoutingTests {
             #expect(action == .openLink)
         } else if !enabled || !live {
             #expect(action == .ignore)
-        } else if empty {
+        } else if empty || (plain && !mouse) {
             #expect(action == .toggleKeyboard)
         } else {
             #expect(action == (mouse ? .mouseClick : .cursorNavigation))
@@ -93,7 +94,7 @@ struct TerminalContentTapRoutingTests {
 
     @Suite("Native terminal mouse click encoding")
     struct TerminalMouseClickTests {
-        @Test("Normal/button/any tracking sends exactly one left press and release", arguments: [1000, 1002, 1003])
+        @Test("Normal/button/any tracking sends exactly one left press and release", arguments: [1_000, 1_002, 1_003])
         func sgrClick(mode: Int) {
             let delegate = Delegate()
             let terminal = Terminal(delegate: delegate, options: .init(cols: 80, rows: 24))
@@ -119,7 +120,9 @@ struct TerminalContentTapRoutingTests {
         func scrollbackCoordinates() {
             let delegate = Delegate()
             let terminal = Terminal(delegate: delegate, options: .init(cols: 80, rows: 24))
-            for _ in 0..<60 { terminal.feed(text: "history\r\n") }
+            for _ in 0..<60 {
+                terminal.feed(text: "history\r\n")
+            }
             terminal.feed(text: "\u{1b}[?1003h\u{1b}[?1006h")
             let liveRow = terminal.buffer.yDisp
             #expect(liveRow > 0)
@@ -175,11 +178,15 @@ struct TerminalContentTapRoutingTests {
             )
         }
 
-        private func bytes(_ strings: String...) -> [[UInt8]] { strings.map { Array($0.utf8) } }
+        private func bytes(_ strings: String...) -> [[UInt8]] {
+            strings.map { Array($0.utf8) }
+        }
 
-        private final class Delegate: TerminalDelegate {
+        final private class Delegate: TerminalDelegate {
             var writes: [[UInt8]] = []
-            func send(source: Terminal, data: ArraySlice<UInt8>) { writes.append(Array(data)) }
+            func send(source: Terminal, data: ArraySlice<UInt8>) {
+                writes.append(Array(data))
+            }
         }
     }
 #endif

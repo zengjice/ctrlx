@@ -17,14 +17,15 @@ enum TerminalContentTapRouting {
         canSendInput: Bool,
         mouseModeActive: Bool,
         isLiveScreen: Bool,
-        isEmptyInputArea: Bool = false
+        isEmptyInputArea: Bool = false,
+        isPlainTerminal: Bool = false
     ) -> Action {
         guard !selectionActive else { return .ignore }
         if hasLink {
             return .openLink
         }
         guard canSendInput, isLiveScreen else { return .ignore }
-        if isEmptyInputArea {
+        if isEmptyInputArea || (isPlainTerminal && !mouseModeActive) {
             return .toggleKeyboard
         }
         return mouseModeActive ? .mouseClick : .cursorNavigation

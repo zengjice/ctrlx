@@ -11,6 +11,33 @@
     @MainActor
     @Suite("Terminal input-row selection routing", .serialized)
     struct TerminalSelectionRoutingTests {
+        @Test("Plain terminal content toggles the keyboard with custom prompts and drafts")
+        func plainTerminalKeyboard() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            view.scrollingAgentID = nil
+            feed(view, "output\r\n(base) Office ➜  project echo draft")
+            var requests: [Bool] = []
+            var keys: [TmuxKey] = []
+            var raw: [Data] = []
+            view.onInput = { keys += $0 }
+            view.onRawInput = { raw.append($0) }
+            view.onKeyboardRequest = { [weak view] value in
+                requests.append(value)
+                view?.updateInput(isEnabled: true, keyboardRequested: value)
+            }
+            for row in [0, 1, 3, 1] {
+                view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 4.5, y: view.cellDimension.height * (CGFloat(row) + 0.5)))
+                await view.inputFocusUpdates.pendingTask?.value
+            }
+            #expect(requests == [true, false, true, false])
+            #expect(keys.isEmpty && raw.isEmpty)
+            feed(view, "\u{1b}[?1049hmenu\u{1b}[?1003h\u{1b}[?1006h")
+            view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 4.5, y: view.cellDimension.height * 3.5))
+            #expect(requests == [true, false, true, false])
+            #expect(!raw.isEmpty)
+        }
+
         @Test("Empty input taps toggle keyboard intent without emitting input", arguments: [false, true])
         func emptyInputKeyboard(mouseMode: Bool) async throws {
             let (window, view) = await makeView()
@@ -816,6 +843,7 @@
             let viewport = UIScrollView(frame: window.bounds)
             controller.view.addSubview(viewport)
             let terminal = InteractiveTerminalView(frame: CGRect(x: 0, y: 0, width: 400, height: 300), font: nil)
+            terminal.scrollingAgentID = "codex"
             viewport.addSubview(terminal)
             terminal.attachInputProxy(to: viewport)
             window.makeKeyAndVisible()

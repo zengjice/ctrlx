@@ -523,6 +523,11 @@ Completed single taps now have exactly one owner:
 
 - Existing selection consumes the tap; it cannot click through. Links still
   open locally, without also sending a terminal click.
+- In **Bottom Bar** mode, ordinary terminal tabs toggle the keyboard when tapping
+  the live terminal content, including output and blank cells. This does not
+  depend on shell prompt punctuation and emits no input, even with a draft.
+  Agent tabs retain the input-area behavior below. Alternate-screen and
+  mouse-reporting programs retain their terminal interactions.
 - In **Bottom Bar** mode, an empty live input surface toggles the software
   keyboard through the existing parent/standalone keyboard intent. It emits no
   terminal keys or mouse packets. The known Codex `Ask Codex to do anything`
@@ -542,8 +547,7 @@ Completed single taps now have exactly one owner:
   viewport or scrollback. Off-grid/history taps and marked-text composition
   cannot send clicks. The remote TUI owns hit testing, including multiline and
   wide-character cursor placement; CtrlX sends no speculative arrow fallback.
-- With mouse reporting off, the existing arrow-based navigation below remains
-  unchanged. No agent-name/version heuristic is used.
+- With mouse reporting off, Agent tabs retain the arrow-based navigation below.
 
 SwiftTerm's automatic mouse reporting remains disabled for gestures: only the
 shared single-tap handler opts into the new path. Double/triple tap selection,

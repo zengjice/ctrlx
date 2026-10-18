@@ -1335,7 +1335,16 @@ iOS **Settings → Terminal → Terminal Theme** uses the same palettes, includi
 Codex Light. The choice is stored on that device, independently of app appearance
 and the Host's theme, and defaults to Default Dark. Changing it updates existing
 terminal text, ANSI colors, cursor, canvas and scroll-view backgrounds without
-reconnecting or clearing the terminal. Explicit Agent RGB colors remain unchanged.
+reconnecting or clearing the terminal. For Codex tabs on a light theme, a
+display-only SwiftTerm mapping lightens dark explicit backgrounds and darkens
+low-contrast foreground colors while preserving hue. This covers Codex composer,
+history and diff blocks whose colors were chosen from the Host's startup palette.
+Reverse-video cells preserve their resolved foreground/background pair, including
+default inverted colors, so ANSI/RGB emphasis cannot become light text on a light
+background. Underlines follow the same inverse-video policy.
+Raw bytes, buffer attributes, Agent configuration and other Viewers are unchanged.
+Changing back to a dark theme or leaving Codex restores the original explicit
+colors; other terminal/Agent tabs preserve their explicit colors.
 
 ### PairedViewer / PairedHost
 

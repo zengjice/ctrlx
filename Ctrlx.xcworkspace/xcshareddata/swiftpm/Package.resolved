@@ -357,7 +357,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/jicezeng/SwiftTerm.git",
       "state" : {
-        "revision" : "04cd54b6cb65561f50628bdffd5ced298437d48e"
+        "revision" : "043179d5e273d74e15702e3250ea21833483a026"
       }
     },
     {

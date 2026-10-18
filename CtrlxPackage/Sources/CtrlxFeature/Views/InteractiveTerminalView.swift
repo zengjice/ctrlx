@@ -77,6 +77,23 @@ enum TerminalCursorTapNavigation {
             caretColor = palette.foreground.nativeColor
             caretTextColor = palette.background.nativeColor
             appliedTheme = theme
+            updateExplicitColorTransform()
+        }
+
+        private func updateExplicitColorTransform() {
+            guard
+                let palette = appliedTheme?.palette, scrollingAgentID == "codex",
+                CodexTerminalColorAdaptation.isLight(palette) else {
+                explicitColorTransform = nil
+                return
+            }
+            explicitColorTransform = { color, foreground, inverse in
+                var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+                guard color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return color }
+                let rgb = TerminalRGB(hex: UInt32((red * 255).rounded()) << 16
+                    | UInt32((green * 255).rounded()) << 8 | UInt32((blue * 255).rounded()))
+                return CodexTerminalColorAdaptation.color(rgb, foreground: foreground, inverse: inverse, palette: palette).nativeColor
+            }
         }
 
         /// Callback invoked when the user types. The keys are ready for relay transmission.
@@ -139,6 +156,7 @@ enum TerminalCursorTapNavigation {
             didSet {
                 if oldValue != scrollingAgentID {
                     cancelMouseScroll()
+                    updateExplicitColorTransform()
                 }
             }
         }
@@ -897,7 +915,11 @@ enum TerminalCursorTapNavigation {
                         cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
                         tap: .init(column: pos.col, row: pos.row - terminal.buffer.yDisp),
                         mouseModeActive: isMouseModeActive
-                    )
+                    ),
+                isPlainTerminal: scrollingAgentID == nil && !terminal.isCurrentBufferAlternate
+                    && onKeyboardRequest != nil && !terminal.synchronizedOutputActive
+                    && point.x >= 0 && point.x < CGFloat(terminal.cols) * cellSize.width
+                    && pos.row >= liveRow && pos.row < liveRow + terminal.rows
             )
             switch action {
             case .ignore:

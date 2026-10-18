@@ -10,6 +10,71 @@
     @Suite("iOS terminal themes")
     @MainActor
     struct TerminalThemeTests {
+        @Test("ANSI, default and RGB inverse video retain their contrast through theme changes")
+        func inverseColors() throws {
+            for sgr in [
+                "7",
+                "31;7",
+                "1;31;7",
+                "2;31;7",
+                "38;2;213;53;56;7",
+                "48;2;57;57;57;7",
+                "38;2;242;242;242;48;2;57;57;57;7;4;58;2;213;53;56",
+            ] {
+                let view = InteractiveTerminalView(frame: CGRect(x: 0, y: 0, width: 300, height: 200), font: nil)
+                view.feedTerminalData(Array("\u{1B}[\(sgr)mInverse\u{1B}[0m".utf8)[...])
+                let line = try #require(view.getTerminal().getLine(row: 0))
+                let attribute = line[0].attribute
+                for theme in [TerminalTheme.codexLight, .defaultDark, .defaultLight, .solarizedLight, .codexLight] {
+                    view.scrollingAgentID = nil
+                    view.applyTheme(theme)
+                    let baseline = try #require(view.getAttributes(attribute, withUrl: false))
+                    view.scrollingAgentID = "codex"
+                    let adapted = try #require(view.getAttributes(attribute, withUrl: false))
+                    for key in [NSAttributedString.Key.foregroundColor, .backgroundColor, .underlineColor] {
+                        #expect(adapted[key] as? UIColor == baseline[key] as? UIColor)
+                    }
+                    #expect(line[0].attribute == attribute)
+                    if sgr == "31;7", theme == .codexLight {
+                        let fg = try #require((adapted[.foregroundColor] as? UIColor)?.cgColor.components)
+                        let bg = try #require((adapted[.backgroundColor] as? UIColor)?.cgColor.components)
+                        func luminance(_ components: [CGFloat]) -> Double {
+                            let rgb = TerminalRGB(hex: UInt32((components[0] * 255).rounded()) << 16
+                                | UInt32((components[1] * 255).rounded()) << 8 | UInt32((components[2] * 255).rounded()))
+                            return CodexTerminalColorAdaptation.luminance(rgb)
+                        }
+                        let foreground = luminance(fg), background = luminance(bg)
+                        #expect((max(foreground, background) + 0.05) / (min(foreground, background) + 0.05) > 4.2)
+                    }
+                }
+            }
+        }
+
+        @Test("Codex RGB adaptation changes rendering only and resets with theme or agent changes")
+        func codexExplicitColors() throws {
+            let view = InteractiveTerminalView(frame: CGRect(x: 0, y: 0, width: 300, height: 200), font: nil)
+            view.scrollingAgentID = "codex"
+            view.applyTheme(.defaultDark)
+            view.feedTerminalData(Array("\u{1B}[48;2;57;57;57m\u{1B}[38;2;180;221;180mText\u{1B}[0m".utf8)[...])
+            let line = try #require(view.getTerminal().getLine(row: 0))
+            let attribute = line[0].attribute
+            let dark = try #require(view.getAttributes(attribute, withUrl: false))
+            view.applyTheme(.codexLight)
+            let light = try #require(view.getAttributes(attribute, withUrl: false))
+            let background = try #require(light[.backgroundColor] as? UIColor)
+            let foreground = try #require(light[.foregroundColor] as? UIColor)
+            #expect(background == CodexTerminalColorAdaptation.color(.init(hex: 0x393939), foreground: false, palette: TerminalTheme.codexLight.palette).nativeColor)
+            #expect(foreground != dark[.foregroundColor] as? UIColor)
+            #expect(line[0].attribute == attribute)
+            view.applyTheme(.defaultDark)
+            #expect(view.getAttributes(attribute, withUrl: false)?[.backgroundColor] as? UIColor == dark[.backgroundColor] as? UIColor)
+            view.applyTheme(.codexLight)
+            view.scrollingAgentID = nil
+            #expect(view.getAttributes(attribute, withUrl: false)?[.backgroundColor] as? UIColor == dark[.backgroundColor] as? UIColor)
+            view.scrollingAgentID = "codex"
+            #expect(view.getAttributes(attribute, withUrl: false)?[.backgroundColor] as? UIColor == background)
+        }
+
         @Test("Terminal theme persists independently of app appearance")
         func preference() {
             withDependencies {
