@@ -7,6 +7,32 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.80 — Multi-host Dashboard and native Agent CLI maintenance
+
+- Add a shared Mac/iOS Dashboard for Agent account quotas, Host CPU/memory/disk
+  and collected usage. Deduplicate shared accounts and Host identities, preserve
+  source timestamps, distinguish unavailable/stale data and gate older peers.
+- Add Mac Agent Setup with bounded startup detection, explicit native Codex and
+  Claude Code installation, managed updates and launch repair. Verify official
+  signatures before removing quarantine, preserve working/custom commands and
+  refresh guarded settings after successful path repair.
+- Give iOS its own terminal theme setting, independent of Mac Host appearance,
+  and apply the shared palette to active terminals without restarting sessions.
+- Update the Mac installer to skip an already verified identical build, support
+  explicit force/verbose flags and retain detailed installation logs locally.
+- Release validation: the bounded serial Swift regression passed with 3,544
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 90 publisher/COS/installer tests, 22
+  bundled-skill tests, the website build, signed Mac Release and iOS device-SDK
+  Release builds passed. Eight Agent Setup offscreen UI cases passed; the
+  same-source signed Mac Debug build passed the 57-step Dashboard Host/Viewer
+  scenario with isolated state, tmux sockets and a private Relay. Reviewed the
+  fresh Agent Setup and Dashboard screenshots. Live CLI installation/update,
+  cross-machine and iPhone UI acceptance were not run. SwiftFormat reports 46
+  existing findings in two files, identical to 3.0.79 and outside changed lines.
+- Distribution: Mac build 13 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.79 — Mac themes, browser app handoff and layout diagnostics
 
 - Add Codex Light for Mac local, remote and detached workspaces, with a shared
