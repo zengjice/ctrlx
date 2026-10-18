@@ -1,3 +1,4 @@
+import Clocks
 import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
@@ -59,8 +60,8 @@ struct CodexAccountTests {
         }
     }
 
-    @Test
-    func refreshFailurePreservesTheOriginalObservation() async throws {
+    @Test(arguments: [false, true])
+    func refreshFailurePreservesTheOriginalObservation(timeout: Bool) async throws {
         let auth = try auth()
         let signedIn = signedIn
         let limits = limits
@@ -70,7 +71,7 @@ struct CodexAccountTests {
             $0[AccountConfigurationClient.self].read = { _ in auth }
             $0[CodexAccountClient.self].read = { _, _ in
                 if await calls.next() > 1 {
-                    throw CodexAccountError.unavailable
+                    throw timeout ? CodexAccountError.timeout : CodexAccountError.unavailable
                 }
                 return .init(account: signedIn, limits: limits)
             }
@@ -78,12 +79,15 @@ struct CodexAccountTests {
             let reporter = CodexAccountReporter()
             let roots = [URL(fileURLWithPath: "/private/test-codex")]
             let first = await reporter.accounts(command: "fixture", roots: roots)
-            let second = await reporter.accounts(command: "fixture", roots: roots)
+            let second = await withDependencies {
+                $0.date.now = date.addingTimeInterval(120)
+            } operation: { await reporter.accounts(command: "fixture", roots: roots) }
             #expect(first.first?.availability == .available)
             #expect(second.first?.availability == .failed)
             #expect(second.first?.authentication == .unknown)
             #expect(second.first?.windows == first.first?.windows)
             #expect(second.first?.quotaObservedAt == first.first?.quotaObservedAt)
+            #expect(second.first?.detail?.contains("timed out") == timeout)
         }
     }
 
@@ -118,7 +122,9 @@ struct CodexAccountTests {
                 try Data(script.utf8).write(to: executable)
                 try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
                 do {
-                    _ = try await CodexAccountClient.liveValue.read(executable.path, directory.path)
+                    _ = try await withDependencies {
+                        $0.continuousClock = ContinuousClock()
+                    } operation: { try await CodexAccountClient.liveValue.read(executable.path, directory.path) }
                     exit(2)
                 } catch {
                     let failure = error as NSError
@@ -156,13 +162,94 @@ struct CodexAccountTests {
             """#
             try Data(script.utf8).write(to: executable)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-            let reply = try await CodexAccountClient.liveValue.read(executable.path, directory.path)
-            #expect(reply.limits != nil)
+            // Repeated reads exercise process cleanup across executor hops.
+            for _ in 0..<5 {
+                let reply = try await withDependencies {
+                    $0.continuousClock = ContinuousClock()
+                } operation: { try await CodexAccountClient.liveValue.read(executable.path, directory.path) }
+                #expect(reply.limits != nil)
+                let pid = try #require(Int32(String(contentsOf: directory.appendingPathComponent("pid"), encoding: .utf8)))
+                #expect(kill(pid, 0) == -1)
+                #expect(errno == ESRCH)
+            }
             let methods = try String(contentsOf: directory.appendingPathComponent("methods"), encoding: .utf8)
-            #expect(methods.split(separator: "\n") == ["initialize", "initialized", "account/read", "account/rateLimits/read"])
-            let pid = try #require(Int32(String(contentsOf: directory.appendingPathComponent("pid"), encoding: .utf8)))
-            #expect(kill(pid, 0) == -1)
-            #expect(errno == ESRCH)
+            #expect(methods.split(separator: "\n").map(String.init) == Array(repeating: ["initialize", "initialized", "account/read", "account/rateLimits/read"], count: 5).flatMap { $0 })
+        }
+
+        @Test(arguments: [false, true])
+        func stalledReadEndsOnTimeoutOrCancellation(cancel: Bool) async throws {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-dashboard-stalled-\(UUID())")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let executable = directory.appendingPathComponent("fixture codex")
+            let script = #"""
+            #!/usr/bin/env python3
+            import os, sys, time
+            from pathlib import Path
+            sys.stdin.readline()
+            (Path(__file__).parent/'pid').write_text(str(os.getpid()))
+            time.sleep(60)
+            """#
+            try Data(script.utf8).write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+            let clock = TestClock()
+            try await withDependencies {
+                $0.continuousClock = clock
+            } operation: {
+                let task = Task { try await CodexAccountClient.liveValue.read(executable.path, directory.path) }
+                let watchdog = Task {
+                    do { try await Task.sleep(for: .seconds(5)) }
+                    catch { return }
+                    task.cancel()
+                    Issue.record("Account query did not finish within the test deadline")
+                }
+                defer { watchdog.cancel()
+                    task.cancel()
+                }
+                let pidFile = directory.appendingPathComponent("pid")
+                for _ in 0..<200 {
+                    if FileManager.default.fileExists(atPath: pidFile.path) {
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                let pid = try #require(Int32(String(contentsOf: pidFile, encoding: .utf8)))
+                defer {
+                    if kill(pid, 0) == 0 {
+                        kill(pid, SIGKILL)
+                    }
+                }
+                for _ in 0..<200 {
+                    do { try await clock.checkSuspension() }
+                    catch { break }
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                if cancel {
+                    task.cancel()
+                } else {
+                    await clock.advance(by: .seconds(20))
+                }
+                do {
+                    _ = try await task.value
+                    Issue.record("Stalled account query unexpectedly succeeded")
+                } catch {
+                    if cancel {
+                        #expect(error is CancellationError)
+                    } else if case CodexAccountError.timeout = error { }
+                    else {
+                        Issue.record("Expected timeout, got \(error)")
+                    }
+                }
+                // Timeout/cancellation does not block on Foundation's exit notification.
+                for _ in 0..<200 {
+                    if kill(pid, 0) == -1 {
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                #expect(kill(pid, 0) == -1)
+                #expect(errno == ESRCH)
+            }
         }
     #endif
 }

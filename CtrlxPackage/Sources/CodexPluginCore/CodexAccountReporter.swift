@@ -28,12 +28,18 @@ actor CodexAccountReporter {
                 cached[root.path] = (after, accounts)
                 result += accounts
             } catch {
+                let failure: String
+                if case CodexAccountError.timeout = error {
+                    failure = "Codex quota refresh timed out."
+                } else {
+                    failure = "Could not refresh Codex quotas."
+                }
                 if let previous = cached[root.path], previous.identity == observedIdentity {
                     result += previous.accounts.map { account in
                         var account = account
                         account.availability = .failed
                         account.authentication = .unknown
-                        account.detail = "Could not refresh Codex quotas. Showing the last observation."
+                        account.detail = failure + " Showing the last observation."
                         return account
                     }
                 } else {
@@ -44,7 +50,7 @@ actor CodexAccountReporter {
                         label: label,
                         configurationLabel: label,
                         availability: .failed,
-                        detail: "Could not read Codex account information. Check CLI sign-in and version."
+                        detail: failure + " Check CLI sign-in and version."
                     ))
                 }
             }

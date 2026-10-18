@@ -282,3 +282,13 @@ Agent 特有的身份与额度读取放在插件能力中，公共 UI 使用统�
 - 隔离的 Mac Host／Viewer 自动化验收 58 步通过，实际检查菜单的 Needs attention、Accounts、All Sessions，并从两端菜单打开 Dashboard、显示提醒开关与机器资源。截图人工检查；不以动态账号数据执行像素基线比较。运行证据在 `.build-local/dashboard-quicklook-acceptance/`，专项测试与构建日志在 `.build-local/dashboard-quicklook-*.log`，不进入 Git。
 - 本轮未验证 iPhone 真机、真实系统通知投递或 Claude 订阅账号；iOS 前台提醒规则与两端共享同一模型并由专项测试覆盖。本轮没有替换用户安装的 App，也未发布。
 - 审查修复：iOS 从 Dashboard 切换会话时显式清空旧通知的 pane 去重标记，避免导航深度不变时遗漏清理；仅关闭 Dashboard 保留标记。`test_dashboard_notification_navigation` 将生产导航回调载入离屏 SwiftUI，验证通知 A → Dashboard B → 通知 A、无选择关闭、重复通知及返回列表；旧回调对照失败，修复后通过。该验证不等同于真实 iOS 系统通知投递。
+
+### 11.3 额度刷新停滞修复（2026-10-18）
+
+- 3.0.81 运行现场两次采样均停在 `CodexAccountClient` 的子进程退出清理 `waitUntilExit()`；该同步等待在 20 秒 RPC 超时之外。资源快照持续更新，账号额度仍停留在一个多小时前。
+- Codex 改为启动前注册退出回调，异步等待子进程退出；通信与退出等待共用 20 秒时限，超时和取消均终止本次子进程，不再同步阻塞执行器。超时保留旧额度及采样时间，并明确显示刷新失败。
+- Host 按插件分别管理查询任务与一分钟限频，避免 Codex 卡住后连带阻止 Claude 刷新。单个来源查询超过一分钟时标记失败，但不重复创建仍未返回的调用；来源移除或服务停止后忽略晚到结果。
+- Claude 登录方式的支持范围保持不变；API Key 登录不提供订阅额度，与刷新停滞是不同问题。
+- `CodexAccountTests|ClaudeAccountTests|HostDashboardTests|DashboardResourceTests` 共 21 项测试通过，覆盖多轮查询、默认 SIGPIPE 行为、超时与取消后的子进程回收、失败保留采样时间、慢来源隔离及停止／移除后的晚到响应。相关 Mac 模块随测试重新编译；SwiftFormat、品牌／技术边界和差异空白检查通过。
+- 使用本轮编译的 Codex reporter 对真实 CLI 进行两次只读查询，中间等待 61 秒；分别约 7.5 秒和 9.1 秒完成，采样时间从 22:07:43 前进到 22:08:56（Asia/Shanghai）。未创建对话或发起模型请求，记录不含账号凭证。本地证据在 `.build-local/dashboard-refresh-tests.log` 和 `.build-local/diagnostics/dashboard-refresh-20261018/`。
+- 未替换运行中的 App，未打包或发布；未重跑整包构建、iPhone／远程 Mac UI 或真实 Claude 订阅账号验收。此修复位于 Host 侧，更新 Mac Host 后由现有 Dashboard 协议供各 Viewer 使用。

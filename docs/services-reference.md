@@ -548,11 +548,18 @@ input, and do not rebroadcast `SessionStateMessage`.
 - Plugins may implement `AgentAccountReporting`. Codex uses read-only app-server
   account/rate-limit RPCs. Its stdin pipe suppresses SIGPIPE so a child closing
   input produces a catchable write error rather than terminating the Host.
+  Child exit is observed asynchronously, with the same 20-second deadline covering
+  RPCs and exit cleanup; no synchronous `waitUntilExit()` runs on the actor executor.
   Claude Code uses the standard claude.ai profile/usage
   endpoints only when its local credential is readable; API-key login and custom
   credential endpoints are unsupported. Credentials never enter the wire model,
   and existing statusline configuration is untouched. Queries are shared across
-  Viewers, limited to once per minute, and never start a model turn.
+  Viewers, limited to once per minute per plugin, and never start a model turn.
+  Each plugin has its own in-flight query, so a stalled source cannot stop other
+  providers refreshing. A source still running after a minute is marked failed
+  while retaining its previous quota and observation time; it keeps one in-flight
+  call rather than accumulating retries. Stopping or removing a source cancels
+  its task and discards late results. Codex timeouts explicitly identify the failure.
 - `DashboardStore` is shared by the Dashboard and quota monitor in each client,
   and retains a small local snapshot cache. Mac monitors every 30 seconds while
   running; iOS monitors only while foregrounded. An open Dashboard refreshes

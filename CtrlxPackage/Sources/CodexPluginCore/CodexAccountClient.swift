@@ -81,14 +81,19 @@ enum CodexAccountError: Error, LocalizedError {
                 continuation.onTermination = { _ in output.fileHandleForReading.readabilityHandler = nil }
             }
             iterator = stream.makeAsyncIterator()
+            let exit = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            // Register before launch so even an immediate exit is retained.
+            process.terminationHandler = { _ in
+                exit.continuation.yield(())
+                exit.continuation.finish()
+            }
             defer {
                 output.fileHandleForReading.readabilityHandler = nil
                 if process.isRunning {
                     kill(process.processIdentifier, SIGKILL)
                 }
-                if process.processIdentifier > 0 {
-                    process.waitUntilExit()
-                }
+                process.terminationHandler = nil
+                exit.continuation.finish()
                 try? input.fileHandleForWriting.close()
                 try? output.fileHandleForReading.close()
                 iterator = nil
@@ -97,11 +102,24 @@ enum CodexAccountError: Error, LocalizedError {
             try input.fileHandleForReading.close()
             try output.fileHandleForWriting.close()
 
+            @Dependency(\.continuousClock) var clock
             return try await withTaskCancellationHandler {
                 try await withThrowingTaskGroup(of: CodexAccountReply.self) { group in
-                    group.addTask { try await self.exchange(input.fileHandleForWriting) }
                     group.addTask {
-                        try await Task.sleep(for: .seconds(20))
+                        let result: Result<CodexAccountReply, Error>
+                        do { result = try .success(await self.exchange(input.fileHandleForWriting)) }
+                        catch { result = .failure(error) }
+                        if process.isRunning {
+                            kill(process.processIdentifier, SIGKILL)
+                        }
+                        // Cleanup is part of the same deadline, not a blocking defer.
+                        var exited = exit.stream.makeAsyncIterator()
+                        _ = await exited.next()
+                        try Task.checkCancellation()
+                        return try result.get()
+                    }
+                    group.addTask { [clock] in
+                        try await clock.sleep(for: .seconds(20))
                         if process.isRunning {
                             kill(process.processIdentifier, SIGKILL)
                         }

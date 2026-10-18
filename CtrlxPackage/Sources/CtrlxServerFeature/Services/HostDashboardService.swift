@@ -13,8 +13,8 @@
 
         private let resources = DashboardResourceSampler()
         private var accounts: [String: [DashboardAccount]] = [:]
-        private var queriedAt: Date?
-        private var query: Task<Void, Never>?
+        private var queriedAt: [String: Date] = [:]
+        private var queries: [String: Task<Void, Never>] = [:]
 
         func snapshot(
             hostID: UUID, paths: [String], sources: [Source],
@@ -22,26 +22,42 @@
         ) async -> DashboardSnapshot {
             let active = Set(sources.map(\.id))
             accounts = accounts.filter { active.contains($0.key) }
-            let needsQuery = queriedAt.map { date.timeIntervalSince($0) >= 60 || date < $0 } ?? true
-            if query == nil, needsQuery {
-                queriedAt = date
-                query = Task {
-                    await withTaskGroup(of: (String, [DashboardAccount]).self) { group in
-                        for source in sources {
-                            group.addTask {
-                                let result = await source.reporter?.dashboardAccounts() ?? [DashboardAccount(
-                                    id: source.id, pluginID: source.id, providerName: source.name,
-                                    label: source.name, configurationLabel: "Default",
-                                    availability: .unsupported, detail: "This Agent does not provide account quotas."
-                                )]
-                                return (source.id, result)
-                            }
-                        }
-                        for await (id, values) in group {
-                            accounts[id] = values
+            for id in queries.keys where !active.contains(id) {
+                queries.removeValue(forKey: id)?.cancel()
+            }
+            queriedAt = queriedAt.filter { active.contains($0.key) }
+            for source in sources {
+                let needsQuery = queriedAt[source.id].map { date.timeIntervalSince($0) >= 60 || date < $0 } ?? true
+                if queries[source.id] != nil {
+                    if needsQuery {
+                        // Keep one in-flight call even if a provider ignores cancellation.
+                        // Its old sample must not continue looking like a successful refresh.
+                        let previous = accounts[source.id] ?? [DashboardAccount(
+                            id: source.id, pluginID: source.id, providerName: source.name,
+                            label: source.name, configurationLabel: "Default"
+                        )]
+                        accounts[source.id] = previous.map { account in
+                            var account = account
+                            account.availability = .failed
+                            account.authentication = .unknown
+                            account.detail = "Account refresh is taking too long. Showing the last observation, if available."
+                            return account
                         }
                     }
-                    query = nil
+                    continue
+                }
+                guard needsQuery else { continue }
+                queriedAt[source.id] = date
+                queries[source.id] = Task {
+                    let result = await source.reporter?.dashboardAccounts() ?? [DashboardAccount(
+                        id: source.id, pluginID: source.id, providerName: source.name,
+                        label: source.name, configurationLabel: "Default",
+                        availability: .unsupported, detail: "This Agent does not provide account quotas."
+                    )]
+                    // Removal/stop cancels this task; late responses cannot overwrite a replacement.
+                    guard !Task.isCancelled else { return }
+                    accounts[source.id] = result
+                    queries[source.id] = nil
                 }
             }
             let sampled = await resources.read(paths: paths, at: date)
@@ -60,8 +76,11 @@
         }
 
         func stop() {
-            query?.cancel()
-            query = nil
+            for query in queries.values {
+                query.cancel()
+            }
+            queries.removeAll()
+            queriedAt.removeAll()
         }
     }
 #endif
