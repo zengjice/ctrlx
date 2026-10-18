@@ -1,7 +1,6 @@
 #if os(macOS) || os(iOS)
     import CtrlxCommon
     import Testing
-    @testable import CtrlxFeature
 
     @Suite("Codex light terminal color adaptation")
     struct CodexTerminalColorAdaptationTests {

@@ -1346,16 +1346,19 @@ The palette is based on the bundled Codex Light theme in ChatGPT for Mac
 cyan is adapted for white backgrounds. Bright chromatic ANSI slots retain dark,
 readable colors, while white slots keep their conventional background/reverse
 video meaning. SwiftTerm rendering, rich-text copy and new-shell OSC 10/11
-declarations use the same palette. Agent-emitted RGB colors are preserved;
-code-block/diff syntax themes remain controlled by the Agent (for example,
-Codex's `/theme`). Switching CtrlX themes does not rewrite Agent configuration.
+declarations use the same palette. Agent-emitted RGB colors are preserved except
+for the display-only Codex light-theme adaptation described below. Switching
+CtrlX themes does not rewrite Agent configuration (for example, Codex's `/theme`).
 
 iOS **Settings → Terminal → Terminal Theme** uses the same palettes, including
 Codex Light. The choice is stored on that device, independently of app appearance
 and the Host's theme, and defaults to Default Dark. Changing it updates existing
 terminal text, ANSI colors, cursor, canvas and scroll-view backgrounds without
-reconnecting or clearing the terminal. For Codex tabs on a light theme, a
-display-only SwiftTerm mapping lightens dark explicit backgrounds and darkens
+reconnecting or clearing the terminal.
+
+Both Mac (local, remote and detached) and iOS use the shared
+`CodexTerminalColorAdaptation` for Codex tabs on a light theme. A display-only
+SwiftTerm mapping lightens dark explicit backgrounds and darkens
 low-contrast foreground colors while preserving hue. This covers Codex composer,
 history and diff blocks whose colors were chosen from the Host's startup palette.
 Reverse-video cells preserve their resolved foreground/background pair, including

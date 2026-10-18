@@ -597,11 +597,14 @@
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
 
-        /// Pane metadata, not text/title matching. Used for precise wheel
-        /// sensitivity and forwarding copy to Codex's application-owned selection.
+        /// Pane metadata, not text/title matching. Used for wheel sensitivity,
+        /// Codex color adaptation and application-owned selection copying.
         var scrollingAgentID: String? {
             didSet {
-                if oldValue != scrollingAgentID { scrollOverlay?.resetScrollGesture() }
+                if oldValue != scrollingAgentID {
+                    scrollOverlay?.resetScrollGesture()
+                    updateExplicitColorTransform()
+                }
             }
         }
 
@@ -2050,6 +2053,23 @@
             nativeBackgroundColor = palette.background.nativeColor
             richCopyANSIColors = palette.nativeANSIColors
             appliedTheme = theme
+            updateExplicitColorTransform()
+        }
+
+        private func updateExplicitColorTransform() {
+            guard
+                let palette = appliedTheme?.palette,
+                scrollingAgentID == "codex",
+                CodexTerminalColorAdaptation.isLight(palette) else {
+                terminalView.explicitColorTransform = nil
+                return
+            }
+            terminalView.explicitColorTransform = { color, foreground, inverse in
+                guard let color = color.usingColorSpace(.sRGB) else { return color }
+                let rgb = TerminalRGB(hex: UInt32((color.redComponent * 255).rounded()) << 16
+                    | UInt32((color.greenComponent * 255).rounded()) << 8 | UInt32((color.blueComponent * 255).rounded()))
+                return CodexTerminalColorAdaptation.color(rgb, foreground: foreground, inverse: inverse, palette: palette).nativeColor
+            }
         }
 
         var nativeForegroundColor: NSColor {

@@ -1,15 +1,14 @@
 #if os(macOS) || os(iOS)
-    import CtrlxCommon
     import Foundation
 
     /// Codex chooses explicit colors using the Host's background at startup.
-    /// Adapt their display on a light Viewer without changing the terminal data.
-    enum CodexTerminalColorAdaptation {
-        static func isLight(_ palette: TerminalThemePalette) -> Bool {
+    /// Adapt their display on light Mac/iOS terminals without changing terminal data.
+    public enum CodexTerminalColorAdaptation {
+        public static func isLight(_ palette: TerminalThemePalette) -> Bool {
             luminance(palette.background) > 0.5
         }
 
-        static func color(_ color: TerminalRGB, foreground: Bool, inverse: Bool = false, palette: TerminalThemePalette) -> TerminalRGB {
+        public static func color(_ color: TerminalRGB, foreground: Bool, inverse: Bool = false, palette: TerminalThemePalette) -> TerminalRGB {
             // Reverse video may pair an explicit background with a default
             // inverted foreground, which bypasses this mapping. Preserve the
             // resolved pair rather than changing only its explicit member.
@@ -38,7 +37,7 @@
             return mix(color, toward: .init(hex: 0), amount: high)
         }
 
-        static func luminance(_ color: TerminalRGB) -> Double {
+        public static func luminance(_ color: TerminalRGB) -> Double {
             func linear(_ channel: UInt8) -> Double {
                 let value = Double(channel) / 255
                 return value <= 0.04_045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
