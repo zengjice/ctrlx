@@ -7,6 +7,34 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.81 — Dashboard quicklook, quota alerts and iOS terminal input
+
+- Show waiting panes, account quota summaries and Dashboard access in the Mac
+  status menu. Share foreground quota monitoring with iOS and notify once when
+  verified fresh account data crosses to 10% remaining. Deduplicate shared
+  accounts and quota cycles; ignore stale, offline and conflicting observations.
+- Preserve iOS notification navigation when switching sessions from Dashboard.
+- Improve Codex text and surface contrast on light iOS terminal themes while
+  preserving reverse-video colors. Let plain-terminal taps toggle the keyboard
+  without changing link, selection or mouse-reporting behavior.
+- Pin the published SwiftTerm explicit-color transform revision in both Apple
+  dependency locks; terminal data remains unchanged by display adaptation.
+- Release validation: the bounded serial Swift regression passed with 3,558
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. The first run stalled in an existing process-cleanup wait;
+  the identical-scope rerun passed, including that probe. Both boundary checks,
+  89 publisher/COS/distributed-installer tests, 22 bundled-skill tests, the
+  production-callback notification navigation regression, website build and
+  changed-file SwiftFormat passed. One separate personal shell-wrapper test
+  failed because the local ctrlx-install function does not forward arguments;
+  the distributed installer passed all 26 of its tests.
+- Signed Mac and iOS device-SDK Release builds passed. A same-source signed Mac
+  Debug build passed all 58 isolated Host/Viewer menu and Dashboard steps;
+  fresh screenshots were reviewed. Physical-iPhone UI interaction and real
+  system-notification delivery were not exercised by this release validation.
+- Distribution: Mac build 14 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.80 — Multi-host Dashboard and native Agent CLI maintenance
 
 - Add a shared Mac/iOS Dashboard for Agent account quotas, Host CPU/memory/disk
