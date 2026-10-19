@@ -120,7 +120,13 @@ Spaces and reserved punctuation use UTF-8 percent encoding; literal percent sign
 must be `%25`. Chinese may remain literal or be encoded. Decoding happens once:
 a filename containing literal `%27` must not become an apostrophe on the Host.
 Complete markers survive soft/hard visual wraps, including a wrap inside the
-prefix or percent escape. Missing delimiters, whitespace, malformed escapes,
+prefix or percent escape. In Codex's borderless tables, separated horizontal
+rules define column bounds: wrapped marker fragments are joined only within
+the same column, and underlines/hit targets cover only those fragments. Table
+separators, blank cells/rows and text crossing a column boundary stop a partial
+marker; columns are not inferred from ordinary whitespace-aligned prose. The
+divider and complete marker must be within the bounded scan window below.
+Missing delimiters, whitespace, malformed escapes,
 control characters and paths exceeding 4096 UTF-8 bytes are rejected. No filename
 or continuation is guessed.
 
