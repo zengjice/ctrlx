@@ -7,6 +7,40 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.83 — Quota shortcuts and reliable terminal navigation
+
+- Show compact account quota rings in Mac local, remote and detached workbench
+  titlebars, with hover summaries, pinned details and overflow at narrow widths.
+  Reuse Dashboard account identity, freshness rules and existing polling.
+- Show connection, pending-session and low-quota status in the iOS Dashboard
+  entry. Preserve cross-Host identities and combine attention and quota alerts.
+- Add vertical swipes on the iOS status and first input-control rows: swipe up
+  opens Tabs and swipe down hides the keyboard. Preserve ordinary taps,
+  horizontal scrolling, held buttons, drafts and excluded input surfaces.
+- After closing the selected terminal, select the first surviving terminal tab
+  and preserve pane identity through tmux renumbering and state/reply ordering.
+  Confirm before closing the final session window, including an idle shell;
+  keep background tabs, split workspaces and reconnect recovery independent.
+- Recognize repository links wrapped within Codex table columns while bounding
+  hit targets to the link fragments and rejecting cross-column continuations.
+- Observe the process-provenance test fixture's exit asynchronously. Remove its
+  blocking cleanup wait while retaining process identity and configuration checks.
+- Release validation: the bounded serial Swift regression passed with 3,600
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Two earlier runs stalled in the process-provenance fixture's
+  blocking cleanup. After the fixture fix, its three focused tests and the
+  complete same-scope regression passed, including the live-process probe.
+- Four fresh isolated Mac titlebar interaction cases passed, covering main and
+  detached windows, quota details, narrow layouts and system double-click actions.
+  Both boundary checks, 89 publisher/COS/distributed-installer tests, website
+  build and changed-line SwiftFormat checks passed. There are 180 pre-existing
+  format findings in three files and one existing personal shell-wrapper
+  argument-forwarding failure; the distributed installer passed all 26 tests.
+- Signed Mac and iOS device-SDK Release builds passed. Physical-iPhone UI and
+  full paired-Mac runtime acceptance were not rerun in this release validation.
+- Distribution: Mac build 16 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
 ## 3.0.82 — Reliable quotas, Codex questions and Mac light themes
 
 - Prevent Codex quota queries from stalling during child-process cleanup. Observe
