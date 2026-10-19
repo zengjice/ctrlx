@@ -23,41 +23,47 @@ struct DashboardQuotaToolbar: View {
             // Store updates can arrive between timer ticks; judge them against now.
             let now = Date()
             let accounts = DashboardToolbarAccount.accounts(in: store.hosts, at: now)
-            ViewThatFits(in: .horizontal) {
-                ForEach((0...min(4, accounts.count)).reversed(), id: \.self) { count in
-                    strip(accounts: accounts, count: count)
-                        .fixedSize()
-                }
-            }
-            // AppKit treats a SwiftUI toolbar item's ideal width as fixed. Give it
-            // a bounded width before it decides which native toolbar items to overflow.
-            .frame(width: min(idealWidth(accounts.count), max(32, windowWidth - 800)), height: 32, alignment: .leading)
-            .background(DashboardQuotaPopover(width: $windowWidth, isPresented: Binding(
-                get: { presentation != nil },
-                set: {
-                    if !$0 {
-                        presentation = nil
+            if !accounts.isEmpty {
+                ViewThatFits(in: .horizontal) {
+                    ForEach((0...min(4, accounts.count)).reversed(), id: \.self) { count in
+                        strip(accounts: accounts, count: count)
+                            .fixedSize()
                     }
                 }
-            )) {
-                popover(accounts: accounts, at: now)
-                    .padding(16)
-                    .frame(width: 340)
-            })
-            .task(id: hoveredID) {
-                if case .account = presentation {
-                    return
+                // AppKit treats a SwiftUI toolbar item's ideal width as fixed. Give it
+                // a bounded width before it decides which native toolbar items to overflow.
+                .frame(width: min(idealWidth(accounts.count), max(32, windowWidth - 800)), height: 32, alignment: .leading)
+                .background(DashboardQuotaPopover(width: $windowWidth, isPresented: Binding(
+                    get: { presentation != nil },
+                    set: {
+                        if !$0 {
+                            presentation = nil
+                        }
+                    }
+                )) {
+                    popover(accounts: accounts, at: now)
+                        .padding(16)
+                        .frame(width: 340)
+                })
+                .task(id: hoveredID) {
+                    if case .account = presentation {
+                        return
+                    }
+                    if case .overflow = presentation {
+                        return
+                    }
+                    presentation = nil
+                    guard let hoveredID else {
+                        return
+                    }
+                    do { try await Task.sleep(for: .milliseconds(450)) } catch { return }
+                    guard case nil = presentation else { return }
+                    presentation = .summary(hoveredID)
                 }
-                if case .overflow = presentation {
-                    return
+                .onDisappear {
+                    presentation = nil
+                    hoveredID = nil
                 }
-                presentation = nil
-                guard let hoveredID else {
-                    return
-                }
-                do { try await Task.sleep(for: .milliseconds(450)) } catch { return }
-                guard case nil = presentation else { return }
-                presentation = .summary(hoveredID)
             }
         }
     }
@@ -86,7 +92,7 @@ struct DashboardQuotaToolbar: View {
                     }
                 }
             }
-            if count < accounts.count || accounts.isEmpty {
+            if count < accounts.count {
                 Button { presentation = .overflow(count) } label: {
                     Group {
                         if count == 0 {

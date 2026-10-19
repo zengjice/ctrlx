@@ -134,6 +134,7 @@ struct TitlebarFixture: View {
         try require(find("quota-overflow", in: root) != nil, "quota overflow missing")
         try capture(root, label: "toolbar")
         try await checkQuotaPopover(window, root: root)
+        try await checkUnsupportedAccounts(window, root: root)
         // AppKit's left titlebar area is the oracle for the user's native double-click action.
         try await doubleClick(window, at: NSPoint(x: 90, y: 575))
         let expectedFrame = window.frame
@@ -218,6 +219,39 @@ struct TitlebarFixture: View {
         try await click(other, in: popupWindow)
         try require(popup("detail-Account 4") != nil, "overflow account did not open details")
         try await postClick(window, at: .init(x: 600, y: 300))
+    }
+
+    @MainActor private func checkUnsupportedAccounts(_ window: NSWindow, root: NSView) async throws {
+        let saved = state.dashboard.hosts
+        for index in 0 ..< 3 {
+            state.dashboard.hosts[0].snapshot?.accounts[index].availability = .unsupported
+            state.dashboard.hosts[0].snapshot?.accounts[index].windows = []
+        }
+        try await settle()
+        for index in 0 ..< 3 {
+            try require(find("quota-account-\(index)", in: root) == nil, "unsupported account retained its titlebar icon")
+        }
+        try require(find("quota-overflow", in: root) == nil, "unsupported accounts still count toward overflow")
+        guard let supported = find("quota-account-3", in: root) else { throw failure("supported account disappeared") }
+        try capture(root, label: "supported-quotas")
+        try await click(supported, in: window)
+        try require(popup("detail-Account 3") != nil, "supported account details missing")
+
+        for index in 3 ..< 6 {
+            state.dashboard.hosts[0].snapshot?.accounts[index].availability = .unsupported
+            state.dashboard.hosts[0].snapshot?.accounts[index].windows = []
+        }
+        try await settle()
+        try require(find("quota-account-3", in: root) == nil && find("quota-overflow", in: root) == nil,
+                    "all-unsupported accounts retained an empty quota control")
+        try require(popup("detail-Account 3") == nil, "hidden quota toolbar retained its popover")
+        try capture(root, label: "no-supported-quotas")
+
+        state.dashboard.hosts = saved
+        try await settle()
+        try require(find("quota-account-0", in: root) != nil && find("quota-overflow", in: root) != nil,
+                    "supported quotas did not return after an account update")
+        try require(popup("detail-Account 3") == nil, "account update reopened an old popover")
     }
 
     @MainActor private func popup(_ id: String) -> NSView? {

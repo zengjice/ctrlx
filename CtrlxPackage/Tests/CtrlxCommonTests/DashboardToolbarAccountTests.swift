@@ -76,6 +76,25 @@ struct DashboardToolbarAccountTests {
         #expect(first.map(\.id) == second.map(\.id))
     }
 
+    @Test(arguments: ["codex", "claude-code"])
+    func unsupportedAccountsRemainInDashboardOnly(pluginID: String) {
+        var api = host(name: "api", user: "API account")
+        api.snapshot?.accounts[0].pluginID = pluginID
+        api.snapshot?.accounts[0].identity = nil
+        api.snapshot?.accounts[0].availability = .unsupported
+        api.snapshot?.accounts[0].windows = []
+        api.snapshot?.accounts[0].quotaObservedAt = nil
+        let subscription = host(name: "subscription", user: "Subscription")
+
+        let dashboard = DashboardOverview.accounts(in: [api, subscription])
+        #expect(dashboard.count == 2)
+        #expect(dashboard.contains { $0.selection?.source.account == api.snapshot?.accounts[0] })
+        let toolbar = DashboardToolbarAccount.accounts(in: [api, subscription], at: now)
+        #expect(toolbar.count == 1)
+        #expect(toolbar.first?.account.label == "Subscription")
+        #expect(DashboardToolbarAccount.accounts(in: [api], at: now).isEmpty)
+    }
+
     @Test
     func ambiguousObservationsStayGray() {
         let item = DashboardToolbarAccount.accounts(in: [host(), host(name: "home", used: 90)], at: now)[0]

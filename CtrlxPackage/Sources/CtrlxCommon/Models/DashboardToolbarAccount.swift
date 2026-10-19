@@ -21,7 +21,7 @@ public struct DashboardToolbarAccount: Identifiable, Sendable {
     }
 
     public init?(group: DashboardAccountGroup, at now: Date) {
-        guard let selection = group.selection else { return nil }
+        guard let selection = group.selection, selection.source.account.availability != .unsupported else { return nil }
         self.group = group
         self.account = selection.source.account
         self.observedAt = selection.source.interval?.upperBound
