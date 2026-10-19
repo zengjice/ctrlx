@@ -150,6 +150,24 @@ moves show an error. Files ordering is viewer-local and saved with its workspace
 Recovery applies that order to matching Host tab UUIDs as their catalog arrives;
 new tabs follow the saved tabs without resetting live reorders.
 
+On iOS, swipe up from the native session/window status row (for example `cm:1`)
+or the first input-control row to open that same **Tabs** sheet. Swipe down from
+either row to hide the keyboard; an already hidden keyboard stays hidden. The
+title button and explicit keyboard controls remain available. These gestures
+exclude terminal content (including an Agent's footer), the second-row shortcut
+accessory and text editors. A deliberate vertical swipe cancels the button under
+the finger; horizontal overflow scrolling, ordinary taps and held repeat buttons
+keep their existing behavior. Recording and open quick-action panels suspend
+these navigation gestures. Each completed swipe performs at most one action.
+
+Validation (2026-10-19): `TerminalBarSwipePolicyTests` and
+`TerminalWindowSwipePolicyTests` passed (8 tests, 30 cases), as did the iOS
+Simulator Debug build. An isolated iOS 27 fixture reused the production gesture,
+status row and keyboard bar with stubbed sends: native touch checks covered
+button cancellation, overflow scrolling, held buttons, actual keyboard dismissal,
+draft preservation and the excluded regions/presentation states. This was not
+a paired-Host or physical-iPhone acceptance run.
+
 In Bottom Bar mode, a single tap in an empty terminal input surface
 shows/hides the keyboard; with draft text, it places the cursor and opens the
 keyboard (or keeps it open), so editing can resume after hiding it. Native

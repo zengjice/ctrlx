@@ -315,6 +315,7 @@
                         agentCommandContext: activeAgentCommandContext,
                         showsTerminalControls: settings.terminalKeyboardControlPosition == .bottomBar
                     )
+                    .gesture(terminalBarSwipe)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -746,10 +747,7 @@
         @ToolbarContentBuilder private var windowToolbar: some ToolbarContent {
             // Title opens the tab picker; each row owns its window actions.
             ToolbarItem(placement: .principal) {
-                Button {
-                    pendingWindowTabAction = nil
-                    showsWindowTabs = true
-                } label: {
+                Button(action: openWindowTabs) {
                     HStack(spacing: 4) {
                         Text(navigationTitle)
                             .fontWeight(.semibold)
@@ -839,6 +837,25 @@
                     .popover(isPresented: $showSessionInfo) {
                         sessionInfoPopover
                     }
+                }
+            }
+        }
+
+        private func openWindowTabs() {
+            pendingWindowTabAction = nil
+            showsWindowTabs = true
+        }
+
+        private var terminalBarSwipe: TerminalBarSwipeGesture {
+            TerminalBarSwipeGesture(
+                isEnabled: terminalIsVisible && !showsWindowTabs && !creationSheetIsPresented
+                    && !quickActionPresentation.isPresented && !voiceSession.isPresented
+            ) { direction in
+                switch direction {
+                case .up:
+                    openWindowTabs()
+                case .down:
+                    isKeyboardActive = false
                 }
             }
         }
@@ -1488,6 +1505,8 @@
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(.bar)
+            .contentShape(.rect)
+            .gesture(terminalBarSwipe)
         }
 
         // MARK: - Tmux Controls
