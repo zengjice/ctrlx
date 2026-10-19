@@ -490,6 +490,21 @@ enum MacOSAccessibility {
         return true
     }
 
+    static func hover(appPID: pid_t, matching query: ElementQuery) -> Bool {
+        guard
+            focusedAppPID() == appPID,
+            let frame = findAllRawElements(appPID: appPID, matching: query).lazy.compactMap({ frameOfElement($0) }).first,
+            let event = CGEvent(
+                mouseEventSource: nil,
+                mouseType: .mouseMoved,
+                mouseCursorPosition: CGPoint(x: frame.midX, y: frame.midY),
+                mouseButton: .left
+            )
+        else { return false }
+        event.post(tap: .cghidEventTap)
+        return true
+    }
+
     /// CGEvent left-click on an element matching by "titled" text.
     @discardableResult
     static func cgClick(appPID: pid_t, titled: String) -> Bool {
@@ -622,10 +637,14 @@ enum MacOSAccessibility {
     static func mainResizableWindow(appPID: pid_t) -> (title: String, element: AXUIElement)? {
         let all = windows(appPID: appPID)
         let standard = all.filter { subroleOf($0.element) == kAXStandardWindowSubrole as String }
-        if let first = standard.first { return first }
+        if let first = standard.first {
+            return first
+        }
         // Fallback: windows with no subrole at all (some SwiftUI windows omit it).
         let noSubrole = all.filter { subroleOf($0.element).isEmpty }
-        if let first = noSubrole.first { return first }
+        if let first = noSubrole.first {
+            return first
+        }
         return all.first
     }
 
@@ -789,7 +808,9 @@ enum MacOSAccessibility {
         for _ in 0..<5 {
             guard let el = current else { return false }
             let result = AXUIElementPerformAction(el, kAXPressAction as CFString)
-            if result == .success { return true }
+            if result == .success {
+                return true
+            }
             current = parent(of: el)
         }
         return false

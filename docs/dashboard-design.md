@@ -292,3 +292,17 @@ Agent 特有的身份与额度读取放在插件能力中，公共 UI 使用统�
 - `CodexAccountTests|ClaudeAccountTests|HostDashboardTests|DashboardResourceTests` 共 21 项测试通过，覆盖多轮查询、默认 SIGPIPE 行为、超时与取消后的子进程回收、失败保留采样时间、慢来源隔离及停止／移除后的晚到响应。相关 Mac 模块随测试重新编译；SwiftFormat、品牌／技术边界和差异空白检查通过。
 - 使用本轮编译的 Codex reporter 对真实 CLI 进行两次只读查询，中间等待 61 秒；分别约 7.5 秒和 9.1 秒完成，采样时间从 22:07:43 前进到 22:08:56（Asia/Shanghai）。未创建对话或发起模型请求，记录不含账号凭证。本地证据在 `.build-local/dashboard-refresh-tests.log` 和 `.build-local/diagnostics/dashboard-refresh-20261018/`。
 - 未替换运行中的 App，未打包或发布；未重跑整包构建、iPhone／远程 Mac UI 或真实 Claude 订阅账号验收。此修复位于 Host 侧，更新 Mac Host 后由现有 Dashboard 协议供各 Viewer 使用。
+
+### 11.4 Mac 标题栏额度快览（2026-10-19）
+
+- 在工作台标题与右侧连接／终端操作之间显示账号图标与 28pt 剩余额度环；本地、远程与独立工作台共用组件。原 Dashboard 入口保留。
+- 使用 Dashboard 的可信账号／额度池身份去重；同一服务商的不同账号分别展示，按身份稳定排序，不随额度、选中会话或 Host 到达顺序重排。
+- 同一账号以所有有效窗口中的最低剩余百分比表示当前限制：大于 20% 绿色、大于 10% 至 20% 橙色、10% 及以下红色；已耗尽显示完整红色轮廓。窗口缺失、过期、未知、离线、来源冲突或采样过旧时显示灰色虚线，详情保留上次读数。不会在重置时自行补到 100%。
+- 悬停约 450ms 显示账号、各额度窗口和采样时间；点击固定详情，显示进度、重置时间、来源 Host 与 Dashboard 入口。直接点击另一账号切换卡片，点击外部或 Escape 关闭。
+- 常规宽度最多四个图标，其他账号进入 `+N`；随窗口缩窄逐步减少图标，空间不足时保留额度入口。额度区域有界，剩余空间继续使用原生工具栏 spacer，保留窗口拖动与系统双击行为。
+- 每个窗口仅读取共享 `DashboardStore`；15 秒展示时钟用于更新过期状态和相对时间，不发起查询。沿用 Mac 每 30 秒快照监控及 Host 的一分钟账号查询限频，悬停、打开卡片和新增独立窗口不增加查询。
+- 本版不增加账号历史图，也不将现有 Host／项目 token 历史归给当前账号。当前协议没有套餐字段，因此不推断或编造套餐名。
+- 图标资源仅用于识别来源服务：[OpenAI 官方开发者站点图标](https://developers.openai.com/favicon.svg)、[Claude 官方站点的品牌符号](https://claude.com/)。商标归各自所有者；未使用 Agent HUD 的代码或资源。
+- `DashboardToolbarAccountTests|DashboardQuotaAlertTests|DashboardOverviewTests|DashboardStoreTests` 共 28 项专项测试通过，覆盖阈值、全部额度约束、身份去重与稳定顺序、离线／过期／冲突状态，以及现有提醒与共享缓存规则。Mac Debug 完整构建通过。
+- 原生 SwiftUI／AppKit 隔离验收四组通过：主窗口与独立窗口、明暗主题、实时账号更新、一次点击切换详情、Escape／外部关闭、溢出列表与窄窗口，以及系统 Maximize／Minimize／None 双击行为。另用实际弹层组件检查显示摘要前后 key window 与文本输入 first responder 均保持。
+- 隔离 Mac Host／Viewer 的 74 步验收通过，包含真实鼠标悬停摘要、两端窄窗口额度入口、进入 Dashboard 与加密机器数据请求；截图人工检查，不对动态额度进行像素比较。日志和截图在 `.build-local/diagnostics/titlebar-quotas-20261019/`，不进入 Git。未替换用户安装的 App，也未打包发布。

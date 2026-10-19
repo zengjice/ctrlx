@@ -329,6 +329,19 @@ public actor MacOSDriver {
 
     // MARK: - Right-Click / Context Menu
 
+    public func hover(matching query: ElementQuery) async throws {
+        let pid = try requirePID()
+        try await activate()
+        do {
+            try await Polling.waitUntil(description: "macOS hover target", timeout: 10, pollInterval: 0.2) {
+                MacOSAccessibility.hover(appPID: pid, matching: query)
+            }
+        } catch {
+            logger.error("Hover query: \(MacOSAccessibility.diagnoseQuery(appPID: pid, query: query)); focused PID: \(String(describing: MacOSAccessibility.focusedAppPID()))")
+            throw error
+        }
+    }
+
     /// Right-click on an element to open its context menu.
     public func rightClick(titled: String) async throws {
         let pid = try requirePID()

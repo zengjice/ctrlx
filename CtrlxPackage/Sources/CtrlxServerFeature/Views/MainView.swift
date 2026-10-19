@@ -2583,6 +2583,11 @@ public struct MainView: View {
                 .accessibilityIdentifier("session-switcher-button")
             }
         }
+        ToolbarItem(id: "ctrlx.toolbar.quotas", placement: .automatic) {
+            DashboardQuotaToolbar(store: coordinator.dashboardStore) {
+                openWindow(id: "dashboard")
+            }
+        }
         WorkbenchWindowTitle(title: workspaceTitle)
         ToolbarItem(id: "ctrlx.toolbar.trial", placement: .automatic) {
             TrialStatusToolbarItem()

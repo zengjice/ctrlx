@@ -1,10 +1,45 @@
 import AppKit
 import SwiftUI
 
+/// The data transport and asset bundle are inert. Account grouping, quota rules,
+/// views, native toolbar layout and event handling are the production implementations.
+extension Bundle {
+    static var module: Bundle {
+        ProcessInfo.processInfo.environment["CTRLX_TITLEBAR_ASSETS"].flatMap(Bundle.init(path:)) ?? .main
+    }
+}
+
+enum Symbols {
+    case gaugeWithDotsNeedle50percent
+    var image: Image {
+        Image(systemName: "gauge.with.dots.needle.50percent")
+    }
+}
+
+@MainActor @Observable
+final class DashboardStore {
+    var isRefreshing = false
+    var hosts: [DashboardHost] = {
+        let now = Date()
+        let accounts = (0 ..< 6).map { index -> DashboardAccount in
+            let plugin = index % 2 == 0 ? "codex" : "claude-code"
+            let name = index % 2 == 0 ? "Codex" : "Claude Code"
+            let identity = DashboardAccountIdentity(providerID: "fixture", accountID: String(index), workspaceID: "personal", poolID: "quota")
+            let quota = DashboardQuotaWindow(id: "weekly", title: "7 days", usedPercent: Double(index * 20), resetsAt: now.addingTimeInterval(3600))
+            return DashboardAccount(id: "account-\(index)", pluginID: plugin, providerName: name, label: "Account \(index)", configurationLabel: "Default",
+                                    identity: identity, authentication: .signedIn, availability: .available, quotaObservedAt: now, windows: [quota])
+        }
+        return [.init(id: "local", name: "This Mac", isConnected: true, isSupported: true,
+                      snapshot: .init(hostID: UUID(), generatedAt: now, timeZoneIdentifier: "UTC", accounts: accounts),
+                      requestedAt: now, receivedAt: now)]
+    }()
+}
+
 @MainActor @Observable
 final class TitlebarFixtureState {
     var title = "cm"
     var buttonClicks = 0
+    let dashboard = DashboardStore()
 }
 
 struct TitlebarAnchor: NSViewRepresentable {
@@ -15,7 +50,9 @@ struct TitlebarAnchor: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_: NSView, context _: Context) {}
+    func updateNSView(_ view: NSView, context _: Context) {
+        view.identifier = .init(id)
+    }
 
     final class Passthrough: NSView {
         override func hitTest(_: NSPoint) -> NSView? {
@@ -30,9 +67,10 @@ struct TitlebarFixture: View {
 
     var body: some View {
         workspace
-            .background(Color.black)
-            .containerBackground(Color.black, for: .window)
-            .toolbarBackground(Color.black, for: .windowToolbar)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .containerBackground(Color(nsColor: .windowBackgroundColor), for: .window)
+            .toolbarBackground(Color(nsColor: .windowBackgroundColor), for: .windowToolbar)
+            .preferredColorScheme(detached ? .dark : .light)
             .navigationTitle(state.title)
             .toolbar(removing: .title)
             .toolbar {
@@ -40,6 +78,9 @@ struct TitlebarFixture: View {
                     ToolbarItem(placement: .navigation) {
                         Button("Search") { state.buttonClicks += 1 }
                     }
+                }
+                ToolbarItem(id: "quotas", placement: .automatic) {
+                    DashboardQuotaToolbar(store: state.dashboard) { state.buttonClicks += 1 }
                 }
                 WorkbenchWindowTitle(title: state.title)
                 ToolbarItem(placement: .automatic) {
@@ -89,6 +130,10 @@ struct TitlebarFixture: View {
         }
         let frame = NSRect(x: 100, y: 100, width: 1000, height: 600)
         try await reset(window, to: frame)
+        try require(find("quota-account-0", in: root) != nil, "quota icons missing")
+        try require(find("quota-overflow", in: root) != nil, "quota overflow missing")
+        try capture(root, label: "toolbar")
+        try await checkQuotaPopover(window, root: root)
         // AppKit's left titlebar area is the oracle for the user's native double-click action.
         try await doubleClick(window, at: NSPoint(x: 90, y: 575))
         let expectedFrame = window.frame
@@ -122,6 +167,11 @@ struct TitlebarFixture: View {
             let narrow = NSRect(x: 100, y: 100, width: width, height: 400)
             try await reset(window, to: narrow)
             try require(window.frame.width == width, "long title expanded the window")
+            print("quota width=\(width), item=\(find("quota-account-0", in: root) != nil), overflow=\(find("quota-overflow", in: root) != nil)")
+            if width == 600 {
+                try require(find("quota-account-0", in: root) == nil, "narrow window did not collapse quota icons")
+                try require(find("quota-overflow", in: root) != nil, "narrow quota entry missing")
+            }
             // A 400-point split-view toolbar already overflows with the native title.
             // Check its bounds, and verify direct actions at 600 points (400 when detached).
             if !detached, width == 400 {
@@ -136,6 +186,65 @@ struct TitlebarFixture: View {
             try require(state.buttonClicks > oldClicks, "long title made trailing action inaccessible")
         }
         window.close()
+    }
+
+    @MainActor private func checkQuotaPopover(_ window: NSWindow, root: NSView) async throws {
+        guard let icon = find("quota-account-0", in: root) else { throw failure("quota button missing") }
+        try await click(icon, in: window)
+        try require(popup("detail-Account 0") != nil, "click did not open account details")
+        if let card = popup("detail-Account 0")?.window?.contentView {
+            try capture(card, label: "account")
+        }
+        state.dashboard.hosts[0].snapshot?.accounts[0].label = "Updated account"
+        try await settle()
+        try require(popup("detail-Updated account") != nil, "account popover retained a stale snapshot")
+        guard let next = find("quota-account-1", in: root) else { throw failure("second quota button missing") }
+        try await click(next, in: window)
+        try require(popup("detail-Account 1") != nil, "clicking another account did not switch details")
+        if let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                         windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)
+        {
+            NSApp.postEvent(escape, atStart: false)
+        }
+        try await settle()
+        try require(popup("detail-Account 1") == nil, "Escape did not dismiss details")
+        try await click(next, in: window)
+        try require(popup("detail-Account 1") != nil, "account did not reopen after Escape")
+        try await postClick(window, at: .init(x: 600, y: 300))
+        try require(popup("detail-Account 1") == nil, "outside click did not dismiss details")
+        guard let overflow = find("quota-overflow", in: root) else { throw failure("quota overflow missing") }
+        try await click(overflow, in: window)
+        guard let other = popup("list-account-4"), let popupWindow = other.window else { throw failure("overflow account list missing") }
+        try await click(other, in: popupWindow)
+        try require(popup("detail-Account 4") != nil, "overflow account did not open details")
+        try await postClick(window, at: .init(x: 600, y: 300))
+    }
+
+    @MainActor private func popup(_ id: String) -> NSView? {
+        NSApp.windows.filter(\.isVisible).compactMap { $0.contentView }.compactMap { find(id, in: $0) }.first
+    }
+
+    @MainActor private func capture(_ view: NSView, label: String) throws {
+        guard let path = ProcessInfo.processInfo.environment["CTRLX_TITLEBAR_SCREENSHOTS"],
+              let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: image)
+        if let png = image.representation(using: .png, properties: [:]) {
+            try png.write(to: URL(fileURLWithPath: path).appendingPathComponent("\(label)-\(detached ? "dark" : "light").png"))
+        }
+    }
+
+    @MainActor private func click(_ view: NSView, in window: NSWindow) async throws {
+        let rect = view.convert(view.bounds, to: nil)
+        try await postClick(window, at: .init(x: rect.midX, y: rect.midY))
+    }
+
+    @MainActor private func postClick(_ window: NSWindow, at point: NSPoint) async throws {
+        for type: NSEvent.EventType in [.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 0)!
+            NSApp.postEvent(event, atStart: false)
+        }
+        try await settle()
     }
 
     @MainActor private func reset(_ window: NSWindow, to frame: NSRect) async throws {

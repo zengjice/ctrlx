@@ -291,6 +291,8 @@ public enum TestStep: Sendable {
     /// CGEvent left-click on an element (bypasses AXPress, uses real mouse click).
     /// Use for selecting items in SwiftUI List/OutlineGroup.
     case macCGClick(titled: String, instance: Int = 0)
+    /// Move the pointer over an element after verifying the isolated app has focus.
+    case macHoverElement(query: ElementQuery, instance: Int = 0)
     /// CGEvent left-click on an element matching the query (bypasses AXPress,
     /// uses real mouse click). Use when targeting elements by accessibility
     /// identifier — e.g., individual terminal panes — instead of fragile
