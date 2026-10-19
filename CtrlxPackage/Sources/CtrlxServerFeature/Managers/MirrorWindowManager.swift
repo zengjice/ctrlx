@@ -197,29 +197,31 @@ final public class MirrorWindowManager {
         if changed {
             paneStates = updatedStates
         }
-        let liveWindowIdsBySession = Dictionary(grouping: updatedStates.values, by: \.sessionName)
-            .mapValues { Set($0.map(\.stableWindowId)) }
+        let liveWindowIdsBySession = Dictionary(grouping: TmuxWindow.groupPanes(Array(updatedStates.values)), by: \.sessionName)
+            .mapValues { $0.map(\.stableId) }
         var reconciledLayouts: [String: SharedTerminalLayout] = [:]
         for (sessionName, layout) in sharedTerminalLayouts {
             guard
                 let liveWindowIds = liveWindowIdsBySession[sessionName],
-                liveWindowIds.contains(layout.leftWindowId)
+                let leftWindowId = liveWindowIds.contains(layout.leftWindowId) ? layout.leftWindowId
+                : liveWindowIds.first(where: { !layout.rightWindowIds.contains($0) }) ?? liveWindowIds.first
             else { continue }
 
             let rightWindowIds = layout.rightWindowIds.filter {
-                $0 != layout.leftWindowId && liveWindowIds.contains($0)
+                $0 != leftWindowId && liveWindowIds.contains($0)
             }
             let selectedRightWindowId = layout.selectedRightWindowId
                 .flatMap { rightWindowIds.contains($0) ? $0 : nil }
                 ?? rightWindowIds.first
             if
+                leftWindowId == layout.leftWindowId,
                 rightWindowIds == layout.rightWindowIds,
                 selectedRightWindowId == layout.selectedRightWindowId {
                 reconciledLayouts[sessionName] = layout
             } else {
                 let revision = layout.revision == UInt64.max ? layout.revision : layout.revision + 1
                 reconciledLayouts[sessionName] = SharedTerminalLayout(
-                    leftWindowId: layout.leftWindowId,
+                    leftWindowId: leftWindowId,
                     rightWindowIds: rightWindowIds,
                     selectedRightWindowId: selectedRightWindowId,
                     splitRatio: layout.splitRatio,

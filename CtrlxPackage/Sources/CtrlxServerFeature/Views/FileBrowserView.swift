@@ -583,24 +583,16 @@ final class SessionFileTabsState {
         }
 
         guard selectedRight == nil else { return false }
-        if
-            let window = rightSide.first(where: {
-                if case .window = $0 {
-                    true
-                } else {
-                    false
-                }
-            }) {
-            selectedRight = window
-        } else if includeLocalTabs, rightSide.contains(.fileExplorer) {
-            selectedRight = .fileExplorer
-        } else if includeLocalTabs, rightSide.contains(.git) {
-            selectedRight = .git
-        } else if let browser = openBrowserTabs.last(where: { rightSide.contains(.browser($0.id)) }) {
-            selectedRight = .browser(browser.id)
-        } else if let file = openFileTabs.last(where: { rightSide.contains(.file($0.id)) }) {
-            selectedRight = .file(file.id)
-        }
+        let remaining = TabDragPayload.reconciledOrder(
+            windowIds: sessionWindowIDs, fileTabIds: openFileTabs.map(\.id), browserTabIds: openBrowserTabs.map(\.id),
+            storedOrder: tabOrder, includeFileExplorer: includeLocalTabs, includeGit: includeLocalTabs
+        ).filter { rightSide.contains($0) }
+        selectedRight = remaining.first(where: {
+            if case .window = $0 {
+                return true
+            }
+            return false
+        }) ?? remaining.first
         return false
     }
 

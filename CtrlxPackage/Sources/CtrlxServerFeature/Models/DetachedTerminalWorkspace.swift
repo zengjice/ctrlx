@@ -160,6 +160,22 @@ final class DetachedTerminalWorkspace {
 }
 
 enum WorkspaceTerminalSelection {
+    struct Window: Equatable {
+        let hostID: String
+        let id: String
+        let stableId: String
+        let sessionName: String
+        let isWindowActive: Bool
+
+        init(_ window: TmuxWindow, hostID: String) {
+            self.hostID = hostID
+            self.id = window.id
+            self.stableId = window.stableId
+            self.sessionName = window.sessionName
+            self.isWindowActive = window.isWindowActive
+        }
+    }
+
     static func leftWindowID(
         current: String?, orderedIDs: [String], activeID: String?,
         rightSide: Set<String>, followsActive: Bool = false,
@@ -167,6 +183,9 @@ enum WorkspaceTerminalSelection {
     ) -> String? {
         let eligible = orderedIDs.filter { owns($0) && !rightSide.contains($0) }
         let active = activeID.flatMap { eligible.contains($0) ? $0 : nil }
+        if let current, !orderedIDs.contains(current) {
+            return eligible.first
+        }
         if followsActive, let active {
             return active
         }

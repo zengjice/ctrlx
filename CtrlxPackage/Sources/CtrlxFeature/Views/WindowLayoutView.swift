@@ -22,6 +22,7 @@
         @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
         @Environment(ViewerConnectionManager.self) private var connectionManager
         @Environment(AgentBackgroundMonitoringService.self) private var backgroundMonitoring
+        @Environment(\.dismiss) private var dismiss
 
         /// The currently selected window within the session
         @State private var selectedWindowId: String?
@@ -149,7 +150,8 @@
                     windowId: window.id,
                     paneId: window.activePane?.paneId ?? window.panes.first?.paneId,
                     isActive: window.isWindowActive,
-                    paneIDs: window.panes.map(\.paneId)
+                    paneIDs: window.panes.map(\.paneId),
+                    stableWindowId: window.stableId
                 )
             }
         }
@@ -485,28 +487,15 @@
                     AgentForkPanel(configuration: configuration)
                         .presentationDetents([.large])
                 }
-                .alert(
-                    "Close Window?",
-                    isPresented: .init(
-                        get: { closeConfirmation != nil },
-                        set: {
-                            if !$0 {
-                                closeConfirmation = nil
-                            }
-                        }
+                .alert(item: $closeConfirmation) { confirmation in
+                    Alert(
+                        title: Text(confirmation.title),
+                        message: Text(confirmation.message),
+                        primaryButton: .destructive(Text(confirmation.actionTitle)) {
+                            performCloseWindow(confirmation.target, inputBinding: confirmation.inputBinding, closesSession: confirmation.closesSession)
+                        },
+                        secondaryButton: .cancel()
                     )
-                ) {
-                    if let confirmation = closeConfirmation {
-                        Button("Close Anyway", role: .destructive) {
-                            performCloseWindow(confirmation.target, inputBinding: confirmation.inputBinding)
-                        }
-                        .keyboardShortcut(.defaultAction)
-                    }
-                    Button("Cancel", role: .cancel) { closeConfirmation = nil }
-                } message: {
-                    if let confirmation = closeConfirmation {
-                        Text(confirmation.message)
-                    }
                 }
                 .alert("Error", isPresented: .init(
                     get: { commandError != nil },
@@ -633,8 +622,8 @@
                     // Mark session as handled when navigating into the view
                     await activeService?.markHandledIfNeeded()
                 }
-                .task(id: windowSelectionCandidates) {
-                    reconcileWindowSelection(candidates: windowSelectionCandidates)
+                .onChange(of: windowSelectionCandidates, initial: true) { previous, candidates in
+                    reconcileWindowSelection(candidates: candidates, previousCandidates: previous)
                     if
                         let request = annotationHandoff.request,
                         Set(sessionWindows.first(where: { $0.id == request.windowID })?.panes.map(\.paneId) ?? []) != request.paneIDs {
@@ -909,7 +898,6 @@
                     renamingWindowBinding = relayClient.workspaceInputState.windowBinding(target: target.stableId)
                     renamingWindow = target
                 case .close:
-                    guard sessionWindows.count > 1 else { return }
                     requestCloseWindow(target)
                 }
             case let .selectFiles(id):
@@ -1155,7 +1143,9 @@
             await relayClient.requestSessionState()
         }
 
-        private func reconcileWindowSelection(candidates: [WindowSelectionCandidate]) {
+        private func reconcileWindowSelection(
+            candidates: [WindowSelectionCandidate], previousCandidates: [WindowSelectionCandidate] = []
+        ) {
             if !windowCreation.validateSessionBinding(relayClient.workspaceInputState.sessionBinding(name: sessionName)) {
                 initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
             }
@@ -1172,7 +1162,8 @@
                 selectedWindowId: selectedWindowId,
                 candidates: candidates,
                 createdPaneId: windowCreation.paneID,
-                selectedPaneId: activePaneId
+                selectedPaneId: activePaneId,
+                previousCandidates: previousCandidates
             )
 
             switch decision {
@@ -1825,18 +1816,21 @@
 
         private func requestCloseWindow(_ window: TmuxWindow) {
             let binding = relayClient.workspaceInputState.windowBinding(target: window.stableId)
+            let sessionBinding = relayClient.workspaceInputState.sessionBinding(name: window.sessionName)
             Task {
                 let spec = CheckRunningProcesses(target: .window(window.stableId))
                 let result = await relayClient.sendCommand(spec, paneId: "", inputBinding: binding)
                 if case let .success(response) = result {
                     let processes = response.runningProcesses ?? []
-                    if processes.isEmpty {
+                    let closesSession = sessionWindows.count == 1 && sessionWindows.first?.stableId == window.stableId
+                    if processes.isEmpty, !closesSession {
                         performCloseWindow(window, inputBinding: binding)
                     } else {
                         closeConfirmation = TerminalCloseConfirmation(
                             target: window,
                             runningProcesses: processes,
-                            inputBinding: binding
+                            inputBinding: closesSession ? sessionBinding : binding,
+                            closesSession: closesSession
                         )
                     }
                 } else if case let .failure(error) = result {
@@ -1845,18 +1839,33 @@
             }
         }
 
-        private func performCloseWindow(_ window: TmuxWindow, inputBinding: ViewerWorkspaceInputBinding) {
+        private func performCloseWindow(_ window: TmuxWindow, inputBinding: ViewerWorkspaceInputBinding, closesSession: Bool = false) {
+            let previousCandidates = windowSelectionCandidates
             Task {
+                if closesSession {
+                    let result = await relayClient.sendCommand(
+                        KillTmuxSession(sessionName: window.sessionName), paneId: "", inputBinding: inputBinding
+                    )
+                    if case .success = result {
+                        // Identity-aware destinations leave when the Host removes
+                        // the session from its catalog, including external closes.
+                        if fileWorkspace.recoveryReference == nil {
+                            dismiss()
+                        }
+                    } else if case let .failure(error) = result {
+                        commandError = error.localizedDescription
+                    }
+                    return
+                }
                 let spec = KillTmuxWindow(windowId: window.stableId)
                 let result = await relayClient.sendCommand(spec, paneId: "", inputBinding: inputBinding)
                 if case .success = result {
-                    // Select another window if the closed one was selected
-                    // (the host will push updated state via pushSessionStateToAll)
-                    if selectedWindowId == window.id {
-                        let remaining = sessionWindows.filter { $0.id != window.id }
-                        selectedWindowId = remaining.first(where: \.isWindowActive)?.id ?? remaining.first?.id
-                        activePaneId = sessionWindows.first(where: { $0.id == selectedWindowId })?.activePane?.paneId
-                    }
+                    // The push may precede the reply and reuse the closed index.
+                    // Reconcile by the pre-command identities, preserving a new manual selection.
+                    reconcileWindowSelection(
+                        candidates: windowSelectionCandidates.filter { $0.stableWindowId != window.stableId },
+                        previousCandidates: previousCandidates
+                    )
                 } else if case let .failure(error) = result {
                     commandError = error.localizedDescription
                 }

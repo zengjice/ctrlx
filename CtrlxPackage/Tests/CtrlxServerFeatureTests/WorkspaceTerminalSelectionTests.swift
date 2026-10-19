@@ -5,6 +5,60 @@ import Testing
 
 @Suite @MainActor
 struct WorkspaceTerminalSelectionTests {
+    @Test("Closing the selected window chooses the first eligible tab even if tmux changes active window", arguments: [false, true])
+    func closedSelection(followsActive: Bool) {
+        #expect(WorkspaceTerminalSelection.leftWindowID(
+            current: "@closed", orderedIDs: ["@8", "@4", "@2"], activeID: "@2", rightSide: [],
+            followsActive: followsActive, owns: { _ in true }
+        ) == "@8")
+        #expect(WorkspaceTerminalSelection.leftWindowID(
+            current: "@closed", orderedIDs: ["@8", "@4", "@2"], activeID: "@2", rightSide: ["@8"],
+            followsActive: followsActive, owns: { _ in true }
+        ) == "@4")
+    }
+
+    @Test("Right-pane close follows visible tab order and preserves background selections")
+    func rightCloseOrder() {
+        let tabs = SessionFileTabsState()
+        tabs.rightSide = [.window("@3"), .window("@2")]
+        tabs.tabOrder = [.window("@1"), .window("@3"), .window("@2")]
+        tabs.selectedRight = .window("@closed")
+        tabs.reconcileRightPaneSelection(sessionWindowIDs: ["@1", "@2", "@3"], includeLocalTabs: true)
+        #expect(tabs.selectedRight == .window("@3"))
+        tabs.selectedRight = .window("@2")
+        tabs.reconcileRightPaneSelection(sessionWindowIDs: ["@1", "@2", "@3"], includeLocalTabs: true)
+        #expect(tabs.selectedRight == .window("@2"))
+    }
+
+    @Test("Mixed right tabs prefer the first remaining terminal on Host and Viewer", arguments: [false, true])
+    func mixedRightCloseOrder(local: Bool) {
+        let tabs = SessionFileTabsState()
+        let file = OpenFileTab(path: "/tmp", directoryPath: "/tmp", isDirectory: true)
+        tabs.openFileTabs = [file]
+        let files: TabDragPayload = local ? .fileExplorer : .file(file.id)
+        tabs.rightSide = [files, .window("@3"), .window("@2")]
+        tabs.tabOrder = [files, .window("@1"), .window("@3"), .window("@2")]
+        tabs.selectedRight = .window("@closed")
+        func reconcile(_ windows: [String]) {
+            if local {
+                tabs.reconcileRightPaneSelection(sessionWindowIDs: windows, includeLocalTabs: true)
+            } else {
+                tabs.reconcileRemoteRightPaneSelection(sessionWindowIDs: windows)
+            }
+        }
+        reconcile(["@1", "@2", "@3"])
+        #expect(tabs.selectedRight == .window("@3"))
+        // A background close must not take focus away from Files.
+        tabs.selectedRight = files
+        reconcile(["@1", "@2", "@3"])
+        #expect(tabs.selectedRight == files)
+        tabs.selectedRight = .window("@3")
+        tabs.rightSide = [files]
+        reconcile(["@1"])
+        #expect(tabs.selectedRight == files)
+        #expect(tabs.isSplit)
+    }
+
     @Test(arguments: [nil, "remote-host"] as [String?])
     func draggingLeftTerminalAwaySkipsRightTerminal(host: String?) throws {
         let manager = DetachedTerminalWindows()

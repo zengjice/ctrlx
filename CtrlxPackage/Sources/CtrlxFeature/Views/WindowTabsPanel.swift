@@ -188,12 +188,10 @@
                         Label("Rename Window", symbol: .pencil)
                     }
                     .disabled(!isConnected)
-                    if windows.count > 1 {
-                        Button(role: .destructive) { choose(.window(stableID: window.stableId, operation: .close)) } label: {
-                            Label("Close Window", symbol: .rectangleBadgeMinus)
-                        }
-                        .disabled(!isConnected)
+                    Button(role: .destructive) { choose(.window(stableID: window.stableId, operation: .close)) } label: {
+                        Label("Close Window", symbol: .rectangleBadgeMinus)
                     }
+                    .disabled(!isConnected)
                 } label: {
                     Label("Actions for \(name)", symbol: .ellipsisCircle)
                         .labelStyle(.iconOnly)

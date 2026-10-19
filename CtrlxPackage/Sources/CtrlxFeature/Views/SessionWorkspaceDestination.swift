@@ -10,6 +10,7 @@
         @Environment(IOSFileBrowserWorkspaceStore.self) private var workspaces
         @Environment(ViewerConnectionManager.self) private var connections
         @Environment(IOSSettings.self) private var settings
+        @Environment(\.dismiss) private var dismiss
         @State private var observedReference: ViewerWorkspaceReference?
 
         private var catalog: ViewerWorkspaceCatalog? {
@@ -47,7 +48,14 @@
                     )
                 }
             }
-            .onChange(of: catalog, initial: true) {
+            .onChange(of: catalog, initial: true) { previous, current in
+                if
+                    let reference, let previous, let current,
+                    previous.scope == current.scope,
+                    previous.resolve(reference) != nil, current.resolve(reference) == nil {
+                    dismiss()
+                    return
+                }
                 if reference == nil {
                     observedReference = catalog?.reference(sessionName: destination.sessionName)
                 }

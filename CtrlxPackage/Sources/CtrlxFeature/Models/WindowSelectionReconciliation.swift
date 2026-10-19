@@ -3,6 +3,7 @@ struct WindowSelectionCandidate: Equatable, Hashable, Sendable {
     let paneId: String?
     let isActive: Bool
     var paneIDs: [String] = []
+    var stableWindowId: String?
 }
 
 enum WindowSelectionReconciliation: Equatable, Sendable {
@@ -24,18 +25,28 @@ enum WindowSelectionReconciliation: Equatable, Sendable {
         selectedWindowId: String?,
         candidates: [WindowSelectionCandidate],
         createdPaneId: String? = nil,
-        selectedPaneId: String? = nil
+        selectedPaneId: String? = nil,
+        previousCandidates: [WindowSelectionCandidate] = []
     ) -> Self {
         if
             let createdPaneId,
             let candidate = candidates.first(where: { $0.paneId == createdPaneId || $0.paneIDs.contains(createdPaneId) }) {
             return .select(windowId: candidate.windowId, paneId: createdPaneId)
         }
-        if
-            let selectedPaneId,
-            let candidate = candidates.first(where: { $0.paneId == selectedPaneId || $0.paneIDs.contains(selectedPaneId) }),
-            candidate.windowId != selectedWindowId {
-            return .select(windowId: candidate.windowId, paneId: selectedPaneId)
+        if let selectedPaneId {
+            if let candidate = candidates.first(where: { $0.paneId == selectedPaneId || $0.paneIDs.contains(selectedPaneId) }) {
+                return candidate.windowId == selectedWindowId
+                    ? .unchanged
+                    : .select(windowId: candidate.windowId, paneId: selectedPaneId)
+            }
+            // A closed split pane stays in its surviving window. A closed window
+            // goes to the first tab, even when tmux reuses its old index.
+            let previousWindow = previousCandidates.first { $0.paneId == selectedPaneId || $0.paneIDs.contains(selectedPaneId) }
+            let survivingWindow = previousWindow?.stableWindowId.flatMap { stableID in
+                candidates.first { $0.stableWindowId == stableID }
+            }
+            guard let candidate = survivingWindow ?? candidates.first else { return .unchanged }
+            return .select(windowId: candidate.windowId, paneId: candidate.paneId)
         }
         guard let selectedWindowId else {
             guard let candidate = preferredCandidate(in: candidates) else {
@@ -48,7 +59,7 @@ enum WindowSelectionReconciliation: Equatable, Sendable {
             return .unchanged
         }
 
-        guard let candidate = preferredCandidate(in: candidates) else { return .unchanged }
+        guard let candidate = candidates.first else { return .unchanged }
         return .select(windowId: candidate.windowId, paneId: candidate.paneId)
     }
 

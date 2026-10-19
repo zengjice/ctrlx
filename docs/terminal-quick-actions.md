@@ -19,7 +19,7 @@ Git directory, then the home directory, without taking the other side's Files pa
 | Command-1…9 | Select any tab by its visible order within the focused split |
 | Command-Option-Left / Right | Select the previous / next tab within that split |
 | Command-Option-Up / Down | Select the previous / next session in sidebar order |
-| Command-W | Close the focused tab, preserving existing terminal close confirmation |
+| Command-W | Close the focused tab; the final terminal tab asks to close its session |
 | Command-Option-M | Start / stop voice input; stop inserts without submitting |
 | Command-Option-F | Find in Files |
 | Command-Option-S | Toggle the status bar |
@@ -40,6 +40,23 @@ and detached workspaces share this behavior. Vertical scrolling and the tab
 strip's own overflow scrolling remain unchanged. Hold Option while scrolling
 to use the content's existing horizontal scrolling or browser navigation instead.
 Short or cancelled swipes and momentum do not switch tabs.
+
+Closing the selected terminal tab on Mac or iOS selects the first remaining
+terminal tab in that strip, ahead of any interleaved Files or browser tabs.
+On iOS, selection and input follow pane/window identities across tmux renumbering
+and either ordering of the close reply and state push. Background tab closes
+preserve the selection; split panes and detached workbenches keep their own
+eligible tabs. Closing the final
+terminal window in the entire session always asks to close the session, including
+an idle shell. Cancel leaves it intact; confirmation closes the session and exits
+its page. Running-process warnings remain in the same dialog. Files and browser
+tabs retain their existing source/parent return behavior.
+
+The iOS recovery cache distinguishes a previously observed window disappearing
+within the same Host/tmux incarnation from a pending window after restart. A live
+close saves the first surviving tab instead of waiting indefinitely for the closed
+window. Session disappearance within that same incarnation returns to the session
+list; reconnect/restoration gaps retain their saved navigation.
 
 Mac workbench titlebars use a compact, non-interactive session title and native
 flexible toolbar space. Double-clicking the empty area follows the same macOS

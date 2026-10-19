@@ -51,6 +51,9 @@ public enum WorkspaceCloseIdentityScenario {
                     TestStep.tmuxCreateSession(name: name, width: 100, height: 35)
                     TestStep.tmuxCommand(arguments: ["respawn-pane", "-k", "-t", "\(name):0.0", "/bin/cat"])
                     TestStep.tmuxCommand(arguments: ["rename-window", "-t", "\(name):0", name])
+                    if kind == "window" {
+                        TestStep.tmuxCommand(arguments: ["new-window", "-d", "-t", name, "-n", "keeper"])
+                    }
                 }
             }
         }
@@ -79,12 +82,16 @@ public enum WorkspaceCloseIdentityScenario {
             requestClose(name: name, kind: kind, instance: instance)
             TestStep.macWaitForElement(titled: "Close Anyway", timeout: 10, instance: instance)
             TestStep.macClickButton(titled: "Close Anyway", instance: instance)
-            TestStep.waitForTmuxDisplayMessageNotEqual(
-                target: "close-keeper", format: "#{S:#{session_name}|}",
-                notEqualTo: "${close-original-sessions}", timeout: 10
-            )
-            TestStep.tmuxStoreDisplayMessage(target: "close-keeper", format: "#{S:#{session_name}|}", storeAs: "close-remaining-sessions")
-            TestStep.assertStoredNotContains(key: "close-remaining-sessions", substring: name)
+            if kind == "window" {
+                TestStep.waitForTmuxDisplayMessage(target: name, format: "#{session_windows}", contains: "1", timeout: 10)
+            } else {
+                TestStep.waitForTmuxDisplayMessageNotEqual(
+                    target: "close-keeper", format: "#{S:#{session_name}|}",
+                    notEqualTo: "${close-original-sessions}", timeout: 10
+                )
+                TestStep.tmuxStoreDisplayMessage(target: "close-keeper", format: "#{S:#{session_name}|}", storeAs: "close-remaining-sessions")
+                TestStep.assertStoredNotContains(key: "close-remaining-sessions", substring: name)
+            }
         }
     }
 

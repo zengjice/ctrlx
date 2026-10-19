@@ -1,7 +1,9 @@
 import CtrlxCommon
 import CtrlxNetworking
+import Foundation
 
-struct CloseConfirmation {
+struct CloseConfirmation: Identifiable {
+    let id = UUID()
     enum Target {
         case session(String, identity: WorkspacePaneIdentity)
         case window(LocalTmuxWindow, identity: WorkspacePaneIdentity)
@@ -11,18 +13,21 @@ struct CloseConfirmation {
 
     let target: Target
     let runningProcesses: [RunningProcessInfo]
+    let closesLastWindow: Bool
 
     /// Create from local TmuxService processes
-    init(target: Target, localProcesses: [TmuxService.RunningProcess]) {
+    init(target: Target, localProcesses: [TmuxService.RunningProcess], closesLastWindow: Bool = false) {
         self.target = target
+        self.closesLastWindow = closesLastWindow
         self.runningProcesses = localProcesses.map {
             RunningProcessInfo(paneIndex: $0.paneIndex, name: $0.name, isForeground: $0.isForeground)
         }
     }
 
     /// Create from remote RunningProcessInfo (already in wire format)
-    init(target: Target, runningProcesses: [RunningProcessInfo]) {
+    init(target: Target, runningProcesses: [RunningProcessInfo], closesLastWindow: Bool = false) {
         self.target = target
+        self.closesLastWindow = closesLastWindow
         self.runningProcesses = runningProcesses
     }
 
@@ -50,6 +55,9 @@ struct CloseConfirmation {
             let names = Set(processes.map(\.name)).sorted().joined(separator: ", ")
             return "Terminal \(paneIndex): \(names)"
         }
-        return "The following processes are still running:\n\(descriptions.joined(separator: "\n"))"
+        let processes = "The following processes are still running:\n\(descriptions.joined(separator: "\n"))"
+        guard closesLastWindow else { return processes }
+        let warning = "This is the last terminal tab. Closing it will close the entire session."
+        return runningProcesses.isEmpty ? warning : "\(warning)\n\n\(processes)"
     }
 }

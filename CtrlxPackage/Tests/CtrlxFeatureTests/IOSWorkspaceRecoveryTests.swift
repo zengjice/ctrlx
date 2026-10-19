@@ -223,6 +223,51 @@ struct IOSWorkspaceRecoveryTests {
         }
     }
 
+    @Test("A live tab close selects and saves the first survivor; a Host restart still waits for recovery", arguments: [false, true])
+    func selectedWindowClosed(restarted: Bool) async throws {
+        try await withDependencies {
+            $0[IOSWorkspaceRecoveryStore.self] = .inMemory()
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let store = IOSFileBrowserWorkspaceStore(), client = ViewerRelayClient()
+            await store.prepareRecovery()
+            let initial = state(includeFiles: false)
+            store.update(initial, client: client)
+            let workspace = try #require(store.workspace(hostID: "pair", sessionName: "project"))
+            store.recordSelection(workspace: workspace, window: TmuxWindow.groupPanes(Array(initial.paneStates.values)).first, paneID: "%1")
+            let server = restarted ? "200:2" : "100:1"
+            let firstWindow = UUID()
+            let remaining = SessionStateMessage(pairId: "pair", paneStates: [
+                "%2": .init(
+                    paneId: "%2",
+                    sessionName: "project",
+                    windowIndex: 1,
+                    tmuxWindowId: "@2",
+                    workspaceIdentity: .init(serverID: server, sessionID: session, windowID: firstWindow, paneID: UUID())
+                ),
+                "%3": .init(
+                    paneId: "%3",
+                    sessionName: "project",
+                    windowIndex: 2,
+                    tmuxWindowId: "@3",
+                    isWindowActive: true,
+                    workspaceIdentity: .init(serverID: server, sessionID: session, windowID: UUID(), paneID: UUID())
+                ),
+            ], workspaceIdentity: .init(hostID: host, serverID: server))
+            store.update(remaining, client: client)
+            let updated = try #require(store.workspace(hostID: "pair", sessionName: "project"))
+            #expect(updated.hasPendingTerminalSelection == restarted)
+            if !restarted {
+                #expect(updated === workspace)
+                #expect(updated.restoredWindowID == "project:1")
+                #expect(updated.restoredPaneID == "%2")
+            }
+            store.update(remaining, client: client)
+            #expect(store.recovery.sessions.first?.selectedWindowID == (restarted ? window : firstWindow))
+            await store.flushRecovery()
+        }
+    }
+
     @Test("Draft confirmation cannot erase newer text and never stores a live request")
     func drafts() async throws {
         try await withDependencies { $0[IOSWorkspaceRecoveryStore.self] = .inMemory() } operation: {

@@ -656,6 +656,9 @@ public struct MainView: View {
     private var paneLifecycle: some View {
         workspaceLifecycle
             .onChange(of: tmuxService.panes) { oldPanes, newPanes in
+                let selectedWasClosed = selectedWindow.map { selected in
+                    !newPanes.contains { $0.sessionName == selected.sessionName && $0.stableWindowId == selected.stableId }
+                } ?? false
                 // Ensure pane states exist for all known panes so the detail view
                 // can render immediately when a window is selected (without waiting
                 // for the periodic validation timer).
@@ -767,7 +770,12 @@ public struct MainView: View {
                 // selection with tmux's unchanged active-window value.
                 let previousActive = oldPanes.first { $0.sessionName == sessionName && $0.isWindowActive }?.stableWindowId
                 let active = newPanes.first { $0.sessionName == sessionName && $0.isWindowActive }?.stableWindowId
-                repairLocalLeftSelection(sessionName: sessionName, followsActive: previousActive != nil && previousActive != active)
+                let previousIDs = Set(oldPanes.filter { $0.sessionName == sessionName }.map(\.stableWindowId))
+                let currentIDs = Set(newPanes.filter { $0.sessionName == sessionName }.map(\.stableWindowId))
+                repairLocalLeftSelection(
+                    sessionName: sessionName,
+                    followsActive: !selectedWasClosed && previousIDs.isSubset(of: currentIDs) && previousActive != nil && previousActive != active
+                )
             }
     }
 
@@ -817,13 +825,8 @@ public struct MainView: View {
                 handleSelectionChanged()
             }
             .onChange(of: selectedRemoteWindowId) { handleSelectionChanged() }
-            .onChange(of: selectedRemoteWindow?.id) {
-                // Keep selectedRemoteWindowId in sync when the computed property
-                // resolves to a different window (e.g., selected window removed,
-                // or tmux-active window changed by the host).
-                if let resolvedId = selectedRemoteWindow?.id, resolvedId != selectedRemoteWindowId {
-                    selectedRemoteWindowId = resolvedId
-                }
+            .onChange(of: selectedRemoteWindowSelection, initial: true) { previous, current in
+                reconcileRemoteWindowSelection(previous: previous, current: current)
                 if
                     let remote = selectedRemoteSession,
                     coordinator.remoteSessionStore?.hasReceivedState(for: remote.hostId) == true {
@@ -1446,9 +1449,9 @@ public struct MainView: View {
         let key = remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)
         let rightWindowIds = remoteSessionTabsStates[key]?.rightSideWindowIds ?? []
         let id = WorkspaceTerminalSelection.leftWindowID(
-            current: windows.first { $0.id == selectedRemoteWindowId }?.stableId,
+            current: windows.first { $0.id == selectedRemoteWindowId }?.stableId ?? selectedRemoteWindowId,
             orderedIDs: windows.map(\.stableId), activeID: windows.first(where: \.isWindowActive)?.stableId,
-            rightSide: rightWindowIds, followsActive: detachedWorkspace == nil,
+            rightSide: rightWindowIds,
             owns: { ownsTerminal(hostID: remote.hostId, windowID: $0) }
         )
         return windows.first { $0.stableId == id }
@@ -1458,6 +1461,29 @@ public struct MainView: View {
     private var selectedRemoteSessionWindows: [TmuxWindow] {
         guard let remote = selectedRemoteSession else { return [] }
         return remoteSessionWindows(hostId: remote.hostId, sessionName: remote.sessionName)
+    }
+
+    private var selectedRemoteWindowSelection: [WorkspaceTerminalSelection.Window] {
+        guard let remote = selectedRemoteSession else { return [] }
+        return selectedRemoteSessionWindows.map { .init($0, hostID: remote.hostId) }
+    }
+
+    private func reconcileRemoteWindowSelection(previous: [WorkspaceTerminalSelection.Window], current: [WorkspaceTerminalSelection.Window]) {
+        guard let remote = selectedRemoteSession else { return }
+        let old = previous.filter { $0.hostID == remote.hostId && $0.sessionName == remote.sessionName }
+        let selected = old.first { $0.id == selectedRemoteWindowId }?.stableId
+            ?? current.first { $0.id == selectedRemoteWindowId }?.stableId ?? selectedRemoteWindowId
+        let oldActive = old.first(where: \.isWindowActive)?.stableId
+        let active = current.first(where: \.isWindowActive)?.stableId
+        let tabs = remoteSessionTabsStates[remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)]
+        let id = WorkspaceTerminalSelection.leftWindowID(
+            current: selected, orderedIDs: current.map(\.stableId), activeID: active,
+            rightSide: tabs?.rightSideWindowIds ?? [],
+            followsActive: detachedWorkspace == nil && oldActive != nil && oldActive != active
+                && Set(old.map(\.stableId)).isSubset(of: Set(current.map(\.stableId))),
+            owns: { ownsTerminal(hostID: remote.hostId, windowID: $0) }
+        )
+        selectedRemoteWindowId = current.first { $0.stableId == id }?.id
     }
 
     @ViewBuilder
@@ -3308,12 +3334,15 @@ public struct MainView: View {
         Task {
             let processes = await tmuxService.runningProcesses(inWindow: window.stableId)
             guard ownsTerminal(hostID: nil, windowID: window.stableId) else { return }
-            if processes.isEmpty {
+            let windows = tmuxService.windows.filter { $0.sessionName == window.sessionName }
+            let closesSession = windows.count == 1 && windows.first?.stableId == window.stableId
+            if processes.isEmpty, !closesSession {
                 performClose(target)
             } else {
                 closeConfirmation = CloseConfirmation(
-                    target: target,
-                    localProcesses: processes
+                    target: closesSession ? .session(window.sessionName, identity: identity) : target,
+                    localProcesses: processes,
+                    closesLastWindow: closesSession
                 )
             }
         }
@@ -4611,10 +4640,8 @@ public struct MainView: View {
     /// Keeps the right pane's selection coherent with the tabs still on that
     /// side. Clears a dangling selection, then auto-picks an entry on the
     /// right when nothing is selected but at least one tab remains there.
-    /// The auto-pick prefers, in order: a remaining window, the file
-    /// explorer, the most recently appended browser, then the most recently
-    /// appended file — avoiding the "No Tab Selected" placeholder whenever
-    /// real right-side content exists.
+    /// The auto-pick prefers terminals in visible tab order, avoiding the "No Tab
+    /// Selected" placeholder whenever real right-side content exists.
     private func reconcileRightPaneSelection(sessionName: String) {
         defer {
             if currentLocalSession()?.sessionName == sessionName {
@@ -5965,6 +5992,7 @@ public struct MainView: View {
         guard ownsTerminal(hostID: hostId, windowID: window.stableId) else { return }
         guard let manager = coordinator.viewerConnectionManager else { return }
         let binding = manager.connection(for: hostId)?.relayClient.workspaceInputState.windowBinding(target: window.stableId) ?? .unavailable
+        let sessionBinding = manager.connection(for: hostId)?.relayClient.workspaceInputState.sessionBinding(name: window.sessionName) ?? .unavailable
         let target = CloseConfirmation.Target.remoteWindow(window, hostId: hostId, binding: binding)
         Task {
             let spec = CheckRunningProcesses(target: .window(window.stableId))
@@ -5973,12 +6001,15 @@ public struct MainView: View {
             switch result {
             case let .success(response):
                 let processes = response.runningProcesses ?? []
-                if processes.isEmpty {
+                let windows = remoteSessionWindows(hostId: hostId, sessionName: window.sessionName)
+                let closesSession = windows.count == 1 && windows.first?.stableId == window.stableId
+                if processes.isEmpty, !closesSession {
                     performClose(target)
                 } else {
                     closeConfirmation = CloseConfirmation(
-                        target: target,
-                        runningProcesses: processes
+                        target: closesSession ? .remoteSession(sessionName: window.sessionName, hostId: hostId, binding: sessionBinding) : target,
+                        runningProcesses: processes,
+                        closesLastWindow: closesSession
                     )
                 }
             case let .failure(error):
@@ -6017,11 +6048,15 @@ public struct MainView: View {
                 switch target {
                 case let .session(sessionName, identity):
                     try await tmuxService.killSession(sessionName, expectedWorkspacePane: identity)
+                    if selectedRemoteSession == nil, selectedLocalSessionName == sessionName {
+                        selectedWindow = nil
+                        selectedLocalSessionName = nil
+                    }
                 case let .window(window, identity):
                     guard ownsTerminal(hostID: nil, windowID: window.stableId) else { return }
                     try await tmuxService.killWindow(window.stableId, expectedWorkspacePane: identity)
                     // If the closed window was selected, select another window in the session
-                    if selectedWindow?.id == window.id {
+                    if selectedWindow?.stableId == window.stableId {
                         repairLocalLeftSelection(sessionName: window.sessionName)
                     }
                 case let .remoteWindow(window, hostId, binding):
@@ -6035,12 +6070,12 @@ public struct MainView: View {
                     )
                     if case .success = result {
                         // Select another window if the closed one was selected
-                        if selectedRemoteWindowId == window.id {
+                        if selectedRemoteSession?.hostId == hostId, selectedRemoteWindow?.stableId == window.stableId {
                             let rightIDs = remoteSessionTabsStates[remoteTabsKey(hostId: hostId, sessionName: window.sessionName)]?.rightSideWindowIds ?? []
                             let remaining = selectedRemoteSessionWindows.filter {
-                                $0.id != window.id && ownsTerminal(hostID: hostId, windowID: $0.stableId) && !rightIDs.contains($0.stableId)
+                                $0.stableId != window.stableId && ownsTerminal(hostID: hostId, windowID: $0.stableId) && !rightIDs.contains($0.stableId)
                             }
-                            selectedRemoteWindowId = remaining.first(where: \.isWindowActive)?.id ?? remaining.first?.id
+                            selectedRemoteWindowId = remaining.first?.id
                         }
                     } else if case let .failure(error) = result {
                         attachError = error.localizedDescription
@@ -6055,6 +6090,9 @@ public struct MainView: View {
                     )
                     if case let .failure(error) = result {
                         attachError = error.localizedDescription
+                    } else if selectedRemoteSession?.hostId == hostId, selectedRemoteSession?.sessionName == sessionName {
+                        selectedRemoteWindowId = nil
+                        selectedRemoteSession = nil
                     }
                 }
             } catch {

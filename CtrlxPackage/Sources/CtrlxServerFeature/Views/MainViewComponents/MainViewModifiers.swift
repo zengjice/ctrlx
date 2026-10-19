@@ -138,28 +138,15 @@ struct AlertsModifier: ViewModifier {
                     Text(error)
                 }
             }
-            .alert(
-                closeConfirmation?.title ?? "Close?",
-                isPresented: .init(
-                    get: { closeConfirmation != nil },
-                    set: {
-                        if !$0 {
-                            closeConfirmation = nil
-                        }
-                    }
-                )
-            ) {
-                if let confirmation = closeConfirmation {
-                    Button("Close Anyway", role: .destructive) {
+            .alert(item: $closeConfirmation) { confirmation in
+                Alert(
+                    title: Text(confirmation.title),
+                    message: Text(confirmation.message),
+                    primaryButton: .destructive(Text(confirmation.closesLastWindow ? "Close Session" : "Close Anyway")) {
                         onPerformClose(confirmation.target)
-                    }
-                    .keyboardShortcut(.defaultAction)
-                }
-                Button("Cancel", role: .cancel) { closeConfirmation = nil }
-            } message: {
-                if let confirmation = closeConfirmation {
-                    Text(confirmation.message)
-                }
+                    },
+                    secondaryButton: .cancel()
+                )
             }
     }
 }

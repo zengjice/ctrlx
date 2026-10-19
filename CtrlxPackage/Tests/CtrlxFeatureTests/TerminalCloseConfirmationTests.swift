@@ -4,6 +4,19 @@ import Testing
 
 @Suite("Terminal close confirmation")
 struct TerminalCloseConfirmationTests {
+    @Test("The final tab always explains session closure, including an idle shell", arguments: [false, true])
+    func lastWindow(hasProcesses: Bool) {
+        let confirmation = TerminalCloseConfirmation(
+            target: "last", runningProcesses: hasProcesses ? [process(paneIndex: 0, name: "codex")] : [],
+            inputBinding: .legacy(pairID: "office"), closesSession: true
+        )
+        #expect(confirmation.title == "Close Session?")
+        #expect(confirmation.actionTitle == "Close Session")
+        #expect(confirmation.message.contains("close the entire session"))
+        #expect(confirmation.message.contains("codex") == hasProcesses)
+        #expect(confirmation.message.contains("still running") == hasProcesses)
+    }
+
     @Test("Confirmation preserves the selected host and session")
     func targetSnapshot() {
         let confirmation = TerminalCloseConfirmation(

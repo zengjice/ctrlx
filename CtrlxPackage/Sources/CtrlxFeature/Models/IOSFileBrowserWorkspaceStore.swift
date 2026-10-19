@@ -59,6 +59,7 @@ final class IOSFileBrowserWorkspaceStore {
 
     func update(_ state: SessionStateMessage, client: ViewerRelayClient) {
         captureHost(state.pairId)
+        let previousCatalog = catalogs[state.pairId]
         let catalog = ViewerWorkspaceCatalog(state: state)
         // A rename retains its private presentation, but a new Host or tmux
         // incarnation gets fresh views and input endpoints.
@@ -105,7 +106,7 @@ final class IOSFileBrowserWorkspaceStore {
             workspace.syncHostTabs((state.fileTabs ?? []).filter { $0.sessionName == sessionName }, retained: retained)
             workspace.restoredFileIDs.formIntersection(Set(workspace.tabs.map(\.id)))
             if let reference, let catalog {
-                restore(workspace, reference: reference, catalog: catalog, windows: windows)
+                restore(workspace, reference: reference, catalog: catalog, previousCatalog: previousCatalog, windows: windows)
                 workspace.onSaveRecovery = { [weak self, weak workspace] in
                     guard let self, let workspace else { return }
                     capture(workspace, key: key)
@@ -211,7 +212,7 @@ final class IOSFileBrowserWorkspaceStore {
         }
     }
 
-    private func restore(_ workspace: IOSFileBrowserWorkspace, reference: ViewerWorkspaceReference, catalog: ViewerWorkspaceCatalog, windows: [TmuxWindow]) {
+    private func restore(_ workspace: IOSFileBrowserWorkspace, reference: ViewerWorkspaceReference, catalog: ViewerWorkspaceCatalog, previousCatalog: ViewerWorkspaceCatalog?, windows: [TmuxWindow]) {
         guard let saved = recovery.sessions.first(where: { $0.reference == reference }) else { return }
         for file in saved.files {
             let source = file.source.flatMap(catalog.resolve)?.paneID
@@ -238,14 +239,27 @@ final class IOSFileBrowserWorkspaceStore {
         if let id = saved.selectedWindowID {
             let window = ViewerWorkspaceReference(pairID: reference.pairID, hostID: reference.hostID, sessionID: reference.sessionID, windowID: id)
             let runtimeID = catalog.resolve(window)?.windowID
-            workspace.restoredWindowID = windows.first { $0.stableId == runtimeID }?.id
-            workspace.restoredPaneID = nil
-            if let paneID = saved.selectedPaneID {
-                var pane = window
-                pane.paneID = paneID
-                workspace.restoredPaneID = catalog.resolve(pane)?.paneID
+            // A live close is final; a missing target after a Host restart may
+            // still be awaiting restoration. Never replace that saved identity.
+            if
+                runtimeID == nil, previousCatalog?.scope == catalog.scope,
+                let previous = previousCatalog?.resolve(window),
+                !windows.contains(where: { $0.stableId == previous.windowID }),
+                let first = windows.first {
+                workspace.restoredWindowID = first.id
+                workspace.restoredPaneID = first.activePane?.paneId
+                workspace.hasPendingTerminalSelection = false
+                recordSelection(workspace: workspace, window: first, paneID: workspace.restoredPaneID)
+            } else {
+                workspace.restoredWindowID = windows.first { $0.stableId == runtimeID }?.id
+                workspace.restoredPaneID = nil
+                if let paneID = saved.selectedPaneID {
+                    var pane = window
+                    pane.paneID = paneID
+                    workspace.restoredPaneID = catalog.resolve(pane)?.paneID
+                }
+                workspace.hasPendingTerminalSelection = workspace.restoredWindowID == nil || (saved.selectedPaneID != nil && workspace.restoredPaneID == nil)
             }
-            workspace.hasPendingTerminalSelection = workspace.restoredWindowID == nil || (saved.selectedPaneID != nil && workspace.restoredPaneID == nil)
         }
         if workspace.selectedID == nil, let selected = saved.selectedFileID, workspace.tabs.contains(where: { $0.id == selected }) {
             workspace.selectedID = selected
