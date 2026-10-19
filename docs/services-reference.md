@@ -1340,6 +1340,10 @@ white terminal (`#FFFFFF` / `#0D0D0D`), near-white sidebar/tab bar (`#FCFCFC`),
 gray secondary text (`#626262`) and blue accent (`#0169CC`) share the existing
 theme setting across local, remote and detached workspaces. Sidebar selection
 uses neutral gray when selected-session highlighting is enabled.
+Mac tabs in light themes use a solid accent underline for selection; Codex Light
+also uses a neutral gray selected-tab background (`#EDEDED`). The shared tab
+decoration covers terminal, Files, Git, browser and simulator tabs in local,
+remote and detached workspaces, including both sides of a split.
 
 The palette is based on the bundled Codex Light theme in ChatGPT for Mac
 26.820.60940 (7119). ANSI red/green/yellow/blue/magenta follow its syntax colors;

@@ -35,7 +35,12 @@ private struct TabStripItemStyleModifier: ViewModifier {
             .background(isSelected ? settings.theme.activeTabBackgroundColor : Color.clear)
             .overlay(alignment: .bottom) {
                 if isSelected {
-                    if settings.theme.usesSubtleTabBorder {
+                    if settings.theme.workspaceColorScheme == .light {
+                        Rectangle()
+                            .fill(settings.theme.workspaceAccentColor)
+                            .frame(height: 3)
+                            .allowsHitTesting(false)
+                    } else if settings.theme.usesSubtleTabBorder {
                         Rectangle()
                             .fill(settings.theme.workspaceBorderColor)
                             .frame(height: 1)

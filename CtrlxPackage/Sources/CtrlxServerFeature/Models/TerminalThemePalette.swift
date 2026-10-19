@@ -116,7 +116,7 @@ extension TerminalTheme {
                 sidebarBackground: .init(hex: 0xFCFCFC),
                 workspaceBackground: .init(hex: 0xFFFFFF),
                 chromeBackground: .init(hex: 0xFCFCFC),
-                activeTabBackground: .init(hex: 0xFFFFFF),
+                activeTabBackground: .init(hex: 0xEDEDED),
                 border: .init(hex: 0xE5E5E5),
                 selectedSidebarRow: .init(hex: 0xEDEDED)
             )
