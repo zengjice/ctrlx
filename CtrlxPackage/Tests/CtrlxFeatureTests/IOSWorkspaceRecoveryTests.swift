@@ -20,6 +20,91 @@ struct IOSWorkspaceRecoveryTests {
         )], supportsPaneFiles: true, fileTabs: includeFiles ? [.init(id: file, sessionName: name, windowID: windowRuntime, sourcePaneID: runtime, initialDirectory: "/Host/project")] : [], workspaceIdentity: .init(hostID: root ?? host, serverID: server))
     }
 
+    @Test("Mixed child order survives cold restore and delayed browser/simulator catalogs")
+    func linkedTabOrder() async throws {
+        let disk = IOSWorkspaceRecoveryStore.inMemory()
+        try await withDependencies {
+            $0[IOSWorkspaceRecoveryStore.self] = disk
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let client = ViewerRelayClient()
+            let first = IOSFileBrowserWorkspaceStore()
+            await first.prepareRecovery()
+            first.update(state(), client: client)
+            let workspace = try #require(first.workspace(hostID: "pair", sessionName: "project"))
+            let web = UUID(), simulator = UUID()
+            let order: [PaneLinkedTabID] = [.simulator(simulator), .file(file), .browser(web)]
+            workspace.recordLinkedTabOrder(order)
+            await first.flushRecovery()
+            let second = IOSFileBrowserWorkspaceStore()
+            await second.prepareRecovery()
+            second.update(state(includeFiles: false), client: client)
+            second.update(state(), client: client)
+            let restored = try #require(second.workspace(hostID: "pair", sessionName: "project"))
+            #expect(restored.linkedTabOrder == order)
+            restored.recordLinkedTabOrder([.browser(web), .file(file), .simulator(simulator)])
+            second.update(state(), client: client)
+            #expect(restored.linkedTabOrder == [.browser(web), .file(file), .simulator(simulator)])
+            await second.flushRecovery()
+            let third = IOSFileBrowserWorkspaceStore()
+            await third.prepareRecovery()
+            third.update(state(), client: client)
+            #expect(third.workspace(hostID: "pair", sessionName: "project")?.linkedTabOrder == restored.linkedTabOrder)
+        }
+    }
+
+    @Test("A reorder during partial discovery survives saving, restart and the delayed browser arrival")
+    func reorderBeforeBrowserArrives() async throws {
+        let disk = IOSWorkspaceRecoveryStore.inMemory()
+        try await withDependencies {
+            $0[IOSWorkspaceRecoveryStore.self] = disk
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let client = ViewerRelayClient()
+            let initial = state()
+            let a = try #require(initial.fileTabs?.first)
+            let b = HostFileTab(sessionName: "project", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/Host/B")
+            let web = RemoteBrowserTab(id: UUID(), sessionName: "project", title: "Web", url: "about:blank", isLoading: false, isAgentOwned: false, sourcePaneID: "%1")
+            func catalog(includeWeb: Bool) -> SessionStateMessage {
+                .init(
+                    pairId: initial.pairId, paneStates: initial.paneStates,
+                    browserTabs: includeWeb ? [web] : [],
+                    supportsPaneFiles: true, fileTabs: [a, b], workspaceIdentity: initial.workspaceIdentity
+                )
+            }
+            let first = IOSFileBrowserWorkspaceStore()
+            await first.prepareRecovery()
+            first.update(catalog(includeWeb: true), client: client)
+            let workspace = try #require(first.workspace(hostID: "pair", sessionName: "project"))
+            workspace.recordLinkedTabOrder([.file(a.id), .browser(web.id), .file(b.id)])
+            await first.flushRecovery()
+
+            let second = IOSFileBrowserWorkspaceStore()
+            await second.prepareRecovery()
+            second.update(catalog(includeWeb: false), client: client)
+            let restored = try #require(second.workspace(hostID: "pair", sessionName: "project"))
+            let windows = TmuxWindow.groupPanes(Array(initial.paneStates.values))
+            let partial = IOSPaneLinkedTabs(files: restored.tabs, browsers: [], simulators: [], windows: windows, storedOrder: restored.linkedTabOrder)
+            let group = try #require(partial.groups.first)
+            restored.recordLinkedTabOrder(partial.moving(IndexSet(integer: 0), to: 2, in: group))
+            let expected: [PaneLinkedTabID] = [.file(b.id), .browser(web.id), .file(a.id)]
+            #expect(restored.linkedTabOrder == expected)
+            second.update(catalog(includeWeb: false), client: client)
+            await second.flushRecovery()
+            #expect(try await disk.load()?.sessions.first?.linkedTabOrder == expected)
+
+            let third = IOSFileBrowserWorkspaceStore()
+            await third.prepareRecovery()
+            third.update(catalog(includeWeb: false), client: client)
+            third.update(catalog(includeWeb: true), client: client)
+            let completed = try #require(third.workspace(hostID: "pair", sessionName: "project"))
+            #expect(completed.linkedTabOrder == expected)
+            let visible = IOSPaneLinkedTabs(files: completed.tabs, browsers: [web], simulators: [], windows: windows, storedOrder: completed.linkedTabOrder)
+            #expect(visible.groups.first?.items == expected)
+            await third.flushRecovery()
+        }
+    }
+
     @Test("Host Files restore their saved order through partial catalogs and subsequent live reorders", arguments: [false, true])
     func fileOrder(partialCatalog: Bool) async throws {
         let disk = IOSWorkspaceRecoveryStore.inMemory()

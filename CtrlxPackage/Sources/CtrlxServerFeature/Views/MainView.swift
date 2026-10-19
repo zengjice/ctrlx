@@ -403,6 +403,13 @@ public struct MainView: View {
                     coordinator.detachedWindows.mainRequest = nil
                 }
             }
+            .onChange(of: coordinator.detachedWindows.sourcePaneRequest?.id) {
+                guard
+                    let request = coordinator.detachedWindows.sourcePaneRequest,
+                    ownsTerminal(hostID: request.hostID, windowID: request.pane.stableWindowId) else { return }
+                coordinator.detachedWindows.sourcePaneRequest = nil
+                showSourcePane(request.pane, hostID: request.hostID)
+            }
             .onChange(of: selectedWindow?.id) { pendingFileLink = nil }
             .onChange(of: selectedRemoteWindowId) { pendingFileLink = nil }
             .onChange(of: selectedRemoteSession) { pendingFileLink = nil }
@@ -929,6 +936,7 @@ public struct MainView: View {
         return MenuCommandsModifier(
             onOpenContentSearch: { handleOpenContentSearch() },
             tabCount: navigableTabCount,
+            canSelectAdjacentTab: canSelectAdjacentTab,
             onSelectTabAtIndex: { selectTab(at: $0) },
             onSelectPreviousTab: { selectAdjacentTab(direction: -1) },
             onSelectNextTab: { selectAdjacentTab(direction: 1) },
@@ -1505,6 +1513,7 @@ public struct MainView: View {
             VStack(spacing: 0) {
                 RemoteWindowTabBar(
                     windows: windows,
+                    sourcePanes: selectedRemoteSessionWindows.flatMap(\.panes),
                     selectedWindow: window,
                     isHostConnected: connection.isHostConnected,
                     hasCurrentHostState: connection.isHostConnected && coordinator.remoteSessionStore?.hasReceivedState(for: remote.hostId) == true,
@@ -3410,19 +3419,91 @@ public struct MainView: View {
         guard let tabs = currentSessionTabs else { return [] }
         let ids = selectedRemoteSession == nil
             ? currentLocalSession()?.windows.map(\.stableId) ?? [] : selectedRemoteSessionWindows.map(\.stableId)
-        return TabDragPayload.reconciledOrder(
+        let order = TabDragPayload.reconciledOrder(
             windowIds: ids.filter { ownsTerminal(hostID: selectedRemoteSession?.hostId, windowID: $0) },
             fileTabIds: tabs.openFileTabs.map(\.id), browserTabIds: tabs.openBrowserTabs.map(\.id),
             storedOrder: tabs.tabOrder, includeFileExplorer: false, includeGit: selectedRemoteSession == nil
-        ).filter { tabs.rightSide.contains($0) }
+        )
+        return tabs.groupedTabOrder(order, paneOrder: navigationSourcePanes.map(\.paneId)).filter { tabs.rightSide.contains($0) }
     }
 
     private func selectAdjacentRightTab(direction: Int) {
         guard let tabs = currentSessionTabs else { return }
         let entries = rightTabEntries
-        guard entries.count > 1, let selected = tabs.selectedRight, let index = entries.firstIndex(of: selected) else { return }
-        let next = entries[(index + direction + entries.count) % entries.count]
+        guard
+            let selected = tabs.selectedRight,
+            let next = adjacentTab(to: selected, in: entries, direction: direction) else { return }
         selectRightTab(next)
+    }
+
+    private var navigationSourcePanes: [PaneState] {
+        let panes: [PaneState]
+        if selectedRemoteSession != nil {
+            panes = selectedRemoteSessionWindows.flatMap(\.panes)
+        } else {
+            guard let session = currentLocalSession() else { return [] }
+            panes = tmuxService.windows.filter { $0.sessionName == session.sessionName }
+                .flatMap(\.panes).compactMap { windowManager.paneStates[$0.paneId] }
+        }
+        let windows = PaneLinkedTabs.ordered(panes.map(\.stableWindowId), stored: currentSessionTabs?.tabOrder.compactMap(\.windowId) ?? [])
+        return windows.flatMap { id in panes.filter { $0.stableWindowId == id } }
+    }
+
+    private func adjacentTab(to current: TabDragPayload, in order: [TabDragPayload], direction: Int) -> TabDragPayload? {
+        if current.windowId != nil {
+            let terminals = order.filter { $0.windowId != nil }
+            guard terminals.count > 1, let index = terminals.firstIndex(of: current) else { return nil }
+            return terminals[(index + direction + terminals.count) % terminals.count]
+        }
+        guard let tabs = currentSessionTabs else { return nil }
+        let groups = PaneLinkedTabs.groups(items: order.filter(\.isLinkedContent), paneOrder: navigationSourcePanes.map(\.paneId), sourcePane: tabs.sourcePaneID)
+        switch PaneLinkedTabs.adjacent(to: current, direction: direction, groups: groups) {
+        case let .tab(tab): return tab
+        case let .sourcePane(id):
+            guard let pane = navigationSourcePanes.first(where: { $0.paneId == id }) else { return nil }
+            showSourcePane(pane, hostID: selectedRemoteSession?.hostId)
+            return nil
+        case nil: return nil
+        }
+    }
+
+    private func showSourcePane(_ pane: PaneState, hostID: String?) {
+        let live = hostID.flatMap { coordinator.remoteSessionStore?.paneState(for: pane.paneId, hostId: $0) }
+            ?? (hostID == nil ? windowManager.paneStates[pane.paneId] : nil)
+        guard
+            let live, live.sessionName == pane.sessionName, live.stableWindowId == pane.stableWindowId,
+            pane.workspaceIdentity == nil || pane.workspaceIdentity?.isSamePane(as: live.workspaceIdentity) == true else { return }
+        if !ownsTerminal(hostID: hostID, windowID: pane.stableWindowId) {
+            coordinator.detachedWindows.sourcePaneRequest = .init(hostID: hostID, pane: pane)
+            coordinator.detachedWindows.focusNativeWindow(workspaceID: coordinator.detachedWindows.owner(hostID: hostID, windowID: pane.stableWindowId))
+            return
+        }
+        if let hostID {
+            if selectedRemoteSession?.hostId != hostID || selectedRemoteSession?.sessionName != pane.sessionName {
+                selectRemoteSession(.init(hostId: hostID, hostName: settings.pairedHosts.first { $0.id == hostID }?.displayName ?? hostID, sessionName: pane.sessionName))
+            }
+        } else if selectedRemoteSession != nil || currentLocalSession()?.sessionName != pane.sessionName {
+            guard let session = tmuxService.sessions.first(where: { $0.sessionName == pane.sessionName }) else { return }
+            selectLocalSession(session)
+        }
+        let onRight = currentSessionTabs?.rightSide.contains(.window(pane.stableWindowId)) == true
+        currentSessionTabs?.isRightPaneFocused = onRight
+        if onRight {
+            selectRightTab(.window(pane.stableWindowId))
+        } else {
+            selectTerminalWindow(stableId: pane.stableWindowId)
+        }
+        terminalQuickActions.requestFocus(hostID: hostID, paneID: pane.paneId)
+        let client = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient }
+        let binding = client?.workspaceInputState.binding(paneID: pane.paneId)
+        Task {
+            if let client {
+                _ = await client.sendCommand(SelectTmuxPane(), paneId: pane.paneId, inputBinding: binding)
+            } else if hostID == nil {
+                do { try await tmuxService.selectPane(pane.paneId, expectedWorkspacePane: pane.workspaceIdentity) }
+                catch { attachError = error.localizedDescription }
+            }
+        }
     }
 
     private func selectRightTab(_ entry: TabDragPayload) {
@@ -3547,6 +3628,34 @@ public struct MainView: View {
     }
 
     // MARK: - Menu Commands
+
+    private var canSelectAdjacentTab: Bool {
+        guard !isPresentingSessionPicker, let tabs = currentSessionTabs else { return false }
+        let order: [TabDragPayload]
+        let selected: TabDragPayload?
+        if targetsRightPane {
+            order = rightTabEntries
+            selected = tabs.selectedRight
+        } else if let remote = selectedRemoteSession {
+            order = remoteTabEntries(remote: remote)
+            selected = tabs.selectedBrowserTabId.map(TabDragPayload.browser)
+                ?? tabs.selectedFileTabId.map(TabDragPayload.file)
+                ?? selectedRemoteWindow.map { .window($0.stableId) }
+        } else if let session = currentLocalSession() {
+            let entries = tabStripEntries(session: session, sessionTabs: tabs)
+            order = entries.map(\.payload)
+            selected = currentTabIndex(entries: entries, window: selectedWindow, sessionTabs: tabs).map { order[$0] }
+        } else {
+            return false
+        }
+        guard let selected else { return false }
+        if selected.windowId != nil {
+            return order.filter { $0.windowId != nil }.count > 1
+        }
+        let groups = PaneLinkedTabs.groups(items: order.filter(\.isLinkedContent), paneOrder: navigationSourcePanes.map(\.paneId), sourcePane: tabs.sourcePaneID)
+        guard let group = groups.first(where: { $0.items.contains(selected) }) else { return false }
+        return group.items.count > 1 || navigationSourcePanes.contains { $0.paneId == group.id }
+    }
 
     private var navigableTabCount: Int {
         guard !isPresentingSessionPicker else { return 0 }
@@ -3890,16 +3999,17 @@ public struct MainView: View {
             session: session,
             sessionTabs: sessionTabs
         )
-        guard entries.count > 1 else { return }
         let currentIndex = currentTabIndex(
             entries: entries,
             window: window,
             sessionTabs: sessionTabs
         )
         guard let currentIndex else { return }
-        let nextIndex = (currentIndex + direction + entries.count) % entries.count
+        guard
+            let next = adjacentTab(to: entries[currentIndex].payload, in: entries.map(\.payload), direction: direction),
+            let entry = entries.first(where: { $0.payload == next }) else { return }
         applyTabSelection(
-            entry: entries[nextIndex],
+            entry: entry,
             session: session,
             sessionTabs: sessionTabs,
             currentWindow: window
@@ -3915,6 +4025,16 @@ public struct MainView: View {
         case gitBrowser
         case fileTab(UUID)
         case browserTab(UUID)
+
+        var payload: TabDragPayload {
+            switch self {
+            case let .window(window): .window(window.stableId)
+            case .fileBrowser: .fileExplorer
+            case .gitBrowser: .git
+            case let .fileTab(id): .file(id)
+            case let .browserTab(id): .browser(id)
+            }
+        }
     }
 
     private func tabStripEntries(
@@ -3936,7 +4056,8 @@ public struct MainView: View {
         // Window ids are unique within a session, so assert that invariant
         // rather than silently tolerating a duplicate.
         let windowsById = Dictionary(uniqueKeysWithValues: session.windows.map { ($0.stableId, $0) })
-        return order.compactMap { payload in
+        let grouped = sessionTabs?.groupedTabOrder(order, paneOrder: navigationSourcePanes.map(\.paneId)) ?? order
+        return grouped.compactMap { payload in
             guard sessionTabs?.rightSide.contains(payload) != true else { return nil }
             return switch payload {
             case let .window(id):
@@ -4029,20 +4150,20 @@ public struct MainView: View {
         let windows = selectedRemoteSessionWindows.filter { ownsTerminal(hostID: remote.hostId, windowID: $0.stableId) }
         let key = remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)
         let tabs = remoteSessionTabsStates[key]
-        return TabDragPayload.reconciledOrder(
+        let order = TabDragPayload.reconciledOrder(
             windowIds: windows.map(\.stableId),
             fileTabIds: tabs?.openFileTabs.map(\.id) ?? [],
             browserTabIds: tabs?.openBrowserTabs.map(\.id) ?? [],
             storedOrder: tabs?.tabOrder ?? [],
             includeFileExplorer: false,
             includeGit: false
-        ).filter { tabs?.rightSide.contains($0) != true }
+        )
+        return (tabs?.groupedTabOrder(order, paneOrder: navigationSourcePanes.map(\.paneId)) ?? order).filter { tabs?.rightSide.contains($0) != true }
     }
 
     private func cycleRemoteWindowTab(remote: RemoteSessionSelection, direction: Int) {
         let tabs = currentSessionTabs
         let entries = remoteTabEntries(remote: remote)
-        guard entries.count > 1 else { return }
 
         // File tab > browser tab > selected window. The first match wins so the user's
         // actual visible tab is the cycling anchor.
@@ -4057,8 +4178,8 @@ public struct MainView: View {
             currentIndex = nil
         }
         guard let currentIndex else { return }
-        let nextIndex = (currentIndex + direction + entries.count) % entries.count
-        selectRemoteTab(entries[nextIndex], remote: remote)
+        guard let next = adjacentTab(to: entries[currentIndex], in: entries, direction: direction) else { return }
+        selectRemoteTab(next, remote: remote)
     }
 
     private func selectRemoteTab(_ entry: TabDragPayload, remote: RemoteSessionSelection) {
@@ -4790,8 +4911,10 @@ public struct MainView: View {
         // from the opening URL, `BrowserTab.url` advances with them; re-using
         // that for de-dup would let a second click on the original URL spawn a
         // duplicate tab. Re-focusing is the intended behaviour.
+        let sourcePaneID = parentTabId.flatMap { tabs.sourcePaneID(for: .browser($0)) }
+            ?? browserSourcePane(sessionName: sessionName, hostID: nil, windowID: originWindowId ?? windowId)
         let existingIndex = tabs.openBrowserTabs.firstIndex { tab in
-            tabs.browserStates[tab.id]?.currentURL == url
+            tabs.browserStates[tab.id]?.currentURL == url && tab.sourcePaneID == sourcePaneID
         }
         if let existingIndex {
             if let originWindowId {
@@ -4806,7 +4929,7 @@ public struct MainView: View {
                 fileBrowserActiveWindowIds.remove(windowId)
             }
         } else {
-            let newTab = BrowserTab(url: url, originWindowId: originWindowId, parentTabId: parentTabId)
+            let newTab = BrowserTab(url: url, originWindowId: originWindowId, sourcePaneID: sourcePaneID, parentTabId: parentTabId)
             tabs.openBrowserTabs.append(newTab)
             tabs.browserStates[newTab.id] = BrowserTabState(initialURL: url)
             tabs.browserStates[newTab.id]?.sourceAgent = parentTabId.flatMap { tabs.browserStates[$0]?.sourceAgent }
@@ -4961,6 +5084,7 @@ public struct MainView: View {
             }
         }
         tabs.openBrowserTabs.remove(at: closedIndex)
+        tabs.tabOrder.removeAll { $0 == .browser(tabId) }
         // Cancel in-flight downloads before dropping the state — a
         // deallocated `BrowserTabState` can't clean up its partial files.
         tabs.browserStates[tabId]?.cancelActiveDownloads()
@@ -5327,8 +5451,10 @@ public struct MainView: View {
         // stored on `BrowserTab`. After the user navigates the tab away from
         // its opening URL, `BrowserTab.url` advances with them; matching on
         // it would let a re-click of the original URL spawn a duplicate tab.
+        let sourcePaneID = parentTabId.flatMap { tabs.sourcePaneID(for: .browser($0)) }
+            ?? browserSourcePane(sessionName: sessionName, hostID: hostId, windowID: originWindowId)
         let existingIndex = tabs.openBrowserTabs.firstIndex { tab in
-            tabs.browserStates[tab.id]?.currentURL == url
+            tabs.browserStates[tab.id]?.currentURL == url && tab.sourcePaneID == sourcePaneID
         }
         if let existingIndex {
             if let originWindowId {
@@ -5336,7 +5462,7 @@ public struct MainView: View {
             }
             tabs.selectedBrowserTabId = tabs.openBrowserTabs[existingIndex].id
         } else {
-            let newTab = BrowserTab(url: url, originWindowId: originWindowId, parentTabId: parentTabId)
+            let newTab = BrowserTab(url: url, originWindowId: originWindowId, sourcePaneID: sourcePaneID, parentTabId: parentTabId)
             tabs.openBrowserTabs.append(newTab)
             tabs.browserStates[newTab.id] = BrowserTabState(initialURL: url)
             tabs.browserStates[newTab.id]?.sourceAgent = parentTabId.flatMap { tabs.browserStates[$0]?.sourceAgent }
@@ -5451,6 +5577,7 @@ public struct MainView: View {
             }
         }
         tabs.openBrowserTabs.remove(at: closedIndex)
+        tabs.tabOrder.removeAll { $0 == .browser(tabId) }
         // Cancel in-flight downloads before dropping the state — a
         // deallocated `BrowserTabState` can't clean up its partial files.
         tabs.browserStates[tabId]?.cancelActiveDownloads()

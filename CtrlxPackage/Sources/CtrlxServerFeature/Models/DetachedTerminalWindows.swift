@@ -41,6 +41,13 @@ final class DetachedTerminalWindows {
         Set(workspaces.values.flatMap(\.members))
     }
 
+    struct SourcePaneRequest {
+        let id = UUID()
+        let hostID: String?
+        let pane: PaneState
+    }
+
+    var sourcePaneRequest: SourcePaneRequest?
     var mainRequest: Request?
     var restoredWindowIDs: [UUID] = []
     @ObservationIgnored weak var mainWindow: NSWindow?

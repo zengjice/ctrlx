@@ -470,6 +470,12 @@ final class SessionFileTabsState {
         }
         closingHostBrowserTabIDs.subtract(removed)
         openBrowserTabs.removeAll { removed.contains($0.id) }
+        tabOrder.removeAll {
+            if case let .browser(id) = $0 {
+                return removed.contains(id)
+            }
+            return false
+        }
         for id in removed {
             remoteBrowserTabs.removeValue(forKey: id)
             rightSide.remove(.browser(id))
@@ -525,6 +531,12 @@ final class SessionFileTabsState {
         let removed = Set(remoteSimulatorTabs.keys).subtracting(live)
         let removedSelectedLeft = selectedBrowserTabId.map { removed.contains($0) } ?? false
         openBrowserTabs.removeAll { removed.contains($0.id) }
+        tabOrder.removeAll {
+            if case let .browser(id) = $0 {
+                return removed.contains(id)
+            }
+            return false
+        }
         for id in removed {
             remoteSimulatorTabs.removeValue(forKey: id)
             rightSide.remove(.browser(id))

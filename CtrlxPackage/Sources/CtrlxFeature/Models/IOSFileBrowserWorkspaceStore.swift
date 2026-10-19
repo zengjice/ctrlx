@@ -113,6 +113,11 @@ final class IOSFileBrowserWorkspaceStore {
                     scheduleSave()
                 }
             }
+            let linkedIDs = workspace.tabs.map { PaneLinkedTabID.file($0.id) }
+                + (state.browserTabs ?? []).filter { $0.sessionName == sessionName }.map { .browser($0.id) }
+                + (state.simulatorTabs ?? []).filter { $0.sessionName == sessionName }.map { .simulator($0.id) }
+            var seenLinkedIDs = Set(workspace.linkedTabOrder)
+            workspace.linkedTabOrder += linkedIDs.filter { seenLinkedIDs.insert($0).inserted }
             for tab in workspace.tabs where tab.hostTab == nil {
                 tab.reconcileSource(windows: windows)
             }
@@ -185,6 +190,7 @@ final class IOSFileBrowserWorkspaceStore {
         let previous = recovery.sessions.first { $0.reference == reference }
         var record = previous ?? .init(reference: reference, name: key.sessionName)
         record.name = key.sessionName
+        record.linkedTabOrder = workspace.linkedTabOrder
         let snapshots = workspace.tabs.compactMap { tab -> IOSWorkspaceRecoveryFile? in
             guard let snapshot = tab.snapshot else { return nil }
             let source = tab.sourcePaneID.flatMap { catalog.reference(paneID: $0) }
@@ -214,6 +220,10 @@ final class IOSFileBrowserWorkspaceStore {
 
     private func restore(_ workspace: IOSFileBrowserWorkspace, reference: ViewerWorkspaceReference, catalog: ViewerWorkspaceCatalog, previousCatalog: ViewerWorkspaceCatalog?, windows: [TmuxWindow]) {
         guard let saved = recovery.sessions.first(where: { $0.reference == reference }) else { return }
+        if !workspace.didRestoreLinkedTabOrder {
+            workspace.linkedTabOrder = saved.linkedTabOrder ?? saved.files.map { .file($0.snapshot.id) }
+            workspace.didRestoreLinkedTabOrder = true
+        }
         for file in saved.files {
             let source = file.source.flatMap(catalog.resolve)?.paneID
             if let existing = workspace.tabs.first(where: { $0.id == file.snapshot.id }) {

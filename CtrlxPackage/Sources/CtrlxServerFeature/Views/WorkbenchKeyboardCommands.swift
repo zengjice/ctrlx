@@ -31,10 +31,10 @@ public struct WorkbenchKeyboardCommands: Commands {
             Divider()
             Button("Previous Tab") { actions?.selectPreviousTab() }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-                .disabled((actions?.tabCount ?? 0) < 2)
+                .disabled(actions?.canSelectAdjacentTab != true)
             Button("Next Tab") { actions?.selectNextTab() }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-                .disabled((actions?.tabCount ?? 0) < 2)
+                .disabled(actions?.canSelectAdjacentTab != true)
             Menu("Select Tab") {
                 ForEach(0..<9, id: \.self) { index in
                     Button("Tab \(index + 1)") { actions?.selectTabAtIndex(index) }

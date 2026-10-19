@@ -18,6 +18,34 @@ medium/large tab-list sheet without a nested navigation stack. Actions are
 applied after dismissing this list, before presenting a Fork/Agent sheet or alert.
 Files rows expose only their own selection/close actions, not terminal operations.
 
+### Pane-linked tab groups
+
+Files, Host browser pages and iOS Simulator tabs are grouped by their actual
+source pane within one Host/session. Children from different panes never share
+a group, even when they belong to the same tmux window or directory. Groups
+follow terminal order; children retain their client-private mixed-type order,
+and new children append to their group. Reordering does not rebind a source.
+
+Mac keeps terminal tabs and session-wide Git before the child groups. Each group
+has a thin colored outline and source name; multi-pane windows add the pane
+number. iOS uses the same names/colors in its Tabs list, with native long-press
+reordering within each group. Selection still uses the ordinary underline or
+checkmark. Unbound legacy tabs appear under Other; a surviving child whose
+source is gone is labeled Source closed and never falls back to an unrelated pane.
+
+Previous/next from a terminal visits only terminal tabs. From a child it visits
+only its group's visible children; either boundary returns to the exact source
+pane. Mac operates within the focused split and can reveal the source in another
+split or native workbench. On iOS, horizontal swipes over the top tab title switch
+child tabs; tapping the title still opens Tabs. Browser/Simulator content gestures,
+terminal swipe navigation and the bottom bar's vertical gestures retain their
+existing behavior. Terminal navigation does not implicitly enter a child group.
+
+Order is local to each client. Saving catalog IDs for ordering does not recreate
+browser pages or simulators: only live Host descriptors make those tabs available.
+During partial catalog delivery, reordering replaces only the current group's
+visible members in the saved order; missing IDs and other groups keep their slots.
+
 ## Directories and lifetime
 
 - A new tab captures a pane inside the window whose menu was used: prefer the

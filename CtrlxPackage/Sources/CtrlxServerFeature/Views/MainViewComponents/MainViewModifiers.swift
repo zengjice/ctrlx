@@ -6,6 +6,7 @@ import SwiftUI
 struct MenuCommandsModifier: ViewModifier {
     let onOpenContentSearch: @MainActor () -> Void
     let tabCount: Int
+    let canSelectAdjacentTab: Bool
     let onSelectTabAtIndex: @MainActor (Int) -> Void
     let onSelectPreviousTab: @MainActor () -> Void
     let onSelectNextTab: @MainActor () -> Void
@@ -22,6 +23,7 @@ struct MenuCommandsModifier: ViewModifier {
             .focusedSceneValue(\.workbenchMenuActions, WorkbenchMenuActions(
                 openContentSearch: onOpenContentSearch,
                 tabCount: tabCount,
+                canSelectAdjacentTab: canSelectAdjacentTab,
                 selectTabAtIndex: onSelectTabAtIndex,
                 selectPreviousTab: onSelectPreviousTab,
                 selectNextTab: onSelectNextTab,

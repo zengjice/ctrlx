@@ -203,6 +203,49 @@
             return max(120, barWidth - reservedPerSide * 2)
         }
 
+        private var linkedTabs: IOSPaneLinkedTabs {
+            IOSPaneLinkedTabs(
+                files: fileWorkspace.tabs,
+                browsers: sessionBrowsers,
+                simulators: sessionSimulators,
+                windows: sessionWindows,
+                storedOrder: fileWorkspace.linkedTabOrder
+            )
+        }
+
+        private var selectedLinkedTab: PaneLinkedTabID? {
+            if let id = selectedSimulatorID {
+                return .simulator(id)
+            }
+            if let id = browserSelection.selectedID {
+                return .browser(id)
+            }
+            return fileWorkspace.selectedID.map(PaneLinkedTabID.file)
+        }
+
+        private func selectAdjacentLinkedTab(_ source: PaneLinkedTabID, direction: Int) {
+            guard !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput else { return }
+            switch PaneLinkedTabs.adjacent(to: source, direction: direction, groups: linkedTabs.groups) {
+            case let .tab(item):
+                fileWorkspace.selectedID = nil
+                browserSelection.selectedID = nil
+                selectedSimulatorID = nil
+                switch item {
+                case let .file(id): fileWorkspace.selectedID = id
+                case let .browser(id): browserSelection.selectedID = id
+                case let .simulator(id): selectedSimulatorID = id
+                }
+            case let .sourcePane(id):
+                guard let target = sessionWindows.first(where: { $0.panes.contains { $0.paneId == id } }) else { return }
+                selectTerminalWindow(target, preferredPaneID: id)
+                if relayClient.isHostConnected {
+                    let binding = relayClient.workspaceInputState.binding(paneID: id)
+                    Task { await sendCommand(.selectTmuxPane, paneId: id, inputBinding: binding) }
+                }
+            case nil: break
+            }
+        }
+
         private var terminalIsVisible: Bool {
             selectedBrowser == nil && selectedSimulator == nil && fileWorkspace.selected == nil
         }
@@ -475,7 +518,8 @@
                             }
                         },
                         onReorderWindows: reorderWindows,
-                        onReorderFiles: fileWorkspace.reorder
+                        linkedTabOrder: fileWorkspace.linkedTabOrder,
+                        onReorderLinkedTabs: fileWorkspace.recordLinkedTabOrder
                     )
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
@@ -761,6 +805,7 @@
                     // of bleeding behind the bar buttons (#600).
                     .frame(maxWidth: principalTitleMaxWidth)
                 }
+                .modifier(PaneLinkedTabTitleSwipe(selected: selectedLinkedTab, onSwitch: selectAdjacentLinkedTab))
                 .accessibilityLabel("Tabs: \(navigationTitle)")
                 .accessibilityIdentifier("window-tabs-picker")
             }

@@ -29,6 +29,8 @@ final class IOSFileBrowserWorkspace {
 
     var tabs: [FileBrowserTab] = []
     var selectedID: UUID?
+    var linkedTabOrder: [PaneLinkedTabID] = []
+    var didRestoreLinkedTabOrder = false
     let recoveryID = UUID()
     var recoveryReference: ViewerWorkspaceReference?
     var recoveryScope: WorkspaceIdentityScope?
@@ -113,6 +115,12 @@ final class IOSFileBrowserWorkspace {
     func reorder(_ ids: [UUID]) {
         guard ids.count == tabs.count, Set(ids) == Set(tabs.map(\.id)) else { return }
         tabs = ids.compactMap { id in tabs.first { $0.id == id } }
+        save()
+    }
+
+    func recordLinkedTabOrder(_ ids: [PaneLinkedTabID]) {
+        guard linkedTabOrder != ids else { return }
+        linkedTabOrder = ids
         save()
     }
 

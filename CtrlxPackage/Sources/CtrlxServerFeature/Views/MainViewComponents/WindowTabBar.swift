@@ -121,23 +121,26 @@ struct WindowTabBar: View {
         sessionTabs.rightSide.contains(payload)
     }
 
-    /// Source-of-truth ordering for the tab strip — reconciles the persisted
-    /// `sessionTabs.tabOrder` with the live windows / file tabs / browser tabs
-    /// so newly-discovered entries are slotted in and removed entries drop
-    /// out without rewriting the array elsewhere. The view body renders from
-    /// this and the `.onChange` below writes it back into `sessionTabs` so the
-    /// order survives session switches.
+    /// Keep source labels for children whose terminal is in another workbench.
+    private var groupPanes: [PaneState] {
+        let ids = PaneLinkedTabs.ordered(session.windows.map(\.stableId), stored: sessionTabs.tabOrder.compactMap(\.windowId))
+        let visible = ids.flatMap { id in session.windows.first { $0.stableId == id }?.panes ?? [] }
+            .compactMap { windowManager.paneStates[$0.paneId] }
+        let seen = Set(visible.map(\.paneId))
+        return visible + windowManager.paneStates.values.filter { $0.sessionName == session.sessionName && !seen.contains($0.paneId) }
+            .sorted { ($0.windowIndex, $0.paneIndex) < ($1.windowIndex, $1.paneIndex) }
+    }
+
     private var effectiveTabOrder: [TabDragPayload] {
-        // Local sessions get both the file-explorer and Git singletons
-        // (`includeGit` defaults to true), so the Git tab takes part in
-        // drag-reordering and keyboard cycling alongside everything else.
-        TabDragPayload.reconciledOrder(
+        // Session-wide tabs precede the pane-linked groups.
+        let order = TabDragPayload.reconciledOrder(
             windowIds: session.windows.map(\.stableId),
             fileTabIds: openFileTabs.map(\.id),
             browserTabIds: openBrowserTabs.map(\.id),
             storedOrder: sessionTabs.tabOrder,
             includeFileExplorer: false
         )
+        return sessionTabs.groupedTabOrder(order, paneOrder: groupPanes.map(\.paneId))
     }
 
     /// Effective order restricted to entries visible on the left section in
@@ -192,19 +195,18 @@ struct WindowTabBar: View {
         // so this can't loop.
         .onChange(of: effectiveTabOrder) { _, new in
             if sessionTabs.tabOrder != new {
-                sessionTabs.tabOrder = new
+                sessionTabs.recordVisibleTabOrder(new)
             }
         }
         .onAppear {
             let computed = effectiveTabOrder
             if sessionTabs.tabOrder != computed {
-                sessionTabs.tabOrder = computed
+                sessionTabs.recordVisibleTabOrder(computed)
             }
         }
     }
 
-    @ViewBuilder
-    private var tabBarDivider: some View {
+    @ViewBuilder private var tabBarDivider: some View {
         if settings.theme.usesSubtleTabBorder {
             Rectangle()
                 .fill(settings.theme.workspaceBorderColor)
@@ -218,7 +220,7 @@ struct WindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                ForEach(effectiveTabOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: effectiveTabOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 if let suggestion = openSuggestionStore.suggestionsBySession[session.sessionName] {
@@ -242,7 +244,7 @@ struct WindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                ForEach(leftSectionOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: leftSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 if let suggestion = openSuggestionStore.suggestionsBySession[session.sessionName] {
@@ -260,7 +262,7 @@ struct WindowTabBar: View {
     private var rightSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-                ForEach(rightSectionOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: rightSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 trailingDropZone(for: .right)
@@ -715,14 +717,14 @@ struct WindowTabBar: View {
     /// so other consumers see the same order.
     private func handleDrop(payloads: [TabDragPayload], target: TabDragPayload) -> Bool {
         defer { dropIndicator = nil }
-        guard let source = payloads.first, source != target else { return false }
+        guard let source = payloads.first, source != target, sessionTabs.canReorder(source, before: target) else { return false }
 
         let previousOrder = effectiveTabOrder
         guard let order = TabDragPayload.moving(source, before: target, in: previousOrder) else { return false }
         let windowOrderChanged = order.windowIds != session.windows.map(\.stableId)
         guard !windowOrderChanged || !sessionTabs.isWindowReorderPending else { return false }
 
-        sessionTabs.tabOrder = order
+        sessionTabs.recordVisibleTabOrder(order)
 
         // If the drop crosses the split, also flip the source tab's side
         // membership so it shows up in the pane the user dropped it into.
@@ -763,10 +765,18 @@ struct WindowTabBar: View {
             insertIndex = (order.lastIndex { !isOnRight($0) } ?? -1) + 1
         }
 
-        order.insert(moved, at: min(insertIndex, order.count))
+        let destination: Int
+        if source.isLinkedContent {
+            destination = (order.lastIndex { sessionTabs.canReorder(source, before: $0) } ?? -1) + 1
+        } else if source.windowId != nil {
+            destination = (order.lastIndex { $0.windowId != nil } ?? -1) + 1
+        } else {
+            destination = insertIndex
+        }
+        order.insert(moved, at: min(destination, order.count))
         let windowOrderChanged = order.windowIds != session.windows.map(\.stableId)
         guard !windowOrderChanged || !sessionTabs.isWindowReorderPending else { return false }
-        sessionTabs.tabOrder = order
+        sessionTabs.recordVisibleTabOrder(order)
         adjustSplitSideIfNeeded(source: source, to: section)
         syncSubsequences(from: order, rollbackOrder: previousOrder)
         return true

@@ -19,7 +19,8 @@
         let forkUnavailableReason: String?
         let onChoose: (WindowTabAction) -> Void
         let onReorderWindows: ([String]) async throws -> Void
-        let onReorderFiles: ([UUID]) -> Void
+        let linkedTabOrder: [PaneLinkedTabID]
+        let onReorderLinkedTabs: ([PaneLinkedTabID]) -> Void
         @Environment(\.dismiss) private var dismiss
         @State private var pendingWindowOrder: [String]?
         @State private var reorderError: String?
@@ -27,6 +28,10 @@
         private var orderedWindows: [TmuxWindow] {
             guard let pendingWindowOrder else { return windows }
             return RemoteSessionOrder.applying(pendingWindowOrder, to: windows, sessionName: \.stableId)
+        }
+
+        private var linkedTabs: IOSPaneLinkedTabs {
+            IOSPaneLinkedTabs(files: files, browsers: browsers, simulators: simulators, windows: orderedWindows, storedOrder: linkedTabOrder)
         }
 
         var body: some View {
@@ -53,55 +58,22 @@
                             }
                         }
                     }
-                    if !files.isEmpty {
-                        Section("Files") {
-                            ForEach(files) { tab in
-                                fileRow(tab)
+                    ForEach(linkedTabs.groups) { group in
+                        let color = PaneTabGroupStyle.color(for: linkedTabs.colorKey(for: group.id))
+                        Section {
+                            ForEach(group.items, id: \.self) { item in
+                                linkedRow(item)
+                                    .listRowBackground(
+                                        PaneTabGroupRowBorder(first: item == group.items.first, last: item == group.items.last)
+                                            .stroke(color.opacity(0.65), lineWidth: 1)
+                                            .background(Color(uiColor: .secondarySystemGroupedBackground))
+                                    )
                             }
                             .onMove { source, destination in
-                                var ids = files.map(\.id)
-                                ids.move(fromOffsets: source, toOffset: destination)
-                                onReorderFiles(ids)
+                                onReorderLinkedTabs(linkedTabs.moving(source, to: destination, in: group))
                             }
-                        }
-                    }
-                    if !simulators.isEmpty {
-                        Section("iOS Simulators on Host") {
-                            ForEach(simulators) { tab in
-                                Button { choose(.selectSimulator(tab.id)) } label: {
-                                    HStack {
-                                        Label(tab.title, symbol: .iphone).lineLimit(1)
-                                        Spacer()
-                                        if selectedSimulatorID == tab.id {
-                                            Symbols.checkmark.image
-                                        }
-                                    }.contentShape(Rectangle())
-                                }.buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    if !browsers.isEmpty {
-                        Section("Browsers on Host") {
-                            ForEach(browsers) { tab in
-                                HStack {
-                                    Button { choose(.selectBrowser(tab.id)) } label: {
-                                        HStack {
-                                            Label(tab.title.isEmpty ? "Browser" : tab.title, symbol: .globe).lineLimit(1)
-                                            Spacer()
-                                            if selectedBrowserID == tab.id {
-                                                Symbols.checkmark.image
-                                            }
-                                        }.contentShape(Rectangle())
-                                    }.buttonStyle(.plain)
-                                    Menu {
-                                        Button("Close Browser on Host", role: .destructive) { choose(.closeBrowser(tab.id)) }
-                                            .disabled(!isConnected)
-                                    } label: {
-                                        Label("Browser Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly)
-                                            .frame(minWidth: 44, minHeight: 44)
-                                    }.buttonStyle(.borderless)
-                                }
-                            }
+                        } header: {
+                            Text(linkedTabs.title(for: group.id)).foregroundStyle(color)
                         }
                     }
                     Section {
@@ -137,6 +109,48 @@
                 Button("OK") { reorderError = nil }
             } message: {
                 Text(reorderError ?? "")
+            }
+        }
+
+        @ViewBuilder
+        private func linkedRow(_ item: PaneLinkedTabID) -> some View {
+            switch item {
+            case let .file(id):
+                if let tab = files.first(where: { $0.id == id }) {
+                    fileRow(tab)
+                }
+            case let .simulator(id):
+                if let tab = simulators.first(where: { $0.id == id }) {
+                    Button { choose(.selectSimulator(id)) } label: {
+                        HStack {
+                            Label(tab.title, symbol: .iphone).lineLimit(1)
+                            Spacer()
+                            if selectedSimulatorID == id {
+                                Symbols.checkmark.image
+                            }
+                        }.contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                }
+            case let .browser(id):
+                if let tab = browsers.first(where: { $0.id == id }) {
+                    HStack {
+                        Button { choose(.selectBrowser(id)) } label: {
+                            HStack {
+                                Label(tab.title.isEmpty ? "Browser" : tab.title, symbol: .globe).lineLimit(1)
+                                Spacer()
+                                if selectedBrowserID == id {
+                                    Symbols.checkmark.image
+                                }
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                        Menu {
+                            Button("Close Browser on Host", role: .destructive) { choose(.closeBrowser(id)) }.disabled(!isConnected)
+                        } label: {
+                            Label("Browser Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly)
+                                .frame(minWidth: 44, minHeight: 44)
+                        }.buttonStyle(.borderless)
+                    }
+                }
             }
         }
 

@@ -4,6 +4,7 @@ import SwiftUI
 public struct WorkbenchMenuActions {
     public var openContentSearch: @MainActor () -> Void
     public var tabCount: Int
+    public var canSelectAdjacentTab: Bool
     public var selectTabAtIndex: @MainActor (Int) -> Void
     public var selectPreviousTab: @MainActor () -> Void
     public var selectNextTab: @MainActor () -> Void

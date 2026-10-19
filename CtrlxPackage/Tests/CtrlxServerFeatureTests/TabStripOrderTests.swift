@@ -2,11 +2,9 @@ import Foundation
 import Testing
 @testable import CtrlxServerFeature
 
-/// Covers the unified tab-strip ordering that both the visible `WindowTabBar`
-/// and the Cmd-Shift-[ / Cmd-Shift-] keyboard navigation (issue #566) derive
-/// from. The reconciliation must keep the user's drag-reordered layout —
-/// including a browser/file tab dragged *between* two terminal windows —
-/// instead of regrouping by kind.
+/// Reconciles saved IDs against live tabs, including legacy interleaved layouts.
+/// The presentation layer subsequently groups pane-linked children; raw stored
+/// order still determines the order of children within each group.
 @Suite("TabDragPayload.reconciledOrder")
 struct TabStripOrderTests {
     @Test("Dropping on a target always inserts before its leading indicator")

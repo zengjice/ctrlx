@@ -18,6 +18,7 @@ struct RemoteWindowTabBar: View {
     @Environment(AppSettings.self) private var settings
 
     let windows: [TmuxWindow]
+    var sourcePanes: [PaneState] = []
     let selectedWindow: TmuxWindow?
     let isHostConnected: Bool
     let hasCurrentHostState: Bool
@@ -91,19 +92,16 @@ struct RemoteWindowTabBar: View {
         sessionTabs?.rightSide.contains(payload) ?? false
     }
 
-    /// Source-of-truth ordering for the tab strip — reconciles the persisted
-    /// `sessionTabs.tabOrder` with the live windows / browser tabs so newly-
-    /// discovered entries are slotted in and removed entries drop out without
-    /// rewriting the array elsewhere. New windows insert at the end of the
-    /// windows subsequence (right before the first browser tab); new browser
-    /// tabs append at the very end. Remote sessions have no file explorer, file
-    /// tabs, or Git tab, hence `includeFileExplorer: false` and
-    /// `includeGit: false`.
-    ///
-    /// Shares `TabDragPayload.reconciledOrder` with the local strip and both
-    /// keyboard cyclers so all four surfaces stay in lockstep (issue #566).
+    /// Keep source labels for children whose terminal is in another workbench.
+    private var groupPanes: [PaneState] {
+        let ids = PaneLinkedTabs.ordered(windows.map(\.stableId), stored: sessionTabs?.tabOrder.compactMap(\.windowId) ?? [])
+        let visible = ids.flatMap { id in windows.first { $0.stableId == id }?.panes ?? [] }
+        let seen = Set(visible.map(\.paneId))
+        return visible + sourcePanes.filter { !seen.contains($0.paneId) }
+    }
+
     private var effectiveTabOrder: [TabDragPayload] {
-        TabDragPayload.reconciledOrder(
+        let order = TabDragPayload.reconciledOrder(
             windowIds: windows.map(\.stableId),
             fileTabIds: sessionTabs?.openFileTabs.map(\.id) ?? [],
             browserTabIds: openBrowserTabs.map(\.id),
@@ -111,6 +109,7 @@ struct RemoteWindowTabBar: View {
             includeFileExplorer: false,
             includeGit: false
         )
+        return sessionTabs?.groupedTabOrder(order, paneOrder: groupPanes.map(\.paneId)) ?? order
     }
 
     private var persistableTabOrder: [TabDragPayload]? {
@@ -163,13 +162,12 @@ struct RemoteWindowTabBar: View {
             // Disconnect clears the live pane list, not the saved tab order.
             guard let new else { return }
             if sessionTabs?.tabOrder != new {
-                sessionTabs?.tabOrder = new
+                sessionTabs?.recordVisibleTabOrder(new)
             }
         }
     }
 
-    @ViewBuilder
-    private var tabBarDivider: some View {
+    @ViewBuilder private var tabBarDivider: some View {
         if settings.theme.usesSubtleTabBorder {
             Rectangle()
                 .fill(settings.theme.workspaceBorderColor)
@@ -183,7 +181,7 @@ struct RemoteWindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                ForEach(effectiveTabOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: effectiveTabOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 trailingDropZone(for: .single)
@@ -197,7 +195,7 @@ struct RemoteWindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                ForEach(leftSectionOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: leftSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 trailingDropZone(for: .left)
@@ -210,7 +208,7 @@ struct RemoteWindowTabBar: View {
     private var rightSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-                ForEach(rightSectionOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: rightSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 trailingDropZone(for: .right)
@@ -439,14 +437,14 @@ struct RemoteWindowTabBar: View {
 
     private func handleDrop(payloads: [TabDragPayload], target: TabDragPayload) -> Bool {
         defer { dropIndicator = nil }
-        guard let source = payloads.first, source != target else { return false }
+        guard let source = payloads.first, source != target, sessionTabs?.canReorder(source, before: target) == true else { return false }
 
         let previousOrder = effectiveTabOrder
         guard let order = TabDragPayload.moving(source, before: target, in: previousOrder) else { return false }
         let windowOrderChanged = order.compactMap(\.windowId) != windows.map(\.stableId)
         guard !windowOrderChanged || sessionTabs?.isWindowReorderPending != true else { return false }
 
-        sessionTabs?.tabOrder = order
+        sessionTabs?.recordVisibleTabOrder(order)
 
         adjustSplitSideIfNeeded(source: source, to: sectionOf(target))
         syncSubsequences(from: order, rollbackOrder: previousOrder)
@@ -473,10 +471,18 @@ struct RemoteWindowTabBar: View {
             insertIndex = (order.lastIndex { !isOnRight($0) } ?? -1) + 1
         }
 
-        order.insert(moved, at: min(insertIndex, order.count))
+        let destination: Int
+        if source.isLinkedContent {
+            destination = (order.lastIndex { sessionTabs?.canReorder(source, before: $0) == true } ?? -1) + 1
+        } else if source.windowId != nil {
+            destination = (order.lastIndex { $0.windowId != nil } ?? -1) + 1
+        } else {
+            destination = insertIndex
+        }
+        order.insert(moved, at: min(destination, order.count))
         let windowOrderChanged = order.compactMap(\.windowId) != windows.map(\.stableId)
         guard !windowOrderChanged || sessionTabs?.isWindowReorderPending != true else { return false }
-        sessionTabs?.tabOrder = order
+        sessionTabs?.recordVisibleTabOrder(order)
         adjustSplitSideIfNeeded(source: source, to: section)
         syncSubsequences(from: order, rollbackOrder: previousOrder)
         return true

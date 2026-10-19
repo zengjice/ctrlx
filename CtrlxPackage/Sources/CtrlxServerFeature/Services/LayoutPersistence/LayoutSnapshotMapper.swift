@@ -153,6 +153,7 @@
                 fileTabs: fileTabs,
                 browserTabs: browserTabs,
                 tabOrder: tabs.tabOrder.compactMap(ref),
+                linkedTabOrder: tabs.tabOrder.compactMap(\.linkedID),
                 rightSide: tabs.rightSide.compactMap(ref),
                 selectedLeft: selectedLeft,
                 selectedRight: tabs.selectedRight.flatMap(ref),
@@ -193,6 +194,7 @@
                 fileTabs: files,
                 browserTabs: layout.browserTabs,
                 tabOrder: layout.tabOrder.compactMap(validBrowserRef),
+                linkedTabOrder: layout.linkedTabOrder,
                 rightSide: rightSide,
                 selectedLeft: selectedLeft,
                 selectedRight: selectedRight,
@@ -305,6 +307,7 @@
                 tabs.splitRatio = liveSplitRatio
             }
 
+            tabs.restoreLinkedTabOrder(layout.linkedTabOrder)
             if let fileTree = layout.fileTree, let fileBrowser {
                 fileBrowser.sidebarWidth = fileTree.sidebarWidth
             }

@@ -26,6 +26,7 @@ struct BrowserTab: Identifiable, Equatable {
     var url: URL
     var displayTitle: String?
     var originWindowId: String?
+    var sourcePaneID: String?
     var parentTabId: UUID?
     /// Native Chromium tabs (agent-owned or human-only) are transient. Never
     /// restore them as WebKit pages or grant a new Codex control over old tabs.
@@ -40,12 +41,14 @@ struct BrowserTab: Identifiable, Equatable {
         url: URL,
         displayTitle: String? = nil,
         originWindowId: String? = nil,
+        sourcePaneID: String? = nil,
         parentTabId: UUID? = nil
     ) {
         self.id = id
         self.url = url
         self.displayTitle = displayTitle
         self.originWindowId = originWindowId
+        self.sourcePaneID = sourcePaneID
         self.parentTabId = parentTabId
     }
 

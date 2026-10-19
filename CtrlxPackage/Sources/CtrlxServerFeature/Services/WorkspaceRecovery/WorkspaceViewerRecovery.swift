@@ -381,6 +381,7 @@ final class WorkspaceViewerRecovery {
                     // Tab order relative to private Files is Viewer-owned;
                     // the Host still supplies terminal split placement below.
                     tabs.tabOrder = mappedOrder.filter { $0.windowId != nil || tabs.tabOrder.contains($0) }
+                    tabs.restoreLinkedTabOrder(layout.linkedTabOrder)
                     tabs.isRightPaneFocused = saved.focusedRight
                     tabs.scrollOffsets = saved.fileScrollOffsets
                 } else {
