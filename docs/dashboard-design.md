@@ -306,3 +306,13 @@ Agent 特有的身份与额度读取放在插件能力中，公共 UI 使用统�
 - `DashboardToolbarAccountTests|DashboardQuotaAlertTests|DashboardOverviewTests|DashboardStoreTests` 共 28 项专项测试通过，覆盖阈值、全部额度约束、身份去重与稳定顺序、离线／过期／冲突状态，以及现有提醒与共享缓存规则。Mac Debug 完整构建通过。
 - 原生 SwiftUI／AppKit 隔离验收四组通过：主窗口与独立窗口、明暗主题、实时账号更新、一次点击切换详情、Escape／外部关闭、溢出列表与窄窗口，以及系统 Maximize／Minimize／None 双击行为。另用实际弹层组件检查显示摘要前后 key window 与文本输入 first responder 均保持。
 - 隔离 Mac Host／Viewer 的 74 步验收通过，包含真实鼠标悬停摘要、两端窄窗口额度入口、进入 Dashboard 与加密机器数据请求；截图人工检查，不对动态额度进行像素比较。日志和截图在 `.build-local/diagnostics/titlebar-quotas-20261019/`，不进入 Git。未替换用户安装的 App，也未打包发布。
+
+### 11.5 iOS 会话列表状态入口（2026-10-19）
+
+- 顶部 Dashboard 入口以紧凑图标替换 Connected／All Connected 长文字；点击仍打开现有 Dashboard，不新增设置或轮询。
+- 连接状态独立显示：全部连接为绿点，部分连接为橙点及 `1/2` 比例；正在连接显示橙色刷新图标，全部断开显示红色断线图标，尚未配对显示灰色断线图标。
+- 复用 Mac 菜单的 `pendingSessionCount`：未处理的完成、Questions、审批及手动等待状态参与计数。按 Host 分别聚合，避免同名会话或相同 pane ID 跨 Host 合并；移除配对后不再计入。数量超过 99 显示 `99+`，辅助功能保留完整计数。
+- 复用 `DashboardQuotaSummary.isLow`，只为新鲜、可信、无冲突且剩余额度不超过 10% 的账号显示橙色警示；同账号多 Host 去重。待处理数量与额度告警同时存在时一起显示，连接状态不被覆盖。实时断线立即排除该 Host 的额度告警，缓存待处理信息仍可保留。
+- 状态随现有会话推送及 Dashboard 前台快照更新；保留原有 30 秒监控和 Host 侧一分钟账号查询限频。Low quota alerts 开关控制系统通知，不隐藏入口上的状态。
+- `IOSDashboardStatusTests|PendingSessionCountTests|DashboardQuotaAlertTests` 共 19 项专项测试通过，覆盖跨 Host 同名会话、已处理状态、共享账号去重、阈值、断线／移除配对及失效额度；iOS Simulator Debug 完整构建通过。
+- 使用生产按钮组件的隔离 SwiftUI App 验证正常、待处理、低额度、两种告警并存、部分连接、断线、连接中及未配对状态，并检查明暗主题、较大字号、`99+` 和 Dashboard 打开回调。聚合逻辑使用生产模型运行专项测试；UI fixture 提供受控状态，不代表真实多 Host 链路或 iPhone 真机验收。证据在 `.build-local/diagnostics/ios-dashboard-status-20261019/`，未替换用户安装的 App，也未打包发布。

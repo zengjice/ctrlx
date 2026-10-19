@@ -22,6 +22,7 @@
         @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
         @Environment(ViewerConnectionManager.self) private var connectionManager
         @Environment(IOSSettings.self) private var settings
+        @Environment(DashboardStore.self) private var dashboardStore
 
         @State private var creatingSelection: ProjectPickerSelection?
         @State private var sessionCreation = NewSessionCreation()
@@ -70,10 +71,7 @@
                     .accessibilityLabel("Settings")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: onOpenDashboard) { overallConnectionStatusView }
-                        .accessibilityLabel(overallConnectionStatusText)
-                        .accessibilityHint("Open Dashboard")
-                        .accessibilityIdentifier("dashboard-open")
+                    IOSDashboardStatusButton(status: dashboardStatus, openDashboard: onOpenDashboard)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     EditButton()
@@ -333,43 +331,19 @@
             }
         }
 
-        // MARK: - Overall Connection Status
+        // MARK: - Dashboard Status
 
-        private var overallConnectionStatusView: some View {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(overallConnectionStatusColor)
-                    .frame(width: 8, height: 8)
-
-                Text(overallConnectionStatusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-
-        private var overallConnectionStatusColor: Color {
-            if connectionManager.anyHostConnected {
-                return .green
-            } else if connectionManager.isConnecting {
-                return .yellow
-            } else {
-                return .red
-            }
-        }
-
-        private var overallConnectionStatusText: String {
-            let connectedCount = connectionManager.activeConnections.filter(\.isHostConnected).count
-            let totalCount = settings.pairedHosts.count
-
-            if connectedCount == totalCount && totalCount > 0 {
-                return totalCount == 1 ? "Connected" : "All Connected"
-            } else if connectedCount > 0 {
-                return "\(connectedCount)/\(totalCount) Online"
-            } else if connectionManager.isConnecting {
-                return "Connecting..."
-            } else {
-                return "Disconnected"
-            }
+        private var dashboardStatus: IOSDashboardStatus {
+            let pairedHostIDs = Set(settings.pairedHosts.map(\.id))
+            let connections = connectionManager.activeConnections.filter { pairedHostIDs.contains($0.id) }
+            return IOSDashboardStatus(
+                pairedHostIDs: pairedHostIDs,
+                connectedHostIDs: Set(connections.filter(\.isHostConnected).map(\.id)),
+                isConnecting: connections.contains { $0.state == .connecting },
+                paneStates: sessionStore.paneStates,
+                dashboardHosts: dashboardStore.hosts,
+                at: Date()
+            )
         }
 
         // MARK: - New Session Creation
@@ -1232,6 +1206,7 @@
                             .environment(fileWorkspaces)
                             .environment(connectionManager)
                             .environment(settings)
+                            .environment(DashboardStore())
                     }
                 } else {
                     ProgressView()
