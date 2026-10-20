@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.86 — Stable remote clipboard feedback
+
+- Show copy, clipboard-read and paste confirmations as a non-interactive
+  overlay in remote browser and simulator views on Mac and iOS. Repeated
+  clipboard operations and clearing feedback preserve the canvas size,
+  position, image scale and input focus.
+- Release validation: the bounded serial Swift regression passed with 3,638
+  tests reported across 516 suites, including four native AppKit/SwiftUI
+  layout and input cases. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded.
+- Both boundary checks, the website build and 89 publisher/COS/distributed-
+  installer tests passed. The new helper and regression test pass SwiftFormat;
+  the two existing remote views retain 732 pre-existing formatting findings.
+  Physical-iPhone clipboard interaction and paired Viewer UI acceptance
+  were not rerun as part of release validation.
+- The signed iOS device-SDK Release build passed. Mac distribution uses build
+  19 through COS, with signature, source metadata and complete public-download
+  integrity checks before installer promotion.
+
 ## 3.0.85 — Browser focus and passkey sign-in
 
 - Keep Agent browser creation, navigation, page input and popups in the
