@@ -532,19 +532,6 @@
         private func cleanupFifo() {
             unlink(fifoPath)
         }
-
-        /// Cleans up stale FIFOs from previous crashes.
-        /// Call once at startup.
-        static func cleanupStaleFifos() {
-            let fm = FileManager.default
-            let tmpDir = fm.temporaryDirectory.path
-            guard let contents = try? fm.contentsOfDirectory(atPath: tmpDir) else { return }
-            for file in contents where file.hasPrefix("ctrlx-pipe-") && file.hasSuffix(".fifo") {
-                let path = "\(tmpDir)/\(file)"
-                try? fm.removeItem(atPath: path)
-                Logging.Logger(label: "com.jicezeng.ctrlx.pipepane").debug("Cleaned up stale FIFO: \(path)")
-            }
-        }
     }
 
     /// Small thread-safe handoff between FileHandle's dispatch callback and the

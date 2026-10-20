@@ -6,6 +6,7 @@ import Foundation
 /// 1. Pair two Mac apps (host + viewer), create and stream a tmux session
 /// 2. **Positive**: Send OSC 52 while viewer terminal is key — clipboard syncs
 /// 3. **Negative**: Open Settings to defocus terminal, send OSC 52 — clipboard unchanged
+/// 4. Disconnect the OSC pipe; periodic recovery restores copying without reopening the tab
 public enum ClipboardSyncMacViewerScenario {
     public static let scenario = CtrlxE2ELib.scenario(
         "Clipboard Sync Mac Viewer",
@@ -17,6 +18,7 @@ public enum ClipboardSyncMacViewerScenario {
         // ── Create session and open on both ──────────────────────
         TestStep.tmuxCreateSession(name: "clip-mac", width: 80, height: 24)
         TestStep.wait(seconds: 2)
+        Shortcut.tmuxRunCommand(target: "clip-mac:0.0", command: "printf 'CLIPBOARD_READY\\n'")
 
         // Open host panes window and select the session
         Shortcut.openPanesWindow()
@@ -31,7 +33,7 @@ public enum ClipboardSyncMacViewerScenario {
 
         // Wait for the viewer to be streaming the terminal
         TestStep.macWaitForElementQuery(
-            .allOf([.identifier("terminal-%0"), .valueContains("$")]),
+            .allOf([.identifier("terminal-%0"), .valueContains("CLIPBOARD_READY")]),
             timeout: 15,
             instance: 1
         )
@@ -83,5 +85,26 @@ public enum ClipboardSyncMacViewerScenario {
         TestStep.macReadClipboard(storeAs: "macClipboardAfter", instance: 1)
         TestStep.assertStoredNotContains(key: "macClipboardAfter", substring: "should not arrive mac")
         TestStep.assertStoredContains(key: "macClipboardAfter", substring: "mac viewer clipboard")
+
+        TestStep.log("Phase 3: Clipboard recovers after the Host's OSC pipe disconnects")
+        TestStep.macCloseWindow(titled: "Remote Hosts", instance: 1)
+        TestStep.macActivate(instance: 1)
+        TestStep.tmuxCommand(arguments: ["pipe-pane", "-t", "clip-mac:0.0"])
+        Shortcut.tmuxRunCommand(target: "clip-mac:0.0", command: "echo LIVE_WITHOUT_OSC_PIPE")
+        TestStep.macWaitForElementQuery(
+            .allOf([.identifier("terminal-%0"), .valueContains("LIVE_WITHOUT_OSC_PIPE")]),
+            timeout: 5,
+            instance: 1
+        )
+        // Allow the existing ten-second pane refresh to detect the lost pipe.
+        TestStep.wait(seconds: 12)
+        // Codex wraps OSC 52 in a tmux DCS passthrough sequence.
+        Shortcut.tmuxRunCommand(
+            target: "clip-mac:0.0",
+            command: "printf '\\ePtmux;\\e\\e]52;c;Y29weSBhZnRlciByZWNvdmVyeQ==\\a\\e\\\\'"
+        )
+        TestStep.wait(seconds: 2)
+        TestStep.macReadClipboard(storeAs: "macClipboardRecovered", instance: 1)
+        TestStep.assertStoredContains(key: "macClipboardRecovered", substring: "copy after recovery")
     }
 }

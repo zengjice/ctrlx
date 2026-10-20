@@ -397,7 +397,7 @@ Multiple panes in the same session share one control connection. Snapshots and l
 `actor` managing a scan-only FIFO copy from tmux `pipe-pane` for a single pane. One reader lives for the pane's full lifetime and never feeds terminal content.
 
 **Features:**
-- Creates per-pane FIFO (`/tmp/ctrlx-pipe-<id>.fifo`)
+- Creates a private per-reader FIFO (`$TMPDIR/ctrlx-pipe-<id>-<reader-uuid>.fifo`); cleanup only removes that reader's own file
 - Starts `pipe-pane -O "cat > fifo"` via control mode command
 - Reads raw PTY bytes only to parse OSC 9/777/9;4/0/2/52 side effects
 - AsyncStream + single consumer task for strict FIFO ordering
@@ -415,6 +415,7 @@ Multiple panes in the same session share one control connection. Snapshots and l
 **Per-pane lifecycle:**
 - New pane discovered → `startReader` creates a `PipePaneReader`, attaches the manager as delegate, calls `startPipePane()` (scan-only mode)
 - Pane disappears → `tearDownReader` calls `stopPipePane`, unregisters dimensions, drops the entry
+- Pane refresh (every ten seconds) → check live tmux `pane_pipe` and reader health; restart a failed scanner without replacing terminal subscriptions or Viewer leases. This also recovers when macOS omits the FIFO EOF callback.
 
 **Data Flow:**
 ```

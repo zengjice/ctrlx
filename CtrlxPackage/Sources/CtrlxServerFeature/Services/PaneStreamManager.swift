@@ -959,6 +959,10 @@
                 readers[pane.paneId] = context
                 onTitleChange?(pane.paneId, pane.target, pane.paneTitle)
             }
+
+            for paneId in acceptedPaneIDs {
+                await checkReaderHealth(paneId: paneId)
+            }
         }
 
         /// Start periodic pane discovery to detect new tmux sessions.
@@ -1157,7 +1161,33 @@
             paneId: String,
             didTerminate reason: PipePaneReaderTermination
         ) {
+            scheduleReaderRecovery(paneId: paneId, reader: reader, reason: reason.description)
+        }
+
+        private func checkReaderHealth(paneId: String) async {
+            guard !isShuttingDown, let context = readers[paneId], readerRecoveryTasks[paneId] == nil else { return }
+            do {
+                // FileHandle may never signal EOF when a FIFO loses its writer.
+                // Query live tmux state rather than trusting an old pane snapshot.
+                let pipe = try await controlClientManager.sendCommand(
+                    "display-message -p -t '\(paneId)' '#{pane_pipe}'",
+                    sessionName: context.sessionName,
+                    expectedServerID: context.serverID
+                )
+                let healthy = await context.reader.isHealthy
+                if pipe.output.trimmingCharacters(in: .whitespacesAndNewlines) == "0" || !healthy {
+                    scheduleReaderRecovery(paneId: paneId, reader: context.reader, reason: "periodic health check")
+                }
+            } catch {
+                logger.debug("Could not check pane reader", metadata: [
+                    "paneId": "\(paneId)", "error": "\(error)",
+                ])
+            }
+        }
+
+        private func scheduleReaderRecovery(paneId: String, reader: PipePaneReader, reason: String) {
             guard
+                !Task.isCancelled,
                 !isShuttingDown,
                 readers[paneId]?.reader === reader,
                 readerRecoveryTasks[paneId] == nil

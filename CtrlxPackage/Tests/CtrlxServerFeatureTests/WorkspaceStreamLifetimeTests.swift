@@ -8,6 +8,64 @@ import Testing
 
 @MainActor
 struct WorkspaceStreamLifetimeTests {
+    @Test("Pane refresh restores clipboard forwarding without replacing the Viewer lease", arguments: [false, true])
+    func clipboardAfterPipeDisconnect(unlinkFIFO: Bool) async throws {
+        try await withFixture { fixture in
+            let identity = try await fixture.createSession("clipboard")
+            let lease = UUID()
+            try await fixture.service.startStreaming(
+                paneId: "%0", target: "%0", viewerId: "viewer", leaseId: lease,
+                expectedWorkspacePane: identity
+            )
+            try await fixture.copy("BEFORE_DISCONNECT")
+            try await fixture.waitUntil { fixture.sender.clipboards == ["BEFORE_DISCONNECT"] }
+            let initialCount = fixture.sender.frames.filter(\.isInitial).count
+            let fifo = try #require(FileManager.default.contentsOfDirectory(at: fixture.root, includingPropertiesForKeys: nil)
+                .first { $0.pathExtension == "fifo" })
+
+            // The tmux pipe can disappear without FileHandle delivering EOF.
+            // An unlinked FIFO reproduces interference from another App launch.
+            if unlinkFIFO {
+                try FileManager.default.removeItem(at: fifo)
+            }
+            _ = try await fixture.run(["pipe-pane", "-t", "%0"])
+            try await fixture.write("LIVE_WHILE_PIPE_IS_DOWN")
+            try await fixture.waitUntil { fixture.sender.containsOutput("LIVE_WHILE_PIPE_IS_DOWN") }
+
+            await fixture.panes.updateMonitoring(panes: await fixture.tmux.refreshPanes())
+            try await fixture.waitUntil {
+                try await fixture.run(["display-message", "-p", "-t", "%0", "#{pane_pipe}"])
+                    .stdoutString.trimmingCharacters(in: .newlines) == "1"
+            }
+            try await fixture.copy("AFTER_RECOVERY", tmuxWrapped: true)
+            try await fixture.waitUntil { fixture.sender.clipboards == ["BEFORE_DISCONNECT", "AFTER_RECOVERY"] }
+            #expect(fixture.sender.frames.allSatisfy { $0.leaseId == lease })
+            #expect(fixture.sender.frames.filter(\.isInitial).count == initialCount)
+            #expect(!fixture.sender.frames.contains { $0.updateType == .streamEnd })
+            #expect(fixture.service.isStreaming(paneId: "%0"))
+        }
+    }
+
+    @Test("Refreshing a healthy scanner keeps its FIFO and clipboard subscription")
+    func healthyClipboardReader() async throws {
+        try await withFixture { fixture in
+            let identity = try await fixture.createSession("clipboard")
+            try await fixture.service.startStreaming(
+                paneId: "%0", target: "%0", viewerId: "viewer", leaseId: UUID(),
+                expectedWorkspacePane: identity
+            )
+            try await fixture.copy("BEFORE_REFRESH")
+            try await fixture.waitUntil { fixture.sender.clipboards == ["BEFORE_REFRESH"] }
+            let fifo = try #require(FileManager.default.contentsOfDirectory(at: fixture.root, includingPropertiesForKeys: nil)
+                .first { $0.pathExtension == "fifo" })
+            let inode = try FileManager.default.attributesOfItem(atPath: fifo.path)[.systemFileNumber] as? NSNumber
+            await fixture.panes.updateMonitoring(panes: await fixture.tmux.refreshPanes())
+            #expect(try FileManager.default.attributesOfItem(atPath: fifo.path)[.systemFileNumber] as? NSNumber == inode)
+            try await fixture.copy("AFTER_REFRESH")
+            try await fixture.waitUntil { fixture.sender.clipboards == ["BEFORE_REFRESH", "AFTER_REFRESH"] }
+        }
+    }
+
     @Test("A reconnected control client cannot feed a reader from the previous server", arguments: [false, true])
     func reconnectOutput(guarded: Bool) async throws {
         try await withFixture { fixture in
@@ -203,6 +261,14 @@ struct WorkspaceStreamLifetimeTests {
             try await waitUntil { try await self.tmux.capturePaneText("%0").contains(text) }
         }
 
+        func copy(_ text: String, tmuxWrapped: Bool = false) async throws {
+            let encoded = Data(text.utf8).base64EncodedString()
+            let sequence = tmuxWrapped
+                ? "\u{1B}Ptmux;\u{1B}\u{1B}]52;c;\(encoded)\u{7}\u{1B}\\"
+                : "\u{1B}]52;c;\(encoded)\u{7}"
+            try await tmux.sendRawBytes("%0", data: Data(sequence.utf8))
+        }
+
         func waitUntil(_ predicate: () async throws -> Bool) async throws {
             let deadline = ContinuousClock.now + .seconds(5)
             while ContinuousClock.now < deadline {
@@ -227,6 +293,23 @@ struct WorkspaceStreamLifetimeTests {
     @MainActor
     final private class Sender: TerminalStreamSending {
         var frames: [TerminalStreamMessage] = []
+
+        var clipboards: [String] {
+            frames.compactMap {
+                guard case let .clipboardUpdate(update) = $0.updateType else { return nil }
+                return update.content
+            }
+        }
+
+        func containsOutput(_ text: String) -> Bool {
+            let bytes = frames.reduce(into: Data()) { output, message in
+                if case let .dataChunk(chunk) = message.updateType, let data = chunk.data {
+                    output.append(data)
+                }
+            }
+            return String(decoding: bytes, as: UTF8.self).contains(text)
+        }
+
         func sendTerminalStream(_ message: TerminalStreamMessage, to viewers: Set<String>, leaseIDs: [String: UUID]) async {
             for viewer in viewers {
                 frames.append(message.withLeaseId(leaseIDs[viewer]))

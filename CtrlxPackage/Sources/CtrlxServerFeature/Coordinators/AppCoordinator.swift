@@ -469,9 +469,6 @@
             @Dependency(EditorClient.self) var editorClient
             await settings.seedEditorsIfEmpty(using: editorClient)
 
-            // Clean up any stale pipe-pane FIFOs from previous crashes
-            PipePaneReader.cleanupStaleFifos()
-
             // Sweep any leftover `ctrlx-drop-*` directories from prior
             // sessions. Each remote drop drops a per-UUID subdir under
             // `$TMPDIR`, normally short-lived: the inner pane app reads

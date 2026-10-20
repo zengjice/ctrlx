@@ -127,6 +127,15 @@ sequenceDiagram
 - Uses AsyncStream + single consumer task for strict FIFO ordering of data chunks
 - Forwards only side-effect events through `PipePaneReaderDelegate`; terminal bytes are always discarded
 
+The existing ten-second pane refresh also checks each reader against live tmux
+`pane_pipe` state. A detached or failed scanner restarts in place, preserving
+subscribers, Viewer leases and control-mode output. This check does not depend
+on `FileHandle.readabilityHandler` delivering FIFO EOF, which macOS can omit.
+Clipboard events lost while the pipe was down cannot be replayed; new copies
+are forwarded after recovery. Cleanup only unlinks the reader's own UUID-named
+FIFO. App startup never sweeps other instances' FIFOs; crash leftovers remain
+in the system temporary directory for normal temporary-file cleanup.
+
 **TmuxControlClient** is an actor that:
 - Maintains a long-lived `tmux -C attach -f ignore-size` process
 - Handles individual commands via `sendCommand()` and snapshot transactions via `sendCommandList()`
