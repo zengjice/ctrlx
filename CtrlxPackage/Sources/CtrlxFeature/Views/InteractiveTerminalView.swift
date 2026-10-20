@@ -329,15 +329,16 @@ enum TerminalCursorTapNavigation {
         override init(frame: CGRect, font: UIFont?) {
             super.init(frame: frame, font: font)
             terminalDelegate = self
-            // CtrlX owns single-tap mouse reporting and scrolling below. Keep
-            // SwiftTerm's multi-taps local so copy/selection never clicks a TUI.
+            // CtrlX owns single-tap mouse reporting and scrolling below. Default
+            // multi-taps to local selection; the pane's More menu can opt in to mouse events.
             allowMouseReporting = false
             if let accessory = inputAccessoryView as? TerminalAccessory {
                 accessory.configuration = .init(
                     showsHorizontalArrows: false,
                     showsFunctionKeys: false,
                     buttonHeight: TerminalInputControlMetrics.buttonHeight,
-                    showsEscapeKey: false
+                    showsEscapeKey: false,
+                    showsTouchToggle: false
                 )
             }
             // Always render cursor as filled on iOS since the user is typically viewing

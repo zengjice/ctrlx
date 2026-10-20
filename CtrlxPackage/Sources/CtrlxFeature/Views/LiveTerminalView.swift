@@ -57,6 +57,7 @@
         /// Whether a parent-managed multi-pane layout wants the software keyboard.
         /// The selected pane keeps its shortcut bar available even when this is false.
         let parentKeyboardRequested: Bool
+        let mouseReportingEnabled: Bool
         let onKeyboardRequest: (@MainActor (Bool) -> Void)?
 
         /// Submits a structured `AgentResponse` for the open response form.
@@ -152,6 +153,7 @@
             isActive: Bool = true,
             isInputSuspended: Bool = false,
             parentKeyboardRequested: Bool = false,
+            mouseReportingEnabled: Bool = false,
             onKeyboardRequest: (@MainActor (Bool) -> Void)? = nil,
             settings: IOSSettings,
             telemetry: SessionTelemetry? = nil,
@@ -189,6 +191,7 @@
             self.isActive = isActive
             self.isInputSuspended = isInputSuspended
             self.parentKeyboardRequested = parentKeyboardRequested
+            self.mouseReportingEnabled = mouseReportingEnabled
             self.onKeyboardRequest = onKeyboardRequest
             self.telemetry = telemetry
             self.submitResponse = submitResponse
@@ -570,6 +573,7 @@
                         scrollingAgentID: scrollingAgentID,
                         codexQuestionID: codexQuestionID,
                         inputEnabled: inputPresentation.inputEnabled,
+                        mouseReportingEnabled: mouseReportingEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
                         onKeyboardRequest: settings.terminalKeyboardControlPosition == .bottomBar ? setKeyboardRequested : nil,
                         keyboardIsTransitioning: keyboardIsTransitioning,
@@ -1503,6 +1507,7 @@
 
         /// Whether this terminal owns the input accessory and accepts input.
         let inputEnabled: Bool
+        var mouseReportingEnabled = false
 
         /// Whether the software keyboard should be visible below the accessory.
         let keyboardRequested: Bool
@@ -1549,6 +1554,7 @@
 
             // Configure terminal
             terminalView.applyTheme(theme)
+            terminalView.allowMouseReporting = mouseReportingEnabled
             terminalView.isScrollEnabled = true
             terminalView.inputAssistantItem.leadingBarButtonGroups = []
             terminalView.inputAssistantItem.trailingBarButtonGroups = []
@@ -1731,6 +1737,7 @@
             guard let terminalView = context.coordinator.terminalView else { return }
 
             terminalView.applyTheme(theme)
+            terminalView.allowMouseReporting = mouseReportingEnabled
             scrollView.backgroundColor = theme.palette.background.nativeColor
             context.coordinator.canvasView?.backgroundColor = theme.palette.background.nativeColor
 

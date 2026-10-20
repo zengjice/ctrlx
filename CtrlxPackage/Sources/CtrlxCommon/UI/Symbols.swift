@@ -67,6 +67,7 @@ public enum Symbols: String {
     case gearshape
     case gearshapeFill = "gearshape.fill"
     case globe
+    case handDraw = "hand.draw"
     case handsAndSparklesFill = "hands.and.sparkles.fill"
     case hourglass = "hourglass"
     case house

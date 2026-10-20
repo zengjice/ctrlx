@@ -50,6 +50,7 @@
 
         /// The currently selected pane (receives keyboard input)
         @State private var activePaneId: String?
+        @State private var mouseReportingPaneIDs: Set<String> = []
 
         /// Whether the software keyboard is requested for the selected pane.
         /// Terminal shortcuts remain available when this is false.
@@ -711,6 +712,7 @@
                     await activeService?.markHandledIfNeeded()
                 }
                 .onChange(of: windowSelectionCandidates, initial: true) { previous, candidates in
+                    mouseReportingPaneIDs.formIntersection(candidates.flatMap(\.paneIDs))
                     reconcileWindowSelection(candidates: candidates, previousCandidates: previous)
                     if
                         let request = annotationHandoff.request,
@@ -884,6 +886,29 @@
                             Label("Copy Terminal Text", symbol: .docOnClipboard)
                         }
                         .disabled(activeCopyAction == nil)
+
+                        if let paneID = activePaneId {
+                            Menu {
+                                Picker("Touch Mode", selection: Binding(
+                                    get: { mouseReportingPaneIDs.contains(paneID) },
+                                    set: { enabled in
+                                        if enabled {
+                                            mouseReportingPaneIDs.insert(paneID)
+                                        } else {
+                                            mouseReportingPaneIDs.remove(paneID)
+                                        }
+                                    }
+                                )) {
+                                    Text("Select Text").tag(false)
+                                    Text("Send Mouse Events").tag(true)
+                                }
+                                .pickerStyle(.inline)
+                            } label: {
+                                Label("Touch Mode", symbol: .handDraw)
+                            }
+                            .accessibilityHint("Controls whether double and triple taps select text or send mouse events.")
+                            .accessibilityIdentifier("terminal-touch-mode")
+                        }
 
                         if let activeService, activeService.session != nil {
                             Divider()
@@ -1535,6 +1560,7 @@
                 isActive: terminalIsVisible && pane.paneId == activePaneId,
                 isInputSuspended: !terminalIsVisible || quickActionPresentation.suspendsTerminalInput,
                 parentKeyboardRequested: isKeyboardActive,
+                mouseReportingEnabled: mouseReportingPaneIDs.contains(pane.paneId),
                 onKeyboardRequest: { isKeyboardActive = $0 },
                 settings: settings,
                 telemetry: pane.telemetry,

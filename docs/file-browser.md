@@ -20,7 +20,7 @@ On iOS, the current terminal has a compact icon row below its title:
 **Fit Terminal to Screen**. The title opens the **Tabs** list; terminal rows
 contain only the name and selection mark and retain long-press reordering.
 Switch to a terminal before using its actions. The top-right **More** menu
-combines terminal copy/session controls with rename, close and the open/Fork
+combines terminal copy/session controls and per-pane **Touch Mode** with rename, close and the open/Fork
 actions, including **Open Another Files Tab**. Fit retains its existing Host-wide
 resize behavior; moving the control does not change the resize command.
 The simulator shortcut opens an existing simulator belonging to the current

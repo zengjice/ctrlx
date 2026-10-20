@@ -337,9 +337,16 @@ it does not auto-repeat. The accessory hides Esc, horizontal arrows (already
 present in the first row) and optional function keys,
 then distributes its remaining controls across the available width. This is a
 presentation configuration only: Ctrl/modifier handling, up/down auto-repeat,
-touch mode, keyboard switching and the input proxy keep their existing paths.
-SwiftTerm's `showsEscapeKey` defaults to `true`; only CtrlX opts out, so other
-consumers retain their existing keyboard. Layout tests cover both configurations.
+keyboard switching and the input proxy keep their existing paths.
+The hand/touch toggle is hidden in CtrlX, and the remaining nine keys share the
+available width without inserting a replacement. **More → Touch Mode** retains
+**Select Text** (default) and **Send Mouse Events** for the focused pane. The
+choice is local to this Viewer/session screen and independent for each pane;
+closed panes are removed. It controls SwiftTerm's multi-tap mouse reporting,
+while CtrlX's single-tap, link and scroll routing remains unchanged.
+SwiftTerm's `showsEscapeKey` and `showsTouchToggle` default to `true`; only CtrlX
+opts out, so other consumers retain their existing keyboard. Layout tests cover
+both configurations.
 
 The extended keyboard (the rightmost keyboard toggle, with Home/End and function
 keys) has a separate six-button row: `⇧←`, `⇧→`, `⇧↑`, `⇧↓`, `⇧Tab`, `⇧Enter`.
