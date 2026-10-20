@@ -242,6 +242,10 @@ at that index, otherwise it is dropped. So a saved layout is mostly about the
 *auxiliary* tabs (files / browser / git / explorer) and the split *shape*; the
 terminal windows come from whatever the live session currently has.
 
+Git is now opt-in: seeding a new session from a folder layout excludes its Git
+references and selection. Recovery of the original workspace still restores
+explicitly open Git tabs; closing Git removes it from subsequent snapshots.
+
 ### 4.5 Cold-launch specifics (R7)
 
 - **Rides the existing birth hook.** On cold launch every `@State` dictionary is

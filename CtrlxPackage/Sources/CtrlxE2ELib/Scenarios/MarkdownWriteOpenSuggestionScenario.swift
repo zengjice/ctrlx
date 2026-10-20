@@ -201,7 +201,7 @@ public enum MarkdownWriteOpenSuggestionScenario {
         // Activate the Git tab. In e2e mode the workbench is backed by the
         // deterministic MockGitProvider, so the fixture repo name "aurora-cli"
         // renders if and only if the Git tab is the active view.
-        TestStep.macClickButton(titled: "Git")
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
         TestStep.macWaitForElement(titled: "aurora-cli", timeout: 10)
 
         TestStep.macSendHookEvent(

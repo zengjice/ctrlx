@@ -236,9 +236,10 @@ extension SessionFileTabsState {
         guard !hasTerminal else { return }
         let order = TabDragPayload.reconciledOrder(
             windowIds: [], fileTabIds: openFileTabs.map(\.id), browserTabIds: openBrowserTabs.map(\.id),
-            storedOrder: tabOrder, includeFileExplorer: false, includeGit: false
+            storedOrder: tabOrder, includeFileExplorer: false, includeGit: isGitOpen
         )
         switch order.first(where: { !rightSide.contains($0) }) {
+        case .git: selectLeftGit()
         case let .file(id): selectedFileTabId = id
         case let .browser(id): selectedBrowserTabId = id
         default: break

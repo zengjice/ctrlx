@@ -26,6 +26,17 @@ medium/large tab-list sheet without a nested navigation stack. Actions are
 applied after dismissing this list, before presenting a Fork/Agent sheet or alert.
 Files rows expose only their own selection/close actions, not terminal operations.
 
+### Mac Git tab
+
+Open the session's Git tab with **+ → Open Git**. It supports the close button
+and **⌘W**, including in the right split. Closing returns to the remaining
+content without closing tmux windows or changing the repository. Reopening
+reuses the session's Git view state, including an unsent commit message.
+New sessions do not open Git automatically, including when inheriting a saved
+folder layout. Workspace recovery preserves explicitly open tabs; a closed Git
+tab stays closed. Closing a file that came from Git returns there only while
+that Git tab is still open.
+
 ### Pane-linked tab groups
 
 Files, Host browser pages and iOS Simulator tabs are grouped by their actual

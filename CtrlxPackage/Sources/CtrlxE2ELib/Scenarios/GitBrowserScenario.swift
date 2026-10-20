@@ -2,8 +2,7 @@ import Foundation
 
 /// E2E scenario: Git Browser tab (issue #258)
 ///
-/// Exercises the new Git tab that embeds the `GitWorkbench` component to the
-/// right of the file-explorer tab:
+/// Exercises the explicitly opened Git tab and its `GitWorkbench` component:
 /// 1. Activating the Git tab shows the GitWorkbench Changes view backed by the
 ///    stable mock provider (repo "aurora-cli", branch "feat/auto-sync", the
 ///    fixture's changed files).
@@ -55,11 +54,15 @@ public enum GitBrowserScenario {
         TestStep.macClickButton(titled: "repobrowse")
         TestStep.wait(seconds: 3)
 
-        // ── Phase 0: Clean repo → no badge; add changes → badge on load ──
+        TestStep.macWaitForElementQueryToDisappear(.identifier("git-tab"), timeout: 5)
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
+        TestStep.macWaitForElement(titled: "aurora-cli", timeout: 10)
+        TestStep.macClickButton(titled: "repobrowse:0")
+
+        // ── Phase 0: An explicitly opened Git tab keeps its badge updated ──
         //
-        // The displayed session's git status loads eagerly (issue #573), so the
-        // Git tab button reflects the repo without the tab being opened. The mock
-        // starts clean, so there's no badge here.
+        // The open Git tab keeps its badge while the terminal is selected.
+        // The mock starts clean, so there's no badge here.
         TestStep.log("Phase 0: Clean repo shows no changed-file badge")
         TestStep.macScreenshot(label: "mac-git-terminal-baseline")
 
@@ -145,35 +148,12 @@ public enum GitBrowserScenario {
         // earlier phases' screenshots aren't disturbed by an extra sidebar row.
         // The name avoids the substring "git" for the same reason as above.
         TestStep.tmuxCreateSession(name: "otherproj", width: 160, height: 50)
-        // Put `otherproj` in a different working directory than `repobrowse`.
-        // Folder layout persistence (feat/folder-layout-persistence) seeds an
-        // empty session from its folder's last-known layout, so a sibling in the
-        // *same* cwd would inherit repobrowse's open Git tab — making this
-        // "switch to a fresh session" screenshot show the git workbench instead
-        // of a plain terminal. A distinct cwd keeps `otherproj` genuinely empty.
-        Shortcut.tmuxRunCommand(target: "otherproj:0.0", command: "cd /tmp")
+        // Same-folder layout seeding must not reopen Git in this new session.
         Shortcut.tmuxRunCommand(target: "otherproj:0.0", command: "echo '=== OTHER PROJECT ==='")
-
-        // Select the other session — its terminal replaces the Git view.
-        // A freshly-created tmux session only surfaces in the sidebar on the
-        // next periodic refresh (~5s), so allow two cycles to avoid racing it.
         TestStep.macWaitForElement(titled: "otherproj", timeout: 12)
-        // Wait until the app has actually observed otherproj's `cd /tmp` before
-        // selecting it. `otherproj` is born in `$HOME` (tmux `new-session -c
-        // $HOME`) — the same folder as `repobrowse` — and only moves to `/tmp`
-        // once the typed `cd /tmp` executes and a pane refresh picks it up.
-        // Seed-on-birth (`MainView.seedLayoutIfNeeded`) reads the pane's cwd
-        // exactly ONCE, when the session is first selected, and never re-seeds.
-        // If we click while the cached cwd is still `$HOME`, this "fresh"
-        // session gets seeded from `repobrowse`'s persisted git-split layout
-        // instead of `/private/tmp`'s empty one, and the Git tab leaks into the
-        // screenshot below. The sidebar renders each session's `currentPath`
-        // (shown verbatim since `/private/tmp` isn't under `$HOME`), so gating on
-        // it appearing guarantees the seed reads the settled cwd, not the stale
-        // birth dir.
-        TestStep.macWaitForElementQuery(.anyTextMatches("/private/tmp"), timeout: 15)
         TestStep.macClickButton(titled: "otherproj")
         TestStep.wait(seconds: 2)
+        TestStep.macWaitForElementQueryToDisappear(.identifier("git-tab"), timeout: 5)
         TestStep.macScreenshot(label: "mac-git-other-session")
 
         // Return to repobrowse: the Git tab is still active and still on
@@ -208,6 +188,38 @@ public enum GitBrowserScenario {
         // expanded (a view-local @State would have reset it to collapsed).
         TestStep.macWaitForElementQuery(.anyTextMatches("log-levels"), timeout: 5)
         TestStep.macScreenshot(label: "mac-git-branch-expansion-preserved")
+
+        TestStep.log("Phase 8: Close Git, keep it closed across session switches, then reopen")
+        TestStep.macClickButton(titled: "Close Git tab")
+        TestStep.macWaitForElementQueryToDisappear(.identifier("git-tab"), timeout: 5)
+        TestStep.macClickButton(titled: "otherproj")
+        TestStep.macClickButton(titled: "repobrowse")
+        TestStep.macWaitForElementQueryToDisappear(.identifier("git-tab"), timeout: 5)
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
+        TestStep.macWaitForElement(titled: "aurora-cli", timeout: 10)
+        TestStep.macPressKey(.character("w"), modifiers: .command)
+        TestStep.macWaitForElementQueryToDisappear(.identifier("git-tab"), timeout: 5)
+
+        TestStep.log("Phase 9: Cmd-W closes right-side Git and restores the terminal")
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
+        TestStep.macClickButton(titled: "Open git in split: Git")
+        TestStep.macCGClick(titled: "History")
+        TestStep.macPressKey(.character("w"), modifiers: .command)
+        TestStep.macWaitForElementQueryToDisappear(.identifier("git-tab"), timeout: 5)
+        TestStep.macWaitForElement(titled: "repobrowse:0", timeout: 5)
+        TestStep.macScreenshot(label: "mac-git-closed", compare: false)
+
+        TestStep.log("Phase 10: Git fills the left side when its last terminal moves right")
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
+        TestStep.macClickButton(titled: "repobrowse:0")
+        TestStep.tmuxCommand(arguments: ["rename-window", "-t", "repobrowse:0", "console"])
+        TestStep.macWaitForElement(titled: "Open terminal in split: console", timeout: 10)
+        TestStep.macClickButton(titled: "Open terminal in split: console")
+        TestStep.macWaitForElement(titled: "Move terminal to left: console", timeout: 5)
+        TestStep.macWaitForElement(titled: "aurora-cli", timeout: 5)
+        TestStep.macClickButton(titled: "Close Git tab")
+        TestStep.macWaitForElementQueryToDisappear(.identifier("git-tab"), timeout: 5)
+        TestStep.macWaitForElement(titled: "Open terminal in split: console", timeout: 5)
 
         // ── Tear down ────────────────────────────────────────────
         Shortcut.tmuxRunCommand(target: "repobrowse:0.0", command: "exit")

@@ -36,6 +36,7 @@ struct WindowTabBar: View {
     let onSelectFileBrowser: () -> Void
     /// Activates the Git tab for the current window (issue #258).
     let onSelectGitBrowser: () -> Void
+    let onCloseGitBrowser: () -> Void
     let onSelectFileTab: (UUID) -> Void
     let onCloseFileTab: (UUID) -> Void
     let onSelectBrowserTab: (UUID) -> Void
@@ -73,6 +74,7 @@ struct WindowTabBar: View {
 
     @State private var hoveredWindowId: String?
     @State private var hoveredFileTabId: UUID?
+    @State private var isGitHovered = false
 
     /// Currently-displayed drop indicator: nil while nothing is being dragged.
     /// The bar shows a vertical accent line to the left of the matching tab
@@ -338,7 +340,8 @@ struct WindowTabBar: View {
         NewTabMenuButton(
             helpText: "New agent or terminal in \(session.sessionName)",
             agentConfiguration: agentConfiguration,
-            onNewTerminal: onNewWindow
+            onNewTerminal: onNewWindow,
+            onOpenGit: onSelectGitBrowser
         )
     }
 
@@ -402,9 +405,7 @@ struct WindowTabBar: View {
         return parts.joined(separator: ", ")
     }
 
-    /// The Git tab button (issue #258). A singleton like `fileBrowserButton`,
-    /// living immediately to its right, with the same split-toggle and
-    /// drag-and-drop affordances.
+    /// One Git tab per session, opened from the "+" menu.
     private var gitBrowserButton: some View {
         let tabIsOnRight = isOnRight(.git)
         let isSelected = tabIsOnRight
@@ -435,6 +436,7 @@ struct WindowTabBar: View {
             .buttonStyle(.plain)
             .help("Git changes for \(session.sessionName)")
             .accessibilityLabel("Git")
+            .accessibilityIdentifier("git-tab")
             .accessibilityValue(gitAccessibilityValue(isSelected: isSelected))
 
             TabSplitToggleButton(
@@ -444,9 +446,16 @@ struct WindowTabBar: View {
                 tabName: "Git",
                 action: { onToggleSplit(.git) }
             )
+            TabCloseButton(
+                isVisible: isSelected || isGitHovered,
+                accessibilityLabel: "Close Git tab",
+                helpText: "Close Git tab",
+                action: onCloseGitBrowser
+            )
             .padding(.trailing, 6)
         }
         .tabStripItemStyle(isSelected: isSelected, isOnRightSplit: tabIsOnRight, isSplit: isSplit)
+        .onHover { isGitHovered = $0 }
         .overlay(alignment: .leading) {
             DropIndicator(visible: dropIndicator == .git)
         }
@@ -951,10 +960,8 @@ enum TabDragPayload: Codable, Hashable, Transferable {
     /// entry is neither kept nor inserted and new windows slot in before the
     /// first browser tab instead of before the (absent) explorer.
     ///
-    /// The Git tab (issue #258) is another local-only singleton: it sits
-    /// immediately to the right of the file explorer in the default layout and,
-    /// like the explorer, doesn't exist on remote sessions. Pass
-    /// `includeGit: false` for remote so `.git` is neither kept nor inserted.
+    /// Git is a local-only, explicitly opened tab. Preserve it when present
+    /// in the stored order; never synthesize it. Remote sessions exclude it.
     static func reconciledOrder(
         windowIds: [String],
         fileTabIds: [UUID],
@@ -1003,16 +1010,6 @@ enum TabDragPayload: Codable, Hashable, Transferable {
         }
         if includeFileExplorer, seen.insert(.fileExplorer).inserted {
             order.insert(.fileExplorer, at: insertAt)
-        }
-        // The Git button sits immediately to the right of the file-explorer
-        // button (issue #258); for a new git entry not yet in the stored order,
-        // slot it just after the explorer (or at the front of the singletons
-        // when the explorer is absent).
-        if includeGit, seen.insert(.git).inserted {
-            let gitInsertAt = includeFileExplorer
-                ? (order.firstIndex(of: .fileExplorer).map { $0 + 1 } ?? order.count)
-                : insertAt
-            order.insert(.git, at: min(gitInsertAt, order.count))
         }
         // New file/browser tabs append at the end.
         for tab in liveFiles + liveBrowsers where seen.insert(tab).inserted {

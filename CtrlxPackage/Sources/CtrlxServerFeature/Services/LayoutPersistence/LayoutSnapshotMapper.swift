@@ -219,6 +219,7 @@
             to tabs: SessionFileTabsState,
             fileBrowser: FileBrowserState?,
             includeHostFiles: Bool = false,
+            includeGit: Bool = true,
             windowIdForIndex: (Int) -> String?,
             makeBrowserState: (BrowserTab) -> BrowserTabState
         ) {
@@ -266,7 +267,8 @@
             let restoredBrowserIds = Set(restoredBrowserTabs.map(\.id))
 
             func payload(for ref: SavedTabRef) -> TabDragPayload? {
-                runtimePayload(
+                guard includeGit || ref != .git else { return nil }
+                return runtimePayload(
                     for: ref,
                     windowIdForIndex: windowIdForIndex,
                     restoredFileIds: restoredFileIds,
@@ -278,7 +280,10 @@
             tabs.rightSide = Set(layout.rightSide.compactMap(payload))
             tabs.selectedRight = layout.selectedRight.flatMap(payload)
 
+            tabs.isGitSelected = false
             switch layout.selectedLeft.flatMap(payload) {
+            case .git:
+                tabs.selectLeftGit()
             case let .file(id):
                 tabs.selectedFileTabId = id
                 tabs.selectedBrowserTabId = nil

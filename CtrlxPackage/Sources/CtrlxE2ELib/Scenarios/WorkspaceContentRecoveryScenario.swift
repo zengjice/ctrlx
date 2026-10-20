@@ -22,7 +22,7 @@ public enum WorkspaceContentRecoveryScenario {
         TestStep.macWaitForElementQuery(.anyTextMatches("RECOVERED_FILE_PREVIEW"), timeout: 10)
         TestStep.macScreenshot(label: "files-before-restart", compare: false)
 
-        TestStep.macClickButton(titled: "Git")
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
         TestStep.macWaitForElement(titled: "change.txt", timeout: 10)
         TestStep.macCGClick(titled: "Message (")
         TestStep.macSetFocusedText("Unsent commit message for workspace recovery")

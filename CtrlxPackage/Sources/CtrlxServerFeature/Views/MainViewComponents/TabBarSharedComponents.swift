@@ -94,6 +94,7 @@ struct NewTabMenuButton: View {
     let agentConfiguration: NewAgentTabConfiguration
     var isTerminalDisabled = false
     let onNewTerminal: () -> Void
+    var onOpenGit: (() -> Void)?
     @State private var presentedAgents: NewAgentTabConfiguration?
 
     var body: some View {
@@ -110,6 +111,13 @@ struct NewTabMenuButton: View {
                 Label("New Terminal", symbol: .terminal)
             }
             .disabled(isTerminalDisabled)
+            if let onOpenGit {
+                Divider()
+                Button(action: onOpenGit) {
+                    Label { Text("Open Git") } icon: { CustomSymbol.gitLogo.image }
+                }
+                .accessibilityIdentifier("open-git-tab")
+            }
         } label: {
             Symbols.plus.image
                 .font(.caption)

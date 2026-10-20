@@ -54,7 +54,7 @@ public enum WorkbenchKeyboardScenario {
         TestStep.wait(seconds: 1)
 
         // Keep Git on the left after moving its last terminal to the right.
-        TestStep.macClickButton(titled: "Git")
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
         TestStep.macWaitForElement(titled: "aurora-cli", timeout: 10)
         TestStep.macClickButton(titled: "Open terminal in split: source")
         TestStep.macWaitForElement(titled: "Move terminal to left: source", timeout: 5)
@@ -152,7 +152,8 @@ public enum WorkbenchKeyboardScenario {
         TestStep.macPressKey(.upArrow, modifiers: [.command, .option])
         TestStep.macWaitForElement(titled: "keys456:0 first", timeout: 5)
 
-        // Numeric and arrow navigation both include Git, before a terminal is added.
+        // Explicitly open Git before exercising tab navigation.
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
         TestStep.macPressKey(.character("2"), modifiers: .command)
         TestStep.macWaitForElementQuery(.allOf([.label("Git"), .valueContains("selected")]), timeout: 5)
         TestStep.macPressKey(.rightArrow, modifiers: [.command, .option])

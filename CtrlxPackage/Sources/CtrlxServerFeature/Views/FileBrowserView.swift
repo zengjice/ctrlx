@@ -378,11 +378,27 @@ final class SessionFileTabsState {
     /// Git belongs to this workbench's session, including when no terminal remains on the left.
     var isGitSelected = false
 
+    var isGitOpen: Bool {
+        tabOrder.contains(.git)
+    }
+
     func selectLeftGit() {
         guard !rightSide.contains(.git) else { return }
+        if !isGitOpen {
+            tabOrder.append(.git)
+        }
         selectedFileTabId = nil
         selectedBrowserTabId = nil
         isGitSelected = true
+    }
+
+    func closeGit() {
+        tabOrder.removeAll { $0 == .git }
+        rightSide.remove(.git)
+        isGitSelected = false
+        if selectedRight == .git {
+            selectedRight = nil
+        }
     }
 
     /// Directory tabs own their content; only editor tabs need the legacy tree underneath.
@@ -585,6 +601,7 @@ final class SessionFileTabsState {
         guard isSplit else { return false }
 
         let leftEmpty = (!sessionWindowIDs.isEmpty || !openFileTabs.isEmpty || !openBrowserTabs.isEmpty)
+            && (!isGitOpen || rightSide.contains(.git))
             && sessionWindowIDs.allSatisfy { rightSide.contains(.window($0)) }
             && openBrowserTabs.allSatisfy { rightSide.contains(.browser($0.id)) }
             && openFileTabs.allSatisfy { rightSide.contains(.file($0.id)) }
@@ -659,7 +676,7 @@ final class SessionFileTabsState {
     var isPrivateWorkbenchEmpty: Bool {
         openFileTabs.allSatisfy { directoryTabs[$0.id]?.hostTab != nil }
             && openBrowserTabs.isEmpty
-            && !isGitSelected
+            && !isGitOpen
             && !rightSide.contains { payload in
                 switch payload {
                 case .window: return false

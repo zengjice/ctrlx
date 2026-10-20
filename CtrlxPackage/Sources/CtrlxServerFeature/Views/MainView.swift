@@ -1770,6 +1770,9 @@ public struct MainView: View {
                             fileBrowserActiveWindowIds.remove(windowID)
                             tabs?.selectLeftGit()
                         },
+                        onCloseGitBrowser: {
+                            closeGitTab(sessionName: session.sessionName)
+                        },
                         onSelectFileTab: { tabId in
                             selectFileTab(tabId, sessionName: session.sessionName, windowId: windowID)
                         },
@@ -1856,10 +1859,9 @@ public struct MainView: View {
                 }
             }
             .id(session.sessionName)
-            .task(id: coordinator.workspaceRecoveryReady ? directoryPath : nil) {
-                // Eagerly load the displayed session's git status so the Git tab
-                // badge (issue #573) shows on session load, before the Git tab is
-                // ever opened.
+            .task(id: coordinator.workspaceRecoveryReady && sessionTabs?.isGitOpen == true ? directoryPath : nil) {
+                guard sessionTabs?.isGitOpen == true else { return }
+                // Keep an open Git tab's badge current even when another tab is selected.
                 await eagerlyLoadGitStatus(
                     sessionName: session.sessionName,
                     directoryPath: directoryPath
@@ -2371,11 +2373,8 @@ public struct MainView: View {
         return entry.store.summary?.changedFileCount ?? 0
     }
 
-    /// Eagerly builds and loads the displayed session's GitWorkbench store so the
-    /// Git tab badge (issue #573) reflects the repository's changes as soon as the
-    /// session is shown — without the user first opening the Git tab. The store is
-    /// retained per session, so this is a no-op refresh once loaded, and its own
-    /// repository watcher keeps the badge live afterwards.
+    /// Loads an open Git tab's status while another tab is selected.
+    /// The per-session store and its repository watcher keep the badge current.
     @MainActor
     private func eagerlyLoadGitStatus(sessionName: String, directoryPath: String) async {
         guard coordinator.workspaceRecoveryReady else { return }
@@ -3535,8 +3534,8 @@ public struct MainView: View {
                 }
             case let .file(id): closeOpenFileTab(id, sessionName: session.sessionName)
             case let .browser(id): closeBrowserTab(id, sessionName: session.sessionName)
-            case .fileExplorer,
-                 .git: break
+            case .git: closeGitTab(sessionName: session.sessionName)
+            case .fileExplorer: break
             }
         }
     }
@@ -3965,11 +3964,24 @@ public struct MainView: View {
             closeOpenFileTab(selectedTabId, sessionName: sessionName)
             return
         }
-        // The file browser and Git tabs have no close action — do nothing.
+        if let sessionName, sessionFileTabsStates[sessionName]?.isGitSelected == true {
+            closeGitTab(sessionName: sessionName)
+            return
+        }
+        // The legacy file explorer has no close action.
         guard let window = selectedWindow else { return }
         guard !fileBrowserActiveWindowIds.contains(window.id) else { return }
-        guard sessionFileTabsStates[window.sessionName]?.isGitSelected != true else { return }
         requestCloseWindow(window)
+    }
+
+    private func closeGitTab(sessionName: String) {
+        guard let tabs = sessionFileTabsStates[sessionName] else { return }
+        tabStore.userDidSelectTab(hostID: nil, session: sessionName)
+        tabs.closeGit()
+        reconcileRightPaneSelection(sessionName: sessionName)
+        if currentLocalSession()?.sessionName == sessionName {
+            requestAutomaticTabFit()
+        }
     }
 
     private func selectSwipedTab(direction: Int, onRight: Bool) {
@@ -4044,8 +4056,7 @@ public struct MainView: View {
         // Walk the same reconciled, drag-reordered order the visible
         // `WindowTabBar` renders — sharing `reconciledOrder` keeps keyboard
         // cycling and the on-screen strip from drifting apart (issue #566).
-        // Local sessions include the Git tab (issue #258), so `reconciledOrder`
-        // emits `.git` and the switch below maps it to `.gitBrowser`.
+        // An explicitly opened Git tab participates in the same order.
         let order = TabDragPayload.reconciledOrder(
             windowIds: session.windows.filter { ownsTerminal(hostID: nil, windowID: $0.stableId) }.map(\.stableId),
             fileTabIds: sessionTabs?.openFileTabs.map(\.id) ?? [],
@@ -6105,7 +6116,7 @@ public struct MainView: View {
         }
         // Only restore the Git tab for a live window; a gone window falls back
         // to the terminal/default like the terminal-origin case.
-        if showGit {
+        if showGit, sessionFileTabsStates[originWindow.sessionName]?.isGitOpen == true {
             sessionFileTabsStates[originWindow.sessionName]?.selectLeftGit()
         }
         if selectedWindow?.id != originWindow.id {
@@ -7207,6 +7218,7 @@ private extension MainView {
                 chosen,
                 to: tabs,
                 fileBrowser: fileBrowserStates[sessionName],
+                includeGit: false,
                 windowIdForIndex: { index in sessionWindows.first { $0.windowIndex == index }?.stableId },
                 makeBrowserState: { BrowserTabState(initialURL: $0.url) }
             )

@@ -14,6 +14,10 @@ struct DetachedTerminalWindowsTests {
         let file = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host")
         manager.syncFileTabs(hostID: nil, descriptors: [file], sessionWindows: ["work": ["@1"]])
         let tabs = manager.mainTabs.tabs(hostID: nil, session: "work")
+        if fallback == .git {
+            tabs.selectLeftGit()
+            _ = tabs.selectLeftTerminalWindow("@1")
+        }
         tabs.rightSide = [.file(file.id), fallback]
         tabs.selectedRight = .file(file.id)
 

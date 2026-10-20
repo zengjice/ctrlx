@@ -29,7 +29,7 @@ struct TabStripOrderTests {
         ])
     }
 
-    @Test("Empty stored order falls back to windows, file explorer, git, files, browsers")
+    @Test("New sessions omit Git until explicitly opened")
     func defaultOrder() {
         let w1 = "win-1"
         let w2 = "win-2"
@@ -43,13 +43,10 @@ struct TabStripOrderTests {
             storedOrder: []
         )
 
-        // The Git tab (issue #258) is a local-only singleton that slots in
-        // immediately to the right of the file explorer.
         #expect(order == [
             .window(w1),
             .window(w2),
             .fileExplorer,
-            .git,
             .file(file),
             .browser(browser),
         ])
@@ -77,9 +74,7 @@ struct TabStripOrderTests {
             storedOrder: reordered
         )
 
-        // The interleaved browser keeps its dragged spot; the Git tab the
-        // stored order didn't yet know about slots in after the file explorer.
-        #expect(order == reordered + [.git])
+        #expect(order == reordered)
     }
 
     @Test("New windows slot in just before the file explorer")
@@ -108,7 +103,6 @@ struct TabStripOrderTests {
             .browser(browser),
             .window(t2),
             .fileExplorer,
-            .git,
         ])
     }
 
@@ -132,7 +126,7 @@ struct TabStripOrderTests {
             storedOrder: stored
         )
 
-        #expect(order == [.window(t1), .fileExplorer, .git])
+        #expect(order == [.window(t1), .fileExplorer])
     }
 
     @Test("Reconciliation is idempotent")
@@ -184,7 +178,7 @@ struct TabStripOrderTests {
             storedOrder: stored
         )
 
-        #expect(order == [.window(t1), .fileExplorer, .git, .browser(browser)])
+        #expect(order == [.window(t1), .fileExplorer, .browser(browser)])
     }
 
     @Test("New windows append before an absent file explorer falls back to the end")
@@ -203,7 +197,7 @@ struct TabStripOrderTests {
             storedOrder: stored
         )
 
-        #expect(order == [.window(t1), .window(t2), .fileExplorer, .git])
+        #expect(order == [.window(t1), .window(t2), .fileExplorer])
     }
 
     @Test("Remote sessions omit the file explorer and git tab entirely")
@@ -273,13 +267,10 @@ struct TabStripOrderTests {
         #expect(order == reordered)
     }
 
-    @Test("A new git entry slots in just after the file explorer")
-    func newGitSlotsInAfterFileExplorer() {
+    @Test("Reconciliation does not recreate a closed Git tab")
+    func closedGitStaysClosed() {
         let t1 = "win-1"
 
-        // Stored order predates the Git tab (issue #258) — only the window and
-        // explorer are known; the synthetic git entry must land right after the
-        // explorer rather than at the end.
         let stored: [TabDragPayload] = [
             .window(t1),
             .fileExplorer,
@@ -292,6 +283,79 @@ struct TabStripOrderTests {
             storedOrder: stored
         )
 
-        #expect(order == [.window(t1), .fileExplorer, .git])
+        #expect(order == [.window(t1), .fileExplorer])
+    }
+
+    @Test("Opening Git is explicit and idempotent; closing keeps other tabs")
+    @MainActor
+    func gitLifecycle() {
+        let tabs = SessionFileTabsState()
+        tabs.tabOrder = [.window("@1")]
+        #expect(!tabs.isGitOpen)
+        tabs.selectLeftGit()
+        tabs.selectLeftGit()
+        #expect(tabs.tabOrder == [.window("@1"), .git])
+        #expect(tabs.isGitSelected)
+        #expect(!tabs.isPrivateWorkbenchEmpty)
+        _ = tabs.selectLeftTerminalWindow("@1")
+        #expect(!tabs.isGitSelected && tabs.isGitOpen)
+        #expect(!tabs.isPrivateWorkbenchEmpty)
+        tabs.closeGit()
+        #expect(!tabs.isGitOpen && !tabs.isGitSelected)
+        #expect(TabDragPayload.reconciledOrder(
+            windowIds: ["@1"], fileTabIds: [], browserTabIds: [],
+            storedOrder: tabs.tabOrder, includeFileExplorer: false
+        ) == [.window("@1")])
+        tabs.selectLeftGit()
+        #expect(tabs.isGitOpen && tabs.isGitSelected)
+    }
+
+    @Test("Closing right Git chooses the remaining terminal or collapses the split")
+    @MainActor
+    func closeRightGit() {
+        let tabs = SessionFileTabsState()
+        tabs.tabOrder = [.window("@1"), .git, .window("@2")]
+        tabs.rightSide = [.git, .window("@2")]
+        tabs.selectedRight = .git
+        tabs.closeGit()
+        tabs.reconcileRightPaneSelection(sessionWindowIDs: ["@1", "@2"], includeLocalTabs: true)
+        #expect(tabs.selectedRight == .window("@2"))
+        #expect(tabs.rightSide == [.window("@2")])
+
+        tabs.tabOrder.append(.git)
+        tabs.rightSide = [.git]
+        tabs.selectedRight = .git
+        tabs.closeGit()
+        tabs.reconcileRightPaneSelection(sessionWindowIDs: ["@1", "@2"], includeLocalTabs: true)
+        #expect(!tabs.isSplit && tabs.selectedRight == nil)
+    }
+
+    @Test("Closing background Git leaves the selected file untouched")
+    @MainActor
+    func closeBackgroundGit() {
+        let tabs = SessionFileTabsState()
+        let file = OpenFileTab(path: "/tmp/note.md", directoryPath: "/tmp")
+        tabs.openFileTabs = [file]
+        tabs.selectLeftGit()
+        tabs.selectedFileTabId = file.id
+        tabs.closeGit()
+        #expect(tabs.selectedFileTabId == file.id)
+        #expect(tabs.openFileTabs == [file])
+    }
+
+    @Test("Git alone can occupy the left split until closed")
+    @MainActor
+    func gitKeepsLeftSplitAlive() {
+        let tabs = SessionFileTabsState()
+        tabs.selectLeftGit()
+        _ = tabs.selectLeftTerminalWindow("@1")
+        tabs.rightSide = [.window("@1")]
+        tabs.selectedRight = .window("@1")
+        #expect(!tabs.reconcileRightPaneSelection(sessionWindowIDs: ["@1"], includeLocalTabs: true))
+        tabs.repairLeftContent(hasTerminal: false)
+        #expect(tabs.isSplit && tabs.isGitSelected)
+        tabs.closeGit()
+        #expect(tabs.reconcileRightPaneSelection(sessionWindowIDs: ["@1"], includeLocalTabs: true))
+        #expect(!tabs.isSplit)
     }
 }

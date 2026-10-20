@@ -75,6 +75,29 @@
 
         // MARK: - Restore
 
+        @Test("Folder seeding omits Git while workspace recovery preserves it", arguments: [false, true])
+        func gitRestorePolicy(includeGit: Bool) {
+            let layout = SavedFolderLayout(
+                tabOrder: [.window(index: 0), .git],
+                rightSide: [.git],
+                selectedRight: .git
+            )
+            let tabs = SessionFileTabsState()
+            LayoutSnapshotMapper.apply(
+                layout, to: tabs, fileBrowser: nil, includeGit: includeGit,
+                windowIdForIndex: { _ in "@1" },
+                makeBrowserState: { BrowserTabState(initialURL: $0.url) }
+            )
+            #expect(tabs.isGitOpen == includeGit)
+            #expect(tabs.rightSide.contains(.git) == includeGit)
+            #expect(tabs.selectedRight == (includeGit ? .git : nil))
+            tabs.closeGit()
+            let saved = LayoutSnapshotMapper.snapshot(from: tabs, fileBrowser: nil, windowIndexForId: { _ in 0 })
+            #expect(!saved.tabOrder.contains(.git))
+            #expect(!saved.rightSide.contains(.git))
+            #expect(saved.selectedRight == nil)
+        }
+
         @Test("Transient Chromium tabs never replace or restore as existing WebKit tabs")
         func chromiumTabsAreNotRestoredAsWebKit() throws {
             let webKit = try BrowserTab(url: #require(URL(string: "https://example.com")))
