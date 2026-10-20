@@ -7,6 +7,37 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.84 — Pane-linked tabs and Viewer clipboard
+
+- Group file, browser and simulator tabs by their source terminal pane on Mac
+  and iOS. Keep navigation within the group, return to the source terminal at
+  either boundary and preserve mixed tab order across reconnects.
+- Align Mac tab swipes with visual tab positions and improve selected-tab
+  contrast in light themes. Make Mac Git tabs explicitly opened and closable.
+- Add Files, Browser, iOS Simulator and Fork shortcuts to iOS terminal rows.
+  Allow a Viewer to open the source pane's simulator on the Host, reusing its
+  existing device and rejecting stale file-link responses.
+- Support explicit text and image copy/paste in Host file, browser and
+  simulator tabs from Mac and iOS Viewers. Preserve original JPEG data, bound
+  the encoded payload and verify simulator clipboard revisions and completed
+  writes before forwarding paste.
+- Restore clipboard forwarding after tmux pipe disconnections without adding
+  another terminal byte stream.
+- Hide accounts that do not support quota queries, including API accounts,
+  from the Mac titlebar and its overflow count; retain them in Dashboard.
+- Release validation: the bounded serial Swift regression passed with 3,637
+  tests reported across 515 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, the website
+  build and 89 publisher/COS/distributed-installer tests passed.
+- Fresh native titlebar, tab-drop and simulator-clipboard fixtures passed.
+  Earlier native browser and simulator acceptance evidence was retained after
+  verifying the relevant source hashes; paired Mac/iPhone UI acceptance was
+  not rerun. SwiftFormat still reports 2,265 findings in 24 already-committed
+  files touched since the previous release; packaging does not reformat them.
+- The signed iOS device-SDK Release build passed. Mac distribution uses build
+  17 through COS, with signature, source metadata and complete public-download
+  integrity checks before installer promotion.
+
 ## 3.0.83 — Quota shortcuts and reliable terminal navigation
 
 - Show compact account quota rings in Mac local, remote and detached workbench
