@@ -112,6 +112,7 @@ public struct RemoteBrowserView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(WorkspaceClipboardFeedback(message: session.clipboardMessage))
             }
             if let error = session.error ?? session.frameError {
                 HStack {
@@ -119,9 +120,6 @@ public struct RemoteBrowserView: View {
                     Spacer()
                     Button { session.dismissError() } label: { Label("Dismiss", symbol: .xmark) }.labelStyle(.iconOnly)
                 }.padding(8)
-            }
-            if let message = session.clipboardMessage {
-                Text(message).font(.caption).padding(6)
             }
             BrowserExternalApplicationBanner(notice: session.tab.externalApplicationNotice)
         }

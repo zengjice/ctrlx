@@ -70,9 +70,6 @@ public struct RemoteSimulatorView: View {
             if let error = client.isHostConnected ? (session.error ?? decodingError) : "Host disconnected" {
                 Text(error).font(.caption).foregroundStyle(.secondary).padding(6)
             }
-            if let message = session.clipboardMessage {
-                Text(message).font(.caption).foregroundStyle(.secondary)
-            }
             BrowserAnnotationSurface(
                 preferredTarget: annotation?.target,
                 requiresRecipientSelection: annotation?.target == nil,
@@ -121,6 +118,7 @@ public struct RemoteSimulatorView: View {
                         updateDimension(geometry.size)
                     }
                 }
+                .modifier(WorkspaceClipboardFeedback(message: session.clipboardMessage))
             }
         }
         .task(id: scenePhase == .active && client.isHostConnected && annotation == nil) {

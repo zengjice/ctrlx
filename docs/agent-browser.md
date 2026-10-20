@@ -5,6 +5,8 @@
 Host 的 `supportsWorkspaceClipboard` 能力开启配对 Mac / iOS Viewer 的 Copy / Paste。
 复制当前网页选中文字，或最后点击的图片，到 Viewer 本地剪贴板；粘贴发送本地文本或图片。
 Mac 内容区支持 ⌘C / ⌘V，iOS 保留工具栏按钮及外接键盘快捷键。
+复制、粘贴成功提示叠加在画面底部，不占用布局高度，也不拦截点击或触控；
+连续操作不会因提示出现或清空而改变 Viewer 画布尺寸和页面显示比例。
 操作使用现有页面控制 lease、surface ID、页面 generation 和加密 Relay；离开、接管变化或
 注释模式会丢弃尚未完成的复制结果。不会轮询或同步 Host 全局剪贴板。
 
