@@ -505,6 +505,7 @@ var targets: [Target] = [
         dependencies: [
             "CtrlxNetworking",
             .ctrlxEncryption,
+            .crypto,
         ]
     ),
     .testTarget(
@@ -557,6 +558,7 @@ var targets: [Target] = [
         name: "CtrlxCommonTests",
         dependencies: [
             "CtrlxCommon",
+            .ctrlxEncryption,
             .dependenciesTestSupport,
             .clocks,
             .concurrencyExtras,
@@ -609,7 +611,7 @@ var targets: [Target] = [
     products.append(.executable(name: "CtrlxSimulatorHost", targets: ["CtrlxSimulatorHost"]))
     targets.append(.target(name: "CtrlxBrowserBridge"))
     targets.append(.target(name: "CtrlxSimulatorProtocol"))
-    targets.append(.target(name: "CtrlxSimulatorBridge", exclude: ["ThirdParty"], linkerSettings: [.linkedFramework("Foundation"), .linkedFramework("IOSurface"), .linkedFramework("Metal"), .linkedFramework("CoreGraphics"), .linkedFramework("Accelerate"), .linkedFramework("ImageIO")]))
+    targets.append(.target(name: "CtrlxSimulatorBridge", exclude: ["ThirdParty"], linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("Foundation"), .linkedFramework("IOSurface"), .linkedFramework("Metal"), .linkedFramework("CoreGraphics"), .linkedFramework("Accelerate"), .linkedFramework("ImageIO")]))
     targets.append(.executableTarget(name: "CtrlxSimulatorHost", dependencies: ["CtrlxSimulatorBridge"]))
     targets.append(.testTarget(name: "CtrlxSimulatorTests", dependencies: ["CtrlxSimulatorProtocol"]))
     targets.append(.testTarget(name: "CtrlxCLITests", dependencies: ["CtrlxCLI", .dependenciesTestSupport]))

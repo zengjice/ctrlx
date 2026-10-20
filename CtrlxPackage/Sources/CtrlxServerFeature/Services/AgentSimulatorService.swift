@@ -55,6 +55,7 @@
 
         private func expireInactiveDevices() {
             for state in Array(tabs.values) {
+                if let lease = state.remoteControl, lease.expires <= .now { releaseSimulatorControl(state) }
                 let ownerEnded = state.owner.map { (try? system.inspect($0.pid).owner) != $0 } ?? false
                 let idle = !state.visible && !state.writing && state.lastActivity.duration(to: .now) > .seconds(600)
                 if ownerEnded || idle {
@@ -317,7 +318,7 @@
             return response.frame.jpeg
         }
 
-        func handleSimulator(_ request: BrowseSimulator) async throws -> RemoteSimulatorResponse {
+        func handleSimulator(_ request: BrowseSimulator, viewerID: String? = nil) async throws -> RemoteSimulatorResponse {
             guard
                 supportsSimulatorViewing, let state = tabs[request.tabID], !state.isClosed,
                 state.sourcePane.sessionName == request.sessionName else {
@@ -354,7 +355,12 @@
                         let width = result["width"]?.intValue, let height = result["height"]?.intValue else {
                         throw SimulatorFailure("Invalid simulator preview response")
                     }
-                    let value = RemoteSimulatorFrame(jpeg: jpeg, width: width, height: height)
+                    let geometry = result["geometry"]?.objectValue
+                    let inputGeometry = geometry.flatMap { values -> RemoteSimulatorInputGeometry? in
+                        guard let epoch = values["epoch"]?.stringValue, let version = values["geometryVersion"]?.intValue, version > 0 else { return nil }
+                        return RemoteSimulatorInputGeometry(epoch: epoch, geometryVersion: UInt64(version))
+                    }
+                    let value = RemoteSimulatorFrame(jpeg: jpeg, width: width, height: height, inputGeometry: inputGeometry)
                     guard value.isValid else { throw SimulatorFailure("Invalid or oversized simulator preview") }
                     return value
                 }
@@ -367,7 +373,163 @@
                 throw SimulatorFailure("Simulator changed session or closed during preview")
             }
             state.markActivity()
-            return RemoteSimulatorResponse(tab: remoteDescriptor(state), frame: frame)
+            var controlID: UUID?
+            if
+                var lease = state.remoteControl, lease.id == request.controlID,
+                lease.viewerID == viewerID, lease.surfaceID == request.surfaceID, lease.expires > .now {
+                lease.expires = .now.advanced(by: .seconds(20))
+                state.remoteControl = lease
+                controlID = lease.id
+            }
+            return RemoteSimulatorResponse(tab: remoteDescriptor(state), frame: frame, controlID: controlID, generation: state.generation)
+        }
+
+        func disconnectSimulatorViewer(_ viewerID: String) {
+            for state in tabs.values where state.remoteControl?.viewerID == viewerID {
+                releaseSimulatorControl(state)
+            }
+        }
+
+        private func releaseSimulatorControl(_ state: SimulatorTabState) {
+            guard state.remoteControl != nil else { return }
+            state.remoteControl = nil
+            state.generation += 1
+            let previous = state.manualInput
+            state.manualInput = Task { [weak state] in
+                await previous?.value
+                guard let state, !state.isClosed else { return }
+                do { _ = try await state.handle.worker.request(["command": .string("cancel")]) }
+                catch { state.error = error.localizedDescription }
+            }
+        }
+
+        func controlSimulator(_ request: ControlSimulator, viewerID: String) async throws -> RemoteSimulatorControlResponse {
+            guard
+                let state = tabs[request.tabID], !state.isClosed, !closing,
+                state.sourcePane.sessionName == request.sessionName, let coordinator else {
+                throw SimulatorFailure("This Host simulator is no longer available")
+            }
+            try validate(state.owner)
+            if let lease = state.remoteControl, lease.expires <= .now {
+                releaseSimulatorControl(state)
+            }
+            if request.operation == .releaseControl {
+                if
+                    let lease = state.remoteControl, lease.id == request.controlID,
+                    lease.viewerID == viewerID, lease.surfaceID == request.surfaceID {
+                    releaseSimulatorControl(state)
+                }
+                return RemoteSimulatorControlResponse(controlID: nil, generation: state.generation)
+            }
+            guard !state.writing else { throw SimulatorFailure("A simulator operation is still in progress") }
+            state.writing = true
+            defer { state.writing = false }
+            if request.operation == .takeControl {
+                guard state.remoteControl == nil else { throw SimulatorFailure("Another Viewer controls this simulator") }
+                let generation = state.generation
+                let revision = state.manualInputRevision
+                await state.manualInput?.value
+                try Task.checkCancellation()
+                guard !state.isClosed, state.generation == generation, state.manualInputRevision == revision else { throw SimulatorFailure("Simulator changed during takeover") }
+                state.writer = nil
+                state.generation += 1
+                let lease = BrowserControlLease(id: UUID(), viewerID: viewerID, surfaceID: request.surfaceID, expires: .now.advanced(by: .seconds(20)))
+                state.remoteControl = lease
+                do {
+                    _ = try await state.handle.worker.request(["command": .string("cancel")])
+                    try Task.checkCancellation()
+                    guard state.remoteControl?.id == lease.id, !state.isClosed else { throw SimulatorFailure("Simulator control was released") }
+                } catch {
+                    if state.remoteControl?.id == lease.id {
+                        releaseSimulatorControl(state)
+                    }
+                    throw error
+                }
+                state.markActivity()
+                return RemoteSimulatorControlResponse(controlID: lease.id, generation: state.generation)
+            }
+            func checkControl() throws {
+                try Task.checkCancellation()
+                try validate(state.owner)
+                guard
+                    !closing, !state.isClosed, state.sourcePane.sessionName == request.sessionName,
+                    let lease = state.remoteControl, lease.viewerID == viewerID, lease.surfaceID == request.surfaceID,
+                    lease.id == request.controlID, lease.expires > .now, request.generation == state.generation else {
+                    throw SimulatorFailure("Simulator control changed. Take Control again")
+                }
+            }
+            try checkControl()
+            state.markActivity()
+            state.remoteControl?.expires = .now.advanced(by: .seconds(20))
+            var clipboard: WorkspaceClipboardContent?
+            func press(_ usage: Int) async throws {
+                for event in try SimulatorKeyPress(usage: usage, modifiers: ["command"]).events {
+                    try checkControl()
+                    _ = try await state.handle.worker.request(["command": .string("key"), "usage": .int(event.usage), "down": .bool(event.down)])
+                }
+            }
+            do {
+                switch request.operation {
+                case let .touch(phase, x, y, expected):
+                    guard (0...2).contains(phase), x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else { throw SimulatorFailure("Invalid simulator touch") }
+                    let geometry = try await coordinator.geometry(state.handle)
+                    try checkControl()
+                    guard geometry.epoch == expected.epoch, geometry.geometryVersion == expected.geometryVersion else { throw SimulatorFailure("Simulator geometry changed. Wait for a new frame") }
+                    let point = try geometry.normalizedDevicePoint(SimulatorPoint(x: x * geometry.displayWidth, y: y * geometry.displayHeight))
+                    try await touch(state, point: point, phase: phase, geometry: geometry)
+                case let .paste(content):
+                    guard content.isValid else { throw SimulatorFailure("Invalid clipboard content") }
+                    _ = try await state.handle.worker.request(["command": .string("clipboard-write"), "content": .object([
+                        "kind": .string(content.kind.rawValue), "data": .string(content.data.base64EncodedString()),
+                    ])])
+                    try checkControl()
+                    try await press(25)
+                case .copy,
+                     .readClipboard:
+                    let before = try await state.handle.worker.request([
+                        "command": .string("clipboard-read"),
+                        "revisionOnly": .bool(request.operation == .copy),
+                    ])
+                    try checkControl()
+                    var copied = request.operation == .readClipboard ? before : nil
+                    if request.operation == .copy {
+                        guard let revision = before["revision"]?.stringValue, !revision.isEmpty else {
+                            throw SimulatorFailure("Simulator clipboard revision is unavailable")
+                        }
+                        try await press(6)
+                        for _ in 0..<10 {
+                            try await Task.sleep(for: .milliseconds(100))
+                            try checkControl()
+                            let result = try await state.handle.worker.request([
+                                "command": .string("clipboard-read"),
+                                "afterRevision": .string(revision),
+                            ])
+                            try checkControl()
+                            if result["revision"]?.stringValue != revision {
+                                copied = result
+                                break
+                            }
+                        }
+                    }
+                    guard
+                        let content = copied?["content"]?.objectValue,
+                        let rawKind = content["kind"]?.stringValue, let kind = WorkspaceClipboardContent.Kind(rawValue: rawKind),
+                        let encoded = content["data"]?.stringValue, let data = Data(base64Encoded: encoded) else {
+                        throw SimulatorFailure("Nothing was copied. Select content first, or use Get Simulator Clipboard after copying inside the simulator")
+                    }
+                    let value = WorkspaceClipboardContent(kind: kind, data: data)
+                    clipboard = try WorkspaceClipboard.prepare(value)
+                case .takeControl,
+                     .releaseControl: break
+                }
+                try checkControl()
+                return RemoteSimulatorControlResponse(controlID: request.controlID, generation: state.generation, clipboard: clipboard)
+            } catch {
+                if state.remoteControl?.id == request.controlID {
+                    releaseSimulatorControl(state)
+                }
+                throw error
+            }
         }
 
         private func resolvePane(for owner: SimulatorOwner) async throws -> PaneInfo {
@@ -1470,6 +1632,7 @@
         }
 
         func manualTouch(_ state: SimulatorTabState, point: SimulatorPoint, phase: Int, receivedAt: Double) {
+            if phase == 0 { releaseSimulatorControl(state) }
             state.markActivity()
             state.manualInputRevision += 1
             let takeover = phase == 0 && state.writer != nil
@@ -1541,6 +1704,7 @@
         }
 
         func manualKey(_ state: SimulatorTabState, usage: Int, down: Bool) {
+            releaseSimulatorControl(state)
             state.markActivity()
             state.manualInputRevision += 1
             state.pendingMove = nil
@@ -1559,7 +1723,7 @@
         }
 
         func claimWriter(_ state: SimulatorTabState, cancelInput: @MainActor () async throws -> Void) async throws {
-            guard !state.writing else { throw SimulatorFailure("A simulator operation is still in progress") }
+            guard !state.writing, state.remoteControl == nil else { throw SimulatorFailure("The simulator is busy or controlled by a Viewer") }
             state.writing = true
             defer { state.writing = false }
             let generation = state.generation
@@ -1582,6 +1746,7 @@
         }
 
         func manualHome(_ state: SimulatorTabState) {
+            releaseSimulatorControl(state)
             state.markActivity()
             state.manualInputRevision += 1
             state.pendingMove = nil
@@ -1689,6 +1854,7 @@
         var error: String?
         var hasPresentedFrame = false
         var isClosed = false
+        @ObservationIgnored var remoteControl: BrowserControlLease?
         @ObservationIgnored var generation = 0
         // Keyboard activity must revoke pending claims without discarding queued touch events.
         @ObservationIgnored var manualInputRevision = 0

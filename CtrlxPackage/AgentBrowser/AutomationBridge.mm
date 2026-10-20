@@ -26,6 +26,7 @@
 #include "include/cef_parser.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_helpers.h"
+#include "BrowserClipboard.h"
 
 namespace {
 using Clock = std::chrono::steady_clock;

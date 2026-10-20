@@ -1,6 +1,26 @@
 # Agent iOS 设计（当前支持 iOS Simulator）
 
-当前源码的对外入口为 `ctrlx ios`，配套技能为 `ctrlx:agent-ios`（`plugin/ctrlx/skills/agent-ios/`）。运行与控制仍由 Host Mac 上的 iOS Simulator 提供；配对 Mac / iOS Viewer 已加入只读画面查看的源码实现，真机及 Android 支持留待后续。内部 `Simulator*` 类型、`simulator.action` 协议和设备存储目录继续沿用。旧 CLI 名称不保留别名，调用脚本与 Skill 应随新版本一同更新；下文历史证据中的 `ctrlx simulator` / `agent-simulator` 保留当时名称，不代表本次改名已经过同样的设备验收。
+当前源码的对外入口为 `ctrlx ios`，配套技能为 `ctrlx:agent-ios`（`plugin/ctrlx/skills/agent-ios/`）。运行与控制仍由 Host Mac 上的 iOS Simulator 提供；配对 Mac / iOS Viewer 支持画面查看，以及显式接管后的触摸和剪贴板操作，真机及 Android 支持留待后续。内部 `Simulator*` 类型、`simulator.action` 协议和设备存储目录继续沿用。旧 CLI 名称不保留别名，调用脚本与 Skill 应随新版本一同更新；下文历史证据中的 `ctrlx simulator` / `agent-simulator` 保留当时名称，不代表本次改名已经过同样的设备验收。
+
+## Viewer 剪贴板与接管
+
+更新后的 Host 用 `supportsWorkspaceClipboard` 为配对 Mac / iOS Viewer 开启 Take Control、
+Copy、Paste；旧 Host 保持只读。触摸基于实际显示帧的设备 epoch / geometryVersion，
+坐标映射到指定设备。Mac 支持拖动选区和 ⌘C / ⌘V；iOS 支持点击、长按、拖动和工具栏按钮。
+控制权绑定 Viewer、标签和 surface ID，20 秒失效，前台预览续期；Host 人工输入、
+Viewer 断开或离开标签会释放控制。Agent 在 Viewer 控制期间不能重新 claim。
+
+复制先仅读取设备剪贴板 revision，再发 Cmd+C；轮询在同一次快照中确认 revision 改变后，
+才提取并检查新内容的 384 KiB 限制，避免旧的大剪贴板阻断复制或被误当成选中内容返回。
+若在模拟器内使用了原生 Copy 菜单（如 Safari 图片），使用复制按钮菜单中的
+Get Simulator Clipboard 显式取回设备剪贴板；长按复制按钮可打开此菜单。
+粘贴将不超过 384 KiB 的文本 / PNG / JPEG 写入指定设备，在统一的 5 秒时限内确认目标内容
+可见后，再在身份仍有效时发 Cmd+V。旧快照只触发重新读取，不重复写入；超时或断连明确失败。
+复制和粘贴同时限制剪贴板 JSON 为 576 KiB（包括 Base64 与斜杠转义），为原生请求及加密
+Relay 消息预留空间。图片超过编码预算时由发送端重新编码或缩小，原始字节满足限制并不代表可直接传输。
+通过 CoreSimulator 的 SimPasteboardInterface 与临时命名 pasteboard 做一次传输，不启用
+自动同步，不使用 Host 全局 pasteboard。系统粘贴许可和目标 App 的图片支持仍由 iOS 决定；
+不支持此接口的 Xcode 明确报错，不退回覆盖 Host 剪贴板的路径。
 
 ## Agent 工具选择入口
 
@@ -58,7 +78,7 @@ Codex 的专用启动方式，不引导 Claude 启动嵌套 Codex。
 | 触摸 | `tap`、`swipe`、`long-press`、`drag`、`pinch` | 单触点点击、滑动、长按、拖动及显式起始边缘手势；`pinch` 同时发送两个触点，按中心和比例缩放。使用模拟器逻辑点，旋转后重新观察 |
 | 键盘与文本 | `key`、`button`、`paste` | HID 按键及修饰键组合，Home / 锁屏 / 音量键，Unicode 剪贴板粘贴和指定目标的 iOS 菜单粘贴；人工输入采用 iOS 硬件键盘输入源 |
 | 原生显示 | `show`、`show --split`、`rotate`、`display-mode` | 内嵌 Metal 画面、左右分栏、方向切换、默认同步 / 可选低延迟显示。低延迟模式可能撕裂；选择标签不保证 Mac App 自动取得前台 |
-| Viewer 查看 | Mac / iOS Viewer 的 Host 模拟器标签 | 共享 Host 设备的只读画面；选择独立，隐藏 / 后台 / 断线停止取帧，无远程输入和设备关闭操作 |
+| Viewer 查看与接管 | Mac / iOS Viewer 的 Host 模拟器标签 | 共享 Host 画面，支持显式接管后的触摸及文本 / 图片剪贴板；选择独立，隐藏 / 后台 / 断线停止取帧并释放控制，无设备关闭操作 |
 | 截图标注 | Mac Host / Mac Viewer / iOS Viewer 标签内的 Annotate Screenshot | 原地冻结截图，框选 / 箭头 / 画笔后添加至同会话 Agent 输入；不发送回车、不抢模拟器控制权 |
 | 环境 | `location`、`appearance`、`privacy`、`push` | 固定定位及清除定位模拟、深浅色、列举权限的 grant / revoke / reset、向指定 App 注入模拟推送；关闭时不自动恢复这些配置 |
 | 资源与服务配置 | `config`、`resources`、`metrics`，`open --profile` / `--requires` | 默认双开，数量可配置为 1...32；检查内存压力和内存 / 磁盘保留量。报告进程 footprint / CPU，支持 standard / balanced 和功能依赖保留；配置上限不等于实测容量 |
@@ -175,7 +195,7 @@ Mac Host 只隔离当前视图的鼠标、按键及 Home，
 |---|---|
 | 任意多点手势、双指旋转或平移 | 当前双指接口仅提供基础 `pinch`，不暴露任意触点轨迹 |
 | Mac 输入法 marked-text 组合及候选窗 | 已验证 iOS 硬件键盘输入源中的拼音；显式粘贴可以输入 Unicode，但不验证逐字符输入或组合过程 |
-| 模拟器远程控制及视频流 | 已提供 Viewer 只读 JPEG 预览；未提供远程输入、创建 / 关闭设备、音频或高帧率视频传输 |
+| 模拟器远程设备关闭及视频流 | 已提供 Viewer JPEG 预览、显式触摸接管和剪贴板；未提供远程设备关闭、音频或高帧率视频传输 |
 | 真机控制 | 当前接口面向 iOS Simulator，不控制物理 iPhone |
 | 设备显式克隆 | 已提供复用、擦除和删除，尚未提供复制一台设备作为另一份并行测试环境 |
 | Runtime 下载 / 安装 | `inventory` 只列举已安装资源，Xcode 和 runtime 由外部工作流准备 |

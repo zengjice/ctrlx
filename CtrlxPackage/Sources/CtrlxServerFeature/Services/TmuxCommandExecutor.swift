@@ -121,6 +121,7 @@ public actor TmuxCommandExecutor {
                  .browseFiles,
                  .browseBrowser,
                  .browseSimulator,
+                 .controlSimulator,
                  .openPaneSimulator,
                  .stopTerminalStream,
                  .createTmuxSession,

@@ -12,6 +12,9 @@ final public class RemoteBrowserSession {
     public private(set) var error: String?
     public private(set) var frameError: String?
     public private(set) var isTakingControl = false
+    public var supportsClipboard = true
+    public private(set) var clipboardMessage: String?
+    @ObservationIgnored @Dependency(ClipboardClient.self) private var clipboard
     public let managesExtensions: Bool
     public private(set) var extensionSurface: RemoteBrowserExtensionSurface = .manager
     @ObservationIgnored private let anchorTabID: UUID
@@ -47,6 +50,7 @@ final public class RemoteBrowserSession {
             }
             return response
         }
+        self.supportsClipboard = client.hostSupportsWorkspaceClipboard && !managesExtensions
     }
 
     private func request(_ operation: RemoteBrowserOperation, generation: UInt64? = nil) -> BrowseBrowser {
@@ -235,6 +239,7 @@ final public class RemoteBrowserSession {
     }
 
     private func invalidateInput() {
+        clipboardMessage = nil
         inputEpoch = UUID()
         inputs.removeAll()
         inputTask?.cancel()
@@ -256,6 +261,25 @@ final public class RemoteBrowserSession {
     public func dismissError() {
         error = nil
         frameError = nil
+    }
+
+    public func copy() {
+        guard supportsClipboard else { error = "Update the Host Mac to copy from this page."
+            return
+        }
+        clipboardMessage = nil
+        submit(.copy)
+    }
+
+    public func paste() {
+        clipboardMessage = nil
+        do {
+            if supportsClipboard {
+                try submit(.paste(clipboard.workspaceContent()))
+            } else if let text = clipboard.getString() {
+                submit(.text(text))
+            }
+        } catch { self.error = error.localizedDescription }
     }
 
     public func submit(_ operation: RemoteBrowserOperation) {
@@ -304,7 +328,22 @@ final public class RemoteBrowserSession {
                 self.controlID == controlID, !self.inputs.isEmpty {
                 let (operation, generation) = self.inputs.removeFirst()
                 do {
-                    _ = try await self.send(self.request(operation, generation: generation))
+                    let response = try await self.send(self.request(operation, generation: generation))
+                    guard
+                        !Task.isCancelled, self.epoch == current, self.inputEpoch == inputGeneration,
+                        self.controlID == controlID else { return }
+                    if operation == .copy || operation.isClipboardPaste {
+                        guard response.controlID == controlID else { throw WorkspaceClipboardError.message("Browser control changed before clipboard transfer completed.") }
+                    }
+                    if operation == .copy {
+                        guard let content = response.clipboard else {
+                            throw WorkspaceClipboardError.message("The Host returned no copied content.")
+                        }
+                        try self.clipboard.setWorkspaceContent(content)
+                        self.clipboardMessage = "Copied."
+                    } else if operation.isClipboardPaste {
+                        self.clipboardMessage = "Paste sent."
+                    }
                 } catch {
                     guard
                         !Task.isCancelled, self.epoch == current,

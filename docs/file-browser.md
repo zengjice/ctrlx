@@ -1,5 +1,18 @@
 # Host-backed Files tabs
 
+## Viewer 剪贴板
+
+Mac / iOS Viewer 的 Copy Path、Copy Text、Copy Image 写入当前 Viewer 的系统剪贴板。
+图片预览支持复制；Mac 聚焦图片后可用 ⌘C。Paste Image（Mac 也支持粘贴命令）把
+剪贴板图片上传到点击时捕获的 Host / 目录，使用已有分块上传、校验和及原子发布。
+切换来源或目录会取消未完成上传；不覆盖同名文件。它不解释剪贴板里的路径为本地文件，
+也不提供跨机器文件夹剪切。文本预览仍为只读。
+
+共享图片限制为原始 384 KiB、JSON 编码后 576 KiB（含 Base64 和斜杠转义）；同时满足
+两项限制的 PNG/JPEG 保留原字节和像素尺寸，Mac 在 TIFF 之前读取原始 JPEG。
+超限图片重新编码，必要时等比缩小并保留透明度。
+普通文件导入继续使用原有文件上传能力，不受剪贴板图片限制影响。
+
 Mac Host, Mac Viewer and iOS share `WorkspaceFileBrowserView`.
 Right-click a terminal window tab on Mac Host/Viewer and choose **Open Files**.
 On iOS, tap the window title to open the **Tabs** list. Each terminal row has

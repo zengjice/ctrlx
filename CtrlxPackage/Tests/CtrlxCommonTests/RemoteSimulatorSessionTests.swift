@@ -1,4 +1,5 @@
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Testing
 @testable import CtrlxCommon
@@ -17,6 +18,42 @@ struct RemoteSimulatorSessionTests {
             try await Task.sleep(for: .milliseconds(5))
         }
         throw CancellationError()
+    }
+
+    @Test
+    func lateCopyAfterLeavingDoesNotOverwriteLocalClipboard() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clipboard = ClipboardClient.fileBacked(path: root.appendingPathComponent("clipboard").path)
+        clipboard.setString("keep local")
+        try await withDependencies { $0[ClipboardClient.self] = clipboard } operation: {
+            let tab = tab(), lease = UUID()
+            var copy: CheckedContinuation<RemoteSimulatorControlResponse, any Error>?
+            let session = RemoteSimulatorSession(tab: tab, control: { request in
+                switch request.operation {
+                case .takeControl: return .init(controlID: lease, generation: 1)
+                case .copy: return try await withCheckedThrowingContinuation { copy = $0 }
+                default: return .init(controlID: nil, generation: 2)
+                }
+            }, send: { request in
+                .init(tab: tab, frame: .init(jpeg: Data([1]), width: 320, height: 640), controlID: request.controlID, generation: 1)
+            })
+            let watch = Task { await session.watch() }
+            defer { session.stop()
+                watch.cancel()
+            }
+            try await wait { session.preview != nil }
+            await session.takeControl()
+            #expect(session.controlID == lease)
+            session.copy()
+            try await wait { copy != nil }
+            session.stop()
+            copy?.resume(returning: .init(controlID: lease, generation: 1, clipboard: .init(text: "remote")))
+            await watch.value
+            try await Task.sleep(for: .milliseconds(20))
+            #expect(clipboard.getString() == "keep local")
+        }
     }
 
     @Test

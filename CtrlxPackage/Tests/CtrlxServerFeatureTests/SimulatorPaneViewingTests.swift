@@ -16,6 +16,10 @@
         let commands = Mutex<[String]>([])
         let requests = Mutex<[[String: JSONValue]]>([])
         let hold = Mutex(false)
+        let holdClipboard = Mutex(false)
+        let failCancel = Mutex(false)
+        let readClipboard = Mutex<(@Sendable ([String: JSONValue]) throws -> [String: JSONValue])?>(nil)
+        let clipboardReplies = Mutex<[CXSimulatorDataReply]>([])
         let replies = Mutex<[CXSimulatorDataReply]>([])
         override func invalidate() { }
         override func request(_ data: Data, reply: @escaping CXSimulatorDataReply) {
@@ -25,6 +29,17 @@
             if let request {
                 requests.withLock { $0.append(request) }
             }
+            if command == "cancel", failCancel.withLock({ $0 }) {
+                reply(nil, NSError(domain: "ClipboardTests", code: 1))
+            } else if command == "clipboard-write", holdClipboard.withLock({ $0 }) {
+                clipboardReplies.withLock { $0.append(reply) }
+            } else if command == "clipboard-read", let request, let read = readClipboard.withLock({ $0 }) {
+                do {
+                    try reply(JSONEncoder().encode(read(request)), nil)
+                } catch {
+                    reply(nil, error)
+                }
+            } else
             if command == "preview" {
                 if hold.withLock({ $0 }) {
                     replies.withLock { $0.append(reply) }
@@ -249,6 +264,120 @@
                 return fixture.pane
             }
             return (fixture, identity, OpenPaneSimulator(sessionName: "work", sourcePaneID: "%1"))
+        }
+
+        @Test
+        func failedTakeoverDoesNotKeepViewerLease() async throws {
+            let (fixture, identity, open) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            let state = try #require(fixture.created.first)
+            fixture.connection.failCancel.withLock { $0 = true }
+            await #expect(throws: (any Error).self) {
+                try await fixture.service.controlSimulator(.init(
+                    sessionName: "work", tabID: tab.id, surfaceID: UUID(),
+                    controlID: nil, generation: nil, operation: .takeControl
+                ), viewerID: "viewer")
+            }
+            #expect(state.remoteControl == nil)
+            fixture.connection.failCancel.withLock { $0 = false }
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func clipboardControlIsBoundToViewerAndSurfaceAndHostTakeoverCancelsPaste() async throws {
+            let (fixture, identity, open) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            let state = try #require(fixture.created.first)
+            let surface = UUID()
+            let acquired = try await fixture.service.controlSimulator(.init(
+                sessionName: "work",
+                tabID: tab.id,
+                surfaceID: surface,
+                controlID: nil,
+                generation: nil,
+                operation: .takeControl
+            ), viewerID: "viewer-A")
+            let lease = try #require(acquired.controlID)
+            func paste(surfaceID: UUID = surface) -> ControlSimulator {
+                .init(
+                    sessionName: "work",
+                    tabID: tab.id,
+                    surfaceID: surfaceID,
+                    controlID: lease,
+                    generation: acquired.generation,
+                    operation: .paste(.init(text: "intended paste"))
+                )
+            }
+            await #expect(throws: (any Error).self) { try await fixture.service.controlSimulator(paste(), viewerID: "viewer-B") }
+            await #expect(throws: (any Error).self) { try await fixture.service.controlSimulator(paste(surfaceID: UUID()), viewerID: "viewer-A") }
+            #expect(!fixture.connection.commands.withLock { $0.contains("clipboard-write") })
+            fixture.connection.holdClipboard.withLock { $0 = true }
+            let task = Task { try await fixture.service.controlSimulator(paste(), viewerID: "viewer-A") }
+            try await wait { fixture.connection.clipboardReplies.withLock { !$0.isEmpty } }
+            fixture.service.manualHome(state)
+            #expect(state.remoteControl == nil)
+            for reply in fixture.connection.clipboardReplies.withLock({ $0 }) {
+                reply(Data("{}".utf8), nil)
+            }
+            await #expect(throws: (any Error).self) { try await task.value }
+            #expect(!fixture.connection.requests.withLock { $0.contains { $0["command"]?.stringValue == "key" && $0["usage"]?.intValue == 25 } }, "A stale paste must never inject Cmd+V")
+            await fixture.service.shutdown()
+        }
+
+        @Test(arguments: [false, true])
+        func copyIgnoresLargeOldClipboardButChecksNewContent(oversizedSelection: Bool) async throws {
+            let (fixture, identity, open) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            let state = try #require(fixture.created.first)
+            let surface = UUID()
+            let acquired = try await fixture.service.controlSimulator(.init(
+                sessionName: "work", tabID: tab.id, surfaceID: surface,
+                controlID: nil, generation: nil, operation: .takeControl,
+            ), viewerID: "viewer")
+            let reads = Mutex(0)
+            let selected = oversizedSelection ? Data(repeating: 120, count: 400 * 1_024) : Data("selected 中文".utf8)
+            fixture.connection.readClipboard.withLock {
+                $0 = { request in
+                    let attempt = reads.withLock { $0 += 1
+                        return $0
+                    }
+                    // The first two polls after Cmd+C still see the oversized old snapshot.
+                    let revision = attempt <= 3 ? "old" : "new"
+                    if request["revisionOnly"]?.boolValue == true || request["afterRevision"]?.stringValue == revision {
+                        return ["revision": .string(revision)]
+                    }
+                    let data = revision == "old" ? Data(repeating: 120, count: 400 * 1_024) : selected
+                    guard data.count <= WorkspaceClipboardContent.maximumBytes else {
+                        throw NSError(domain: "ClipboardTests", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: "Simulator clipboard exceeds 384 KiB",
+                        ])
+                    }
+                    return ["revision": .string(revision), "content": .object([
+                        "kind": .string("text"), "data": .string(data.base64EncodedString()),
+                    ])]
+                }
+            }
+            let request = ControlSimulator(
+                sessionName: "work", tabID: tab.id, surfaceID: surface,
+                controlID: acquired.controlID, generation: acquired.generation, operation: .copy,
+            )
+            if oversizedSelection {
+                await #expect(throws: (any Error).self) {
+                    try await fixture.service.controlSimulator(request, viewerID: "viewer")
+                }
+                #expect(state.remoteControl == nil)
+            } else {
+                let response = try await fixture.service.controlSimulator(request, viewerID: "viewer")
+                #expect(response.clipboard?.data == selected && response.clipboard?.kind == .text)
+                #expect(state.remoteControl?.id == acquired.controlID)
+            }
+            let sent = fixture.connection.requests.withLock { $0 }
+            let clipboardReads = sent.filter { $0["command"]?.stringValue == "clipboard-read" }
+            #expect(clipboardReads.count == 4)
+            #expect(clipboardReads.first?["revisionOnly"]?.boolValue == true)
+            #expect(clipboardReads.dropFirst().allSatisfy { $0["afterRevision"]?.stringValue == "old" })
+            #expect(sent.contains { $0["command"]?.stringValue == "key" && $0["usage"]?.intValue == 6 && $0["down"]?.boolValue == true })
+            await fixture.service.shutdown()
         }
 
         @Test

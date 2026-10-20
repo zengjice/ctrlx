@@ -1,10 +1,46 @@
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Testing
 @testable import CtrlxCommon
 
 @Suite("Remote browser surface") @MainActor
 struct RemoteBrowserSessionTests {
+    @Test
+    func clipboardCopyUsesLocalClipboardAndRejectsLateReplies() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clipboard = ClipboardClient.fileBacked(path: root.appendingPathComponent("clipboard").path)
+        try await withDependencies { $0[ClipboardClient.self] = clipboard } operation: {
+            let host = Host(agent: false)
+            var pending: CheckedContinuation<RemoteBrowserResponse, any Error>?
+            let session = RemoteBrowserSession(tab: host.tab) { request in
+                if request.operation == .copy {
+                    if host.delayClipboard {
+                        return try await withCheckedThrowingContinuation { pending = $0 }
+                    }
+                    return .init(controlID: host.control, clipboard: .init(text: "selected 中文"))
+                }
+                return try await host.send(request)
+            }
+            let watch = Task { await session.watch() }
+            defer { session.stop()
+                watch.cancel()
+            }
+            try await wait { session.controlID != nil }
+            session.copy()
+            try await wait { clipboard.getString() == "selected 中文" }
+            host.delayClipboard = true
+            session.copy()
+            try await wait { pending != nil }
+            session.releaseControl()
+            clipboard.setString("new local copy")
+            pending?.resume(returning: .init(controlID: host.control, clipboard: .init(text: "stale")))
+            try await Task.sleep(for: .milliseconds(20))
+            #expect(clipboard.getString() == "new local copy")
+        }
+    }
     @Test
     func reusedPageRefreshesViewerMetadataWithoutWaitingForAnotherSnapshot() {
         let client = ViewerRelayClient()
@@ -35,6 +71,7 @@ struct RemoteBrowserSessionTests {
     @MainActor
     final class Host {
         var control = UUID()
+        var delayClipboard = false
         var operations: [RemoteBrowserOperation] = []
         var generations: [UInt64?] = []
         var controlIDs: [UUID?] = []

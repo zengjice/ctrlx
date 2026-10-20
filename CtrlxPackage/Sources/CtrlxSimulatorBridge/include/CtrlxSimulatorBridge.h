@@ -25,6 +25,7 @@ NSDictionary<NSString *, id> * _Nullable CXSimulatorCreatePreview(IOSurfaceRef s
 - (BOOL)sendKey:(NSUInteger)usage down:(BOOL)down error:(NSError **)error;
 - (BOOL)sendButton:(NSUInteger)usage down:(BOOL)down error:(NSError **)error;
 - (BOOL)cancelInput:(NSError **)error;
+- (nullable NSDictionary *)clipboard:(nullable NSDictionary *)content revisionOnly:(BOOL)revisionOnly afterRevision:(nullable NSString *)afterRevision error:(NSError **)error;
 - (void)drainInput:(CXSimulatorReply)reply;
 - (BOOL)rotateToOrientation:(NSUInteger)orientation error:(NSError **)error;
 - (nullable NSDictionary<NSString *, id> *)snapshotWithLimit:(NSUInteger)limit timeout:(NSTimeInterval)timeout error:(NSError **)error;

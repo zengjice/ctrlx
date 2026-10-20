@@ -75,6 +75,7 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsCodexQuestionAcknowledgement: Bool?
     /// Explicit fit preserves the Host window's pane topology and proportions.
     public let supportsTerminalFit: Bool?
+    public let supportsWorkspaceClipboard: Bool?
     public let supportsBrowserSharing: Bool?
     public let supportsBrowserExtensions: Bool?
     public let supportsPaneBrowser: Bool?
@@ -106,6 +107,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsFileDownloads: Bool? = nil,
         supportsFileUploads: Bool? = nil,
         supportsRepositoryFileLinks: Bool? = nil,
+        supportsWorkspaceClipboard: Bool? = nil,
         supportsBrowserSharing: Bool? = nil,
         supportsBrowserExtensions: Bool? = nil,
         supportsPaneBrowser: Bool? = nil,
@@ -145,6 +147,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsTerminalPaste = supportsTerminalPaste
         self.supportsCodexQuestionAcknowledgement = supportsCodexQuestionAcknowledgement
         self.supportsTerminalFit = supportsTerminalFit
+        self.supportsWorkspaceClipboard = supportsWorkspaceClipboard
         self.supportsBrowserSharing = supportsBrowserSharing
         self.supportsBrowserExtensions = supportsBrowserExtensions
         self.supportsPaneBrowser = supportsPaneBrowser
@@ -182,6 +185,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsFileDownloads: supportsFileDownloads,
             supportsFileUploads: supportsFileUploads,
             supportsRepositoryFileLinks: supportsRepositoryFileLinks,
+            supportsWorkspaceClipboard: supportsWorkspaceClipboard,
             supportsBrowserSharing: supportsBrowserSharing,
             supportsBrowserExtensions: supportsBrowserExtensions,
             supportsPaneBrowser: supportsPaneBrowser,

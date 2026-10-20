@@ -113,10 +113,19 @@ public enum RemoteBrowserOperation: Codable, Sendable, Equatable {
     case reload
     case close
     case fit(width: Int, height: Int)
+    case copy
+    case paste(WorkspaceClipboardContent)
     case text(String)
     case key(RemoteBrowserKey)
     case pointer(RemoteBrowserPointer)
     case extensions(RemoteBrowserExtensionOperation)
+
+    public var isClipboardPaste: Bool {
+        if case .paste = self {
+            return true
+        }
+        return false
+    }
 }
 
 public enum BrowserWebURL {
@@ -223,15 +232,18 @@ public struct RemoteBrowserResponse: Codable, Sendable, Equatable {
     public let frame: RemoteBrowserFrame?
     public let controlID: UUID?
     public let extensions: RemoteBrowserExtensionResult?
+    public let clipboard: WorkspaceClipboardContent?
     public init(
         tab: RemoteBrowserTab? = nil,
         frame: RemoteBrowserFrame? = nil,
         controlID: UUID? = nil,
-        extensions: RemoteBrowserExtensionResult? = nil
+        extensions: RemoteBrowserExtensionResult? = nil,
+        clipboard: WorkspaceClipboardContent? = nil
     ) {
         self.tab = tab
         self.frame = frame
         self.controlID = controlID
         self.extensions = extensions
+        self.clipboard = clipboard
     }
 }

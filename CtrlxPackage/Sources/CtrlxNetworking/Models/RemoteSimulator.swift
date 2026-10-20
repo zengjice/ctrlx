@@ -36,10 +36,15 @@ public struct BrowseSimulator: CommandSpec, Equatable {
     public let tabID: UUID
     public let frameMaxDimension: Int
 
-    public init(sessionName: String, tabID: UUID, frameMaxDimension: Int = 1_024) {
+    public let surfaceID: UUID?
+    public let controlID: UUID?
+
+    public init(sessionName: String, tabID: UUID, frameMaxDimension: Int = 1_024, surfaceID: UUID? = nil, controlID: UUID? = nil) {
         self.sessionName = sessionName
         self.tabID = tabID
         self.frameMaxDimension = frameMaxDimension
+        self.surfaceID = surfaceID
+        self.controlID = controlID
     }
 
     public var commandType: CommandType {
@@ -71,10 +76,13 @@ public struct RemoteSimulatorFrame: Codable, Sendable, Equatable {
     public let width: Int
     public let height: Int
 
-    public init(jpeg: Data, width: Int, height: Int) {
+    public let inputGeometry: RemoteSimulatorInputGeometry?
+
+    public init(jpeg: Data, width: Int, height: Int, inputGeometry: RemoteSimulatorInputGeometry? = nil) {
         self.jpeg = jpeg
         self.width = width
         self.height = height
+        self.inputGeometry = inputGeometry
     }
 
     public var isValid: Bool {
@@ -87,8 +95,65 @@ public struct RemoteSimulatorResponse: Codable, Sendable, Equatable {
     public let tab: RemoteSimulatorTab
     public let frame: RemoteSimulatorFrame
 
-    public init(tab: RemoteSimulatorTab, frame: RemoteSimulatorFrame) {
+    public let controlID: UUID?
+    public let generation: Int?
+
+    public init(tab: RemoteSimulatorTab, frame: RemoteSimulatorFrame, controlID: UUID? = nil, generation: Int? = nil) {
         self.tab = tab
         self.frame = frame
+        self.controlID = controlID
+        self.generation = generation
+    }
+}
+
+public struct RemoteSimulatorInputGeometry: Codable, Sendable, Equatable {
+    public let epoch: String
+    public let geometryVersion: UInt64
+    public init(epoch: String, geometryVersion: UInt64) {
+        self.epoch = epoch
+        self.geometryVersion = geometryVersion
+    }
+}
+
+public enum RemoteSimulatorControlOperation: Codable, Sendable, Equatable {
+    case takeControl
+    case releaseControl
+    case touch(phase: Int, x: Double, y: Double, geometry: RemoteSimulatorInputGeometry)
+    case copy
+    case readClipboard
+    case paste(WorkspaceClipboardContent)
+}
+
+public struct ControlSimulator: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+    public let sessionName: String
+    public let tabID: UUID
+    public let surfaceID: UUID
+    public let controlID: UUID?
+    public let generation: Int?
+    public let operation: RemoteSimulatorControlOperation
+
+    public init(sessionName: String, tabID: UUID, surfaceID: UUID, controlID: UUID?, generation: Int?, operation: RemoteSimulatorControlOperation) {
+        self.sessionName = sessionName
+        self.tabID = tabID
+        self.surfaceID = surfaceID
+        self.controlID = controlID
+        self.generation = generation
+        self.operation = operation
+    }
+
+    public var commandType: CommandType {
+        .controlSimulator(self)
+    }
+}
+
+public struct RemoteSimulatorControlResponse: Codable, Sendable, Equatable {
+    public let controlID: UUID?
+    public let generation: Int
+    public let clipboard: WorkspaceClipboardContent?
+    public init(controlID: UUID?, generation: Int, clipboard: WorkspaceClipboardContent? = nil) {
+        self.controlID = controlID
+        self.generation = generation
+        self.clipboard = clipboard
     }
 }

@@ -124,8 +124,8 @@
     NSMutableDictionary *controlRequest = request.mutableCopy;
     if (cancel) controlRequest[@"command"] = @"cancel-rotation";
     NSData *data = [NSJSONSerialization dataWithJSONObject:controlRequest options:0 error:&error];
-    if (atomic_load(&_invalid) || !data || data.length > 65536) {
-        reply(nil, error ?: [NSError errorWithDomain:@"CtrlXSimulator" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Simulator connection is closed or request exceeds 64 KB"}]); return;
+    if (atomic_load(&_invalid) || !data || data.length > 768 * 1024) {
+        reply(nil, error ?: [NSError errorWithDomain:@"CtrlXSimulator" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Simulator connection is closed or request exceeds 768 KiB"}]); return;
     }
     CXSimulatorInput *input = [self connectedInput];
     if ([command isEqual:@"touch"] || [command isEqual:@"release-touch"]

@@ -1,5 +1,19 @@
 # Agent Browser
 
+## Viewer 显式剪贴板
+
+Host 的 `supportsWorkspaceClipboard` 能力开启配对 Mac / iOS Viewer 的 Copy / Paste。
+复制当前网页选中文字，或最后点击的图片，到 Viewer 本地剪贴板；粘贴发送本地文本或图片。
+Mac 内容区支持 ⌘C / ⌘V，iOS 保留工具栏按钮及外接键盘快捷键。
+操作使用现有页面控制 lease、surface ID、页面 generation 和加密 Relay；离开、接管变化或
+注释模式会丢弃尚未完成的复制结果。不会轮询或同步 Host 全局剪贴板。
+
+CEF 使用固定的页面脚本读取选区，并给当前焦点派发带 `DataTransfer` 的 paste 事件；
+普通输入框 / contenteditable 使用编辑命令完成默认粘贴。图片事件是否接收由网页决定，
+不伪装成可信系统事件。无法访问的跨域子框架、密码复制和不接受图片的控件明确报错。
+文本和图片载荷最多 384 KiB，同时限制 JSON 编码后为 576 KiB（含 Base64 和斜杠转义）。
+复制和粘贴的图片超过编码预算时重新编码或缩小；旧 Host 隐藏复制能力，保留既有纯文本输入方式。
+
 Current embedded-browser contract, followed by dated acceptance history. The
 Apple Development-signed runtime is distributed through the private Mac channel;
 this does not mean hardened-runtime/notarized distribution is approved. Formal
@@ -335,7 +349,9 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   Transport failure releases control.
 - Mac uses native IME composition; iOS commits UITextView composition before
   sending text, with explicit Keyboard and Paste buttons. One finger scrolls;
-  two fingers drag. System/CEF popup UI, file chooser, remote clipboard reads,
+  two fingers drag; long press holds a pointer for selection. Copy/Paste transfer
+  bounded text/images with the current page lease (see Viewer clipboard above).
+  System/CEF popup UI and file chooser,
   remote audio/video streaming and remote DevTools are not included.
 
 Validation scope and outstanding physical-device acceptance are tracked in

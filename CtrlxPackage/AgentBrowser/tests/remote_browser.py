@@ -176,6 +176,65 @@ class RemoteBrowser(Managed):
         assert actual['result']['value'] == '远程输入 中文 "quotes"', actual
         self.passed('trusted remote click + committed Chinese input; original engine blocked until release')
 
+        # Clipboard transfers use only the addressed page and lease, not the Host pasteboard.
+        await evaluate("document.querySelector('#message').focus();document.querySelector('#message').select()")
+        clipboard_lease = str(uuid.uuid4())
+        assert (await self.request(run, 'probe.remote-control', tab=tab, lease=clipboard_lease))['accepted']
+        clipboard_frame = await frame()
+        async def clipboard_call(action, **payload):
+            return await remote(action=action, lease=clipboard_lease, generation=clipboard_frame['generation'], **payload)
+        copied = await clipboard_call('copy')
+        assert copied['kind'] == 'text' and base64.b64decode(copied['data']).decode() == '远程输入 中文 "quotes"', copied
+        replacement = '粘贴 text\n"quotes" `literal`'
+        await clipboard_call('paste', kind='text', data=base64.b64encode(replacement.encode()).decode())
+        await self.request(run, 'probe.remote-control', tab=tab)
+        actual_paste = await evaluate("document.querySelector('#message').value")
+        assert actual_paste == replacement.replace('\n', ' '), (actual_paste, replacement)
+        await evaluate("const t=document.createElement('textarea');t.id='clipboard-textarea';document.body.append(t);t.focus()")
+        assert (await self.request(run, 'probe.remote-control', tab=tab, lease=clipboard_lease))['accepted']
+        await clipboard_call('paste',kind='text',data=base64.b64encode(replacement.encode()).decode())
+        await self.request(run, 'probe.remote-control', tab=tab)
+        multiline = await evaluate("document.querySelector('#clipboard-textarea').value")
+        assert multiline == replacement, (multiline,replacement)
+        await evaluate("document.querySelector('#clipboard-textarea').remove();document.querySelector('#message').focus()")
+        # A paste handler receives the real image payload, and can consume it.
+        await evaluate("""document.querySelector('#message').onpaste=e=>{
+            window.clipboardImage={type:e.clipboardData.files[0]?.type,size:e.clipboardData.files[0]?.size};e.preventDefault()};""")
+        assert (await self.request(run, 'probe.remote-control', tab=tab, lease=clipboard_lease))['accepted']
+        png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQaPjQAMIMMAYARzIIQdQEEEMAAAAASUVORK5CYII=')
+        await clipboard_call('paste', kind='png', data=base64.b64encode(png).decode())
+        await self.request(run, 'probe.remote-control', tab=tab)
+        assert await evaluate('clipboardImage') == {'type':'image/png', 'size':len(png)}
+        await evaluate("document.querySelector('#message').onpaste=null;document.querySelector('#message').type='password';document.querySelector('#message').select()")
+        assert (await self.request(run, 'probe.remote-control', tab=tab, lease=clipboard_lease))['accepted']
+        denied = await asyncio.to_thread(call, self.endpoint['socket'], dict(run, command='probe.remote', tab=tab,
+            request=dict(action='copy',lease=clipboard_lease,generation=clipboard_frame['generation'])), False)
+        assert 'Password' in denied, denied
+        await self.request(run, 'probe.remote-control', tab=tab)
+        await evaluate("document.querySelector('#message').type='text';document.querySelector('#message').blur();getSelection().removeAllRanges()")
+        self.passed('page clipboard copies selection, pastes Unicode and image payloads, and refuses password copies')
+        await evaluate("""const rich=document.createElement('div');rich.id='clipboard-rich';rich.contentEditable=true;
+            rich.style.cssText='position:fixed;left:100px;top:240px;width:200px;height:100px;background:white';
+            document.body.append(rich);rich.focus();""")
+        assert (await self.request(run, 'probe.remote-control', tab=tab, lease=clipboard_lease))['accepted']
+        await clipboard_call('paste', kind='png', data=base64.b64encode(png).decode())
+        await self.request(run, 'probe.remote-control', tab=tab)
+        image_source = await evaluate("document.querySelector('#clipboard-rich img').src")
+        assert image_source.startswith('data:image/png;base64,')
+        point_image = await evaluate("""(()=>{const e=document.querySelector('#clipboard-rich img');e.style.width='32px';e.style.height='32px';
+            document.querySelector('#clipboard-rich').blur();getSelection().removeAllRanges();const r=e.getBoundingClientRect();return {x:r.x+10,y:r.y+10}})()""")
+        assert (await self.request(run, 'probe.remote-control', tab=tab, lease=clipboard_lease))['accepted']
+        for event, buttons in [('mousePressed',1),('mouseReleased',0)]:
+            await remote(action='mouse',lease=clipboard_lease,generation=clipboard_frame['generation'],
+                type=event,button='left',buttons=buttons,clickCount=1,**point_image)
+        copied_image = await clipboard_call('copy')
+        assert copied_image['kind'] == 'png'
+        assert Image.open(io.BytesIO(base64.b64decode(copied_image['data']))).size == (2,2)
+        await self.request(run, 'probe.remote-control', tab=tab)
+        await evaluate("document.querySelector('#clipboard-rich').remove();getSelection().removeAllRanges()")
+        self.passed('contenteditable image paste and rendered-image copy return actual image bytes')
+
+
         # A lease obtained by the managed engine before handoff must also stop.
         endpoint = await self.request(run, 'engine.attach', tab=tab)
         from websockets.asyncio.client import connect

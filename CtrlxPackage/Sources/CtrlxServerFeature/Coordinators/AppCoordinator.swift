@@ -3236,6 +3236,7 @@
             }
             connectionManager.onViewerUnavailable = { [weak terminalStreamService, weak self] viewerId in
                 self?.agentBrowser.disconnectBrowserViewer(viewerId)
+                self?.agentSimulator.disconnectSimulatorViewer(viewerId)
                 await terminalStreamService?.stopStreams(for: viewerId)
             }
 
@@ -3311,12 +3312,19 @@
                         return try await CommandResponseMessage(commandId: command.id, success: true, dashboard: self.dashboardSnapshot())
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
+                if case let .controlSimulator(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        let result = try await self.agentSimulator.controlSimulator(spec, viewerID: viewerId)
+                        return CommandResponseMessage(commandId: command.id, success: true, simulatorControl: result)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .browseSimulator(spec) = command.command {
                     guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
                         return .failure(for: command.id, error: "Session no longer exists.")
                     }
                     do {
-                        let result = try await self.agentSimulator.handleSimulator(spec)
+                        let result = try await self.agentSimulator.handleSimulator(spec, viewerID: viewerId)
                         return CommandResponseMessage(commandId: command.id, success: true, simulator: result)
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
@@ -3764,6 +3772,7 @@
                     supportsFileDownloads: true,
                     supportsFileUploads: true,
                     supportsRepositoryFileLinks: true,
+                    supportsWorkspaceClipboard: true,
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
                     supportsBrowserExtensions: await self?.agentBrowser.supportsBrowserExtensions,
                     supportsPaneBrowser: await self?.agentBrowser.supportsBrowserSharing,

@@ -2,7 +2,7 @@ import CtrlxNetworking
 import ImageIO
 import SwiftUI
 
-/// Paired clients only observe or annotate screenshots, without taking simulator control.
+/// Clipboard and touch input require explicit control of this device.
 public struct RemoteSimulatorView: View {
     private let tab: RemoteSimulatorTab
     private let client: ViewerRelayClient
@@ -36,7 +36,27 @@ public struct RemoteSimulatorView: View {
             HStack {
                 Label(tab.title, symbol: .iphone).lineLimit(1)
                 Spacer()
-                Text("Host · Read only").font(.caption).foregroundStyle(.secondary)
+                if session.supportsClipboard {
+                    if session.controlID != nil {
+                        Button("Release Control") { session.releaseControl() }
+                        Menu {
+                            Button("Copy Selection", action: session.copy)
+                            Button("Get Simulator Clipboard", action: session.readClipboard)
+                        } label: { Label("Copy", symbol: .docOnDoc).labelStyle(.iconOnly) }
+                            primaryAction: { session.copy() }
+                            .help("Copy the selection; open the menu to retrieve content copied inside the simulator")
+                            .accessibilityIdentifier("simulator-copy")
+                        Button(action: session.paste) { Label("Paste", symbol: .docOnClipboard).labelStyle(.iconOnly) }
+                            .help("Paste from this device")
+                            .accessibilityIdentifier("simulator-paste")
+                    } else {
+                        Button("Take Control") { Task { await session.takeControl() } }
+                            .disabled(session.preview == nil || session.isTakingControl)
+                            .accessibilityIdentifier("simulator-take-control")
+                    }
+                } else {
+                    Text("Host · Read only").font(.caption).foregroundStyle(.secondary)
+                }
                 Button(action: beginAnnotation) {
                     Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
                 }
@@ -49,6 +69,9 @@ public struct RemoteSimulatorView: View {
             Divider()
             if let error = client.isHostConnected ? (session.error ?? decodingError) : "Host disconnected" {
                 Text(error).font(.caption).foregroundStyle(.secondary).padding(6)
+            }
+            if let message = session.clipboardMessage {
+                Text(message).font(.caption).foregroundStyle(.secondary)
             }
             BrowserAnnotationSurface(
                 preferredTarget: annotation?.target,
@@ -64,13 +87,28 @@ public struct RemoteSimulatorView: View {
                 },
                 captureRequest: annotation?.id,
                 showsCaptureButton: false,
-                identifierPrefix: "simulator"
+                identifierPrefix: "simulator",
             ) {
                 GeometryReader { geometry in
                     ZStack {
                         Color.black
                         if let displayed {
-                            Image(decorative: displayed.image, scale: 1).resizable().scaledToFit()
+                            RemoteBrowserCanvas(
+                                image: displayed.image,
+                                frame: RemoteBrowserFrame(
+                                    jpeg: displayed.response.frame.jpeg,
+                                    width: Double(displayed.response.frame.width),
+                                    height: Double(displayed.response.frame.height),
+                                    generation: UInt64(max(0, displayed.response.generation ?? 0)),
+                                ),
+                                acceptsInput: session.controlID != nil && client.isHostConnected && annotation == nil,
+                                keyboardRequested: false,
+                                isSimulator: true,
+                                onCopy: session.copy,
+                                onPaste: session.paste,
+                            ) { operation in
+                                session.send(operation, displayed: displayed.response)
+                            }
                         } else {
                             ProgressView().tint(.white)
                         }
@@ -102,6 +140,12 @@ public struct RemoteSimulatorView: View {
             displayed = decoded.map { DisplayedPreview(response: preview, image: $0) }
             decodingError = decoded == nil ? "Cannot decode simulator preview" : nil
         }
+        .onChange(of: client.hostSupportsWorkspaceClipboard, initial: true) { _, supported in
+            session.supportsClipboard = supported
+            if !supported {
+                session.releaseControl()
+            }
+        }
         .onDisappear { session.stop()
             displayed = nil
             annotation = nil
@@ -117,7 +161,7 @@ public struct RemoteSimulatorView: View {
             let jpeg = try session.annotationScreenshot(from: displayed.response)
             annotation = AnnotationRequest(
                 jpeg: jpeg,
-                target: context.targets.first { $0.paneID == displayed.response.tab.sourcePaneID }
+                target: context.targets.first { $0.paneID == displayed.response.tab.sourcePaneID },
             )
             decodingError = nil
         } catch {
@@ -131,7 +175,7 @@ public struct RemoteSimulatorView: View {
             let dimension = RemoteBrowserGeometry.frameMaxDimension(
                 viewSize: size,
                 pageSize: CGSize(width: frame.width, height: frame.height),
-                displayScale: displayScale
+                displayScale: displayScale,
             ) {
             session.frameMaxDimension = dimension
         }

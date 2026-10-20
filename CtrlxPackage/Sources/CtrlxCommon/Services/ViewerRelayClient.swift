@@ -112,6 +112,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsFileUploads = false
     public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
+    public private(set) var hostSupportsWorkspaceClipboard = false
     public private(set) var hostSupportsBrowserSharing = false
     public private(set) var hostSupportsBrowserExtensions = false
     public private(set) var hostSupportsPaneBrowser = false
@@ -551,6 +552,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to confirm draft submission"))
         case let .sendDroppedFiles(spec) where spec.expectedAgent != nil && !hostSupportsAgentImageInput:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add annotated screenshots to an Agent"))
+        case .controlSimulator where !hostSupportsWorkspaceClipboard:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host to use simulator clipboard controls."))
         case .browseSimulator where !hostSupportsSimulatorViewing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view iOS simulators"))
         case .openPaneSimulator where !hostSupportsPaneSimulator:
@@ -558,6 +561,9 @@ final public class ViewerRelayClient {
         case .browseBrowser where !hostSupportsBrowserSharing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
         case let .browseBrowser(spec):
+            if spec.operation == .copy || spec.operation.isClipboardPaste, !hostSupportsWorkspaceClipboard {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to copy and paste in workspace tabs"))
+            }
             if case .extensions = spec.operation, !hostSupportsBrowserExtensions {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage browser extensions"))
             }
@@ -764,6 +770,8 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .browseFiles(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
+        case let .controlSimulator(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
         case let .browseSimulator(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .openPaneSimulator(spec):
@@ -1177,6 +1185,7 @@ final public class ViewerRelayClient {
             hostSupportsRepositoryFileLinks = sessionState.supportsRepositoryFileLinks == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
+            hostSupportsWorkspaceClipboard = sessionState.supportsWorkspaceClipboard == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
             hostSupportsBrowserExtensions = sessionState.supportsBrowserExtensions == true
             hostSupportsPaneBrowser = sessionState.supportsPaneBrowser == true
@@ -1668,6 +1677,7 @@ final public class ViewerRelayClient {
     }
 
     private func resetBrowserState() {
+        hostSupportsWorkspaceClipboard = false
         hostSupportsBrowserSharing = false
         hostSupportsBrowserExtensions = false
         hostSupportsSimulatorViewing = false

@@ -46,6 +46,7 @@ public enum Symbols: String {
     case circleLefthalfFilled = "circle.lefthalf.filled"
     case docBadgeGearshapeFill = "doc.badge.gearshape.fill"
     case docOnClipboard = "doc.on.clipboard"
+    case docOnDoc = "doc.on.doc"
     case docPlaintextFill = "doc.plaintext.fill"
     case docTextFill = "doc.text.fill"
     case docZipper = "doc.zipper"

@@ -6,7 +6,7 @@ mkdir -p "$BUILD"
 SIM_ARCHIVES=()
 for SIM_ARCH in ${ARCHS:-$(uname -m)}; do
 xcrun clang -arch "$SIM_ARCH" -mmacosx-version-min=15.0 -O2 -fobjc-arc -fblocks \
-  -framework Foundation -framework IOSurface -framework Metal -framework CoreGraphics -framework Accelerate -framework ImageIO \
+  -framework Foundation -framework AppKit -framework IOSurface -framework Metal -framework CoreGraphics -framework Accelerate -framework ImageIO \
   -I "$ROOT/CtrlxPackage/Sources/CtrlxSimulatorBridge/include" \
   "$ROOT/CtrlxPackage/Sources/CtrlxSimulatorBridge/Device.m" \
   "$ROOT/CtrlxPackage/Sources/CtrlxSimulatorBridge/Connection.m" \

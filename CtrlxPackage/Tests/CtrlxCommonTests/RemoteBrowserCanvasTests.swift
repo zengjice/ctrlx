@@ -12,7 +12,59 @@ struct RemoteBrowserCanvasTests {
             eventNumber: 1, clickCount: type == .mouseMoved ? 0 : 1, pressure: 0))
     }
 
-    @Test func trackingAreaRegistersVisibleMouseMovementWithoutAccumulating() {
+    @Test
+    func copyAndPasteShortcutsRequireFocusedControlledCanvas() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false,
+        )
+        window.isReleasedWhenClosed = false
+        let view = BrowserCanvasNSView(frame: window.contentView!.bounds)
+        window.contentView?.addSubview(view)
+        var copies = 0, pastes = 0
+        view.onCopy = { copies += 1 }
+        view.onPaste = { pastes += 1 }
+        let copy = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: .command,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "c",
+            charactersIgnoringModifiers: "c",
+            isARepeat: false,
+            keyCode: 8,
+        ))
+        let paste = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: .command,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "v",
+            charactersIgnoringModifiers: "v",
+            isARepeat: false,
+            keyCode: 9,
+        ))
+        #expect(!view.performKeyEquivalent(with: copy))
+        view.acceptsInput = true
+        #expect(window.makeFirstResponder(view))
+        #expect(view.performKeyEquivalent(with: copy))
+        #expect(view.performKeyEquivalent(with: paste))
+        #expect(copies == 1 && pastes == 1)
+        view.acceptsInput = false
+        #expect(!view.performKeyEquivalent(with: copy))
+        #expect(copies == 1)
+        window.close()
+    }
+
+    @Test
+    func trackingAreaRegistersVisibleMouseMovementWithoutAccumulating() {
         let view = BrowserCanvasNSView(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
         view.updateTrackingAreas()
         view.updateTrackingAreas()

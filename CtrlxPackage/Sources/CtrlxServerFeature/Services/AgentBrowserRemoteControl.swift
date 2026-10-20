@@ -1,4 +1,5 @@
 import CtrlxBrowserBridge
+import CtrlxCommon
 import CtrlxNetworking
 import Foundation
 
@@ -195,8 +196,17 @@ extension AgentBrowserService {
             var payload = try Self.nativePayload(request.operation)
             payload["lease"] = lease.id.uuidString
             payload["generation"] = request.generation
-            _ = try await nativeBrowserRequest(tabID, payload: payload)
-            return RemoteBrowserResponse(tab: tab.isClosed ? nil : descriptor(tab), controlID: lease.id)
+            let data = try await nativeBrowserRequest(tabID, payload: payload)
+            try Task.checkCancellation()
+            guard !tab.isClosed, remoteControls[tabID]?.id == lease.id else {
+                throw RemoteBrowserError.message("Control changed before the operation completed.")
+            }
+            var clipboard: WorkspaceClipboardContent?
+            if request.operation == .copy {
+                let content = try JSONDecoder().decode(WorkspaceClipboardContent.self, from: data)
+                clipboard = try WorkspaceClipboard.prepare(content)
+            }
+            return RemoteBrowserResponse(tab: descriptor(tab), controlID: lease.id, clipboard: clipboard)
         }
     }
 
@@ -244,6 +254,10 @@ extension AgentBrowserService {
         case .forward: return ["action": "forward"]
         case .reload: return ["action": "reload"]
         case .close: return ["action": "close"]
+        case .copy: return ["action": "copy"]
+        case let .paste(content):
+            guard content.isValid else { throw RemoteBrowserError.message("Invalid or oversized clipboard content.") }
+            return ["action": "paste", "kind": content.kind.rawValue, "data": content.data.base64EncodedString()]
         case let .fit(width, height):
             guard (240...2_560).contains(width), (240...2_560).contains(height) else {
                 throw RemoteBrowserError.message("Unsupported viewport size.")

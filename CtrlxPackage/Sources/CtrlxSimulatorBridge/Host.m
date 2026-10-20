@@ -366,7 +366,9 @@
                 NSDictionary *result = CXSimulatorCreatePreview(self->_screenshotBuffer.surface, orientation,
                     [metadata[@"previewDimension"] unsignedIntegerValue]);
                 [self->_operations addOperationWithBlock:^{
-                    [self reply:request result:result error:result ? nil : [NSError errorWithDomain:@"CtrlXSimulator" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Simulator preview encoding failed"}]];
+                    NSMutableDictionary *preview = result.mutableCopy;
+                    preview[@"geometry"] = metadata;
+                    [self reply:request result:preview error:result ? nil : [NSError errorWithDomain:@"CtrlXSimulator" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Simulator preview encoding failed"}]];
                     self->_encodingScreenshot = NO;
                     [self stopUnusedDisplay];
                     [self capture];
@@ -409,7 +411,7 @@
     size_t length = 0;
     const void *bytes = xpc_dictionary_get_data(object, "request", &length);
     NSError *error = nil;
-    NSDictionary *request = bytes && length <= 65536 ? [NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:bytes length:length] options:0 error:&error] : nil;
+    NSDictionary *request = bytes && length <= 768*1024 ? [NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:bytes length:length] options:0 error:&error] : nil;
     if (![request isKindOfClass:NSDictionary.class]) { [self reply:object result:nil error:error ?: [NSError errorWithDomain:@"CtrlXSimulator" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Invalid simulator request"}]]; return; }
     NSString *command = request[@"command"];
     if ([command isEqual:@"status"]) {
@@ -442,6 +444,12 @@
             [self reply:object result:snapshot error:error]; return;
         }
     } else {
+        if ([command isEqual:@"clipboard-read"] || [command isEqual:@"clipboard-write"]) {
+            NSDictionary *result = [self.device clipboard:[command isEqual:@"clipboard-write"] ? request[@"content"] : nil
+                revisionOnly:[request[@"revisionOnly"] boolValue]
+                afterRevision:[request[@"afterRevision"] isKindOfClass:NSString.class] ? request[@"afterRevision"] : nil error:&error];
+            [self reply:object result:result error:error]; return;
+        }
         if ([command isEqual:@"connect"]) {
             double started = NSProcessInfo.processInfo.systemUptime;
             NSLog(@"Simulator input connection starting");

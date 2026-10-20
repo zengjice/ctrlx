@@ -8,6 +8,7 @@
 #include <mach/mach.h>
 #include <sys/mman.h>
 #include "InputState.h"
+#include "Clipboard.h"
 
 // DTUHID wire vocabulary and simulator XPC handshake follow facebook/idb
 // 45e96c070ce62ee1df14ba21ccd8c07b720a8684 (MIT; see ThirdParty/idb-LICENSE).
@@ -104,6 +105,10 @@ static xpc_object_t CXUnsigned(NSUInteger value) { return xpc_uint64_create(valu
     NSArray *_contacts;
     NSMutableSet<NSNumber *> *_keys;
     NSMutableSet<NSNumber *> *_buttons;
+}
+
+- (NSDictionary *)clipboard:(NSDictionary *)content revisionOnly:(BOOL)revisionOnly afterRevision:(NSString *)afterRevision error:(NSError **)error {
+    return CXSimulatorClipboard(_device,content,revisionOnly,afterRevision,error);
 }
 
 - (instancetype)initWithDeveloperDirectory:(NSString *)developerDirectory deviceSet:(NSString *)deviceSet identifier:(NSString *)identifier error:(NSError **)error {

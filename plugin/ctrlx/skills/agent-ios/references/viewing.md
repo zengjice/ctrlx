@@ -18,8 +18,13 @@ Visible local tabs and successful remote viewing prevent hidden-idle cleanup.
 
 Mac Viewer shows simulator tabs marked Host; iOS lists them under **Tabs → iOS
 Simulators on Host**. Select one to watch; selection stays private to that client.
-These surfaces have no device close, input, rotation or ownership-transfer action.
-Switching away, backgrounding or disconnecting stops polling. Reconnection requests
+Updated Hosts offer explicit **Take Control**, touch selection and **Copy / Paste**
+between the selected simulator and the Viewer's local clipboard. The Copy menu's
+**Get Simulator Clipboard** retrieves content already copied inside the guest.
+This never synchronizes the Host's global clipboard. Host human input takes control
+back immediately; agents cannot claim during a Viewer lease. Older Hosts remain
+read-only. These surfaces have no device close or rotation action.
+Switching away, backgrounding or disconnecting releases control and stops polling. Reconnection requests
 fresh frames. Old Hosts without the capability cannot receive simulator requests.
 
 Preview uses the existing encrypted Relay connection with one pending frame per

@@ -1106,6 +1106,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case browseFiles(BrowseFiles)
     case browseBrowser(BrowseBrowser)
     case browseSimulator(BrowseSimulator)
+    case controlSimulator(ControlSimulator)
     case openPaneSimulator(OpenPaneSimulator)
     /// Resize a tmux pane
     case resizeTmuxPane(ResizeTmuxPane)
@@ -1392,6 +1393,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let fileBrowser: FileBrowserResponse?
     public let browser: RemoteBrowserResponse?
     public let simulator: RemoteSimulatorResponse?
+    public let simulatorControl: RemoteSimulatorControlResponse?
     public let simulatorTab: RemoteSimulatorTab?
     public let dashboard: DashboardSnapshot?
     /// True only after the Host sent the opener or already handled this queue.
@@ -1412,6 +1414,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         fileBrowser: FileBrowserResponse? = nil,
         browser: RemoteBrowserResponse? = nil,
         simulator: RemoteSimulatorResponse? = nil,
+        simulatorControl: RemoteSimulatorControlResponse? = nil,
         simulatorTab: RemoteSimulatorTab? = nil,
         dashboard: DashboardSnapshot? = nil,
         codexQuestionsHandled: Bool? = nil
@@ -1429,6 +1432,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.fileBrowser = fileBrowser
         self.browser = browser
         self.simulator = simulator
+        self.simulatorControl = simulatorControl
         self.simulatorTab = simulatorTab
         self.dashboard = dashboard
         self.codexQuestionsHandled = codexQuestionsHandled
