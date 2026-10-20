@@ -103,7 +103,7 @@ Codex 的专用启动方式，不引导 Claude 启动嵌套 Codex。
 ### Pane 复用与远程查看的实现约定
 
 三类 Host 标签遵守同一个边界：按来源 Pane 区分人工 / Agent 默认资源，普通打开复用、
-显式多开不替换默认资源，查看 / 标注不改变归属。iOS Tabs 的 Open iOS 可打开该窗口
+显式多开不替换默认资源，查看 / 标注不改变归属。iOS 当前终端标题下方的 Open iOS 可打开该窗口
 已有设备；没有时，通过 `OpenPaneSimulator` 在 Host 创建标准配置的默认设备。
 人工打开和 Agent `open` 共用 pane 的默认设备与在途启动任务，不额外创建副本。
 浏览器保留人工与 Agent 两组，Files 目前只有人工组（点击 Agent 输出路径也属于人工操作）。

@@ -367,6 +367,11 @@
                     .gesture(terminalBarSwipe)
                 }
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if terminalIsVisible, let window {
+                    windowShortcutBar(window)
+                }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { windowToolbar }
         }
@@ -549,12 +554,7 @@
                         selectedBrowserID: browserSelection.selectedID,
                         selectedSimulatorID: selectedSimulatorID,
                         isConnected: relayClient.isHostConnected,
-                        canOpenFiles: relayClient.isHostConnected && relayClient.hostSupportsPaneFiles,
-                        canOpenBrowser: relayClient.hostSupportsPaneBrowser,
-                        canOpenSimulator: relayClient.hostSupportsSimulatorViewing,
-                        canCreateSimulator: relayClient.hostSupportsPaneSimulator,
                         isCreatingWindow: isCreatingWindow,
-                        forkUnavailableReason: agentForkUnavailableReason,
                         onChoose: { action in
                             if pendingWindowTabAction == nil {
                                 pendingWindowTabAction = action
@@ -832,7 +832,7 @@
         }
 
         @ToolbarContentBuilder private var windowToolbar: some ToolbarContent {
-            // Title opens the tab picker; each row owns its window actions.
+            // Title opens the tab picker; actions belong to the displayed window.
             ToolbarItem(placement: .principal) {
                 Button(action: openWindowTabs) {
                     HStack(spacing: 4) {
@@ -875,18 +875,7 @@
                 }
             }
 
-            if terminalIsVisible {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: resizeWindowToFit) {
-                        Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
-                    }
-                    .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
-                    .accessibilityHint("Changes the window size on the Host and all Viewers")
-                    .accessibilityIdentifier("terminal-fit-to-screen")
-                }
-            }
-
-            if terminalIsVisible, window != nil {
+            if terminalIsVisible, let window {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
@@ -918,15 +907,56 @@
                             }
                             .tint(nil)
                         }
+                        Divider()
+                        windowActions(window, includesWindowManagement: true)
                     } label: {
                         Label("More", symbol: .ellipsisCircle)
                     }
+                    .menuOrder(.fixed)
+                    .accessibilityIdentifier("window-actions-\(window.stableId)")
                     .tint(activeService?.isYoloModeEnabled == true ? .red : nil)
                     .popover(isPresented: $showSessionInfo) {
                         sessionInfoPopover
                     }
                 }
             }
+        }
+
+        private func windowShortcutBar(_ window: TmuxWindow) -> some View {
+            HStack(spacing: 16) {
+                Group {
+                    windowActions(window)
+                    Button(action: resizeWindowToFit) {
+                        Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
+                    }
+                    .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
+                    .accessibilityHint("Changes the window size on the Host and all Viewers")
+                    .accessibilityIdentifier("terminal-fit-to-screen")
+                }
+                .labelStyle(.iconOnly)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+        }
+
+        private func windowActions(_ window: TmuxWindow, includesWindowManagement: Bool = false) -> some View {
+            WindowTabActions(
+                window: window,
+                focusedPaneID: activePaneId,
+                simulators: sessionSimulators,
+                isConnected: relayClient.isHostConnected,
+                canOpenFiles: relayClient.hostSupportsPaneFiles,
+                canOpenBrowser: relayClient.hostSupportsPaneBrowser,
+                canOpenSimulator: relayClient.hostSupportsSimulatorViewing,
+                canCreateSimulator: relayClient.hostSupportsPaneSimulator,
+                isCreatingWindow: isCreatingWindow,
+                forkUnavailableReason: agentForkUnavailableReason,
+                includesWindowManagement: includesWindowManagement,
+                choose: performWindowTabAction
+            )
         }
 
         private func openWindowTabs() {
@@ -954,6 +984,10 @@
                 return
             }
             pendingWindowTabAction = nil
+            performWindowTabAction(action)
+        }
+
+        private func performWindowTabAction(_ action: WindowTabAction) {
             pendingSimulatorRequest = nil
             switch action {
             case let .window(_, operation):

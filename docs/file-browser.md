@@ -15,17 +15,20 @@ Mac / iOS Viewer 的 Copy Path、Copy Text、Copy Image 写入当前 Viewer 的�
 
 Mac Host, Mac Viewer and iOS share `WorkspaceFileBrowserView`.
 Right-click a terminal window tab on Mac Host/Viewer and choose **Open Files**.
-On iOS, tap the window title to open the **Tabs** list. Each terminal row has
-icon shortcuts for **Open Files**, **Open Browser on Host**, **Open iOS Simulator**
-and **Fork**. They move below the name when the row is too narrow. The simulator
-shortcut opens an existing simulator belonging to that window, offers a picker
-when there are several, and creates the source pane's default device on the Host
-when none exists. Creation requires the Host's `supportsPaneSimulator` capability;
-older Hosts can still expose existing devices. The Viewer shows opening progress
-and can stop waiting without closing the shared Host device.
-Tapping the name switches tabs; shortcuts operate on their own row without
-first switching the terminal. The `⋯` menu starts with rename and close, followed
-by the same open/Fork actions and **Open Another Files Tab**.
+On iOS, the current terminal has a compact icon row below its title:
+**Open Files**, **Open Browser on Host**, **Open iOS Simulator**, **Fork** and
+**Fit Terminal to Screen**. The title opens the **Tabs** list; terminal rows
+contain only the name and selection mark and retain long-press reordering.
+Switch to a terminal before using its actions. The top-right **More** menu
+combines terminal copy/session controls with rename, close and the open/Fork
+actions, including **Open Another Files Tab**. Fit retains its existing Host-wide
+resize behavior; moving the control does not change the resize command.
+The simulator shortcut opens an existing simulator belonging to the current
+window, offers a picker when there are several, and creates the source pane's
+default device on the Host when none exists. Creation requires the Host's
+`supportsPaneSimulator` capability; older Hosts can still expose existing
+devices. The Viewer shows opening progress and can stop waiting without closing
+the shared Host device.
 New Terminal / Agent remain separate creation actions at the
 bottom of the iOS list; the Mac `+` menu does not create Files.
 Each session can keep multiple independent Files tabs alongside terminals and
@@ -35,8 +38,9 @@ default tab. **Open Another Files Tab** explicitly creates an extra without
 replacing that default. Tab identity and source routing belong to the Host;
 directory, preview, ordering, split placement and selection belong to each client.
 On iOS, a Files tab fills the session content area. The title opens a native
-medium/large tab-list sheet without a nested navigation stack. Actions are
-applied after dismissing this list, before presenting a Fork/Agent sheet or alert.
+medium/large tab-list sheet without a nested navigation stack. List selections are
+applied after dismissing the sheet; toolbar actions run directly for the current
+window, resolving its stable ID again before opening a sheet or alert.
 Files rows expose only their own selection/close actions, not terminal operations.
 
 ### Mac Git tab
@@ -80,10 +84,10 @@ visible members in the saved order; missing IDs and other groups keep their slot
 
 ## Directories and lifetime
 
-- A new tab captures a pane inside the window whose menu was used: prefer the
+- A new tab captures a pane inside the window whose action was used: prefer the
   focused pane only if it belongs to that window, then its active/first pane.
   Focus in another window can never redirect the initial directory. iOS captures
-  the stable window ID and resolves the target again after the list closes; a
+  the stable window ID and resolves the target again before the action; a
   closed target fails rather than falling back to the currently selected window.
   The Host resolves the agent's
   project directory, then a fresh `pane_current_path`, then its home directory.
