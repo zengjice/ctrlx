@@ -14,6 +14,11 @@ specific owned tab. Use `open --new` to keep an old page, compare in parallel,
 or honor an explicit new-tab request; extras do not replace the default.
 Prefer an open target; use `tabs` when unsure. Keep pages the user still needs.
 
+Agent pages and popups open in the background. Reading, clicking, typing and
+navigation do not require selecting the page in the Host UI. Use `action show`
+only when the user asks to see the page or a manual handoff needs it; ordinary
+automation must leave the user's current session and keyboard focus alone.
+
 ```sh
 ctrlx browser action tabs
 ctrlx browser action open --url http://localhost:3000

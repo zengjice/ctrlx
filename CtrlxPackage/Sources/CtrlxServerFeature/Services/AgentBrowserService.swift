@@ -463,8 +463,11 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         state.parentID = parent.flatMap(UUID.init(uuidString:))
         state.isExtensionWindow = route["presentation"] == "extensionWindow"
         state.isPrimary = parent == nil && route["primary"] != "false"
-        state.suppressInitialSelection = (parent == nil && route["remote"] == "true")
-            || parent.flatMap { tabs[$0]?.isRemotelyControlled } == true
+        // Native Agent pages are created in the background without a selection
+        // callback. Only human/extension pages need to consume that callback.
+        state.suppressInitialSelection = (owner.isEmpty || state.isExtensionWindow)
+            && ((parent == nil && route["remote"] == "true")
+                || parent.flatMap { tabs[$0]?.isRemotelyControlled } == true)
         tabs[identifier] = state
         workspaces[workspaceID]?.onCreate(state, state.parentID)
         publishBrowserTabs()

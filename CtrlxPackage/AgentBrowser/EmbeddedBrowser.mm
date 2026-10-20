@@ -243,7 +243,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     if (!identifier_) { browser->GetHost()->CloseBrowser(true); return; }
     identifiers[browser->GetIdentifier()] = identifier_;
     [runtime.delegate browserTabCreated:identifier_ view:container_ route:route_ owner:@(owner_.c_str()) parent:parent_];
-    [runtime.delegate browserTabSelected:identifier_];
+    if (owner_.empty() || extensionWindow_) [runtime.delegate browserTabSelected:identifier_];
   }
   bool DoClose(CefRefPtr<CefBrowser>) override {
     if (extensionWindow_) return false;
@@ -485,7 +485,6 @@ static void OpenTab(std::string owner, int pid, std::string url, bool newTab,
       const bool same = CefParseURL(browser->GetMainFrame()->GetURL(), currentParts) && CefParseURL(url, destinationParts) &&
           CefString(&currentParts.spec) == CefString(&destinationParts.spec);
       if (!same) { AgentBrowserCancelHumanInput(browser); browser->GetMainFrame()->LoadURL(url); }
-      [runtime.delegate browserTabSelected:identifiers.at(*existing)];
       done(browser, nil);
       return;
     }

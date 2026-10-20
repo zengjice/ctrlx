@@ -290,7 +290,6 @@
     }
     if (enginePending_.size() >= 128) { EngineError(connection, wireID, @"Engine is busy; operation not sent."); return; }
     if ([method isEqual:@"Target.attachToTarget"]) engineCaptureAttaching_.insert(browserID);
-    if ([method hasPrefix:@"Input."]) { callbacks_.select(tab.browser); tab.browser->GetHost()->SetFocus(true); }
     const int message = ++nextMessage_;
     bool navigation = [@[@"Page.navigate", @"Page.reload", @"Page.navigateToHistoryEntry"] containsObject:method];
     enginePending_[{tab.browser->GetIdentifier(), message}] = {connection, wireID, token, tab.generation, Clock::now() + std::chrono::seconds(10), navigation, session, method};

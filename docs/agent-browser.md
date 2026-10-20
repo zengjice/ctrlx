@@ -79,6 +79,22 @@ Chromium pages remain transient across App restarts. The `vercel` / `ctrlx`
 automation-backend selection is independent. If Chromium is unavailable, report
 an error rather than substituting WebKit or the system browser.
 
+### Background Agent operation
+
+Agent page creation/reuse, navigation, popups and page actions run without
+selecting a workspace tab, raising the Host window or taking native keyboard
+focus. Both engines send page input to the authorized browser directly; DOM
+focus inside that page is independent of the user's current AppKit responder.
+`action show --tab` is the explicit request to reveal a page. Human Open Browser,
+tab selection and extension-window actions retain their UI presentation.
+Agent popups also start in the background when a Viewer controls their parent;
+their first later explicit `show` must not be discarded as an initial selection.
+
+`tests/background_input.py` runs both public engines in an isolated signed app.
+It checks actual page effects and preservation of another session's visible
+page and native text input, same-session background tabs, visible-page input,
+popup creation/closure, screenshots, navigation and explicit `show`.
+
 ### Passkey Bluetooth permission
 
 Chromium's WebAuthn sign-in flow can initialize Bluetooth for nearby-device

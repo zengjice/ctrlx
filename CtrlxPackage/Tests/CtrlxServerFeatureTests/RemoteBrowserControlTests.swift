@@ -188,22 +188,31 @@
             await #expect(throws: (any Error).self) { try await service.handleBrowser(request(.frame, session: "other"), viewerID: "a") }
             _ = try await service.handleBrowser(request(.text("中文"), control: control), viewerID: "a")
             #expect(runtime.requests.last?["text"] as? String == "中文")
+            let workspace = AgentBrowserWorkspace()
+            var selectedChild: UUID?
+            workspace.acceptsSession = { $0 == "test" }
+            workspace.onSelect = { selectedChild = $0.id }
+            service.register(workspace)
             let child = UUID()
             service.browserTabCreated(
                 child.uuidString,
                 view: NSView(),
-                route: ["workspace": UUID().uuidString, "pane": "%1", "session": "test"],
+                route: ["workspace": workspace.id.uuidString, "pane": "%1", "session": "test"],
                 owner: "owner",
                 parent: tab.id.uuidString
             )
             #expect(
-                service.tabs[child.uuidString]?.suppressInitialSelection == true,
-                "A popup opened by remote input must not steal Host focus"
+                service.tabs[child.uuidString]?.suppressInitialSelection == false,
+                "Native Agent popups have no initial selection callback to suppress"
             )
+            #expect(selectedChild == nil)
             _ = try await service.handleBrowser(request(.releaseControl, control: control), viewerID: "b")
             #expect(service.remoteControls[tab.id] != nil)
             service.disconnectBrowserViewer("a")
             #expect(service.remoteControls.isEmpty && runtime.controls.isEmpty)
+            service.browserTabSelected(child.uuidString)
+            #expect(selectedChild == child, "An explicit show must work on the first attempt")
+            service.unregister(workspace)
             await #expect(throws: (any Error).self) { try await service.handleBrowser(request(.text("stale"), control: control), viewerID: "a") }
             await service.shutdown()
         }

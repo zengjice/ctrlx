@@ -628,11 +628,8 @@ class Bridge final : public CefDevToolsMessageObserver {
           [this, id](NSDictionary* result) { Reply(id, result); });
       return;
     }
-    // DOM focus alone does not make a hidden native CEF tab an input target.
-    // Reveal/focus this already-authorized tab before real CDP input; never
-    // route input to whichever tab the human happened to leave selected.
-    callbacks_.select(client.browser);
-    client.browser->GetHost()->SetFocus(true);
+    // Page input targets this authorized browser, independently of the user's
+    // selected workspace and native keyboard focus. Only "show" selects a tab.
     if ([command isEqual:@"press"]) {
       NSDictionary* down = PageKeyDown(params[@"key"]);
       if (!down) { Reply(id, nil, @"Unsupported page key. Use Enter/Tab/Escape/Space/arrows/Home/End/PageUp/PageDown/Backspace/Delete with modifiers, or Meta+A/Control+A."); return; }
