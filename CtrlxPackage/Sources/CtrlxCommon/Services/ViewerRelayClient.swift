@@ -118,8 +118,17 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsAgentImageInput = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
     public private(set) var hostSupportsSimulatorViewing = false
+    public private(set) var hostSupportsPaneSimulator = false
     public private(set) var hostSupportsDashboard = false
     public private(set) var simulatorTabs: [RemoteSimulatorTab] = []
+
+    func rememberOpenedSimulator(_ tab: RemoteSimulatorTab) {
+        if let index = simulatorTabs.firstIndex(where: { $0.id == tab.id }) {
+            simulatorTabs[index] = tab
+        } else {
+            simulatorTabs.append(tab)
+        }
+    }
 
     func rememberOpenedBrowser(_ tab: RemoteBrowserTab) {
         if let index = browserTabs.firstIndex(where: { $0.id == tab.id }) {
@@ -544,6 +553,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add annotated screenshots to an Agent"))
         case .browseSimulator where !hostSupportsSimulatorViewing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view iOS simulators"))
+        case .openPaneSimulator where !hostSupportsPaneSimulator:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open a pane's iOS simulator"))
         case .browseBrowser where !hostSupportsBrowserSharing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
         case let .browseBrowser(spec):
@@ -621,6 +632,8 @@ final public class ViewerRelayClient {
             targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
         case let .prepareAgentFork(spec):
             targetBinding = workspaceInputState.binding(paneID: spec.source.paneID)
+        case let .openPaneSimulator(spec):
+            targetBinding = workspaceInputState.binding(paneID: spec.sourcePaneID)
         case let .forkAgentSession(spec):
             targetBinding = workspaceInputState.binding(paneID: spec.source.paneID)
         case let .createTmuxWindow(spec):
@@ -752,6 +765,8 @@ final public class ViewerRelayClient {
         case let .browseFiles(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .browseSimulator(spec):
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
+        case let .openPaneSimulator(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .browseBrowser(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
@@ -1168,6 +1183,7 @@ final public class ViewerRelayClient {
             hostSupportsAgentImageInput = sessionState.supportsAgentImageInput == true
             browserTabs = sessionState.browserTabs ?? []
             hostSupportsSimulatorViewing = sessionState.supportsSimulatorViewing == true
+            hostSupportsPaneSimulator = sessionState.supportsPaneSimulator == true
             hostSupportsDashboard = sessionState.supportsDashboard == true
             simulatorTabs = sessionState.simulatorTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
@@ -1655,6 +1671,7 @@ final public class ViewerRelayClient {
         hostSupportsBrowserSharing = false
         hostSupportsBrowserExtensions = false
         hostSupportsSimulatorViewing = false
+        hostSupportsPaneSimulator = false
         hostSupportsDashboard = false
         hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false

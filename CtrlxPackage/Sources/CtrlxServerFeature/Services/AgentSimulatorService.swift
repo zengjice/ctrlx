@@ -16,10 +16,12 @@
         private var workspaces: [UUID: SimulatorWorkspace] = [:]
         private var tabs: [UUID: SimulatorTabState] = [:]
         private var routePanes: [PaneInfo] = []
+        private var routeRevision: UInt64 = 0
+        var resolveSourcePane: (@MainActor (String, String) async throws -> PaneInfo)?
         private var resolveRoute: (@MainActor (Int32) async throws -> AgentPaneRoute)?
         private var opening = 0
         private var primaryDevices: [String: UUID] = [:]
-        private var pendingOpens: [String: (owner: SimulatorOwner, task: Task<SimulatorTabState, Error>)] = [:]
+        private var pendingOpens: [String: (owner: SimulatorOwner?, task: Task<SimulatorTabState, Error>)] = [:]
         private let detachedWorkspaceID = UUID()
         var onTabsChanged: (@MainActor () -> Void)?
         private var frameCaptures: [UUID: (dimension: Int, task: Task<RemoteSimulatorFrame, Error>)] = [:]
@@ -53,7 +55,7 @@
 
         private func expireInactiveDevices() {
             for state in Array(tabs.values) {
-                let ownerEnded = (try? system.inspect(state.owner.pid).owner) != state.owner
+                let ownerEnded = state.owner.map { (try? system.inspect($0.pid).owner) != $0 } ?? false
                 let idle = !state.visible && !state.writing && state.lastActivity.duration(to: .now) > .seconds(600)
                 if ownerEnded || idle {
                     close(state)
@@ -106,11 +108,21 @@
         }
 
         func updateSimulatorRoutes(_ panes: [PaneInfo]) {
+            routeRevision &+= 1
             let renames = SessionRenameMapping.detect(from: routePanes, to: panes)
             routePanes = panes
-            for state in tabs.values {
+            for state in Array(tabs.values) {
                 let matches = panes.filter { $0.paneId == state.paneID }
-                guard matches.count == 1, let pane = matches.first else { continue }
+                guard matches.count == 1, let pane = matches.first else {
+                    if state.owner == nil {
+                        close(state)
+                    }
+                    continue
+                }
+                if let identity = state.sourcePane.workspaceIdentity, !identity.isSamePane(as: pane.workspaceIdentity) {
+                    close(state)
+                    continue
+                }
                 if renames.contains(where: { $0.oldName == state.sourcePane.sessionName && $0.newName == pane.sessionName }) {
                     // MainView migrates the whole session collection. Detaching here
                     // would remove its tabs before that migration and lose selection.
@@ -165,7 +177,8 @@
             )
         }
 
-        private func validate(_ owner: SimulatorOwner) throws {
+        private func validate(_ owner: SimulatorOwner?) throws {
+            guard let owner else { return }
             guard try system.inspect(owner.pid).owner == owner else {
                 throw SimulatorFailure("The owning agent process exited or changed identity")
             }
@@ -362,7 +375,6 @@
             let route = try await resolveRoute(owner.pid)
             try validate(owner)
             guard !closing else { throw SimulatorFailure("Simulator host is closing") }
-            // The same live snapshot supplies ownership and complete-session rename detection.
             updateSimulatorRoutes(route.panes)
             return route.pane
         }
@@ -378,28 +390,71 @@
                     "Cannot route this agent to a CtrlX pane: \(error.localizedDescription). Run the agent in a local CtrlX terminal. For Codex, use ctrlx ios run -- codex"
                 )
             }
+            return try await openDevice(parameters: parameters, owner: owner, pane: pane, coordinator: coordinator) {
+                try await self.resolvePane(for: owner)
+            }
+        }
+
+        func openPaneSimulator(_ request: OpenPaneSimulator, expectedWorkspacePane: WorkspacePaneIdentity?) async throws -> RemoteSimulatorTab {
+            guard let coordinator, !closing, let identity = expectedWorkspacePane else {
+                throw SimulatorFailure("Refresh the session before opening a Host simulator")
+            }
+            let resolve: @MainActor () async throws -> PaneInfo = {
+                try await self.resolveHumanPane(request, identity: identity)
+            }
+            let pane = try await resolve()
+            let state = try await openDevice(parameters: [:], owner: nil, pane: pane, coordinator: coordinator, resolve: resolve)
+            return remoteDescriptor(state)
+        }
+
+        private func resolveHumanPane(_ request: OpenPaneSimulator, identity: WorkspacePaneIdentity) async throws -> PaneInfo {
+            guard let resolveSourcePane, !closing else { throw SimulatorFailure("Simulator pane routing is unavailable") }
+            let revision = routeRevision
+            let pane = try await resolveSourcePane(request.sessionName, request.sourcePaneID)
+            try Task.checkCancellation()
+            guard
+                pane.paneId == request.sourcePaneID, pane.sessionName == request.sessionName,
+                identity.isSamePane(as: pane.workspaceIdentity) else {
+                throw SimulatorFailure("The source terminal changed. Select it again to open iOS Simulator")
+            }
+            if revision != routeRevision {
+                let matches = routePanes.filter { $0.paneId == pane.paneId }
+                guard
+                    matches.count == 1, let current = matches.first,
+                    identity.isSamePane(as: current.workspaceIdentity), current.sessionName == pane.sessionName,
+                    current.stableWindowId == pane.stableWindowId else {
+                    throw SimulatorFailure("The source terminal changed while opening iOS Simulator")
+                }
+            }
+            return pane
+        }
+
+        private func openDevice(
+            parameters: [String: JSONValue], owner: SimulatorOwner?, pane: PaneInfo,
+            coordinator: SimulatorCoordinator, resolve: @escaping @MainActor () async throws -> PaneInfo
+        ) async throws -> SimulatorTabState {
             try validate(owner)
             guard !closing else { throw SimulatorFailure("Simulator host is closing") }
             if parameters["new"]?.boolValue == true {
-                return try await createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator)
+                return try await createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator, resolve: resolve)
             }
             let state: SimulatorTabState
             if let id = primaryDevices[pane.paneId], let existing = tabs[id], !existing.isClosed {
                 state = existing
             } else if let pending = pendingOpens[pane.paneId] {
-                guard pending.owner == owner else { throw SimulatorFailure("Another agent is opening this pane's default simulator") }
+                guard owner == nil || pending.owner == nil || pending.owner == owner else { throw SimulatorFailure("Another agent is opening this pane's default simulator") }
                 state = try await pending.task.value
             } else {
                 let task = Task { @MainActor in
                     defer { self.pendingOpens.removeValue(forKey: pane.paneId) }
-                    return try await self.createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator)
+                    return try await self.createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator, resolve: resolve)
                 }
                 pendingOpens[pane.paneId] = (owner, task)
                 state = try await task.value
             }
             try Task.checkCancellation()
             try validate(owner)
-            guard !state.isClosed, !closing, state.owner == owner else {
+            guard !state.isClosed, !closing, owner == nil || state.owner == nil || state.owner == owner else {
                 throw SimulatorFailure("This pane's simulator is unavailable or belongs to another agent process")
             }
             for (key, actual) in [
@@ -418,11 +473,19 @@
             guard required.isSubset(of: Set(state.handle.requiredFeatures)) else {
                 throw SimulatorFailure("The pane's default simulator has different required features. Use open --new or close it first")
             }
-            let current = try await resolvePane(for: owner)
-            guard current.paneId == state.paneID, !state.isClosed, !closing else {
+            let current = try await resolve()
+            guard
+                current.paneId == state.paneID, !state.isClosed, !closing,
+                owner == nil || state.owner == nil || state.owner == owner,
+                state.sourcePane.workspaceIdentity.map({ $0.isSamePane(as: current.workspaceIdentity) }) ?? true else {
                 throw SimulatorFailure("The source pane changed while opening the simulator")
             }
             try validate(owner)
+            try validate(state.owner)
+            if state.owner == nil, let owner {
+                state.owner = owner
+            }
+            updateRoute(state, pane: current)
             attach(state)
             state.markActivity()
             return state
@@ -430,9 +493,10 @@
 
         private func createDevice(
             parameters: [String: JSONValue],
-            owner: SimulatorOwner,
+            owner: SimulatorOwner?,
             sourcePane: PaneInfo,
-            coordinator: SimulatorCoordinator
+            coordinator: SimulatorCoordinator,
+            resolve: @escaping @MainActor () async throws -> PaneInfo
         ) async throws -> SimulatorTabState {
             let configuration = try await coordinator.configuration()
             guard !closing, tabs.count + opening + closeTasks.count < configuration.maximumDevices else {
@@ -467,8 +531,8 @@
                 }
             )
             do {
-                pane = try await resolvePane(for: owner)
-                guard pane.paneId == sourcePane.paneId else { throw SimulatorFailure("The agent moved to another pane while opening the simulator") }
+                pane = try await resolve()
+                guard pane.paneId == sourcePane.paneId, sourcePane.workspaceIdentity.map({ $0.isSamePane(as: pane.workspaceIdentity) }) ?? true else { throw SimulatorFailure("The agent moved to another pane while opening the simulator") }
                 try validate(owner)
             } catch {
                 try await coordinator.close(handle, shutdown: true)
@@ -1608,8 +1672,11 @@
     @MainActor @Observable
     final class SimulatorTabState {
         let handle: SimulatorDeviceHandle
-        var id: UUID { handle.id }
-        let owner: SimulatorOwner
+        var id: UUID {
+            handle.id
+        }
+
+        var owner: SimulatorOwner?
         var sourcePane: PaneInfo
         var paneID: String { sourcePane.paneId }
         var workspaceID: UUID
@@ -1650,7 +1717,7 @@
         }
 
         init(
-            handle: SimulatorDeviceHandle, owner: SimulatorOwner, sourcePane: PaneInfo, workspaceID: UUID, view: SimulatorMetalView,
+            handle: SimulatorDeviceHandle, owner: SimulatorOwner?, sourcePane: PaneInfo, workspaceID: UUID, view: SimulatorMetalView,
             service: AgentSimulatorService
         ) {
             self.handle = handle

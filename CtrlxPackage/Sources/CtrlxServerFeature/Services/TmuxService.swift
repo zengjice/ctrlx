@@ -958,7 +958,8 @@ final public class TmuxService {
         let format = [
             "#{pane_pid}", "#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
             "#{pane_current_command}", "#{pane_current_path}", "#{pane_width}", "#{pane_height}",
-            "#{pane_active}", "#{window_id}",
+            "#{pane_active}", "#{window_id}", "#{pid}:#{start_time}",
+            "#{\(WorkspaceTmuxRecovery.sessionKey)}", "#{\(WorkspaceTmuxRecovery.windowKey)}", "#{\(WorkspaceTmuxRecovery.paneKey)}",
         ].joined(separator: sep)
         let result = try await runTmuxCommand([
             "list-panes", "-a", "-F", format,
@@ -969,18 +970,27 @@ final public class TmuxService {
         var current: [(pane: PaneInfo, shellPID: String)] = []
         for line in result.stdoutString.split(separator: "\n") {
             let fields = line.split(separator: PaneInfo.fieldSeparator, omittingEmptySubsequences: false)
-            guard fields.count == 11, let shellPID = Int32(fields[0]),
-                  let windowIndex = Int(fields[3]), let paneIndex = Int(fields[4]),
-                  let width = Int(fields[7]), let height = Int(fields[8]) else {
+            guard
+                fields.count == 15, let shellPID = Int32(fields[0]),
+                let windowIndex = Int(fields[3]), let paneIndex = Int(fields[4]),
+                let width = Int(fields[7]), let height = Int(fields[8]) else {
                 throw TmuxError.commandFailed(message: "Invalid pane metadata while locating Agent Browser source.")
             }
             let session = String(fields[2])
+            let identity: WorkspacePaneIdentity?
+            if
+                let sessionID = UUID(uuidString: String(fields[12])),
+                let windowID = UUID(uuidString: String(fields[13])), let paneID = UUID(uuidString: String(fields[14])) {
+                identity = .init(serverID: String(fields[11]), sessionID: sessionID, windowID: windowID, paneID: paneID)
+            } else {
+                identity = nil
+            }
             let pane = PaneInfo(
                 paneId: String(fields[1]), target: "\(session):\(windowIndex).\(paneIndex)",
                 sessionName: session, windowIndex: windowIndex,
                 tmuxWindowId: fields[10].isEmpty ? nil : String(fields[10]), paneIndex: paneIndex,
                 command: String(fields[5]), currentPath: String(fields[6]), width: width, height: height,
-                isActive: fields[9] == "1")
+                isActive: fields[9] == "1", workspaceIdentity: identity)
             current.append((pane, String(shellPID)))
         }
         let ids: Set<String>

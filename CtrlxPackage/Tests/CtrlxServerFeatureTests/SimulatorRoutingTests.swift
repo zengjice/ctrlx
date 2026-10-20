@@ -14,7 +14,7 @@
               arguments: ["live", "linked", "missing-parent", "missing-agent"])
         func liveRouting(_ scenario: String) async throws {
             func row(_ session: String) -> String {
-                ["100", "%1", session, "1", "0", "codex", "/tmp", "80", "24", "1", "@1"]
+                ["100", "%1", session, "1", "0", "codex", "/tmp", "80", "24", "1", "@1", "123:456", "", "", ""]
                     .joined(separator: String(PaneInfo.fieldSeparator))
             }
             let output = row("current") + (scenario == "linked" ? "\n" + row("linked") : "")

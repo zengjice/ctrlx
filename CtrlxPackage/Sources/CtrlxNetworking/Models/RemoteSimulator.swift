@@ -47,6 +47,22 @@ public struct BrowseSimulator: CommandSpec, Equatable {
     }
 }
 
+/// Explicit human action: reuse or boot the source pane's default simulator.
+public struct OpenPaneSimulator: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+    public let sessionName: String
+    public let sourcePaneID: String
+
+    public init(sessionName: String, sourcePaneID: String) {
+        self.sessionName = sessionName
+        self.sourcePaneID = sourcePaneID
+    }
+
+    public var commandType: CommandType {
+        .openPaneSimulator(self)
+    }
+}
+
 public struct RemoteSimulatorFrame: Codable, Sendable, Equatable {
     public static let maximumBytes = 512 * 1_024
     public static let maximumDimension = 2_560

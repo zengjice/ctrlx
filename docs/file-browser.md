@@ -2,10 +2,18 @@
 
 Mac Host, Mac Viewer and iOS share `WorkspaceFileBrowserView`.
 Right-click a terminal window tab on Mac Host/Viewer and choose **Open Files**.
-On iOS, tap the window title to open the **Tabs** list, then use that window row's
-`⋯` menu → **Open Files**. Tapping a row switches tabs; its menu operates on that
-row without first switching the terminal. Fork, rename and close use the same
-per-window menu. New Terminal / Agent remain separate creation actions at the
+On iOS, tap the window title to open the **Tabs** list. Each terminal row has
+icon shortcuts for **Open Files**, **Open Browser on Host**, **Open iOS Simulator**
+and **Fork**. They move below the name when the row is too narrow. The simulator
+shortcut opens an existing simulator belonging to that window, offers a picker
+when there are several, and creates the source pane's default device on the Host
+when none exists. Creation requires the Host's `supportsPaneSimulator` capability;
+older Hosts can still expose existing devices. The Viewer shows opening progress
+and can stop waiting without closing the shared Host device.
+Tapping the name switches tabs; shortcuts operate on their own row without
+first switching the terminal. The `⋯` menu starts with rename and close, followed
+by the same open/Fork actions and **Open Another Files Tab**.
+New Terminal / Agent remain separate creation actions at the
 bottom of the iOS list; the Mac `+` menu does not create Files.
 Each session can keep multiple independent Files tabs alongside terminals and
 web browsers. On Mac, these are ordinary reorderable, closable, splittable tabs.

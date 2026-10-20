@@ -53,6 +53,7 @@
         let calls = Mutex<[[String]]>([])
         let holdBoot = Mutex(false)
         let alive = Mutex(true)
+        let agentUnavailable = Mutex(false)
     }
 
     @Suite("Simulator pane reuse and remote viewing", .serialized) @MainActor
@@ -122,6 +123,9 @@
                 system.write = { _, _ in }
                 system.remove = { _ in }
                 system.inspect = { pid in
+                    if pid != getpid(), probe.agentUnavailable.withLock({ $0 }) {
+                        throw SimulatorFailure("No agent process")
+                    }
                     guard probe.alive.withLock({ $0 }) else { throw SimulatorFailure("Owner exited") }
                     return SimulatorProcess(
                         owner: SimulatorOwner(pid: pid, uid: getuid(), startSeconds: 100, startMicros: 1),
@@ -231,6 +235,125 @@
                 try await Task.sleep(for: .milliseconds(5))
             }
             throw SimulatorFailure("Timed out waiting for test fixture")
+        }
+
+        private func humanFixture() throws -> (Fixture, WorkspacePaneIdentity, OpenPaneSimulator) {
+            let fixture = try Fixture()
+            let identity = WorkspacePaneIdentity(serverID: "server:1", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            fixture.pane = Fixture.pane(session: "work", window: 0, identity: identity)
+            fixture.service.updateSimulatorRoutes([fixture.pane])
+            fixture.service.resolveSourcePane = { [unowned fixture] session, paneID in
+                guard session == fixture.pane.sessionName, paneID == fixture.pane.paneId else {
+                    throw SimulatorFailure("Source pane missing")
+                }
+                return fixture.pane
+            }
+            return (fixture, identity, OpenPaneSimulator(sessionName: "work", sourcePaneID: "%1"))
+        }
+
+        @Test
+        func viewerCreatesWithoutAgentAndRepeatedOpensReuse() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            fixture.probe.agentUnavailable.withLock { $0 = true }
+            let first = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            let second = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            #expect(first.id == second.id && fixture.boots == 1)
+            let state = try #require(fixture.created.first)
+            #expect(state.owner == nil && state.writer == nil)
+            let preview = try await fixture.service.handleSimulator(BrowseSimulator(sessionName: "work", tabID: first.id))
+            #expect(preview.tab.id == first.id && preview.frame.isValid)
+            fixture.service.updateSimulatorRoutes([])
+            #expect(state.isClosed && fixture.service.sharedSimulatorTabs.isEmpty)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func simultaneousViewerOpensShareOneBoot() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            fixture.probe.holdBoot.withLock { $0 = true }
+            let first = Task { try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity) }
+            try await wait { fixture.boots == 1 }
+            let second = Task { try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity) }
+            await Task.yield()
+            fixture.probe.holdBoot.withLock { $0 = false }
+            let a = try await first.value, b = try await second.value
+            #expect(a.id == b.id && fixture.boots == 1)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func viewerReusesAgentDeviceWithoutTakingOwnership() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            let owner = state.owner
+            let tab = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            #expect(tab.id == state.id && state.owner == owner && state.writer == owner && fixture.boots == 1)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func agentAdoptsHumanDefaultOnlyThroughExplicitOpen() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            #expect(!(await fixture.action("status", ["device": .string(tab.id.uuidString)])).ok)
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            #expect(state.owner?.pid == 10 && state.writer == nil && fixture.boots == 1)
+            #expect(!(await fixture.action("open", peer: 20)).ok)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func viewerRejectsMissingOrReplacedIdentityBeforeBoot() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            await #expect(throws: (any Error).self) {
+                try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: nil)
+            }
+            fixture.pane = Fixture.pane(
+                session: "work",
+                window: 0,
+                identity: .init(serverID: "replacement", sessionID: identity.sessionID, windowID: identity.windowID, paneID: identity.paneID)
+            )
+            await #expect(throws: (any Error).self) {
+                try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            }
+            #expect(fixture.boots == 0 && fixture.created.isEmpty)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func paneReplacedDuringBootClosesUnpublishedDevice() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            fixture.probe.holdBoot.withLock { $0 = true }
+            let open = Task { try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity) }
+            try await wait { fixture.boots == 1 }
+            fixture.pane = Fixture.pane(
+                session: "work",
+                window: 0,
+                identity: .init(serverID: "replacement", sessionID: identity.sessionID, windowID: identity.windowID, paneID: UUID())
+            )
+            fixture.service.updateSimulatorRoutes([fixture.pane])
+            fixture.probe.holdBoot.withLock { $0 = false }
+            await #expect(throws: (any Error).self) { try await open.value }
+            #expect(fixture.created.isEmpty && fixture.service.sharedSimulatorTabs.isEmpty)
+            #expect(fixture.probe.calls.withLock { $0.contains { $0.contains("shutdown") } })
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func newerRouteSnapshotRejectsStaleSourceQuery() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            let original = fixture.pane
+            fixture.service.resolveSourcePane = { [unowned fixture] _, _ in
+                fixture.service.updateSimulatorRoutes([])
+                return original
+            }
+            await #expect(throws: (any Error).self) {
+                try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            }
+            #expect(fixture.boots == 0)
+            await fixture.service.shutdown()
         }
 
         @Test

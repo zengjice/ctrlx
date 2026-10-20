@@ -1106,6 +1106,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case browseFiles(BrowseFiles)
     case browseBrowser(BrowseBrowser)
     case browseSimulator(BrowseSimulator)
+    case openPaneSimulator(OpenPaneSimulator)
     /// Resize a tmux pane
     case resizeTmuxPane(ResizeTmuxPane)
     /// Set the shared terminal-window layout for a tmux session
@@ -1391,6 +1392,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let fileBrowser: FileBrowserResponse?
     public let browser: RemoteBrowserResponse?
     public let simulator: RemoteSimulatorResponse?
+    public let simulatorTab: RemoteSimulatorTab?
     public let dashboard: DashboardSnapshot?
     /// True only after the Host sent the opener or already handled this queue.
     /// Missing on older Hosts; a generic success is not an acknowledgement.
@@ -1410,6 +1412,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         fileBrowser: FileBrowserResponse? = nil,
         browser: RemoteBrowserResponse? = nil,
         simulator: RemoteSimulatorResponse? = nil,
+        simulatorTab: RemoteSimulatorTab? = nil,
         dashboard: DashboardSnapshot? = nil,
         codexQuestionsHandled: Bool? = nil
     ) {
@@ -1426,6 +1429,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.fileBrowser = fileBrowser
         self.browser = browser
         self.simulator = simulator
+        self.simulatorTab = simulatorTab
         self.dashboard = dashboard
         self.codexQuestionsHandled = codexQuestionsHandled
     }

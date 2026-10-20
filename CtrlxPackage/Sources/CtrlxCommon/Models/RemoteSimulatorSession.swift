@@ -30,6 +30,25 @@ final public class RemoteSimulatorSession {
         }
     }
 
+    public static func open(
+        sessionName: String,
+        sourcePaneID: String,
+        client: ViewerRelayClient,
+        inputBinding: ViewerWorkspaceInputBinding
+    ) async throws -> RemoteSimulatorTab {
+        let result = try await client.sendCommand(
+            OpenPaneSimulator(sessionName: sessionName, sourcePaneID: sourcePaneID),
+            paneId: sourcePaneID, timeout: 240, inputBinding: inputBinding
+        ).get()
+        try Task.checkCancellation()
+        _ = try inputBinding.expectedPane(current: client.workspaceInputState.binding(paneID: sourcePaneID))
+        guard result.success, let tab = result.simulatorTab, tab.sessionName == sessionName, tab.sourcePaneID == sourcePaneID else {
+            throw ViewerRelayClientError.commandFailed(result.error ?? "Host did not return the source pane's simulator")
+        }
+        client.rememberOpenedSimulator(tab)
+        return tab
+    }
+
     public func watch() async {
         stop()
         let current = epoch

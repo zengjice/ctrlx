@@ -81,15 +81,19 @@ Codex 的专用启动方式，不引导 Claude 启动嵌套 Codex。
 ### Pane 复用与远程查看的实现约定
 
 三类 Host 标签遵守同一个边界：按来源 Pane 区分人工 / Agent 默认资源，普通打开复用、
-显式多开不替换默认资源，查看 / 标注不改变归属。模拟器目前只有 Agent 创建入口，
-不为形式统一增加人工创建或远程控制；Viewer 查看已有 Agent 设备不会创建人工副本。
+显式多开不替换默认资源，查看 / 标注不改变归属。iOS Tabs 的 Open iOS 可打开该窗口
+已有设备；没有时，通过 `OpenPaneSimulator` 在 Host 创建标准配置的默认设备。
+人工打开和 Agent `open` 共用 pane 的默认设备与在途启动任务，不额外创建副本。
 浏览器保留人工与 Agent 两组，Files 目前只有人工组（点击 Agent 输出路径也属于人工操作）。
 
 `AgentSimulatorService` 在 Host 进程内以来源 pane ID 索引默认活动设备，
 并登记该 pane 正在进行的默认启动任务。并发 `open` 合并；先判断复用，再检查新增
 设备容量。显式 runtime / type / profile / UDID 不符或缺少声明的 required features
 时明确报冲突，不更改已有设备。`--new` 跳过默认映射，额外设备不替换主设备。
-关闭默认设备清理映射；owner 仍按 UID / PID / start time 校验，不通过 pane 共享写权限。
+关闭默认设备清理映射；Agent owner 仍按 UID / PID / start time 校验。
+人工创建的设备没有 Agent owner / writer；同一持久 pane 的 Agent 显式 `open` 才可采用它，
+仍需 `claim` 才能取得写权限。Viewer 打开已有 Agent 设备不改变 owner / writer。
+人工设备在来源 pane 消失或身份改变时关闭，隐藏空闲回收沿用现有规则。
 
 工作区 unregister 只 detach，register 重新采用同一个设备与稳定渲染对象；未挂载时
 不订阅本地连续帧。设备可在没有本地工作区窗口时由来源 agent 打开。tmux pane 的
@@ -109,9 +113,16 @@ MainView 整体迁移原会话的标签集合、选择与分栏状态，避免�
 
 网络模型位于 `CtrlxNetworking/Models/RemoteSimulator.swift`：session 快照新增可选
 `supportsSimulatorViewing` / `simulatorTabs`，`BrowseSimulator` 只请求单帧。
-`withPairId` 保留这两个字段，Viewer 状态依附原有每 Host 连接与工作区。发送前检查
+`withPairId` 保留这些字段，Viewer 状态依附原有每 Host 连接与工作区。发送前检查
 能力标志；每次请求检查 session / tab / 活动 owner，完成后重查关闭及路由变化。
 不把浏览器命令或 agent 的本地身份凭据暴露给 Viewer。
+
+创建能力另以可选 `supportsPaneSimulator` 标识；旧 Host 不支持创建时入口置灰。
+`OpenPaneSimulator` 绑定发送时的 Host / tmux server / 持久 pane 身份，Host 在启动前及
+启动完成后重新解析来源；来源变化则回收尚未发布的设备。更新的路由快照优先于旧的
+异步查询结果。启动使用独立请求队列，不占终端键盘接收循环；重复请求合并且沿用设备
+容量、内存和磁盘限制。iOS 收到结果后再次校验身份，离开/取消等待不会跳回旧标签。
+取消等待不撤销其他 Viewer 共用的 Host 启动。创建入口不增加远程输入或关闭权限。
 
 `ConnectedViewer` 将模拟器请求放进既有 preview 队列，与浏览器合计每连接最多四个
 并发请求；终端输出拥塞时暂停新取帧。模拟器服务全局最多四个请求，同设备同尺寸的

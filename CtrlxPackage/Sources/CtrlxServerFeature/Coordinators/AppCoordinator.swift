@@ -450,6 +450,7 @@
                 try await tmuxService.browserSourcePane(sessionName: sessionName, paneID: paneID)
             }
             hostFileTabs.resolvePane = agentBrowser.resolveSourcePane
+            agentSimulator.resolveSourcePane = agentBrowser.resolveSourcePane
             hostFileTabs.projectDirectory = { [weak windowManager] paneID in
                 windowManager?.paneStates[paneID]?.agentSession?.detectedProjectPath
             }
@@ -3319,6 +3320,13 @@
                         return CommandResponseMessage(commandId: command.id, success: true, simulator: result)
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
+                if case let .openPaneSimulator(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        let tab = try await self.agentSimulator.openPaneSimulator(spec, expectedWorkspacePane: command.expectedWorkspacePane)
+                        return CommandResponseMessage(commandId: command.id, success: true, simulatorTab: tab)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .browseBrowser(spec) = command.command {
                     guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
                         return .failure(for: command.id, error: "Session no longer exists.")
@@ -3762,6 +3770,7 @@
                     supportsAgentImageInput: true,
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs,
                     supportsSimulatorViewing: await self?.agentSimulator.supportsSimulatorViewing,
+                    supportsPaneSimulator: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsDashboard: true,
                     simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs,
                     supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs,

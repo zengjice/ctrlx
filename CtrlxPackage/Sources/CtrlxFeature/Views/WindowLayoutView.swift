@@ -33,6 +33,12 @@
             let inputBinding: ViewerWorkspaceInputBinding
         }
 
+        private struct SimulatorOpenRequest: Equatable {
+            let paneID: String
+            let inputBinding: ViewerWorkspaceInputBinding
+        }
+
+        @State private var pendingSimulatorRequest: SimulatorOpenRequest?
         @State private var pendingFilesRequest: FilesOpenRequest?
         @State private var pendingFilesCloseID: UUID?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
@@ -422,6 +428,37 @@
 
         private var fileLinkContent: some View {
             browserContent
+                .safeAreaInset(edge: .bottom) {
+                    if pendingSimulatorRequest != nil {
+                        HStack {
+                            ProgressView()
+                            Text("Opening iOS Simulator on Host…").font(.callout)
+                            Spacer()
+                            Button("Cancel") { pendingSimulatorRequest = nil }
+                        }
+                        .padding()
+                        .background(.regularMaterial)
+                    }
+                }
+                .task(id: pendingSimulatorRequest) {
+                    guard let request = pendingSimulatorRequest else { return }
+                    do {
+                        let tab = try await RemoteSimulatorSession.open(
+                            sessionName: sessionName, sourcePaneID: request.paneID, client: relayClient, inputBinding: request.inputBinding
+                        )
+                        try Task.checkCancellation()
+                        guard pendingSimulatorRequest == request else { return }
+                        fileWorkspace.selectedID = nil
+                        browserSelection.selectedID = nil
+                        selectedSimulatorID = tab.id
+                        pendingSimulatorRequest = nil
+                    } catch is CancellationError { }
+                    catch {
+                        guard pendingSimulatorRequest == request else { return }
+                        pendingSimulatorRequest = nil
+                        commandError = error.localizedDescription
+                    }
+                }
                 .task(id: pendingFilesRequest) {
                     guard let request = pendingFilesRequest else { return }
                     let paneID = request.paneID
@@ -463,18 +500,22 @@
                 .onChange(of: window?.id) { pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
+                    pendingSimulatorRequest = nil
                 }
                 .onChange(of: fileWorkspace.selectedID) { pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
+                    pendingSimulatorRequest = nil
                 }
                 .onChange(of: browserSelection.selectedID) { pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
+                    pendingSimulatorRequest = nil
                 }
                 .onChange(of: selectedSimulatorID) { pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
+                    pendingSimulatorRequest = nil
                 }
         }
 
@@ -510,6 +551,8 @@
                         isConnected: relayClient.isHostConnected,
                         canOpenFiles: relayClient.isHostConnected && relayClient.hostSupportsPaneFiles,
                         canOpenBrowser: relayClient.hostSupportsPaneBrowser,
+                        canOpenSimulator: relayClient.hostSupportsSimulatorViewing,
+                        canCreateSimulator: relayClient.hostSupportsPaneSimulator,
                         isCreatingWindow: isCreatingWindow,
                         forkUnavailableReason: agentForkUnavailableReason,
                         onChoose: { action in
@@ -911,6 +954,7 @@
                 return
             }
             pendingWindowTabAction = nil
+            pendingSimulatorRequest = nil
             switch action {
             case let .window(_, operation):
                 guard let target = action.targetWindow(in: sessionWindows) else {
@@ -938,6 +982,22 @@
                     isKeyboardActive = false
                     quickActionPresentation.dismiss()
                     pendingFilesRequest = .init(paneID: paneID, new: operation == .openAnotherFiles, inputBinding: relayClient.workspaceInputState.binding(paneID: paneID))
+                case .openSimulator:
+                    guard
+                        relayClient.hostSupportsPaneSimulator,
+                        let paneID = FileBrowserTab.sourcePaneID(
+                            in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
+                        ) else {
+                        commandError = "Update the Host to open iOS Simulator for this window."
+                        return
+                    }
+                    cancelCreationFollowUp()
+                    isKeyboardActive = false
+                    quickActionPresentation.dismiss()
+                    pendingFileLink = nil
+                    pendingFilesRequest = nil
+                    pendingBrowserLink = nil
+                    pendingSimulatorRequest = .init(paneID: paneID, inputBinding: relayClient.workspaceInputState.binding(paneID: paneID))
                 case .openBrowser:
                     guard
                         let paneID = FileBrowserTab.sourcePaneID(
@@ -1052,6 +1112,7 @@
         }
 
         private func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String? = nil) {
+            pendingSimulatorRequest = nil
             fileWorkspace.hasPendingTerminalSelection = false
             browserSelection.selectedID = nil
             selectedSimulatorID = nil
