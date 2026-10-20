@@ -79,6 +79,16 @@ Chromium pages remain transient across App restarts. The `vercel` / `ctrlx`
 automation-backend selection is independent. If Chromium is unavailable, report
 an error rather than substituting WebKit or the system browser.
 
+### Passkey Bluetooth permission
+
+Chromium's WebAuthn sign-in flow can initialize Bluetooth for nearby-device
+passkeys in the main Host process. The Mac app declares
+`NSBluetoothAlwaysUsageDescription` in `CtrlxServer/Info.plist`; the built app
+must retain it. Without this description, macOS TCC terminates the entire Host
+when that API is reached, rather than returning a recoverable page error.
+Bluetooth authorization remains a macOS system prompt when needed; adding the
+description does not grant permission or request it at app startup.
+
 ### External applications
 
 Clicking an application-protocol link (for example Feishu authorization) opens
