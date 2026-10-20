@@ -32,9 +32,11 @@ bound. Extended actions use the same Command-Option modifiers as navigation.
 Rich-text and control-sequence copy remain menu actions without default shortcuts.
 Shortcuts are fixed; Settings does not provide a shortcut editor.
 
-Mac content areas also support two-finger trackpad swipes: swipe left for the next
-tab and right for the previous tab. Each completed horizontal gesture switches
-at most one tab, using the same visible order and wraparound as the keyboard.
+Mac content areas also support two-finger trackpad swipes: move fingers left for
+the previous (left-hand) tab and right for the next (right-hand) tab, regardless
+of the macOS natural-scrolling preference. Each completed horizontal gesture
+switches at most one tab, using the same navigation groups and boundary behavior
+as Command-Option-Left / Right.
 In a split, it targets the side where the gesture began. Local, remote Viewer
 and detached workspaces share this behavior. Vertical scrolling and the tab
 strip's own overflow scrolling remain unchanged. Hold Option while scrolling

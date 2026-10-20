@@ -10,7 +10,7 @@ struct WorkbenchTabSwipeGestureTests {
         #expect(gesture.consume(deltaX: 80 * sign, deltaY: 2, phase: .changed).direction == nil)
         let end = gesture.consume(deltaX: 0, deltaY: 0, phase: .ended)
         #expect(end.consumed)
-        #expect(end.direction == (sign < 0 ? 1 : -1))
+        #expect(end.direction == (sign < 0 ? -1 : 1))
         for phase: NSEvent.Phase in [.began, .changed, .ended] {
             let momentum = gesture.consume(deltaX: 120 * sign, deltaY: 0, phase: [], momentumPhase: phase)
             #expect(momentum.consumed)
@@ -43,7 +43,7 @@ struct WorkbenchTabSwipeGestureTests {
         _ = gesture.consume(deltaX: -100, deltaY: 0, phase: .began)
         #expect(gesture.consume(deltaX: 0, deltaY: 0, phase: .cancelled).direction == nil)
         _ = gesture.consume(deltaX: 80, deltaY: 0, phase: .began)
-        #expect(gesture.consume(deltaX: 0, deltaY: 0, phase: .ended).direction == -1)
+        #expect(gesture.consume(deltaX: 0, deltaY: 0, phase: .ended).direction == 1)
     }
 
     @Test("Tiny initial drift does not lock a vertical scroll into horizontal navigation")
@@ -55,25 +55,25 @@ struct WorkbenchTabSwipeGestureTests {
         #expect(gesture.consume(deltaX: 0, deltaY: 0, phase: .ended).direction == nil)
         _ = gesture.consume(deltaX: 0, deltaY: 0.5, phase: .began)
         #expect(gesture.consume(deltaX: -80, deltaY: 0, phase: .changed).consumed)
-        #expect(gesture.consume(deltaX: 0, deltaY: 0, phase: .ended).direction == 1)
+        #expect(gesture.consume(deltaX: 0, deltaY: 0, phase: .ended).direction == -1)
     }
 }
 
 @MainActor
 @Suite(.serialized)
 struct WorkbenchTabSwipeRoutingTests {
-    @Test("Native content swipes retain their starting split and physical direction", arguments: [true, false])
+    @Test("Physical left selects previous and right selects next in the starting split, with natural scrolling on or off", arguments: [true, false])
     func splitAndDirection(natural: Bool) {
         let fixture = SwipeFixture()
         defer { fixture.close() }
         let leftwardDelta: CGFloat = natural ? -80 : 80
         #expect(fixture.send(x: 880, dx: leftwardDelta, phase: .began, natural: natural) == nil)
         #expect(fixture.send(x: 120, phase: .ended, natural: natural) == nil)
-        #expect(fixture.switches.map(\.direction) == [1])
+        #expect(fixture.switches.map(\.direction) == [-1])
         #expect(fixture.switches.map(\.onRight) == [true])
         #expect(fixture.send(x: 120, dx: -leftwardDelta, phase: .began, natural: natural) == nil)
         _ = fixture.send(x: 880, phase: .ended, natural: natural)
-        #expect(fixture.switches.map(\.direction) == [1, -1])
+        #expect(fixture.switches.map(\.direction) == [-1, 1])
         #expect(fixture.switches.map(\.onRight) == [true, false])
         #expect(fixture.view.hitTest(.init(x: 10, y: 10)) == nil)
     }

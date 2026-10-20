@@ -46,7 +46,8 @@ struct WorkbenchTabSwipeGesture {
         if phase.contains(.ended) {
             isTracking = false
             isHorizontal = consumed
-            let direction = consumed && abs(distance) >= 60 ? (distance < 0 ? 1 : -1) : nil
+            // Follow the tab strip: physical left selects previous, right selects next.
+            let direction = consumed && abs(distance) >= 60 ? (distance < 0 ? -1 : 1) : nil
             return (consumed, direction)
         }
         return (consumed, nil)
