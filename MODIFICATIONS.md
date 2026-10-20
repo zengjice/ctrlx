@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.85 — Browser focus and passkey sign-in
+
+- Keep Agent browser creation, navigation, page input and popups in the
+  background without changing the user's selected workspace or native keyboard
+  focus. Preserve explicit page reveal, human tab selection and extension-window
+  presentation in both browser engines.
+- Declare Bluetooth usage in the Mac Host for nearby-device passkey sign-in.
+  Prevent macOS from terminating CtrlX when Chromium initializes Bluetooth;
+  permission remains controlled by the system prompt.
+- Release validation: the bounded serial Swift regression passed with 3,637
+  tests reported across 515 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, the website
+  build, 89 publisher/COS/distributed-installer tests, the Bluetooth privacy
+  regression and SwiftFormat checks for the two changed Swift files passed.
+- Reused isolated browser background-input and external-application acceptance
+  evidence after verifying all relevant source hashes (49 and 21 checks,
+  including setup and completion). Bluetooth permission allow/deny evidence
+  also matches the current implementation; full Qovery sign-in and paired
+  Mac/iPhone UI acceptance were not rerun.
+- The signed iOS device-SDK Release build passed. Mac distribution uses build
+  18 through COS, with signature, source metadata and complete public-download
+  integrity checks before installer promotion.
+
 ## 3.0.84 — Pane-linked tabs and Viewer clipboard
 
 - Group file, browser and simulator tabs by their source terminal pane on Mac
