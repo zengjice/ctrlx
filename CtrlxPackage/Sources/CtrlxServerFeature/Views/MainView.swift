@@ -390,7 +390,7 @@ public struct MainView: View {
             ))
             .environment(\.workbenchWindowID, detachedWorkspace?.id)
             .environment(\.terminalQuickActions, terminalQuickActions)
-            .environment(\.terminalContentClick, fitClickedTerminal)
+            .environment(\.terminalViewportInteraction, fitTerminalIfViewportChanged)
             .environment(\.openTerminalFileLink) { request in pendingFileLink = request }
             .task(id: pendingFileLink) {
                 guard let request = pendingFileLink else { return }
@@ -2869,7 +2869,7 @@ public struct MainView: View {
         }
     }
 
-    private func fitClickedTerminal(hostID: String?, paneID: String) {
+    private func fitTerminalIfViewportChanged(hostID: String?, paneID: String) {
         guard
             appearsActive,
             let focused = terminalQuickActions.active, focused.isAvailable,

@@ -19,8 +19,77 @@
     @MainActor
     @Suite("Mac terminal mouse routing", .serialized)
     struct MacTerminalMouseRoutingTests {
-        @Test("An enlarged terminal fits on a content click without changing focus")
-        func resizedContentClick() async throws {
+        @Test("Focus Fit requires a real first-responder transition")
+        func focusRestoration() {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            window.makeFirstResponder(nil)
+            var restorations = 0
+            var notifications = 0
+            view.onFocusRestored = { restorations += 1 }
+            view.onBecomeFirstResponder = { notifications += 1 }
+
+            #expect(view.focusTerminal())
+            #expect(restorations == 1)
+            #expect(view.focusTerminal())
+            #expect(restorations == 1)
+            #expect(notifications == 2)
+            #expect(panes[1].focusTerminal())
+            #expect(view.focusTerminal())
+            #expect(restorations == 2)
+        }
+
+        @Test("Hidden bootstrap defers focus Fit and checks focus again at reveal", arguments: [false, true])
+        func hiddenFocusRestoration(focusLeaves: Bool) {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            window.makeFirstResponder(nil)
+            var restorations = 0
+            view.onFocusRestored = { restorations += 1 }
+            view.isHidden = true
+            #expect(view.focusTerminal())
+            #expect(view.focusTerminal())
+            #expect(restorations == 0)
+            if focusLeaves {
+                #expect(panes[1].focusTerminal())
+            }
+
+            view.isHidden = false
+            view.completePendingFocusRestoration()
+            view.completePendingFocusRestoration()
+            #expect(restorations == (focusLeaves ? 0 : 1))
+            #expect(view.focusTerminal())
+            #expect(restorations == 1)
+        }
+
+        @Test("Mouse focus never becomes a deferred bootstrap Fit", arguments: [false, true])
+        func hiddenMouseFocus(previousProgrammaticFocus: Bool) {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            window.makeFirstResponder(nil)
+            var restorations = 0
+            view.onFocusRestored = { restorations += 1 }
+            view.isHidden = true
+            if previousProgrammaticFocus {
+                #expect(view.focusTerminal())
+            }
+            #expect(view.focusTerminal(source: .mouse))
+            #expect(restorations == 0)
+
+            view.isHidden = false
+            view.completePendingFocusRestoration()
+            #expect(view.focusTerminal())
+            #expect(restorations == 0)
+            #expect(panes[1].focusTerminal())
+            #expect(view.focusTerminal())
+            #expect(restorations == 1)
+        }
+
+        @Test("An enlarged terminal fits only after a completed plain click", arguments: [false, true])
+        func resizedContentClick(fromOtherPane: Bool) async throws {
             let (window, panes) = makeTerminalWindow(key: true)
             defer { withExtendedLifetime(window) { } }
             let view = panes[0]
@@ -39,28 +108,39 @@
                     fit.recordFit(for: target, request: request)
                 }
             }
+            view.onFocusRestored = view.onContentClick
             view.focusTerminal()
             #expect(window.isKeyWindow)
             window.setContentSize(NSSize(width: 1_800, height: 800))
             view.frame.size = NSSize(width: 1_000, height: 800)
             view.layoutSubtreeIfNeeded()
             #expect(requests.isEmpty)
-            for _ in 0..<2 {
-                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [])
+            for index in 0..<2 {
+                if fromOtherPane {
+                    panes[1].focusTerminal()
+                }
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [], afterStep: { _ in
+                    #expect(requests.count == index)
+                    #expect(window.firstResponder === view.terminalView)
+                })
                 try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
                 #expect(requests == [grid()])
                 #expect(window.firstResponder === view.terminalView)
             }
         }
 
-        @Test("Selection, links and application mouse clicks never request content Fit", arguments: ["drag", "doubleClick", "tripleClick", "link", "mouse", "shift", "editor", "ime"])
-        func contentClickExclusions(action: String) async throws {
+        @Test("Selection, links and application mouse clicks never request content Fit", arguments: ["drag", "doubleClick", "tripleClick", "link", "mouse", "shift", "editor", "ime"], [false, true])
+        func contentClickExclusions(action: String, fromOtherPane: Bool) async throws {
             let (window, panes) = makeTerminalWindow(key: true)
             defer { withExtendedLifetime(window) { } }
             let view = panes[0]
+            panes[fromOtherPane ? 1 : 0].focusTerminal()
             var clicks = 0
             var links = 0
             view.onContentClick = { clicks += 1 }
+            view.onFocusRestored = view.onContentClick
+            view.frame.size = NSSize(width: 1_000, height: 600)
+            view.layoutSubtreeIfNeeded()
             view.onOpenURL = { _, _ in links += 1
                 return true
             }

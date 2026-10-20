@@ -685,10 +685,12 @@
             }
         }
 
-        /// Fires whenever this view becomes the window's first responder
-        /// (mouse click, programmatic, tabbing). Used to propagate focus back
-        /// to tmux via `select-pane` so external clients see the same active pane.
+        /// Synchronizes input routing and tmux selection, including repeated
+        /// mouse-down notifications while this terminal already has focus.
         var onBecomeFirstResponder: (@MainActor () -> Void)?
+        /// A programmatic responder transition, delivered once the terminal is visible.
+        var onFocusRestored: (@MainActor () -> Void)?
+        private var pendingFocusRestoration = false
         /// A completed plain content click, separate from programmatic focus and selections.
         var onContentClick: (@MainActor () -> Void)?
         weak var voiceInputRouter: TerminalQuickActionRouter?
@@ -827,7 +829,7 @@
                 self?.scrollHorizontally(by: delta)
             }
             overlay.onMouseDown = { [weak self] in
-                self?.focusTerminal()
+                self?.focusTerminal(source: .mouse)
             }
             overlay.onMouseMoved = { [weak self] event in
                 self?.handleMouseMoved(event)
@@ -886,15 +888,42 @@
             false
         }
 
+        enum FocusSource {
+            case programmatic
+            case mouse
+        }
+
         @discardableResult
-        func focusTerminal() -> Bool {
-            guard let window, window.makeFirstResponder(terminalView) else { return false }
+        func focusTerminal(source: FocusSource = .programmatic) -> Bool {
+            // Mouse focus must wait for the completed-click gesture checks, including
+            // when it supersedes a programmatic focus waiting for remote bootstrap.
+            if source == .mouse {
+                pendingFocusRestoration = false
+            }
+            guard let window else { return false }
+            let restoresFocus = window.firstResponder !== terminalView
+            guard window.makeFirstResponder(terminalView) else { return false }
             if let contentView = window.contentView {
                 updateFocusBorders(in: contentView)
             }
             onBecomeFirstResponder?()
+            if source == .programmatic, restoresFocus {
+                pendingFocusRestoration = true
+            }
+            completePendingFocusRestoration()
             scheduleQuestionCheck()
             return true
+        }
+
+        func completePendingFocusRestoration() {
+            guard pendingFocusRestoration else { return }
+            guard let window, window.firstResponder === terminalView, !isEditorActive else {
+                pendingFocusRestoration = false
+                return
+            }
+            guard !isHiddenOrHasHiddenAncestor else { return }
+            pendingFocusRestoration = false
+            onFocusRestored?()
         }
 
         private func updateFocusBorders(in view: NSView) {
@@ -973,6 +1002,7 @@
             }
 
             guard let window else {
+                pendingFocusRestoration = false
                 cancelVoiceInputPress()
                 cancelQuestionCheck()
                 return

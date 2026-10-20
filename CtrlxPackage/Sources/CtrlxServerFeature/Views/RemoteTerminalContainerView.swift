@@ -590,12 +590,13 @@ enum RemoteStreamState: Equatable {
 private struct RemoteTerminalNSView: NSViewRepresentable {
     @Environment(\.terminalQuickActions) private var quickActions
     @Environment(\.openTerminalFileLink) private var openFileLink
-    @Environment(\.terminalContentClick) private var contentClick
+    @Environment(\.terminalViewportInteraction) private var viewportInteraction
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
         return { path in openFileLink(.init(path: path, paneID: paneId, hostID: connection.id)) }
     }
+
     let paneId: String
     let connection: ViewerConnection
     let isHostConnected: Bool
@@ -636,10 +637,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             onTitleChange: onTitleChange,
         )
         coordinator.terminalView.isEditorActive = isEditorActive
+        coordinator.terminalView.onFocusRestored = { viewportInteraction?(connection.id, paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
         coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
-        coordinator.terminalView.onContentClick = { contentClick?(connection.id, paneId) }
+        coordinator.terminalView.onContentClick = { viewportInteraction?(connection.id, paneId) }
         // Route image pastes through the SwiftUI parent so the upload state
         // and cancel popover live alongside the terminal view in the body
         // hierarchy. Returning `true` consumes the paste — `Ctrl+V` is sent
@@ -675,10 +677,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
         // Re-bind focus, paste and URL-click callbacks so closures captured
         // here reflect the current parent state on every layout pass.
+        context.coordinator.terminalView.onFocusRestored = { viewportInteraction?(connection.id, paneId) }
         context.coordinator.bindQuickActions(quickActions, onFocus: onFocus)
         nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
-        nsView.onContentClick = { contentClick?(connection.id, paneId) }
+        nsView.onContentClick = { viewportInteraction?(connection.id, paneId) }
         nsView.onImagePaste = { [weak coordinator] image in
             coordinator?.quickActionEndpoint?.recordInput()
             onImagePaste(image)
@@ -888,6 +891,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 Task { @MainActor in router?.retire(endpoint) }
             }
             terminalView.onBecomeFirstResponder = nil
+            terminalView.onFocusRestored = nil
             terminalView.onRawInput = nil
             terminalView.onInput = nil
             terminalView.onImagePaste = nil
@@ -1324,6 +1328,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             terminalView.isHidden = false
             terminalView.needsDisplay = true
             updateState(.streaming)
+            terminalView.completePendingFocusRestoration()
 
             if terminalView.autoFocusEnabled, !terminalView.isEditorActive {
                 terminalView.focusTerminal()

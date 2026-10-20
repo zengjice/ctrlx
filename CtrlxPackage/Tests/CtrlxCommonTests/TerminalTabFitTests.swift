@@ -135,6 +135,26 @@ struct TerminalTabFitTests {
         #expect(take(&fit, current: first) == grid)
     }
 
+    @Test("The same terminal fits on focus after moving right and back left", arguments: [nil, "host-a"] as [String?])
+    func splitFocusRoundTrip(hostID: String?) {
+        let target = TerminalTabFit.Target(hostID: hostID, sessionName: "dev", windowID: "@1")
+        var fit = TerminalTabFit()
+        let full = ResizeTmuxPane(width: 180, height: 40, userInitiated: true)
+        let right = ResizeTmuxPane(width: 85, height: 40, userInitiated: true)
+        fit.recordFit(for: target, request: full)
+
+        for viewport in [right, full] {
+            // Moving the tab/receiving shared layout alone does not own a resize.
+            #expect(fit.takeRequest(for: target, isAvailable: true, isPresentationReady: true, measuredRequest: viewport) == nil)
+            // Native focus can move to a new view without changing the tmux window ID.
+            fit.requestAfterViewportChange(target, measuredRequest: viewport)
+            #expect(fit.takeRequest(for: target, isAvailable: true, isPresentationReady: true, measuredRequest: viewport) == viewport)
+            fit.recordFit(for: target, request: viewport)
+            fit.requestAfterViewportChange(target, measuredRequest: viewport)
+            #expect(fit.target == nil)
+        }
+    }
+
     @Test("A failed automatic Fit stays consumed until a new click, which can retry", arguments: [nil, "host-a"] as [String?])
     func clickRetriesFailedFit(hostID: String?) {
         let target = TerminalTabFit.Target(hostID: hostID, sessionName: "dev", windowID: "@1")

@@ -62,7 +62,7 @@ struct TerminalContainerView: NSViewRepresentable {
     @Environment(EditorSessionManager.self) private var editorSessionManager
     @Environment(\.terminalQuickActions) private var quickActions
     @Environment(\.openTerminalFileLink) private var openFileLink
-    @Environment(\.terminalContentClick) private var contentClick
+    @Environment(\.terminalViewportInteraction) private var viewportInteraction
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
@@ -99,7 +99,8 @@ struct TerminalContainerView: NSViewRepresentable {
         // state captured by parent closures (window/session selection).
         coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
-        coordinator.terminalView.onContentClick = { contentClick?(nil, paneState.paneId) }
+        coordinator.terminalView.onContentClick = { viewportInteraction?(nil, paneState.paneId) }
+        coordinator.terminalView.onFocusRestored = { viewportInteraction?(nil, paneState.paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
         quickActions?.applyRequestedFocus(to: coordinator.terminalView, hostID: nil, paneID: paneState.paneId, autoFocus: autoFocus)
@@ -133,7 +134,8 @@ struct TerminalContainerView: NSViewRepresentable {
         // current parent state on every layout pass.
         nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
-        nsView.onContentClick = { contentClick?(nil, paneState.paneId) }
+        nsView.onContentClick = { viewportInteraction?(nil, paneState.paneId) }
+        coordinator.terminalView.onFocusRestored = { viewportInteraction?(nil, paneState.paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
         // Update container size on layout changes
@@ -534,6 +536,7 @@ struct TerminalContainerView: NSViewRepresentable {
                 Task { @MainActor in router?.retire(endpoint) }
             }
             terminalView.onBecomeFirstResponder = nil
+            terminalView.onFocusRestored = nil
             // Disconnect input handlers first so no new tmux commands fire
             // after the pane is destroyed (prevents SIGABRT from NSTask).
             terminalView.onInput = nil
