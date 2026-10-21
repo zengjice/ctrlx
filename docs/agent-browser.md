@@ -9,6 +9,13 @@ Host 浏览器标签录制静音 MP4。最长 10 分钟，默认 10 fps，视频
 `completed` 确认文件可用，再通过文件浏览器查看或下载。参数、资源限制、
 异常情况及与旧短录屏命令的区别见 [浏览器引擎](agent-browser-engines.md#managed-expansion-workflows)。
 
+排查偶发录屏崩溃时，在实际录制的 Mac Host 上开启 **Settings → General →
+Diagnostics → Debug Mode**（默认关闭，立即生效）。关键阶段及每 5 秒的进度、
+Host 内存和窗口布局摘要写入 `~/Library/Logs/CtrlX/Browser/`，最多 3 × 2 MiB；
+关闭开关停止采集、保留已有日志。复现后将整个目录和对应 macOS `.ips` 崩溃报告
+一起提供。不会记录网页内容、URL、请求头或终端文本；详见
+[诊断日志](services-reference.md#appkit-layout-diagnostics)。
+
 ## Viewer 显式剪贴板
 
 Host 的 `supportsWorkspaceClipboard` 能力开启配对 Mac / iOS Viewer 的 Copy / Paste。

@@ -12,6 +12,9 @@
     int64_t bytes = 0;
     bool pending = true, finishing = false;
     Clock::time_point created = Clock::now(), started = created, next = created, lastFrame = created, stopped;
+    Clock::time_point phaseStarted = created, nextDiagnostic = created;
+    NSString* phase = @"prepare";
+    int captureFailures = 0, skippedFrames = 0;
     std::shared_ptr<BrowserRecordingWriter> writer;
     bool Active() const { return [@[@"starting", @"recording", @"stopping"] containsObject:state]; }
     NSDictionary* Status() const {
@@ -27,6 +30,36 @@
   };
   std::map<std::string, std::shared_ptr<Recording>> recordings_;
 
+  void RecordingDiagnostic(std::shared_ptr<Recording> recording, NSString* event) {
+    if (!AgentBrowserDebugMode()) return;
+    auto now = Clock::now();
+    NSMutableDictionary* value = [@{@"event": event, @"recording": recording->identifier,
+      @"state": recording->state, @"phase": recording->phase,
+      @"phaseSeconds": @(std::chrono::duration<double>(now - recording->phaseStarted).count()),
+      @"elapsedSeconds": @(std::chrono::duration<double>(now - recording->created).count()),
+      @"sinceLastFrameSeconds": @(std::chrono::duration<double>(now - recording->lastFrame).count()),
+      @"frames": @(recording->frames), @"bytes": @(recording->bytes), @"fps": @(recording->fps),
+      @"maximumSeconds": @(recording->seconds), @"pending": @(recording->pending),
+      @"finishing": @(recording->finishing), @"captureFailures": @(recording->captureFailures),
+      @"skippedFrames": @(recording->skippedFrames), @"recordingJobs": @(browserRecordingJobs.load()),
+      @"browserTabs": @(tabs_.size()), @"failed": @(recording->error != nil)} mutableCopy];
+    if (recording->reason) value[@"reason"] = recording->reason;
+    auto tab = tabs_.find(recording->tab);
+    if (tab != tabs_.end()) {
+      value[@"browserID"] = @(tab->second.browser->GetIdentifier());
+      NSDictionary* presentation = callbacks_.presentation ? callbacks_.presentation(tab->second.browser) : nil;
+      value[@"pageVisible"] = presentation[@"visible"] ?: @NO;
+      value[@"loading"] = @(tab->second.browser->IsLoading());
+    }
+    RecordBrowserDiagnostic(value);
+    recording->nextDiagnostic = now + std::chrono::seconds(5);
+  }
+
+  void RecordingPhase(std::shared_ptr<Recording> recording, NSString* phase) {
+    recording->phase = phase;
+    recording->phaseStarted = Clock::now();
+  }
+
   bool RecordingActive(const std::string& tab) {
     auto found = recordings_.find(tab);
     return found != recordings_.end() && found->second->Active();
@@ -35,6 +68,8 @@
   void FinishRecording(std::shared_ptr<Recording> recording) {
     if (recording->pending || recording->finishing || ![recording->state isEqual:@"stopping"]) return;
     recording->finishing = true;
+    RecordingPhase(recording, @"finish");
+    RecordingDiagnostic(recording, @"recording-finalize");
     const double seconds = std::chrono::duration<double>(recording->stopped - recording->started).count();
     CefRefPtr<Bridge> self = this;
     CefPostTask(TID_FILE_USER_VISIBLE, new Action([self, recording, seconds] {
@@ -47,6 +82,8 @@
           if (result[@"error"] && !recording->error) recording->error = result[@"error"];
           recording->writer.reset();
           --browserRecordingJobs;
+          self->RecordingPhase(recording, @"done");
+          self->RecordingDiagnostic(recording, @"recording-finished");
         }));
       });
     }));
@@ -58,13 +95,17 @@
       recording->state = @"stopping";
       recording->reason = reason;
       recording->stopped = Clock::now();
+      RecordingDiagnostic(recording, @"recording-stop");
     }
     FinishRecording(recording);
   }
 
   void RecordingTick() {
     for (auto& [id, recording] : recordings_) {
-      if (!recording->Active() || [recording->state isEqual:@"stopping"]) continue;
+      if (!recording->Active()) continue;
+      if (AgentBrowserDebugMode() && Clock::now() >= recording->nextDiagnostic)
+        RecordingDiagnostic(recording, @"recording-progress");
+      if ([recording->state isEqual:@"stopping"]) continue;
       if (!tabs_.contains(id)) { StopRecording(recording, @"tab-closed"); continue; }
       if (!ownership_.Owns(recording->owner, id)) { StopRecording(recording, @"owner-ended"); continue; }
       auto now = Clock::now();
@@ -77,6 +118,7 @@
       }
       if (recording->pending || now < recording->next) continue;
       recording->pending = true;
+      RecordingPhase(recording, @"capture");
       recording->next = now + std::chrono::milliseconds(1000 / recording->fps);
       CefRefPtr<Bridge> self = this;
       RemoteCall(id, "Page.captureScreenshot", @{@"format": @"jpeg", @"quality": @80,
@@ -84,13 +126,16 @@
         [self, recording](NSDictionary* result, NSString* error) {
           if (!self->ownership_.Owns(recording->owner, recording->tab)) self->StopRecording(recording, @"owner-ended");
           if (error || [recording->state isEqual:@"stopping"]) {
+            if (error) ++recording->captureFailures;
             // Navigation invalidates an old frame, not the recording. The next
             // sample observes the new document without replaying any input.
             recording->pending = false;
+            self->RecordingPhase(recording, @"idle");
             self->FinishRecording(recording);
             return;
           }
           NSString* encoded = result[@"data"];
+          self->RecordingPhase(recording, @"append");
           double elapsed = recording->frames ? std::chrono::duration<double>(Clock::now() - recording->started).count() : 0;
           CefPostTask(TID_FILE_USER_VISIBLE, new Action([self, recording, encoded, elapsed] {
             NSString* failure = recording->writer->Append(encoded, elapsed);
@@ -98,12 +143,16 @@
             int frames = recording->writer->Frames();
             bool limit = recording->writer->AtSizeLimit();
             CefPostTask(TID_UI, new Action([self, recording, failure, bytes, frames, limit] {
+              bool firstFrame = !recording->frames && frames > 0;
+              if (frames == recording->frames && !failure) ++recording->skippedFrames;
               if (frames > recording->frames) {
                 if (!recording->frames) recording->started = Clock::now();
                 recording->lastFrame = Clock::now();
                 if ([recording->state isEqual:@"starting"]) recording->state = @"recording";
               }
               recording->bytes = bytes; recording->frames = frames; recording->pending = false;
+              self->RecordingPhase(recording, @"idle");
+              if (firstFrame) self->RecordingDiagnostic(recording, @"recording-first-frame");
               if (failure) {
                 recording->error = failure;
                 self->StopRecording(recording, @"encoder-failed");
@@ -155,11 +204,14 @@
       recording->writer = std::make_shared<BrowserRecordingWriter>(recording->path, recording->fps);
       recordings_[tabID] = recording;
       ++browserRecordingJobs;
+      RecordingDiagnostic(recording, @"recording-start");
       CefRefPtr<Bridge> self = this;
       CefPostTask(TID_FILE_USER_VISIBLE, new Action([self, recording] {
         NSString* error = recording->writer->Prepare();
         CefPostTask(TID_UI, new Action([self, recording, error] {
           recording->pending = false;
+          self->RecordingPhase(recording, @"idle");
+          self->RecordingDiagnostic(recording, @"recording-prepared");
           if (error) { recording->error = error; self->StopRecording(recording, @"failed"); }
           self->FinishRecording(recording);
         }));

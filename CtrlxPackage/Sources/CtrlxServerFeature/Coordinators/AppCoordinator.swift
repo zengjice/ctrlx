@@ -399,6 +399,7 @@
 
             // Disable macOS automatic window restoration to prevent duplicate windows on launch
             preferences.setBool(false, "NSQuitAlwaysKeepsWindows")
+            AppKitDiagnostics.shared.bind(to: settings)
         }
 
         // MARK: - Public API

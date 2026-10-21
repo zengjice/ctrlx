@@ -9,6 +9,9 @@ NS_ASSUME_NONNULL_BEGIN
 @protocol CXApplicationDiagnosticsDelegate <NSObject>
 // Synchronous: AppKit may terminate the process immediately after reporting.
 - (void)recordAppKitException:(NSException *)exception;
+@optional
+// Main thread, bounded metadata only; no page content, URLs or request headers.
+- (void)recordBrowserDiagnostic:(NSDictionary<NSString *, id> *)event;
 @end
 
 // CEF stays in a separately built native library. Swift/SPM clients need only
@@ -62,6 +65,7 @@ NS_ASSUME_NONNULL_BEGIN
 FOUNDATION_EXPORT BOOL CXBrowserPrepareApplication(void);
 FOUNDATION_EXPORT void CXBrowserSetTerminationDelegate(id<CXBrowserTerminationDelegate> delegate);
 FOUNDATION_EXPORT void CXBrowserSetDiagnosticsDelegate(id<CXApplicationDiagnosticsDelegate> delegate);
+FOUNDATION_EXPORT void CXBrowserSetDebugMode(BOOL enabled);
 FOUNDATION_EXPORT id<CXBrowserRuntime> _Nullable CXBrowserCreateRuntime(void);
 FOUNDATION_EXPORT NSString * _Nullable CXBrowserLoadError(void);
 NS_ASSUME_NONNULL_END

@@ -29,6 +29,12 @@ void CXBrowserSetDiagnosticsDelegate(id<CXApplicationDiagnosticsDelegate> delega
     if (setDelegate) setDelegate(delegate);
 }
 
+void CXBrowserSetDebugMode(BOOL enabled) {
+    if (!library || loadError) return;
+    void (*setEnabled)(BOOL) = dlsym(library, "CXEmbeddedBrowserSetDebugMode");
+    if (setEnabled) setEnabled(enabled);
+}
+
 id<CXBrowserRuntime> CXBrowserCreateRuntime(void) {
     if (!library || loadError) return nil;
     id (*create)(void) = dlsym(library, "CXEmbeddedBrowserCreateRuntime");

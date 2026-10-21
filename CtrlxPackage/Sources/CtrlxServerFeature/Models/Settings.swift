@@ -250,8 +250,13 @@ final public class AppSettings {
 
     /// App-wide diagnostics, stored locally on this device.
     public var debugModeEnabled = false {
-        didSet { preferences.setBool(debugModeEnabled, Keys.debugModeEnabled) }
+        didSet {
+            preferences.setBool(debugModeEnabled, Keys.debugModeEnabled)
+            onDebugModeChanged?(debugModeEnabled)
+        }
     }
+
+    @ObservationIgnored var onDebugModeChanged: (@MainActor (Bool) -> Void)?
 
     /// Whether to open the panes window when the app launches
     public var openPanesWindowOnLaunch: Bool = Defaults.openPanesWindowOnLaunch {

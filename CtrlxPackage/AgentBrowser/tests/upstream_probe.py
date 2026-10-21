@@ -188,7 +188,8 @@ class Probe:
         self.host = subprocess.Popen([str(self.args.app / 'Contents/MacOS/CtrlX'), '--e2e-test',
             '--tmux-socket', self.socket, '--ctrlx-state-root', str(self.root), '--e2e-api-socket', self.api,
             '--zdotdir', str(Path(__file__).resolve().parent / 'shell')]
-            + (['--e2e-browser-mock-keychain'] if getattr(self, 'mock_keychain', False) else []),
+            + (['--e2e-browser-mock-keychain'] if getattr(self, 'mock_keychain', False) else [])
+            + getattr(self, 'extra_host_arguments', []),
             stdout=log, stderr=log, start_new_session=True)
         print('Artifacts:', self.root, 'isolated host PID:', self.host.pid, flush=True)
         await self.control('wait-ready', '--timeout', '30')

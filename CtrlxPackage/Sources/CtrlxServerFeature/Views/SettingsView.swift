@@ -235,6 +235,7 @@ struct GeneralSettingsView: View {
                 Text("Diagnostics")
             } footer: {
                 Text("Show additional diagnostic information across CtrlX. Off by default on this device.")
+                Text("On Mac, browser recording diagnostics are saved locally while enabled. Turning this off stops collection and keeps existing logs.")
             }
 
             Section("Updates") {

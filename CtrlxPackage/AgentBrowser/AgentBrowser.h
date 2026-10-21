@@ -14,6 +14,9 @@ struct BrowserCallbacks {
 bool StartAgentBrowser(NSString* stateDirectory, BrowserCallbacks callbacks);
 void StopAgentBrowser();
 bool AgentBrowserTransportsStopped();
+// Accessed only on the native AppKit/CEF UI thread.
+bool AgentBrowserDebugMode();
+void RecordBrowserDiagnostic(NSDictionary* event);
 void AddAgentBrowserTab(CefRefPtr<CefBrowser> browser, const std::string& owner);
 void RemoveAgentBrowserTab(CefRefPtr<CefBrowser> browser);
 void AgentBrowserNavigation(CefRefPtr<CefBrowser> browser);

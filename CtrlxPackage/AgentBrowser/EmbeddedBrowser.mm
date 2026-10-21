@@ -344,6 +344,11 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     title_ = @(title.ToString().c_str()); Changed(browser);
   }
   void OnLoadingStateChange(CefRefPtr<CefBrowser> browser, bool, bool, bool) override { Changed(browser); }
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, TerminationStatus status,
+      int errorCode, const CefString&) override {
+    if (AgentBrowserDebugMode()) RecordBrowserDiagnostic(@{@"event": @"renderer-terminated",
+      @"browserID": @(browser->GetIdentifier()), @"status": @(status), @"errorCode": @(errorCode)});
+  }
   NSDictionary *Presentation() {
     // Read-only routing/attachment diagnostics, filtered by ownership by Tabs.
     return @{@"session": route_[@"session"] ?: @"", @"window": route_[@"window"] ?: @"",
@@ -494,6 +499,19 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
 @end
 static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
 static __weak id<CXApplicationDiagnosticsDelegate> applicationDiagnosticsDelegate;
+static bool browserDebugMode = false;
+
+bool AgentBrowserDebugMode() { return browserDebugMode; }
+void RecordBrowserDiagnostic(NSDictionary* event) {
+  if (!browserDebugMode || !NSThread.isMainThread ||
+      ![applicationDiagnosticsDelegate respondsToSelector:@selector(recordBrowserDiagnostic:)]) return;
+  @try {
+    [applicationDiagnosticsDelegate recordBrowserDiagnostic:event];
+  } @catch (NSException* exception) {
+    browserDebugMode = false;
+    NSLog(@"[agent-browser] Diagnostic callback failed; collection disabled (%@)", exception.name);
+  }
+}
 @implementation CXBrowserApplication
 - (void)reportException:(NSException *)exception {
   @try {
@@ -943,4 +961,7 @@ extern "C" __attribute__((visibility("default"))) void CXEmbeddedBrowserSetTermi
 }
 extern "C" __attribute__((visibility("default"))) void CXEmbeddedBrowserSetDiagnosticsDelegate(id<CXApplicationDiagnosticsDelegate> delegate) {
   applicationDiagnosticsDelegate = delegate;
+}
+extern "C" __attribute__((visibility("default"))) void CXEmbeddedBrowserSetDebugMode(BOOL enabled) {
+  browserDebugMode = enabled;
 }

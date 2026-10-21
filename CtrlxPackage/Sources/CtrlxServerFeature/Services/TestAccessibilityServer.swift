@@ -100,7 +100,9 @@
                     maximumLength: 65_536
                 ) { [weak self] data, _, isComplete, error in
                     var current = accumulated
-                    if let data { current.append(data) }
+                    if let data {
+                        current.append(data)
+                    }
 
                     guard error == nil, !current.isEmpty else {
                         connection.cancel()
@@ -231,6 +233,15 @@
                         connection.send(content: response, completion: .contentProcessed { _ in
                             connection.cancel()
                         })
+                    }
+                } else if request.hasPrefix("POST /set-debug-mode") {
+                    let enabled = Self.extractQueryParam(from: request, key: "enabled") == "true"
+                    Task { @MainActor in
+                        let settings = TestAccessibilityServer.liveSettings
+                        settings?.debugModeEnabled = enabled
+                        let body = settings == nil ? "not_found" : "ok"
+                        let response = Data("HTTP/1.1 200 OK\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n\(body)".utf8)
+                        connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
                     }
                 } else if request.hasPrefix("POST /set-sidebar-fields") {
                     // Opt a scenario into off-by-default sidebar fields by

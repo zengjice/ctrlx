@@ -10,6 +10,39 @@ dated acceptance paragraphs retain their original test scope, not a fresh run.
 
 ### AppKit layout diagnostics
 
+Mac **Settings → General → Diagnostics → Debug Mode** also controls ongoing
+browser-recording diagnostics. It defaults off per device, restores on launch,
+and changes take effect immediately, including recordings already in progress.
+The switch does not start Chromium. While enabled, recording start/prepare/first
+frame/stop/finalize/completion and renderer termination are logged. Active
+recordings (including finalization) add one progress sample every five seconds.
+Samples contain phase age, frame/byte/error/skip counts, page visibility, Host
+process resident/footprint bytes, build/OS identity and cached window/tab-layout
+counts and selections. This samples Host memory, not the sum of Chromium helper
+processes; a main-thread stall also stalls sampling.
+
+`BrowserDiagnosticStore` writes each small JSONL entry synchronously, without a
+background flush queue, to `~/Library/Logs/CtrlX/Browser/`. Three rotating files
+are limited to 2 MiB each (directory 0700, files 0600). Turning Debug Mode off
+stops collection, retains evidence and does not affect recording. A write failure
+stops collection until toggled again and reports one error in the system log.
+E2E uses only `<state-root>/browser-diagnostics/` and requires an explicit root.
+No URLs, headers, credentials, output paths, page/terminal text or window titles
+are collected. Periodic samples never request layout or walk the view tree.
+
+For an intermittent recording crash, enable this switch on the **recording
+Host**, reproduce, then collect the entire `Browser/` directory together with
+the matching macOS `.ips` crash report and approximate crash time. These are
+pre-crash breadcrumbs, not a crash fix or a substitute for the crash stack.
+`BrowserDiagnosticsTests` covers setting persistence/live toggling, failure
+handling, rotation, private permissions, isolation and content-free snapshots.
+The isolated signed Debug-app test `AgentBrowser/tests/recording_diagnostics.py`
+uses the live settings binding, checks background capture and bounded sample
+cadence, verifies capture continues after diagnostics are disabled, and confirms
+logs remain readable after abruptly killing only its disposable Host. Run it
+through the managed artifact wrapper with a `prepare_upstream_probe.sh` fixture,
+passing `<fixture>/CtrlX.app <fixture>/agent-browser <fixture>/codex`.
+
 `AppKitDiagnostics` synchronously records the first toolbar/window-layout
 exception reported through the native `CXBrowserApplication` per launch. The
 bridge always forwards the exception to AppKit afterward, including when

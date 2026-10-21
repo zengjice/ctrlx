@@ -385,7 +385,15 @@ public struct MainView: View {
                     kind: detachedWorkspace == nil ? .main : .detached,
                     connection: coordinator.connectedViewerManager?.combinedState ?? .disconnected,
                     paired: settings.isPaired,
-                    remote: selectedRemoteSession != nil
+                    remote: selectedRemoteSession != nil,
+                    split: currentSessionTabs?.isSplit == true,
+                    browserSelected: currentSessionTabs?.selectedBrowserTabId != nil,
+                    fileSelected: currentSessionTabs?.selectedFileTabId != nil,
+                    rightPaneFocused: currentSessionTabs?.isRightPaneFocused == true,
+                    rightBrowserSelected: currentSessionTabs?.selectedRight?.kind == .browser,
+                    orderedTabCount: currentSessionTabs?.tabOrder.count ?? 0,
+                    browserTabCount: currentSessionTabs?.openBrowserTabs.count ?? 0,
+                    fileTabCount: currentSessionTabs?.openFileTabs.count ?? 0
                 )
             ))
             .environment(\.workbenchWindowID, detachedWorkspace?.id)

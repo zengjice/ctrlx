@@ -11,6 +11,14 @@ struct AppKitWindowDiagnosticContext {
     let connection: ConnectedViewer.ConnectionState
     let paired: Bool
     let remote: Bool
+    var split = false
+    var browserSelected = false
+    var fileSelected = false
+    var rightPaneFocused = false
+    var rightBrowserSelected = false
+    var orderedTabCount = 0
+    var browserTabCount = 0
+    var fileTabCount = 0
 
     var snapshot: NSDictionary {
         let state = switch connection {
@@ -20,7 +28,12 @@ struct AppKitWindowDiagnosticContext {
         case .reconnecting: "reconnecting"
         case .error: "error"
         }
-        return ["kind": kind.rawValue, "toolbarConnection": state, "paired": paired, "remoteSelection": remote]
+        return [
+            "kind": kind.rawValue, "toolbarConnection": state, "paired": paired, "remoteSelection": remote,
+            "split": split, "browserSelected": browserSelected, "fileSelected": fileSelected,
+            "rightPaneFocused": rightPaneFocused, "rightBrowserSelected": rightBrowserSelected,
+            "orderedTabCount": orderedTabCount, "browserTabCount": browserTabCount, "fileTabCount": fileTabCount,
+        ]
     }
 }
 
@@ -34,6 +47,9 @@ final class AppKitDiagnostics: NSObject, @preconcurrency CXApplicationDiagnostic
     private var recordedLayoutFailure = false
     private let logger = Logger(subsystem: "com.ctrlx.appkit", category: "Diagnostics")
     @Dependency(AppKitDiagnosticStore.self) private var store
+    @Dependency(BrowserDiagnosticStore.self) private var browserStore
+    private var debugEnabled = false
+    private var browserWriteFailed = false
 
     init(windows: @escaping @MainActor () -> [NSWindow] = { NSApp?.windows ?? [] }) {
         self.windows = windows
@@ -45,6 +61,60 @@ final class AppKitDiagnostics: NSObject, @preconcurrency CXApplicationDiagnostic
             contexts.setObject(context.snapshot, forKey: window)
         } else {
             contexts.removeObject(forKey: window)
+        }
+    }
+
+    func bind(to settings: AppSettings) {
+        settings.onDebugModeChanged = { [weak self] in self?.setDebugMode($0) }
+        setDebugMode(settings.debugModeEnabled)
+    }
+
+    func setDebugMode(_ enabled: Bool) {
+        guard enabled != debugEnabled else { return }
+        if !enabled {
+            recordBrowserDiagnostic(["event": "debug-disabled"])
+        }
+        debugEnabled = enabled
+        browserWriteFailed = false
+        CXBrowserSetDebugMode(enabled)
+        if enabled {
+            recordBrowserDiagnostic(["event": "debug-enabled"])
+        }
+    }
+
+    func recordBrowserDiagnostic(_ event: [String: Any]) {
+        guard debugEnabled, !browserWriteFailed else { return }
+        let build = AppBuildInfo.current
+        let allWindows = windows()
+        let report: [String: Any] = [
+            "schemaVersion": 1,
+            "timestamp": Date().ISO8601Format(),
+            "uptimeSeconds": ProcessInfo.processInfo.systemUptime,
+            "processID": ProcessInfo.processInfo.processIdentifier,
+            "version": build.version ?? "unknown",
+            "buildNumber": build.buildNumber ?? "unknown",
+            "buildStamp": build.buildStamp ?? "unknown",
+            "sourceRevision": build.sourceRevision ?? "unknown",
+            "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
+            "memory": browserStore.memory(),
+            "browser": event,
+            "windowCount": allWindows.count,
+            // Cached metadata only; no SwiftUI body evaluation, layout or view-tree walk.
+            "windows": allWindows.prefix(16).map { window -> [String: Any] in
+                [
+                    "windowNumber": window.windowNumber, "frame": NSStringFromRect(window.frame),
+                    "visible": window.isVisible, "key": window.isKeyWindow,
+                    "toolbarItemCount": window.toolbar?.items.count ?? 0,
+                    "context": contexts.object(forKey: window) ?? ["kind": "other"],
+                ]
+            },
+        ]
+        do {
+            try browserStore.append(JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]))
+        } catch {
+            browserWriteFailed = true
+            CXBrowserSetDebugMode(false)
+            logger.error("Browser diagnostic collection stopped after a write failure: \(String(describing: error), privacy: .private)")
         }
     }
 
