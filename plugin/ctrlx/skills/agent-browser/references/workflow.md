@@ -42,6 +42,10 @@ Read the current page before acting; use returned selectors, not invented ones.
 For pagination, keys, scrolling, conditional waits and form controls, read
 [action details](actions.md).
 
+To record video with either engine, use `record-start`, `record-status` and
+`record-stop`; read [recording](page-commands.md#recording) for readiness,
+completion and limits.
+
 For expanded Vercel page commands (files, frames, network, diagnostics or eval),
 read [page commands](page-commands.md). **Page JavaScript is supported**:
 

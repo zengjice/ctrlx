@@ -747,6 +747,11 @@ dismissible banner linking to that agent's settings. The check runs once per
 launch; unknown versions and query failures are not classified as up to date.
 No remote Host or Agent process is changed by checking.
 
+Shared skill changes must bump both Agent-side plugin manifest versions so
+existing installations can discover the update. Rebuilding the app includes the
+new resources for both agents, but same-version edits alone do not trigger an
+update notice or replace the agents' installed caches.
+
 Settings shows each configuration folder's installed and bundled versions,
 Check, Install/Reinstall, and Uninstall. Operations are serialized per folder
 across settings views. Reinstall validates the marketplace source first and

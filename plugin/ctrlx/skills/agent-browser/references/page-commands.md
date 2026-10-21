@@ -111,11 +111,6 @@ ctrlx browser command --tab <id> -- react renders stop --raw-json
 ctrlx browser command --tab <id> -- react suspense
 ctrlx browser command --tab <id> -- webmcp list
 ctrlx browser command --tab <id> -- webmcp invoke <observed-tool> --params '{"key":"value"}'
-ctrlx browser record --tab <id> --seconds 3 --output /tmp/new.webm
-ctrlx browser record --tab <id> --seconds 3 --format mp4 --fps 12 --cursor --output /tmp/new.mp4 --contact-sheet /tmp/contact.png
-ctrlx browser record-start --tab <id> --seconds 600 --output /absolute/new-long.mp4
-ctrlx browser record-status --tab <id> --recording <returned-id>
-ctrlx browser record-stop --tab <id> --recording <returned-id>
 ```
 
 Conditional captures return `artifactSkipped: true` without creating a file when
@@ -159,10 +154,22 @@ tool availability in `webmcp` metadata (bounded summary, no schemas). This only
 discovers tools, never invokes them. Use explicit `list` for full definitions;
 `status:unavailable` means discovery failed, not that the preceding action failed.
 
+## Recording
+
+Prefer background MP4 for video capture. Legacy short `record` also supports
+WebM, cursor overlays and a contact sheet.
+
+```sh
+ctrlx browser record-start --tab <id> --seconds 600 --output /absolute/new-long.mp4
+ctrlx browser record-status --tab <id> --recording <returned-id>
+ctrlx browser record-stop --tab <id> --recording <returned-id>
+```
+
 For background recording up to 10 minutes, use `record-start` (1–600 seconds,
 default 600; 1–30 fps, default 10). It returns immediately with a recording ID.
 Use `record-status` to observe `starting/recording/stopping/completed/failed` and
-`record-stop` to finish early. Pass the returned `--recording` ID to avoid stopping
+wait for `recording` before performing actions that must be captured.
+Use `record-stop` to finish early. Pass the returned `--recording` ID to avoid stopping
 a newer recording. Stop returns immediately; wait for `completed` before using
 the file. A `failed` status or `error` is not successful capture.
 The Host writes silent H.264 MP4 directly to a new absolute path, using macOS
@@ -174,6 +181,12 @@ overlap legacy `record`. Only metadata is returned; use the existing file browse
 to view/download the saved movie. No pause, audio or contact sheet in this mode.
 
 Legacy short `record` requires existing Homebrew `ffmpeg`; CtrlX does not install it automatically.
+
+```sh
+ctrlx browser record --tab <id> --seconds 3 --output /tmp/new.webm
+ctrlx browser record --tab <id> --seconds 3 --format mp4 --fps 12 --cursor --output /tmp/new.mp4 --contact-sheet /tmp/contact.png
+```
+
 It captures only the owned page: 1–10 seconds requested, WebM or `--format mp4`,
 `--fps 1...60` (default 10), optional `--cursor` and a new PNG `--contact-sheet` path.
 `--contact-sheet-threshold 0...1` controls frame selection (default 0.05). Video plus
