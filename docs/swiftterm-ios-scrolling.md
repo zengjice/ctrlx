@@ -196,7 +196,7 @@ list owns the one-shot request and consumes it before sending, even if the
 command fails. Before measurement, leaving the page, disconnecting, manually
 fitting, switching windows or splitting cancels it. There is no fixed delay,
 rendering gate, repeated fitting on rotation/keyboard changes or Relay change.
-Unsupported Hosts keep 120 × 40. Settings → New Session can disable automatic
+Unsupported Hosts keep 120 × 40. Settings → New Session Defaults can disable automatic
 sizing and retain explicit rows/columns; migration preserves legacy customized
 fixed sizes and enables automatic sizing for the old 120 × 40 default.
 
@@ -325,8 +325,8 @@ In **Bottom Bar** mode the first control is **+ / Attachments**, replacing the
 keyboard button. It opens the existing Photo Library, image files, Camera and
 Paste Image menu, including the same preview and captured-pane upload flow.
 The image button is removed from the navigation bar in both layout modes.
-The existing **Keyboard Control** setting is retained: **Top Right** keeps its
-keyboard/voice controls and shows only Attachments in the bottom row; **Bottom
+The keyboard **Button Position** setting under **Settings → Keyboard & Input**
+is retained: **Top Right** keeps its keyboard/voice controls and shows only Attachments in the bottom row; **Bottom
 Bar** shows the complete input toolbar. The keyboard-on-entry setting is unchanged.
 
 The first-row input controls and SwiftTerm's second-row shortcut accessory share

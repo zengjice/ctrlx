@@ -134,8 +134,8 @@ send from the terminal. Existing terminal input is never cleared automatically.
 
 On iOS, the first-row **+ / Attachments** menu owns image input (Photo Library,
 image files, Camera and Paste Image); there is no duplicate image button at the
-top right. **Confirm Before Sending Images** in Settings is device-local and
-off by default. All four sources then prepare/compress and insert the images
+top right. **Confirm Before Sending Images** in Settings → Keyboard & Input is
+device-local and off by default. All four sources then prepare/compress and insert the images
 directly, without Return. Turning it on restores the compressed-image review
 sheet. A failed upload opens that sheet with the remaining images and error for
 manual retry. Preparation and sending retain the original pane/input identity;
@@ -196,6 +196,23 @@ height across the live terminal. The animation never wraps the terminal or keybo
 fade only, and Reduce Transparency uses an opaque, legible surface. The phrase
 editor hides its Form background so it does not obscure the shared material.
 
+## iOS settings organization
+
+The Settings home groups connection, preferences, background activity and other
+settings. **Hosts & Connection** contains connection controls, automatic connection,
+device name, paired Hosts and the Relay address. **Appearance & Terminal** keeps
+app appearance separate from terminal colors/font. **Keyboard & Input** contains
+keyboard placement/entry, Agent Quick Input and image-upload confirmation.
+**Voice Input**, **Quick Phrase Sync** and **New Session Defaults** have dedicated
+pages. Background Agent Monitoring and the global Debug Mode remain on the home
+page. **About CtrlX** groups version/device information, provenance and licenses.
+
+On iOS, Voice Input shows language and correction availability before provider
+configuration. Model testing and recording evaluation are collapsed by default;
+privacy and API-credit descriptions remain beside their controls. Mac voice
+settings retain their existing presentation. Navigation does not change preference
+keys/defaults, credentials, device-name commit behavior or voice-test cancellation.
+
 ## Context-aware voice input
 
 Mac (Local/Viewer) and iOS use the same preview-then-insert contract. One click
@@ -224,7 +241,7 @@ terminal above its input controls; native reply fields show it below their edito
 Neither terminal overlay changes the terminal's size. The strip remains visible
 during correction; cancelling it discards the recording without inserting text.
 If neither corrector can run, the recognized text is still inserted once without
-Return. With the app-wide **Diagnostics → Debug Mode** enabled in settings
+Return. With the app-wide **Debug Mode** enabled in settings
 (Mac: **General**; iOS: the main settings page),
 only after the input surface accepts it, the same strip shows
 **Voice Input**, explaining that context-aware correction was unavailable
@@ -352,7 +369,7 @@ Repeated identical clauses alone do not force the longer result. Both recognitio
 versions remain available as evidence for correction and for the recovery menu.
 This is an omission guard, not proof that the live recognizer is always right.
 
-Mac **Settings → Voice Input** and the existing iOS settings use the same component
+Mac and iOS **Settings → Voice Input** use the same component
 for provider credentials, model choices and bundled-sample model tests. Existing
 iOS preference keys (`voiceCorrectionProvider`, `voiceCorrectionModelID`,
 `voiceCorrectionTestedModelIDsByProvider`) and Keychain accounts are unchanged.
