@@ -28,9 +28,15 @@ class CORSFixture:
         content_type = 'application/json'
         body = json.dumps({'header': header}).encode()
         status = 200
+        redirects = {
+            '/cors/redirect': '/cors/redirect-final',
+            '/cors/redirect-chain': '/cors/redirect',
+            '/cors/same-to-cross': f'http://localhost:{handler.server.server_port}/cors/redirect-final',
+            '/cors/page-env-redirect': f'http://localhost:{handler.server.server_port}/cors/page-env-header',
+        }
         if handler.command == 'OPTIONS':
             status, body = 204, b''
-        elif path == '/cors/redirect':
+        elif path in redirects:
             status, body = 302, b''
         elif path == '/cors/script.js':
             content_type = 'application/javascript'
@@ -47,7 +53,7 @@ class CORSFixture:
         handler.send_header('Access-Control-Allow-Methods', 'GET, POST')
         handler.send_header('Access-Control-Expose-Headers', 'x-ctrlx-response')
         if status == 302:
-            handler.send_header('Location', '/cors/echo')
+            handler.send_header('Location', redirects[path])
         handler.send_header('Cache-Control', 'no-store')
         handler.send_header('Content-Type', content_type)
         handler.send_header('Content-Length', str(len(body)))
@@ -64,12 +70,12 @@ class CORSFixture:
             result = result if env else (result.get('cors') or {})
             passed = all(result.get(key, {}).get('ok') is True and
                          result[key].get('body', {}).get('header') == 'ark-chat-dev'
-                         for key in ('same', 'get', 'post', 'redirect'))
+                         for key in ('same', 'get', 'post', 'redirect', 'sameToCross', 'redirectChain'))
             passed &= (result.get('script', {}).get('ok') is True and
                        result['script'].get('header') == 'ark-chat-dev')
             passed &= all(result.get(key, {}).get('ok') is False and
                           'TypeError' in result[key].get('error', '')
-                          for key in ('deniedOrigin', 'deniedHeader', 'deniedSameHeader'))
+                          for key in ('deniedOrigin', 'deniedHeader', 'deniedSameHeader', 'deniedRedirectHeader'))
             if not env:
                 passed &= result.get('get', {}).get('responseHeader') == 'response-active'
             checks[name] = passed
@@ -85,4 +91,7 @@ class CORSFixture:
         checks['extensionHeaderNotPreflighted'] = bool(preflights) and not any(
             'x-maas-env' in (r['requestedHeaders'] or '') for r in preflights
             if r['path'] != '/cors/page-env-header')
+        checks['redirectTargetReceivedExtensionHeader'] = any(
+            r['path'] == '/cors/redirect-final' and r['method'] == 'GET' and
+            r['injectedHeader'] == 'ark-chat-dev' for r in self.requests)
         return checks

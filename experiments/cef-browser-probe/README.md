@@ -104,7 +104,8 @@ For cross-origin request-header acceptance, append `--cors` to either the
 configures `x-maas-env: ark-chat-dev` through its popup. The fixture uses
 `127.0.0.1` and `localhost` as distinct origins, served by the same private
 loopback server. It checks actual received headers on GET, JSON POST, script
-and redirect requests, response-header modification for the minimal extension,
+and redirect requests (same-origin to cross-origin and multiple hops),
+response-header modification for the minimal extension,
 and rejection of missing-origin permission and page-added forbidden headers
 (including `x-maas-env` when added by page JavaScript itself).
 `report.json` includes server-side `networkEvents` and strict `compatibility.cors`
@@ -115,6 +116,22 @@ The currently pinned prebuilt CEF **fails** this gate. The candidate source
 patch and its uncompleted native-build acceptance are documented under
 [Cross-origin header compatibility](../../docs/browser-extensions-design.md#cross-origin-header-compatibility).
 Rebuilding only the probe executable does not apply a CEF source patch.
+
+The candidate patch also has a small check that needs only the three matching
+upstream CEF source files and the existing SDK headers, without a Chromium build:
+
+```bash
+python3 experiments/cef-browser-probe/test_header_client_patch.py \
+  --cef-source /path/to/unpatched/cef \
+  --cef-sdk /path/to/pinned/cef_sdk
+```
+
+It applies the patch in a temporary copy, checks declaration/definition agreement
+and callback bindings with CEF's `OnceCallback`/`BindOnce`, then compiles and runs
+the extracted request/response finishing functions with small network/callback
+stand-ins. Cases cover successive redirects, preserving page-added headers,
+errors, and optional redirect/response overrides. This checks the continuations;
+it does not compile the full CEF file or replace the native `--cors` gate.
 
 To exercise the product's generated key for unsigned ZIPs and immutable update
 directories, export fixtures through the real store:

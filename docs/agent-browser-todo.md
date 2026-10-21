@@ -75,6 +75,8 @@ ENV-Plugin 注入 `x-maas-env` 时，当前 CEF 会将扩展请求头错误带�
 [回归夹具](../experiments/cef-browser-probe/README.md) 已准备；原有扩展验收通过，
 新增跨域回归在未修补内核上按预期失败。补丁尚未编译或接入产品 SDK，不能视为修复完成。
 根因、固定版本及证据见 [跨域兼容性记录](browser-extensions-design.md#cross-origin-header-compatibility)。
+审查发现的可选 URL 回调签名、重定向请求头污染已在候选补丁中修正，
+轻量编译和提取函数检查通过；这不改变下列完整内核构建、运行验收和 SDK 接入待办状态。
 
 本机清理构建缓存后约有 50 GiB 可用空间，仍不足以完成 CEF/Chromium 构建；
 官方构建参考需要约 150–200 GB。用户确认先记录待办并提交代码，暂缓内核构建。

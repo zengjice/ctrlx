@@ -19,6 +19,8 @@ window.ctrlxCORSProbe = async () => {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
   });
   const redirect = await fetchResult('/cors/redirect');
+  const sameToCross = await fetchResult('/cors/same-to-cross', {}, location.origin);
+  const redirectChain = await fetchResult('/cors/redirect-chain');
   const script = await new Promise(resolve => {
     delete window.ctrlxCORSScript;
     const element = document.createElement('script');
@@ -33,5 +35,8 @@ window.ctrlxCORSProbe = async () => {
   const deniedOrigin = await fetchResult('/cors/no-origin');
   const deniedHeader = await fetchResult('/cors/page-header', {headers: {'x-ctrlx-page': 'blocked'}});
   const deniedSameHeader = await fetchResult('/cors/page-env-header', {headers: {'x-maas-env': 'page-added'}});
-  return {same, get, post, redirect, script, deniedOrigin, deniedHeader, deniedSameHeader};
+  const deniedRedirectHeader = await fetchResult('/cors/page-env-redirect',
+    {headers: {'x-maas-env': 'page-added'}}, location.origin);
+  return {same, get, post, redirect, sameToCross, redirectChain, script,
+    deniedOrigin, deniedHeader, deniedSameHeader, deniedRedirectHeader};
 };

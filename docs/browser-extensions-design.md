@@ -388,8 +388,11 @@ CEF 的 `ChromeContentBrowserClientCef::WillCreateURLLoaderFactory` 向 Chrome
 
 - 保留并串接 Chrome 的 factory／request header client，跨 UI／IO 线程传递
   pending remote，每次 network loader 创建时重新绑定。
-- 普通请求先由 Chrome 扩展处理，再让 CEF 看到最终请求／响应头；保留响应头
-  修改、重定向参数、扩展错误及断开回调，不以默认成功覆盖失败。
+- 扩展修改的请求头只通过 trusted callback 交给本次网络请求；CEF 保存修改前的
+  请求头，供重定向重建使用，每一跳重新应用扩展规则，避免将扩展头带回 CORS
+  预检。网页自行添加的同名头仍保留并接受 CORS 检查。
+- 响应头先由 Chrome 扩展处理，再让 CEF 看到最终响应头；保留响应头修改、
+  可选重定向参数、扩展错误及断开回调，不以默认成功覆盖失败。
 - 预检回调转交 Chrome；没有 Chrome header client 时保持 CEF 原路径。
   CEF 自定义响应也沿用相同的回调绑定。没有关闭 CORS 或增加网站白名单。
 
@@ -415,6 +418,7 @@ git -C "$CEF_SOURCE" apply "$CTRLX_ROOT/CtrlxPackage/AgentBrowser/cef-patches/ex
 | 检查 | 结果 |
 | --- | --- |
 | 补丁对固定版本源文件 `git apply --check` | 通过；不等于 C++ 编译 |
+| 补丁 continuation 签名与最小行为检查 | 使用 CEF 回调类型编译通过；提取函数的请求头隔离、错误和可选响应覆盖检查通过；不等于完整 CEF 编译 |
 | 更新后的原型可执行文件构建、签名验证 | 通过；仍链接原 SDK |
 | 原有 `--production-admin` 扩展验收（无 `--cors`） | 通过 |
 | 最小 DNR 扩展 `--production-admin --cors` | 按预期失败，暴露旧 runtime 缺陷；同源和管理检查通过 |
@@ -427,3 +431,16 @@ git -C "$CEF_SOURCE" apply "$CTRLX_ROOT/CtrlxPackage/AgentBrowser/cef-patches/ex
 实际收到的头和预检列表，验证需要的 POST 预检仍存在、普通网页无授权的跨域
 请求仍被拒绝（包括网页自己添加 `x-maas-env`）；失败会使进程退出码非零，
 不再把“观察完成”当作此项兼容通过。
+
+2026-10-21 审查修正：两处响应回调及其声明改用 `std::optional<GURL>`，
+保留未覆盖重定向的 `nullopt`；不再将扩展修改后的请求头写回重建请求。
+新增 `test_header_client_patch.py` 直接提取补丁应用后的 continuation 检查，
+旧签名在真实 CEF 回调类型检查中失败，恢复旧请求头赋值时行为断言失败，
+修正后两项通过。该轻量检查使用网络类型替身，不证明 Mojo 路由或真实网络
+重定向已通过；完整内核构建与运行验收仍按用户要求暂缓。
+原生 `--cors` 夹具已增加同源转跨域、多跳和网页自加同名头后重定向的用例。
+更新后的最小扩展与真实 ENV 夹具在旧内核上均按预期失败；同源注入正常、
+原生进程退出码为 0 且完成 shutdown，测试命令因跨域断言退出 1。
+新增证据分别位于 `.build-local/diagnostics/browser-extensions-3ncg1kd0/`、
+`.build-local/diagnostics/browser-extensions-vfk77rs3/`；轻量检查和旧实现反向验证
+见 `.build-local/diagnostics/env-cors-20261021/accepted-fixes/`。

@@ -84,14 +84,14 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
 +      OnHeadersReceivedCallback callback,
 +      int result,
 +      const std::optional<std::string>& headers,
-+      const GURL& redirect_url);
++      const std::optional<GURL>& redirect_url);
 +  void FinishHeadersReceived(
 +      std::optional<std::string> extension_headers,
-+      const GURL& extension_redirect_url,
++      const std::optional<GURL>& extension_redirect_url,
 +      OnHeadersReceivedCallback callback,
 +      int result,
 +      const std::optional<std::string>& headers,
-+      const GURL& redirect_url);
++      const std::optional<GURL>& redirect_url);
 +
    // Helpers for determining the request handler.
    void BeforeRequestReceived(const GURL& original_url,
@@ -133,7 +133,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
  }
  
  bool InterceptedRequest::InputStreamFailed() {
-@@ -618,8 +647,30 @@
+@@ -618,8 +647,32 @@
      return;
    }
  
@@ -160,13 +160,15 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
 +    const std::optional<net::HttpRequestHeaders>& headers,
 +    std::optional<base::DictValue> extended_net_log_events) {
 +  if (result == net::OK) {
-+    request_.headers = headers.value_or(original_headers);
++    // Redirects restart the loader with request_. Keep trusted extension edits
++    // out of its CORS-checked headers; they are applied again for the next hop.
++    request_.headers = original_headers;
 +  }
 +  std::move(callback).Run(result, headers, std::move(extended_net_log_events));
  
    // Resume handling of client messages after continuing from an async callback.
    if (proxied_client_receiver_.is_bound()) {
-@@ -637,8 +688,36 @@
+@@ -637,8 +690,36 @@
      return;
    }
  
@@ -179,11 +181,11 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
 +            base::BindOnce(&InterceptedRequest::ContinueHeadersReceived,
 +                           weak_factory_.GetWeakPtr(), headers,
 +                           std::move(callback)),
-+            net::ERR_ABORTED, std::nullopt, GURL()));
++            net::ERR_ABORTED, std::nullopt, std::nullopt));
 +    return;
 +  }
 +  ContinueHeadersReceived(headers, std::move(callback), net::OK,
-+                          std::nullopt, GURL());
++                          std::nullopt, std::nullopt);
 +}
 +
 +void InterceptedRequest::ContinueHeadersReceived(
@@ -191,7 +193,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
 +    OnHeadersReceivedCallback callback,
 +    int result,
 +    const std::optional<std::string>& headers,
-+    const GURL& redirect_url) {
++    const std::optional<GURL>& redirect_url) {
 +  if (result != net::OK) {
 +    std::move(callback).Run(result, headers, redirect_url);
 +    return;
@@ -205,7 +207,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
  
    std::optional<net::RedirectInfo> redirect_info;
    std::string location;
-@@ -652,6 +731,20 @@
+@@ -652,6 +733,22 @@
        redirect_info,
        base::BindOnce(&InterceptedRequest::ContinueToHandleOverrideHeaders,
                       weak_factory_.GetWeakPtr()));
@@ -213,20 +215,22 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
 +
 +void InterceptedRequest::FinishHeadersReceived(
 +    std::optional<std::string> extension_headers,
-+    const GURL& extension_redirect_url,
++    const std::optional<GURL>& extension_redirect_url,
 +    OnHeadersReceivedCallback callback,
 +    int result,
 +    const std::optional<std::string>& headers,
-+    const GURL& redirect_url) {
++    const std::optional<GURL>& redirect_url) {
 +  // A no-op CEF handler must not erase an extension's response modification.
-+  header_client_redirect_url_ =
-+      redirect_url.is_empty() ? extension_redirect_url : redirect_url;
++  const auto final_redirect_url =
++      redirect_url && !redirect_url->is_empty() ? redirect_url
++                                              : extension_redirect_url;
++  header_client_redirect_url_ = final_redirect_url.value_or(GURL());
 +  std::move(callback).Run(result, headers ? headers : extension_headers,
-+                          header_client_redirect_url_);
++                         final_redirect_url);
  }
  
  // URLLoaderClient methods.
-@@ -917,9 +1010,11 @@
+@@ -917,9 +1014,11 @@
    current_request_uses_header_client_ = true;
  
    DCHECK(!stream_loader_);
@@ -239,7 +243,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
        std::move(current_cached_metadata_),
        std::make_unique<InterceptDelegate>(std::move(response),
                                            weak_factory_.GetWeakPtr()));
-@@ -1377,6 +1472,8 @@
+@@ -1377,6 +1476,8 @@
      mojo::PendingRemote<network::mojom::URLLoaderFactory> target_factory_remote,
      mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
          header_client_receiver,
@@ -248,7 +252,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
      std::unique_ptr<InterceptedRequestHandler> request_handler)
      : request_handler_(std::move(request_handler)), weak_factory_(this) {
    CEF_REQUIRE_IOT();
-@@ -1394,6 +1491,9 @@
+@@ -1394,6 +1495,9 @@
  
    if (header_client_receiver) {
      url_loader_header_client_receiver_.Bind(std::move(header_client_receiver));
@@ -258,7 +262,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
    }
  }
  
-@@ -1407,12 +1507,15 @@
+@@ -1407,12 +1511,15 @@
      mojo::PendingRemote<network::mojom::URLLoaderFactory> target_factory,
      mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
          header_client_receiver,
@@ -275,7 +279,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
  
    // Set disconnect callback to remove proxy from map when disconnected.
    proxy->SetDisconnectCallback(base::BindOnce(
-@@ -1451,7 +1554,12 @@
+@@ -1451,7 +1558,12 @@
  
    mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
        header_client_receiver;
@@ -288,7 +292,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
      header_client_receiver = header_client->InitWithNewPipeAndPassReceiver();
    }
  
-@@ -1463,7 +1571,8 @@
+@@ -1463,7 +1575,8 @@
                  base::BindOnce(&ProxyURLLoaderFactory::CreateOnIOThread,
                                 std::move(factory_receiver),
                                 std::move(target_factory_remote),
@@ -298,7 +302,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
                                 std::move(request_handler)));
  }
  
-@@ -1527,6 +1636,8 @@
+@@ -1527,6 +1640,8 @@
                  mojo::PendingRemote<network::mojom::URLLoaderFactory>(),
                  mojo::PendingReceiver<
                      network::mojom::TrustedURLLoaderHeaderClient>(),
@@ -307,7 +311,7 @@ prebuilt SDK does not include it. See docs/browser-extensions-design.md,
                  std::move(request_handler)));
  
              proxy->SetDisconnectCallback(base::BindOnce(
-@@ -1596,7 +1707,12 @@
+@@ -1596,7 +1711,12 @@
      const network::ResourceRequest& request,
      mojo::PendingReceiver<network::mojom::TrustedHeaderClient> receiver) {
    CEF_REQUIRE_IOT();
