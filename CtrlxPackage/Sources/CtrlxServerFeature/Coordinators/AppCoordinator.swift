@@ -1775,8 +1775,8 @@
             await connectedViewerManager?.broadcastBadgeUpdate(badge: badge)
         }
 
-        /// NotificationSink → show a Mac desktop notification using the
-        /// core-baked title/body, and forward it to paired iOS viewers via the
+        /// NotificationSink → format the pane context and event copy once for
+        /// Mac desktop notifications and paired viewers via the
         /// encrypted-push path (falls back to APNs when a viewer is offline).
         /// When `formState` carries an open permission/question form, an
         /// action-button context is baked into the push so iOS can answer
@@ -1813,23 +1813,19 @@
                 )
             }
             let paneState = paneId.flatMap { windowManager.paneStates[$0] }
-            let pushPresentation = AgentNotificationPresentation(
+            let presentation = AgentNotificationPresentation(
                 title: notification.title,
                 body: notification.body,
                 paneState: paneState
             )
-            let macNotification = TerminalStreamMessage.TerminalNotification(
-                title: isQuestion ? pushPresentation.title : notification.title,
-                body: isQuestion ? [pushPresentation.subtitle, pushPresentation.body].compactMap { $0 }.joined(separator: "\n") : notification.body
-            )
             // Stamp the real pane id so tapping the banner navigates to the
             // originating session; fall back to "system" only when the event
             // carries no pane (e.g. a ctrlx-cli notify with no target).
-            terminalNotificationService.showNotification(paneId ?? "system", macNotification, nil)
+            terminalNotificationService.showNotification(paneId ?? "system", presentation, nil)
             await connectedViewerManager?.sendCustomPushNotificationToAll(
-                title: pushPresentation.title,
-                subtitle: pushPresentation.subtitle,
-                body: pushPresentation.body,
+                title: presentation.title,
+                subtitle: presentation.subtitle,
+                body: presentation.body,
                 paneId: paneId,
                 action: action,
                 isQuestion: isQuestion ? true : nil
@@ -2714,9 +2710,10 @@
                     try await tmux.sendKeys(target.info.paneId, keys: key, expectedWorkspacePane: target.identity)
                 },
                 onNotify: { [weak self, notificationService] title, body, paneId, push in
-                    let notification = TerminalStreamMessage.TerminalNotification(
+                    let notification = AgentNotificationPresentation(
                         title: title,
-                        body: body
+                        body: body,
+                        paneState: nil
                     )
                     let targetPane = paneId ?? "system"
                     notificationService.showNotification(targetPane, notification, nil)
@@ -3244,7 +3241,11 @@
             // Wire terminal notification display (fires for any monitored pane, regardless of streaming)
             let notificationService = terminalNotificationService
             paneStreamManager.onNotification = { paneId, notification in
-                notificationService.showNotification(paneId, notification, nil)
+                notificationService.showNotification(paneId, AgentNotificationPresentation(
+                    title: notification.title ?? "Terminal",
+                    body: notification.body,
+                    paneState: nil
+                ), nil)
             }
 
             // Wire title changes from background notification readers to window manager
@@ -4515,15 +4516,20 @@
                 // about remote agent activity (needs-permission, done, questions…)
                 // without watching the viewer window. `pairId` is the host's key, so
                 // tapping the banner reveals the originating remote session.
-                manager.onAgentNotification = { [weak self] notification in
+                manager.onAgentNotification = { [weak self, weak store] notification in
                     guard let self else { return }
-                    let macNotification = TerminalStreamMessage.TerminalNotification(
+                    let paneState = notification.sessionId.flatMap {
+                        store?.paneStates[PaneKey(pairId: notification.pairId, paneId: $0)]
+                    }
+                    let presentation = AgentNotificationPresentation(
                         title: notification.title,
-                        body: notification.body
+                        subtitle: notification.subtitle,
+                        body: notification.body,
+                        paneState: paneState
                     )
                     self.terminalNotificationService.showNotification(
                         notification.sessionId ?? "system",
-                        macNotification,
+                        presentation,
                         notification.pairId
                     )
                 }

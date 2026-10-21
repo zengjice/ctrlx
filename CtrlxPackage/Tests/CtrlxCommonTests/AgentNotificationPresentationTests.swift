@@ -1,9 +1,43 @@
 import CtrlxNetworking
+import Foundation
 import Testing
 @testable import CtrlxCommon
 
 @Suite("Agent notification presentation")
 struct AgentNotificationPresentationTests {
+    @Test(arguments: ["Session Idle", "Permission: Bash", "Codex wants answers", "Claude wants answers"])
+    func hostAndViewerDeliveryKeepTheSamePresentation(title: String) throws {
+        let pane = PaneState(
+            paneId: "%3", sessionName: "work", windowName: "review",
+            agentSession: AgentSession(paneId: "%3", detectedProjectPath: "/Projects/intelligence-ui")
+        )
+        let host = AgentNotificationPresentation(title: title, body: "intelligence-ui: Task details", paneState: pane)
+        let push = NotificationContent(
+            title: host.title, subtitle: host.subtitle, body: host.body,
+            eventType: "cli.notify", pairId: "host-a", paneId: pane.paneId
+        )
+        let decodedPush = try JSONDecoder().decode(NotificationContent.self, from: JSONEncoder().encode(push))
+        let live = AgentNotificationMessage(
+            pairId: "host-a", sessionId: pane.paneId,
+            title: host.title, subtitle: host.subtitle, body: host.body, timestamp: Date()
+        )
+        let decodedLive = try JSONDecoder().decode(AgentNotificationMessage.self, from: JSONEncoder().encode(live))
+
+        #expect(host.title == "work · review")
+        #expect(host.subtitle == (title == "Session Idle" ? "Finished" : title))
+        #expect(host.body == "Task details")
+        #expect(decodedPush.title == host.title)
+        #expect(decodedPush.subtitle == host.subtitle)
+        #expect(decodedPush.body == host.body)
+        // Mac/iOS live delivery may have pane metadata already or receive the alert first.
+        for metadata in [pane, nil] as [PaneState?] {
+            #expect(AgentNotificationPresentation(
+                title: decodedLive.title, subtitle: decodedLive.subtitle, body: decodedLive.body,
+                paneState: metadata
+            ) == host)
+        }
+    }
+
     @Test("Uses tmux context and removes a repeated project prefix")
     func tmuxContext() {
         let pane = PaneState(

@@ -1423,6 +1423,15 @@ distinct; both peers may be Macs.
 
 ## Push Notifications
 
+Agent alerts use the same presentation on Mac Host, Mac Viewer and iOS: the
+title is `session · tab`, the native subtitle carries the event status (`Session
+Idle` becomes `Finished`), and the body carries the event details without a
+repeated project prefix. Main and detached windows share this path. The Host
+formats the context before local delivery, encrypted live messages and APNs;
+Mac/iOS live receivers preserve the subtitle and can add context for older Hosts
+when pane metadata is available. Missing metadata preserves the original copy.
+Locally generated CLI notifications and terminal OSC copy keep their existing semantics.
+
 Codex `PreToolUse` events for `request_user_input` and `request_user_input_async`
 produce a question notification on the Host, independently of terminal visibility
 or focus. The plugin deduplicates by `(session_id, tool_use_id)` and leaves Agent
