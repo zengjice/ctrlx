@@ -7,6 +7,26 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.88 — Background browser recording
+
+- Add Host-owned background H.264 recording through `record-start`,
+  `record-status` and `record-stop`, with a maximum duration of ten minutes.
+  Keep page navigation, Agent actions and Viewer control available during capture.
+- Write bounded viewport samples directly to private MP4 files. Preserve owner
+  isolation and stale-recording checks, and finalize recordings on manual stop,
+  duration expiry, tab close, Agent exit or normal Host shutdown.
+- Release validation: the bounded serial Swift regression passed with 3,645
+  tests reported across 517 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, changed Swift
+  file formatting, the website build and 89 publisher/COS/installer tests passed.
+- All 16 implementation and test/documentation hashes match the existing
+  600-second production-runtime recording and Viewer/control/legacy-recording
+  acceptance. The accepted video hash also matches. This evidence is reused;
+  physical Viewer devices and a live Codex reasoning session were not retested.
+- Signed Mac and iOS device-SDK Release builds passed. Mac distribution uses
+  build 21 through COS, with signature, source metadata and complete
+  public-download integrity checks before installer promotion.
+
 ## 3.0.87 — Split terminal focus and iOS navigation
 
 - Fit a terminal to its current split viewport when programmatic focus returns,
