@@ -100,7 +100,7 @@ void CloseAll() {
   auto copy = browsers;
   for (auto& [id, browser] : copy) browser->GetHost()->CloseBrowser(true);
   auto tools = extensionTools;
-  for (auto& [id, browser] : tools) browser->GetHost()->CloseBrowser(true);
+  for (auto& [id, browser] : tools) if (!copy.contains(id)) browser->GetHost()->CloseBrowser(true);
   Later(50, WaitForClose);
 }
 
@@ -149,7 +149,7 @@ NSString *PageProbe() {
 
 void BeginChecks();
 
-class Client final : public CefClient, public CefLifeSpanHandler,
+class Client : public CefClient, public CefLifeSpanHandler,
     public CefLoadHandler, public CefDevToolsMessageObserver, public CefDialogHandler {
  public:
   explicit Client(NSView *container = nil) : container_(container) {}
@@ -239,7 +239,17 @@ class Client final : public CefClient, public CefLifeSpanHandler,
 };
 
 using BrowserUITask = Action;
-using ExtensionToolClient = Client;
+class ExtensionToolClient final : public Client {
+ public:
+  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+    Client::OnAfterCreated(browser);
+    extensionTools[browser->GetIdentifier()] = browser;
+  }
+  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+    extensionTools.erase(browser->GetIdentifier());
+    Client::OnBeforeClose(browser);
+  }
+};
 }
 
 // Exercise the actual product implementation in this isolated executable.
@@ -257,6 +267,8 @@ void AdminOperation(NSDictionary *request, std::function<void(NSDictionary *)> c
     callback(value);
   });
 }
+
+#include "OptionsProbe.inc"
 
 void ConfirmFixtureRemoval(int attempt) {
     if (closing) return;
@@ -503,7 +515,8 @@ void BeginChecks() {
             if (!CheckHiddenManager()) return;
             Report(@"background-management-focus", @{@"hidden": @YES, @"sourceFocused": @YES});
             Report(@"production-admin-reloaded", reloaded);
-            UpdateFixtureAndInspect();
+            if (configuration[@"optionsMode"]) CheckExtensionOptions(UpdateFixtureAndInspect);
+            else UpdateFixtureAndInspect();
           });
         });
       });

@@ -142,6 +142,15 @@
                         Text(entry.name).font(.headline)
                         Text("\(entry.version) · \(entry.state.capitalized)").font(.caption).foregroundStyle(.secondary)
                         HStack {
+                            if entry.hasOptions == true {
+                                Button("Settings") {
+                                    run("Opening extension settings…") {
+                                        _ = try await session.performExtension(.openOptions(entry.id))
+                                        showsWindow = true
+                                    }
+                                }
+                                .disabled(!entry.isEnabled)
+                            }
                             Button(entry.isEnabled ? "Disable" : "Enable") {
                                 run(entry.isEnabled ? "Disabling…" : "Confirm any permission request in the window…") {
                                     if !entry.isEnabled {
@@ -226,9 +235,9 @@
         private var nativeWindow: some View {
             VStack(spacing: 8) {
                 HStack {
-                    Menu(session.extensionSurface == .page ? "Extension Window" : "Chromium Settings") {
+                    Menu(surfaceTitle) {
                         Button("Open Extension Window") { show(.page) }
-                        Button("Chromium Settings") { show(.manager) }
+                        Button("Extension Advanced Management") { show(.manager) }
                     }.disabled(status != nil)
                     Spacer()
                     Button {
@@ -280,6 +289,14 @@
 
         private func show(_ surface: RemoteBrowserExtensionSurface) {
             run("Opening Host window…") { _ = try await session.performExtension(.showSurface(surface)) }
+        }
+
+        private var surfaceTitle: String {
+            switch session.extensionSurface {
+            case .page: "Extension Window"
+            case .manager: "Extension Advanced Management"
+            case .options: "Extension Settings"
+            }
         }
 
         private func refresh() async throws {

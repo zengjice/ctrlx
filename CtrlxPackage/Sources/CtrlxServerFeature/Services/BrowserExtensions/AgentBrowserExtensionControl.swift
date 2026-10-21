@@ -126,7 +126,13 @@ extension AgentBrowserService {
              .release: break
         case .list:
             let entries = try await browserExtensions(for: tab, controlID: id)
-            result = .init(entries: entries.map { .init(id: $0.id, name: $0.runtime.name, version: $0.runtime.version, state: $0.runtime.state, canUpdate: $0.canUpdate) })
+            result = .init(entries: entries.map { .init(id: $0.id, name: $0.runtime.name, version: $0.runtime.version, state: $0.runtime.state, canUpdate: $0.canUpdate, hasOptions: $0.runtime.hasOptions) })
+        case let .openOptions(extensionID):
+            let item = try await extensionItem(extensionID, tab: tab, control: control)
+            try await openExtensionOptions(item.runtime, for: tab, controlID: id)
+            try checkExtensionControl(control)
+            control.surface = .options
+            result = .init(surface: .options)
         case .openWindow,
              .showSurface(.page):
             let data = try await extensionSurfaceRequest(control, payload: ["action": "openWindow"])
@@ -147,6 +153,8 @@ extension AgentBrowserService {
             _ = try await extensionSurfaceRequest(control, payload: ["action": "showManager"])
             control.surface = .manager
             result = .init(surface: .manager)
+        case .showSurface(.options):
+            throw RemoteBrowserError.message("Choose Settings beside an extension to open its options.")
         case let .prepareStore(input, replacingID):
             guard !control.preparing, control.prepared.isEmpty, control.upload == nil else {
                 throw RemoteBrowserError.message("Finish or discard the current extension package first.")

@@ -31,11 +31,41 @@
 @end
 
 static CefRefPtr<CefBrowser> extensionManager;
+static std::map<std::string, int> extensionOptionsWindows;
+
+static CefRefPtr<CefBrowser> OpenExtensionOptionsWindow(NSString *url) {
+  CefRefPtr<CefBrowser> browser;
+  auto saved = extensionOptionsWindows.find(url.UTF8String);
+  if (saved != extensionOptionsWindows.end()) {
+    auto found = extensionTools.find(saved->second);
+    if (found != extensionTools.end() && found->second->IsValid()) browser = found->second;
+  }
+  if (!browser) {
+    CefWindowInfo info;
+    info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    info.bounds = CefRect(0, 0, 1100, 750);
+    browser = CefBrowserHost::CreateBrowserSync(info, new ExtensionToolClient(),
+        url.UTF8String, CefBrowserSettings(), nullptr, nullptr);
+    if (browser) extensionOptionsWindows[url.UTF8String] = browser->GetIdentifier();
+  } else {
+    const auto current = browser->GetMainFrame()->GetURL().ToString();
+    const std::string requested = url.UTF8String;
+    if (current.substr(0, current.find('#')) != requested.substr(0, requested.find('#')))
+      browser->GetMainFrame()->LoadURL(url.UTF8String);
+  }
+  if (browser) {
+    NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
+    [view.window makeKeyAndOrderFront:nil];
+    browser->GetHost()->SetFocus(true);
+  }
+  return browser;
+}
 
 class ExtensionManagerClient final : public CefClient, public CefLifeSpanHandler,
     public CefLoadHandler, public CefDevToolsMessageObserver {
  public:
   using Completion = void (^)(NSData *, NSString *);
+  using OptionsPresenter = std::function<NSString *(NSString *)>;
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
@@ -70,12 +100,13 @@ class ExtensionManagerClient final : public CefClient, public CefLifeSpanHandler
     return false;
   }
 
-  void Request(NSDictionary *request, Completion completion) {
+  void Request(NSDictionary *request, Completion completion, OptionsPresenter optionsPresenter = nullptr) {
     CEF_REQUIRE_UI_THREAD();
     if (busy_) { completion(nil, @"Another extension operation is in progress."); return; }
     busy_ = true;
     request_ = [request copy];
     completion_ = [completion copy];
+    optionsPresenter_ = std::move(optionsPresenter);
     const int generation = ++generation_;
     CefRefPtr<ExtensionManagerClient> self = this;
     CefPostDelayedTask(TID_UI, new BrowserUITask([self, generation] {
@@ -171,6 +202,26 @@ class ExtensionManagerClient final : public CefClient, public CefLifeSpanHandler
     }
     NSData *json = [NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
     NSString *parameters = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+    if ([operation isEqualToString:@"openOptions"]) {
+      NSString *script = [NSString stringWithFormat:@R"JS((async () => {
+        const p = %@;
+        const entries = await chrome.developerPrivate.getExtensionsInfo({includeDisabled: true, includeTerminated: true});
+        const entry = entries.find(item => item.id === p.id);
+        if (!entry || entry.state !== 'ENABLED' || !entry.optionsPage)
+          throw new Error('This extension has no available settings page. Enable it first if disabled.');
+        const page = entry.optionsPage;
+        if (!page.url.startsWith('chrome-extension://' + p.id + '/'))
+          throw new Error('Unsupported extension settings address.');
+        return page.openInTab ? page.url : 'chrome://extensions/?options=' + p.id;
+      })())JS", parameters];
+      Evaluate(script, [this](id value) {
+        if (![value isKindOfClass:NSString.class]) { Finish(nil, @"Invalid extension settings address."); return; }
+        NSString *error = optionsPresenter_ ? optionsPresenter_(value) :
+            (OpenExtensionOptionsWindow(value) ? nil : @"Could not open extension settings.");
+        Finish(error ? nil : [@"{\"extensions\":[]}" dataUsingEncoding:NSUTF8StringEncoding], error);
+      });
+      return;
+    }
     if (![operation isEqualToString:@"setEnabled"] && ![operation isEqualToString:@"uninstall"] &&
         ![operation isEqualToString:@"reload"]) {
       Finish(nil, @"Unsupported extension operation."); return;
@@ -199,8 +250,8 @@ class ExtensionManagerClient final : public CefClient, public CefLifeSpanHandler
   void List() {
     Evaluate(@R"JS((async () => {
       const entries = await chrome.developerPrivate.getExtensionsInfo({includeDisabled: true, includeTerminated: true});
-      return {extensions: entries.map(({id, name, version, description, state, location, path}) =>
-        ({id, name, version, description, state, location, path}))};
+      return {extensions: entries.map(({id, name, version, description, state, location, path, optionsPage}) =>
+        ({id, name, version, description, state, location, path, hasOptions: !!optionsPage}))};
     })())JS", [this](id value) {
       NSError *error = nil;
       NSMutableDictionary *result = [value isKindOfClass:NSDictionary.class] ? [value mutableCopy] : nil;
@@ -241,6 +292,7 @@ class ExtensionManagerClient final : public CefClient, public CefLifeSpanHandler
     EndDrag();
     request_ = nil;
     pending_ = nullptr;
+    optionsPresenter_ = nullptr;
     Completion completion = completion_;
     completion_ = nil;
     busy_ = false;
@@ -260,6 +312,7 @@ class ExtensionManagerClient final : public CefClient, public CefLifeSpanHandler
   NSDictionary *request_ = nil;
   Completion completion_ = nil;
   std::function<void(id)> pending_;
+  OptionsPresenter optionsPresenter_;
   CefRefPtr<CefRegistration> observer_;
   CefRefPtr<CefBrowser> browser_;
   NSView *dragView_ = nil;

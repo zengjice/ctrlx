@@ -89,9 +89,14 @@ final public class RemoteBrowserSession {
         if let surface = result.extensions?.surface {
             extensionSurface = surface
         }
-        if operation == .openWindow || operation == .showSurface(.page) || operation == .showSurface(.manager) {
+        switch operation {
+        case .openWindow,
+             .showSurface,
+             .openOptions:
             invalidateInput()
             frame = nil
+            frameError = nil
+        default: break
         }
         return result
     }
@@ -112,10 +117,14 @@ final public class RemoteBrowserSession {
                 continue
             }
             let sent = request(.frame)
+            let sentInputEpoch = inputEpoch
             do {
                 let response = try await send(sent)
                 try Task.checkCancellation()
                 if managesExtensions, epoch == current, sent.controlID != controlID {
+                    continue
+                }
+                if managesExtensions, sentInputEpoch != inputEpoch {
                     continue
                 }
                 if managesExtensions, epoch == current, response.controlID == nil {
@@ -144,7 +153,7 @@ final public class RemoteBrowserSession {
                 first = false
             } catch is CancellationError { return }
             catch {
-                if epoch == current {
+                if epoch == current, !managesExtensions || sentInputEpoch == inputEpoch {
                     frameError = error.localizedDescription
                 }
             }

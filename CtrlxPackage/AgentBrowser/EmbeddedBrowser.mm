@@ -748,7 +748,20 @@ static __weak id<CXApplicationDiagnosticsDelegate> applicationDiagnosticsDelegat
       extensionSurface->SetWindow(view.window);
     }
     auto client = static_cast<ExtensionManagerClient*>(browser->GetHost()->GetClient().get());
-    client->Request(request, reply);
+    client->Request(request, reply, [target, request, remote](NSString *url) -> NSString * {
+      // Metadata lookup is asynchronous. Recheck the grant before opening or
+      // focusing a native window, including Host takeover while it was pending.
+      auto source = AgentBrowserTarget(target);
+      if (runtime.closing || !source || !source->IsValid() || !browsers.contains(source->GetIdentifier()) ||
+          (remote ? !AuthorizeExtensionRequest(target, request) :
+              ((extensionSurface && extensionSurface->Active()) || AgentBrowserHumanControlled(source))))
+        return @"Extension control changed before settings opened.";
+      auto options = OpenExtensionOptionsWindow(url);
+      if (!options) return @"Could not open extension settings.";
+      NSView *view = (__bridge NSView *)options->GetHost()->GetWindowHandle();
+      if (remote && !extensionSurface->SetWindow(view.window)) return @"Extension settings are unavailable.";
+      return nil;
+    });
   }))) reply(nil, @"Chromium is not ready or the extension request is too large.");
 }
 - (BOOL)setExtensionControl:(NSString *)token forTab:(NSString *)identifier {

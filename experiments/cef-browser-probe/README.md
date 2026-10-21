@@ -56,6 +56,16 @@ to compile/exercise the actual `BrowserExtensions.inc` implementation for instal
 disable, enable, reload, list and uninstall around the same page/popup checks. These modes
 still use only this test fixture and a new private profile.
 
+`--options-mode tab|embedded|legacy|none` adds direct Settings acceptance:
+current options availability, native opening from the declared mode, repeated-open
+reuse (including loading), storage in the private extension profile, and capture
+through the product `ExtensionSurface`. `none` checks rejection without a settings
+page. Screenshots are saved as `options.jpg` in the run's evidence directory.
+Run modes sequentially. `--options-mode env --env-extension <verified-directory>`
+opens the unmodified ENV-Plugin options page in another private profile and verifies
+reuse and native capture; it does not modify the extension manifest or user settings.
+These native probes do not establish physical-device or cross-machine UI acceptance.
+
 `--dynamic-install` retains a negative characterization: the Chrome directory
 picker does not call CEF's `CefDialogHandler`, so the bounded probe fails. A
 successful CEF file-picker callback must not be assumed for product imports.

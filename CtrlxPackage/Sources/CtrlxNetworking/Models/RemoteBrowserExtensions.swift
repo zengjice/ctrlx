@@ -7,6 +7,7 @@ public enum RemoteBrowserExtensionOperation: Codable, Sendable, Equatable {
     case release
     case list
     case openWindow
+    case openOptions(String)
     case showSurface(RemoteBrowserExtensionSurface)
     case prepareStore(input: String, replacingID: String?)
     case beginUpload(id: UUID, name: String, size: Int, replacingID: String?)
@@ -27,6 +28,7 @@ public enum RemoteBrowserExtensionOperation: Codable, Sendable, Equatable {
 public enum RemoteBrowserExtensionSurface: String, Codable, Sendable {
     case page
     case manager
+    case options
 }
 
 public struct RemoteBrowserExtension: Codable, Sendable, Equatable, Identifiable {
@@ -35,16 +37,19 @@ public struct RemoteBrowserExtension: Codable, Sendable, Equatable, Identifiable
     public let version: String
     public let state: String
     public let canUpdate: Bool
+    /// Absent on older Hosts, which do not support opening options directly.
+    public let hasOptions: Bool?
     public var isEnabled: Bool {
         state == "ENABLED"
     }
 
-    public init(id: String, name: String, version: String, state: String, canUpdate: Bool) {
+    public init(id: String, name: String, version: String, state: String, canUpdate: Bool, hasOptions: Bool? = nil) {
         self.id = id
         self.name = name
         self.version = version
         self.state = state
         self.canUpdate = canUpdate
+        self.hasOptions = hasOptions
     }
 }
 

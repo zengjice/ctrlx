@@ -16,7 +16,7 @@ from extension_cors import CORSFixture
 def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, production_admin: bool = False,
         env_extension: Path = None, env_scenario: Path = None, env_restart_scenario: Path = None,
         fixture_packages: Path = None, native_window_capture: bool = False, native_window_input: bool = False,
-        native_manager_input: bool = False, env_debugger: bool = False, cors: bool = False) -> Path:
+        native_manager_input: bool = False, env_debugger: bool = False, cors: bool = False, options_mode: str = None) -> Path:
     executable = app / "Contents/MacOS/CtrlX Browser Probe"
     if not executable.is_file():
         raise ValueError("Expected the isolated extension probe app")
@@ -39,11 +39,12 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
     evidence = root / ".build-local/diagnostics"
     evidence.mkdir(parents=True, exist_ok=True)
     output = Path(tempfile.mkdtemp(prefix="browser-extensions-", dir=evidence))
-    production_admin = production_admin or env_extension is not None or fixture_packages is not None or native_manager_input
+    production_admin = production_admin or env_extension is not None or fixture_packages is not None or native_manager_input or options_mode is not None
     packages = json.loads(fixture_packages.read_text()) if fixture_packages else None
     extension = output / ("profile/CtrlXExtensions/packages/fixture" if production_admin else "extension")
     shutil.copytree(env_extension or (Path(packages["first"]) if packages else Path(__file__).with_name("extension-fixture")), extension)
     popup_reports = []
+    options_reports = []
     cors_fixture = CORSFixture()
 
     class Handler(BaseHTTPRequestHandler):
@@ -75,10 +76,12 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
             if cors and cors_fixture.handle(self):
                 return
             size = int(self.headers.get("Content-Length", "0"))
-            if self.path != "/popup-report" or not 0 < size <= 65536:
+            if self.path not in ("/popup-report", "/options-report") or not 0 < size <= 65536:
                 self.send_error(400)
                 return
-            popup_reports.append(json.loads(self.rfile.read(size)))
+            (options_reports if self.path == "/options-report" else popup_reports).append(json.loads(self.rfile.read(size)))
+            if self.path == "/options-report":
+                (output / "options-ready.json").write_text(json.dumps(options_reports[-1]))
             self.send_response(204)
             self.end_headers()
 
@@ -107,6 +110,30 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
             configuration["envScenario"] = (
                 "globalThis.ctrlxProbeHeaderName = 'x-maas-env';"
                 "globalThis.ctrlxProbeHeaderValue = 'ark-chat-dev';\n" + configuration["envScenario"])
+    if options_mode == "env":
+        if not env_extension:
+            raise ValueError("ENV options require a verified ENV extension directory")
+        configuration["optionsMode"] = options_mode
+    elif options_mode:
+        if env_extension or fixture_packages:
+            raise ValueError("Options fixtures use their own generated extension")
+        configuration["optionsMode"] = options_mode
+        manifest = json.loads((extension / "manifest.json").read_text())
+        if options_mode == "legacy":
+            manifest["options_page"] = "options.html"
+        elif options_mode != "none":
+            manifest["options_ui"] = {"page": "options.html", "open_in_tab": options_mode == "tab"}
+        (extension / "manifest.json").write_text(json.dumps(manifest))
+        (extension / "options.html").write_text('<!doctype html><title>Fixture Settings</title><style>body{min-width:360px;min-height:180px}</style><h1>Fixture Settings</h1><input id="setting" value="options fixture"><script src="options.js"></script>')
+        (extension / "options.js").write_text("""
+(async () => {
+  const previous = await chrome.storage.local.get('optionsLoads');
+  const count = (previous.optionsLoads || 0) + 1;
+  await chrome.storage.local.set({optionsLoads: count});
+  const saved = await chrome.storage.local.get('optionsLoads');
+  await fetch(%s, {method: 'POST', body: JSON.stringify({saved: saved.optionsLoads})});
+})();
+""" % json.dumps(configuration["fixture"] + "/options-report"))
     config_path = output / "config.json"
     config_path.write_text(json.dumps(configuration))
     def launch(log_name):
@@ -174,6 +201,8 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
         if env_debugger:
             required |= {"env-debugger-with-page-cdp", "page-cdp-with-env-debugger",
                          "env-debugger-with-devtools", "page-cdp-with-devtools", "devtools-window-ready"}
+    if options_mode == "env":
+        required = {"env-install", "options-reused", "options-native-surface", "shutdown"}
     complete = (exit_code == 0 and required <= phases.keys()
                 and "failure" not in phases and phases["shutdown"]["complete"])
     if env_restart_scenario:
@@ -227,9 +256,25 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
     if cors:
         compatibility["cors"] = cors_fixture.acceptance(phases, env_extension is not None)
         complete &= all(compatibility["cors"].values())
+    if options_mode:
+        if options_mode == "env":
+            valid = (phases.get("options-reused", {}).get("sameBrowser") is True
+                     and phases.get("options-native-surface", {}).get("captured") is True
+                     and phases.get("options-native-surface", {}).get("url") == "chrome-extension://imebogohheacbbmhfiiddakclhifpbde/options.html")
+        elif options_mode == "none":
+            valid = phases.get("options-unavailable", {}).get("rejected") is True and not options_reports
+        else:
+            valid = (phases.get("options-reused", {}).get("sameBrowser") is True
+                     and phases.get("options-native-surface", {}).get("captured") is True
+                     and phases.get("options-native-surface", {}).get("visible") is True
+                     and len(options_reports) == 1 and options_reports[0]["saved"] == 1
+                     and phases["options-native-surface"]["url"].startswith(
+                         "chrome://extensions/?options=" if options_mode == "embedded" else "chrome-extension://"))
+        compatibility["options"] = {"mode": options_mode, "passed": valid}
+        complete &= valid
     report = {"probeCompleted": complete, "exitCode": exit_code,
               "compatibility": compatibility, "observations": observations, "popups": popup_reports,
-              "restart": restart, "networkEvents": cors_fixture.requests,
+              "restart": restart, "networkEvents": cors_fixture.requests, "options": options_reports,
               "scope": "ENV-Plugin: only operations recorded in observations and compatibility; native messaging and remote clients not covered" if env_extension is not None else
                        "Local fixture only; not ENV-Plugin, CRX verification or Web Store installation acceptance"}
     (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
@@ -254,7 +299,8 @@ if __name__ == "__main__":
     parser.add_argument("--native-manager-input", action="store_true", help="Capture and confirm fixture removal through only the manager window's owned tree")
     parser.add_argument("--env-debugger", action="store_true", help="Characterize ENV debugger API coexistence with CEF page control and native DevTools")
     parser.add_argument("--cors", action="store_true", help="Require Chrome-compatible cross-origin header injection and preserve page CORS checks")
+    parser.add_argument("--options-mode", choices=["tab", "embedded", "legacy", "none", "env"], help="Verify declared options mode, reuse, storage and native capture")
     args = parser.parse_args()
     run(args.app.resolve(), args.dynamic_install, args.native_drag, args.production_admin,
         args.env_extension, args.env_scenario, args.env_restart_scenario, args.fixture_packages,
-        args.native_window_capture, args.native_window_input, args.native_manager_input, args.env_debugger, args.cors)
+        args.native_window_capture, args.native_window_input, args.native_manager_input, args.env_debugger, args.cors, args.options_mode)

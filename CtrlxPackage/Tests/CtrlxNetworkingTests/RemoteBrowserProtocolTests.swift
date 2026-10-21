@@ -92,7 +92,7 @@ struct RemoteBrowserProtocolTests {
     func extensionCommandsAndReceiptsRoundTrip() throws {
         let id = UUID()
         let operations: [RemoteBrowserExtensionOperation] = [
-            .acquire, .release, .list, .openWindow, .showSurface(.manager), .showSurface(.page),
+            .acquire, .release, .list, .openWindow, .showSurface(.manager), .showSurface(.page), .openOptions("extension-id"),
             .prepareStore(input: "store-id", replacingID: nil),
             .beginUpload(id: id, name: "package.zip", size: 3, replacingID: "installed-id"),
             .appendUpload(id: id, offset: 0, data: Data([1, 2, 3])),
@@ -134,6 +134,11 @@ struct RemoteBrowserProtocolTests {
         #expect(old.supportsBrowserExtensions == nil)
         let new = SessionStateMessage(pairId: "a", paneStates: [:], supportsBrowserExtensions: true).withPairId("b")
         #expect(new.supportsBrowserExtensions == true)
+        let legacy = Data(#"{"id":"fixture","name":"Fixture","version":"1","state":"ENABLED","canUpdate":true}"#.utf8)
+        #expect(try JSONDecoder().decode(RemoteBrowserExtension.self, from: legacy).hasOptions == nil)
+        let entry = RemoteBrowserExtension(id: "fixture", name: "Fixture", version: "1", state: "ENABLED", canUpdate: true, hasOptions: true)
+        let options = RemoteBrowserExtensionResult(entries: [entry], surface: .options)
+        #expect(try JSONDecoder().decode(RemoteBrowserExtensionResult.self, from: JSONEncoder().encode(options)) == options)
     }
 
     @Test

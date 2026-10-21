@@ -8,6 +8,7 @@
         let version: String
         let state: String
         let path: String?
+        var hasOptions: Bool? = nil
         var isEnabled: Bool {
             state == "ENABLED"
         }

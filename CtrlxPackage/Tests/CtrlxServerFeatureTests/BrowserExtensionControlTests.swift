@@ -7,6 +7,36 @@ import ZIPFoundation
 
 @Suite("Browser extension control") @MainActor
 struct BrowserExtensionControlTests {
+    @Test(arguments: [true, false, nil] as [Bool?])
+    func settingsRequireAdvertisedOptionsAndKeepNativeGrant(hasOptions: Bool?) async throws {
+        let (service, runtime, tab) = try await RemoteBrowserControlTests().fixture()
+        let surface = UUID()
+        var grant: UUID?
+        var item = BrowserExtensionRuntimeItem(id: String(repeating: "a", count: 32), name: "Options", version: "1", state: "ENABLED", path: nil, hasOptions: hasOptions)
+        runtime.onExtensionRequest = { _ in try JSONEncoder().encode(["extensions": [item]]) }
+        func send(_ operation: RemoteBrowserExtensionOperation) async throws -> RemoteBrowserResponse {
+            try await service.handleBrowser(.init(sessionName: tab.sessionName, tabID: tab.id, surfaceID: surface, controlID: grant, operation: .extensions(operation)), viewerID: "one")
+        }
+        grant = try #require(try await send(.acquire).controlID)
+        #expect(try await send(.list).extensions?.entries?.first?.hasOptions == hasOptions)
+        if hasOptions == true {
+            let response = try await send(.openOptions(item.id))
+            #expect(response.extensions?.surface == .options)
+            #expect(runtime.extensionRequests.last?["operation"] as? String == "openOptions")
+            #expect(runtime.extensionRequests.last?["lease"] as? String == grant?.uuidString)
+            #expect(try await send(.frame).extensions?.surface == .options)
+        } else {
+            await #expect(throws: (any Error).self) { try await send(.openOptions(item.id)) }
+            #expect(!runtime.extensionRequests.contains { $0["operation"] as? String == "openOptions" })
+        }
+        item = .init(id: item.id, name: item.name, version: "1", state: "DISABLED", path: nil, hasOptions: true)
+        await #expect(throws: (any Error).self) { try await send(.openOptions(item.id)) }
+        await #expect(throws: (any Error).self) { try await send(.openOptions("missing")) }
+        service.disconnectBrowserViewer("one")
+        await #expect(throws: (any Error).self) { try await send(.openOptions(item.id)) }
+        await service.shutdown()
+    }
+
     @Test
     func grantIsSeparateFromPageAndBoundToViewerSurfaceAndSource() async throws {
         let (service, runtime, tab) = try await RemoteBrowserControlTests().fixture()

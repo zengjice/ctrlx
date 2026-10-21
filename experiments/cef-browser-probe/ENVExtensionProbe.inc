@@ -299,6 +299,11 @@ void BeginENVChecks() {
     for (NSDictionary *item in result[@"extensions"])
       if ([item[@"id"] isEqual:@"imebogohheacbbmhfiiddakclhifpbde"] && [item[@"state"] isEqual:@"ENABLED"]) found = true;
     if (!found) { Report(@"failure", @{@"error": @"ENV was not installed with its verified identity"}); CloseAll(); return; }
+    if ([configuration[@"optionsMode"] isEqual:@"env"]) {
+      installedFixtureID = @"imebogohheacbbmhfiiddakclhifpbde";
+      CheckExtensionOptions([] { resultCode = 0; CloseAll(); });
+      return;
+    }
     control = Chrome([configuration[@"fixture"] stringByAppendingString:@"/env"]);
     Later(0, [] { WaitForENVPage(0); });
   });

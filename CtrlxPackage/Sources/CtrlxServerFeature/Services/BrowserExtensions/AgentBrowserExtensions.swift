@@ -27,6 +27,13 @@
             return entries.sorted { $0.runtime.name.localizedStandardCompare($1.runtime.name) == .orderedAscending }
         }
 
+        func openExtensionOptions(_ item: BrowserExtensionRuntimeItem, for tab: AgentBrowserTabState, controlID: UUID? = nil) async throws {
+            guard item.isEnabled, item.hasOptions == true else {
+                throw BrowserExtensionPackageError("This extension has no available settings page.")
+            }
+            _ = try await requestExtensions(["operation": "openOptions", "id": item.id], for: tab, controlID: controlID)
+        }
+
         func prepareExtension(file: URL, for tab: AgentBrowserTabState, replacing: BrowserExtensionRuntimeItem? = nil, controlID: UUID? = nil) async throws -> PreparedBrowserExtension {
             _ = try extensionRuntime(for: tab, controlID: controlID)
             guard let extensionStore else { throw BrowserExtensionPackageError("The Host extension store is unavailable.") }

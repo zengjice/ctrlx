@@ -22,7 +22,7 @@ struct BrowserExtensionsView: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                     .disabled(busy || prepared != nil)
             }
-            Text("Applies to this Mac's CtrlX browser across all sessions. Use an extension window to access extension buttons and settings.")
+            Text("Applies to this Mac's CtrlX browser across all sessions. Use Settings below to configure an extension, or an extension window to access its toolbar button.")
                 .font(.callout).foregroundStyle(.secondary)
             if let prepared {
                 preview(prepared)
@@ -36,7 +36,7 @@ struct BrowserExtensionsView: View {
                 .disabled(busy)
                 HStack {
                     Button("Import ZIP / CRX…") { importPackage() }
-                    Button("Chromium Settings…") {
+                    Button("Extension Advanced Management…") {
                         perform("Opening extension settings…") { try await tab.service.showExtensionManager(tab) }
                     }
                     Spacer()
@@ -77,6 +77,14 @@ struct BrowserExtensionsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if entry.runtime.hasOptions == true {
+                Button("Settings") {
+                    perform("Opening extension settings…") {
+                        try await tab.service.openExtensionOptions(entry.runtime, for: tab)
+                    }
+                }
+                .disabled(!entry.runtime.isEnabled)
+            }
             Button(entry.runtime.isEnabled ? "Disable" : "Enable") {
                 perform("Updating extension…") {
                     try await tab.service.setExtensionEnabled(entry.runtime, enabled: !entry.runtime.isEnabled, for: tab)

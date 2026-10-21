@@ -183,6 +183,9 @@ the [capability audit](agent-browser-capability-audit.md).
 
 The browser's **Extensions** button provides Chrome Web Store link/ID installation,
 ZIP/CRX import, permission review, enable/disable, manual update and removal.
+Extensions declaring an options page also show **Settings** before Enable/Disable
+on Mac Host, Mac Viewer and iOS. Enable a disabled extension before opening its
+settings. **Extension Advanced Management** opens Chromium's full extension manager.
 Extensions are installed in the source **Host's CtrlX profile** and apply across
 its sessions. They do not install into system Chrome or a Viewer's local profile.
 The first version supports Manifest V3 and signed CRX3; ZIP packages are identified
@@ -196,6 +199,14 @@ toolbar and extension popups. Existing embedded pages remain available, but
 extensions relying on Chrome's active-tab/window APIs need the extension window.
 Installations and extension settings persist across restarts; open pages remain
 transient.
+
+**Settings** resolves the extension's current `options_ui` / `options_page`
+declaration on the Host. It opens a reusable native options window, using Chromium's
+embedded options UI when `open_in_tab` is false. The Viewer switches to that native
+window automatically, under the existing extension-control grant. Options addresses
+and native window IDs are not accepted from the Viewer or exposed to Agent page
+commands. Older Hosts omit options availability, so their Viewers retain the
+advanced-management route. Settings are shared by Viewers of the same Host profile.
 
 Mac Viewer and iOS use **Browser Extensions → Take Extension Control**. This is
 separate from ordinary page control. The **Window** view carries the Host's full
