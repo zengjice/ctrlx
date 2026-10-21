@@ -2087,10 +2087,7 @@
         }
 
         private func updateExplicitColorTransform() {
-            guard
-                let palette = appliedTheme?.palette,
-                scrollingAgentID == "codex",
-                CodexTerminalColorAdaptation.isLight(palette) else {
+            guard let palette = appliedTheme?.palette, scrollingAgentID == "codex" else {
                 terminalView.explicitColorTransform = nil
                 return
             }

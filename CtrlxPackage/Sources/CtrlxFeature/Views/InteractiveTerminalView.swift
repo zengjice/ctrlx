@@ -81,9 +81,7 @@ enum TerminalCursorTapNavigation {
         }
 
         private func updateExplicitColorTransform() {
-            guard
-                let palette = appliedTheme?.palette, scrollingAgentID == "codex",
-                CodexTerminalColorAdaptation.isLight(palette) else {
+            guard let palette = appliedTheme?.palette, scrollingAgentID == "codex" else {
                 explicitColorTransform = nil
                 return
             }

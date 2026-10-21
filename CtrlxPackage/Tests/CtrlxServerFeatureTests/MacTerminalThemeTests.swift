@@ -5,7 +5,7 @@
     @testable import CtrlxServerFeature
     @testable import SwiftTerm
 
-    @Suite("Mac terminal light color adaptation", .serialized)
+    @Suite("Mac terminal color adaptation", .serialized)
     @MainActor
     struct MacTerminalThemeTests {
         @Test("RGB and indexed composer colors become readable without changing terminal data", arguments: ["48;2;57;57;57", "48;5;237"])
@@ -52,7 +52,7 @@
             view.feed(byteArray: Array("\u{1B}[\(sgr)mInverse\u{1B}[0m".utf8)[...])
             let line = try #require(view.getTerminal().getLine(row: 0))
             let attribute = line[0].attribute
-            for theme in [TerminalTheme.codexLight, .defaultLight, .solarizedLight, .defaultDark] {
+            for theme in TerminalTheme.allCases {
                 view.scrollingAgentID = nil
                 view.applyTheme(theme)
                 let baseline = try #require(view.terminalView.getAttributes(attribute, withUrl: false))
@@ -89,6 +89,45 @@
             try await assertRenderedBackground(light, in: view, name: "codex-light")
             view.applyTheme(.defaultDark)
             try await assertRenderedBackground(dark, in: view, name: "dark")
+        }
+
+        @Test("Light RGB and indexed composers redraw for dark themes and late Codex metadata", arguments: ["48;2;238;238;238", "48;5;255"])
+        func lightComposerRendering(backgroundSGR: String) async throws {
+            let view = makeView()
+            let window = NSWindow(contentRect: view.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            defer { window.close() }
+            view.applyTheme(.defaultDark)
+            view.feed(byteArray: Array("\u{1B}[?25l\u{1B}[\(backgroundSGR);38;2;13;13;13m  Ask Codex to do anything                    \u{1B}[0m\r\n".utf8)[...])
+            view.layoutSubtreeIfNeeded()
+            let terminal = view.getTerminal()
+            let line = try #require(terminal.getLine(row: 0))
+            let attribute = line[0].attribute
+            let columns = terminal.cols, rows = terminal.rows
+            let original = try colors(view, attribute)
+            #expect(CodexTerminalColorAdaptation.luminance(original.background) > 0.65)
+            try await assertRenderedBackground(original.background, in: view, name: "light-composer-before")
+
+            view.scrollingAgentID = "codex"
+            for theme in [TerminalTheme.defaultDark, .codexLight, .solarizedDark, .anysphereDark, .defaultDark] {
+                view.applyTheme(theme)
+                let pair = try colors(view, attribute)
+                #expect(contrast(pair.foreground, pair.background) >= 4.5)
+                if theme == .codexLight {
+                    #expect(CodexTerminalColorAdaptation.luminance(pair.background) > 0.65)
+                    #expect(pair.foreground == original.foreground)
+                } else {
+                    #expect(CodexTerminalColorAdaptation.luminance(pair.background) < 0.1)
+                }
+                try await assertRenderedBackground(pair.background, in: view, name: "light-composer-\(theme.rawValue)")
+                #expect(line[0].attribute == attribute)
+                #expect(view.getTerminal() === terminal)
+                #expect(terminal.cols == columns && terminal.rows == rows)
+            }
+            view.scrollingAgentID = "claude-code"
+            #expect(try colors(view, attribute) == original)
+            try await assertRenderedBackground(original.background, in: view, name: "light-composer-other-agent")
         }
 
         private func makeView() -> InteractiveTerminalView {

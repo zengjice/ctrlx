@@ -1352,7 +1352,7 @@ cyan is adapted for white backgrounds. Bright chromatic ANSI slots retain dark,
 readable colors, while white slots keep their conventional background/reverse
 video meaning. SwiftTerm rendering, rich-text copy and new-shell OSC 10/11
 declarations use the same palette. Agent-emitted RGB colors are preserved except
-for the display-only Codex light-theme adaptation described below. Switching
+for the display-only Codex theme adaptation described below. Switching
 CtrlX themes does not rewrite Agent configuration (for example, Codex's `/theme`).
 
 iOS **Settings → Terminal → Terminal Theme** uses the same palettes, including
@@ -1362,16 +1362,19 @@ terminal text, ANSI colors, cursor, canvas and scroll-view backgrounds without
 reconnecting or clearing the terminal.
 
 Both Mac (local, remote and detached) and iOS use the shared
-`CodexTerminalColorAdaptation` for Codex tabs on a light theme. A display-only
-SwiftTerm mapping lightens dark explicit backgrounds and darkens
-low-contrast foreground colors while preserving hue. This covers Codex composer,
+`CodexTerminalColorAdaptation` for Codex tabs. A display-only SwiftTerm mapping
+lightens dark explicit backgrounds on light themes and dims bright explicit
+backgrounds on dark themes. Low-contrast foreground colors move toward black or
+white respectively while preserving hue; readable colors remain unchanged.
+This covers Codex composer,
 history and diff blocks whose colors were chosen from the Host's startup palette.
 Reverse-video cells preserve their resolved foreground/background pair, including
-default inverted colors, so ANSI/RGB emphasis cannot become light text on a light
-background. Underlines follow the same inverse-video policy.
+default inverted colors, so adapting only one side cannot destroy ANSI/RGB
+emphasis. Underlines follow the same inverse-video policy.
 Raw bytes, buffer attributes, Agent configuration and other Viewers are unchanged.
-Changing back to a dark theme or leaving Codex restores the original explicit
-colors; other terminal/Agent tabs preserve their explicit colors.
+Changing themes or receiving Codex metadata updates already painted content.
+Leaving Codex restores the original explicit colors; other terminal/Agent tabs
+preserve their explicit colors.
 
 ### PairedViewer / PairedHost
 
