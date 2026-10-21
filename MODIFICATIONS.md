@@ -7,6 +7,31 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.89 — Browser extension access and iOS question input
+
+- Open extension settings directly and route Chrome Web Store links into
+  workspace browser tabs, preserving Host/Viewer control and older-peer behavior.
+- Add opt-in browser recording diagnostics, with bounded lifecycle/resource
+  records that stop when debugging is disabled. Refresh bundled browser skills.
+- Adapt Codex light colors to dark terminal themes, unify Agent notification
+  titles/subtitles, and open the iOS keyboard from Codex answer and notes areas
+  while retaining terminal selection, link and text-composition behavior.
+- Prepare and correct the CEF extension-header compatibility patch; its source
+  and experimental validation do not replace the distributed CEF runtime.
+- Release validation: the bounded serial Swift regression passed with 3,675
+  tests reported across 522 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, the website
+  build, 89 publisher/COS/installer tests and the CEF patch's lightweight
+  callback/continuation checks passed.
+- Reused native extension, recording-diagnostic and iOS keyboard acceptance
+  after checking source hashes and reviewing later changes for impact. The
+  keyboard's 16 native regression checks match the current implementation.
+  Live remote Codex, cross-machine Viewer and APNs acceptance were not rerun.
+  Two already-committed Swift files retain 799 formatting findings.
+- Signed Mac and iOS device-SDK Release builds passed. Mac distribution uses
+  build 22 through COS, with signature, source metadata and complete
+  public-download integrity checks before installer promotion.
+
 ## 3.0.88 — Background browser recording
 
 - Add Host-owned background H.264 recording through `record-start`,
