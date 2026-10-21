@@ -1,6 +1,7 @@
 // Isolated characterization of extension APIs, never linked into CtrlX.
 #import <Cocoa/Cocoa.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import "../../CtrlxPackage/Sources/CtrlxBrowserBridge/include/CtrlxBrowserBridge.h"
 #include <map>
 #include <functional>
 #include <cmath>
@@ -46,6 +47,7 @@
 @interface ExtensionProbeRuntime : NSObject
 @property(nonatomic, copy) NSString *profile;
 @property(nonatomic) BOOL closing;
+@property(nonatomic, strong) id delegate;
 @end
 @implementation ExtensionProbeRuntime
 @end
@@ -255,6 +257,25 @@ class ExtensionToolClient final : public Client {
 // Exercise the actual product implementation in this isolated executable.
 #include "../../CtrlxPackage/AgentBrowser/BrowserExtensions.inc"
 #include "../../CtrlxPackage/AgentBrowser/ExtensionSurface.inc"
+
+namespace {
+CefRefPtr<CefBrowser> AgentBrowserTarget(NSString *identifier) {
+  return [identifier isEqual:@"store-source"] ? embeddedA : nullptr;
+}
+bool AgentBrowserHumanControlled(CefRefPtr<CefBrowser>) { return false; }
+}
+#include "../../CtrlxPackage/AgentBrowser/ExtensionStoreRouting.inc"
+
+@interface StoreProbeDelegate : NSObject
+@property(nonatomic, strong) NSMutableArray<NSDictionary *> *calls;
+@end
+@implementation StoreProbeDelegate
+- (void)browserTab:(NSString *)identifier openWebStoreURL:(NSString *)url controlToken:(NSString *)token
+    completion:(void (^)(NSString *, NSString *))completion {
+  [self.calls addObject:@{@"source": identifier, @"url": url, @"token": token ?: @"local"}];
+  completion(nil, nil);
+}
+@end
 
 namespace {
 #include "NativeWindowProbe.inc"

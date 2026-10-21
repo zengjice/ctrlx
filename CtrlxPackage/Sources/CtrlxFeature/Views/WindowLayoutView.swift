@@ -296,13 +296,20 @@
                         .background(Color(.systemBackground))
                         .id(tab.id)
                 } else if let tab = selectedBrowser {
-                    RemoteBrowserView(tab: tab, client: relayClient)
-                        .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
-                            targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
-                            didSend: { target in try await revealAnnotationTarget(target, source: .browser(tab.id)) }
-                        ))
-                        .background(Color(.systemBackground))
-                        .id(tab.id)
+                    RemoteBrowserView(tab: tab, client: relayClient) { opened in
+                        cancelCreationFollowUp()
+                        isKeyboardActive = false
+                        quickActionPresentation.dismiss()
+                        fileWorkspace.selectedID = nil
+                        selectedSimulatorID = nil
+                        browserSelection.selectedID = opened.id
+                    }
+                    .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
+                        targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
+                        didSend: { target in try await revealAnnotationTarget(target, source: .browser(tab.id)) }
+                    ))
+                    .background(Color(.systemBackground))
+                    .id(tab.id)
                 } else if let tab = fileWorkspace.selected, fileWorkspace.unavailableFileSources.contains(tab.id) {
                     ContentUnavailableView(
                         "Files Source Unavailable",

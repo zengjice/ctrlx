@@ -186,6 +186,31 @@ ZIP/CRX import, permission review, enable/disable, manual update and removal.
 Extensions declaring an options page also show **Settings** before Enable/Disable
 on Mac Host, Mac Viewer and iOS. Enable a disabled extension before opening its
 settings. **Extension Advanced Management** opens Chromium's full extension manager.
+**Browse Store** opens Chrome Web Store in a new embedded tab linked to the same
+source pane. Store links in **Extension Advanced Management** use that route too;
+they do not create a separate native store window. Mac Viewer and iOS select the
+returned Host tab without changing the Host's selection. On an extension detail
+page, **Install on Host** opens the existing permission preview with its ID filled
+in (and the existing update flow when already installed). Download, signature
+checks and installation remain on the source Host. The website's own “Add to
+Chrome” button is not the supported installation entry point. Older Hosts omit
+the new store-browsing capability; link/ID installation remains available.
+Store handoff metadata accompanies a valid native-window frame, so older Viewers
+can keep polling and reacquire control without reopening the panel. Physical Host
+takeover rebinds the manager's store links to the local source and clears the
+stale Swift lease on local navigation; queued Viewer callbacks retain their old
+token and remain rejected. The manager retains its source independently of the
+grant, so real Host input also restores local links after Viewer release or the
+20-second native lease expires. Input in unrelated windows or injected by a
+Viewer does not restore local routing.
+
+2026-10-21 store-navigation validation passed 38 focused protocol/control/URL tests,
+the signed `--options-mode tab` probe (actual manager store link, same-tab routing,
+no native store popup, active/released/expired grants, and options regression),
+and Mac Debug builds. The expiry regression waits for the production 20-second timeout.
+The earlier iOS Simulator build remains applicable to the unchanged Viewer code.
+Physical-device and cross-machine UI acceptance remain unverified.
+
 Extensions are installed in the source **Host's CtrlX profile** and apply across
 its sessions. They do not install into system Chrome or a Viewer's local profile.
 The first version supports Manifest V3 and signed CRX3; ZIP packages are identified

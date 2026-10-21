@@ -16,6 +16,7 @@ final public class RemoteBrowserSession {
     public private(set) var clipboardMessage: String?
     @ObservationIgnored @Dependency(ClipboardClient.self) private var clipboard
     public let managesExtensions: Bool
+    public private(set) var openedStoreTab: RemoteBrowserTab?
     public private(set) var extensionSurface: RemoteBrowserExtensionSurface = .manager
     @ObservationIgnored private let anchorTabID: UUID
     @ObservationIgnored private let surfaceID = UUID()
@@ -89,6 +90,7 @@ final public class RemoteBrowserSession {
         if let surface = result.extensions?.surface {
             extensionSurface = surface
         }
+        try acceptStoreTab(result.extensions?.openedStoreTab)
         switch operation {
         case .openWindow,
              .showSurface,
@@ -99,6 +101,17 @@ final public class RemoteBrowserSession {
         default: break
         }
         return result
+    }
+
+    private func acceptStoreTab(_ opened: RemoteBrowserTab?) throws {
+        guard let opened else { return }
+        guard
+            opened.sessionName == tab.sessionName, opened.sourcePaneID == tab.sourcePaneID,
+            opened.sourcePaneID != nil, opened.id != anchorTabID, !opened.isAgentOwned,
+            opened.isExtensionWindow != true, BrowserExtensionStoreURL.isStore(opened.url) else {
+            throw ViewerRelayClientError.commandFailed("The Host returned a store tab outside the source pane.")
+        }
+        openedStoreTab = opened
     }
 
     public func watch() async {
@@ -132,7 +145,12 @@ final public class RemoteBrowserSession {
                     releaseControl()
                     continue
                 }
-                guard epoch == current, let frame = response.frame, frame.isValid else { return }
+                guard epoch == current else { return }
+                try acceptStoreTab(response.extensions?.openedStoreTab)
+                if openedStoreTab != nil {
+                    return
+                }
+                guard let frame = response.frame, frame.isValid else { return }
                 if self.frame != frame {
                     self.frame = frame
                 }

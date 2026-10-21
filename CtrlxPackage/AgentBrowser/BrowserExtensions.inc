@@ -62,10 +62,28 @@ static CefRefPtr<CefBrowser> OpenExtensionOptionsWindow(NSString *url) {
 }
 
 class ExtensionManagerClient final : public CefClient, public CefLifeSpanHandler,
-    public CefLoadHandler, public CefDevToolsMessageObserver {
+    public CefLoadHandler, public CefRequestHandler, public CefDevToolsMessageObserver {
  public:
   using Completion = void (^)(NSData *, NSString *);
   using OptionsPresenter = std::function<NSString *(NSString *)>;
+  NSString *storeSource = nil;
+  std::function<void(NSString *)> openStore;
+  CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+  bool RouteStore(const CefString& value) {
+    NSURLComponents *url = [NSURLComponents componentsWithString:@(value.ToString().c_str())];
+    if (!browser_ || !browser_->IsValid() || runtime.closing ||
+        !browser_->GetMainFrame()->GetURL().ToString().starts_with("chrome://extensions/") ||
+        ![url.scheme isEqual:@"https"] || ![url.host isEqual:@"chromewebstore.google.com"] ||
+        url.user || url.password || url.port) return false;
+    if (openStore) openStore(@(value.ToString().c_str()));
+    return true;
+  }
+  bool OnOpenURLFromTab(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
+      const CefString& url, WindowOpenDisposition, bool) override { return RouteStore(url); }
+  bool OnBeforeBrowse(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
+      CefRefPtr<CefRequest> request, bool, bool) override {
+    return frame->IsMain() && RouteStore(request->GetURL());
+  }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
@@ -93,9 +111,10 @@ class ExtensionManagerClient final : public CefClient, public CefLifeSpanHandler
     }
   }
   bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int,
-      const CefString&, const CefString&, WindowOpenDisposition, bool,
+      const CefString& url, const CefString&, WindowOpenDisposition, bool,
       const CefPopupFeatures&, CefWindowInfo&, CefRefPtr<CefClient>& client,
       CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
+    if (RouteStore(url)) return true;
     client = new ExtensionToolClient();
     return false;
   }

@@ -382,31 +382,7 @@ class BrowserUITask final : public CefTask {
 #include "BrowserExtensions.inc"
 #include "ExtensionSurface.inc"
 
-static std::shared_ptr<ExtensionSurface> extensionSurface;
-static NSString *extensionAnchor;
-static NSString *extensionControlledPage;
-
-static void ReleaseExtensionControlFor(NSString *identifier) {
-  if (extensionSurface && ([extensionAnchor isEqual:identifier] || [extensionControlledPage isEqual:identifier]))
-    extensionSurface->Revoke();
-}
-
-static bool AuthorizeExtensionRequest(NSString *target, NSDictionary *request) {
-  return extensionSurface && [extensionAnchor isEqual:target] && extensionSurface->Authorize(request[@"lease"]);
-}
-
-static bool ExtensionControlOwnsWindow(NSWindow *window) {
-  if (!window || !extensionSurface) return false;
-  if (extensionSurface->Owns(window)) return true;
-  for (NSString *identifier in @[extensionAnchor ?: @"", extensionControlledPage ?: @""]) {
-    auto browser = AgentBrowserTarget(identifier);
-    if (!browser) continue;
-    NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
-    for (NSWindow *candidate = window; candidate; candidate = candidate.parentWindow)
-      if (candidate == view.window) return true;
-  }
-  return false;
-}
+#include "ExtensionStoreRouting.inc"
 
 static void OpenExtensionWindow(NSString *target, bool remote, void (^reply)(NSString *, NSString *)) {
   auto source = AgentBrowserTarget(target);
@@ -530,12 +506,7 @@ static __weak id<CXApplicationDiagnosticsDelegate> applicationDiagnosticsDelegat
 }
 - (BOOL)isHandlingSendEvent { return self.handlingSendEvent; }
 - (void)sendEvent:(NSEvent *)event {
-  if (extensionInputDepth == 0 && extensionSurface && extensionSurface->Active() && ExtensionControlOwnsWindow(event.window) &&
-      (event.type == NSEventTypeKeyDown || event.type == NSEventTypeLeftMouseDown ||
-       event.type == NSEventTypeRightMouseDown || event.type == NSEventTypeScrollWheel)) {
-    // Local interaction always takes precedence over an extension Viewer.
-    extensionSurface->Revoke();
-  }
+  TakeExtensionControlFromHost(event);
   // CDP input bypasses NSApplication. Physical Host input must not race the
   // remote controller, including a CEF field that was already first responder.
   if (runtime.started && extensionInputDepth == 0) for (auto& [id, browser] : browsers) {
@@ -719,7 +690,10 @@ static __weak id<CXApplicationDiagnosticsDelegate> applicationDiagnosticsDelegat
     if (runtime.closing || !source || !source->IsValid() || !browsers.contains(source->GetIdentifier()) ||
         AgentBrowserHumanControlled(source)) { reply(@"The source page is closed or controlled by a Viewer."); return; }
     auto browser = EnsureExtensionManager();
-    if (browser) RevealWindow(browser);
+    if (browser) {
+      ConfigureExtensionStore(browser, target, nil);
+      RevealWindow(browser);
+    }
     reply(browser ? nil : @"Chromium could not open extension management.");
   }))) reply(@"Chromium is not ready.");
 }
@@ -741,6 +715,7 @@ static __weak id<CXApplicationDiagnosticsDelegate> applicationDiagnosticsDelegat
         (!remote && AgentBrowserHumanControlled(source))) { reply(nil, @"The source page is closed or controlled by a Viewer."); return; }
     auto browser = EnsureExtensionManager();
     if (!browser) { reply(nil, @"Chromium could not open extension management."); return; }
+    ConfigureExtensionStore(browser, target, remote ? request[@"lease"] : nil);
     if (remote && ([request[@"operation"] isEqual:@"uninstall"] ||
         ([request[@"operation"] isEqual:@"setEnabled"] && [request[@"enabled"] boolValue]))) {
       RevealWindow(browser);
@@ -808,6 +783,7 @@ static __weak id<CXApplicationDiagnosticsDelegate> applicationDiagnosticsDelegat
     } else if ([request[@"action"] isEqual:@"showManager"]) {
       auto browser = EnsureExtensionManager();
       if (!browser) { reply(nil, @"Chromium could not open extension management."); return; }
+      ConfigureExtensionStore(browser, target, request[@"lease"]);
       RevealWindow(browser);
       NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
       if (!extensionSurface->SetWindow(view.window)) { reply(nil, @"Extension management is unavailable."); return; }

@@ -12,6 +12,7 @@ final class BrowserExtensionControl {
     var prepared: [UUID: PreparedBrowserExtension] = [:]
     var upload: (id: UUID, actor: BrowserExtensionUpload, replacing: BrowserExtensionRuntimeItem?)?
     var preparing = false
+    var openedStoreTab: RemoteBrowserTab?
 
     init(anchorID: UUID, lease: BrowserControlLease) {
         self.anchorID = anchorID
@@ -126,7 +127,11 @@ extension AgentBrowserService {
              .release: break
         case .list:
             let entries = try await browserExtensions(for: tab, controlID: id)
-            result = .init(entries: entries.map { .init(id: $0.id, name: $0.runtime.name, version: $0.runtime.version, state: $0.runtime.state, canUpdate: $0.canUpdate, hasOptions: $0.runtime.hasOptions) })
+            result = .init(entries: entries.map { .init(id: $0.id, name: $0.runtime.name, version: $0.runtime.version, state: $0.runtime.state, canUpdate: $0.canUpdate, hasOptions: $0.runtime.hasOptions) }, canBrowseStore: true)
+        case .openStore:
+            let opened = try await openExtensionStore(for: tab, controlID: id)
+            control.openedStoreTab = descriptor(opened)
+            result = .init(openedStoreTab: control.openedStoreTab)
         case let .openOptions(extensionID):
             let item = try await extensionItem(extensionID, tab: tab, control: control)
             try await openExtensionOptions(item.runtime, for: tab, controlID: id)
@@ -250,7 +255,9 @@ extension AgentBrowserService {
             let decoded = try JSONDecoder().decode(RemoteBrowserFrame.self, from: data)
             guard decoded.isValid else { throw RemoteBrowserError.message("Invalid extension window frame.") }
             frame = decoded
-            result = .init(surface: control.surface)
+            // Older Viewers ignore the handoff metadata and still require a frame
+            // to keep polling and allow control to be reacquired in this panel.
+            result = .init(surface: control.surface, openedStoreTab: control.openedStoreTab)
         case let .text(text):
             _ = try await extensionSurfaceInput(.text(text), request: request, control: control)
         case let .key(key):
@@ -311,7 +318,7 @@ extension AgentBrowserService {
         return try await extensionSurfaceRequest(control, payload: payload)
     }
 
-    private func extensionSurfaceRequest(_ control: BrowserExtensionControl, payload: [String: Any]) async throws -> Data {
+    func extensionSurfaceRequest(_ control: BrowserExtensionControl, payload: [String: Any]) async throws -> Data {
         try checkExtensionControl(control)
         guard let runtime, supportsBrowserExtensions else { throw RemoteBrowserError.message("Native extension control is unavailable.") }
         var payload = payload

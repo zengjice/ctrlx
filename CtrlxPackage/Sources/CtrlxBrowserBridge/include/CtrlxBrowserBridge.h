@@ -21,6 +21,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)browserTabSelected:(NSString *)identifier;
 - (void)browserTabClosed:(NSString *)identifier;
 @optional
+// Human navigation from the trusted extension manager, scoped to its source tab.
+// A nil token confirms no native control grant remains (including Host takeover).
+- (void)browserTab:(NSString *)identifier openWebStoreURL:(NSString *)url controlToken:(nullable NSString *)controlToken completion:(void (^)(NSString * _Nullable identifier, NSString * _Nullable error))completion;
 // Native runtime supplies a one-use, observed human activation, never page JS.
 - (void)browserTab:(NSString *)identifier openExternalURL:(NSString *)url controlToken:(nullable NSString *)controlToken;
 @end

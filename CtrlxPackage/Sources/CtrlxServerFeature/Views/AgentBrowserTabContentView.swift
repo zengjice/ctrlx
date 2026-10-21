@@ -1,5 +1,6 @@
 import AppKit
 import CtrlxCommon
+import CtrlxNetworking
 import SwiftUI
 
 /// Same workbench/split host as New Browser, with a Chromium native child.
@@ -10,7 +11,12 @@ struct AgentBrowserTabContentView: View {
     @State private var address = ""
     @State private var isAnnotating = false
     @State private var extensionError: String?
-    @State private var showsExtensions = false
+    private struct ExtensionRequest: Identifiable {
+        let id = UUID()
+        let storeID: String?
+    }
+
+    @State private var extensionRequest: ExtensionRequest?
     @FocusState private var editingAddress: Bool
 
     var body: some View {
@@ -42,9 +48,17 @@ struct AgentBrowserTabContentView: View {
                     ProgressView().controlSize(.small)
                 }
                 if state.manualTarget?.hostID == nil {
+                    if let id = BrowserExtensionStoreURL.extensionID(from: state.url) {
+                        Button("Install on Host") {
+                            extensionRequest = ExtensionRequest(storeID: id)
+                        }
+                        .disabled(state.isClosed || state.isRemotelyControlled)
+                        .accessibilityIdentifier("browser-install-store-extension")
+                    }
                     Menu {
                         Button(action: openExtensionWindow) { Label("Open in Extension Window", symbol: .arrowUpRightSquare) }
-                        Button { showsExtensions = true } label: { Label("Manage Extensions", symbol: .puzzlepiece) }
+                        Button { extensionRequest = ExtensionRequest(storeID: nil)
+                        } label: { Label("Manage Extensions", symbol: .puzzlepiece) }
                     } label: { Label("Extensions", symbol: .puzzlepiece) }
                         .help("Extensions for this Host's browser")
                         .accessibilityIdentifier("agent-browser-extensions")
@@ -110,7 +124,7 @@ struct AgentBrowserTabContentView: View {
             }
         }
         .accessibilityIdentifier("agent-browser-tab-content")
-        .sheet(isPresented: $showsExtensions) { BrowserExtensionsView(tab: state) }
+        .sheet(item: $extensionRequest) { request in BrowserExtensionsView(tab: state, initialStoreID: request.storeID) }
         .alert("Browser Extensions", isPresented: Binding(
             get: { extensionError != nil }, set: {
                 if !$0 {

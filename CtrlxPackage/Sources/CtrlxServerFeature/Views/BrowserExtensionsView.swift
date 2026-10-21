@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 @MainActor
 struct BrowserExtensionsView: View {
     let tab: AgentBrowserTabState
+    var initialStoreID: String?
     @Environment(\.dismiss) private var dismiss
     @State private var entries: [BrowserExtensionListEntry] = []
     @State private var prepared: PreparedBrowserExtension?
@@ -35,6 +36,12 @@ struct BrowserExtensionsView: View {
                 }
                 .disabled(busy)
                 HStack {
+                    Button("Browse Store") {
+                        perform("Opening Chrome Web Store…") {
+                            _ = try await tab.service.openExtensionStore(for: tab)
+                            dismiss()
+                        }
+                    }
                     Button("Import ZIP / CRX…") { importPackage() }
                     Button("Extension Advanced Management…") {
                         perform("Opening extension settings…") { try await tab.service.showExtensionManager(tab) }
@@ -195,8 +202,14 @@ struct BrowserExtensionsView: View {
         busy = true
         status = "Loading extensions…"
         defer { busy = false }
-        do { entries = try await tab.service.browserExtensions(for: tab) }
-        catch { errorMessage = error.localizedDescription }
+        do {
+            entries = try await tab.service.browserExtensions(for: tab)
+            if let initialStoreID {
+                storeLink = initialStoreID
+                status = "Downloading and checking store package…"
+                prepared = try await tab.service.prepareStoreExtension(initialStoreID, for: tab, replacing: entries.first { $0.id == initialStoreID }?.runtime)
+            }
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func perform(_ status: String, action: @escaping @MainActor () async throws -> Void) {

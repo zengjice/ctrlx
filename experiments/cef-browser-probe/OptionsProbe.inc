@@ -28,7 +28,7 @@ void WaitForOptions(CefRefPtr<CefBrowser> browser, std::function<void()> next, i
   });
 }
 
-void CheckExtensionOptions(std::function<void()> next) {
+void CheckExtensionOptionsContent(std::function<void()> next) {
   AdminOperation(@{@"operation": @"list"}, [next](NSDictionary *result) {
     NSDictionary *item = [result[@"extensions"] filteredArrayUsingPredicate:
         [NSPredicate predicateWithFormat:@"id == %@", installedFixtureID]].firstObject;
@@ -61,5 +61,106 @@ void CheckExtensionOptions(std::function<void()> next) {
         WaitForOptions(*opened, next);
       }, present);
     }, present);
+  });
+}
+
+void CheckStoreHostTakeover(std::function<void()> next, int mode = 0) {
+  NSString *phase = mode == 0 ? @"store-host-takeover" :
+      mode == 1 ? @"store-host-after-release" : @"store-host-after-expiry";
+  auto client = static_cast<ExtensionManagerClient*>(manager->GetHost()->GetClient().get());
+  StoreProbeDelegate *delegate = [StoreProbeDelegate new];
+  delegate.calls = [NSMutableArray array];
+  runtime.delegate = delegate;
+  extensionAnchor = @"store-source";
+  NSView *view = (__bridge NSView *)manager->GetHost()->GetWindowHandle();
+  [view.window makeKeyAndOrderFront:nil];
+  extensionSurface = std::make_shared<ExtensionSurface>(@"viewer-store", [] { return !closing; }, [] {});
+  if (!extensionSurface->SetWindow(view.window)) {
+    Report(@"failure", @{@"error": @"Store takeover surface could not be bound"}); CloseAll(); return;
+  }
+  ConfigureExtensionStore(manager, extensionAnchor, @"viewer-store");
+  NSEvent *event = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown location:NSMakePoint(10, 10)
+      modifierFlags:0 timestamp:0 windowNumber:view.window.windowNumber context:nil eventNumber:1 clickCount:1 pressure:1];
+  {
+    ExtensionInputScope scope;
+    TakeExtensionControlFromHost(event);
+  }
+  const bool remoteKeptGrant = extensionSurface->Authorize(@"viewer-store");
+  auto staleCallback = client->openStore;
+  if (mode == 1) extensionSurface->Revoke();
+  // Wait for the production 20-second lease; do not fake expiry by revoking it.
+  Later(mode == 2 ? 20200 : 0, [client, delegate, remoteKeptGrant, staleCallback, event, phase, mode, next] {
+    const bool initialStateCorrect = extensionSurface->Active() == (mode == 0);
+    if (mode != 0) {
+      // The manager must retain its own source even after another grant changes
+      // the last extension anchor. Unrelated Host input must not rebind it.
+      extensionAnchor = @"other-source";
+      NSWindow *unrelated = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 100, 100)
+          styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+      NSEvent *other = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown location:NSZeroPoint
+          modifierFlags:0 timestamp:0 windowNumber:unrelated.windowNumber context:nil eventNumber:2 clickCount:1 pressure:1];
+      TakeExtensionControlFromHost(other);
+      {
+        ExtensionInputScope scope;
+        TakeExtensionControlFromHost(event);
+      }
+    }
+    client->RouteStore("https://chromewebstore.google.com/detail/queued/abcdefghijklmnopabcdefghijklmnop");
+    TakeExtensionControlFromHost(event);
+    const bool hostRevoked = !extensionSurface->Active();
+    staleCallback(@"https://chromewebstore.google.com/detail/stale/abcdefghijklmnopabcdefghijklmnop");
+    client->RouteStore("https://chromewebstore.google.com/");
+    Later(250, [client, delegate, remoteKeptGrant, initialStateCorrect, hostRevoked, phase, mode, next] {
+      const bool passed = remoteKeptGrant && initialStateCorrect && hostRevoked && delegate.calls.count == 1 &&
+          [delegate.calls.firstObject[@"token"] isEqual:@"local"] &&
+          [delegate.calls.firstObject[@"source"] isEqual:@"store-source"] &&
+          [delegate.calls.firstObject[@"url"] isEqual:@"https://chromewebstore.google.com/"];
+      Report(phase, @{@"passed": @(passed), @"remoteKeptGrant": @(remoteKeptGrant),
+          @"initialStateCorrect": @(initialStateCorrect), @"hostRevoked": @(hostRevoked), @"opened": @(delegate.calls.count)});
+      client->openStore = nullptr;
+      extensionSurface.reset();
+      extensionAnchor = nil;
+      runtime.delegate = nil;
+      if (!passed) { Report(@"failure", @{@"error": @"Host takeover did not rebind the store route safely", @"scenario": phase}); }
+      if (mode < 2) CheckStoreHostTakeover(next, mode + 1);
+      else CheckExtensionOptionsContent(next);
+    });
+  });
+}
+
+// Exercise Chromium's actual popup and same-tab callbacks from the trusted manager.
+void CheckExtensionOptions(std::function<void()> next) {
+  auto client = static_cast<ExtensionManagerClient*>(manager->GetHost()->GetClient().get());
+  auto urls = std::make_shared<std::vector<std::string>>();
+  const size_t toolCount = extensionTools.size();
+  client->openStore = [urls](NSString *url) { urls->push_back(url.UTF8String); };
+  auto params = CefDictionaryValue::Create();
+  params->SetString("expression", R"JS((() => {
+    function find(root) {
+      for (const a of root.querySelectorAll('a[href]'))
+        if (a.href.startsWith('https://chromewebstore.google.com/')) return a;
+      for (const element of root.querySelectorAll('*')) {
+        if (element.shadowRoot) { const a = find(element.shadowRoot); if (a) return a; }
+      }
+    }
+    const link = find(document);
+    if (!link) throw new Error('Native manager store link not found');
+    link.click();
+  })())JS");
+  params->SetBool("userGesture", true);
+  manager->GetHost()->ExecuteDevToolsMethod(0, "Runtime.evaluate", params);
+  Later(500, [client, urls, toolCount, next] {
+    manager->GetMainFrame()->LoadURL("https://chromewebstore.google.com/detail/fixture/abcdefghijklmnopabcdefghijklmnop");
+    Later(500, [client, urls, toolCount, next] {
+      const bool passed = urls->size() == 2 &&
+          urls->at(0).starts_with("https://chromewebstore.google.com/") &&
+          urls->at(1) == "https://chromewebstore.google.com/detail/fixture/abcdefghijklmnopabcdefghijklmnop" &&
+          extensionTools.size() == toolCount && manager->GetMainFrame()->GetURL() == "chrome://extensions/" &&
+          !client->RouteStore("https://chromewebstore.google.com.evil.test/");
+      client->openStore = nullptr;
+      Report(@"store-routing", @{@"passed": @(passed), @"count": @(urls->size()), @"noNativePopup": @(extensionTools.size() == toolCount)});
+      if (!passed) { Report(@"failure", @{@"error": @"Store navigation escaped the embedded-tab route"}); CloseAll(); return; }
+      CheckStoreHostTakeover(next);
+    });
   });
 }

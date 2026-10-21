@@ -1,4 +1,5 @@
 import CryptoKit
+import CtrlxCommon
 import CtrlxNetworking
 import Foundation
 import Testing
@@ -7,6 +8,175 @@ import ZIPFoundation
 
 @Suite("Browser extension control") @MainActor
 struct BrowserExtensionControlTests {
+    @Test
+    func storeCreatesEmbeddedHumanTabInSamePaneAndReturnsItToViewer() async throws {
+        let (service, _, source) = try await RemoteBrowserControlTests().fixture()
+        let surface = UUID()
+        var grant: UUID?
+        func send(_ operation: RemoteBrowserExtensionOperation) async throws -> RemoteBrowserResponse {
+            try await service.handleBrowser(.init(sessionName: source.sessionName, tabID: source.id, surfaceID: surface, controlID: grant, operation: .extensions(operation)), viewerID: "viewer")
+        }
+        grant = try #require(try await send(.acquire).controlID)
+        #expect(try await send(.list).extensions?.canBrowseStore == true)
+        let opened = try #require(try await send(.openStore).extensions?.openedStoreTab)
+        #expect(opened.id != source.id)
+        #expect(opened.sourcePaneID == source.sourcePaneID)
+        #expect(opened.sessionName == source.sessionName)
+        #expect(opened.url == BrowserExtensionStoreURL.home)
+        #expect(!opened.isAgentOwned)
+        #expect(opened.isExtensionWindow != true)
+        let frame = try await send(.frame)
+        #expect(frame.extensions?.openedStoreTab == opened)
+        #expect(frame.frame?.isValid == true)
+        _ = try await send(.release)
+        await #expect(throws: (any Error).self) { try await send(.openStore) }
+        await service.shutdown()
+    }
+
+    @Test
+    func managerStoreCallbackKeepsViewerRouteAndClosesTabAfterTakeover() async throws {
+        let (service, runtime, source) = try await RemoteBrowserControlTests().fixture()
+        let grant = try #require(try await service.handleBrowser(.init(sessionName: source.sessionName, tabID: source.id, surfaceID: UUID(), operation: .extensions(.acquire)), viewerID: "viewer").controlID)
+        let workspace = AgentBrowserWorkspace()
+        workspace.acceptsPane = { _ in true }
+        service.register(workspace)
+        var selected: [UUID] = []
+        workspace.onSelect = { selected.append($0.id) }
+        let url = BrowserExtensionStoreURL.home + "detail/fixture/abcdefghijklmnopabcdefghijklmnop"
+        let opened: String = try await withCheckedThrowingContinuation { continuation in
+            service.browserTab(source.id.uuidString, openWebStoreURL: url, controlToken: grant.uuidString) { id, error in
+                if let id {
+                    continuation.resume(returning: id)
+                } else {
+                    continuation.resume(throwing: RemoteBrowserError.message(error ?? "Missing tab"))
+                }
+            }
+        }
+        #expect(service.extensionControl?.openedStoreTab?.id.uuidString == opened)
+        #expect(service.extensionControl?.openedStoreTab?.url == url)
+        #expect(selected.isEmpty)
+        runtime.onManualCreated = { runtime.extensionGrant = nil }
+        let tab = try #require(service.tabs[source.id.uuidString])
+        await #expect(throws: (any Error).self) { try await service.openExtensionStore(for: tab, controlID: grant) }
+        #expect(runtime.closed.count == 1)
+        #expect(runtime.closed.first != opened)
+        await service.shutdown()
+    }
+
+    @Test
+    func storeNavigationKeepsLegacyViewerPollingAndAbleToReacquire() async throws {
+        // Decode only fields understood before store handoff support.
+        struct LegacyResponse: Decodable {
+            struct Extensions: Decodable { let surface: RemoteBrowserExtensionSurface? }
+            let tab: RemoteBrowserTab?
+            let frame: RemoteBrowserFrame?
+            let controlID: UUID?
+            let extensions: Extensions?
+        }
+        let (service, _, source) = try await RemoteBrowserControlTests().fixture()
+        var framesAfterStore = 0
+        let session = RemoteBrowserSession(tab: source, managesExtensions: true) { request in
+            let response = try await service.handleBrowser(request, viewerID: "legacy")
+            if response.extensions?.openedStoreTab != nil {
+                framesAfterStore += 1
+            }
+            let legacy = try JSONDecoder().decode(LegacyResponse.self, from: JSONEncoder().encode(response))
+            return .init(tab: legacy.tab, frame: legacy.frame, controlID: legacy.controlID, extensions: .init(surface: legacy.extensions?.surface))
+        }
+        let watch = Task { await session.watch() }
+        defer { watch.cancel()
+            session.stop()
+        }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        await session.takeControl()
+        let grant = try #require(session.controlID)
+        let url = BrowserExtensionStoreURL.home
+        let opened: String? = await withCheckedContinuation { continuation in
+            service.browserTab(source.id.uuidString, openWebStoreURL: url, controlToken: grant.uuidString) { id, _ in
+                continuation.resume(returning: id)
+            }
+        }
+        #expect(opened != nil)
+        for _ in 0..<100 {
+            if framesAfterStore >= 2 || session.controlID == nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(framesAfterStore >= 2)
+        #expect(session.frame?.isValid == true)
+        #expect(session.controlID == grant)
+        session.releaseControl()
+        for _ in 0..<100 {
+            if service.extensionControl == nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        await session.takeControl()
+        #expect(session.controlID != nil)
+        #expect(session.controlID != grant)
+        watch.cancel()
+        await watch.value
+        await service.shutdown()
+    }
+
+    @Test
+    func localStoreCallbackClearsRevokedLeaseBeforeViewerPoll() async throws {
+        let (service, runtime, source) = try await RemoteBrowserControlTests().fixture()
+        let grant = try #require(try await service.handleBrowser(.init(sessionName: source.sessionName, tabID: source.id, surfaceID: UUID(), operation: .extensions(.acquire)), viewerID: "viewer").controlID)
+        let workspace = AgentBrowserWorkspace()
+        workspace.acceptsPane = { _ in true }
+        service.register(workspace)
+        var selected: [UUID] = []
+        workspace.onSelect = { selected.append($0.id) }
+        // Native Host input revokes immediately, before the next Viewer ping.
+        runtime.extensionGrant = nil
+        #expect(service.extensionControl?.lease.id == grant)
+        let opened: String = try await withCheckedThrowingContinuation { continuation in
+            service.browserTab(source.id.uuidString, openWebStoreURL: BrowserExtensionStoreURL.home, controlToken: nil) { id, error in
+                if let id {
+                    continuation.resume(returning: id)
+                } else {
+                    continuation.resume(throwing: RemoteBrowserError.message(error ?? "Missing tab"))
+                }
+            }
+        }
+        #expect(service.extensionControl == nil)
+        #expect(selected.map(\.uuidString) == [opened])
+        let tab = try #require(service.tabs[source.id.uuidString])
+        await #expect(throws: (any Error).self) { try await service.openExtensionStore(for: tab, controlID: grant) }
+        await service.shutdown()
+    }
+
+    @Test
+    func localStoreSelectsNewTabOnce() async throws {
+        let (service, _, source) = try await RemoteBrowserControlTests().fixture()
+        let workspace = AgentBrowserWorkspace()
+        workspace.acceptsPane = { _ in true }
+        service.register(workspace)
+        var selected: [UUID] = []
+        workspace.onSelect = { selected.append($0.id) }
+        let tab = try #require(service.tabs[source.id.uuidString])
+        let opened = try await service.openExtensionStore(for: tab)
+        #expect(selected == [opened.id])
+        await service.shutdown()
+    }
+
+    @Test
+    func storeRejectsStaleNativeGrantAndForeignURL() async throws {
+        let (service, runtime, source) = try await RemoteBrowserControlTests().fixture()
+        let grant = try #require(try await service.handleBrowser(.init(sessionName: source.sessionName, tabID: source.id, surfaceID: UUID(), operation: .extensions(.acquire)), viewerID: "viewer").controlID)
+        let tab = try #require(service.tabs[source.id.uuidString])
+        await #expect(throws: (any Error).self) { try await service.openExtensionStore(for: tab, url: "https://example.com", controlID: grant) }
+        runtime.extensionGrant = nil
+        await #expect(throws: (any Error).self) { try await service.openExtensionStore(for: tab, controlID: grant) }
+        #expect(service.sharedBrowserTabs.count == 1)
+        await service.shutdown()
+    }
+
     @Test(arguments: [true, false, nil] as [Bool?])
     func settingsRequireAdvertisedOptionsAndKeepNativeGrant(hasOptions: Bool?) async throws {
         let (service, runtime, tab) = try await RemoteBrowserControlTests().fixture()

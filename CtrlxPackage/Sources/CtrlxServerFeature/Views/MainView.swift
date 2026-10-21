@@ -1976,7 +1976,11 @@ public struct MainView: View {
         } else if let selectedBrowserTab, let tab = remoteSessionTabsStates[tabsKey]?.remoteSimulatorTabs[selectedBrowserTab.id] {
             RemoteSimulatorView(tab: tab, client: connection.relayClient).id("\(tab.id):\(tab.sessionName)")
         } else if let selectedBrowserTab, let tab = remoteSessionTabsStates[tabsKey]?.remoteBrowserTabs[selectedBrowserTab.id] {
-            RemoteBrowserView(tab: tab, client: connection.relayClient).id("\(tab.id):\(tab.sessionName)")
+            RemoteBrowserView(tab: tab, client: connection.relayClient) { opened in
+                claimBrowser(opened.id, hostID: remote.hostId, session: remote.sessionName, windowID: opened.windowID)
+                syncHostBrowserTabs(hostId: remote.hostId, sessionName: remote.sessionName, client: connection.relayClient)
+                selectRemoteBrowserTab(opened.id, hostId: remote.hostId, sessionName: remote.sessionName)
+            }.id("\(tab.id):\(tab.sessionName)")
         } else if let selectedBrowserTab, let state = remoteSessionTabsStates[tabsKey]?.agentBrowserStates[selectedBrowserTab.id] {
             AgentBrowserTabContentView(state: state)
                 .id(selectedBrowserTab.id)
@@ -2082,9 +2086,14 @@ public struct MainView: View {
                     .id("\(tab.id):\(tab.sessionName)")
                     .accessibilityIdentifier("split-right-pane")
             } else if let tab = sessionTabs.remoteBrowserTabs[id] {
-                RemoteBrowserView(tab: tab, client: connection.relayClient)
-                    .id("\(tab.id):\(tab.sessionName)")
-                    .accessibilityIdentifier("split-right-pane")
+                RemoteBrowserView(tab: tab, client: connection.relayClient) { opened in
+                    claimBrowser(opened.id, hostID: remote.hostId, session: remote.sessionName, windowID: opened.windowID)
+                    syncHostBrowserTabs(hostId: remote.hostId, sessionName: remote.sessionName, client: connection.relayClient)
+                    sessionTabs.rightSide.insert(.browser(opened.id))
+                    selectRemoteBrowserTab(opened.id, hostId: remote.hostId, sessionName: remote.sessionName)
+                }
+                .id("\(tab.id):\(tab.sessionName)")
+                .accessibilityIdentifier("split-right-pane")
             } else if let state = sessionTabs.agentBrowserStates[id] {
                 AgentBrowserTabContentView(state: state)
                     .id(id)

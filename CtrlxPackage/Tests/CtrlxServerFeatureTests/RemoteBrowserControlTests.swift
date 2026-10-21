@@ -20,6 +20,7 @@
             var onExtensionRequest: (([String: Any]) throws -> Data)?
             var extensionFrameReply: ((Data?, String?) -> Void)?
             var deferExtensionFrame = false
+            var onManualCreated: (() -> Void)?
             func start(with delegate: any CXBrowserHostDelegate, profile: String, state: String) throws { }
             func isReady() -> Bool {
                 true
@@ -30,7 +31,10 @@
             }
 
             func openManualTab(route: [String: String], url: String, completion: @escaping (String?) -> Void) {
-                delegate?.browserTabCreated(UUID().uuidString, view: NSView(), route: route, owner: "", parent: nil)
+                let identifier = UUID().uuidString
+                delegate?.browserTabCreated(identifier, view: NSView(), route: route, owner: "", parent: nil)
+                delegate?.browserTabSelected(identifier)
+                onManualCreated?()
                 completion(nil)
             }
 

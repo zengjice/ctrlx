@@ -7,6 +7,7 @@ public enum RemoteBrowserExtensionOperation: Codable, Sendable, Equatable {
     case release
     case list
     case openWindow
+    case openStore
     case openOptions(String)
     case showSurface(RemoteBrowserExtensionSurface)
     case prepareStore(input: String, replacingID: String?)
@@ -106,16 +107,22 @@ public struct RemoteBrowserExtensionResult: Codable, Sendable, Equatable {
     public let prepared: RemoteBrowserExtensionPreview?
     public let uploadOffset: Int?
     public let surface: RemoteBrowserExtensionSurface?
+    public let canBrowseStore: Bool?
+    public let openedStoreTab: RemoteBrowserTab?
 
     public init(
         entries: [RemoteBrowserExtension]? = nil,
         prepared: RemoteBrowserExtensionPreview? = nil,
         uploadOffset: Int? = nil,
-        surface: RemoteBrowserExtensionSurface? = nil
+        surface: RemoteBrowserExtensionSurface? = nil,
+        canBrowseStore: Bool? = nil,
+        openedStoreTab: RemoteBrowserTab? = nil
     ) {
         self.entries = entries
         self.prepared = prepared
         self.uploadOffset = uploadOffset
         self.surface = surface
+        self.canBrowseStore = canBrowseStore
+        self.openedStoreTab = openedStoreTab
     }
 }

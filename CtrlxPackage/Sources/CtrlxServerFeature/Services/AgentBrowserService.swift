@@ -488,6 +488,27 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         publishBrowserTabs()
     }
 
+    public func browserTab(_ identifier: String, openWebStoreURL url: String, controlToken: String?, completion: @escaping (String?, String?) -> Void) {
+        // The native callback checks that no native grant remains before sending
+        // a local request. Clear its stale Swift lease before scheduling work.
+        if controlToken == nil {
+            releaseExtensionControl()
+        }
+        Task {
+            do {
+                guard let source = tabs[identifier], controlToken == nil || controlToken.flatMap(UUID.init(uuidString:)) != nil else {
+                    throw RemoteBrowserError.message("The source browser is no longer available.")
+                }
+                let controlID = controlToken.flatMap(UUID.init(uuidString:))
+                let opened = try await openExtensionStore(for: source, url: url, controlID: controlID)
+                if let controlID, extensionControl?.lease.id == controlID {
+                    extensionControl?.openedStoreTab = descriptor(opened)
+                }
+                completion(opened.identifier, nil)
+            } catch { completion(nil, error.localizedDescription) }
+        }
+    }
+
     public func browserTabSelected(_ identifier: String) {
         guard let tab = tabs[identifier] else { return }
         if tab.suppressInitialSelection {

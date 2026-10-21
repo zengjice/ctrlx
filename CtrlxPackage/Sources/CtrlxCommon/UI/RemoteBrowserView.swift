@@ -13,14 +13,21 @@ public struct RemoteBrowserView: View {
     @State private var viewport = CGSize.zero
     @State private var keyboardRequested = false
     @State private var isAnnotating = false
-    @State private var showsExtensions = false
+    private struct ExtensionRequest: Identifiable {
+        let id = UUID()
+        let storeID: String?
+    }
+
+    @State private var extensionRequest: ExtensionRequest?
+    private let onOpenBrowser: (RemoteBrowserTab) -> Void
     @FocusState private var editingAddress: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
     private let client: ViewerRelayClient
 
-    public init(tab: RemoteBrowserTab, client: ViewerRelayClient) {
+    public init(tab: RemoteBrowserTab, client: ViewerRelayClient, onOpenBrowser: @escaping (RemoteBrowserTab) -> Void) {
         self.client = client
+        self.onOpenBrowser = onOpenBrowser
         _session = State(initialValue: RemoteBrowserSession(tab: tab, client: client))
     }
 
@@ -54,7 +61,7 @@ public struct RemoteBrowserView: View {
                 if client.hostSupportsBrowserExtensions {
                     Button {
                         session.releaseControl()
-                        showsExtensions = true
+                        extensionRequest = ExtensionRequest(storeID: nil)
                     } label: { Label("Browser Extensions", symbol: .puzzlepiece).labelStyle(.iconOnly) }
                 }
                 if session.controlID != nil {
@@ -78,6 +85,18 @@ public struct RemoteBrowserView: View {
                     .disabled(session.isTakingControl || !client.isHostConnected || session.frame == nil)
                 }
             }.disabled(isAnnotating).padding(.horizontal, 8).padding(.bottom, 8)
+            if client.hostSupportsBrowserExtensions, let id = BrowserExtensionStoreURL.extensionID(from: session.tab.url) {
+                HStack {
+                    Text("Chrome Web Store").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Install on Host") {
+                        session.releaseControl()
+                        extensionRequest = ExtensionRequest(storeID: id)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("browser-install-store-extension")
+                }.disabled(isAnnotating).padding(.horizontal, 8).padding(.bottom, 8)
+            }
             Divider()
             BrowserAnnotationSurface(preferredTarget: session.tab.sourceAgent,
                                      requiresRecipientSelection: session.tab.isAgentOwned && session.tab.sourceAgent == nil, capture: {
@@ -123,8 +142,8 @@ public struct RemoteBrowserView: View {
             }
             BrowserExternalApplicationBanner(notice: session.tab.externalApplicationNotice)
         }
-        .task(id: !showsExtensions && scenePhase == .active && client.isHostConnected && client.hostSupportsBrowserSharing) {
-            guard !showsExtensions, scenePhase == .active, client.isHostConnected, client.hostSupportsBrowserSharing else {
+        .task(id: extensionRequest == nil && scenePhase == .active && client.isHostConnected && client.hostSupportsBrowserSharing) {
+            guard extensionRequest == nil, scenePhase == .active, client.isHostConnected, client.hostSupportsBrowserSharing else {
                 session.stop(); image = nil; displayedFrame = nil; return
             }
             await session.watch()
@@ -139,8 +158,8 @@ public struct RemoteBrowserView: View {
         .onChange(of: client.hostSupportsWorkspaceClipboard, initial: true) { _, supported in session.supportsClipboard = supported }
         .onDisappear { session.stop() }
         .accessibilityIdentifier("remote-browser-page")
-        .sheet(isPresented: $showsExtensions) {
-            RemoteBrowserExtensionsView(tab: session.tab, client: client)
+        .sheet(item: $extensionRequest) { request in
+            RemoteBrowserExtensionsView(tab: session.tab, client: client, initialStoreID: request.storeID, onOpenBrowser: onOpenBrowser)
         }
     }
 

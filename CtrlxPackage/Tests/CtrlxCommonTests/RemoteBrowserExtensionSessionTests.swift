@@ -7,13 +7,14 @@ import Testing
 struct RemoteBrowserExtensionSessionTests {
     @MainActor
     final class Host {
-        let anchor = RemoteBrowserTab(id: UUID(), sessionName: "source", title: "Source", url: "https://example.com", isLoading: false, isAgentOwned: false)
+        let anchor = RemoteBrowserTab(id: UUID(), sessionName: "source", title: "Source", url: "https://example.com", isLoading: false, isAgentOwned: false, sourcePaneID: "%1")
         lazy var page = RemoteBrowserTab(id: UUID(), sessionName: anchor.sessionName, title: "Chrome", url: anchor.url, isLoading: false, isAgentOwned: false, isExtensionWindow: true)
         var requests: [BrowseBrowser] = []
         var control = UUID()
         var owned = false
         var showingPage = false
         var showingOptions = false
+        var openedStore: RemoteBrowserTab?
         var holdFrame = false
         var heldFrame: CheckedContinuation<RemoteBrowserResponse, any Error>?
 
@@ -39,6 +40,9 @@ struct RemoteBrowserExtensionSessionTests {
                     return try await withCheckedThrowingContinuation { heldFrame = $0 }
                 }
                 guard owned else { return .init(tab: anchor) }
+                if let openedStore {
+                    return .init(tab: anchor, controlID: control, extensions: .init(openedStoreTab: openedStore))
+                }
                 return .init(
                     tab: showingPage ? page : anchor,
                     frame: .init(jpeg: Data([1]), width: 1_200, height: 800, generation: 9),
@@ -57,6 +61,44 @@ struct RemoteBrowserExtensionSessionTests {
             default: return .init(tab: anchor, controlID: owned ? control : nil, extensions: .init(entries: []))
             }
         }
+    }
+
+    @Test
+    func managerNavigationHandsOffWithoutRequiringWindowFrame() async throws {
+        let host = Host()
+        let session = RemoteBrowserSession(tab: host.anchor, managesExtensions: true, send: host.send)
+        let watch = Task { await session.watch() }
+        defer { watch.cancel()
+            session.stop()
+        }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        await session.takeControl()
+        try await RemoteBrowserSessionTests().wait { session.frame != nil }
+        let opened = RemoteBrowserTab(id: UUID(), sessionName: host.anchor.sessionName, title: "Store", url: BrowserExtensionStoreURL.home, isLoading: true, isAgentOwned: false, sourcePaneID: "%1")
+        host.openedStore = opened
+        try await RemoteBrowserSessionTests().wait { session.openedStoreTab != nil }
+        #expect(session.openedStoreTab == opened)
+        try await RemoteBrowserSessionTests().wait { !host.owned }
+    }
+
+    @Test
+    func storeHandoffRejectsAnotherPane() async throws {
+        let host = Host()
+        let session = RemoteBrowserSession(tab: host.anchor, managesExtensions: true, send: host.send)
+        let watch = Task { await session.watch() }
+        defer { watch.cancel()
+            session.stop()
+        }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        await session.takeControl()
+        try await RemoteBrowserSessionTests().wait { session.frame != nil }
+        host.openedStore = RemoteBrowserTab(id: UUID(), sessionName: host.anchor.sessionName, title: "Store", url: BrowserExtensionStoreURL.home, isLoading: false, isAgentOwned: false, sourcePaneID: "%2")
+        try await RemoteBrowserSessionTests().wait { session.frameError != nil }
+        #expect(session.openedStoreTab == nil)
     }
 
     @Test

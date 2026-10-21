@@ -1,4 +1,5 @@
 #if os(macOS)
+    import CtrlxNetworking
     import Dependencies
     import DependenciesMacros
     import Foundation
@@ -9,16 +10,10 @@
             if validID(input) {
                 return input
             }
-            guard
-                let url = URL(string: input), url.scheme == "https", url.host == "chromewebstore.google.com",
-                url.user == nil, url.password == nil, url.port == nil else {
+            guard let id = BrowserExtensionStoreURL.extensionID(from: input) else {
                 throw BrowserExtensionPackageError("Enter a Chrome Web Store extension link or its 32-letter ID.")
             }
-            let parts = url.path.split(separator: "/")
-            guard (2...3).contains(parts.count), parts.first == "detail", let last = parts.last, validID(String(last)) else {
-                throw BrowserExtensionPackageError("The Chrome Web Store link does not identify an extension.")
-            }
-            return String(last)
+            return id
         }
 
         static func downloadURL(identifier: String, chromiumVersion: String) throws -> URL {

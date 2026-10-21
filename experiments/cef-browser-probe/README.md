@@ -479,3 +479,15 @@ claim that the official extension supports CEF.**
 The build script pins the actual archive and SHA-256; upstream documentation can
 change independently. The downloaded SDK's `cef_types_mac.h` and
 `cef_life_span_handler.h` define the embedded runtime and window-close contract.
+
+The `--options-mode` suite also exercises the product extension manager's store
+routing: a real `target="_blank"` click and same-tab navigation both invoke the
+store opener, leave the manager on its trusted URL, and create no native popup.
+The same production routing code also verifies physical Host takeover, immediate
+local navigation, rejected queued/stale Viewer callbacks, and remote input that
+must retain its grant. It repeats with an explicitly released grant and an
+actually expired 20-second grant, checking the manager's independent source
+binding and excluding unrelated Host windows and injected Viewer input. The
+Host/Viewer handoff, source-pane checks, legacy Viewer
+polling/reacquisition and expired-grant behavior are covered by
+`BrowserExtensionControlTests` and `RemoteBrowserExtensionSessionTests`.

@@ -1,5 +1,6 @@
 #if os(macOS)
     import CtrlxBrowserBridge
+    import CtrlxNetworking
     import Dependencies
     import Foundation
 
@@ -25,6 +26,34 @@
                 entries.append(BrowserExtensionListEntry(runtime: item, canUpdate: managed))
             }
             return entries.sorted { $0.runtime.name.localizedStandardCompare($1.runtime.name) == .orderedAscending }
+        }
+
+        func openExtensionStore(for source: AgentBrowserTabState, url: String = BrowserExtensionStoreURL.home, controlID: UUID? = nil) async throws -> AgentBrowserTabState {
+            guard BrowserExtensionStoreURL.isStore(url), let destination = URL(string: url) else {
+                throw BrowserExtensionPackageError("Only Chrome Web Store pages can open from extension management.")
+            }
+            _ = try extensionRuntime(for: source, controlID: controlID)
+            let control = controlID == nil ? nil : extensionControl
+            if let control {
+                _ = try await extensionSurfaceRequest(control, payload: ["action": "ping"])
+            }
+            let opened = try await openPaneBrowser(sessionName: source.sessionName, paneID: source.paneID, url: destination, new: true)
+            do {
+                try Task.checkCancellation()
+                _ = try extensionRuntime(for: source, controlID: controlID)
+                if let control {
+                    _ = try await extensionSurfaceRequest(control, payload: ["action": "ping"])
+                }
+            } catch {
+                runtime?.closeTab(opened.identifier)
+                throw error
+            }
+            opened.url = destination.absoluteString
+            if controlID == nil {
+                opened.suppressInitialSelection = false
+                browserTabSelected(opened.identifier)
+            }
+            return opened
         }
 
         func openExtensionOptions(_ item: BrowserExtensionRuntimeItem, for tab: AgentBrowserTabState, controlID: UUID? = nil) async throws {

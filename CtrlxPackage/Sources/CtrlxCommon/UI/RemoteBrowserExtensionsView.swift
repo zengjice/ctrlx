@@ -7,6 +7,10 @@
     @MainActor
     struct RemoteBrowserExtensionsView: View {
         let client: ViewerRelayClient
+        let initialStoreID: String?
+        let onOpenBrowser: (RemoteBrowserTab) -> Void
+        @State private var canBrowseStore = false
+        @State private var preparedInitialStore = false
         @State private var session: RemoteBrowserSession
         @State private var entries: [RemoteBrowserExtension] = []
         @State private var preview: RemoteBrowserExtensionPreview?
@@ -27,8 +31,10 @@
         @Environment(\.displayScale) private var displayScale
         @Dependency(ClipboardClient.self) private var clipboard
 
-        init(tab: RemoteBrowserTab, client: ViewerRelayClient) {
+        init(tab: RemoteBrowserTab, client: ViewerRelayClient, initialStoreID: String? = nil, onOpenBrowser: @escaping (RemoteBrowserTab) -> Void) {
             self.client = client
+            self.initialStoreID = initialStoreID
+            self.onOpenBrowser = onOpenBrowser
             _session = State(initialValue: RemoteBrowserSession(tab: tab, client: client, managesExtensions: true))
         }
 
@@ -111,8 +117,22 @@
                     entries = []
                     keyboard = false
                 } else {
-                    run("Loading extensions…") { try await refresh() }
+                    run("Loading extensions…") {
+                        try await refresh()
+                        if let initialStoreID, !preparedInitialStore {
+                            preparedInitialStore = true
+                            storeLink = initialStoreID
+                            preview = try await session.performExtension(.prepareStore(input: initialStoreID, replacingID: entries.first { $0.id == initialStoreID }?.id)).extensions?.prepared
+                        }
+                    }
                 }
+            }
+            .onChange(of: session.openedStoreTab) { _, tab in
+                guard let tab else { return }
+                client.rememberOpenedBrowser(tab)
+                session.releaseControl()
+                dismiss()
+                onOpenBrowser(tab)
             }
             .onDisappear { operation?.cancel()
                 session.stop()
@@ -129,6 +149,11 @@
                     Button("Review") { prepareStore(storeLink) }.disabled(storeLink.isEmpty)
                 }.padding(.horizontal)
                 HStack {
+                    if canBrowseStore {
+                        Button("Browse Store") {
+                            run("Opening Chrome Web Store…") { _ = try await session.performExtension(.openStore) }
+                        }
+                    }
                     Button("Import ZIP / CRX…") { replacingID = nil
                         importing = true
                     }
@@ -300,7 +325,9 @@
         }
 
         private func refresh() async throws {
-            entries = try await session.performExtension(.list).extensions?.entries ?? []
+            let result = try await session.performExtension(.list).extensions
+            entries = result?.entries ?? []
+            canBrowseStore = result?.canBrowseStore == true
         }
 
         private func cancelAndRelease() {

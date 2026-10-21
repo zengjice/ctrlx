@@ -141,7 +141,7 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
             process = subprocess.Popen([str(executable), str(config_path)], stdout=native_log,
                                        stderr=subprocess.STDOUT, start_new_session=True)
             try:
-                process.wait(timeout=105 if env_extension else 60)
+                process.wait(timeout=(105 if env_extension else 60) + (25 if options_mode else 0))
             except (subprocess.TimeoutExpired, KeyboardInterrupt):
                 # Stop only this test's own process group; never target an app by name.
                 try:
@@ -270,8 +270,13 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
                      and len(options_reports) == 1 and options_reports[0]["saved"] == 1
                      and phases["options-native-surface"]["url"].startswith(
                          "chrome://extensions/?options=" if options_mode == "embedded" else "chrome-extension://"))
+        compatibility["store-routing"] = phases.get("store-routing", {})
+        takeover_phases = ("store-host-takeover", "store-host-after-release", "store-host-after-expiry")
+        for phase in takeover_phases:
+            compatibility[phase] = phases.get(phase, {})
         compatibility["options"] = {"mode": options_mode, "passed": valid}
-        complete &= valid
+        complete &= (valid and phases.get("store-routing", {}).get("passed") is True
+                     and all(phases.get(phase, {}).get("passed") is True for phase in takeover_phases))
     report = {"probeCompleted": complete, "exitCode": exit_code,
               "compatibility": compatibility, "observations": observations, "popups": popup_reports,
               "restart": restart, "networkEvents": cors_fixture.requests, "options": options_reports,
