@@ -550,6 +550,17 @@ Completed single taps now have exactly one owner:
   IME composition, inactive input, history and unstable redraws cannot toggle.
   The single-tap recognizer still waits for double/triple taps and long press,
   so the existing copy/paste menu and selection behavior are unchanged.
+- Expanded **Codex Questions** uses its question header, focused answer prompt
+  and footer to identify the answer separately from the popup. Header scanning
+  follows the popup's unchanged two-column margins, allowing selected options
+  to use a different background or inverse video. The answer itself still
+  requires a consistent background and valid continuation indentation.
+  Tapping the answer, its top/bottom padding or a multiline continuation opens
+  the keyboard; repeated taps keep it open, including an empty answer. Choices,
+  question text and footer hints are outside this region. Cursor visibility,
+  stable redraw, active input, live-screen, IME, link and selection guards still
+  apply. This only changes keyboard intent; existing terminal click/cursor
+  routing remains in place and no answer is submitted automatically.
 - In mouse mode, an active, focused, mounted input view on the live screen
   sends a primary-button press/release. SwiftTerm encodes the negotiated mouse
   protocol; CtrlX collects its synchronous writes into **one raw-input batch**
@@ -573,6 +584,11 @@ and checks exact press/release bytes, protocol changes, alternate-screen redraw,
 history offsets, grid bounds and pixel reporting. iOS-only
 `TerminalSelectionRoutingTests` additionally checks the real view's raw batch,
 IME/focus/history gates, unchanged multi-tap selection and the legacy arrow path.
+`CodexQuestionInputAreaTests` covers expanded answer bounds, notes versus options,
+multiline drafts, wrapped footer hints and incomplete/unknown layouts. SwiftTerm
+ANSI regressions cover highlighted/inverse options (including wrapped labels),
+notes padding and continuations, and broken surface boundaries; the native
+selection-routing tests also cover these styles, Questions keyboard intent and input guards.
 An isolated real Codex 0.158.0/tmux probe verified insertion at clicked positions
 in unsent single-line, explicit-multiline, Chinese and soft-wrapped drafts;
 this verifies Codex's mouse handling, not end-to-end iPhone gesture delivery.

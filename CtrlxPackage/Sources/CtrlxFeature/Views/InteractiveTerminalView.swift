@@ -895,6 +895,14 @@ enum TerminalCursorTapNavigation {
                 lineText: closures.lineText, cellPayload: closures.cellPayload
             ).flatMap { URL(string: $0) }
             let liveRow = liveDisplayRow
+            let isQuestionInputArea = scrollingAgentID == "codex"
+                && terminal.isCursorVisible && !terminal.synchronizedOutputActive
+                && point.x >= 0 && point.x < CGFloat(terminal.cols) * cellSize.width
+                && CodexQuestionInputArea.contains(
+                    lines: TerminalMultilineCursorNavigation.lines(in: terminal),
+                    cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
+                    tap: .init(column: pos.col, row: pos.row - terminal.buffer.yDisp)
+                )
             let action = TerminalContentTapRouting.action(
                 selectionActive: selectionActive,
                 hasLink: url != nil,
@@ -902,7 +910,8 @@ enum TerminalCursorTapNavigation {
                     && inputProxy.markedTextRange == nil && window != nil,
                 mouseModeActive: isMouseModeActive,
                 isLiveScreen: terminal.buffer.yDisp == liveRow,
-                isEmptyInputArea: onKeyboardRequest != nil && terminal.isCursorVisible && !terminal.synchronizedOutputActive
+                isEmptyInputArea: !isQuestionInputArea && onKeyboardRequest != nil
+                    && terminal.isCursorVisible && !terminal.synchronizedOutputActive
                     && point.x >= 0 && point.x < CGFloat(terminal.cols) * cellSize.width
                     && TerminalContentTapRouting.isEmptyInputArea(
                         lines: TerminalMultilineCursorNavigation.lines(in: terminal),
@@ -939,23 +948,23 @@ enum TerminalCursorTapNavigation {
                 if let bytes, !bytes.isEmpty {
                     onRawInput?(bytes)
                 }
-                showKeyboardForInputTap(at: point, position: pos)
+                showKeyboardForInputTap(at: point, position: pos, isQuestionInputArea: isQuestionInputArea)
             case .cursorNavigation:
                 moveInputCursor(to: pos)
-                showKeyboardForInputTap(at: point, position: pos)
+                showKeyboardForInputTap(at: point, position: pos, isQuestionInputArea: isQuestionInputArea)
             case .toggleKeyboard:
                 cancelCursorNavigation()
                 onKeyboardRequest?(!keyboardRequested)
             }
         }
 
-        private func showKeyboardForInputTap(at point: CGPoint, position: (col: Int, row: Int)) {
+        private func showKeyboardForInputTap(at point: CGPoint, position: (col: Int, row: Int), isQuestionInputArea: Bool) {
             guard let onKeyboardRequest, !keyboardRequested else { return }
             let terminal = getTerminal()
             guard
                 terminal.isCursorVisible, !terminal.synchronizedOutputActive,
                 point.x >= 0, point.x < CGFloat(terminal.cols) * cellSize.width,
-                TerminalContentTapRouting.isInputArea(
+                isQuestionInputArea || TerminalContentTapRouting.isInputArea(
                     lines: TerminalMultilineCursorNavigation.lines(in: terminal),
                     cursor: .init(column: terminal.buffer.x, row: terminal.buffer.y),
                     tap: .init(column: position.col, row: position.row - terminal.buffer.yDisp),
