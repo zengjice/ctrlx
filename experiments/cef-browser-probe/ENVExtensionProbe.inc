@@ -238,7 +238,15 @@ void InspectENVPopup() {
             Report(@"failure", @{@"error": @"ENV scenario failed", @"response": response}); CaptureENVPopup(session, false); return;
           }
           Report(@"env-scenario", result);
-          CaptureENVPopup(session);
+          if ([configuration[@"cors"] boolValue]) {
+            Evaluate(embeddedB, @"window.ctrlxCORSProbe()", [session](NSDictionary *result) {
+              Report(@"env-cors-alloy", result);
+              Evaluate(control, @"window.ctrlxCORSProbe()", [session](NSDictionary *result) {
+                Report(@"env-cors-chrome", result);
+                CaptureENVPopup(session);
+              });
+            });
+          } else CaptureENVPopup(session);
         });
         });
       } else CaptureENVPopup(session);

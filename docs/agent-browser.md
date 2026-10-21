@@ -222,6 +222,14 @@ check process-specific proxy rules as well as domain connectivity: a local Surge
 DIRECT rule for CtrlX caused the documented TLS failure despite successful curl
 and differently named Foundation requests.
 
+Cross-origin request-header modification has a confirmed limitation in the
+pinned CEF: ENV-Plugin's `x-maas-env` injection enters the CORS preflight header
+list and can make otherwise working sites fail. The prior ENV acceptance was
+same-origin. Both embedded and Chrome-style windows are affected. A candidate
+CEF source patch and strict cross-origin regression are recorded in
+[Cross-origin header compatibility](browser-extensions-design.md#cross-origin-header-compatibility);
+the patch is not yet compiled into the shipped runtime.
+
 ## Embedded routing
 
 The shared `agent-browser` skill (packaged for Codex and Claude Code) defaults

@@ -98,6 +98,24 @@ and checks runtime installation, saved configuration and actual requests without
 reinstalling or writing configuration. Failed checks stay failed in `report.json`;
 opening a popup does not count as a rule-effect pass.
 
+For cross-origin request-header acceptance, append `--cors` to either the
+`--production-admin` fixture run or the ENV run with `env-request-header.js`
+(without restart, debugger or native-input modes). The real ENV scenario then
+configures `x-maas-env: ark-chat-dev` through its popup. The fixture uses
+`127.0.0.1` and `localhost` as distinct origins, served by the same private
+loopback server. It checks actual received headers on GET, JSON POST, script
+and redirect requests, response-header modification for the minimal extension,
+and rejection of missing-origin permission and page-added forbidden headers
+(including `x-maas-env` when added by page JavaScript itself).
+`report.json` includes server-side `networkEvents` and strict `compatibility.cors`
+checks. A CORS failure makes the command exit nonzero even when installation,
+same-origin injection and orderly shutdown succeed.
+
+The currently pinned prebuilt CEF **fails** this gate. The candidate source
+patch and its uncompleted native-build acceptance are documented under
+[Cross-origin header compatibility](../../docs/browser-extensions-design.md#cross-origin-header-compatibility).
+Rebuilding only the probe executable does not apply a CEF source patch.
+
 To exercise the product's generated key for unsigned ZIPs and immutable update
 directories, export fixtures through the real store:
 

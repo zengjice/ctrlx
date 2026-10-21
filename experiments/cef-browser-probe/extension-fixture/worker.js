@@ -20,11 +20,18 @@ async function probe(message, sender) {
     throw new Error("Expected a message from the isolated local fixture page");
   }
   await chrome.storage.local.set({lastSource: message.url});
-  await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds: [1], addRules: [{
+  await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds: [1, 2], addRules: [{
     id: 1,
     priority: 1,
     action: {type: "modifyHeaders", requestHeaders: [{header: "x-ctrlx-extension", operation: "set", value: "active"}]},
     condition: {urlFilter: "127.0.0.1", resourceTypes: ["xmlhttprequest"]}
+  }, {
+    id: 2,
+    priority: 1,
+    action: {type: "modifyHeaders",
+      requestHeaders: [{header: "x-maas-env", operation: "set", value: "ark-chat-dev"}],
+      responseHeaders: [{header: "x-ctrlx-response", operation: "set", value: "response-active"}]},
+    condition: {urlFilter: "/cors/", resourceTypes: ["xmlhttprequest", "script"]}
   }]});
   const result = {id: chrome.runtime.id, source: message.url, sender: sender.tab, queries: await tabQueries()};
   try { result.senderLookup = await chrome.tabs.get(sender.tab.id); }

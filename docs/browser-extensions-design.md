@@ -2,6 +2,10 @@
 
 记录日期：2026-10-16。代码核对基线：`42636bd`。
 
+2026-10-21 补充：原有 ENV 请求头验收只覆盖同源请求；跨域注入已复现
+CEF 兼容问题，候选内核补丁尚未编译和接入产品，见
+[Cross-origin header compatibility](#cross-origin-header-compatibility)。
+
 状态：本分支的 Mac Host、Mac Viewer 和 iOS 实现已完成，关键路径本机验收通过，尚未提交或发布。覆盖商店下载／安装／手动替换、ZIP／CRX 导入与校验、更新恢复、真实 ENV 请求头切换及持久化、远端原生窗口输入与控制租约。Mac Release 与 iOS Simulator 构建通过。用户删除 Surge 中匹配 CtrlX 的 DIRECT 规则后，完整 App 的商店安装和更新流程成功，原网络阻塞解除，见第 9.19 节。iOS 界面证据来自 Simulator；所有扩展通用兼容、ENV native messaging、真实跨机器／设备发布验收不在本次通过结论内。使用方式和边界见[浏览器文档](agent-browser.md#browser-extensions)。
 
 ## 1. 目标与推荐方向
@@ -362,3 +366,64 @@ Mac Viewer 与 iOS 共用管理界面已接入商店链接、ZIP／CRX 文件上
 证据位于 `.build-local/diagnostics/browser-extension-source/ui-review-store.json`、`ui-store-preview.jpg`、`ui-store-installed.jpg` 和 `ui-store-final-receipt.json`。App 正常退出、私有 Relay 和 tmux 已停止，受管理验收命令退出码为 0。至此解除商店在线安装的网络验收阻塞；生产 App 和用户 profile 未被替换。
 
 最终品牌／技术边界和 diff 空白检查通过。32 份变更 Swift 文件的格式检查中，30 份通过；`RemoteBrowserView.swift` 和 `ConnectedViewer.swift` 沿用原有未格式化风格，基线文件用相同配置检查也失败，未为清除告警而整文件重排。构建、定向测试和界面证据按前述分项记录，不将格式检查描述为全通过，也未重跑与本次环境修正无关的全量测试。
+
+## Cross-origin header compatibility
+
+2026-10-21，产品基线 `7d1d9dd`，CEF
+`152.0.8+g1ce985c+chromium-152.0.7977.134`。使用同一官方 ENV-Plugin
+3.4.12 样本，通过真实 popup 配置 `x-maas-env: ark-chat-dev`。
+隔离服务器确认同源注入成功，但跨域 GET、JSON POST、script 和重定向的
+预检携带 `x-maas-env`，因服务端未允许该头而失败；Alloy 与 Chrome-style
+均受影响。没有修改用户 profile、第三方扩展或 CORS 安全设置。
+
+CEF 的 `ChromeContentBrowserClientCef::WillCreateURLLoaderFactory` 向 Chrome
+传入空 `header_client`，随后安装自己的 header client；Chrome 扩展因此无法
+使用 trusted header 回调。Chromium 在这一回调不可用时，将扩展请求头修改
+提前到启动网络请求之前，触发额外的 CORS 检查。诊断对照普通 Chrome 的部分
+来自用户反馈；本轮原生实测对照是两种 CEF 窗口，并非系统 Chrome。
+
+候选补丁为
+[`extension-header-client.patch`](../CtrlxPackage/AgentBrowser/cef-patches/extension-header-client.patch)，
+基于完整 CEF commit `1ce985cb23056548b9cc51483bbef4faf68b1cd3`：
+
+- 保留并串接 Chrome 的 factory／request header client，跨 UI／IO 线程传递
+  pending remote，每次 network loader 创建时重新绑定。
+- 普通请求先由 Chrome 扩展处理，再让 CEF 看到最终请求／响应头；保留响应头
+  修改、重定向参数、扩展错误及断开回调，不以默认成功覆盖失败。
+- 预检回调转交 Chrome；没有 Chrome header client 时保持 CEF 原路径。
+  CEF 自定义响应也沿用相同的回调绑定。没有关闭 CORS 或增加网站白名单。
+
+补丁尚未编译；**不是已生效的产品修复**。当前构建脚本仍下载原来的预编译
+CEF SDK，仅重新构建 CtrlX 或原型 App 不会使补丁生效。准备完整且版本匹配的
+CEF/Chromium 源码构建树后，从本仓库根目录执行：
+
+```bash
+CTRLX_ROOT="$PWD"
+CEF_SOURCE='/path/to/chromium/src/cef'
+test "$(git -C "$CEF_SOURCE" rev-parse HEAD)" = '1ce985cb23056548b9cc51483bbef4faf68b1cd3'
+git -C "$CEF_SOURCE" apply --check "$CTRLX_ROOT/CtrlxPackage/AgentBrowser/cef-patches/extension-header-client.patch"
+git -C "$CEF_SOURCE" apply "$CTRLX_ROOT/CtrlxPackage/AgentBrowser/cef-patches/extension-header-client.patch"
+```
+
+随后依照 [CEF 官方构建流程](https://github.com/chromiumembedded/cef/blob/master/docs/master_build_quick_start.md)
+生成 arm64 runtime。接入前须使用该 runtime 重建隔离原型并通过 `--cors`
+门槛，随后完成嵌入生命周期、扩展管理和产品原生构建验收；最后才更新产品
+与原型共用的 SDK 来源及完整性校验。不能把候选补丁与旧 SDK 一起发布为修复版。
+
+本轮证据：
+
+| 检查 | 结果 |
+| --- | --- |
+| 补丁对固定版本源文件 `git apply --check` | 通过；不等于 C++ 编译 |
+| 更新后的原型可执行文件构建、签名验证 | 通过；仍链接原 SDK |
+| 原有 `--production-admin` 扩展验收（无 `--cors`） | 通过 |
+| 最小 DNR 扩展 `--production-admin --cors` | 按预期失败，暴露旧 runtime 缺陷；同源和管理检查通过 |
+| 真实 ENV `--env-scenario … --cors` | 按预期失败；popup 配置、启用／暂停／恢复通过 |
+| 修复版 CEF 编译及上述用例转绿 | 未完成：缺少可容纳完整源码构建的环境 |
+
+可复现命令见[原型说明](../experiments/cef-browser-probe/README.md)。失败证据位于
+`.build-local/diagnostics/browser-extensions-7hma1dg0/` 和
+`.build-local/diagnostics/browser-extensions-dvn3bb2s/`。`--cors` 会校验服务器
+实际收到的头和预检列表，验证需要的 POST 预检仍存在、普通网页无授权的跨域
+请求仍被拒绝（包括网页自己添加 `x-maas-env`）；失败会使进程退出码非零，
+不再把“观察完成”当作此项兼容通过。

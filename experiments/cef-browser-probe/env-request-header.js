@@ -65,6 +65,8 @@ const expectHeader = value => waitFor(async () => {
 }, `request header ${value}`);
 
 const before = await expectHeader(null);
+const headerName = globalThis.ctrlxProbeHeaderName || 'x-ctrlx-extension';
+const headerValue = globalThis.ctrlxProbeHeaderValue || 'env-active';
 buttonFor('.rdsvc-icon-manual-creation-color').click();
 await waitFor(() => document.querySelector('input[name="name"]'), 'new environment');
 buttonFor('.arco-icon-plus').click();
@@ -72,12 +74,12 @@ const menu = await waitFor(() => [...document.querySelectorAll('[role="menuitem"
   .find(item => item.innerText === 'Request headers'), 'request header menu');
 menu.click();
 await waitFor(() => document.querySelector('input[name="headers.0.name"]'), 'request header fields');
-await fill('headers.0.name', 'x-ctrlx-extension');
-await fill('headers.0.value', 'env-active');
-const active = await expectHeader('env-active');
+await fill('headers.0.name', headerName);
+await fill('headers.0.value', headerValue);
+const active = await expectHeader(headerValue);
 await clickStableButton('.arco-icon-pause');
 const paused = await expectHeader(null);
 await waitFor(async () => (await chrome.storage.local.get('ENV_PLUGIN_V3_GLOBAL_PAUSED')).ENV_PLUGIN_V3_GLOBAL_PAUSED === 'true', 'saved pause');
 await clickStableButton('.arco-icon-play-arrow');
-const resumed = await expectHeader('env-active');
+const resumed = await expectHeader(headerValue);
 return {source: tab.url, before, active, paused, resumed, configuredThroughPopup: true};

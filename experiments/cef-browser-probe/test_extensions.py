@@ -10,12 +10,13 @@ import signal
 import subprocess
 import tempfile
 import threading
+from extension_cors import CORSFixture
 
 
 def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, production_admin: bool = False,
         env_extension: Path = None, env_scenario: Path = None, env_restart_scenario: Path = None,
         fixture_packages: Path = None, native_window_capture: bool = False, native_window_input: bool = False,
-        native_manager_input: bool = False, env_debugger: bool = False) -> Path:
+        native_manager_input: bool = False, env_debugger: bool = False, cors: bool = False) -> Path:
     executable = app / "Contents/MacOS/CtrlX Browser Probe"
     if not executable.is_file():
         raise ValueError("Expected the isolated extension probe app")
@@ -32,6 +33,8 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
         raise ValueError("Native manager input uses the disposable fixture, not ENV")
     if env_debugger and (not env_extension or env_restart_scenario or native_window_input):
         raise ValueError("Debugger characterization needs ENV and runs separately from restart/native input")
+    if cors and env_extension and (not env_scenario or env_restart_scenario or native_window_input or env_debugger):
+        raise ValueError("ENV CORS acceptance requires only the header popup scenario")
     root = Path(__file__).resolve().parents[2]
     evidence = root / ".build-local/diagnostics"
     evidence.mkdir(parents=True, exist_ok=True)
@@ -41,20 +44,25 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
     extension = output / ("profile/CtrlXExtensions/packages/fixture" if production_admin else "extension")
     shutil.copytree(env_extension or (Path(packages["first"]) if packages else Path(__file__).with_name("extension-fixture")), extension)
     popup_reports = []
+    cors_fixture = CORSFixture()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass
 
         def do_GET(self):
+            if cors and cors_fixture.handle(self):
+                return
             if self.path == "/echo":
-                body = json.dumps({"extensionHeader": self.headers.get("x-ctrlx-extension"),
+                header = "x-maas-env" if cors and env_extension else "x-ctrlx-extension"
+                body = json.dumps({"extensionHeader": self.headers.get(header),
                                    "boe": self.headers.get("x-use-boe"), "ppe": self.headers.get("x-use-ppe"),
                                    "environment": self.headers.get("x-tt-env")}).encode()
                 content_type = "application/json"
             else:
                 body = ("<!doctype html><meta charset='utf-8'><title>CtrlX extension fixture</title>"
-                        "<h1>Isolated CtrlX extension test</h1><p>" + self.path + "</p>").encode()
+                        "<h1>Isolated CtrlX extension test</h1><p>" + self.path + "</p>" +
+                        ('<script src="/cors/probe.js"></script>' if cors else '')).encode()
                 content_type = "text/html; charset=utf-8"
             self.send_response(200)
             self.send_header("Content-Type", content_type)
@@ -64,6 +72,8 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
             self.wfile.write(body)
 
         def do_POST(self):
+            if cors and cors_fixture.handle(self):
+                return
             size = int(self.headers.get("Content-Length", "0"))
             if self.path != "/popup-report" or not 0 < size <= 65536:
                 self.send_error(400)
@@ -72,6 +82,10 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
             self.send_response(204)
             self.end_headers()
 
+        def do_OPTIONS(self):
+            if not cors or not cors_fixture.handle(self):
+                self.send_error(404)
+
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
@@ -79,7 +93,7 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
                      "output": str(output), "dynamicInstall": dynamic_install or native_drag, "nativeDrag": native_drag,
                      "productionAdmin": production_admin, "envPlugin": env_extension is not None,
                      "nativeWindowCapture": native_window_capture, "nativeWindowInput": native_window_input,
-                     "nativeManagerInput": native_manager_input, "envDebugger": env_debugger}
+                     "nativeManagerInput": native_manager_input, "envDebugger": env_debugger, "cors": cors}
     if packages:
         updated = extension.with_name("fixture-updated")
         shutil.copytree(packages["second"], updated)
@@ -89,6 +103,10 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
         if not env_extension:
             raise ValueError("ENV scenarios require a verified ENV extension directory")
         configuration["envScenario"] = env_scenario.read_text()
+        if cors:
+            configuration["envScenario"] = (
+                "globalThis.ctrlxProbeHeaderName = 'x-maas-env';"
+                "globalThis.ctrlxProbeHeaderValue = 'ark-chat-dev';\n" + configuration["envScenario"])
     config_path = output / "config.json"
     config_path.write_text(json.dumps(configuration))
     def launch(log_name):
@@ -198,16 +216,20 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
             "pageControlSurvived": "page-cdp-with-env-debugger" in phases and "page-cdp-with-devtools" in phases,
         }
     if scenario.get("configuredThroughPopup"):
+        expected = "ark-chat-dev" if cors else "env-active"
         compatibility["env-request-headers"] = {
             "baselineClear": scenario.get("before", {}).get("extensionHeader") is None,
-            "active": scenario.get("active", {}).get("extensionHeader") == "env-active",
+            "active": scenario.get("active", {}).get("extensionHeader") == expected,
             "paused": scenario.get("paused", {}).get("extensionHeader") is None,
-            "resumed": scenario.get("resumed", {}).get("extensionHeader") == "env-active",
+            "resumed": scenario.get("resumed", {}).get("extensionHeader") == expected,
         }
         complete &= all(compatibility["env-request-headers"].values())
+    if cors:
+        compatibility["cors"] = cors_fixture.acceptance(phases, env_extension is not None)
+        complete &= all(compatibility["cors"].values())
     report = {"probeCompleted": complete, "exitCode": exit_code,
               "compatibility": compatibility, "observations": observations, "popups": popup_reports,
-              "restart": restart,
+              "restart": restart, "networkEvents": cors_fixture.requests,
               "scope": "ENV-Plugin: only operations recorded in observations and compatibility; native messaging and remote clients not covered" if env_extension is not None else
                        "Local fixture only; not ENV-Plugin, CRX verification or Web Store installation acceptance"}
     (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
@@ -231,7 +253,8 @@ if __name__ == "__main__":
     parser.add_argument("--native-window-input", action="store_true", help="Also pause ENV through a native click restricted to the source window's child popup")
     parser.add_argument("--native-manager-input", action="store_true", help="Capture and confirm fixture removal through only the manager window's owned tree")
     parser.add_argument("--env-debugger", action="store_true", help="Characterize ENV debugger API coexistence with CEF page control and native DevTools")
+    parser.add_argument("--cors", action="store_true", help="Require Chrome-compatible cross-origin header injection and preserve page CORS checks")
     args = parser.parse_args()
     run(args.app.resolve(), args.dynamic_install, args.native_drag, args.production_admin,
         args.env_extension, args.env_scenario, args.env_restart_scenario, args.fixture_packages,
-        args.native_window_capture, args.native_window_input, args.native_manager_input, args.env_debugger)
+        args.native_window_capture, args.native_window_input, args.native_manager_input, args.env_debugger, args.cors)

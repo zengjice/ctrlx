@@ -142,7 +142,8 @@ NSString *PageProbe() {
       window.postMessage({kind: 'ctrlx-extension-probe'}, location.origin);
     });
     const echo = await (await fetch('/echo', {cache: 'no-store'})).json();
-    return {url: location.href, extension, echo};
+    const cors = window.ctrlxCORSProbe ? await window.ctrlxCORSProbe() : null;
+    return {url: location.href, extension, echo, cors};
   })())JS";
 }
 
