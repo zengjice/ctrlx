@@ -7,6 +7,30 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.87 — Split terminal focus and iOS navigation
+
+- Fit a terminal to its current split viewport when programmatic focus returns,
+  including after a remote terminal finishes loading. Keep mouse gestures on
+  the completed-click path so selection, links, mouse-reporting applications
+  and text composition cannot trigger an early resize.
+- Move iOS window actions below the selected tab title and put per-pane Touch
+  Mode in the terminal menu. Keep the keyboard accessory focused on input keys
+  with the published SwiftTerm fork revision pinned in both dependency locks.
+- Organize iOS settings into focused connection, terminal, keyboard, voice,
+  sync, session-default and About pages while preserving stored preferences
+  and credentials. Keep the Mac voice-settings presentation unchanged.
+- Release validation: the bounded serial Swift regression passed with 3,642
+  tests reported across 516 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, the website
+  build and 89 publisher/COS/distributed-installer tests passed.
+- Implementation hashes match the existing 12-case native focus-gesture probe
+  and iOS touch-mode acceptance. The iOS settings review also matches the current
+  source; physical-iPhone and full paired Mac UI acceptance were not rerun.
+  SwiftFormat reports 132 existing findings in four already-committed files.
+- Signed Mac and iOS device-SDK Release builds passed. Mac distribution uses
+  build 20 through COS, with signature, source metadata and complete
+  public-download integrity checks before installer promotion.
+
 ## 3.0.86 — Stable remote clipboard feedback
 
 - Show copy, clipboard-read and paste confirmations as a non-interactive
