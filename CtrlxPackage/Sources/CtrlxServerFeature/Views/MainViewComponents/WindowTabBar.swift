@@ -539,8 +539,8 @@ struct WindowTabBar: View {
 
             TabCloseButton(
                 isVisible: isSelected || isHovered,
-                accessibilityLabel: "Close window: \(windowName)",
-                helpText: "Close window",
+                accessibilityLabel: "Close tab: \(windowName)",
+                helpText: "Close tab",
                 action: { onCloseWindow(window) }
             )
             .padding(.trailing, 6)

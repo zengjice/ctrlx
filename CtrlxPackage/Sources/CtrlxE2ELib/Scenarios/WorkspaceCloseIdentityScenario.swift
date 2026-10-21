@@ -98,7 +98,7 @@ public enum WorkspaceCloseIdentityScenario {
     private static func requestClose(name: String, kind: String, instance: Int) -> TestScenario {
         CtrlxE2ELib.scenario("Request \(kind) close", tags: ["shortcut"]) {
             if kind == "window" {
-                TestStep.macClickButton(titled: "Close window: \(name)", instance: instance)
+                TestStep.macClickButton(titled: "Close tab: \(name)", instance: instance)
             } else {
                 // Keep the native window title distinct from the sidebar target.
                 TestStep.macClickButton(titled: "close-keeper", instance: instance)

@@ -3330,6 +3330,13 @@
                         return CommandResponseMessage(commandId: command.id, success: true, simulator: result)
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
+                if case let .closeSimulator(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        try await self.agentSimulator.closeSimulator(spec)
+                        return .success(for: command.id)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .openPaneSimulator(spec) = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
                     do {
@@ -3782,6 +3789,7 @@
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs,
                     supportsSimulatorViewing: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsPaneSimulator: await self?.agentSimulator.supportsSimulatorViewing,
+                    supportsSimulatorClosing: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsDashboard: true,
                     simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs,
                     supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs,

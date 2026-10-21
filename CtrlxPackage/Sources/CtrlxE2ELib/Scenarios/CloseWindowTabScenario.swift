@@ -47,7 +47,7 @@ public enum CloseWindowTabScenario {
         TestStep.tmuxCommand(arguments: ["new-window", "-t", "closetest", "-n", "last-close-tab"])
         TestStep.macWaitForElement(titled: "last-close-tab", timeout: 10)
         TestStep.macClickButton(titled: "last-close-tab")
-        TestStep.macClickButton(titled: "Close window: last-close-tab")
+        TestStep.macClickButton(titled: "Close tab: last-close-tab")
         TestStep.macWaitForElementQuery(.allOf([.labelContains("closetest:0"), .valueContains("selected")]), timeout: 10)
         TestStep.macScreenshot(label: "mac-first-tab-after-third-close")
         // Mixed right tabs keep Files ahead of two terminals in the visible order.
@@ -62,17 +62,17 @@ public enum CloseWindowTabScenario {
         TestStep.macClickButton(titled: "Move terminal to right: right-A")
         TestStep.macClickButton(titled: "Move terminal to right: right-B")
         TestStep.macClickButton(titled: "closetest:2 right-A")
-        TestStep.macClickButton(titled: "Close window: right-A")
+        TestStep.macClickButton(titled: "Close tab: right-A")
         TestStep.macWaitForElementQuery(.allOf([.labelContains("closetest:3 right-B"), .valueContains("selected")]), timeout: 10)
         TestStep.macScreenshot(label: "mac-mixed-right-close-selects-terminal")
-        TestStep.macClickButton(titled: "Close window: right-B")
+        TestStep.macClickButton(titled: "Close tab: right-B")
         TestStep.macWaitForElementQuery(.allOf([.labelContains("File tab:"), .valueContains("selected")]), timeout: 10)
         TestStep.macCGClickElement(query: .labelContains("Close file tab:"))
         TestStep.macClickButton(titled: "closetest:1")
 
         // 3. Close the selected idle window 1 via the X button (no confirmation expected)
         TestStep.log("Stage 3: Close idle window 1 via X button")
-        TestStep.macClickButton(titled: "Close window")
+        TestStep.macClickButton(titled: "Close tab")
 
         // Window 1 should be gone, only window 0 remains
         TestStep.macWaitForElementToDisappear(titled: "closetest:1", timeout: 5)
@@ -91,7 +91,7 @@ public enum CloseWindowTabScenario {
             timeout: 10
         )
 
-        TestStep.macClickButton(titled: "Close window")
+        TestStep.macClickButton(titled: "Close tab")
 
         // Confirmation alert should appear with the process name
         TestStep.macWaitForElement(titled: "Close Session?", timeout: 5)
@@ -114,12 +114,12 @@ public enum CloseWindowTabScenario {
         TestStep.wait(seconds: 2)
 
         // The final tab requires session confirmation even when the shell is idle.
-        TestStep.macClickButton(titled: "Close window")
+        TestStep.macClickButton(titled: "Close tab")
 
         TestStep.macWaitForElement(titled: "Close Session?", timeout: 5)
         TestStep.macPressKey(.escape)
         TestStep.waitForTmuxDisplayMessage(target: "closetest:0", format: "#{session_windows}", contains: "1", timeout: 5)
-        TestStep.macClickButton(titled: "Close window")
+        TestStep.macClickButton(titled: "Close tab")
         TestStep.macWaitForElement(titled: "Close Session", timeout: 5)
         TestStep.macCGClickElement(query: .allOf([.role("AXButton"), .label("Close Session")]))
 

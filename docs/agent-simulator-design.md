@@ -80,7 +80,7 @@ Codex 的专用启动方式，不引导 Claude 启动嵌套 Codex。
 | 触摸 | `tap`、`swipe`、`long-press`、`drag`、`pinch` | 单触点点击、滑动、长按、拖动及显式起始边缘手势；`pinch` 同时发送两个触点，按中心和比例缩放。使用模拟器逻辑点，旋转后重新观察 |
 | 键盘与文本 | `key`、`button`、`paste` | HID 按键及修饰键组合，Home / 锁屏 / 音量键，Unicode 剪贴板粘贴和指定目标的 iOS 菜单粘贴；人工输入采用 iOS 硬件键盘输入源 |
 | 原生显示 | `show`、`show --split`、`rotate`、`display-mode` | 内嵌 Metal 画面、左右分栏、方向切换、默认同步 / 可选低延迟显示。低延迟模式可能撕裂；选择标签不保证 Mac App 自动取得前台 |
-| Viewer 查看与接管 | Mac / iOS Viewer 的 Host 模拟器标签 | 共享 Host 画面，支持显式接管后的触摸及文本 / 图片剪贴板；选择独立，隐藏 / 后台 / 断线停止取帧并释放控制，无设备关闭操作 |
+| Viewer 查看与接管 | Mac / iOS Viewer 的 Host 模拟器标签 | 共享 Host 画面，支持显式接管后的触摸及文本 / 图片剪贴板；选择独立，隐藏 / 后台 / 断线停止取帧并释放控制；iOS More / Tabs 支持显式 Close Tab，需 Host 宣告关闭能力 |
 | 截图标注 | Mac Host / Mac Viewer / iOS Viewer 标签内的 Annotate Screenshot | 原地冻结截图，框选 / 箭头 / 画笔后添加至同会话 Agent 输入；不发送回车、不抢模拟器控制权 |
 | 环境 | `location`、`appearance`、`privacy`、`push` | 固定定位及清除定位模拟、深浅色、列举权限的 grant / revoke / reset、向指定 App 注入模拟推送；关闭时不自动恢复这些配置 |
 | 资源与服务配置 | `config`、`resources`、`metrics`，`open --profile` / `--requires` | 默认双开，数量可配置为 1...32；检查内存压力和内存 / 磁盘保留量。报告进程 footprint / CPU，支持 standard / balanced 和功能依赖保留；配置上限不等于实测容量 |
@@ -146,12 +146,18 @@ MainView 整体迁移原会话的标签集合、选择与分栏状态，避免�
 容量、内存和磁盘限制。iOS 收到结果后再次校验身份，离开/取消等待不会跳回旧标签。
 取消等待不撤销其他 Viewer 共用的 Host 启动。创建入口不增加远程输入或关闭权限。
 
+显式关闭另以 `supportsSimulatorClosing` 标识，新 Viewer 不向旧 Host 发送
+`CloseSimulator`。命令携带不可复用的 tab UUID 和 session，Host 验证当前归属及
+活动 owner 后复用设备关闭流程，等待录屏收尾及关机；不借用浏览器操作或关闭来源
+终端。命令走独立请求队列，不阻塞键盘接收。iOS 的 More 和 Tabs 行菜单均显示
+Close Tab；目录移除通知与关闭回复先后无关，切换到其他标签后不会被旧回复拉回。
+
 `ConnectedViewer` 将模拟器请求放进既有 preview 队列，与浏览器合计每连接最多四个
 并发请求；终端输出拥塞时暂停新取帧。模拟器服务全局最多四个请求，同设备同尺寸的
 在途编码合并，不同尺寸等待已有编码结束。每个可见 Viewer surface 仅一个在途帧，
 回复后间隔 180 ms；解码在并发执行上下文进行，过期选择 / 隐藏 surface 的返回不展示。
 Mac 复用 session 标签栏与分栏；iOS 在 Tabs 中列出 iOS Simulators on Host。
-远程标签提供查看和本地分栏，不提供关闭 Host 设备的按钮。
+Mac 远程标签提供查看和本地分栏；iOS 增加上述显式关闭入口。
 
 原生 helper 的 `preview` 复用已有独立截图缓冲区、方向处理和 ImageIO，直接输出
 JPEG，不经 PNG 落盘或录屏。按 Viewer 实际画布缩放、不放大源图、最长边最多 2560，

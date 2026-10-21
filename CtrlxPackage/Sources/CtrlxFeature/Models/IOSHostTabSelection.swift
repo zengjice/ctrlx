@@ -1,8 +1,12 @@
 import Foundation
 
-struct IOSBrowserTabSelection: Sendable {
+struct IOSHostTabSelection: Sendable {
     var selectedID: UUID?
     private var closingIDs: Set<UUID> = []
+
+    func isClosing(_ id: UUID) -> Bool {
+        closingIDs.contains(id)
+    }
 
     mutating func beginClosing(_ id: UUID) {
         closingIDs.insert(id)
@@ -17,7 +21,7 @@ struct IOSBrowserTabSelection: Sendable {
     }
 
     /// Only catalog removal consumes a close intent; a successful reply may arrive on either side of it.
-    /// Returns whether closing the selected browser should fit the revealed terminal.
+    /// Returns whether closing the selected tab should fit the revealed terminal.
     mutating func syncTabs(_ liveIDs: Set<UUID>) -> Bool {
         let closedIDs = closingIDs.subtracting(liveIDs)
         closingIDs.formIntersection(liveIDs)

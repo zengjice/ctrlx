@@ -2,19 +2,19 @@ import Foundation
 import Testing
 @testable import CtrlxFeature
 
-@Suite("iOS Host browser close selection")
-struct IOSBrowserTabSelectionTests {
+@Suite("iOS shared Host tab close selection")
+struct IOSHostTabSelectionTests {
     enum CloseEvent: Sendable {
         case reply
         case catalog
     }
 
-    @Test("Closing the selected browser fits once in either message order", arguments: [
+    @Test("Closing the selected Host tab fits once in either message order", arguments: [
         [CloseEvent.catalog, .reply], [.reply, .catalog],
     ])
     func closeMessageOrder(events: [CloseEvent]) {
         let closed = UUID(), remaining = UUID()
-        var selection = IOSBrowserTabSelection()
+        var selection = IOSHostTabSelection()
         selection.selectedID = closed
         selection.beginClosing(closed)
         #expect(selection.syncTabs([closed, remaining]) == false)
@@ -39,9 +39,9 @@ struct IOSBrowserTabSelectionTests {
         #expect(selection.syncTabs([remaining]) == false)
     }
 
-    @Test("Passive browser removal clears selection without fitting")
+    @Test("Passive Host tab removal clears selection without fitting")
     func passiveRemoval() {
-        var selection = IOSBrowserTabSelection()
+        var selection = IOSHostTabSelection()
         selection.selectedID = UUID()
         #expect(selection.syncTabs([]) == false)
         #expect(selection.selectedID == nil)
@@ -50,7 +50,7 @@ struct IOSBrowserTabSelectionTests {
     @Test("A failed close cannot grant a later Fit")
     func failedClose() {
         let closed = UUID()
-        var selection = IOSBrowserTabSelection()
+        var selection = IOSHostTabSelection()
         selection.selectedID = closed
         selection.beginClosing(closed)
         selection.cancelClosing(closed)
@@ -59,23 +59,23 @@ struct IOSBrowserTabSelectionTests {
         #expect(selection.selectedID == nil)
     }
 
-    @Test("Leaving the closing browser preserves the new selection", arguments: [false, true])
-    func selectionChanged(selectAnotherBrowser: Bool) {
+    @Test("Leaving the closing Host tab preserves the new selection", arguments: [false, true])
+    func selectionChanged(selectAnotherHostTab: Bool) {
         let closed = UUID(), remaining = UUID()
-        var selection = IOSBrowserTabSelection()
+        var selection = IOSHostTabSelection()
         selection.selectedID = closed
         selection.beginClosing(closed)
-        // Selecting either a terminal or Files clears the browser selection.
-        let nextSelection = selectAnotherBrowser ? remaining : nil
+        // Selecting either a terminal or Files clears the Host tab selection.
+        let nextSelection = selectAnotherHostTab ? remaining : nil
         selection.selectedID = nextSelection
         #expect(selection.syncTabs([remaining]) == false)
         #expect(selection.selectedID == nextSelection)
     }
 
-    @Test("Closing an unselected browser does not fit or clear the selected one")
+    @Test("Closing an unselected Host tab does not fit or clear the selected one")
     func unselectedClose() {
         let closed = UUID(), selected = UUID()
-        var selection = IOSBrowserTabSelection()
+        var selection = IOSHostTabSelection()
         selection.selectedID = selected
         selection.beginClosing(closed)
         #expect(selection.syncTabs([selected]) == false)
@@ -85,7 +85,7 @@ struct IOSBrowserTabSelectionTests {
     @Test("Disconnect, backgrounding or page exit clears all pending close intents")
     func cancelPendingCloses() {
         let first = UUID(), second = UUID()
-        var selection = IOSBrowserTabSelection()
+        var selection = IOSHostTabSelection()
         selection.selectedID = first
         selection.beginClosing(first)
         selection.beginClosing(second)
@@ -95,10 +95,10 @@ struct IOSBrowserTabSelectionTests {
         #expect(selection.syncTabs([]) == false)
     }
 
-    @Test("A close intent is consumed even when its browser is no longer selected")
+    @Test("A close intent is consumed even when its Host tab is no longer selected")
     func consumesUnselectedClose() {
         let closed = UUID()
-        var selection = IOSBrowserTabSelection()
+        var selection = IOSHostTabSelection()
         selection.beginClosing(closed)
         #expect(selection.syncTabs([]) == false)
         selection.selectedID = closed

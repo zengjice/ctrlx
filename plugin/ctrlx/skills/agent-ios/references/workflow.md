@@ -44,7 +44,9 @@ shuts down the device, keeping data. Opening a closed guest assigns a new ID.
 Closing the Host workbench only detaches its view. Paired Mac/iOS Viewers can
 observe it, or explicitly Take Control for touch and clipboard operations when
 the Host advertises workspace clipboard support. Viewer control prevents agent
-writes; do not reclaim after a human takeover. Viewers cannot close devices.
+writes; do not reclaim after a human takeover. Updated iOS Viewers can explicitly
+Close Tab when the Host advertises simulator closing support; this shuts down
+the shared device after recording cleanup. Leaving the tab only releases control.
 Read operations for cleanup, `pinch` and `record-start` / `record-stop`.
 
 `show --device <id>` selects an owned tab; add `--split` to place it in the right

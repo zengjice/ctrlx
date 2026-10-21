@@ -67,7 +67,7 @@ public enum CloseFirstWindowAfterNavigationScenario {
 
         // 5. Click 'X' on window 0; window 1 should survive and render
         TestStep.log("Stage 5: Click 'X' on window 0")
-        TestStep.macClickButton(titled: "Close window")
+        TestStep.macClickButton(titled: "Close tab")
 
         TestStep.macWaitForElementToDisappear(titled: "terminal 1", timeout: 5)
         TestStep.macWaitForElement(titled: "terminal 2", timeout: 5)

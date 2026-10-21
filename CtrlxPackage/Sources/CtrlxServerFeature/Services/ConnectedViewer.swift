@@ -781,6 +781,7 @@ final public class ConnectedViewer: Identifiable {
             case let .browseBrowser(request): request.operation == .frame || request.operation == .extensions(.frame)
             case .browseSimulator: true
             case .openPaneSimulator,
+                 .closeSimulator,
                  .controlSimulator: false
             default: nil
             }

@@ -37,11 +37,15 @@ struct WindowTabActionTests {
         #expect(AgentForkConfiguration.orderedSources(panes: target.panes, focusedPaneID: "%1").map(\.paneID) == ["%3"])
     }
 
-    @Test("Files actions never resolve to a terminal window")
+    @Test("Linked tab actions never resolve to a terminal window")
     func filesHaveNoWindowTarget() {
         let id = UUID()
         #expect(WindowTabAction.selectFiles(id).targetWindow(in: windows()) == nil)
         #expect(WindowTabAction.closeFiles(id).targetWindow(in: windows()) == nil)
+        #expect(WindowTabAction.selectBrowser(id).targetWindow(in: windows()) == nil)
+        #expect(WindowTabAction.closeBrowser(id).targetWindow(in: windows()) == nil)
+        #expect(WindowTabAction.selectSimulator(id).targetWindow(in: windows()) == nil)
+        #expect(WindowTabAction.closeSimulator(id).targetWindow(in: windows()) == nil)
         #expect(WindowTabAction.newAgent.targetWindow(in: windows()) == nil)
         #expect(WindowTabAction.newTerminal.targetWindow(in: windows()) == nil)
     }

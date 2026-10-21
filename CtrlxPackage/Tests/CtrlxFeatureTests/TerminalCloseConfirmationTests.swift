@@ -25,6 +25,7 @@ struct TerminalCloseConfirmationTests {
             inputBinding: .legacy(pairID: "office")
         )
 
+        #expect(confirmation.title == "Close Tab?")
         #expect(confirmation.target.hostId == "office")
         #expect(confirmation.target.sessionName == "coding")
         #expect(confirmation.message == "The following processes are still running:\nTerminal 0: codex")

@@ -41,6 +41,17 @@ On iOS, a Files tab fills the session content area. The title opens a native
 medium/large tab-list sheet without a nested navigation stack. List selections are
 applied after dismissing the sheet; toolbar actions run directly for the current
 window, resolving its stable ID again before opening a sheet or alert.
+Files, Host Browser and iOS Simulator tabs also have a top-right **More** menu:
+**Go to Terminal Tab** returns to the bound source, and **Close Tab** closes the
+current resource using its stable tab ID. The source action is unavailable if
+that terminal is gone. The tab list keeps its per-resource close menus, including
+Simulator. Host-backed close actions require a connection; simulator closing also
+requires the Host's `supportsSimulatorClosing` capability. An older Host shows
+that close action disabled. Closing a shared resource removes it on the Host and
+all Viewers; it does not close its source terminal. Simulator closure shuts down
+the device after recording cleanup. Terminal/Agent close menus and confirmations
+use **Close Tab** on both platforms; the final terminal tab still asks to close
+the entire session.
 Files rows expose only their own selection/close actions, not terminal operations.
 
 ### Mac Git tab

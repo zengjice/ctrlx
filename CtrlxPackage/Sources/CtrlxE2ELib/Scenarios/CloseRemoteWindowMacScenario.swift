@@ -67,7 +67,7 @@ public enum CloseRemoteWindowMacScenario {
         )
 
         // Close the selected window via the X button (no confirmation — idle window)
-        TestStep.macClickButton(titled: "Close window", instance: 1)
+        TestStep.macClickButton(titled: "Close tab", instance: 1)
 
         // Window 1 should be gone, viewer should show window 0
         TestStep.macWaitForElementQueryToDisappear(
@@ -110,7 +110,7 @@ public enum CloseRemoteWindowMacScenario {
         )
 
         // Closing the final terminal tab asks to close its whole session.
-        TestStep.macClickButton(titled: "Close window", instance: 1)
+        TestStep.macClickButton(titled: "Close tab", instance: 1)
 
         // Confirmation alert should appear
         TestStep.macWaitForElement(titled: "Close Session?", timeout: 5, instance: 1)
@@ -118,7 +118,7 @@ public enum CloseRemoteWindowMacScenario {
 
         TestStep.macPressKey(.escape, instance: 1)
         TestStep.waitForTmuxDisplayMessage(target: "mac-close:0", format: "#{session_windows}", contains: "1", timeout: 5)
-        TestStep.macClickButton(titled: "Close window", instance: 1)
+        TestStep.macClickButton(titled: "Close tab", instance: 1)
         TestStep.macWaitForElement(titled: "Close Session", timeout: 5, instance: 1)
 
         // 7. Confirm closing the entire session.

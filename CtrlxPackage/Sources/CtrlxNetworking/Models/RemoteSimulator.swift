@@ -68,6 +68,22 @@ public struct OpenPaneSimulator: CommandSpec, Equatable {
     }
 }
 
+/// Explicit human action: close exactly this Host tab and shut down its device.
+public struct CloseSimulator: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+    public let sessionName: String
+    public let tabID: UUID
+
+    public init(sessionName: String, tabID: UUID) {
+        self.sessionName = sessionName
+        self.tabID = tabID
+    }
+
+    public var commandType: CommandType {
+        .closeSimulator(self)
+    }
+}
+
 public struct RemoteSimulatorFrame: Codable, Sendable, Equatable {
     public static let maximumBytes = 512 * 1_024
     public static let maximumDimension = 2_560

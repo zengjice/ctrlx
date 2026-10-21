@@ -12,6 +12,7 @@
         let selectedFileID: UUID?
         var selectedBrowserID: UUID?
         var selectedSimulatorID: UUID?
+        var canCloseSimulator = false
         let isConnected: Bool
         let isCreatingWindow: Bool
         let onChoose: (WindowTabAction) -> Void
@@ -118,15 +119,24 @@
                 }
             case let .simulator(id):
                 if let tab = simulators.first(where: { $0.id == id }) {
-                    Button { choose(.selectSimulator(id)) } label: {
-                        HStack {
-                            Label(tab.title, symbol: .iphone).lineLimit(1)
-                            Spacer()
-                            if selectedSimulatorID == id {
-                                Symbols.checkmark.image
-                            }
-                        }.contentShape(Rectangle())
-                    }.buttonStyle(.plain)
+                    HStack {
+                        Button { choose(.selectSimulator(id)) } label: {
+                            HStack {
+                                Label(tab.title, symbol: .iphone).lineLimit(1)
+                                Spacer()
+                                if selectedSimulatorID == id {
+                                    Symbols.checkmark.image
+                                }
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                        Menu {
+                            Button("Close Tab", role: .destructive) { choose(.closeSimulator(id)) }
+                                .disabled(!isConnected || !canCloseSimulator)
+                        } label: {
+                            Label("Simulator Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly)
+                                .frame(minWidth: 44, minHeight: 44)
+                        }.buttonStyle(.borderless)
+                    }
                 }
             case let .browser(id):
                 if let tab = browsers.first(where: { $0.id == id }) {
@@ -141,7 +151,7 @@
                             }.contentShape(Rectangle())
                         }.buttonStyle(.plain)
                         Menu {
-                            Button("Close Browser on Host", role: .destructive) { choose(.closeBrowser(id)) }.disabled(!isConnected)
+                            Button("Close Tab", role: .destructive) { choose(.closeBrowser(id)) }.disabled(!isConnected)
                         } label: {
                             Label("Browser Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly)
                                 .frame(minWidth: 44, minHeight: 44)
@@ -189,7 +199,8 @@
                 }
                 .buttonStyle(.plain)
                 Menu {
-                    Button(tab.hostTab == nil ? "Close Files Tab" : "Close Files on Host", role: .destructive) { choose(.closeFiles(tab.id)) }
+                    Button("Close Tab", role: .destructive) { choose(.closeFiles(tab.id)) }
+                        .disabled(tab.hostTab != nil && !isConnected)
                 } label: {
                     Label("Actions for \(tab.title)", symbol: .ellipsisCircle)
                         .labelStyle(.iconOnly)

@@ -10,7 +10,7 @@ struct TerminalCloseConfirmation<Target>: Identifiable {
     var closesSession = false
 
     var title: String {
-        closesSession ? "Close Session?" : "Close Window?"
+        closesSession ? "Close Session?" : "Close Tab?"
     }
 
     var actionTitle: String {

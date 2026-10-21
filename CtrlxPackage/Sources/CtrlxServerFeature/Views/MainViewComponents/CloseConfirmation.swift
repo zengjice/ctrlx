@@ -36,7 +36,7 @@ struct CloseConfirmation: Identifiable {
         case .session,
              .remoteSession: "Close Session?"
         case .window,
-             .remoteWindow: "Close Window?"
+             .remoteWindow: "Close Tab?"
         }
     }
 

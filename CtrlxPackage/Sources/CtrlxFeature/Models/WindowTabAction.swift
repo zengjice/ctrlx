@@ -17,6 +17,7 @@ enum WindowTabAction: Equatable, Sendable {
     case selectFiles(UUID)
     case closeFiles(UUID)
     case selectSimulator(UUID)
+    case closeSimulator(UUID)
     case selectBrowser(UUID)
     case closeBrowser(UUID)
     case newTerminal

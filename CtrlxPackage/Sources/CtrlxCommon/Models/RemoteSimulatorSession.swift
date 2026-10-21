@@ -76,6 +76,16 @@ final public class RemoteSimulatorSession {
         return tab
     }
 
+    public static func close(tab: RemoteSimulatorTab, client: ViewerRelayClient) async throws {
+        let result = try await client.sendCommand(
+            CloseSimulator(sessionName: tab.sessionName, tabID: tab.id), paneId: "", timeout: 60
+        ).get()
+        guard result.success else {
+            throw ViewerRelayClientError.commandFailed(result.error ?? "Could not close the simulator tab")
+        }
+        _ = await client.requestSessionState()
+    }
+
     public func watch() async {
         stop()
         let current = epoch

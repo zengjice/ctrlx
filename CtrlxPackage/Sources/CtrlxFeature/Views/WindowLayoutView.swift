@@ -42,8 +42,8 @@
         @State private var pendingFilesRequest: FilesOpenRequest?
         @State private var pendingFilesCloseID: UUID?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
-        @State private var browserSelection = IOSBrowserTabSelection()
-        @State private var selectedSimulatorID: UUID?
+        @State private var browserSelection = IOSHostTabSelection()
+        @State private var simulatorSelection = IOSHostTabSelection()
         @State private var annotationHandoff = AnnotationTerminalHandoff()
         @State private var showsWindowTabs = false
         @State private var pendingWindowTabAction: WindowTabAction?
@@ -221,7 +221,7 @@
         }
 
         private var selectedLinkedTab: PaneLinkedTabID? {
-            if let id = selectedSimulatorID {
+            if let id = simulatorSelection.selectedID {
                 return .simulator(id)
             }
             if let id = browserSelection.selectedID {
@@ -236,11 +236,11 @@
             case let .tab(item):
                 fileWorkspace.selectedID = nil
                 browserSelection.selectedID = nil
-                selectedSimulatorID = nil
+                simulatorSelection.selectedID = nil
                 switch item {
                 case let .file(id): fileWorkspace.selectedID = id
                 case let .browser(id): browserSelection.selectedID = id
-                case let .simulator(id): selectedSimulatorID = id
+                case let .simulator(id): simulatorSelection.selectedID = id
                 }
             case let .sourcePane(id):
                 guard let target = sessionWindows.first(where: { $0.panes.contains { $0.paneId == id } }) else { return }
@@ -301,7 +301,7 @@
                         isKeyboardActive = false
                         quickActionPresentation.dismiss()
                         fileWorkspace.selectedID = nil
-                        selectedSimulatorID = nil
+                        simulatorSelection.selectedID = nil
                         browserSelection.selectedID = opened.id
                     }
                     .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
@@ -397,7 +397,7 @@
         }
 
         private var selectedSimulator: RemoteSimulatorTab? {
-            sessionSimulators.first { $0.id == selectedSimulatorID }
+            sessionSimulators.first { $0.id == simulatorSelection.selectedID }
         }
 
         private var selectedBrowser: RemoteBrowserTab? {
@@ -463,7 +463,7 @@
                         guard pendingSimulatorRequest == request else { return }
                         fileWorkspace.selectedID = nil
                         browserSelection.selectedID = nil
-                        selectedSimulatorID = tab.id
+                        simulatorSelection.selectedID = tab.id
                         pendingSimulatorRequest = nil
                     } catch is CancellationError { }
                     catch {
@@ -481,7 +481,7 @@
                         guard pendingFilesRequest == request, sessionWindows.contains(where: { $0.panes.contains { $0.paneId == paneID } }) else { return }
                         let tab = fileWorkspace.adopt(descriptor)
                         browserSelection.selectedID = nil
-                        selectedSimulatorID = nil
+                        simulatorSelection.selectedID = nil
                         fileWorkspace.selectedID = tab.id
                         pendingFilesRequest = nil
                     } catch is CancellationError { }
@@ -525,7 +525,7 @@
                     pendingBrowserLink = nil
                     pendingSimulatorRequest = nil
                 }
-                .onChange(of: selectedSimulatorID) { pendingFileLink = nil
+                .onChange(of: simulatorSelection.selectedID) { pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
                     pendingSimulatorRequest = nil
@@ -540,8 +540,9 @@
                 .onChange(of: fileWorkspace.recoverySnapshots) { _, _ in saveFileWorkspace() }
                 .onChange(of: fileWorkspace.selectedID) { _, _ in saveFileWorkspace() }
                 .onChange(of: relayClient.simulatorTabs) { _, _ in
-                    if let id = selectedSimulatorID, !sessionSimulators.contains(where: { $0.id == id }) {
-                        selectedSimulatorID = nil
+                    let shouldFit = simulatorSelection.syncTabs(Set(sessionSimulators.map(\.id)))
+                    if shouldFit, terminalIsVisible, relayClient.isHostConnected, scenePhase == .active {
+                        requestAutomaticTabFit()
                     }
                 }
                 .onChange(of: relayClient.browserTabs) { _, _ in
@@ -560,7 +561,8 @@
                         selectedWindowID: window?.stableId,
                         selectedFileID: fileWorkspace.selectedID,
                         selectedBrowserID: browserSelection.selectedID,
-                        selectedSimulatorID: selectedSimulatorID,
+                        selectedSimulatorID: simulatorSelection.selectedID,
+                        canCloseSimulator: relayClient.hostSupportsSimulatorClosing,
                         isConnected: relayClient.isHostConnected,
                         isCreatingWindow: isCreatingWindow,
                         onChoose: { action in
@@ -663,7 +665,7 @@
                 guard
                     pendingFileLink == request, window?.id == origin.id,
                     window?.panes.contains(where: { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext }) == true,
-                    fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && selectedSimulatorID == nil else { return }
+                    fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && simulatorSelection.selectedID == nil else { return }
                 let tab = fileWorkspace.adopt(descriptor)
                 tab.openTerminalFile(destination, paneID: request.paneID)
                 fileWorkspace.selectedID = tab.id
@@ -693,7 +695,7 @@
                 try Task.checkCancellation()
                 guard pendingBrowserLink == request, window?.id == originWindowID else { return }
                 browserSelection.selectedID = tab.id
-                selectedSimulatorID = nil
+                simulatorSelection.selectedID = nil
                 fileWorkspace.selectedID = nil
                 cancelCreationFollowUp()
                 isKeyboardActive = false
@@ -750,6 +752,7 @@
                     if !relayClient.isHostConnected {
                         pendingBrowserLink = nil
                         browserSelection.cancelPendingCloses()
+                        simulatorSelection.cancelPendingCloses()
                         cancelCreationFollowUp()
                         annotationHandoff.cancel(error: AgentImageError.message("The Host disconnected. Reconnect and try Open Agent again."))
                     } else {
@@ -774,6 +777,7 @@
                     }
                     if scenePhase != .active {
                         browserSelection.cancelPendingCloses()
+                        simulatorSelection.cancelPendingCloses()
                         annotationHandoff.cancel()
                         pendingBrowserLink = nil
                     } else {
@@ -790,6 +794,7 @@
                     // A delayed creation reply must not redirect a later visit.
                     cancelCreationFollowUp()
                     browserSelection.cancelPendingCloses()
+                    simulatorSelection.cancelPendingCloses()
                     automaticTabFit.cancel()
                     wasBackgrounded = false
                     annotationHandoff.cancel()
@@ -884,7 +889,11 @@
                 }
             }
 
-            if terminalIsVisible, let window {
+            if let tab = selectedLinkedTab {
+                ToolbarItem(placement: .topBarTrailing) {
+                    linkedTabMenu(tab)
+                }
+            } else if terminalIsVisible, let window {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
@@ -951,6 +960,53 @@
                         sessionInfoPopover
                     }
                 }
+            }
+        }
+
+        private func linkedTabMenu(_ tab: PaneLinkedTabID) -> some View {
+            let sourcePaneID = linkedTabs.sourcePaneID(tab)
+            let sourceWindow = sessionWindows.first { $0.panes.contains { $0.paneId == sourcePaneID } }
+            return Menu {
+                Button {
+                    if
+                        let paneID = linkedTabs.sourcePaneID(tab),
+                        let target = sessionWindows.first(where: { $0.panes.contains { $0.paneId == paneID } }) {
+                        selectTerminalWindow(target, preferredPaneID: paneID)
+                    }
+                } label: {
+                    Label("Go to Terminal Tab", symbol: .terminal)
+                }
+                .disabled(sourceWindow == nil)
+                Divider()
+                Button(role: .destructive) {
+                    switch tab {
+                    case let .file(id): performWindowTabAction(.closeFiles(id))
+                    case let .browser(id): performWindowTabAction(.closeBrowser(id))
+                    case let .simulator(id): performWindowTabAction(.closeSimulator(id))
+                    }
+                } label: {
+                    Label("Close Tab", symbol: .xmark)
+                }
+                .disabled(!canCloseLinkedTab(tab))
+                if case .simulator = tab, relayClient.isHostConnected, !relayClient.hostSupportsSimulatorClosing {
+                    Text("Update the Host Mac to close simulator tabs")
+                }
+            } label: {
+                Label("More", symbol: .ellipsisCircle)
+            }
+            .menuOrder(.fixed)
+            .accessibilityIdentifier("linked-tab-actions")
+        }
+
+        private func canCloseLinkedTab(_ tab: PaneLinkedTabID) -> Bool {
+            switch tab {
+            case let .file(id):
+                guard let file = fileWorkspace.tabs.first(where: { $0.id == id }) else { return false }
+                return pendingFilesCloseID == nil && (file.hostTab == nil || relayClient.isHostConnected)
+            case let .browser(id):
+                return relayClient.isHostConnected && !browserSelection.isClosing(id)
+            case let .simulator(id):
+                return relayClient.isHostConnected && relayClient.hostSupportsSimulatorClosing && !simulatorSelection.isClosing(id)
             }
         }
 
@@ -1090,13 +1146,14 @@
                 }
             case let .selectFiles(id):
                 browserSelection.selectedID = nil
-                selectedSimulatorID = nil
+                simulatorSelection.selectedID = nil
                 guard fileWorkspace.tabs.contains(where: { $0.id == id }) else { return }
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
                 fileWorkspace.selectedID = id
             case let .closeFiles(id):
+                guard canCloseLinkedTab(.file(id)) else { return }
                 if
                     id == fileWorkspace.selectedID,
                     let sourcePaneID = fileWorkspace.selected?.sourcePaneID,
@@ -1110,13 +1167,13 @@
                 }
             case .newTerminal:
                 browserSelection.selectedID = nil
-                selectedSimulatorID = nil
+                simulatorSelection.selectedID = nil
                 guard relayClient.isHostConnected, !isCreatingWindow else { return }
                 fileWorkspace.selectedID = nil
                 createTerminalWindow()
             case .newAgent:
                 browserSelection.selectedID = nil
-                selectedSimulatorID = nil
+                simulatorSelection.selectedID = nil
                 guard relayClient.isHostConnected, !isCreatingWindow else { return }
                 fileWorkspace.selectedID = nil
                 creationSheetIsPresented = true
@@ -1128,7 +1185,7 @@
                 quickActionPresentation.dismiss()
                 fileWorkspace.selectedID = nil
                 browserSelection.selectedID = nil
-                selectedSimulatorID = id
+                simulatorSelection.selectedID = id
             case let .selectBrowser(id):
                 guard sessionBrowsers.contains(where: { $0.id == id }) else { return }
                 cancelCreationFollowUp()
@@ -1136,9 +1193,20 @@
                 quickActionPresentation.dismiss()
                 fileWorkspace.selectedID = nil
                 browserSelection.selectedID = id
-                selectedSimulatorID = nil
+                simulatorSelection.selectedID = nil
+            case let .closeSimulator(id):
+                guard canCloseLinkedTab(.simulator(id)), let tab = sessionSimulators.first(where: { $0.id == id }) else { return }
+                simulatorSelection.beginClosing(id)
+                Task {
+                    do {
+                        try await RemoteSimulatorSession.close(tab: tab, client: relayClient)
+                    } catch {
+                        simulatorSelection.cancelClosing(id)
+                        commandError = error.localizedDescription
+                    }
+                }
             case let .closeBrowser(id):
-                guard let tab = sessionBrowsers.first(where: { $0.id == id }) else { return }
+                guard canCloseLinkedTab(.browser(id)), let tab = sessionBrowsers.first(where: { $0.id == id }) else { return }
                 browserSelection.beginClosing(id)
                 Task {
                     do {
@@ -1181,7 +1249,7 @@
             pendingSimulatorRequest = nil
             fileWorkspace.hasPendingTerminalSelection = false
             browserSelection.selectedID = nil
-            selectedSimulatorID = nil
+            simulatorSelection.selectedID = nil
             fileWorkspace.selectedID = nil
             cancelCreationFollowUp()
             selectedWindowId = target.id
@@ -1197,7 +1265,7 @@
 
         private func selectAdjacentWindow(from sourceWindowID: String, direction: TerminalWindowSwipePolicy.Direction) {
             guard
-                window?.id == sourceWindowID, fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && selectedSimulatorID == nil,
+                window?.id == sourceWindowID, fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && simulatorSelection.selectedID == nil,
                 !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput,
                 let targetID = WindowSelectionReconciliation.adjacentWindowID(
                     from: sourceWindowID, direction: direction, in: windowSelectionCandidates

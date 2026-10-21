@@ -267,6 +267,34 @@
         }
 
         @Test
+        func remoteCloseValidatesTabAndSessionThenShutsDownOnlyThatDevice() async throws {
+            let (fixture, identity, open) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            let state = try #require(fixture.created.first)
+            let extra = await fixture.action("open", ["new": .bool(true)])
+            #expect(extra.error == nil)
+            let other = try #require(fixture.created.last)
+            #expect(other.id != tab.id)
+            for request in [CloseSimulator(sessionName: "other", tabID: tab.id), .init(sessionName: "work", tabID: UUID())] {
+                await #expect(throws: SimulatorFailure.self) {
+                    try await fixture.service.closeSimulator(request)
+                }
+            }
+            #expect(!state.isClosed && !other.isClosed)
+            try await fixture.service.closeSimulator(.init(sessionName: "work", tabID: tab.id))
+            #expect(state.isClosed && !other.isClosed)
+            #expect(!fixture.service.sharedSimulatorTabs.contains { $0.id == tab.id })
+            #expect(fixture.probe.calls.withLock { $0.contains { $0.suffix(2) == ["shutdown", state.handle.udid] } })
+            let replacement = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            #expect(replacement.id != tab.id)
+            await #expect(throws: SimulatorFailure.self) {
+                try await fixture.service.closeSimulator(.init(sessionName: "work", tabID: tab.id))
+            }
+            #expect(fixture.service.sharedSimulatorTabs.contains { $0.id == replacement.id })
+            await fixture.service.shutdown()
+        }
+
+        @Test
         func failedTakeoverDoesNotKeepViewerLease() async throws {
             let (fixture, identity, open) = try humanFixture()
             let tab = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)

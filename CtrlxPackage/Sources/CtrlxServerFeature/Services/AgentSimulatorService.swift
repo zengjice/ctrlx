@@ -557,6 +557,20 @@
             }
         }
 
+        func closeSimulator(_ request: CloseSimulator) async throws {
+            guard
+                !closing, let state = tabs[request.tabID], !state.isClosed,
+                state.sourcePane.sessionName == request.sessionName else {
+                throw SimulatorFailure("This Host simulator is no longer available in the session")
+            }
+            try validate(state.owner)
+            close(state)
+            await closeTasks[state.id]?.value
+            if let error = state.error {
+                throw SimulatorFailure("Tab closed; device cleanup failed: \(error)")
+            }
+        }
+
         func openPaneSimulator(_ request: OpenPaneSimulator, expectedWorkspacePane: WorkspacePaneIdentity?) async throws -> RemoteSimulatorTab {
             guard let coordinator, !closing, let identity = expectedWorkspacePane else {
                 throw SimulatorFailure("Refresh the session before opening a Host simulator")

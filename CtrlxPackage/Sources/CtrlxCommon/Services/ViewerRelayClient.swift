@@ -120,6 +120,7 @@ final public class ViewerRelayClient {
     public private(set) var browserTabs: [RemoteBrowserTab] = []
     public private(set) var hostSupportsSimulatorViewing = false
     public private(set) var hostSupportsPaneSimulator = false
+    public private(set) var hostSupportsSimulatorClosing = false
     public private(set) var hostSupportsDashboard = false
     public private(set) var simulatorTabs: [RemoteSimulatorTab] = []
 
@@ -556,6 +557,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host to use simulator clipboard controls."))
         case .browseSimulator where !hostSupportsSimulatorViewing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view iOS simulators"))
+        case .closeSimulator where !hostSupportsSimulatorClosing:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to close simulator tabs"))
         case .openPaneSimulator where !hostSupportsPaneSimulator:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open a pane's iOS simulator"))
         case .browseBrowser where !hostSupportsBrowserSharing:
@@ -772,6 +775,8 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .controlSimulator(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+        case let .closeSimulator(spec):
+            return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .browseSimulator(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .openPaneSimulator(spec):
@@ -1193,6 +1198,7 @@ final public class ViewerRelayClient {
             browserTabs = sessionState.browserTabs ?? []
             hostSupportsSimulatorViewing = sessionState.supportsSimulatorViewing == true
             hostSupportsPaneSimulator = sessionState.supportsPaneSimulator == true
+            hostSupportsSimulatorClosing = sessionState.supportsSimulatorClosing == true
             hostSupportsDashboard = sessionState.supportsDashboard == true
             simulatorTabs = sessionState.simulatorTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
@@ -1682,6 +1688,7 @@ final public class ViewerRelayClient {
         hostSupportsBrowserExtensions = false
         hostSupportsSimulatorViewing = false
         hostSupportsPaneSimulator = false
+        hostSupportsSimulatorClosing = false
         hostSupportsDashboard = false
         hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false

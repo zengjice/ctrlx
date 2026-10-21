@@ -123,6 +123,7 @@ public actor TmuxCommandExecutor {
                  .browseSimulator,
                  .controlSimulator,
                  .openPaneSimulator,
+                 .closeSimulator,
                  .stopTerminalStream,
                  .createTmuxSession,
                  .createTmuxWindow,

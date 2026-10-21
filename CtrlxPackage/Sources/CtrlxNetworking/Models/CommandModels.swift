@@ -1108,6 +1108,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case browseSimulator(BrowseSimulator)
     case controlSimulator(ControlSimulator)
     case openPaneSimulator(OpenPaneSimulator)
+    case closeSimulator(CloseSimulator)
     /// Resize a tmux pane
     case resizeTmuxPane(ResizeTmuxPane)
     /// Set the shared terminal-window layout for a tmux session

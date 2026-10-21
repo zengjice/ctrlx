@@ -24,7 +24,7 @@
                 }
                 .disabled(!isConnected)
                 Button(role: .destructive) { choose(.window(stableID: window.stableId, operation: .close)) } label: {
-                    Label("Close Window", symbol: .rectangleBadgeMinus)
+                    Label("Close Tab", symbol: .rectangleBadgeMinus)
                 }
                 .disabled(!isConnected)
                 Divider()
