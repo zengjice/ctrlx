@@ -1,5 +1,14 @@
 # Agent Browser
 
+## 浏览器后台录屏
+
+Agent 可通过 `ctrlx browser record-start/record-status/record-stop` 对自己的
+Host 浏览器标签录制静音 MP4。最长 10 分钟，默认 10 fps，视频直接保存到 Host
+新文件；录制期间可以继续操作网页，Viewer 仍按原有控制权规则接管。
+到时、关标签、Agent 退出或 Host 正常退出会停止并收尾。使用状态返回的
+`completed` 确认文件可用，再通过文件浏览器查看或下载。参数、资源限制、
+异常情况及与旧短录屏命令的区别见 [浏览器引擎](agent-browser-engines.md#managed-expansion-workflows)。
+
 ## Viewer 显式剪贴板
 
 Host 的 `supportsWorkspaceClipboard` 能力开启配对 Mac / iOS Viewer 的 Copy / Paste。
@@ -365,7 +374,8 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   another surface/Viewer cannot steal it. Manual pages attempt acquisition on
   first display. **Return to Agent / Release Control**, Host **Take Back**,
   disconnect or a 20-second lease expiry release it (expiry checked every 5 s).
-  Acquisition refuses in-flight Agent work/recording. Both CLI backends,
+  Acquisition refuses in-flight Agent work and legacy short recording; the
+  independent Host background recording can continue during Viewer control. Both CLI backends,
   including existing Vercel gateway attachments, reject commands during handoff.
   The Host page blocks direct keyboard/pointer input until Take Back.
 - Viewers scale the existing viewport by default. **Fit to This Device** is an

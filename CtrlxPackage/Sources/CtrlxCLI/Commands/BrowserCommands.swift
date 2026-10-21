@@ -7,7 +7,7 @@ struct BrowserCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "browser",
         abstract: "Control this agent instance's Host Chromium tabs in its local CtrlX session (human pages and legacy WebKit tabs are separate)",
-        subcommands: [BrowserRunCommand.self, BrowserIdentityCommand.self, BrowserActionCommand.self, BrowserPageCommand.self, BrowserBatchCommand.self, BrowserSetupCommand.self, BrowserRecordCommand.self, BrowserEngineCommand.self, BrowserEngineProviderCommand.self]
+        subcommands: [BrowserRunCommand.self, BrowserIdentityCommand.self, BrowserActionCommand.self, BrowserPageCommand.self, BrowserBatchCommand.self, BrowserSetupCommand.self, BrowserRecordCommand.self, BrowserRecordStartCommand.self, BrowserRecordStopCommand.self, BrowserRecordStatusCommand.self, BrowserEngineCommand.self, BrowserEngineProviderCommand.self]
     )
 }
 

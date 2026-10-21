@@ -79,7 +79,7 @@ Host 收回、断线/租约回收、阻断两个 CLI 引擎（含已连接 Verce
 | 跨域/跨进程 iframe、嵌套 frame | 已有 frame 后端；CLI 仅解析 CSS/ref/main | 已适配 iframe-only 子会话归属及分散 frame tree 合并；name/URL 通过固定私有 daemon action 补齐；移动设备模拟下 OOPIF 指针操作明确拒绝，恢复桌面 viewport 后可用 | B，已适配，非全场景承诺 |
 | 初始化脚本、React 检查 | 已有启动参数、React 命令及 typed init 后端 | `setup` 管持久配置；`init add/list/remove` 通过上游后端管理独立动态脚本，UUID 防止重启后旧 ID 误删新脚本；保留 React 检查 | B，已接入 |
 | Trace / Profiler | 两者均使用浏览器级 `Tracing`，并非页面级 CPU Profiler | 保持禁用；需单独设计全局采集授权/互斥或实现真正页面级替代，不可先采全局再声称隔离 | B，未实现 |
-| 视频录制 | 已有 `record` 命令 | 已接入 WebM/MP4、1–60 fps、cursor、PNG contact sheet/threshold；本机 Homebrew ffmpeg、1–10 秒请求、15 秒原生租约、合计 6 MiB；长录制未接入 | B，部分选项接入 |
+| 视频录制 | 已有 `record` 命令 | 短录制保留 WebM/MP4、cursor、contact sheet；新增 Host 后台 `record-start/stop/status`，最长 600 秒、默认 10 fps、原生 H.264 直接写文件，录制不占页面操作权 | B，长录制已接入，验收范围见 engines 文档 |
 | WebMCP | 已有实验性命令及 CDP 后端 | 显式 list/invoke/result/cancel；普通 command 和 action snapshot 后自动提示目录变化、去重及导航后清空，失败不重放页面动作；不是 Codex MCP 服务 | B，已接入 |
 | 完整设备/触摸模拟、地理位置权限、Shadow DOM、worker 等复杂场景 | 有部分命令/页面原语，不代表全部场景已支持 | 当前设备模拟主要是 viewport/UA；地理位置权限闭环等仍待验证，先查具体缺口再确定复用或新增实现 | D |
 | 全局 Cookie 清除、整份登录状态导出、任意标签控制 | 上游有相关管理能力 | 与共享 profile 和实例归属边界冲突；不能直接开放，有业务需求时另做作用域与授权设计 | 保持限制 |
@@ -111,7 +111,7 @@ Host 收回、断线/租约回收、阻断两个 CLI 引擎（含已连接 Verce
 
 | ID | 待补能力 | 现有边界及剩余工作 | 状态 |
 |---|---|---|---|
-| P1 | 录屏完整选项 | B：新增 MP4、1–60 fps、cursor、PNG contact sheet/threshold；保留 1–10 秒请求、15 秒租约、合计 6 MiB；长录制另需跨 CLI 生命周期、配额和撤销 | 选项已接入，长录制未实现 |
+| P1 | 录屏完整选项 | B：短录制选项保留；后台长录制增加 600 秒时限、约 512 MiB 文件上限、异步停止和身份撤销收尾 | 长录制已接入；不含音频、暂停或操作生成 Skill |
 | P2 | batch 完整模式 | B：已新增对象步骤的 output 路径、逐步导出、显式 continue-on-error 与失败退出码；全量预校验，保留 1–32 步/48 KB，不回滚或自动重试 | 本轮模式/产物已接入并验收；保留明确预算，非无限制透传 |
 | P3 | URL 图像差异及产物策略 | B：上游 0.38.1 CLI 接受 `diff url --screenshot`，但 native `handle_diff_url` 忽略该选项；CtrlX 已编排单页两次导航/截图及文本/图像 diff，验证变化及无变化不生成文件；保留 PNG 基线、6 MiB 和拒绝覆盖 | URL 图像差异已接入并验收，其余为明确产物限制 |
 | P4 | WebMCP 自动发现与参数文件 | B：参数支持文件/stdin；CtrlX 在普通 command/action snapshot 后经同页私有 daemon 读取目录，发出有界、去重、不可信提示；绕开上游内部 launch 丢弃提示的问题，不自动调用工具 | 已接入并验收；不是后台推送或 MCP server |

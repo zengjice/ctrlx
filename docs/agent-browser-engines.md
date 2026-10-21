@@ -104,6 +104,9 @@ ctrlx browser command --tab <id> -- react tree --raw-json
 ctrlx browser command --tab <id> -- webmcp list
 ctrlx browser record --tab <id> --seconds 3 --output /tmp/new.webm
 ctrlx browser record --tab <id> --seconds 3 --format mp4 --fps 12 --cursor --output /tmp/new.mp4 --contact-sheet /tmp/new-sheet.png
+ctrlx browser record-start --tab <id> --seconds 600 --output /absolute/new-long.mp4
+ctrlx browser record-status --tab <id> --recording <returned-recording-id>
+ctrlx browser record-stop --tab <id> --recording <returned-recording-id>
 ```
 
 - Conditional screenshots return `changed:false, artifactSkipped:true` without a
@@ -152,14 +155,38 @@ ctrlx browser record --tab <id> --seconds 3 --format mp4 --fps 12 --cursor --out
   metadata without failing/replaying the completed page action (2 s socket timeout).
   Upstream's preliminary provider launch consumes its own proactive response, so
   `--no-webmcp` remains pinned and the adapter handles delivery. No MCP server is started.
-- `record` is bounded WebM/MP4 capture (1–10 s requested, configurable 1–60 fps,
+- `record-start`, `record-status` and `record-stop` are Host-owned background MP4
+  recording, independent of the selected CLI engine. Start returns `starting`
+  immediately; poll status for `recording`, `stopping`, `completed` or `failed`.
+  Stop is asynchronous and idempotent; only `completed` confirms a published file.
+  The optional expected recording ID prevents a stale stop/status from targeting
+  a newer recording on the same tab. Default/maximum duration is 600 seconds;
+  `--seconds` accepts 1–600, `--fps` accepts 1–30 (default 10, capture/encoding may
+  drop frames). Native H.264 encoding uses macOS AVFoundation, not ffmpeg.
+  Only the page viewport is captured, without audio/cursor overlays; its initial
+  aspect ratio is retained at at most 1920 pixels on the long edge. Later viewport
+  changes are letterboxed; capture never changes the live viewport or focus.
+  One frame is in flight per recording, with no accumulated frame queue or video
+  Base64 response. Encoding/file I/O run off the CEF UI thread.
+  Output must be a new absolute `.mp4` path on the Host. Private same-directory
+  staging is published with exclusive creation (0600); existing/racing files
+  are preserved. Capture stops near 512 MiB, reserving space for finalization.
+  Status reports the path, frames, bytes, stop reason and any error, not video data.
+  Saved videos can be opened/downloaded through the existing file browser.
+  At most four recordings run per Host, one per tab; up to 32 current/recent
+  recording states remain in memory, including closed tabs. Navigation, Agent actions and
+  Viewer control can continue during recording under their existing ownership
+  rules. Owner exit/reassignment, tab close and Host shutdown stop and finalize
+  capture; renderer/capture/encoder failure is reported explicitly. A forced
+  Host/process crash does not guarantee a published file or staging cleanup.
+- Legacy `record` remains bounded WebM/MP4 capture (1–10 s requested, configurable 1–60 fps,
   default 10). Optional cursor overlay and PNG contact sheet reuse upstream;
   `--contact-sheet-threshold` is 0–1 (default 0.05), combined outputs max 6 MiB.
   Optional validated `--commands-json` runs during capture; a slow command can
   extend the requested duration, but the native attachment expires after 15 s.
   Only existing Homebrew ffmpeg at `/opt/homebrew/bin/ffmpeg` or
   `/usr/local/bin/ffmpeg` is exposed via a private PATH link. No automatic install,
-  indefinite start/stop or recording-to-Skill product UI. Video/sheet paths must
+  indefinite recording or recording-to-Skill product UI. Video/sheet paths must
   both be new; multi-file export is not atomic and may leave the completed video
   if exporting the sheet fails. No capture is automatically repeated.
 
@@ -178,7 +205,10 @@ ctrlx browser record --tab <id> --seconds 3 --format mp4 --fps 12 --cursor --out
   sessions from this exact CefBrowser; unknown/cross-tab sessions are refused.
   Renderer frame trees are merged within that lineage for OOPIF selection.
   A recording may attach only the exact root target reported by that browser,
-  once, with a native 15-second expiry. No target discovery or worker attachment.
+  once, with a native 15-second expiry. This applies to legacy upstream `record`;
+  Host background recording uses independent, bounded viewport samples rather
+  than an upstream capture attachment. The two cannot record a tab concurrently.
+  No target discovery or worker attachment.
   Page-scoped Network/Fetch/Runtime events are forwarded
   with `sessionId: ""`, matching upstream directPage event tracking (omitting the
   field silently loses events). `eval` runs page JavaScript, not native code/CDP.
@@ -194,7 +224,8 @@ ctrlx browser record --tab <id> --seconds 3 --format mp4 --fps 12 --cursor --out
   registered future init scripts, stops capture and detaches iframe sessions.
 - One managed upstream session per owned tab preserves refs without sharing a
   focused target. Both engines take the same per-tab CLI lock. Different tabs
-  remain independent. Host navigation can interrupt actions; it is not retried.
+  remain independent. Background recording commands use their own Host state and
+  do not acquire the page operation lock. Host navigation can interrupt actions; it is not retried.
 - The private engine directory/config and provider credentials are mode 0700/0600.
   The process environment is allowlisted and the executable SHA-256 is verified
   before use; inherited providers/CDP/autoconnect/cloud credentials are ignored.
@@ -248,7 +279,7 @@ license audit and hardened-runtime/notarization validation.
 Tests:
 
 ```sh
-swift test --package-path CtrlxPackage --filter 'AgentBrowserEngineTests|AgentBrowserIdentityTests'
+./scripts/unit-tests.sh -- --filter 'AgentBrowserEngineTests|AgentBrowserIdentityTests|AgentBrowserWorkflowTests|BrowserRecordingCommandTests'
 python3 CtrlxPackage/AgentBrowser/tests/cli.py CtrlxPackage/.build/debug/CtrlxCLI
 clang++ -std=c++20 CtrlxPackage/AgentBrowser/tests/engine_identity.cc -o /tmp/codex
 python3 CtrlxPackage/AgentBrowser/tests/managed_engine.py \
@@ -264,6 +295,9 @@ python3 CtrlxPackage/AgentBrowser/tests/expanded_capabilities.py \
   '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
   '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex \
   '<React 18.3.1 UMD fixture assets directory>'
+python3 CtrlxPackage/AgentBrowser/tests/long_recording.py \
+  '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
+  '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex
 ```
 
 The isolated app must use bundle ID `com.ctrlx.embedded-acceptance`. Build the
@@ -276,6 +310,27 @@ The expansion suite includes the previous page-capability regression by default.
 It requires `websockets`, local ffmpeg/ffprobe, and React 18.3.1 development UMD
 files named `react.js` and `react-dom.js` (upstream packages' `umd/*.development.js`).
 These test-only assets are served on loopback, not bundled into the product.
+
+`long_recording.py` uses the production native library and defaults to a real
+600-second capture; `--duration` allows a shorter smoke run, which does not
+establish ten-minute acceptance. It verifies playback metadata, owner isolation,
+page input/navigation/resize, automatic/manual/tab-close/owner-exit/Host-shutdown
+finalization, and records Host resource samples. `long_recording_controls.py`
+uses a separate `CTRLX_UPSTREAM_BROWSER_PROBE` fixture to assert Viewer input,
+focus/viewport stability, concurrent page-command locks and legacy short capture.
+Run native suites sequentially through `scripts/clean-build.py use-artifact`,
+as printed by `tests/prepare_upstream_probe.sh`; never reuse an active fixture.
+The `browser_recording_writer_tests` CMake target covers irregular timestamps,
+resized frames, exclusive publication, private permissions and cleanup.
+
+Local acceptance (2026-10-21): 42 focused Swift tests, the native writer suite and
+the Mac workspace build passed. An isolated production-runtime Host recorded a
+600-second, 1280×800 H.264 movie (300,289,738 bytes); all frames decoded without
+errors. Manual/automatic/tab-close/owner-exit/normal-shutdown finalization passed.
+A separate native probe verified Viewer input during capture, unchanged focus
+and viewport, status/stop during a page wait, and legacy MP4 recording. These use
+private browser profiles and native identity fixtures, not physical Viewer
+devices or a real Codex reasoning session.
 
 Upstream is not forked. To update, change the pinned version/hash in preparation
 and `ManagedAgentBrowser`, refresh license/dependency review, run both engines'

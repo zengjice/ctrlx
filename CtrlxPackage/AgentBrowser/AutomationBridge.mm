@@ -5,6 +5,7 @@
 #include "PageActions.h"
 #include "PageKeys.h"
 #include "RemoteBrowserFrame.h"
+#include "BrowserRecordingWriter.h"
 #include "EngineServer.h"
 #include <atomic>
 #include <libproc.h>
@@ -34,6 +35,7 @@ constexpr size_t kMaxRequest = 65536;
 constexpr size_t kMaxResponse = 8 * 1024 * 1024;
 int engineServers = 0; // CEF UI RunLoop only, including shutdown completion.
 std::atomic_size_t remoteImageJobs{0};
+std::atomic_size_t browserRecordingJobs{0};
 
 std::string JSON(id value) {
   NSData* data = [NSJSONSerialization dataWithJSONObject:value
@@ -97,6 +99,8 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Remove(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
+    for (auto& [id, tab] : tabs_) if (tab.browser->IsSame(browser) && recordings_.contains(id))
+      StopRecording(recordings_.at(id), @"tab-closed");
 #if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
     ForgetProbeView(browser->GetIdentifier());
 #endif
@@ -116,6 +120,7 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Stop() {
     CEF_REQUIRE_UI_THREAD();
+    for (auto& [id, recording] : recordings_) StopRecording(recording, @"host-stopped");
 #if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
     while (!probeViews_.empty()) ForgetProbeView(probeViews_.begin()->first);
 #endif
@@ -240,6 +245,7 @@ class Bridge final : public CefDevToolsMessageObserver {
   }
 #include "EngineBridge.inc"
 #include "RemoteBrowser.inc"
+#include "BrowserRecording.inc"
  public:
   void OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* data, size_t size) override {
     EngineEvent(browser, method, data, size);
@@ -349,6 +355,7 @@ class Bridge final : public CefDevToolsMessageObserver {
       Reap();
       nextReap_ = Clock::now() + std::chrono::seconds(1);
     }
+    RecordingTick();
     // Nonblocking and bounded per tick: no socket wait on Chromium's UI thread.
     if (clients_.size() < 8) {
       int fd = accept(listener_, nullptr, nullptr);
@@ -543,6 +550,7 @@ class Bridge final : public CefDevToolsMessageObserver {
       });
       return;
     }
+    if (RecordingRequest(id, request)) return;
     if (![@[@"read", @"click", @"type", @"fill", @"press", @"scroll", @"wait", @"select", @"check",
            @"screenshot", @"navigate", @"close", @"show"] containsObject:command]) {
       Reply(id, nil, @"Unsupported command; arbitrary CDP/evaluation and cross-group control are not exposed."); return;
@@ -724,4 +732,4 @@ bool AgentBrowserDialog(CefRefPtr<CefBrowser> browser, cef_jsdialog_type_t type,
 }
 void AgentBrowserDialogReset(CefRefPtr<CefBrowser> browser) { if (bridge) bridge->DialogReset(browser); }
 void StopAgentBrowser() { if (bridge) bridge->Stop(); bridge = nullptr; }
-bool AgentBrowserTransportsStopped() { return engineServers == 0 && remoteImageJobs.load() == 0; }
+bool AgentBrowserTransportsStopped() { return engineServers == 0 && remoteImageJobs.load() == 0 && browserRecordingJobs.load() == 0; }

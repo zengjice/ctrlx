@@ -204,7 +204,7 @@
       if (session.length || params.count) { EngineError(connection, wireID, @"Only the current root target is queryable."); return; }
     }
     if ([method isEqual:@"Target.attachToTarget"]) {
-      bool busy = engineCaptureAttaching_.contains(browserID);
+      bool busy = engineCaptureAttaching_.contains(browserID) || RecordingActive(engineGrants_.at(token).tab);
       for (const auto& [key, deadline] : engineCaptures_) busy |= key.first == browserID;
       if (session.length || busy || !enginePageTargets_.contains(browserID) ||
           ![params[@"targetId"] isEqual:String(enginePageTargets_.at(browserID))]) {
