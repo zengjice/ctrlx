@@ -78,7 +78,7 @@
                 setupConnectionManagerHandlers()
                 await autoConnectIfNeeded()
             }
-            .task(id: scenePhase) {
+            .task(id: dashboardMonitorHosts) {
                 guard scenePhase == .active else { return }
                 await dashboardStore.monitor {
                     settings.pairedHosts.map {
@@ -110,6 +110,16 @@
             } message: {
                 Text(fileWorkspaces.recoveryError ?? "")
             }
+        }
+
+        /// Only foreground/readiness changes restart polling; ordinary session
+        /// updates must not restart the timer or repeatedly query the Host.
+        private var dashboardMonitorHosts: [String: Bool]? {
+            guard scenePhase == .active else { return nil }
+            return Dictionary(uniqueKeysWithValues: settings.pairedHosts.map { host in
+                let connection = connectionManager?.connection(for: host.id)
+                return (host.id, connection?.isHostConnected == true && connection?.relayClient.hostSupportsDashboard == true)
+            })
         }
 
         private func handleAgentBackgroundMonitoringPreferenceChange(_ enabled: Bool) {

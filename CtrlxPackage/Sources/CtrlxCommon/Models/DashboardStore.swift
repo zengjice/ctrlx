@@ -1,3 +1,4 @@
+import Clocks
 import CtrlxNetworking
 import Dependencies
 import Foundation
@@ -59,6 +60,7 @@ final public class DashboardStore {
     @ObservationIgnored @Dependency(PreferencesService.self) private var preferences
     @ObservationIgnored @Dependency(DashboardNotificationClient.self) private var notifications
     @ObservationIgnored private var quotaAlerts = DashboardQuotaAlertTracker()
+    @ObservationIgnored private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored private var restored = false
     @ObservationIgnored private var lastSavedAt: Date?
     private static let key = "dashboard.snapshots.v1"
@@ -74,17 +76,55 @@ final public class DashboardStore {
 
     /// A lightweight account monitor; the open Dashboard still requests its faster resource refresh.
     public func monitor(endpoints: @MainActor () -> [DashboardEndpoint]) async {
+        @Dependency(\.continuousClock) var continuousClock
+        let clock = AnyClock(continuousClock)
+        let initialDeadline = clock.now.advanced(by: .seconds(60))
+        var isStarting = true
         while !Task.isCancelled {
+            // A replacement monitor must wait for the cancelled read to drain,
+            // then resolve the latest connections rather than keep old endpoints.
+            while isRefreshing {
+                await withCheckedContinuation { refreshWaiters.append($0) }
+                guard !Task.isCancelled else { return }
+            }
             await refresh(endpoints())
-            do { try await Task.sleep(for: .seconds(30)) }
+            guard !Task.isCancelled else { return }
+            isStarting = isStarting && clock.now < initialDeadline && awaitingInitialQuota
+            do { try await clock.sleep(for: isStarting ? .seconds(5) : .seconds(30)) }
             catch { return }
         }
     }
 
+    private var awaitingInitialQuota: Bool {
+        hosts.contains { host in
+            guard host.isConnected, host.isSupported, host.error == nil else { return false }
+            guard let snapshot = host.snapshot else { return true }
+            if snapshot.accounts.isEmpty {
+                return true
+            }
+            return snapshot.accounts.contains { account in
+                if account.availability == .waiting {
+                    return true
+                }
+                guard
+                    account.availability == .available, account.authentication == .signedIn,
+                    let observed = account.quotaObservedAt else { return false }
+                return snapshot.generatedAt.timeIntervalSince(observed) >= 60
+            }
+        }
+    }
+
     public func refresh(_ endpoints: [DashboardEndpoint]) async {
-        guard !isRefreshing else { return }
+        guard !isRefreshing, !Task.isCancelled else { return }
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            isRefreshing = false
+            let waiters = refreshWaiters
+            refreshWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
         if !restored {
             restored = true
             if let data = preferences.data(Self.key) {

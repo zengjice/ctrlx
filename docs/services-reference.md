@@ -608,7 +608,14 @@ input, and do not rebroadcast `SessionStateMessage`.
   its task and discards late results. Codex timeouts explicitly identify the failure.
 - `DashboardStore` is shared by the Dashboard and quota monitor in each client,
   and retains a small local snapshot cache. Mac monitors every 30 seconds while
-  running; iOS monitors only while foregrounded. An open Dashboard refreshes
+  running; iOS monitors only while foregrounded and immediately restarts its read
+  when a paired Host becomes connected and advertises Dashboard support. A restarted
+  monitor waits for an older in-flight refresh to drain, then resolves the latest
+  endpoints instead of dropping its first read or retaining old connection state.
+  At monitor startup, an empty account list, waiting accounts or available quota samples at least a minute
+  old are re-read every 5 seconds for at most one minute; ready, failed or unsupported
+  results return to the 30-second cadence. These reads reuse the Host cache.
+  An open Dashboard refreshes
   resources every 5 seconds. Host account queries remain limited to once per minute. `DashboardOverview` deduplicates Host state UUIDs and verified
   provider/account/workspace/pool identities, preserving source observation times.
   Shared quotas are never summed. Today’s observed usage uses each Host’s date;
