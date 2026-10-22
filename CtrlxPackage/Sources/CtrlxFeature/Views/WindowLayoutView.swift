@@ -29,8 +29,7 @@
         @State private var pendingFileLink: TerminalFileLinkRequest?
         @State private var artifactPreview: TerminalArtifactPreview?
         @State private var previewFilesLink: TerminalFileLinkRequest?
-        @State private var previewKeyboardWasActive = false
-        @State private var previewPaneID: String?
+        @State private var previewKeyboardRestore = ArtifactPreviewKeyboardRestore()
         private struct FilesOpenRequest: Equatable {
             let paneID: String
             let new: Bool
@@ -560,10 +559,9 @@
                     if let link = previewFilesLink {
                         previewFilesLink = nil
                         pendingFileLink = link
-                    } else if terminalIsVisible, activePaneId == previewPaneID {
-                        isKeyboardActive = previewKeyboardWasActive
+                    } else {
+                        restorePreviewKeyboard()
                     }
-                    previewPaneID = nil
                 }) { preview in
                     TerminalArtifactPreviewSheet(preview: preview) {
                         previewFilesLink = preview.filesLink
@@ -667,7 +665,10 @@
         private func openTerminalFile(_ request: TerminalFileLinkRequest) async {
             guard
                 request.hostID == hostId, let origin = window,
-                let pane = origin.panes.first(where: { $0.paneId == request.paneID }) else { return }
+                let pane = origin.panes.first(where: { $0.paneId == request.paneID }) else {
+                restorePreviewKeyboard()
+                return
+            }
             let source = FileBrowserSource.remote(
                 hostID: hostId,
                 paneID: request.paneID,
@@ -685,25 +686,40 @@
                 guard
                     pendingFileLink == request, window?.id == origin.id,
                     window?.panes.contains(where: { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext }) == true,
-                    fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && simulatorSelection.selectedID == nil else { return }
+                    fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && simulatorSelection.selectedID == nil else {
+                    restorePreviewKeyboard()
+                    return
+                }
                 if shouldPreview, let path = destination.file, let fileContext {
-                    previewKeyboardWasActive = isKeyboardActive
-                    previewPaneID = activePaneId
+                    if let activePaneId {
+                        previewKeyboardRestore.captureIfNeeded(paneID: activePaneId, keyboardIsActive: isKeyboardActive)
+                    }
                     artifactPreview = .init(link: request, context: fileContext, source: source, path: path)
                 } else if let descriptor {
+                    previewKeyboardRestore.discard()
                     let tab = fileWorkspace.adopt(descriptor)
                     tab.openTerminalFile(destination, paneID: request.paneID)
                     fileWorkspace.selectedID = tab.id
                     cancelCreationFollowUp()
+                } else {
+                    restorePreviewKeyboard()
                 }
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
             } catch is CancellationError { }
             catch {
+                restorePreviewKeyboard()
                 if pendingFileLink == request {
                     commandError = "Cannot open Host path: \(error.localizedDescription)"
                 }
             }
+        }
+
+        private func restorePreviewKeyboard() {
+            guard let keyboardWasActive = previewKeyboardRestore.consume(
+                terminalIsVisible: terminalIsVisible, activePaneID: activePaneId
+            ) else { return }
+            isKeyboardActive = keyboardWasActive
         }
 
         private func openTerminalBrowser(_ request: TerminalBrowserLinkRequest) async {
