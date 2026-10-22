@@ -31,6 +31,17 @@ struct ArtifactPreviewKeyboardRestoreTests {
         #expect(restore.consume(terminalIsVisible: true, activePaneID: "%1") == false)
     }
 
+    @Test("Cancelling a file-link handoff while another tab is visible clears the snapshot")
+    func cancelledHandoffStartsFresh() {
+        var restore = ArtifactPreviewKeyboardRestore()
+        restore.captureIfNeeded(paneID: "%1", keyboardIsActive: true)
+
+        #expect(restore.consume(terminalIsVisible: false, activePaneID: "%1") == nil)
+
+        restore.captureIfNeeded(paneID: "%1", keyboardIsActive: false)
+        #expect(restore.consume(terminalIsVisible: true, activePaneID: "%1") == false)
+    }
+
     @Test("The keyboard is not restored after leaving the terminal or switching panes", arguments: [
         (false, "%1"), (true, "%2"),
     ])

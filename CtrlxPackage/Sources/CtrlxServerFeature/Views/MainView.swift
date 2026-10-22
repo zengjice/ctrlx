@@ -414,8 +414,7 @@ public struct MainView: View {
                 }
                 .preferredColorScheme(settings.theme.workspaceColorScheme)
             }
-            .task(id: pendingFileLink) {
-                guard let request = pendingFileLink else { return }
+            .terminalFileLinkTask($pendingFileLink) { request in
                 await openTerminalFile(request)
             }
             .task(id: coordinator.detachedWindows.mainRequest?.id) {

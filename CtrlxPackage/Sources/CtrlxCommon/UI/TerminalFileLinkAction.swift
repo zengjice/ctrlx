@@ -25,3 +25,19 @@ public extension EnvironmentValues {
         set { self[TerminalFileLinkActionKey.self] = newValue }
     }
 }
+
+public extension View {
+    @MainActor
+    func terminalFileLinkTask(
+        _ request: Binding<TerminalFileLinkRequest?>,
+        perform: @escaping @MainActor (TerminalFileLinkRequest) async -> Void
+    ) -> some View {
+        task(id: request.wrappedValue) {
+            guard let value = request.wrappedValue else { return }
+            await perform(value)
+            if request.wrappedValue == value {
+                request.wrappedValue = nil
+            }
+        }
+    }
+}

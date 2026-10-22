@@ -509,8 +509,7 @@
                     await openTerminalBrowser(request)
                 }
                 .environment(\.openTerminalFileLink) { request in pendingFileLink = request }
-                .task(id: pendingFileLink) {
-                    guard let request = pendingFileLink else { return }
+                .terminalFileLinkTask($pendingFileLink) { request in
                     await openTerminalFile(request)
                 }
                 .onChange(of: window?.id) { pendingFileLink = nil
@@ -706,8 +705,9 @@
                 }
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
-            } catch is CancellationError { }
-            catch {
+            } catch is CancellationError {
+                restorePreviewKeyboard()
+            } catch {
                 restorePreviewKeyboard()
                 if pendingFileLink == request {
                     commandError = "Cannot open Host path: \(error.localizedDescription)"
