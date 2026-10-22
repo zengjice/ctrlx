@@ -176,6 +176,31 @@ transport. Actual multi-device tab switching still requires paired-client accept
 
 ### Explicit terminal file links
 
+Image (`png`, `jpg`, `jpeg`, `gif`, `heic`, `webp`, `tiff`, `bmp`) and Mermaid
+(`mmd`, `mermaid`) references open a client-local preview sheet on Mac Host,
+Mac Viewer and iOS. No Files catalog entry is created and terminal selection,
+layout and viewport are preserved. Mac supports pinch zoom and Escape; iOS
+supports pinch/double-tap zoom, full-screen viewing and swipe-to-dismiss.
+The More menu provides Fit, Copy Image, Share Image and Open in Files. Mermaid
+also offers Diagram/Source and Copy Source. Images show a bounded static preview
+(first frame for animated formats, at most 4096 pixels on the longest side).
+Copy/Share Image uses that preview; the original remains available through Files.
+
+Mermaid 12.2.0 is bundled and rendered in a nonpersistent system WKWebView on
+the viewing device, following that device's appearance. It does not require the
+Host's CEF runtime or an online renderer. The isolated document blocks network
+access and navigation, uses strict Mermaid rendering, limits source to 64 KiB
+and 500 edges, and times out unsuccessful rendering. Invalid diagrams retain
+their source view. The pinned upstream bundle, hash and license are under
+`CtrlxCommon/Resources/ArtifactPreview`; upstream dependency notices are retained.
+
+Preview reads reuse the existing bounded, revision-checked file pipeline and
+revalidate the repository context after transfer. Host/pane context is captured
+at the click; late or invalid reads cannot publish a different source's image.
+The file-link skill asks agents to save complete Mermaid source and reference
+it explicitly. Terminal-only code blocks and arbitrary web image URLs are not
+auto-detected. Existing file commands suffice; the Relay protocol is unchanged.
+
 Mac Host, Mac Viewer and iOS recognize the literal marker
 `<repo:outputs/report.pdf>`, emitted as inline code to preserve both delimiters.
 This is a lightweight application convention, **not a registered URI standard**.

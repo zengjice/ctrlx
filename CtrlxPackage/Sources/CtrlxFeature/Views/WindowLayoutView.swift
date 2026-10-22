@@ -27,6 +27,10 @@
         /// The currently selected window within the session
         @State private var selectedWindowId: String?
         @State private var pendingFileLink: TerminalFileLinkRequest?
+        @State private var artifactPreview: TerminalArtifactPreview?
+        @State private var previewFilesLink: TerminalFileLinkRequest?
+        @State private var previewKeyboardWasActive = false
+        @State private var previewPaneID: String?
         private struct FilesOpenRequest: Equatable {
             let paneID: String
             let new: Bool
@@ -353,7 +357,7 @@
             ))
             .modifier(TerminalVoiceInputOverlay(
                 session: voiceSession, context: activePhraseContext,
-                isSuspended: !terminalIsVisible || quickActionPresentation.isPresented,
+                isSuspended: !terminalIsVisible || artifactPreview != nil || quickActionPresentation.isPresented,
                 insert: insertVoiceTranscript
             ))
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -552,6 +556,21 @@
                     }
                 }
                 .onDisappear(perform: saveFileWorkspace)
+                .sheet(item: $artifactPreview, onDismiss: {
+                    if let link = previewFilesLink {
+                        previewFilesLink = nil
+                        pendingFileLink = link
+                    } else if terminalIsVisible, activePaneId == previewPaneID {
+                        isKeyboardActive = previewKeyboardWasActive
+                    }
+                    previewPaneID = nil
+                }) { preview in
+                    TerminalArtifactPreviewSheet(preview: preview) {
+                        previewFilesLink = preview.filesLink
+                        artifactPreview = nil
+                    }
+                    .preferredColorScheme(settings.appearanceMode.colorScheme)
+                }
                 .sheet(isPresented: $showsWindowTabs, onDismiss: windowTabsDidDismiss) {
                     WindowTabsPanel(
                         windows: sessionWindows,
@@ -660,16 +679,23 @@
                 let destination = try await TerminalFileDestination.resolve(
                     path: request.path, context: fileContext, source: source
                 )
-                let descriptor = try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: request.paneID, inputBinding: inputBinding)
+                let shouldPreview = request.prefersPreview && TerminalArtifactPreview.supports(path: destination.file)
+                let descriptor = shouldPreview ? nil : try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: request.paneID, inputBinding: inputBinding)
                 try Task.checkCancellation()
                 guard
                     pendingFileLink == request, window?.id == origin.id,
                     window?.panes.contains(where: { $0.paneId == request.paneID && RepositoryFileContext(pane: $0) == fileContext }) == true,
                     fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && simulatorSelection.selectedID == nil else { return }
-                let tab = fileWorkspace.adopt(descriptor)
-                tab.openTerminalFile(destination, paneID: request.paneID)
-                fileWorkspace.selectedID = tab.id
-                cancelCreationFollowUp()
+                if shouldPreview, let path = destination.file, let fileContext {
+                    previewKeyboardWasActive = isKeyboardActive
+                    previewPaneID = activePaneId
+                    artifactPreview = .init(link: request, context: fileContext, source: source, path: path)
+                } else if let descriptor {
+                    let tab = fileWorkspace.adopt(descriptor)
+                    tab.openTerminalFile(destination, paneID: request.paneID)
+                    fileWorkspace.selectedID = tab.id
+                    cancelCreationFollowUp()
+                }
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
             } catch is CancellationError { }
@@ -1633,7 +1659,7 @@
                 showKeyboardButton: false,
                 showCopyButton: false,
                 isActive: terminalIsVisible && pane.paneId == activePaneId,
-                isInputSuspended: !terminalIsVisible || quickActionPresentation.suspendsTerminalInput,
+                isInputSuspended: !terminalIsVisible || artifactPreview != nil || quickActionPresentation.suspendsTerminalInput,
                 parentKeyboardRequested: isKeyboardActive,
                 mouseReportingEnabled: mouseReportingPaneIDs.contains(pane.paneId),
                 onKeyboardRequest: { isKeyboardActive = $0 },
@@ -1784,6 +1810,7 @@
         }
 
         private func fitTerminalIfReady() {
+            guard artifactPreview == nil else { return }
             fitCreatedTerminalIfReady()
             guard terminalIsVisible, !isResizing else { return }
             let request = automaticTabFit.takeRequest(

@@ -68,6 +68,7 @@ public extension ThirdPartyLicense {
         ThirdPartyLicense(name: "swift-concurrency-extras", license: "MIT", url: URL(staticString: "https://github.com/pointfreeco/swift-concurrency-extras")),
         ThirdPartyLicense(name: "ProjectNavigator", license: "Apache-2.0", url: URL(staticString: "https://github.com/mchakravarty/ProjectNavigator")),
         ThirdPartyLicense(name: "textual", license: "MIT", url: URL(staticString: "https://github.com/gonzalezreal/textual")),
+        ThirdPartyLicense(name: "Mermaid", license: "MIT / bundled third-party notices", url: URL(staticString: "https://github.com/mermaid-js/mermaid")),
         ThirdPartyLicense(name: "Yams", license: "MIT", url: URL(staticString: "https://github.com/jpsim/Yams")),
         ThirdPartyLicense(name: "SFSymbolsMacro", license: "MIT", url: URL(staticString: "https://github.com/gpambrozio/SFSymbolsMacro")),
         ThirdPartyLicense(name: "GitWorkbench", license: "MIT", url: URL(staticString: "https://github.com/gpambrozio/GitWorkbench")),

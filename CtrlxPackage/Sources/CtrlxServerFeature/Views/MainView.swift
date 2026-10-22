@@ -238,6 +238,8 @@ public struct MainView: View {
     @State private var localSessionRenameRequest: String?
     @State private var attachError: String?
     @State private var pendingFileLink: TerminalFileLinkRequest?
+    @State private var artifactPreview: TerminalArtifactPreview?
+    @State private var previewFilesLink: TerminalFileLinkRequest?
     @State private var browserOpenTask: Task<Void, Never>?
     @State private var filesOpenTask: Task<Void, Never>?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -400,6 +402,18 @@ public struct MainView: View {
             .environment(\.terminalQuickActions, terminalQuickActions)
             .environment(\.terminalViewportInteraction, fitTerminalIfViewportChanged)
             .environment(\.openTerminalFileLink) { request in pendingFileLink = request }
+            .sheet(item: $artifactPreview, onDismiss: {
+                if let link = previewFilesLink {
+                    previewFilesLink = nil
+                    pendingFileLink = link
+                }
+            }) { preview in
+                TerminalArtifactPreviewSheet(preview: preview) {
+                    previewFilesLink = preview.filesLink
+                    artifactPreview = nil
+                }
+                .preferredColorScheme(settings.theme.workspaceColorScheme)
+            }
             .task(id: pendingFileLink) {
                 guard let request = pendingFileLink else { return }
                 await openTerminalFile(request)
@@ -4507,7 +4521,8 @@ public struct MainView: View {
         let initialSelection = browserOpenSelection(for: target)
         do {
             let destination = try await TerminalFileDestination.resolve(path: request.path, context: fileContext, source: source)
-            let descriptor = try await requestHostFileTab(hostID: request.hostID, sessionName: sessionName, paneID: request.paneID, inputBinding: inputBinding, expectedWorkspacePane: expectedWorkspacePane)
+            let shouldPreview = request.prefersPreview && TerminalArtifactPreview.supports(path: destination.file)
+            let descriptor = shouldPreview ? nil : try await requestHostFileTab(hostID: request.hostID, sessionName: sessionName, paneID: request.paneID, inputBinding: inputBinding, expectedWorkspacePane: expectedWorkspacePane)
             try Task.checkCancellation()
             guard fileLinkIsCurrent(request, detachedRequestID: detachedRequestID) else { return }
             if let hostID = request.hostID {
@@ -4523,8 +4538,12 @@ public struct MainView: View {
                     let pane = windowManager.paneStates[request.paneID], RepositoryFileContext(pane: pane) == fileContext else { return }
             }
             guard initialSelection == browserOpenSelection(for: target) else { return }
-            let tab = try presentHostFileTab(descriptor, hostID: request.hostID, windowID: windowID)
-            tab.openTerminalFile(destination, paneID: request.paneID)
+            if shouldPreview, let path = destination.file, let fileContext {
+                artifactPreview = .init(link: request, context: fileContext, source: source, path: path)
+            } else if let descriptor {
+                let tab = try presentHostFileTab(descriptor, hostID: request.hostID, windowID: windowID)
+                tab.openTerminalFile(destination, paneID: request.paneID)
+            }
         } catch is CancellationError { }
         catch {
             if fileLinkIsCurrent(request, detachedRequestID: detachedRequestID) {
