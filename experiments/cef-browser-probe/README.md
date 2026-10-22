@@ -122,10 +122,23 @@ and rejection of missing-origin permission and page-added forbidden headers
 checks. A CORS failure makes the command exit nonzero even when installation,
 same-origin injection and orderly shutdown succeed.
 
-The currently pinned prebuilt CEF **fails** this gate. The candidate source
-patch and its uncompleted native-build acceptance are documented under
-[Cross-origin header compatibility](../../docs/browser-extensions-design.md#cross-origin-header-compatibility).
-Rebuilding only the probe executable does not apply a CEF source patch.
+The currently pinned prebuilt CEF **fails** this gate. On 2026-10-22 the
+matching CEF/Chromium source tree with the recorded source patch was built as a
+macOS arm64 runtime; the isolated probe using that runtime passes both the
+minimal-extension and real ENV `--cors` gates. The product build script can now
+select that runtime with `CTRLX_CEF_SDK_ROOT` or the ignored local macOS
+xcconfig, and a local Release passed strict signing, framework UUID matching and
+isolated startup. See
+[Cross-origin header compatibility](../../docs/browser-extensions-design.md#cross-origin-header-compatibility)
+for the fixed revisions, artifact and evidence. The locally installed app was
+replaced and passed a Baidu home/search smoke test on 2026-10-22; no release was
+published, and ENV/Volcengine cross-origin site acceptance remains outstanding.
+Rebuilding only the probe executable does not apply the CEF patch.
+
+The fixture's content script retries only `Receiving end does not exist` for up
+to eight seconds while a fresh MV3 service worker starts. The same first-message
+failure reproduces on the unpatched same-version SDK, and other errors still
+fail immediately; this retry is a fixture-startup fix, not the CORS fix.
 
 The candidate patch also has a small check that needs only the three matching
 upstream CEF source files and the existing SDK headers, without a Chromium build:

@@ -3,3 +3,5 @@
 CTRLX_MAC_DEVELOPMENT_TEAM = YOUR_TEAM_ID
 CTRLX_SPARKLE_FEED_URL = https://updates.your-domain.example/CtrlX.xml
 CTRLX_SPARKLE_PUBLIC_KEY = YOUR_SPARKLE_ED25519_PUBLIC_KEY
+// Optional matching full-source CEF SDK for scripts/build-agent-browser.sh.
+CTRLX_CEF_SDK_ROOT =

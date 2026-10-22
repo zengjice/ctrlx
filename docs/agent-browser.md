@@ -271,7 +271,14 @@ list and can make otherwise working sites fail. The prior ENV acceptance was
 same-origin. Both embedded and Chrome-style windows are affected. A candidate
 CEF source patch and strict cross-origin regression are recorded in
 [Cross-origin header compatibility](browser-extensions-design.md#cross-origin-header-compatibility);
-the patch is not yet compiled into the shipped runtime.
+the patch has been compiled into a matching isolated runtime and passes both
+`--cors` gates. `scripts/build-agent-browser.sh` can now link a matching
+full-source SDK through `CTRLX_CEF_SDK_ROOT` or the ignored local macOS xcconfig,
+and a local Release build passed deep/strict signing, framework UUID matching and
+isolated startup. The locally installed macOS app was replaced on 2026-10-22 and
+passed a Baidu home/search smoke test (`OpenAI` -> results); the distributed
+build has not been published. ENV/Volcengine cross-origin site acceptance still
+determines whether the original real-site failure is closed.
 
 ## Embedded routing
 
@@ -650,6 +657,10 @@ runtime/framework and sandboxed helpers;
 builds without the prebuilt runtime leave the feature unavailable. Archives
 with the development runtime are deliberately blocked until runtime and
 distribution validation are complete. Packaging does not install the app.
+The build script uses the verified prebuilt SDK by default; a matching
+full-source SDK can be selected with `CTRLX_CEF_SDK_ROOT` or the ignored
+`Config/Local-macOS.xcconfig`. Overrides validate the pinned CEF version, commit
+and required SDK layout before building.
 The standalone acceptance recorded below is **historical** and does not prove
 the new embedded UI. Embedded acceptance uses a separate signed CtrlX test copy,
 an isolated tmux server, private profile and the repository's E2E API socket.

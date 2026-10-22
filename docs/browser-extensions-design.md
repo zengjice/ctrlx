@@ -3,10 +3,12 @@
 记录日期：2026-10-16。代码核对基线：`42636bd`。
 
 2026-10-21 补充：原有 ENV 请求头验收只覆盖同源请求；跨域注入已复现
-CEF 兼容问题，候选内核补丁尚未编译和接入产品，见
+CEF 兼容问题。2026-10-22 补丁已在匹配版本的完整源码树上编译，并通过隔离
+`--cors` 验收。产品构建脚本现可选择这份 SDK，本地 Release 已嵌入并完成
+签名、framework UUID、启动与本机安装验收；尚未发布，见
 [Cross-origin header compatibility](#cross-origin-header-compatibility)。
 
-状态：本分支的 Mac Host、Mac Viewer 和 iOS 实现已完成，关键路径本机验收通过，尚未提交或发布。覆盖商店下载／安装／手动替换、ZIP／CRX 导入与校验、更新恢复、真实 ENV 请求头切换及持久化、远端原生窗口输入与控制租约。Mac Release 与 iOS Simulator 构建通过。用户删除 Surge 中匹配 CtrlX 的 DIRECT 规则后，完整 App 的商店安装和更新流程成功，原网络阻塞解除，见第 9.19 节。iOS 界面证据来自 Simulator；所有扩展通用兼容、ENV native messaging、真实跨机器／设备发布验收不在本次通过结论内。使用方式和边界见[浏览器文档](agent-browser.md#browser-extensions)。
+状态：本分支的 Mac Host、Mac Viewer 和 iOS 实现已完成，关键路径本机验收通过，尚未提交或发布。覆盖商店下载／安装／手动替换、ZIP／CRX 导入与校验、更新恢复、真实 ENV 请求头切换及持久化、远端原生窗口输入与控制租约。Mac Release 与 iOS Simulator 构建通过；2026-10-22 的本地 Mac Release 另已接入重建 CEF SDK，替换了本机 `/Applications/CtrlX.app` 并通过百度首页搜索冒烟，但尚未发布。用户删除 Surge 中匹配 CtrlX 的 DIRECT 规则后，完整 App 的商店安装和更新流程成功，原网络阻塞解除，见第 9.19 节。iOS 界面证据来自 Simulator；所有扩展通用兼容、ENV native messaging、真实跨机器／设备发布验收不在本次通过结论内。使用方式和边界见[浏览器文档](agent-browser.md#browser-extensions)。
 
 ## 1. 目标与推荐方向
 
@@ -382,7 +384,7 @@ CEF 的 `ChromeContentBrowserClientCef::WillCreateURLLoaderFactory` 向 Chrome
 提前到启动网络请求之前，触发额外的 CORS 检查。诊断对照普通 Chrome 的部分
 来自用户反馈；本轮原生实测对照是两种 CEF 窗口，并非系统 Chrome。
 
-候选补丁为
+内核补丁为
 [`extension-header-client.patch`](../CtrlxPackage/AgentBrowser/cef-patches/extension-header-client.patch)，
 基于完整 CEF commit `1ce985cb23056548b9cc51483bbef4faf68b1cd3`：
 
@@ -396,9 +398,27 @@ CEF 的 `ChromeContentBrowserClientCef::WillCreateURLLoaderFactory` 向 Chrome
 - 预检回调转交 Chrome；没有 Chrome header client 时保持 CEF 原路径。
   CEF 自定义响应也沿用相同的回调绑定。没有关闭 CORS 或增加网站白名单。
 
-补丁尚未编译；**不是已生效的产品修复**。当前构建脚本仍下载原来的预编译
-CEF SDK，仅重新构建 CtrlX 或原型 App 不会使补丁生效。准备完整且版本匹配的
-CEF/Chromium 源码构建树后，从本仓库根目录执行：
+补丁已基于匹配源码完成 macOS arm64 Release 全量编译（`autoninja cefclient`
+与 `make_distrib.py --minimal`），构建根目录为外部盘
+`/Volumes/CtrlXCEFBuild`（构建资料不入 Git）：
+
+- CEF：`1ce985cb23056548b9cc51483bbef4faf68b1cd3`
+- Chromium：`066c60fad7c77efe3a81ad78c8109afba848b18d`
+- Runtime：`cef_binary_152.0.8+g1ce985c+chromium-152.0.7977.134_macosarm64_ctrlx_minimal`
+- 最终状态：`Build and CORS probes completed at 2026-10-22T10:07:16Z`
+
+本轮用固定补丁重建隔离签名探针后，最小 DNR 扩展与真实 ENV-Plugin 的
+`--cors` 门槛均通过。首次运行暴露的是测试夹具冷启动竞态：MV3 service worker
+尚未注册消息监听时，内容脚本立即调用 `chrome.runtime.sendMessage` 会得到
+`Receiving end does not exist`。同版本未打补丁 SDK 也能复现，因此不是新编译
+runtime 的回归；夹具现仅对该精确错误在 8 秒内重试，其他错误仍立即失败。
+
+产品构建接入已完成在脚本和本地 Release 验证层面。`scripts/build-agent-browser.sh`
+默认仍使用校验过的原预编译包；设置 `CTRLX_CEF_SDK_ROOT`，或在未跟踪的
+`Config/Local-macOS.xcconfig` 中设置同名变量，可选择这份匹配版本的完整源码
+SDK。覆盖路径必须包含 `cef_version.h`、CMake/header wrapper、minimal runtime、
+`LICENSE.txt` 和 `CREDITS.html`；脚本只接受本文记录的 CEF 版本与 commit。准备
+干净且版本匹配的源码树时，仍需从本仓库根目录应用同一补丁：
 
 ```bash
 CTRLX_ROOT="$PWD"
@@ -409,24 +429,47 @@ git -C "$CEF_SOURCE" apply "$CTRLX_ROOT/CtrlxPackage/AgentBrowser/cef-patches/ex
 ```
 
 随后依照 [CEF 官方构建流程](https://github.com/chromiumembedded/cef/blob/master/docs/master_build_quick_start.md)
-生成 arm64 runtime。接入前须使用该 runtime 重建隔离原型并通过 `--cors`
-门槛，随后完成嵌入生命周期、扩展管理和产品原生构建验收；最后才更新产品
-与原型共用的 SDK 来源及完整性校验。不能把候选补丁与旧 SDK 一起发布为修复版。
+生成 arm64 runtime，再通过上述变量交给产品构建脚本。2026-10-22 已用该路径
+完成本地 Release：`.build-local/DerivedData/macOS/Build/Products/Release/CtrlX.app`
+（build stamp `20261022-104729`，source revision
+`37be51e0dbd850ccc4ee0cab3ab04ab77e796d93`）。整包 deep/strict 签名通过；
+App 内 framework 的 Mach-O UUID `4C4C44DF-5555-3144-A13C-821D908D6E6E`
+与源 SDK 和暂存产物一致；隔离状态目录中的 `browser.start` 成功加载 GPU、
+network、renderer 等 helper，日志达到 `[agent-browser] ready`，没有新增
+CtrlX crash report。源 framework 的原始 SHA-256 为
+`a759b4c0fbcf2ae327b92b65efeca802efb775d2fb175b628bd7b21678a1d9cc`。
+签名会改变嵌入后 Mach-O 的普通文件哈希，因此完整性与对应关系以 SDK 校验、
+脚本原始哈希检查和 App 内 UUID 对照为准。
+
+本机安装与公共入口冒烟已通过：2026-10-22 用上述构建替换
+`/Applications/CtrlX.app`，通过 CtrlX 内嵌浏览器打开百度首页，输入
+`OpenAI` 并点击“百度一下”，结果页标题为 `OpenAI_百度搜索`，正文、AI 摘要和
+普通结果均正常显示；截图保存在
+`.build-local/diagnostics/baidu-openai-cef-20261022-190114.png`。本轮 CEF 日志
+没有 CORS 或网络错误，也没有新增 crash report；仅出现未配置 OAuth、ENV native
+messaging host 缺失和不支持媒体流的警告，不影响本次搜索。这仍不是发布或真实
+受影响网站验收：仓库没有发布新构建，ENV/火山引擎等跨域场景仍需单独验证。
 
 本轮证据：
 
 | 检查 | 结果 |
 | --- | --- |
-| 补丁对固定版本源文件 `git apply --check` | 通过；不等于 C++ 编译 |
+| 补丁对固定版本源文件 `git apply --check` | 通过 |
 | 补丁 continuation 签名与最小行为检查 | 使用 CEF 回调类型编译通过；提取函数的请求头隔离、错误和可选响应覆盖检查通过；不等于完整 CEF 编译 |
-| 更新后的原型可执行文件构建、签名验证 | 通过；仍链接原 SDK |
-| 原有 `--production-admin` 扩展验收（无 `--cors`） | 通过 |
-| 最小 DNR 扩展 `--production-admin --cors` | 按预期失败，暴露旧 runtime 缺陷；同源和管理检查通过 |
-| 真实 ENV `--env-scenario … --cors` | 按预期失败；popup 配置、启用／暂停／恢复通过 |
-| 修复版 CEF 编译及上述用例转绿 | 未完成：缺少可容纳完整源码构建的环境 |
+| 固定版本 CEF/Chromium 全量编译与 arm64 minimal runtime 提取 | 通过 |
+| 使用新 runtime 重建隔离原型、严格签名验证 | 通过 |
+| 最小 DNR 扩展 `--production-admin --cors` | 通过；Alloy 两种状态和 Chrome-style 两种窗口均通过 |
+| 真实 ENV `--env-scenario … --cors` | 通过；Alloy/Chrome-style、启用／暂停／恢复均通过 |
+| 产品 SDK 来源、版本/完整性校验及本地 Release 接入 | 通过；脚本支持覆盖，本地 Release 签名与启动加载通过 |
+| 本机安装及 CtrlX 公共入口百度搜索冒烟 | 通过；已替换本机 App，首页、输入、点击和结果页正常 |
+| 发布及 ENV/火山引擎等真实受影响网站验收 | 未完成；未发布，跨域业务场景仍需执行 |
 
-可复现命令见[原型说明](../experiments/cef-browser-probe/README.md)。失败证据位于
-`.build-local/diagnostics/browser-extensions-7hma1dg0/` 和
+可复现命令见[原型说明](../experiments/cef-browser-probe/README.md)。本轮通过证据位于
+构建快照的 `.build-local/diagnostics/browser-extensions-jok1f31j/`（最小扩展）与
+`.build-local/diagnostics/browser-extensions-89f5k_fc/`（真实 ENV），两份
+`report.json` 的 `exitCode` 均为 0；签名探针位于
+`<build-root>/validation/extensions.WsMsVB/CtrlX Browser Probe.app`。旧 runtime 的失败
+证据仍保留在 `.build-local/diagnostics/browser-extensions-7hma1dg0/` 和
 `.build-local/diagnostics/browser-extensions-dvn3bb2s/`。`--cors` 会校验服务器
 实际收到的头和预检列表，验证需要的 POST 预检仍存在、普通网页无授权的跨域
 请求仍被拒绝（包括网页自己添加 `x-maas-env`）；失败会使进程退出码非零，
@@ -437,7 +480,7 @@ git -C "$CEF_SOURCE" apply "$CTRLX_ROOT/CtrlxPackage/AgentBrowser/cef-patches/ex
 新增 `test_header_client_patch.py` 直接提取补丁应用后的 continuation 检查，
 旧签名在真实 CEF 回调类型检查中失败，恢复旧请求头赋值时行为断言失败，
 修正后两项通过。该轻量检查使用网络类型替身，不证明 Mojo 路由或真实网络
-重定向已通过；完整内核构建与运行验收仍按用户要求暂缓。
+重定向已通过；该缺口已由 2026-10-22 的完整内核构建与运行验收覆盖。
 原生 `--cors` 夹具已增加同源转跨域、多跳和网页自加同名头后重定向的用例。
 更新后的最小扩展与真实 ENV 夹具在旧内核上均按预期失败；同源注入正常、
 原生进程退出码为 0 且完成 shutdown，测试命令因跨域断言退出 1。

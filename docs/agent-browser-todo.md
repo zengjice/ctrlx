@@ -67,23 +67,30 @@ Host 收回、断线/租约回收、阻断两个 CLI 引擎（含已连接 Verce
 
 原“更多引擎能力暴露”和“更多浏览器能力支持及测试”合并为同一工作项：从上游能力盘点、CtrlX 适配到公共入口效果验收形成闭环。
 
-### 2026-10-21：扩展请求头的跨域兼容性〔B，暂缓内核构建〕
+### 2026-10-21：扩展请求头的跨域兼容性〔B，本地安装/公共入口冒烟已通过；待受影响网站/发布〕
 
 ENV-Plugin 注入 `x-maas-env` 时，当前 CEF 会将扩展请求头错误带入页面的 CORS 预检，
 导致火山引擎等跨域接口失败；内嵌 Alloy 与 Chrome-style 窗口均已复现。
-[候选补丁](../CtrlxPackage/AgentBrowser/cef-patches/extension-header-client.patch) 和
+[内核补丁](../CtrlxPackage/AgentBrowser/cef-patches/extension-header-client.patch) 和
 [回归夹具](../experiments/cef-browser-probe/README.md) 已准备；原有扩展验收通过，
-新增跨域回归在未修补内核上按预期失败。补丁尚未编译或接入产品 SDK，不能视为修复完成。
+新增跨域回归在未修补内核上按预期失败。2026-10-22 已在容量充足的独立构建盘上
+完成固定版本全量编译，最小 DNR 扩展和真实 ENV-Plugin 的隔离 `--cors`
+门槛均通过。产品构建脚本现可通过 `CTRLX_CEF_SDK_ROOT` 或未跟踪的本地
+xcconfig 选择匹配 SDK，并校验版本、commit 和 framework；本地 Release 已
+接入、通过严格签名与隔离启动验收，并已替换本机 `/Applications/CtrlX.app`。
+本机内嵌浏览器打开百度首页、输入 `OpenAI`、点击“百度一下”后正常进入结果页。
+发行版本尚未替换，ENV/火山引擎等真实受影响网站仍待验收。
 根因、固定版本及证据见 [跨域兼容性记录](browser-extensions-design.md#cross-origin-header-compatibility)。
 审查发现的可选 URL 回调签名、重定向请求头污染已在候选补丁中修正，
-轻量编译和提取函数检查通过；这不改变下列完整内核构建、运行验收和 SDK 接入待办状态。
+轻量编译和提取函数检查通过，随后已由完整内核构建、运行验收确认。
 
-本机清理构建缓存后约有 50 GiB 可用空间，仍不足以完成 CEF/Chromium 构建；
-官方构建参考需要约 150–200 GB。用户确认先记录待办并提交代码，暂缓内核构建。
+本机此前清理构建缓存后只有约 50 GiB 可用空间；本轮改用外部构建盘完成。
 
-- [ ] 准备容量充足的构建磁盘或机器，基于记录中的固定 CEF/Chromium 版本应用补丁并编译。
-- [ ] 在隔离签名 App/profile 中通过最小 DNR 扩展及真实 ENV-Plugin 的 `--cors` 回归，覆盖两种窗口、重定向、正常预检及页面自加请求头仍受 CORS 限制；回归原有扩展与内嵌生命周期验收。
-- [ ] 验收通过后更新产品 SDK 来源、固定版本/校验信息和构建接入，再验证 CtrlX 公共入口及受影响网站的实际效果。
+- [x] 准备容量充足的构建磁盘或机器，基于记录中的固定 CEF/Chromium 版本应用补丁并编译。
+- [x] 在隔离签名 App/profile 中通过最小 DNR 扩展及真实 ENV-Plugin 的 `--cors` 回归，覆盖两种窗口、重定向、正常预检及页面自加请求头仍受 CORS 限制；回归原有扩展与内嵌生命周期验收。
+- [x] 更新产品 SDK 来源、固定版本/commit 校验和构建接入，并完成本地 Release 构建、签名及启动加载验收。
+- [x] 替换本机 App，并验证 CtrlX 公共入口的百度首页搜索冒烟。
+- [ ] 发布新构建，再验证 ENV/火山引擎等真实受影响网站的实际效果。
 
 ### 能力归属与剩余工作
 
