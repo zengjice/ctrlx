@@ -221,6 +221,32 @@
         }
 
         @Test
+        func markdownHeadingLinksUseTheRenderedHeadingID() async throws {
+            let renderer = ArtifactWebRenderer()
+            let window = mount(renderer)
+            defer { renderer.stop()
+                window.close()
+            }
+            renderer.load(content: """
+            ## Overview
+
+            [Jump](#Overview)
+            """, kind: .markdown, dark: false)
+            try await wait(renderer)
+            let state = try await renderer.webView.evaluateJavaScript("""
+            (() => {
+                const heading = document.querySelector('h2');
+                let scrolled = null;
+                heading.scrollIntoView = () => { scrolled = heading.id; };
+                document.querySelector('a[href="#Overview"]').click();
+                return { heading: heading.id, scrolled };
+            })()
+            """) as? [String: Any]
+            #expect(state?["heading"] as? String == "md-overview")
+            #expect(state?["scrolled"] as? String == "md-overview")
+        }
+
+        @Test
         func markdownSanitizesHTMLAndNeverFetchesImagesFromWebKit() async throws {
             let renderer = ArtifactWebRenderer()
             let window = mount(renderer)

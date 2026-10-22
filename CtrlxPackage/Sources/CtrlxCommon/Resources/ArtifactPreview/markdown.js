@@ -43,9 +43,9 @@ window.renderMarkdown = async function (source, dark) {
     if (target.startsWith("#")) {
       link.addEventListener("click", event => {
         event.preventDefault();
-        let id;
-        try { id = "md-" + decodeURIComponent(target.slice(1)); } catch { return; }
-        document.getElementById(id)?.scrollIntoView();
+        let fragment;
+        try { fragment = decodeURIComponent(target.slice(1)); } catch { return; }
+        document.getElementById(headingID(fragment))?.scrollIntoView();
       });
     } else {
       link.href = "ctrlx-preview://link?target=" + encodeURIComponent(target);
