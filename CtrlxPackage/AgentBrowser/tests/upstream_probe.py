@@ -187,15 +187,20 @@ class Probe:
         log = (self.root / 'host.log').open('wb')
         self.host = subprocess.Popen([str(self.args.app / 'Contents/MacOS/CtrlX'), '--e2e-test',
             '--tmux-socket', self.socket, '--ctrlx-state-root', str(self.root), '--e2e-api-socket', self.api,
-            '--zdotdir', str(Path(__file__).resolve().parent / 'shell')],
+            '--zdotdir', str(Path(__file__).resolve().parent / 'shell')]
+            + (['--e2e-browser-mock-keychain'] if getattr(self, 'mock_keychain', False) else [])
+            + getattr(self, 'extra_host_arguments', []),
             stdout=log, stderr=log, start_new_session=True)
         print('Artifacts:', self.root, 'isolated host PID:', self.host.pid, flush=True)
+        await self.control('wait-ready', '--timeout', '30')
+        # Current Hosts start Chromium on demand, not during app launch.
+        await asyncio.to_thread(call, self.api, {'id': 'browser-start', 'method': 'browser.start',
+            'params': {'state': str(self.root / 'agent-browser')}})
         async def ready():
             assert self.host.poll() is None, 'Test host exited'
             path = self.root / 'agent-browser/endpoint.json'
             return json.loads(path.read_text()) if path.exists() else None
         self.endpoint = await self.wait(ready)
-        await self.control('wait-ready', '--timeout', '30')
         self.runs = []
         for name in ('upstream-alpha', 'upstream-beta'):
             await self.control('new-session', '--name', name, '--path', str(self.root))

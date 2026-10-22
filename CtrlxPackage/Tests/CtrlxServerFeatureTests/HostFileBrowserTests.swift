@@ -1,31 +1,115 @@
+import AVFoundation
+import ConcurrencyExtras
 import CtrlxCommon
 import CtrlxNetworking
-import AVFoundation
 import Darwin
-import ConcurrencyExtras
 import Dependencies
 import Foundation
 import Testing
 @testable import CtrlxServerFeature
 
 struct HostFileBrowserTests {
+    @Test("Local previews validate cached files after edits, replacement and deletion")
+    func localPreviewCacheFreshness() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let host = HostFileBrowser()
+        let url = root.appendingPathComponent("preview.png")
+        for index in 1...3 {
+            let bytes = Data(repeating: UInt8(index), count: 2 * FileBrowserLimits.chunkBytes + 1)
+            try bytes.write(to: url, options: index == 2 ? .atomic : [])
+            guard case let .info(info) = try await host.request(.info(path: url.path)) else {
+                Issue.record("Missing file info")
+                return
+            }
+            #expect(try await host.localPreview(info) == bytes)
+            #expect(try await host.localPreview(info) == bytes)
+        }
+        guard case let .info(old) = try await host.request(.info(path: url.path)) else { return }
+        try Data("replacement".utf8).write(to: url, options: .atomic)
+        await #expect(throws: FileBrowserError.self) { try await host.localPreview(old) }
+        try FileManager.default.removeItem(at: url)
+        await #expect(throws: (any Error).self) { try await host.localPreview(old) }
+    }
+
+    @Test("Local preview reads preserve size, regular-file and cancellation guards")
+    func localPreviewBounds() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let host = HostFileBrowser()
+        let oversized = root.appendingPathComponent("large.txt")
+        try Data(repeating: 65, count: FileBrowserLimits.maximumTextBytes + 1).write(to: oversized)
+        let unsupported = root.appendingPathComponent("archive.zip")
+        try Data([1]).write(to: unsupported)
+        let fifo = root.appendingPathComponent("pipe.png")
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+        for path in [root, oversized, unsupported, fifo] {
+            guard case let .info(info) = try await host.request(.info(path: path.path)) else { return }
+            await #expect(throws: FileBrowserError.self) { try await host.localPreview(info) }
+        }
+        let empty = root.appendingPathComponent("empty.txt")
+        try Data().write(to: empty)
+        guard case let .info(info) = try await host.request(.info(path: empty.path)) else { return }
+        #expect(try await host.localPreview(info) == Data())
+        let task = Task { () throws -> Data in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await host.localPreview(info)
+        }
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
+    @Test("Directory continuation snapshots refresh after directory changes and explicit refresh")
+    func directorySnapshotInvalidation() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0..<201 {
+            try Data().write(to: root.appendingPathComponent("file\(index).txt"))
+        }
+        let host = HostFileBrowser()
+        guard case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)) else { return }
+        let last = root.appendingPathComponent("file200.txt")
+        try Data("changed".utf8).write(to: last)
+        guard case let .listing(second) = try await host.request(.list(path: root.path, offset: 200, includeHidden: false)) else { return }
+        #expect(second.revision == first.revision)
+        #expect(second.entries.first?.size == 0, "Continuation uses the same directory snapshot")
+        _ = try await host.request(.list(path: root.path, offset: 0, includeHidden: false))
+        guard case let .listing(refreshed) = try await host.request(.list(path: root.path, offset: 200, includeHidden: false)) else { return }
+        #expect(refreshed.entries.first?.size == 7)
+        try FileManager.default.removeItem(at: last)
+        guard case let .listing(removed) = try await host.request(.list(path: root.path, offset: 200, includeHidden: false)) else { return }
+        #expect(removed.revision != first.revision)
+        #expect(removed.entries.isEmpty)
+        let hidden = root.appendingPathComponent("file199.txt")
+        #expect(chflags(hidden.path, UInt32(UF_HIDDEN)) == 0)
+        guard
+            case let .listing(filtered) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
+            case let .listing(inclusive) = try await host.request(.list(path: root.path, offset: 0, includeHidden: true)) else { return }
+        #expect(filtered.entries.count == 199)
+        #expect(inclusive.entries.count == 200)
+    }
+
     private func fixture() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-files-test-\(UUID())")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 
-    @Test func directoryPagingAndHiddenFiles() async throws {
+    @Test
+    func directoryPagingAndHiddenFiles() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        for n in 0..<240 { try Data().write(to: root.appendingPathComponent("file\(n).swift")) }
+        for n in 0..<240 {
+            try Data().write(to: root.appendingPathComponent("file\(n).swift"))
+        }
         try FileManager.default.createDirectory(at: root.appendingPathComponent("folder"), withIntermediateDirectories: true)
         try Data().write(to: root.appendingPathComponent(".secret"))
         let host = HostFileBrowser()
-        guard case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
-              let next = first.nextOffset,
-              case let .listing(second) = try await host.request(.list(path: root.path, offset: next, includeHidden: false)) else {
-            Issue.record("Missing pages"); return
+        guard
+            case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
+            let next = first.nextOffset,
+            case let .listing(second) = try await host.request(.list(path: root.path, offset: next, includeHidden: false)) else {
+            Issue.record("Missing pages")
+            return
         }
         #expect(first.entries.count == FileBrowserLimits.directoryPageSize)
         #expect(first.entries.first?.kind == .directory)
@@ -35,7 +119,7 @@ struct HostFileBrowserTests {
         let all = first.entries + second.entries
         #expect(Set(all.map(\.path)).count == 241)
         #expect(!all.contains { $0.name == ".secret" })
-        #expect(try JSONEncoder().encode(first).count < 150 * 1024)
+        #expect(try JSONEncoder().encode(first).count < 150 * 1_024)
         guard case let .listing(hidden) = try await host.request(.list(path: root.path, offset: 0, includeHidden: true)) else { return }
         #expect(hidden.entries.contains { $0.name == ".secret" })
     }
@@ -57,13 +141,15 @@ struct HostFileBrowserTests {
             try #require(chflags(root.appendingPathComponent(name).path, UInt32(UF_HIDDEN)) == 0)
         }
         let host = HostFileBrowser()
-        guard case let .listing(listing) = try await host.request(.list(path: root.path, offset: 0, includeHidden: includeHidden)),
-              case let .search(search) = try await host.request(.search(path: root.path, query: "hidden", mode: .name, includeHidden: includeHidden)),
-              case let .search(content) = try await host.request(.search(path: root.path, query: "needle", mode: .content, includeHidden: includeHidden)) else {
-            Issue.record("Missing listing or search response"); return
+        guard
+            case let .listing(listing) = try await host.request(.list(path: root.path, offset: 0, includeHidden: includeHidden)),
+            case let .search(search) = try await host.request(.search(path: root.path, query: "hidden", mode: .name, includeHidden: includeHidden)),
+            case let .search(content) = try await host.request(.search(path: root.path, query: "needle", mode: .content, includeHidden: includeHidden)) else {
+            Issue.record("Missing listing or search response")
+            return
         }
-        let visible: Set<String> = ["visible.txt", "visible-folder"]
-        let hidden: Set<String> = ["flag-hidden.txt", "flag-hidden-folder", ".dot-hidden.txt", ".dot-hidden-folder"]
+        let visible: Set = ["visible.txt", "visible-folder"]
+        let hidden: Set = ["flag-hidden.txt", "flag-hidden-folder", ".dot-hidden.txt", ".dot-hidden-folder"]
         #expect(Set(listing.entries.map(\.name)) == (includeHidden ? visible.union(hidden) : visible))
         #expect(Set(search.matches.map(\.entry.name)) == (includeHidden ? hidden : []))
         #expect(content.matches.count == (includeHidden ? 6 : 2))
@@ -84,10 +170,12 @@ struct HostFileBrowserTests {
             try #require(chflags(hidden.path, UInt32(UF_HIDDEN)) == 0)
         }
         let host = HostFileBrowser()
-        guard case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
-              let next = first.nextOffset,
-              case let .listing(second) = try await host.request(.list(path: root.path, offset: next, includeHidden: false)) else {
-            Issue.record("Missing pages"); return
+        guard
+            case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
+            let next = first.nextOffset,
+            case let .listing(second) = try await host.request(.list(path: root.path, offset: next, includeHidden: false)) else {
+            Issue.record("Missing pages")
+            return
         }
         #expect(first.entries.count == FileBrowserLimits.directoryPageSize)
         #expect(second.entries.count == 5)
@@ -135,7 +223,8 @@ struct HostFileBrowserTests {
         #expect(unknown.kind == .directory)
         #expect(!unknown.revision.isEmpty)
         guard case let .listing(listing) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)) else {
-            Issue.record("Missing listing"); return
+            Issue.record("Missing listing")
+            return
         }
         #expect(Set(listing.entries.map(\.name)) == [folder.lastPathComponent, "hello.md", "directory-link", "file-link.md"])
         #expect(listing.entries.allSatisfy { $0.path == root.appendingPathComponent($0.name).path })
@@ -151,10 +240,12 @@ struct HostFileBrowserTests {
         #expect(fileLink.isSymbolicLink)
         #expect(fileLink.size == 5)
         #expect(!fileLink.revision.isEmpty)
-        guard case let .info(info) = try await host.request(.info(path: folder.path)),
-              case let .listing(children) = try await host.request(.list(path: folder.path, offset: 0, includeHidden: false)),
-              case let .listing(hidden) = try await host.request(.list(path: root.path, offset: 0, includeHidden: true)) else {
-            Issue.record("Missing directory metadata or listing"); return
+        guard
+            case let .info(info) = try await host.request(.info(path: folder.path)),
+            case let .listing(children) = try await host.request(.list(path: folder.path, offset: 0, includeHidden: false)),
+            case let .listing(hidden) = try await host.request(.list(path: root.path, offset: 0, includeHidden: true)) else {
+            Issue.record("Missing directory metadata or listing")
+            return
         }
         #expect(!info.revision.isEmpty)
         #expect(children.entries.map(\.name) == ["nested"])
@@ -170,10 +261,12 @@ struct HostFileBrowserTests {
         }
         try Data("hello".utf8).write(to: root.appendingPathComponent("file.txt"))
         let host = HostFileBrowser()
-        guard case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
-              let next = first.nextOffset,
-              case let .listing(second) = try await host.request(.list(path: root.path, offset: next, includeHidden: false)) else {
-            Issue.record("Missing pages"); return
+        guard
+            case let .listing(first) = try await host.request(.list(path: root.path, offset: 0, includeHidden: false)),
+            let next = first.nextOffset,
+            case let .listing(second) = try await host.request(.list(path: root.path, offset: next, includeHidden: false)) else {
+            Issue.record("Missing pages")
+            return
         }
         let all = first.entries + second.entries
         #expect(first.entries.count == FileBrowserLimits.directoryPageSize)
@@ -193,7 +286,8 @@ struct HostFileBrowserTests {
         let clock = ContinuousClock()
         let start = clock.now
         guard case let .listing(result) = try await HostFileBrowser().request(.list(path: "~/", offset: 0, includeHidden: false)) else {
-            Issue.record("Missing Home listing"); return
+            Issue.record("Missing Home listing")
+            return
         }
         #expect(result.directory == FileManager.default.homeDirectoryForCurrentUser.path)
         #expect(!result.entries.isEmpty)
@@ -201,16 +295,18 @@ struct HostFileBrowserTests {
         print("Files Home probe: \(result.entries.count) entries in \(start.duration(to: clock.now))")
     }
 
-    @Test func chunkedReadsAndChangingFile() async throws {
+    @Test
+    func chunkedReadsAndChangingFile() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let path = root.appendingPathComponent("file.md")
         let contents = Data(repeating: 65, count: FileBrowserLimits.chunkBytes + 7)
         try contents.write(to: path)
         let host = HostFileBrowser()
-        guard case let .info(info) = try await host.request(.info(path: path.path)),
-              case let .chunk(first) = try await host.request(.read(path: path.path, offset: 0, revision: info.revision)),
-              case let .chunk(second) = try await host.request(.read(path: path.path, offset: first.data.count, revision: info.revision)) else { return }
+        guard
+            case let .info(info) = try await host.request(.info(path: path.path)),
+            case let .chunk(first) = try await host.request(.read(path: path.path, offset: 0, revision: info.revision)),
+            case let .chunk(second) = try await host.request(.read(path: path.path, offset: first.data.count, revision: info.revision)) else { return }
         #expect(info.kind == .markdown)
         #expect(first.data.count == FileBrowserLimits.chunkBytes)
         #expect(second.offset == first.data.count)
@@ -221,7 +317,8 @@ struct HostFileBrowserTests {
         }
     }
 
-    @Test func rejectsSpecialAndOversizedFiles() async throws {
+    @Test
+    func rejectsSpecialAndOversizedFiles() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let fifo = root.appendingPathComponent("pipe")
@@ -241,7 +338,8 @@ struct HostFileBrowserTests {
         await #expect(throws: FileBrowserError.self) { try await host.request(.info(path: "relative")) }
     }
 
-    @Test func localVideoAndExplicitDownloadDoNotRelaxInlinePreviewLimits() async throws {
+    @Test
+    func localVideoAndExplicitDownloadDoNotRelaxInlinePreviewLimits() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("movie.mp4")
@@ -266,7 +364,8 @@ struct HostFileBrowserTests {
         }
     }
 
-    @MainActor @Test func nativePreviewLoadsTheRealMP4Fixture() async throws {
+    @MainActor @Test
+    func nativePreviewLoadsTheRealMP4Fixture() async throws {
         let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let url = package.appendingPathComponent("Sources/CtrlxE2ELib/Scenarios/SampleFiles/test_video.mp4")
         let host = HostFileBrowser()
@@ -283,7 +382,8 @@ struct HostFileBrowserTests {
         #expect(tab.previewURL == nil)
     }
 
-    @Test func downloadsRejectSpecialFilesAndOversizeEvenAtZeroOffset() async throws {
+    @Test
+    func downloadsRejectSpecialFilesAndOversizeEvenAtZeroOffset() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let fifo = root.appendingPathComponent("pipe.mp4")
@@ -304,7 +404,8 @@ struct HostFileBrowserTests {
         await #expect(throws: FileBrowserError.self) { try await host.localFileURL(info) }
     }
 
-    @Test func textAndNameSearchDoNotFollowSymlinkLoops() async throws {
+    @Test
+    func textAndNameSearchDoNotFollowSymlinkLoops() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let child = root.appendingPathComponent("子目录")
@@ -313,8 +414,9 @@ struct HostFileBrowserTests {
         try Data("needle".utf8).write(to: root.appendingPathComponent(".hidden"))
         try FileManager.default.createSymbolicLink(at: child.appendingPathComponent("loop"), withDestinationURL: root)
         let host = HostFileBrowser()
-        guard case let .search(text) = try await host.request(.search(path: root.path, query: "needle", mode: .content, includeHidden: false)),
-              case let .search(name) = try await host.request(.search(path: root.path, query: "HELLO", mode: .name, includeHidden: false)) else { return }
+        guard
+            case let .search(text) = try await host.request(.search(path: root.path, query: "needle", mode: .content, includeHidden: false)),
+            case let .search(name) = try await host.request(.search(path: root.path, query: "HELLO", mode: .name, includeHidden: false)) else { return }
         #expect(text.matches.count == 1)
         #expect(text.matches.first?.lineNumber == 2)
         #expect(!text.isTruncated)
@@ -323,13 +425,15 @@ struct HostFileBrowserTests {
         #expect(link.entries.allSatisfy { $0.path.hasPrefix(child.appendingPathComponent("loop").path + "/") })
     }
 
-    @Test func contentSearchReadsBeyondTheFirstChunk() async throws {
+    @Test
+    func contentSearchReadsBeyondTheFirstChunk() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let text = String(repeating: "a", count: FileBrowserLimits.chunkBytes + 1) + "\nneedle"
         try Data(text.utf8).write(to: root.appendingPathComponent("large.txt"))
         guard case let .search(result) = try await HostFileBrowser().request(.search(path: root.path, query: "needle", mode: .content, includeHidden: false)) else {
-            Issue.record("Missing search result"); return
+            Issue.record("Missing search result")
+            return
         }
         #expect(result.matches.count == 1)
         #expect(result.matches.first?.lineNumber == 2)
@@ -339,46 +443,34 @@ struct HostFileBrowserTests {
 
 @MainActor
 struct FileBrowserLayoutTests {
-    @Test("Terminal links find only the same window's live Files tab, independent of directory and tab order")
-    func terminalLinksAreWindowScoped() throws {
+    @Test("Host IDs, not directory or window, identify Files presentation")
+    func terminalFilesUseHostIDs() {
         let tabs = SessionFileTabsState()
-        let manual = FileBrowserTab(path: "/host/project", sourcePaneID: "%1")
-        let first = FileBrowserTab(path: "/host/project", sourcePaneID: "%1", terminalLinkWindowID: "@1")
-        let second = FileBrowserTab(path: "/host/project", sourcePaneID: "%2", terminalLinkWindowID: "@2")
-        for tab in [manual, first, second] {
-            tabs.directoryTabs[tab.id] = tab
-            tabs.openFileTabs.append(.init(id: tab.id, path: "Files", directoryPath: "", isDirectory: true))
-        }
-        tabs.rightSide = [.file(first.id)]
-        tabs.selectedRight = .file(first.id)
-        tabs.selectedFileTabId = manual.id
-        tabs.openFileTabs.reverse()
-        let reused = try #require(tabs.terminalFilesTab(windowID: "@1"))
-        #expect(reused === first)
-        reused.openTerminalFile(.init(directory: "/host/other", file: "/host/other/report.md"), paneID: "%3")
-        #expect(tabs.terminalFilesTab(windowID: "@1") === first)
-        #expect(tabs.terminalFilesTab(windowID: "@2") === second)
-        #expect(tabs.terminalFilesTab(windowID: "@3") == nil)
-        #expect(reused.sourcePaneID == "%3")
-        #expect(reused.selectedFile == "/host/other/report.md")
-        #expect(manual.path == "/host/project")
-        #expect(second.path == "/host/project")
-        #expect(tabs.rightSide == [.file(first.id)])
-        #expect(tabs.selectedRight == .file(first.id))
-        #expect(tabs.selectedFileTabId == manual.id)
-        #expect(SessionFileTabsState().terminalFilesTab(windowID: "@1") == nil)
-
-        tabs.openFileTabs.removeAll { $0.id == first.id }
-        #expect(tabs.terminalFilesTab(windowID: "@1") == nil)
-        tabs.directoryTabs.removeValue(forKey: first.id)
-        #expect(tabs.terminalFilesTab(windowID: "@2") === second)
+        let descriptor = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host")
+        let model = FileBrowserTab(hostTab: descriptor)
+        tabs.directoryTabs[model.id] = model
+        tabs.openFileTabs = [.init(id: model.id, path: "Files", directoryPath: "", isDirectory: true)]
+        tabs.rightSide = [.file(model.id)]
+        tabs.selectedRight = .file(model.id)
+        model.openTerminalFile(.init(directory: "/host/other", file: "/host/other/report.md"), paneID: "%1")
+        var moved = descriptor
+        moved.windowID = "@2"
+        model.updateHostTab(moved)
+        #expect(tabs.directoryTabs[descriptor.id] === model)
+        #expect(model.path == "/host/other")
+        #expect(model.selectedFile == "/host/other/report.md")
+        #expect(tabs.selectedRight == .file(model.id))
+        let saved = LayoutSnapshotMapper.snapshot(from: tabs, fileBrowser: nil, windowIndexForId: { _ in 0 })
+        let restored = SessionFileTabsState()
+        LayoutSnapshotMapper.apply(saved, to: restored, fileBrowser: nil, windowIdForIndex: { _ in nil }, makeBrowserState: { BrowserTabState(initialURL: $0.url) })
+        #expect(restored.openFileTabs.isEmpty)
     }
 
     @Test("Selecting a new terminal replaces Files/browser content without closing tabs or disturbing the right pane", arguments: [true, false])
-    func newTerminalClearsAuxiliarySelection(fromFiles: Bool) {
+    func newTerminalClearsAuxiliarySelection(fromFiles: Bool) throws {
         let tabs = SessionFileTabsState()
         let directory = FileBrowserTab(path: "/host/project")
-        let browser = BrowserTab(url: URL(string: "https://example.com")!)
+        let browser = try BrowserTab(url: #require(URL(string: "https://example.com")))
         tabs.directoryTabs[directory.id] = directory
         tabs.openFileTabs = [.init(id: directory.id, path: "Files", directoryPath: "", isDirectory: true)]
         tabs.openBrowserTabs = [browser]
@@ -397,7 +489,8 @@ struct FileBrowserLayoutTests {
         #expect(tabs.selectedRight == .window("@right"))
     }
 
-    @Test func rightSideTerminalDoesNotReplaceLeftFiles() {
+    @Test
+    func rightSideTerminalDoesNotReplaceLeftFiles() {
         let tabs = SessionFileTabsState()
         let fileID = UUID()
         tabs.selectedFileTabId = fileID
@@ -408,12 +501,13 @@ struct FileBrowserLayoutTests {
         #expect(tabs.selectedRight == .window("@right"))
     }
 
-    @Test func directorySelectionNeverLeavesALegacyExplorerBehind() {
+    @Test
+    func directorySelectionNeverLeavesALegacyExplorerBehind() {
         let tabs = SessionFileTabsState()
         let directory = FileBrowserTab(path: "/host/project")
         tabs.directoryTabs[directory.id] = directory
         tabs.openFileTabs = [.init(id: directory.id, path: "Files", directoryPath: "", isDirectory: true)]
-        var legacyWindows: Set<String> = ["other-window"]
+        var legacyWindows: Set = ["other-window"]
 
         tabs.selectLeftFileTab(directory.id, windowID: "window", legacyExplorerWindows: &legacyWindows)
         tabs.selectedFileTabId = nil // Return to the terminal, then reselect Files.
@@ -434,7 +528,8 @@ struct FileBrowserLayoutTests {
         }
     }
 
-    @Test func editorSelectionStillKeepsItsLegacyTree() {
+    @Test
+    func editorSelectionStillKeepsItsLegacyTree() {
         let tabs = SessionFileTabsState()
         let editor = OpenFileTab(path: "/host/file.swift", directoryPath: "/host")
         tabs.openFileTabs = [editor]
@@ -446,7 +541,8 @@ struct FileBrowserLayoutTests {
         #expect(tabs.selectedBrowserTabId == nil)
     }
 
-    @Test func localSourceUsesTheRequestedPaneAndFreshCwd() async throws {
+    @Test
+    func localSourceUsesTheRequestedPaneAndFreshCwd() async throws {
         let calls = LockIsolated<[[String]]>([])
         try await withDependencies {
             $0[PreferencesService.self] = .inMemory()
@@ -456,7 +552,9 @@ struct FileBrowserLayoutTests {
                 return .init(exitCode: 0, stdout: Data("/host/fresh-cwd\n".utf8), stderr: Data())
             })
             $0[SessionDirectoryClient.self].resolve = { path in
-                if path == "/deleted" { throw FileBrowserError.message("Deleted directory") }
+                if path == "/deleted" {
+                    throw FileBrowserError.message("Deleted directory")
+                }
                 return path == "~/" ? "/host/home" : path
             }
             $0[FileBrowserClient.self].request = { operation in
@@ -465,9 +563,12 @@ struct FileBrowserLayoutTests {
             }
         } operation: {
             let tmux = TmuxService()
-            let manager = MirrorWindowManager(settings: AppSettings(), tmuxService: tmux,
+            let manager = MirrorWindowManager(
+                settings: AppSettings(),
+                tmuxService: tmux,
                 paneStreamManager: PaneStreamManager(tmuxService: tmux, controlClientManager: TmuxControlClientManager()),
-                editorSessionManager: EditorSessionManager())
+                editorSessionManager: EditorSessionManager()
+            )
             manager.setPaneStatesForPreview([
                 .init(paneId: "%1", currentPath: "/wrong-active", isActive: true),
                 .init(paneId: "%42", currentPath: "/stale", agentSession: .init(paneId: "%42", detectedProjectPath: "/host/agent")),
@@ -486,9 +587,10 @@ struct FileBrowserLayoutTests {
         }
     }
 
-    @Test func directoryTabsSurvivePrivateViewerLayoutRoundTrip() throws {
+    @Test
+    func directoryTabsSurvivePrivateViewerLayoutRoundTrip() throws {
         let tabs = SessionFileTabsState()
-        let first = FileBrowserTab(path: "/host/project1", sourcePaneID: "%42", terminalLinkWindowID: "@1")
+        let first = FileBrowserTab(path: "/host/project1", sourcePaneID: "%42")
         first.expanded = ["/host/project1/src"]
         first.selectedFile = "/host/project1/README.md"
         let second = FileBrowserTab(path: "/host/project2", sourcePaneID: "%43")
@@ -509,14 +611,14 @@ struct FileBrowserLayoutTests {
         #expect(restored.directoryTabs[first.id]?.path == "/host/project1")
         #expect(restored.directoryTabs[first.id]?.expanded == first.expanded)
         #expect(restored.directoryTabs[first.id]?.sourcePaneID == nil)
-        #expect(restored.directoryTabs[first.id]?.terminalLinkWindowID == nil)
-        #expect(restored.terminalFilesTab(windowID: "@1") == nil)
+        #expect(restored.directoryTabs[first.id]?.hostTab == nil)
         #expect(restored.selectedFileTabId == first.id)
         #expect(restored.selectedRight == .file(second.id))
         #expect(!restored.tabOrder.contains(.window("@1")))
     }
 
-    @Test func legacyExplorerBecomesAnOrdinaryClosableTab() {
+    @Test
+    func legacyExplorerBecomesAnOrdinaryClosableTab() {
         let tabs = SessionFileTabsState()
         tabs.tabOrder = [.window("@1"), .fileExplorer]
         tabs.rightSide = [.fileExplorer]

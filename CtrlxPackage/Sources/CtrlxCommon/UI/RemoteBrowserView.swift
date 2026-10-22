@@ -13,14 +13,21 @@ public struct RemoteBrowserView: View {
     @State private var viewport = CGSize.zero
     @State private var keyboardRequested = false
     @State private var isAnnotating = false
+    private struct ExtensionRequest: Identifiable {
+        let id = UUID()
+        let storeID: String?
+    }
+
+    @State private var extensionRequest: ExtensionRequest?
+    private let onOpenBrowser: (RemoteBrowserTab) -> Void
     @FocusState private var editingAddress: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
-    @Dependency(ClipboardClient.self) private var clipboard
     private let client: ViewerRelayClient
 
-    public init(tab: RemoteBrowserTab, client: ViewerRelayClient) {
+    public init(tab: RemoteBrowserTab, client: ViewerRelayClient, onOpenBrowser: @escaping (RemoteBrowserTab) -> Void) {
         self.client = client
+        self.onOpenBrowser = onOpenBrowser
         _session = State(initialValue: RemoteBrowserSession(tab: tab, client: client))
     }
 
@@ -40,10 +47,10 @@ public struct RemoteBrowserView: View {
                     .keyboardType(.URL)
                     #endif
                 Button {
-                    session.submit(.fit(width: Int(max(240, min(viewport.width, 2560))),
-                                        height: Int(max(240, min(viewport.height, 2560)))))
+                    session.submit(.fit(width: Int(max(240, min(viewport.width, 2_560))),
+                                        height: Int(max(240, min(viewport.height, 2_560)))))
                 } label: { Label("Fit to This Device", symbol: .arrowUpLeftAndArrowDownRight) }
-                .help("Changes the page viewport on the Host and all Viewers")
+                    .help("Changes the page viewport on the Host and all Viewers")
             }
             .labelStyle(.iconOnly)
             .disabled(session.controlID == nil || isAnnotating)
@@ -51,10 +58,17 @@ public struct RemoteBrowserView: View {
             HStack {
                 Label("Host · Chromium", symbol: .globe).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                if session.controlID != nil {
+                if client.hostSupportsBrowserExtensions {
                     Button {
-                        if let text = clipboard.getString(), !text.isEmpty { session.submit(.text(text)) }
-                    } label: { Label("Paste", symbol: .docOnClipboard).labelStyle(.iconOnly) }
+                        session.releaseControl()
+                        extensionRequest = ExtensionRequest(storeID: nil)
+                    } label: { Label("Browser Extensions", symbol: .puzzlepiece).labelStyle(.iconOnly) }
+                }
+                if session.controlID != nil {
+                    if session.supportsClipboard {
+                        Button(action: session.copy) { Label("Copy", symbol: .docOnDoc).labelStyle(.iconOnly) }
+                    }
+                    Button(action: session.paste) { Label("Paste", symbol: .docOnClipboard).labelStyle(.iconOnly) }
                     #if os(iOS)
                     Button { keyboardRequested.toggle() } label: {
                         Label("Keyboard", symbol: .keyboard).labelStyle(.iconOnly)
@@ -64,33 +78,48 @@ public struct RemoteBrowserView: View {
                         keyboardRequested = false
                         session.releaseControl()
                     }
-                } else {
+                } else if session.tab.isExtensionWindow != true {
                     Button(session.tab.isControlled ? "Read Only · Take Control" : "Take Control") {
                         Task { await session.takeControl() }
                     }
                     .disabled(session.isTakingControl || !client.isHostConnected || session.frame == nil)
                 }
             }.disabled(isAnnotating).padding(.horizontal, 8).padding(.bottom, 8)
+            if client.hostSupportsBrowserExtensions, let id = BrowserExtensionStoreURL.extensionID(from: session.tab.url) {
+                HStack {
+                    Text("Chrome Web Store").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Install on Host") {
+                        session.releaseControl()
+                        extensionRequest = ExtensionRequest(storeID: id)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("browser-install-store-extension")
+                }.disabled(isAnnotating).padding(.horizontal, 8).padding(.bottom, 8)
+            }
             Divider()
             BrowserAnnotationSurface(preferredTarget: session.tab.sourceAgent,
-                requiresRecipientSelection: session.tab.isAgentOwned && session.tab.sourceAgent == nil, capture: {
-                let request = BrowseBrowser(sessionName: session.tab.sessionName, tabID: session.tab.id,
-                                            surfaceID: UUID(), frameMaxDimension: RemoteBrowserFrame.maximumDimension, operation: .frame)
-                let result = try await client.sendCommand(request, paneId: "", timeout: 10).get()
-                guard result.success, let frame = result.browser?.frame, frame.isValid else {
-                    throw AgentImageError.message(result.error ?? "Could not capture the Host page.")
+                                     requiresRecipientSelection: session.tab.isAgentOwned && session.tab.sourceAgent == nil, capture: {
+                                         let request = BrowseBrowser(sessionName: session.tab.sessionName, tabID: session.tab.id,
+                                                                     surfaceID: UUID(), frameMaxDimension: RemoteBrowserFrame.maximumDimension, operation: .frame)
+                                         let result = try await client.sendCommand(request, paneId: "", timeout: 10).get()
+                                         guard result.success, let frame = result.browser?.frame, frame.isValid else {
+                                             throw AgentImageError.message(result.error ?? "Could not capture the Host page.")
+                                         }
+                                         return frame.jpeg
+                                     }, onEditingChanged: { editing in
+                                         isAnnotating = editing
+                                         if editing { keyboardRequested = false; editingAddress = false
+                                             session.releaseControl() }
+                                     }) {
+                RemoteBrowserCanvas(image: image, frame: displayedFrame,
+                                    acceptsInput: session.controlID != nil && !editingAddress && !isAnnotating,
+                                    keyboardRequested: keyboardRequested,
+                                    onCopy: session.copy,
+                                    onPaste: session.paste) { operation in
+                    guard !isAnnotating else { return }
+                    if let displayedFrame { session.submit(operation, generation: displayedFrame.generation) }
                 }
-                return frame.jpeg
-            }, onEditingChanged: { editing in
-                isAnnotating = editing
-                if editing { keyboardRequested = false; editingAddress = false }
-            }) {
-              RemoteBrowserCanvas(image: image, frame: displayedFrame,
-                                acceptsInput: session.controlID != nil && !editingAddress && !isAnnotating,
-                                keyboardRequested: keyboardRequested) { operation in
-                guard !isAnnotating else { return }
-                if let displayedFrame { session.submit(operation, generation: displayedFrame.generation) }
-            }
                 .onGeometryChange(for: CGSize.self) { $0.size } action: {
                     viewport = $0
                     updateFrameResolution()
@@ -102,6 +131,7 @@ public struct RemoteBrowserView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(WorkspaceClipboardFeedback(message: session.clipboardMessage))
             }
             if let error = session.error ?? session.frameError {
                 HStack {
@@ -110,22 +140,27 @@ public struct RemoteBrowserView: View {
                     Button { session.dismissError() } label: { Label("Dismiss", symbol: .xmark) }.labelStyle(.iconOnly)
                 }.padding(8)
             }
+            BrowserExternalApplicationBanner(notice: session.tab.externalApplicationNotice)
         }
-        .task(id: scenePhase == .active && client.isHostConnected && client.hostSupportsBrowserSharing) {
-            guard scenePhase == .active, client.isHostConnected, client.hostSupportsBrowserSharing else {
+        .task(id: extensionRequest == nil && scenePhase == .active && client.isHostConnected && client.hostSupportsBrowserSharing) {
+            guard extensionRequest == nil, scenePhase == .active, client.isHostConnected, client.hostSupportsBrowserSharing else {
                 session.stop(); image = nil; displayedFrame = nil; return
             }
             await session.watch()
         }
         .modifier(RemoteBrowserFrameDecoding(frame: session.frame, isAnnotating: isAnnotating,
-                                            image: $image, displayedFrame: $displayedFrame))
+                                             image: $image, displayedFrame: $displayedFrame))
         .onChange(of: session.tab.url, initial: true) { _, url in
             if !editingAddress { address = url == "about:blank" ? "" : url }
         }
         .onChange(of: session.frame.map { CGSize(width: $0.width, height: $0.height) }) { _, _ in updateFrameResolution() }
         .onChange(of: displayScale) { _, _ in updateFrameResolution() }
+        .onChange(of: client.hostSupportsWorkspaceClipboard, initial: true) { _, supported in session.supportsClipboard = supported }
         .onDisappear { session.stop() }
         .accessibilityIdentifier("remote-browser-page")
+        .sheet(item: $extensionRequest) { request in
+            RemoteBrowserExtensionsView(tab: session.tab, client: client, initialStoreID: request.storeID, onOpenBrowser: onOpenBrowser)
+        }
     }
 
     private func navigate() {
@@ -176,7 +211,7 @@ public enum RemoteBrowserGeometry {
     public static func frameMaxDimension(viewSize: CGSize, pageSize: CGSize, displayScale: CGFloat) -> Int? {
         guard viewSize.width.isFinite, viewSize.height.isFinite, pageSize.width.isFinite, pageSize.height.isFinite,
               viewSize.width > 0, viewSize.height > 0, pageSize.width > 0, pageSize.height > 0,
-              displayScale.isFinite, displayScale > 0 else { return nil }
+            displayScale.isFinite, displayScale > 0 else { return nil }
         let size = imageRect(viewSize: viewSize, pageSize: pageSize).size
         let pixels = min(CGFloat(RemoteBrowserFrame.maximumDimension), max(size.width, size.height) * displayScale)
         // Buckets avoid creating a new capture size for every point of window resizing.
@@ -202,11 +237,14 @@ public enum RemoteBrowserGeometry {
 #if os(macOS)
 import AppKit
 
-private struct RemoteBrowserCanvas: NSViewRepresentable {
+struct RemoteBrowserCanvas: NSViewRepresentable {
     let image: CGImage?
     let frame: RemoteBrowserFrame?
     let acceptsInput: Bool
     let keyboardRequested: Bool
+    var isSimulator = false
+    var onCopy: (() -> Void)?
+    var onPaste: (() -> Void)?
     let send: (RemoteBrowserOperation) -> Void
     func makeNSView(context: Context) -> BrowserCanvasNSView { BrowserCanvasNSView() }
     func updateNSView(_ view: BrowserCanvasNSView, context: Context) {
@@ -214,6 +252,8 @@ private struct RemoteBrowserCanvas: NSViewRepresentable {
         view.pageSize = frame.map { CGSize(width: $0.width, height: $0.height) } ?? .zero
         view.acceptsInput = acceptsInput
         view.send = send
+        view.onCopy = onCopy
+        view.onPaste = onPaste
         view.needsDisplay = true
     }
 }
@@ -224,6 +264,8 @@ final class BrowserCanvasNSView: NSView, @preconcurrency NSTextInputClient {
     var pageSize = CGSize.zero
     var acceptsInput = false
     var send: (RemoteBrowserOperation) -> Void = { _ in }
+    var onCopy: (() -> Void)?
+    var onPaste: (() -> Void)?
     private var marked = NSAttributedString(string: "")
     private var pointerTrackingArea: NSTrackingArea?
     override var isFlipped: Bool { true }
@@ -232,7 +274,7 @@ final class BrowserCanvasNSView: NSView, @preconcurrency NSTextInputClient {
         super.updateTrackingAreas()
         if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
         let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
-                                 owner: self, userInfo: nil)
+                                  owner: self, userInfo: nil)
         addTrackingArea(area)
         pointerTrackingArea = area
     }
@@ -241,7 +283,7 @@ final class BrowserCanvasNSView: NSView, @preconcurrency NSTextInputClient {
         guard let image else { return }
         let target = RemoteBrowserGeometry.imageRect(viewSize: bounds.size, pageSize: pageSize)
         NSImage(cgImage: image, size: target.size).draw(in: target, from: .zero, operation: .copy, fraction: 1,
-                                                     respectFlipped: true, hints: nil)
+                                                        respectFlipped: true, hints: nil)
     }
     private func modifiers(_ event: NSEvent) -> Int {
         (event.modifierFlags.contains(.option) ? 1 : 0) | (event.modifierFlags.contains(.control) ? 2 : 0)
@@ -249,12 +291,12 @@ final class BrowserCanvasNSView: NSView, @preconcurrency NSTextInputClient {
     }
     private func pointer(_ event: NSEvent, kind: RemoteBrowserPointer.Kind, button: RemoteBrowserPointer.Button = .none, buttons: Int = 0) {
         guard acceptsInput, let point = RemoteBrowserGeometry.pagePoint(convert(event.locationInWindow, from: nil),
-            viewSize: bounds.size, pageSize: pageSize, clamped: kind == .up || (kind == .move && buttons != 0)) else { return }
+                                                                        viewSize: bounds.size, pageSize: pageSize, clamped: kind == .up || (kind == .move && buttons != 0)) else { return }
         let clickCount = kind == .down || kind == .up ? min(3, event.clickCount) : 0
         send(.pointer(.init(kind, x: point.x, y: point.y, button: button, buttons: buttons,
                             modifiers: modifiers(event), clickCount: clickCount,
-                            deltaX: kind == .scroll ? max(-4096, min(4096, -event.scrollingDeltaX)) : 0,
-                            deltaY: kind == .scroll ? max(-4096, min(4096, -event.scrollingDeltaY)) : 0)))
+                            deltaX: kind == .scroll ? max(-4_096, min(4_096, -event.scrollingDeltaX)) : 0,
+                            deltaY: kind == .scroll ? max(-4_096, min(4_096, -event.scrollingDeltaY)) : 0)))
     }
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); pointer(event, kind: .down, button: .left, buttons: 1) }
     override func mouseUp(with event: NSEvent) { pointer(event, kind: .up, button: .left) }
@@ -274,12 +316,44 @@ final class BrowserCanvasNSView: NSView, @preconcurrency NSTextInputClient {
             send(.key(.init(key.0, keyCode: key.1, modifiers: modifiers(event))))
             return
         }
-        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "v" {
-            if let value = clipboard.getString() { send(.text(value)) }
+        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "c", let onCopy {
+            onCopy()
+        } else if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "v" {
+            paste(nil)
         } else if event.modifierFlags.intersection([.command, .control]).isEmpty {
             interpretKeyEvents([event])
         } else if let value = event.charactersIgnoringModifiers, let code = value.uppercased().utf16.first {
             send(.key(.init(value, keyCode: Int(code), modifiers: modifiers(event))))
+        }
+    }
+
+    @objc
+    func copy(_ sender: Any?) {
+        if acceptsInput {
+            onCopy?()
+        }
+    }
+
+    @objc
+    func paste(_ sender: Any?) {
+        guard acceptsInput else { return }
+        if let onPaste {
+            onPaste()
+        } else if let value = clipboard.getString() {
+            send(.text(value))
+        }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard
+            acceptsInput, window?.firstResponder === self,
+            event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command else { return false }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "c" where onCopy != nil: copy(nil)
+            return true
+        case "v": paste(nil)
+            return true
+        default: return false
         }
     }
     func insertText(_ string: Any, replacementRange: NSRange) {
@@ -290,10 +364,10 @@ final class BrowserCanvasNSView: NSView, @preconcurrency NSTextInputClient {
     }
     override func doCommand(by selector: Selector) {
         let keys: [String: (String, Int)] = ["insertNewline:": ("Enter", 13), "deleteBackward:": ("Backspace", 8),
-            "deleteForward:": ("Delete", 46), "insertTab:": ("Tab", 9), "cancelOperation:": ("Escape", 27),
-            "moveLeft:": ("ArrowLeft", 37), "moveRight:": ("ArrowRight", 39),
-            "moveUp:": ("ArrowUp", 38), "moveDown:": ("ArrowDown", 40),
-            "moveToBeginningOfLine:": ("Home", 36), "moveToEndOfLine:": ("End", 35)]
+                                             "deleteForward:": ("Delete", 46), "insertTab:": ("Tab", 9), "cancelOperation:": ("Escape", 27),
+                                             "moveLeft:": ("ArrowLeft", 37), "moveRight:": ("ArrowRight", 39),
+                                             "moveUp:": ("ArrowUp", 38), "moveDown:": ("ArrowDown", 40),
+                                             "moveToBeginningOfLine:": ("Home", 36), "moveToEndOfLine:": ("End", 35),]
         if acceptsInput, let key = keys[NSStringFromSelector(selector)] { send(.key(.init(key.0, keyCode: key.1))) }
     }
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
@@ -313,11 +387,14 @@ final class BrowserCanvasNSView: NSView, @preconcurrency NSTextInputClient {
 #elseif os(iOS)
 import UIKit
 
-private struct RemoteBrowserCanvas: UIViewRepresentable {
+struct RemoteBrowserCanvas: UIViewRepresentable {
     let image: CGImage?
     let frame: RemoteBrowserFrame?
     let acceptsInput: Bool
     let keyboardRequested: Bool
+    var isSimulator = false
+    var onCopy: (() -> Void)?
+    var onPaste: (() -> Void)?
     let send: (RemoteBrowserOperation) -> Void
     func makeUIView(context: Context) -> BrowserCanvasUIView { BrowserCanvasUIView() }
     func updateUIView(_ view: BrowserCanvasUIView, context: Context) {
@@ -325,7 +402,10 @@ private struct RemoteBrowserCanvas: UIViewRepresentable {
         view.pageSize = frame.map { CGSize(width: $0.width, height: $0.height) } ?? .zero
         view.acceptsInput = acceptsInput
         view.send = send
+        view.isSimulator = isSimulator
         view.keyboard.send = send
+        view.keyboard.onCopy = onCopy
+        view.keyboard.onPaste = onPaste
         if keyboardRequested && acceptsInput {
             if !view.keyboard.isFirstResponder { view.keyboard.becomeFirstResponder() }
         } else if view.keyboard.isFirstResponder { view.keyboard.resignFirstResponder() }
@@ -333,9 +413,10 @@ private struct RemoteBrowserCanvas: UIViewRepresentable {
     static func dismantleUIView(_ view: BrowserCanvasUIView, coordinator: ()) { view.keyboard.resignFirstResponder() }
 }
 
-private final class BrowserCanvasUIView: UIView {
+final class BrowserCanvasUIView: UIView {
+    var isSimulator = false
     let picture = UIImageView()
-    let keyboard = BrowserKeyboardInput()
+    fileprivate let keyboard = BrowserKeyboardInput()
     var pageSize = CGSize.zero
     var acceptsInput = false
     var send: (RemoteBrowserOperation) -> Void = { _ in }
@@ -355,7 +436,11 @@ private final class BrowserCanvasUIView: UIView {
         let drag = UIPanGestureRecognizer(target: self, action: #selector(dragged(_:)))
         drag.minimumNumberOfTouches = 2
         pan.maximumNumberOfTouches = 1
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
+        hold.minimumPressDuration = 0.3
+        tap.require(toFail: hold)
         addGestureRecognizer(tap); addGestureRecognizer(pan); addGestureRecognizer(drag)
+        addGestureRecognizer(hold)
     }
     required init?(coder: NSCoder) { nil }
     override func layoutSubviews() { super.layoutSubviews(); picture.frame = bounds }
@@ -369,14 +454,26 @@ private final class BrowserCanvasUIView: UIView {
         send(.pointer(.init(.up, x: point.x, y: point.y, button: .left)))
     }
     @objc private func scrolled(_ gesture: UIPanGestureRecognizer) {
+        if isSimulator {
+            dragged(gesture)
+            return
+        }
         let translation = gesture.translation(in: self)
         defer { previous = translation }
         guard gesture.state == .changed, let point = point(gesture) else { return }
         let rect = RemoteBrowserGeometry.imageRect(viewSize: bounds.size, pageSize: pageSize)
         let scale = pageSize.width / max(1, rect.width)
         send(.pointer(.init(.scroll, x: point.x, y: point.y,
-                            deltaX: max(-4096, min(4096, (previous.x - translation.x) * scale)),
-                            deltaY: max(-4096, min(4096, (previous.y - translation.y) * scale)))))
+                            deltaX: max(-4_096, min(4_096, (previous.x - translation.x) * scale)),
+                            deltaY: max(-4_096, min(4_096, (previous.y - translation.y) * scale))
+            )))
+    }
+
+    @objc
+    private func held(_ gesture: UILongPressGestureRecognizer) {
+        guard let point = point(gesture, clamped: gesture.state != .began) else { return }
+        let kind: RemoteBrowserPointer.Kind = gesture.state == .began ? .down : gesture.state == .changed ? .move : .up
+        send(.pointer(.init(kind, x: point.x, y: point.y, button: .left, buttons: kind == .up ? 0 : 1)))
     }
     @objc private func dragged(_ gesture: UIPanGestureRecognizer) {
         guard let point = point(gesture, clamped: gesture.state != .began) else { return }
@@ -386,8 +483,10 @@ private final class BrowserCanvasUIView: UIView {
 }
 
 /// UIKit owns composition/candidate UI. Only committed text crosses the wire.
-private final class BrowserKeyboardInput: UITextView, UITextViewDelegate {
+final private class BrowserKeyboardInput: UITextView, UITextViewDelegate {
     var send: (RemoteBrowserOperation) -> Void = { _ in }
+    var onCopy: (() -> Void)?
+    var onPaste: (() -> Void)?
     private let sentinel = "\u{200B}"
     init() {
         super.init(frame: .zero, textContainer: nil)
@@ -399,6 +498,22 @@ private final class BrowserKeyboardInput: UITextView, UITextViewDelegate {
         reset()
     }
     required init?(coder: NSCoder) { nil }
+
+    override func copy(_ sender: Any?) {
+        if let onCopy {
+            onCopy()
+        } else {
+            super.copy(sender)
+        }
+    }
+
+    override func paste(_ sender: Any?) {
+        if let onPaste {
+            onPaste()
+        } else {
+            super.paste(sender)
+        }
+    }
     private func reset() { text = sentinel; selectedRange = NSRange(location: 1, length: 0) }
     func textViewDidChange(_ textView: UITextView) {
         guard markedTextRange == nil else { return }
@@ -423,12 +538,24 @@ private final class BrowserKeyboardInput: UITextView, UITextViewDelegate {
         for press in presses {
             guard let key = press.key else { continue }
             let flags = key.modifierFlags
+            if flags.contains(.command) {
+                if key.charactersIgnoringModifiers.lowercased() == "c", onCopy != nil {
+                    copy(nil)
+                    remaining.remove(press)
+                    continue
+                }
+                if key.charactersIgnoringModifiers.lowercased() == "v", onPaste != nil {
+                    paste(nil)
+                    remaining.remove(press)
+                    continue
+                }
+            }
             let modifiers = (flags.contains(.alternate) ? 1 : 0) | (flags.contains(.control) ? 2 : 0)
                 | (flags.contains(.command) ? 4 : 0) | (flags.contains(.shift) ? 8 : 0)
             var value = keys[key.keyCode]
             if value == nil, !flags.intersection([.command, .control]).isEmpty,
                key.charactersIgnoringModifiers.lowercased() != "v",
-               let code = key.charactersIgnoringModifiers.uppercased().utf16.first, code < 128 {
+                let code = key.charactersIgnoringModifiers.uppercased().utf16.first, code < 128 {
                 value = (key.charactersIgnoringModifiers, Int(code))
             }
             guard let value else { continue }

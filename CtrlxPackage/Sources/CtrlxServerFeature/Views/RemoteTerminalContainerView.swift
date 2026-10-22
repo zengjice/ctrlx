@@ -17,6 +17,7 @@ struct RemoteTerminalContainerView: View {
     let connection: ViewerConnection
     let settings: AppSettings
     var scrollingAgentID: String?
+    var codexQuestionID: String?
     /// The stable window key used by MirrorWindowManager to track this window
     var windowKey: String?
     var onStreamEnd: (() -> Void)?
@@ -62,6 +63,7 @@ struct RemoteTerminalContainerView: View {
                 retryGeneration: streamRetryGeneration,
                 settings: settings,
                 scrollingAgentID: scrollingAgentID,
+                codexQuestionID: codexQuestionID,
                 isEditorActive: isEditorActive,
                 autoFocus: autoFocus,
                 showsFocusIndicator: showsFocusIndicator,
@@ -133,6 +135,10 @@ struct RemoteTerminalContainerView: View {
             if newState == .disconnected {
                 onStreamEnd?()
             }
+        }
+        .onChange(of: connection.relayClient.workspaceInputState.binding(paneID: paneId)) { _, binding in
+            guard binding != .unavailable else { return }
+            streamRetryGeneration &+= 1
         }
         // Tear down any in-flight upload or auto-dismiss timer when the view
         // is removed from the hierarchy (e.g. window closed mid-failure),
@@ -349,7 +355,7 @@ struct RemoteTerminalContainerView: View {
                 .foregroundStyle(.tertiary)
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(settings.theme.workspaceSecondaryTextColor)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(settings.theme.chromeBackgroundColor)
@@ -584,17 +590,20 @@ enum RemoteStreamState: Equatable {
 private struct RemoteTerminalNSView: NSViewRepresentable {
     @Environment(\.terminalQuickActions) private var quickActions
     @Environment(\.openTerminalFileLink) private var openFileLink
+    @Environment(\.terminalViewportInteraction) private var viewportInteraction
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
         return { path in openFileLink(.init(path: path, paneID: paneId, hostID: connection.id)) }
     }
+
     let paneId: String
     let connection: ViewerConnection
     let isHostConnected: Bool
     let retryGeneration: Int
     let settings: AppSettings
     let scrollingAgentID: String?
+    let codexQuestionID: String?
     let isEditorActive: Bool
     let autoFocus: Bool
     let showsFocusIndicator: Bool
@@ -616,6 +625,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         coordinator.terminalView.autoFocusEnabled = autoFocus
         coordinator.terminalView.showsFocusIndicator = showsFocusIndicator
         coordinator.terminalView.scrollingAgentID = scrollingAgentID
+        coordinator.terminalView.codexQuestionID = codexQuestionID
 
         coordinator.start(
             paneId: paneId,
@@ -627,9 +637,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             onTitleChange: onTitleChange,
         )
         coordinator.terminalView.isEditorActive = isEditorActive
+        coordinator.terminalView.onFocusRestored = { viewportInteraction?(connection.id, paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
-        coordinator.terminalView.onOpenURL = { url in onOpenURL?(url, paneId) ?? false }
+        coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
+        coordinator.terminalView.onContentClick = { viewportInteraction?(connection.id, paneId) }
         // Route image pastes through the SwiftUI parent so the upload state
         // and cancel popover live alongside the terminal view in the body
         // hierarchy. Returning `true` consumes the paste — `Ctrl+V` is sent
@@ -655,6 +667,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         let coordinator = context.coordinator
         nsView.showsFocusIndicator = showsFocusIndicator
         nsView.scrollingAgentID = scrollingAgentID
+        nsView.codexQuestionID = codexQuestionID
         context.coordinator.updateSettings(settings)
         context.coordinator.updateContainerSize(nsView.frame.size)
         context.coordinator.synchronizeStream(
@@ -664,9 +677,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
         // Re-bind focus, paste and URL-click callbacks so closures captured
         // here reflect the current parent state on every layout pass.
+        context.coordinator.terminalView.onFocusRestored = { viewportInteraction?(connection.id, paneId) }
         context.coordinator.bindQuickActions(quickActions, onFocus: onFocus)
-        nsView.onOpenURL = { url in onOpenURL?(url, paneId) ?? false }
+        nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
+        nsView.onContentClick = { viewportInteraction?(connection.id, paneId) }
         nsView.onImagePaste = { [weak coordinator] image in
             coordinator?.quickActionEndpoint?.recordInput()
             onImagePaste(image)
@@ -793,10 +808,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 keyCoalescer.enqueue(keys)
             }
 
-            terminalView.onExpandCodexQuestions = { [weak self] count in
-                guard let self, self.streamState == .streaming,
-                      let paneID = self.paneId, let connection = self.connection,
-                      connection.isHostConnected, connection.isRelayConnected
+            terminalView.onExpandCodexQuestions = { [weak self] count, questionID in
+                guard
+                    let self, self.streamState == .streaming,
+                    let paneID = self.paneId, let connection = self.connection,
+                    connection.isHostConnected, connection.isRelayConnected
                 else { return false }
                 // No raw-key fallback: an older host must reject this intent,
                 // rather than apply a Shift+Left to an unchecked/stale screen.
@@ -806,7 +822,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 }
                 guard let queue = self.keystrokeDebouncer else { return false }
                 return await withCheckedContinuation { continuation in
-                    queue.enqueueCodexQuestionExpansion(expectedCount: count) {
+                    queue.enqueueCodexQuestionExpansion(expectedCount: count, expectedQuestionID: questionID) {
                         continuation.resume(returning: $0)
                     }
                 }
@@ -854,6 +870,8 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
         func bindQuickActions(_ router: TerminalQuickActionRouter?, onFocus: (@MainActor () -> Void)?) {
             quickActionRouter = router
+            terminalView.voiceInputRouter = router
+            terminalView.voiceInputEndpoint = quickActionEndpoint
             terminalView.onBecomeFirstResponder = { [weak self] in
                 if let self, let endpoint = self.quickActionEndpoint {
                     self.quickActionRouter?.focus(endpoint)
@@ -863,6 +881,9 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         }
 
         func stop() {
+            terminalView.cancelVoiceInputPress()
+            terminalView.voiceInputRouter = nil
+            terminalView.voiceInputEndpoint = nil
             terminalView.stopQuestionChecks()
             if let endpoint = quickActionEndpoint {
                 endpoint.invalidate()
@@ -870,12 +891,14 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 Task { @MainActor in router?.retire(endpoint) }
             }
             terminalView.onBecomeFirstResponder = nil
+            terminalView.onFocusRestored = nil
             terminalView.onRawInput = nil
             terminalView.onInput = nil
             terminalView.onImagePaste = nil
             terminalView.onFileDrop = nil
             terminalView.onOpenURL = nil
             terminalView.onOpenPath = nil
+            terminalView.onContentClick = nil
 
             keystrokeDebouncer?.cancelAll()
             keystrokeDebouncer = nil
@@ -927,6 +950,8 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
         private func startStreaming() async {
             guard let connection, let paneId else { return }
+            let inputBinding = connection.relayClient.workspaceInputState.binding(paneID: paneId)
+            guard inputBinding != .unavailable else { return }
             var startMode = recoveryPolicy.nextStartMode()
 
             // A single retry covers a command response lost during a healthy
@@ -962,6 +987,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 let result = await connection.relayClient.sendCommand(
                     StartTerminalStream(leaseId: leaseId),
                     paneId: paneId,
+                    inputBinding: inputBinding
                 )
 
                 guard streamAttemptId == attemptId else { return }
@@ -998,6 +1024,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
         private func beginStreamAttempt(leaseId: UUID) -> UUID {
             keystrokeDebouncer?.cancelAll()
+            keystrokeDebouncer = nil
             keyCoalescer.reset()
             bootstrapPolicy.beginAttempt()
             bootstrapBuffer.reset()
@@ -1027,6 +1054,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             terminalView.preserveUserScroll = false
             terminalView.isHidden = true
             keystrokeDebouncer?.cancelAll()
+            keystrokeDebouncer = nil
             keyCoalescer.reset()
             updateState(.connecting)
         }
@@ -1061,6 +1089,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         // MARK: - Stream Message Handling
 
         private func handleStreamMessage(_ message: TerminalStreamMessage) {
+            guard
+                message.matchesLease(
+                    activeLeaseId,
+                    requiresLease: connection?.relayClient.workspaceInputState.supportsStreamIdentity == true
+                ) else { return }
             switch message.updateType {
             case let .initialState(state):
                 guard let data = Data(base64Encoded: state.contentBase64) else { return }
@@ -1295,6 +1328,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             terminalView.isHidden = false
             terminalView.needsDisplay = true
             updateState(.streaming)
+            terminalView.completePendingFocusRestoration()
 
             if terminalView.autoFocusEnabled, !terminalView.isEditorActive {
                 terminalView.focusTerminal()

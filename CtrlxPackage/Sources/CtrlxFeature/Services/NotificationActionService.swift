@@ -398,20 +398,26 @@
                 )
             }
 
-            // `connect` returns once the WebSocket is up; the host link is
-            // usable only after the E2EE handshake (`isHostConnected`). Poll
-            // with a deadline rather than hooking connection callbacks the app
-            // may already own.
+            // The handshake can precede the first pane snapshot. Wait for both
+            // before binding a notification response to its current terminal.
             let deadline = Date().addingTimeInterval(Self.connectTimeout)
-            while manager.connection(for: hostId)?.isHostConnected != true, Date() < deadline {
+            while Date() < deadline {
+                if
+                    let connection = manager.connection(for: hostId),
+                    connection.isHostConnected,
+                    connection.relayClient.workspaceInputState.binding(paneID: context.sessionId) != .unavailable {
+                    break
+                }
+                guard !Task.isCancelled else { return false }
                 try? await Task.sleep(for: .milliseconds(200))
             }
 
             guard
                 let connection = manager.connection(for: hostId),
-                connection.isHostConnected
+                connection.isHostConnected,
+                connection.relayClient.workspaceInputState.binding(paneID: context.sessionId) != .unavailable
             else {
-                logger.error("Host not reachable for notification action submission")
+                logger.error("Host terminal not available for notification action submission")
                 return false
             }
 

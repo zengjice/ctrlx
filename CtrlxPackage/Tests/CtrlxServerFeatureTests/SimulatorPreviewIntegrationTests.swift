@@ -1,4 +1,5 @@
 #if os(macOS)
+    import AppKit
     import CtrlxCommon
     import CtrlxNetworking
     import Dependencies
@@ -26,7 +27,7 @@
                 root: root,
                 helper: URL(fileURLWithPath: path),
                 runner: .liveValue,
-                system: .liveValue
+                system: .liveValue,
             )
             var failure: (any Error)?
             var deviceID: String?
@@ -35,9 +36,69 @@
                     runtime: "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
                     deviceType: nil,
                     frames: { $0.finish() },
-                    errors: { print("Preview helper: \($0)") }
+                    errors: { print("Preview helper: \($0)") },
                 )
                 deviceID = handle.udid
+                let hostClipboardRevision = NSPasteboard.general.changeCount
+                let initial = try await handle.worker.request(["command": .string("clipboard-read"), "revisionOnly": .bool(true)])
+                let initialRevision = try #require(initial["revision"]?.stringValue)
+                let seed = root.appendingPathComponent("large-clipboard.txt")
+                try Data(repeating: 120, count: 400 * 1_024).write(to: seed)
+                let seeded = try await ProcessRunner.liveValue.run(
+                    "/bin/sh",
+                    [
+                        "-c",
+                        "exec /usr/bin/xcrun simctl --set \"$1\" pbcopy \"$2\" < \"$3\"",
+                        "clipboard-seed",
+                        root.appendingPathComponent("devices").path,
+                        handle.udid,
+                        seed.path,
+                    ],
+                    nil, 15,
+                )
+                try #require(seeded.isSuccess, "Private device clipboard seed failed: \(seeded.stderrString)")
+                var revision = initialRevision
+                for _ in 0..<10 {
+                    let baseline = try await handle.worker.request(["command": .string("clipboard-read"), "revisionOnly": .bool(true)])
+                    revision = try #require(baseline["revision"]?.stringValue)
+                    #expect(baseline["content"] == nil)
+                    if revision != initialRevision {
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                try #require(!revision.isEmpty && revision != initialRevision)
+                let unchanged = try await handle.worker.request(["command": .string("clipboard-read"), "afterRevision": .string(revision)])
+                #expect(unchanged["revision"]?.stringValue == revision && unchanged["content"] == nil)
+                do {
+                    _ = try await handle.worker.request(["command": .string("clipboard-read")])
+                    Issue.record("Direct retrieval of a 400 KiB clipboard must still fail")
+                } catch {
+                    #expect(error.localizedDescription.contains("exceeds 384 KiB"))
+                }
+                print("Simulator 400 KiB clipboard: revision-only/unchanged reads passed; direct read rejected")
+                let samples: [(String, Data)] = [
+                    ("text", Data("CtrlX clipboard 中文\nsecond line".utf8)),
+                    ("png", Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQaPjQAMIMMAYARzIIQdQEEEMAAAAASUVORK5CYII=")!),
+                ]
+                // Alternate types so an old snapshot cannot accidentally match the next write.
+                for iteration in 0..<10 {
+                    for (kind, original) in samples {
+                        let bytes = kind == "text" ? original + Data("\(iteration)".utf8) : original
+                        _ = try await handle.worker.request(["command": .string("clipboard-write"), "content": .object([
+                            "kind": .string(kind), "data": .string(bytes.base64EncodedString()),
+                        ])])
+                        let result = try await handle.worker.request(["command": .string("clipboard-read"), "afterRevision": .string(revision)])
+                        let content = try #require(result["content"]?.objectValue)
+                        #expect(content["kind"]?.stringValue == kind)
+                        #expect(content["data"]?.stringValue == bytes.base64EncodedString())
+                        let nextRevision = try #require(result["revision"]?.stringValue)
+                        #expect(!nextRevision.isEmpty && nextRevision != revision)
+                        revision = nextRevision
+                        print("Simulator clipboard round-trip \(iteration): \(kind)")
+                    }
+                }
+                #expect(NSPasteboard.general.changeCount == hostClipboardRevision, "Device clipboard transfer must not alter the Host clipboard")
                 for subscribed in [false, true] {
                     if subscribed {
                         _ = try await handle.worker.request(["command": .string("subscribe")])
@@ -71,7 +132,7 @@
                     "/usr/bin/xcrun",
                     ["simctl", "--set", root.appendingPathComponent("devices").path, "delete", deviceID],
                     nil,
-                    60
+                    60,
                 )
                 #expect(cleanup.isSuccess, "Private test device cleanup failed: \(cleanup.stderrString)")
                 if cleanup.isSuccess {

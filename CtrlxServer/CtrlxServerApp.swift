@@ -20,7 +20,6 @@ struct TmuxPaneMirrorApp: App {
     @State private var updaterController: UpdaterController
     @NSApplicationDelegateAdaptor private var shutdownDelegate: AppShutdownDelegate
     @Environment(\.openSettings) private var openSettings
-    @FocusedValue(\.workbenchMenuActions) private var workbenchMenuActions
 
     init() {
         let isE2E = CommandLine.arguments.contains("--e2e-test")
@@ -52,7 +51,8 @@ struct TmuxPaneMirrorApp: App {
 
         // E2E test support: use in-memory storage to avoid polluting real UserDefaults/Keychain
         if CommandLine.arguments.contains("--e2e-test") {
-            let prefs = PreferencesService.inMemory()
+            let restartStorage = E2EPersistentStorage.fromArguments()
+            let prefs = restartStorage?.preferences ?? PreferencesService.inMemory()
 
             // Suppress first-launch dialogs (launch-at-login prompt)
             prefs.setBool(true, AppSettings.Keys.hasAskedAboutLaunchAtLogin.rawValue)
@@ -178,7 +178,7 @@ struct TmuxPaneMirrorApp: App {
 
             prepareDependencies {
                 $0[PreferencesService.self] = prefs
-                $0[SecretsService.self] = .inMemory()
+                $0[SecretsService.self] = restartStorage?.secrets ?? .inMemory()
                 let testRoot: URL
                 if let index = CommandLine.arguments.firstIndex(of: "--ctrlx-state-root"), index + 1 < CommandLine.arguments.count {
                     testRoot = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
@@ -306,14 +306,19 @@ struct TmuxPaneMirrorApp: App {
                 let dynamicEntries: [String: FakeEntry] = [
                     "generated": .folder(generatedChildren),
                 ]
-                $0[FileSystemLoadingService.self] = .inMemory(tree: fakeTree, dynamicEntries: dynamicEntries)
-                $0[FileTextSearchService.self] = .inMemory(tree: fakeTree, dynamicEntries: dynamicEntries)
+                let liveWorkspaceContent = CommandLine.arguments.contains("--e2e-live-workspace-content")
+                if !liveWorkspaceContent {
+                    $0[FileSystemLoadingService.self] = .inMemory(tree: fakeTree, dynamicEntries: dynamicEntries)
+                    $0[FileTextSearchService.self] = .inMemory(tree: fakeTree, dynamicEntries: dynamicEntries)
+                }
                 // Git tab (issue #258): in-memory provider that starts clean and
                 // flips to the fixture changes when a scenario sets the sentinel
                 // file (issue #573), so the eagerly-loaded badge only appears
                 // where a scenario asks for it. Falls back to the always-dirty
                 // mock if no sentinel path was provided.
-                if let gitChangesFilePath {
+                if liveWorkspaceContent {
+                    $0[GitWorkbenchProviderClient.self] = .liveValue
+                } else if let gitChangesFilePath {
                     try? FileManager.default.removeItem(atPath: gitChangesFilePath)
                     $0[GitWorkbenchProviderClient.self] = .e2e(changesFilePath: gitChangesFilePath)
                 } else {
@@ -455,6 +460,7 @@ struct TmuxPaneMirrorApp: App {
         .defaultLaunchBehavior(
             (coordinator.settings.openPanesWindowOnLaunch || showingTmuxInstallGuide) ? .presented : .suppressed
         )
+        .restorationBehavior(coordinator.settings.restoresWorkspaceOnLaunch ? .disabled : .automatic)
         .onChange(of: totalPendingSessionCount, initial: true) { _, newValue in
             // Routed through DockIconService (not NSApp.dockTile directly) so
             // the badge survives .accessory → .regular activation-policy
@@ -480,45 +486,6 @@ struct TmuxPaneMirrorApp: App {
                 CloseTabMenuItem()
             }
 
-            CommandGroup(after: .textEditing) {
-                Button("Find in Files") {
-                    workbenchMenuActions?.openContentSearch()
-                }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled(workbenchMenuActions == nil)
-            }
-
-            // Window menu - tab navigation shortcuts
-            CommandGroup(before: .windowList) {
-                TerminalWindowNavigationMenuItems()
-
-                Divider()
-
-                Button("Previous Tab") {
-                    workbenchMenuActions?.selectPreviousTab()
-                }
-                .keyboardShortcut("[", modifiers: [.command, .shift])
-                .disabled(workbenchMenuActions == nil)
-
-                Button("Next Tab") {
-                    workbenchMenuActions?.selectNextTab()
-                }
-                .keyboardShortcut("]", modifiers: [.command, .shift])
-                .disabled(workbenchMenuActions == nil)
-
-                Button("Previous Session") {
-                    workbenchMenuActions?.selectPreviousSession?()
-                }
-                .disabled(workbenchMenuActions?.selectPreviousSession == nil)
-
-                Button("Next Session") {
-                    workbenchMenuActions?.selectNextSession?()
-                }
-                .disabled(workbenchMenuActions?.selectNextSession == nil)
-
-                Divider()
-            }
-
             // Edit menu - Copy as Rich Text / Copy with Control Sequences
             CommandGroup(after: .pasteboard) {
                 Divider()
@@ -526,12 +493,10 @@ struct TmuxPaneMirrorApp: App {
                 Button("Copy as Rich Text") {
                     NSApp.sendAction(#selector(TerminalActions.copyAsRichText), to: nil, from: nil)
                 }
-                .keyboardShortcut("c", modifiers: [.command, .option])
 
                 Button("Copy with Control Sequences") {
                     NSApp.sendAction(#selector(TerminalActions.copyWithControlSequences), to: nil, from: nil)
                 }
-                .keyboardShortcut("c", modifiers: [.command, .control])
             }
 
             // Help menu - CLI API Reference
@@ -539,6 +504,20 @@ struct TmuxPaneMirrorApp: App {
                 APIReferenceMenuItem()
             }
         }
+
+        Window("Agent Setup", id: "agent-cli-setup") {
+            AgentCLIInstallationView().environment(coordinator)
+        }
+        .defaultSize(width: 620, height: 460)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
+        // Reuse one overview window without changing the selected workspace.
+        Window("Dashboard", id: "dashboard") {
+            MacDashboardView().environment(coordinator)
+        }
+        .defaultSize(width: 720, height: 760)
+        .defaultLaunchBehavior(.suppressed)
 
         // About window - custom CtrlX provenance and build information
         Window("About CtrlX", id: "about") {
@@ -568,11 +547,12 @@ struct TmuxPaneMirrorApp: App {
         // Menu bar extra - always visible, main entry point to the app
         MenuBarExtra {
             MenuBarExtraView()
+                .labelStyle(.titleAndIcon)
                 .environment(coordinator.windowManager)
                 .environment(coordinator.settings)
                 .environment(coordinator)
         } label: {
-            MenuBarLabel(pendingCount: totalPendingSessionCount)
+            MenuBarLabel(pendingCount: totalPendingSessionCount, lowQuotaCount: coordinator.dashboardStore.quotaSummaries().filter(\.isLow).count)
                 .task {
                     coordinator.settings.applyAppearance()
                     // Capture the Settings-opening action once at launch so a
@@ -586,6 +566,7 @@ struct TmuxPaneMirrorApp: App {
                 .task(id: showingTmuxInstallGuide) {
                     guard !showingTmuxInstallGuide else { return }
                     await coordinator.setupAllServices()
+                    await coordinator.dashboardStore.monitor(endpoints: coordinator.dashboardEndpoints)
                 }
         }
     }
@@ -708,45 +689,6 @@ private struct CloseTabMenuItem: View {
             }
         }
         .keyboardShortcut("w", modifiers: .command)
-    }
-}
-
-/// Window-menu commands for tmux-window-only navigation. The focused value is
-/// supplied only by the active panes scene, so Settings/About keep standard
-/// macOS key handling and terminal views never install a key-event monitor.
-private struct TerminalWindowNavigationMenuItems: View {
-    @FocusedValue(\.terminalWindowNavigationActions) private var actions
-
-    private var windowCount: Int {
-        actions?.windowCount ?? 0
-    }
-
-    var body: some View {
-        Button("Previous Terminal Window") {
-            actions?.selectPrevious()
-        }
-        .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-        .disabled(windowCount < 2)
-
-        Button("Next Terminal Window") {
-            actions?.selectNext()
-        }
-        .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-        .disabled(windowCount < 2)
-
-        Menu("Select Terminal Window") {
-            ForEach(0 ..< 9, id: \.self) { index in
-                Button("Terminal Window \(index + 1)") {
-                    actions?.selectAtIndex(index)
-                }
-                .keyboardShortcut(
-                    KeyEquivalent(Character(String(index + 1))),
-                    modifiers: .command
-                )
-                .disabled(index >= windowCount)
-            }
-        }
-        .disabled(windowCount == 0)
     }
 }
 

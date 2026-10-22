@@ -248,6 +248,16 @@ final public class AppSettings {
 
     // MARK: - Behavior Settings
 
+    /// App-wide diagnostics, stored locally on this device.
+    public var debugModeEnabled = false {
+        didSet {
+            preferences.setBool(debugModeEnabled, Keys.debugModeEnabled)
+            onDebugModeChanged?(debugModeEnabled)
+        }
+    }
+
+    @ObservationIgnored var onDebugModeChanged: (@MainActor (Bool) -> Void)?
+
     /// Whether to open the panes window when the app launches
     public var openPanesWindowOnLaunch: Bool = Defaults.openPanesWindowOnLaunch {
         didSet { preferences.setBool(openPanesWindowOnLaunch, Keys.openPanesWindowOnLaunch) }
@@ -442,6 +452,14 @@ final public class AppSettings {
 
     // MARK: - Launch at Login Settings
 
+    var workspaceRecoveryMode: WorkspaceRecoveryMode = .layoutAndAgents {
+        didSet { preferences.setString(workspaceRecoveryMode.rawValue, Keys.workspaceRecoveryMode) }
+    }
+
+    public var restoresWorkspaceOnLaunch: Bool {
+        workspaceRecoveryMode != .disabled
+    }
+
     /// Whether the app should launch at login (synced with system login items)
     public var launchAtLogin: Bool = Defaults.launchAtLogin {
         didSet { preferences.setBool(launchAtLogin, Keys.launchAtLogin) }
@@ -455,6 +473,7 @@ final public class AppSettings {
     // MARK: - Initialization
 
     public init() {
+        self.debugModeEnabled = preferences.optionalBool(Keys.debugModeEnabled) ?? false
         self.fontName = preferences.string(Keys.fontName) ?? Defaults.fontName
         // Clamp on load so a persisted/synced value that predates these
         // bounds (or otherwise lands outside them) is corrected immediately
@@ -541,9 +560,10 @@ final public class AppSettings {
         ) ?? Defaults.editorOverrideMode
 
         // Launch at Login
+        self.workspaceRecoveryMode = WorkspaceRecoveryMode(rawValue: preferences.string(Keys.workspaceRecoveryMode) ?? "") ?? .layoutAndAgents
         self.launchAtLogin = preferences.optionalBool(Keys.launchAtLogin) ?? Defaults.launchAtLogin
         self.hasAskedAboutLaunchAtLogin = preferences.optionalBool(Keys.hasAskedAboutLaunchAtLogin) ?? Defaults.hasAskedAboutLaunchAtLogin
-        quickPhrasePairingsLoaded = true
+        self.quickPhrasePairingsLoaded = true
         updateQuickPhraseSyncPairings()
     }
 
@@ -575,6 +595,8 @@ final public class AppSettings {
     // MARK: - Keys
 
     public enum Keys: String {
+        case debugModeEnabled
+        case workspaceRecoveryMode
         case fontName
         case fontSize
         case scrollbackLines
@@ -760,6 +782,10 @@ final public class AppSettings {
         return browserDomainRules.first(where: { $0.domain == key })?.behavior
     }
 
+    func effectiveBrowserBehavior(for url: URL, override: BrowserLinkBehavior? = nil) -> BrowserLinkBehavior {
+        override ?? browserBehavior(for: url) ?? browserLinkBehavior
+    }
+
     /// Sets the behavior for `domain`, replacing any existing rule for the
     /// same (case-insensitively normalized) host.
     public func setBrowserBehavior(_ behavior: BrowserLinkBehavior, for domain: String) {
@@ -894,8 +920,10 @@ final public class AppSettings {
         for rename in SessionRenameMapping.detectNames(from: oldPaneIDs, to: newPaneIDs) {
             order = RemoteSessionOrder.replacing(rename.oldName, with: rename.newName, in: order)
         }
-        setLocalSessionOrder(RemoteSessionOrder.applying(order, to: newPaneIDs.keys.sorted(), sessionName: { $0 }))
+        setLocalSessionOrder(RemoteSessionOrder.applying(order, to: Set(newPaneIDs.keys).union(pendingRecoverySessionNames).sorted(), sessionName: { $0 }))
     }
+
+    @ObservationIgnored var pendingRecoverySessionNames: Set<String> = []
 
     public func setRemoteSessionOrder(_ sessionNames: [String], for hostId: String) {
         let normalized = RemoteSessionOrder.normalized(sessionNames)
@@ -973,14 +1001,4 @@ final public class AppSettings {
         try loginItemService.setEnabled(enabled)
         launchAtLogin = enabled
     }
-}
-
-// MARK: - Terminal Theme
-
-public enum TerminalTheme: String, CaseIterable, Sendable {
-    case defaultDark = "Default Dark"
-    case defaultLight = "Default Light"
-    case solarizedDark = "Solarized Dark"
-    case solarizedLight = "Solarized Light"
-    case anysphereDark = "Anysphere Dark"
 }

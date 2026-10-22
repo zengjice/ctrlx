@@ -55,7 +55,9 @@ struct SessionDetailServiceTests {
     ) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
-            if condition() { return true }
+            if condition() {
+                return true
+            }
             await Task.yield()
         }
         return condition()
@@ -134,6 +136,7 @@ struct SessionDetailServiceTests {
         SessionDetailService.finishReplySubmission(
             succeeded: false,
             submittedState: submitted,
+            submittedDraft: "retry me",
             currentState: submitted
         )
         #expect(submitted.replyDraft == "retry me")
@@ -141,6 +144,7 @@ struct SessionDetailServiceTests {
         SessionDetailService.finishReplySubmission(
             succeeded: true,
             submittedState: submitted,
+            submittedDraft: "retry me",
             currentState: replacement
         )
         #expect(submitted.replyDraft == "retry me")
@@ -148,6 +152,15 @@ struct SessionDetailServiceTests {
         SessionDetailService.finishReplySubmission(
             succeeded: true,
             submittedState: submitted,
+            submittedDraft: "earlier text",
+            currentState: submitted
+        )
+        #expect(submitted.replyDraft == "retry me")
+
+        SessionDetailService.finishReplySubmission(
+            succeeded: true,
+            submittedState: submitted,
+            submittedDraft: "retry me",
             currentState: submitted
         )
         #expect(submitted.replyDraft.isEmpty)
@@ -258,13 +271,15 @@ struct SessionDetailServiceTests {
     func workingTransitionClearsReplyDraft() async {
         let sessionStore = SessionStore()
         let relayClient = ViewerRelayClient()
+        var persistedDrafts: [String] = []
 
         pushState(sessionStore, pairId: "test-pair", sessionId: "%1", state: .doneWorking(summary: nil))
         let service = SessionDetailService(
             paneId: "%1",
             hostId: "test-pair",
             sessionStore: sessionStore,
-            relayClient: relayClient
+            relayClient: relayClient,
+            onDraftChange: { _, text in persistedDrafts.append(text) }
         )
         let priorState = service.responseState
         let priorViewIdentity = priorState?.viewIdentity
@@ -275,6 +290,7 @@ struct SessionDetailServiceTests {
         pushState(sessionStore, pairId: "test-pair", sessionId: "%1", state: .working)
         #expect(await waitUntil { service.responseState == nil })
         #expect(priorState?.replyDraft == "")
+        #expect(persistedDrafts == ["continue"])
         await Task.yield()
 
         pushState(sessionStore, pairId: "test-pair", sessionId: "%1", state: .idle)

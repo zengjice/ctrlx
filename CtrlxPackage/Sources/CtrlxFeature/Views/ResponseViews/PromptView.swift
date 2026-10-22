@@ -8,13 +8,12 @@ struct PromptView: View {
     let request: PromptRequest
     let isConnected: Bool
     let submit: ResponseSender
-    let state: ResponseState
+    @Bindable var state: ResponseState
 
-    @State private var inputText = ""
     @FocusState private var isTextFieldFocused: Bool
 
     private var isInputEmpty: Bool {
-        inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        state.replyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var placeholder: String {
@@ -44,10 +43,10 @@ struct PromptView: View {
     }
 
     private var textField: some View {
-        TextField(placeholder, text: $inputText, axis: .vertical)
+        TextField(placeholder, text: $state.replyDraft, axis: .vertical)
             .textFieldStyle(.plain)
             .lineLimit(3...6)
-            .voiceInputAccessory(text: $inputText, isDisabled: state.isSending || !isConnected)
+            .voiceInputAccessory(text: $state.replyDraft, isDisabled: state.isSending || !isConnected)
             .padding(12)
             .background(textFieldBackground)
             .overlay(textFieldBorder)
@@ -82,15 +81,14 @@ struct PromptView: View {
     }
 
     private func sendMessage() {
-        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = state.replyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
         state.isSending = true
 
         Task {
-            await submit(.prompt(text: trimmed))
-            inputText = ""
-            state.isSending = false
+            defer { state.isSending = false }
+            guard await submit(.prompt(text: trimmed)) else { return }
             state.response = .promptSubmitted
         }
     }
@@ -111,7 +109,7 @@ struct PromptView: View {
                 PromptView(
                     request: PromptRequest(title: "Send a message to Claude"),
                     isConnected: true,
-                    submit: { _ in },
+                    submit: { _ in true },
                     state: state
                 )
             }

@@ -1,16 +1,18 @@
 import Foundation
 
-struct VoiceRecognitionResult {
+struct VoiceRecognitionResult: Sendable {
     let primaryTranscript: String
     let alternativeTranscripts: [String]
     let liveTranscript: String
     let diagnosticID: String
+    let localeIdentifier: String
 
     init(
         primaryTranscript: String,
         alternativeTranscripts: [String] = [],
         liveTranscript: String = "",
-        diagnosticID: String = UUID().uuidString
+        diagnosticID: String = UUID().uuidString,
+        localeIdentifier: String = VoiceInputLanguage.system.localeIdentifier
     ) {
         self.primaryTranscript = primaryTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         self.alternativeTranscripts = Self.uniqueNonempty(
@@ -19,10 +21,25 @@ struct VoiceRecognitionResult {
         )
         self.liveTranscript = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         self.diagnosticID = diagnosticID
+        self.localeIdentifier = localeIdentifier
     }
 
     var bestAvailableTranscript: String {
-        primaryTranscript.isEmpty ? liveTranscript : primaryTranscript
+        prefersLiveTranscript ? liveTranscript : primaryTranscript
+    }
+
+    var prefersLiveTranscript: Bool {
+        VoiceTranscriptFidelity.shouldPreferLive(liveTranscript, over: primaryTranscript)
+    }
+
+    func withLocale(_ identifier: String) -> Self {
+        Self(
+            primaryTranscript: primaryTranscript,
+            alternativeTranscripts: alternativeTranscripts,
+            liveTranscript: liveTranscript,
+            diagnosticID: diagnosticID,
+            localeIdentifier: identifier
+        )
     }
 
     private static func uniqueNonempty(_ values: [String], excluding excluded: String) -> [String] {
@@ -53,7 +70,9 @@ struct VoiceRecognitionCandidateAccumulator {
         self.maximumCandidateCount = max(1, maximumCandidateCount)
     }
 
-    mutating func append(primary: String, alternatives: [String]) {
+    mutating func append(primary: String, alternatives: [String], isFinal: Bool = true) {
+        // Progressive file replay also emits revisions of the same segment.
+        guard isFinal else { return }
         let options = uniqueSegmentOptions(primary: primary, alternatives: alternatives)
         guard !options.isEmpty else { return }
 
@@ -72,7 +91,9 @@ struct VoiceRecognitionCandidateAccumulator {
         }
 
         combined.sort {
-            if $0.rank != $1.rank { return $0.rank < $1.rank }
+            if $0.rank != $1.rank {
+                return $0.rank < $1.rank
+            }
             return $0.insertionOrder < $1.insertionOrder
         }
 
@@ -108,18 +129,6 @@ struct VoiceRecognitionCandidateAccumulator {
 public enum VoiceInputContext {
     public static let maximumTerminalCharacterCount = 12_000
     static let terminalHeader = "Recent terminal text:\n"
-
-    static func compacted(_ context: String?, maximumCount: Int) -> String? {
-        guard let context else { return nil }
-        guard let header = context.range(of: terminalHeader) else {
-            return terminalExcerpt(context, maximumCount: maximumCount)
-        }
-        return makeTerminalContext(
-            terminalText: String(context[header.upperBound...]),
-            metadata: [String(context[..<header.lowerBound])],
-            maximumCount: maximumCount
-        )
-    }
 
     public static func paneMetadata(
         sessionName: String, windowName: String, command: String?, currentPath: String?

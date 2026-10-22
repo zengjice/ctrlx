@@ -67,7 +67,9 @@ struct RemoteSessionSidebarRow: View {
                 currentPath: activeWindowMetadata.currentPath,
                 gitBranch: activeWindowMetadata.gitBranch,
                 latestEvent: latestEventSubtitle,
-                homeDirectory: homeDirectory
+                homeDirectory: homeDirectory,
+                primaryTextColor: settings.theme.sidebarPrimaryTextColor,
+                secondaryTextColor: settings.theme.workspaceSecondaryTextColor
             )
 
             Spacer()

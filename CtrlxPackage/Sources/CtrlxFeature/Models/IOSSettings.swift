@@ -57,6 +57,7 @@
         // MARK: - UserDefaults Keys
 
         public enum Keys: String {
+            case debugModeEnabled
             case deviceId
             case customDeviceName
             case pairedHosts
@@ -64,10 +65,12 @@
             case externalServerURL
             case autoReconnect
             case appearanceMode
+            case terminalTheme
             case terminalFontName
             case terminalFontSize
             case terminalKeyboardControlPosition
             case showTerminalKeyboardOnEntry
+            case confirmImageUploads
             case agentQuickInputEnabled
             case agentBackgroundMonitoringEnabled
             case newSessionName
@@ -83,6 +86,11 @@
         @Dependency(PreferencesService.self) private var preferences
 
         // MARK: - Properties
+
+        /// App-wide diagnostics, stored locally on this device.
+        public var debugModeEnabled = false {
+            didSet { preferences.setBool(debugModeEnabled, Keys.debugModeEnabled) }
+        }
 
         /// Device-local phrase library, independent of sessions and agent plugins.
         let quickPhrases = QuickPhraseStore()
@@ -129,6 +137,10 @@
             didSet { preferences.setString(appearanceMode.rawValue, Keys.appearanceMode) }
         }
 
+        public var terminalTheme: TerminalTheme = .defaultDark {
+            didSet { preferences.setString(terminalTheme.rawValue, Keys.terminalTheme) }
+        }
+
         /// Font name for terminal snapshot display
         public var terminalFontName = "Menlo" {
             didSet { preferences.setString(terminalFontName, Keys.terminalFontName) }
@@ -152,6 +164,10 @@
         /// Whether a newly opened terminal session starts with keyboard input active.
         public var showTerminalKeyboardOnEntry = false {
             didSet { preferences.setBool(showTerminalKeyboardOnEntry, Keys.showTerminalKeyboardOnEntry) }
+        }
+
+        public var confirmImageUploads = false {
+            didSet { preferences.setBool(confirmImageUploads, Keys.confirmImageUploads) }
         }
 
         /// Whether agent panes use the optional response field above the terminal.
@@ -224,6 +240,7 @@
         /// independent `@Observable` state — mutations on one instance will not
         /// trigger observation updates on another.
         public init() {
+            self.debugModeEnabled = preferences.optionalBool(Keys.debugModeEnabled) ?? false
             // Load or generate device ID
             if let savedDeviceId = preferences.string(Keys.deviceId) {
                 self.deviceId = savedDeviceId
@@ -242,12 +259,14 @@
             self.appearanceMode = AppearanceMode(rawValue: preferences.string(Keys.appearanceMode) ?? "") ?? .system
 
             // Terminal settings with iOS-appropriate defaults
+            self.terminalTheme = TerminalTheme(rawValue: preferences.string(Keys.terminalTheme) ?? "") ?? .defaultDark
             self.terminalFontName = preferences.string(Keys.terminalFontName) ?? "Menlo"
             self.terminalFontSize = preferences.optionalDouble(Keys.terminalFontSize) ?? 10
             self.terminalKeyboardControlPosition = TerminalKeyboardControlPosition(
                 storedValue: preferences.string(Keys.terminalKeyboardControlPosition)
             )
             self.showTerminalKeyboardOnEntry = preferences.optionalBool(Keys.showTerminalKeyboardOnEntry) ?? false
+            self.confirmImageUploads = preferences.optionalBool(Keys.confirmImageUploads) ?? false
             self.agentQuickInputEnabled = preferences.optionalBool(Keys.agentQuickInputEnabled) ?? false
             self.agentBackgroundMonitoringEnabled = preferences.optionalBool(
                 Keys.agentBackgroundMonitoringEnabled
@@ -275,7 +294,7 @@
             // notifications even if the user hasn't changed pairings since
             // upgrading.
             mirrorHostNamesToAppGroup()
-            quickPhrasePairingsLoaded = true
+            self.quickPhrasePairingsLoaded = true
             updateQuickPhraseSyncPairings()
         }
 

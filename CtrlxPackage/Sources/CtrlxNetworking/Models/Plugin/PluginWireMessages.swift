@@ -46,19 +46,22 @@ public struct AgentResponseSubmissionMessage: Codable, Sendable, Equatable {
     public let pluginId: String
     public let requestId: String
     public let response: AgentResponse
+    public let expectedWorkspacePane: WorkspacePaneIdentity?
 
     public init(
         pairId: String,
         sessionId: String,
         pluginId: String,
         requestId: String,
-        response: AgentResponse
+        response: AgentResponse,
+        expectedWorkspacePane: WorkspacePaneIdentity? = nil
     ) {
         self.pairId = pairId
         self.sessionId = sessionId
         self.pluginId = pluginId
         self.requestId = requestId
         self.response = response
+        self.expectedWorkspacePane = expectedWorkspacePane
     }
 
     public func withPairId(_ pairId: String) -> AgentResponseSubmissionMessage {
@@ -67,7 +70,8 @@ public struct AgentResponseSubmissionMessage: Codable, Sendable, Equatable {
             sessionId: sessionId,
             pluginId: pluginId,
             requestId: requestId,
-            response: response
+            response: response,
+            expectedWorkspacePane: expectedWorkspacePane
         )
     }
 }

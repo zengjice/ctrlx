@@ -10,6 +10,8 @@ struct SectionHeader<Trailing: View, Popover: View>: View {
     let popover: Popover
     let hasPopover: Bool
     let newSessionButtonIdentifier: String?
+    var hasManualSessionOrder = false
+    var onRestoreAutomaticOrder: (() -> Void)?
     @State private var showingPopover = false
 
     var body: some View {
@@ -20,8 +22,23 @@ struct SectionHeader<Trailing: View, Popover: View>: View {
             Text(title)
                 .font(.headline.weight(.semibold))
 
-            if hasPopover || !(trailing is EmptyView) {
+            if hasPopover || onRestoreAutomaticOrder != nil || !(trailing is EmptyView) {
                 Spacer()
+            }
+
+            if let onRestoreAutomaticOrder {
+                Button(action: onRestoreAutomaticOrder) {
+                    Symbols.arrowUpArrowDown.image
+                        .font(.caption)
+                        .foregroundStyle(hasManualSessionOrder ? Color.primary : Color.secondary.opacity(0.5))
+                        .frame(width: 24, height: 24)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasManualSessionOrder)
+                .accessibilityLabel("Restore Automatic Order")
+                .accessibilityIdentifier("restore-automatic-session-order")
+                .help(hasManualSessionOrder ? "Restore Automatic Order" : "Already using automatic order")
             }
 
             if hasPopover {
@@ -70,6 +87,8 @@ extension SectionHeader where Trailing == EmptyView {
         symbol: Symbols,
         isNewSessionDisabled: Bool = false,
         newSessionButtonIdentifier: String? = nil,
+        hasManualSessionOrder: Bool = false,
+        onRestoreAutomaticOrder: (() -> Void)? = nil,
         @ViewBuilder popover: () -> Popover
     ) {
         self.title = title
@@ -79,6 +98,8 @@ extension SectionHeader where Trailing == EmptyView {
         self.popover = popover()
         self.hasPopover = true
         self.newSessionButtonIdentifier = newSessionButtonIdentifier
+        self.hasManualSessionOrder = hasManualSessionOrder
+        self.onRestoreAutomaticOrder = onRestoreAutomaticOrder
     }
 }
 
@@ -89,6 +110,8 @@ extension SectionHeader {
         symbol: Symbols,
         isNewSessionDisabled: Bool = false,
         newSessionButtonIdentifier: String? = nil,
+        hasManualSessionOrder: Bool = false,
+        onRestoreAutomaticOrder: (() -> Void)? = nil,
         @ViewBuilder trailing: () -> Trailing,
         @ViewBuilder popover: () -> Popover
     ) {
@@ -99,5 +122,7 @@ extension SectionHeader {
         self.popover = popover()
         self.hasPopover = true
         self.newSessionButtonIdentifier = newSessionButtonIdentifier
+        self.hasManualSessionOrder = hasManualSessionOrder
+        self.onRestoreAutomaticOrder = onRestoreAutomaticOrder
     }
 }

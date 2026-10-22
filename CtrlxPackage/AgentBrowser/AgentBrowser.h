@@ -6,7 +6,7 @@
 #include "include/cef_jsdialog_handler.h"
 
 struct BrowserCallbacks {
-  std::function<void(const std::string&, int, const std::string&, std::function<bool()>, std::function<void(CefRefPtr<CefBrowser>, NSString*)>)> open;
+  std::function<void(const std::string&, int, const std::string&, bool, std::function<bool()>, std::function<void(CefRefPtr<CefBrowser>, NSString*)>)> open;
   std::function<void(CefRefPtr<CefBrowser>)> select;
   std::function<void()> changed;
   std::function<NSDictionary*(CefRefPtr<CefBrowser>)> presentation;
@@ -14,6 +14,9 @@ struct BrowserCallbacks {
 bool StartAgentBrowser(NSString* stateDirectory, BrowserCallbacks callbacks);
 void StopAgentBrowser();
 bool AgentBrowserTransportsStopped();
+// Accessed only on the native AppKit/CEF UI thread.
+bool AgentBrowserDebugMode();
+void RecordBrowserDiagnostic(NSDictionary* event);
 void AddAgentBrowserTab(CefRefPtr<CefBrowser> browser, const std::string& owner);
 void RemoveAgentBrowserTab(CefRefPtr<CefBrowser> browser);
 void AgentBrowserNavigation(CefRefPtr<CefBrowser> browser);
@@ -25,6 +28,9 @@ bool AssignAgentBrowserTab(NSString* tab, NSString* run);
 bool AgentBrowserTabBusy(CefRefPtr<CefBrowser> browser);
 bool SetAgentBrowserHumanControl(NSString* tab, NSString* token);
 bool AgentBrowserHumanControlled(CefRefPtr<CefBrowser> browser);
+std::string AgentBrowserHumanControlToken(CefRefPtr<CefBrowser> browser);
+void AgentBrowserHumanInput(CefRefPtr<CefBrowser> browser, const std::string& control = {});
+void AgentBrowserCancelHumanInput(CefRefPtr<CefBrowser> browser);
 void RequestRemoteBrowserTab(NSString* tab, NSData* request, void (^completion)(NSData*, NSString*));
 bool AgentBrowserDownloadBegin(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem>, CefRefPtr<CefBeforeDownloadCallback>);
 void AgentBrowserDownloadUpdate(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem>, CefRefPtr<CefDownloadItemCallback>);
@@ -34,4 +40,5 @@ void AgentBrowserDialogReset(CefRefPtr<CefBrowser>);
 #ifdef CTRLX_UPSTREAM_BROWSER_PROBE
 // Isolated acceptance only. Never exported by a production runtime.
 NSDictionary *ProbeAgentBrowserDevTools(CefRefPtr<CefBrowser> source, NSString *action);
+NSDictionary *ProbeExternalApplication(CefRefPtr<CefBrowser> source, NSDictionary *request);
 #endif

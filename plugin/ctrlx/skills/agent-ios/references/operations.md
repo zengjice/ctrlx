@@ -15,7 +15,7 @@ Requires Xcode, an installed iOS runtime and CoreSimulator 1155.4 or newer.
 | Observe | `snapshot`, `wait`, `screenshot`: AX nodes/references, semantic selectors, visible/absent waits and PNG to a new path. |
 | Touch | `tap`, `swipe`, `long-press`, `drag`: single-contact input and system edge gestures. `pinch`: simultaneous two-contact scaling. |
 | Keys/text | `key`, `button`, `paste`: HID keys/chords; Home, lock, volume buttons; Unicode clipboard/menu paste. |
-| Display | `show`, `show --split`, `rotate`, `display-mode`: local tabs/splits, orientation and presentation mode. Paired Mac/iOS Viewers can observe live Host devices read-only. |
+| Display | `show`, `show --split`, `rotate`, `display-mode`: local tabs/splits, orientation and presentation mode. Paired Mac/iOS Viewers can observe live Host devices and explicitly take control for touch and clipboard operations on supported Hosts. |
 | Environment | `location`, `appearance`, `privacy`, `push`: fixed position, light/dark, permissions and simulated notifications. |
 | Resources | `config`, `resources`, `metrics`: device limits/reserves, pressure, CPU and process footprint. |
 | Diagnostics | `logs`, `crashes`: bounded device/app records. |
@@ -36,7 +36,7 @@ For cleanup scope, disk usage and exact-device reuse, read [device storage](stor
 - Arbitrary multi-touch paths, two-finger rotation/pan; `pinch` only scales a horizontal pair.
 - Mac marked-text composition/candidate windows: human input uses the iOS hardware-keyboard
   source; iOS Pinyin was verified. Unicode paste does not test composition or typing.
-- Remote simulator input/control, remote device creation/closure, audio or video-rate streaming; physical iPhone control.
+- Remote device closure, audio or video-rate streaming; physical iPhone control.
 - Device cloning, runtime download/installation, app compilation/signing. Prepare
   runtimes/builds separately; physical-device `.app` builds are not accepted.
 
@@ -51,8 +51,9 @@ CtrlX commands from `simctl` capabilities or claim substitutes provide equivalen
   mixed 1x/2x displays, four or more devices and other Macs/toolchains/runtimes are
   not qualified. Command success does not certify performance or compatibility.
 - Common UIKit/SwiftUI/WKWebView fixtures were checked, not every app/control/dialog.
-  Codex is the delivery target; Claude is deferred. Public distribution is separately
-  qualified. Source/tests do not prove the installed signed App includes the changes.
+  Native acceptance covers Codex. Claude Code has entrypoint/caller tests; real
+  CLI/device acceptance remains separate, as does public distribution.
+  Source/tests do not prove the installed signed App includes the changes.
   Unvalidated does not mean known broken. Operational/native limits follow below.
 
 ## Pane reuse and Viewer viewing
@@ -60,8 +61,9 @@ CtrlX commands from `simctl` capabilities or claim substitutes provide equivalen
 `open` reuses the source pane's default; `--new` adds a separate owned device.
 Conflicting explicit configuration fails without changing the running guest.
 Closing the workbench detaches display; owner exit or explicit device close still
-shuts down. Mac/iOS Viewers observe the same device through bounded JPEG previews,
-without input or lifecycle authority. Read [reuse, lifecycle and preview limits](viewing.md).
+shuts down. Mac/iOS Viewers observe the same device through bounded JPEG previews
+and can explicitly take control for touch and clipboard operations on supported
+Hosts. Read [reuse, lifecycle and preview limits](viewing.md).
 
 ## Batches
 

@@ -1,8 +1,21 @@
+import CtrlxCommon
 import CtrlxNetworking
+import Foundation
 
-struct TerminalCloseConfirmation<Target> {
+struct TerminalCloseConfirmation<Target>: Identifiable {
+    let id = UUID()
     let target: Target
     let runningProcesses: [RunningProcessInfo]
+    let inputBinding: ViewerWorkspaceInputBinding
+    var closesSession = false
+
+    var title: String {
+        closesSession ? "Close Session?" : "Close Tab?"
+    }
+
+    var actionTitle: String {
+        closesSession ? "Close Session" : "Close Anyway"
+    }
 
     var message: String {
         let grouped = Dictionary(grouping: runningProcesses) { $0.paneIndex }
@@ -10,6 +23,9 @@ struct TerminalCloseConfirmation<Target> {
             let names = Set(processes.map(\.name)).sorted().joined(separator: ", ")
             return "Terminal \(paneIndex): \(names)"
         }
-        return "The following processes are still running:\n\(descriptions.joined(separator: "\n"))"
+        let processes = "The following processes are still running:\n\(descriptions.joined(separator: "\n"))"
+        guard closesSession else { return processes }
+        let warning = "This is the last terminal tab. Closing it will close the entire session."
+        return runningProcesses.isEmpty ? warning : "\(warning)\n\n\(processes)"
     }
 }

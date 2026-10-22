@@ -63,6 +63,26 @@ public enum WindowRenameScenario {
         TestStep.macWaitForElement(titled: "win1", timeout: 10, instance: 1)
         TestStep.macScreenshot(label: "viewer-initial-tabs", instance: 1)
 
+        // Paste fixture names so an active IME cannot leave them as uncommitted marked text.
+        // An editor must keep its original target through a discovery refresh.
+        for instance in 0...1 {
+            TestStep.tmuxStoreDisplayMessage(target: "e2e-rename:0", format: "#{window_name}:#{pane_pid}", storeAs: "rename-before")
+            TestStep.macCGClickElement(query: .labelContains("e2e-rename:0"), clickCount: 2, instance: instance)
+            TestStep.macWaitForElement(titled: "Rename Window", timeout: 5, instance: instance)
+            TestStep.wait(seconds: 0.5)
+            TestStep.macPressKey(.character("a"), modifiers: .command, instance: instance)
+            TestStep.macWriteClipboard(text: "StaleName", instance: instance)
+            TestStep.macPaste(instance: instance)
+            TestStep.tmuxCommand(arguments: ["set-option", "-w", "-t", "e2e-rename:0", "@ctrlx-recovery-window", UUID().uuidString])
+            TestStep.wait(seconds: 6)
+            TestStep.macClickButton(titled: "Save", instance: instance)
+            TestStep.macWaitForElementQuery(.anyTextMatches("The terminal changed"), timeout: 10, instance: instance)
+            TestStep.macScreenshot(label: "retired-window-rename-\(instance)", compare: false, instance: instance)
+            TestStep.tmuxStoreDisplayMessage(target: "e2e-rename:0", format: "#{window_name}:#{pane_pid}", storeAs: "rename-after")
+            TestStep.assertStoredEqual(key: "rename-before", otherKey: "rename-after")
+            TestStep.macClickButton(titled: "OK", instance: instance)
+        }
+
         // ── Phase 5: Host renames window 0 via double-click ────
         TestStep.log("Phase 5: Host double-clicks tab and renames window 0")
         // The tab's accessibility label is "{windowId} {windowName}" (e.g.
@@ -72,9 +92,11 @@ public enum WindowRenameScenario {
         TestStep.macWaitForElement(titled: "Rename Window", timeout: 5)
         TestStep.wait(seconds: 0.5)
         TestStep.macPressKey(.character("a"), modifiers: .command)
-        TestStep.macType(text: "HostRenamed", pressReturn: false)
+        TestStep.macWriteClipboard(text: "HostRenamed")
+        TestStep.macPaste()
         TestStep.macScreenshot(label: "host-rename-alert-typed")
         TestStep.macClickButton(titled: "Save")
+        TestStep.waitForTmuxDisplayMessage(target: "e2e-rename:0", format: "#{window_name}", contains: "HostRenamed", timeout: 5)
 
         // Host tab updates to the new name.
         TestStep.macWaitForElement(titled: "HostRenamed", timeout: 10)
@@ -90,9 +112,11 @@ public enum WindowRenameScenario {
         TestStep.macWaitForElement(titled: "Rename Window", timeout: 5, instance: 1)
         TestStep.wait(seconds: 0.5)
         TestStep.macPressKey(.character("a"), modifiers: .command, instance: 1)
-        TestStep.macType(text: "ViewerRenamed", pressReturn: false, instance: 1)
+        TestStep.macWriteClipboard(text: "ViewerRenamed", instance: 1)
+        TestStep.macPaste(instance: 1)
         TestStep.macScreenshot(label: "viewer-rename-alert-typed", instance: 1)
         TestStep.macClickButton(titled: "Save", instance: 1)
+        TestStep.waitForTmuxDisplayMessage(target: "e2e-rename:1", format: "#{window_name}", contains: "ViewerRenamed", timeout: 5)
 
         // Viewer tab updates to the new name.
         TestStep.macWaitForElement(titled: "ViewerRenamed", timeout: 10, instance: 1)

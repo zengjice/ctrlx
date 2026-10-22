@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "CtrlX Extension Compatibility Fixture",
+  "version": "1.0.0",
+  "permissions": ["tabs", "storage", "declarativeNetRequest"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": {"service_worker": "worker.js"},
+  "action": {"default_popup": "popup.html"},
+  "content_scripts": [{
+    "matches": ["http://127.0.0.1/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }]
+}

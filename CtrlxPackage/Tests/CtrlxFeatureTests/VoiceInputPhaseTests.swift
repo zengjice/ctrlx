@@ -26,14 +26,8 @@ struct VoiceInputPhaseTests {
         #expect(VoiceInputPhase.recording.accessibilityValue == "Recording")
     }
 
-    @Test("Starting a new dictation resets only its shadow transcript, not existing terminal text")
+    @Test("Native input fields append the new utterance without rewriting the existing draft")
     func newDictation() {
-        var synchronizer = TerminalInputDocumentSynchronizer()
-        _ = synchronizer.advance(to: "上一段")
-        synchronizer.reset()
-        let delta = synchronizer.advance(to: "再检查一下")
-        #expect(delta.deletionCount == 0)
-        #expect(delta.insertion == "再检查一下")
         #expect(VoiceInputTextComposer.appending("再检查一下", to: "已有输入") == "已有输入 再检查一下")
     }
 }

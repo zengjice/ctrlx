@@ -56,7 +56,7 @@ final public class KeystrokeDebouncer {
         case keys([TmuxKey])
         case pasteText(String)
         case rawInput(Data)
-        case expandCodexQuestions(Int)
+        case expandCodexQuestions(Int, questionID: String? = nil)
     }
 
     public convenience init(
@@ -64,17 +64,18 @@ final public class KeystrokeDebouncer {
         relayClient: ViewerRelayClient,
         onPasteFailure: @escaping @MainActor (String) -> Void = { _ in }
     ) {
+        let binding = relayClient.workspaceInputState.binding(paneID: paneId)
         self.init(paneId: paneId) { op in
             let result: Result<CommandResponseMessage, Error>
             switch op {
             case let .keys(keys):
-                result = await relayClient.sendCommand(SendKeystroke(keys), paneId: paneId)
+                result = await relayClient.sendCommand(SendKeystroke(keys), paneId: paneId, inputBinding: binding)
             case let .pasteText(text):
-                result = await relayClient.sendCommand(PasteTerminalText(text: text), paneId: paneId)
+                result = await relayClient.sendCommand(PasteTerminalText(text: text), paneId: paneId, inputBinding: binding)
             case let .rawInput(data):
-                result = await relayClient.sendCommand(SendRawInput(data: data), paneId: paneId)
-            case let .expandCodexQuestions(count):
-                result = await relayClient.sendCommand(ExpandCodexQuestions(expectedCount: count), paneId: paneId, timeout: 2)
+                result = await relayClient.sendCommand(SendRawInput(data: data), paneId: paneId, inputBinding: binding)
+            case let .expandCodexQuestions(count, questionID):
+                result = await relayClient.sendCommand(ExpandCodexQuestions(expectedCount: count, expectedQuestionID: questionID), paneId: paneId, timeout: 2, inputBinding: binding)
             }
             if case let .failure(error) = result {
                 if case .pasteText = op, !Task.isCancelled {
@@ -173,11 +174,11 @@ final public class KeystrokeDebouncer {
 
     /// The guarded opener must follow already typed keys, not race them via a
     /// second relay send task. Report the Host result, including cancellation.
-    public func enqueueCodexQuestionExpansion(expectedCount: Int, onResult: @escaping @MainActor (Bool) -> Void = { _ in }) {
+    public func enqueueCodexQuestionExpansion(expectedCount: Int, expectedQuestionID: String? = nil, onResult: @escaping @MainActor (Bool) -> Void = { _ in }) {
         flushTask?.cancel()
         flushTask = nil
         flushBuffer()
-        enqueueSendOp(.expandCodexQuestions(expectedCount), onResult: onResult)
+        enqueueSendOp(.expandCodexQuestions(expectedCount, questionID: expectedQuestionID), onResult: onResult)
     }
 
     /// Cancel any pending debounce and in-flight sends.

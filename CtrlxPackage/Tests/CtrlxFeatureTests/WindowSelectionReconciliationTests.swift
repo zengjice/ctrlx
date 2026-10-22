@@ -3,6 +3,88 @@ import Testing
 
 @Suite("Window selection reconciliation")
 struct WindowSelectionReconciliationTests {
+    @Test("Reordering window indexes keeps the focused pane, including a non-active split pane")
+    func reorderedWindows() {
+        let candidates = [
+            WindowSelectionCandidate(windowId: "work:1", paneId: "%2", isActive: true, paneIDs: ["%2"]),
+            WindowSelectionCandidate(windowId: "work:3", paneId: "%1", isActive: false, paneIDs: ["%1", "%3"]),
+        ]
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:1", candidates: candidates, selectedPaneId: "%3"
+        ) == .select(windowId: "work:3", paneId: "%3"))
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:3", candidates: candidates, selectedPaneId: "%3"
+        ) == .unchanged)
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:1", candidates: candidates, createdPaneId: "%2", selectedPaneId: "%3"
+        ) == .select(windowId: "work:1", paneId: "%2"))
+    }
+
+    @Test("Closing the middle tab survives index reuse in either delivery order", arguments: [false, true])
+    func closeWithRenumbering(pushFirst: Bool) {
+        let before = [
+            WindowSelectionCandidate(windowId: "work:0", paneId: "%1", isActive: false, stableWindowId: "@1"),
+            WindowSelectionCandidate(windowId: "work:1", paneId: "%2", isActive: true, stableWindowId: "@2"),
+            WindowSelectionCandidate(windowId: "work:2", paneId: "%3", isActive: false, stableWindowId: "@3"),
+        ]
+        let after = [
+            before[0],
+            WindowSelectionCandidate(windowId: "work:1", paneId: "%3", isActive: true, stableWindowId: "@3"),
+        ]
+        let replyCandidates = pushFirst ? after : before.filter { $0.stableWindowId != "@2" }
+        var selectedWindowID: String? = "work:1"
+        var selectedPaneID: String? = "%2"
+        for candidates in pushFirst ? [after, replyCandidates] : [replyCandidates, after] {
+            let decision = WindowSelectionReconciliation.resolve(
+                selectedWindowId: selectedWindowID, candidates: candidates,
+                selectedPaneId: selectedPaneID, previousCandidates: before
+            )
+            if case let .select(windowId, paneId) = decision {
+                selectedWindowID = windowId
+                selectedPaneID = paneId
+            }
+            #expect(selectedWindowID == "work:0")
+            #expect(selectedPaneID == "%1")
+        }
+    }
+
+    @Test("A delayed close reply preserves a manual choice or a background selection")
+    func closePreservesNewSelection() {
+        let before = [
+            WindowSelectionCandidate(windowId: "work:0", paneId: "%1", isActive: false, stableWindowId: "@1"),
+            WindowSelectionCandidate(windowId: "work:1", paneId: "%2", isActive: true, stableWindowId: "@2"),
+            WindowSelectionCandidate(windowId: "work:2", paneId: "%3", isActive: false, stableWindowId: "@3"),
+        ]
+        let after = [
+            before[0],
+            WindowSelectionCandidate(windowId: "work:1", paneId: "%3", isActive: true, stableWindowId: "@3"),
+        ]
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:2", candidates: after, selectedPaneId: "%3", previousCandidates: before
+        ) == .select(windowId: "work:1", paneId: "%3"))
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:1", candidates: after, selectedPaneId: "%3", previousCandidates: before
+        ) == .unchanged)
+    }
+
+    @Test("Closing only the focused split pane keeps its window and selects a live pane")
+    func closedSplitPane() {
+        let before = [
+            WindowSelectionCandidate(windowId: "work:0", paneId: "%1", isActive: false, stableWindowId: "@1"),
+            WindowSelectionCandidate(windowId: "work:1", paneId: "%2", isActive: true, paneIDs: ["%2", "%3"], stableWindowId: "@2"),
+        ]
+        let after = [
+            before[0],
+            WindowSelectionCandidate(windowId: "work:1", paneId: "%3", isActive: true, stableWindowId: "@2"),
+        ]
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:1", candidates: after, selectedPaneId: "%2", previousCandidates: before
+        ) == .select(windowId: "work:1", paneId: "%3"))
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: "work:1", candidates: [], selectedPaneId: "%2", previousCandidates: before
+        ) == .unchanged)
+    }
+
     @Test("Both swipe directions follow picker order, not IDs or the Host active flag")
     func adjacentWindow() {
         let candidates = [
@@ -85,7 +167,7 @@ struct WindowSelectionReconciliationTests {
         )
     }
 
-    @Test("Missing selection falls back to the active window")
+    @Test("Closing the selected window chooses the first remaining tab, not the Host active tab")
     func missingSelection() {
         let candidates = [
             candidate("@1", paneId: "%1"),
@@ -96,7 +178,7 @@ struct WindowSelectionReconciliationTests {
             WindowSelectionReconciliation.resolve(
                 selectedWindowId: "@missing",
                 candidates: candidates
-            ) == .select(windowId: "@2", paneId: "%2")
+            ) == .select(windowId: "@1", paneId: "%1")
         )
     }
 

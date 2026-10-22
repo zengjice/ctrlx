@@ -1,7 +1,7 @@
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
-import CtrlxPluginProtocol
 
 /// One Host-side path for local menus and encrypted Viewer commands.
 @MainActor
@@ -9,15 +9,15 @@ final class AgentForkService {
     private let source: @MainActor (String) -> AgentForkSource?
     private let core: @MainActor (String) -> (any AgentSessionForking)?
     private let refresh: @MainActor () async -> Void
-    private let launch: @MainActor (String, String, SessionLaunchPreparation) async throws -> String
-    private var operations: [UUID: (request: ForkAgentSession, task: Task<String, Error>)] = [:]
+    private let launch: @MainActor (AgentForkSource, String, SessionLaunchPreparation) async throws -> String
+    private var operations: [UUID: (request: ForkAgentSession, source: AgentForkSource, task: Task<String, Error>)] = [:]
     private var completed: [UUID] = []
 
     init(
         source: @escaping @MainActor (String) -> AgentForkSource?,
         core: @escaping @MainActor (String) -> (any AgentSessionForking)?,
         refresh: @escaping @MainActor () async -> Void,
-        launch: @escaping @MainActor (String, String, SessionLaunchPreparation) async throws -> String
+        launch: @escaping @MainActor (AgentForkSource, String, SessionLaunchPreparation) async throws -> String
     ) {
         self.source = source
         self.core = core
@@ -25,43 +25,54 @@ final class AgentForkService {
         self.launch = launch
     }
 
-    func prepare(_ expected: AgentForkSource) async throws -> AgentForkPreparation {
+    func prepare(_ expected: AgentForkSource, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> AgentForkPreparation {
         await refresh()
-        let agent = try validate(expected)
-        _ = try await agent.commandForFork(sessionID: expected.sessionID, projectPath: expected.workingDirectory)
+        let captured = try validatedSource(expected, identity: expectedWorkspacePane)
+        let agent = try validate(captured)
+        _ = try await agent.commandForFork(sessionID: captured.sessionID, projectPath: captured.workingDirectory)
+        _ = try validate(captured)
         @Dependency(AgentForkWorktreeClient.self) var worktrees
+        let plan: AgentForkWorktree?
+        let unavailableReason: String?
         do {
-            let plan = try await worktrees.inspect(expected.workingDirectory)
-            return AgentForkPreparation(source: expected, worktree: plan)
+            plan = try await worktrees.inspect(captured.workingDirectory)
+            unavailableReason = nil
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            return AgentForkPreparation(source: expected, worktree: nil, worktreeUnavailableReason: error.localizedDescription)
+            plan = nil
+            unavailableReason = error.localizedDescription
         }
+        _ = try validate(captured)
+        return AgentForkPreparation(source: expected, worktree: plan, worktreeUnavailableReason: unavailableReason)
     }
 
-    func fork(_ request: ForkAgentSession) async throws -> String {
+    func fork(_ request: ForkAgentSession, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> String {
+        try request.validateName()
+        await refresh()
+        let captured = try validatedSource(request.source, identity: expectedWorkspacePane)
         if let operation = operations[request.requestID] {
             guard operation.request == request else { throw AgentForkError("A Fork retry must use the same source and destination.") }
+            guard operation.source == captured else { throw changedSource() }
             return try await operation.task.value
         }
-        let task = Task { try await perform(request) }
-        operations[request.requestID] = (request, task)
+        let task = Task { try await perform(request, source: captured) }
+        operations[request.requestID] = (request, captured, task)
         defer {
             completed.append(request.requestID)
-            if completed.count > 128 { operations.removeValue(forKey: completed.removeFirst()) }
+            if completed.count > 128 {
+                operations.removeValue(forKey: completed.removeFirst())
+            }
         }
         return try await task.value
     }
 
-    private func perform(_ request: ForkAgentSession) async throws -> String {
-        try request.validateName()
-        await refresh()
-        let agent = try validate(request.source)
+    private func perform(_ request: ForkAgentSession, source: AgentForkSource) async throws -> String {
+        let agent = try validate(source)
         @Dependency(SessionDirectoryClient.self) var directories
-        let sourceDirectory = try await directories.resolve(request.source.workingDirectory)
-        let command = try await agent.commandForFork(sessionID: request.source.sessionID, projectPath: sourceDirectory)
-        _ = try validate(request.source)
+        let sourceDirectory = try await directories.resolve(source.workingDirectory)
+        let command = try await agent.commandForFork(sessionID: source.sessionID, projectPath: sourceDirectory)
+        _ = try validate(source)
         var directory = sourceDirectory
         if let worktree = request.worktree {
             @Dependency(AgentForkWorktreeClient.self) var worktrees
@@ -69,22 +80,31 @@ final class AgentForkService {
         }
         do {
             await refresh()
-            _ = try validate(request.source)
+            _ = try validate(source)
             // Only the new pane receives this command. Source state and keys are untouched.
-            let forkCommand = request.worktree == nil ? command : try await agent.commandForFork(sessionID: request.source.sessionID, projectPath: directory)
-            _ = try validate(request.source)
+            let forkCommand = request.worktree == nil ? command : try await agent.commandForFork(sessionID: source.sessionID, projectPath: directory)
+            _ = try validate(source)
             let windowName = request.windowName ?? request.worktree?.name ?? (forkCommand.command.command as NSString).lastPathComponent.appending(" fork")
-            return try await launch(request.source.sessionName, windowName, SessionLaunchPreparation(workingDirectory: directory, fork: forkCommand))
+            return try await launch(source, windowName, SessionLaunchPreparation(workingDirectory: directory, fork: forkCommand))
         } catch {
             throw AgentForkError(error.localizedDescription + (request.worktree == nil ? "" : "\nThe new worktree is kept at \(directory). Check it before retrying."))
         }
     }
 
     private func validate(_ expected: AgentForkSource) throws -> any AgentSessionForking {
-        guard source(expected.paneID) == expected else {
-            throw AgentForkError("The source pane, conversation or directory changed. Reopen Fork for the current Agent.")
-        }
+        _ = try validatedSource(expected)
         guard let agent = core(expected.pluginID) else { throw AgentForkError("This Agent is unavailable or does not support native Fork.") }
         return agent
+    }
+
+    private func validatedSource(_ expected: AgentForkSource, identity: WorkspacePaneIdentity? = nil) throws -> AgentForkSource {
+        guard
+            let current = source(expected.paneID), expected.matches(current),
+            identity == nil || identity == current.workspaceIdentity else { throw changedSource() }
+        return current
+    }
+
+    private func changedSource() -> AgentForkError {
+        AgentForkError("The source pane, conversation or directory changed. Reopen Fork for the current Agent.")
     }
 }

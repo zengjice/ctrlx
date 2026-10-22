@@ -54,7 +54,7 @@ public enum WorkbenchKeyboardScenario {
         TestStep.wait(seconds: 1)
 
         // Keep Git on the left after moving its last terminal to the right.
-        TestStep.macClickButton(titled: "Git")
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
         TestStep.macWaitForElement(titled: "aurora-cli", timeout: 10)
         TestStep.macClickButton(titled: "Open terminal in split: source")
         TestStep.macWaitForElement(titled: "Move terminal to left: source", timeout: 5)
@@ -78,6 +78,41 @@ public enum WorkbenchKeyboardScenario {
         TestStep.tmuxStoreDisplayMessage(target: "cwd-test:0", format: "#{pane_current_path}", storeAs: "fromFiles")
         TestStep.assertStoredEqual(key: "fromFiles", otherKey: "projectDirectory")
         TestStep.terminateMacApp()
+    }
+
+    public static let remoteTabs = CtrlxE2ELib.scenario("Remote Keyboard", tags: ["keyboard", "tabs", "remote", "macos-only"]) {
+        TestStep.tmuxCreateSession(name: "remote-keys", width: 100, height: 30)
+        TestStep.tmuxCommand(arguments: ["rename-window", "-t", "remote-keys:0", "first"])
+        TestStep.tmuxCommand(arguments: ["new-window", "-t", "remote-keys", "-n", "second"])
+        Shortcut.twoMacPairing
+        Shortcut.openPanesWindow()
+        TestStep.macWaitForElement(titled: "remote-keys", timeout: 10)
+        Shortcut.openPanesWindow(instance: 1)
+        TestStep.macWaitForElement(titled: "remote-keys", timeout: 15, instance: 1)
+        TestStep.macClickButton(titled: "remote-keys", instance: 1)
+        TestStep.macWaitForElement(titled: "remote-keys:0 first", timeout: 10, instance: 1)
+        TestStep.macContextMenuClick(elementTitle: "remote-keys:0", menuItem: "Open Files", instance: 1)
+        TestStep.macWaitForElementQuery(.allOf([.role("AXTextField"), .valueContains("/")]), timeout: 10, instance: 1)
+        TestStep.macPressKey(.character("1"), modifiers: .command, instance: 1)
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("remote-keys:0 first"), .valueContains("selected")]), timeout: 5, instance: 1)
+        TestStep.macPressKey(.character("3"), modifiers: .command, instance: 1)
+        TestStep.macWaitForElementQuery(.allOf([.role("AXTextField"), .valueContains("/")]), timeout: 5, instance: 1)
+        TestStep.macPressKey(.leftArrow, modifiers: [.command, .option], instance: 1)
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("remote-keys:1 second"), .valueContains("selected")]), timeout: 5, instance: 1)
+        TestStep.waitForTmuxDisplayMessage(target: "remote-keys", format: "#{window_name}", contains: "second", timeout: 5)
+        TestStep.macPressKey(.rightArrow, modifiers: [.command, .option], instance: 1)
+        TestStep.macWaitForElementQuery(.allOf([.role("AXTextField"), .valueContains("/")]), timeout: 5, instance: 1)
+
+        TestStep.macClickButton(titled: "Open terminal in split: second", instance: 1)
+        TestStep.macCGClickElement(query: .labelContains("Move file tab to right:"), instance: 1)
+        TestStep.macCGClickElement(query: .allOf([.role("AXButton"), .labelContains("Files ·")]), instance: 1)
+        TestStep.macPressKey(.character("1"), modifiers: .command, instance: 1)
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("remote-keys:1 second"), .valueContains("selected")]), timeout: 5, instance: 1)
+        TestStep.macPressKey(.character("2"), modifiers: .command, instance: 1)
+        TestStep.macWaitForElementQuery(.allOf([.role("AXTextField"), .valueContains("/")]), timeout: 5, instance: 1)
+        TestStep.macPressKey(.rightArrow, modifiers: [.command, .option], instance: 1)
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("remote-keys:1 second"), .valueContains("selected")]), timeout: 5, instance: 1)
+        TestStep.macScreenshot(label: "remote-keyboard-shortcuts", compare: false, instance: 1)
     }
 
     public static let scenario = CtrlxE2ELib.scenario("Workbench Keyboard", tags: ["keyboard", "macos-only"]) {
@@ -110,7 +145,22 @@ public enum WorkbenchKeyboardScenario {
         TestStep.macPressKey(.upArrow)
         TestStep.macPressKey(.return)
         TestStep.macWaitForElement(titled: "keys123:0", timeout: 5)
-        TestStep.macClickButton(titled: "keys456")
+        TestStep.macPressKey(.downArrow, modifiers: [.command, .option])
+        TestStep.macWaitForElement(titled: "keys456:0 first", timeout: 5)
+        TestStep.macPressKey(.upArrow, modifiers: [.command, .option])
+        TestStep.macWaitForElement(titled: "keys123:0", timeout: 5)
+        TestStep.macPressKey(.upArrow, modifiers: [.command, .option])
+        TestStep.macWaitForElement(titled: "keys456:0 first", timeout: 5)
+
+        // Explicitly open Git before exercising tab navigation.
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
+        TestStep.macPressKey(.character("2"), modifiers: .command)
+        TestStep.macWaitForElementQuery(.allOf([.label("Git"), .valueContains("selected")]), timeout: 5)
+        TestStep.macPressKey(.rightArrow, modifiers: [.command, .option])
+        TestStep.macWaitForElementQuery(.allOf([.labelContains("keys456:0 first"), .valueContains("selected")]), timeout: 5)
+        TestStep.macPressKey(.leftArrow, modifiers: [.command, .option])
+        TestStep.macWaitForElementQuery(.allOf([.label("Git"), .valueContains("selected")]), timeout: 5)
+        TestStep.macPressKey(.character("1"), modifiers: .command)
 
         TestStep.macPressKey(.character("t"), modifiers: .command)
         TestStep.wait(seconds: 2)
@@ -118,7 +168,7 @@ public enum WorkbenchKeyboardScenario {
         TestStep.macWaitForElement(titled: "keys456:1 second", timeout: 10)
         TestStep.macPressKey(.character("1"), modifiers: .command)
         TestStep.macWaitForElementQuery(.allOf([.labelContains("keys456:0 first"), .valueContains("selected")]), timeout: 5)
-        TestStep.macPressKey(.character("2"), modifiers: .command)
+        TestStep.macPressKey(.character("3"), modifiers: .command)
         TestStep.macWaitForElementQuery(.allOf([.labelContains("keys456:1 second"), .valueContains("selected")]), timeout: 5)
 
         TestStep.macClickButton(titled: "Open terminal in split: second")
@@ -130,7 +180,7 @@ public enum WorkbenchKeyboardScenario {
         TestStep.macWaitForElement(titled: "Move terminal to left: third", timeout: 10)
         TestStep.macPressKey(.character("1"), modifiers: .command)
         TestStep.macWaitForElementQuery(.allOf([.labelContains("keys456:1 second"), .valueContains("selected")]), timeout: 5)
-        TestStep.macPressKey(.character("]"), modifiers: [.command, .shift])
+        TestStep.macPressKey(.rightArrow, modifiers: [.command, .option])
         TestStep.macWaitForElementQuery(.allOf([.labelContains("keys456:2 third"), .valueContains("selected")]), timeout: 5)
         TestStep.macPressKey(.character("w"), modifiers: .command)
         TestStep.macWaitForElementToDisappear(titled: "keys456:2 third", timeout: 10)

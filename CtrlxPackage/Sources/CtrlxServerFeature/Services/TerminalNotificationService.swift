@@ -1,5 +1,5 @@
 #if os(macOS)
-    import CtrlxNetworking
+    import CtrlxCommon
     import Dependencies
     import DependenciesMacros
     import Foundation
@@ -18,7 +18,7 @@
         /// so tapping it reveals the remote session rather than a local pane.
         public var showNotification: @Sendable (
             _ paneId: String,
-            _ notification: TerminalStreamMessage.TerminalNotification,
+            _ notification: AgentNotificationPresentation,
             _ hostId: String?
         ) -> Void
     }
@@ -31,12 +31,13 @@
         static func e2eTest(logPath: String) -> TerminalNotificationService {
             TerminalNotificationService(
                 showNotification: { paneId, notification, hostId in
-                    let title = notification.title ?? ""
+                    let title = notification.title
+                    let body = [notification.subtitle, notification.body].compactMap { $0 }.joined(separator: "\n")
                     // Append the originating host only for viewer notifications
                     // (hostId set) so scenarios can assert on them; local terminal
                     // notifications keep the original three-field format.
                     let origin = hostId.map { "|\($0)" } ?? ""
-                    let entry = "\(paneId)|\(title)|\(notification.body)\(origin)\n"
+                    let entry = "\(paneId)|\(title)|\(body)\(origin)\n"
                     let data = Data(entry.utf8)
 
                     if let handle = FileHandle(forWritingAtPath: logPath) {
@@ -48,6 +49,27 @@
                     }
                 }
             )
+        }
+    }
+
+    extension TerminalNotificationService {
+        static func content(
+            paneId: String,
+            notification: AgentNotificationPresentation,
+            hostId: String?
+        ) -> UNMutableNotificationContent {
+            let content = UNMutableNotificationContent()
+            content.title = notification.title
+            content.subtitle = notification.subtitle ?? ""
+            content.body = notification.body
+            content.sound = .default
+            content.categoryIdentifier = "terminalNotification"
+            var userInfo: [String: String] = ["paneId": paneId]
+            if let hostId {
+                userInfo["hostId"] = hostId
+            }
+            content.userInfo = userInfo
+            return content
         }
     }
 
@@ -81,24 +103,13 @@
 
         func show(
             paneId: String,
-            notification: TerminalStreamMessage.TerminalNotification,
+            notification: AgentNotificationPresentation,
             hostId: String?
         ) async {
             await ensurePermission()
             guard isAuthorized else { return }
 
-            let content = UNMutableNotificationContent()
-            content.title = notification.title ?? "Terminal"
-            content.body = notification.body
-            content.sound = .default
-            content.categoryIdentifier = "terminalNotification"
-            // Carry the originating remote host (viewer mode) so a tap can reveal
-            // the remote session; left nil for the app's own local panes.
-            var userInfo: [String: String] = ["paneId": paneId]
-            if let hostId {
-                userInfo["hostId"] = hostId
-            }
-            content.userInfo = userInfo
+            let content = TerminalNotificationService.content(paneId: paneId, notification: notification, hostId: hostId)
 
             let request = UNNotificationRequest(
                 identifier: UUID().uuidString,
@@ -110,7 +121,7 @@
                 try await UNUserNotificationCenter.current().add(request)
                 logger.debug("Delivered terminal notification", metadata: [
                     "paneId": "\(paneId)",
-                    "title": "\(notification.title ?? "(none)")",
+                    "title": "\(notification.title)",
                 ])
             } catch {
                 logger.warning("Failed to deliver notification: \(error)")
@@ -170,6 +181,11 @@
     final class ForegroundNotificationDelegate: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
         static let shared = ForegroundNotificationDelegate()
 
+        @MainActor
+        static func install() {
+            UNUserNotificationCenter.current().delegate = shared
+        }
+
         /// Handler called on the main actor when a notification is tapped.
         /// `hostId` is non-nil when the notification came from a remote host
         /// (viewer mode), so the tap reveals that host's remote session.
@@ -191,6 +207,12 @@
             didReceive response: UNNotificationResponse
         ) async {
             let userInfo = response.notification.request.content.userInfo
+            if userInfo[DashboardNotificationClient.userInfoKey] as? Bool == true {
+                await MainActor.run {
+                    NotificationCenter.default.post(name: DashboardNotificationClient.openNotification, object: nil)
+                }
+                return
+            }
 
             if userInfo["licenseAlert"] as? Bool == true {
                 // Schedule after didReceive returns — the system may reclaim focus

@@ -18,12 +18,16 @@
 
         @State private var isShowingMore = false
         @State private var pendingAction: MoreAction?
+        @State private var moreActionHandler: ((MoreAction) -> Void)?
         @State private var isEditingName = false
         @State private var editedName = ""
+        @State private var pendingRename: ((String) -> Void)?
         @State private var isEditingDescription = false
         @State private var editedDescription = ""
+        @State private var pendingDescription: ((String?) -> Void)?
         @State private var isEditingEmoji = false
         @State private var editedEmoji = ""
+        @State private var pendingEmoji: ((String?) -> Void)?
 
         private enum MoreAction {
             case editDescription
@@ -39,6 +43,10 @@
                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
                     Button {
                         editedName = session.sessionName
+                        pendingRename = { [sessionName = session.sessionName, onRename] name in
+                            guard name != sessionName else { return }
+                            onRename(sessionName, name)
+                        }
                         isEditingName = true
                     } label: {
                         Label("Rename", symbol: .pencil)
@@ -49,7 +57,7 @@
                     .accessibilityIdentifier("rename-session")
 
                     Button {
-                        isShowingMore = true
+                        beginMoreActions()
                     } label: {
                         Label("More", symbol: .ellipsisCircle)
                     }
@@ -79,8 +87,8 @@
                     text: $editedName,
                     onSave: { raw in
                         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !isDisabled, name != session.sessionName else { return }
-                        onRename(session.sessionName, name)
+                        pendingRename?(name)
+                        pendingRename = nil
                     }
                 ))
                 .modifier(TextEntryPresentation(
@@ -92,7 +100,8 @@
                     onSave: { raw in
                         guard !isDisabled else { return }
                         let description = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                        onSetDescription(session.sessionName, description.isEmpty ? nil : description)
+                        pendingDescription?(description.isEmpty ? nil : description)
+                        pendingDescription = nil
                     }
                 ))
                 .sheet(isPresented: $isEditingEmoji) {
@@ -102,7 +111,8 @@
                             editedEmoji = emoji
                             guard !isDisabled, SessionEmoji.isValid(emoji) else { return }
                             isEditingEmoji = false
-                            onSetEmoji(session.sessionName, emoji)
+                            pendingEmoji?(emoji)
+                            pendingEmoji = nil
                         }
                     ))
                     .presentationDetents([.medium, .large])
@@ -159,24 +169,35 @@
         private func performPendingAction() {
             let action = pendingAction
             pendingAction = nil
+            let handler = moreActionHandler
+            moreActionHandler = nil
             guard !isDisabled, let action else { return }
             // Wait for More to dismiss before presenting an editor or a command error.
-            switch action {
-            case .editDescription:
-                editedDescription = session.customDescription ?? ""
-                isEditingDescription = true
-            case .removeDescription:
-                onSetDescription(session.sessionName, nil)
-            case .editEmoji:
-                editedEmoji = session.customEmoji ?? ""
-                isEditingEmoji = true
-            case .removeEmoji:
-                onSetEmoji(session.sessionName, nil)
-            case let .setColor(color):
-                onSetColor(session.sessionName, color)
-            case let .setState(state):
-                onSetState(session.sessionName, state)
+            handler?(action)
+        }
+
+        private func beginMoreActions() {
+            moreActionHandler = { [session, onSetDescription, onSetEmoji, onSetColor, onSetState] action in
+                switch action {
+                case .editDescription:
+                    editedDescription = session.customDescription ?? ""
+                    pendingDescription = { onSetDescription(session.sessionName, $0) }
+                    isEditingDescription = true
+                case .removeDescription:
+                    onSetDescription(session.sessionName, nil)
+                case .editEmoji:
+                    editedEmoji = session.customEmoji ?? ""
+                    pendingEmoji = { onSetEmoji(session.sessionName, $0) }
+                    isEditingEmoji = true
+                case .removeEmoji:
+                    onSetEmoji(session.sessionName, nil)
+                case let .setColor(color):
+                    onSetColor(session.sessionName, color)
+                case let .setState(state):
+                    onSetState(session.sessionName, state)
+                }
             }
+            isShowingMore = true
         }
     }
 #endif

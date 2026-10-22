@@ -70,10 +70,13 @@ public struct DescriptionEditingModifier<AdditionalMenu: View>: ViewModifier {
     @Binding private var isRenameRequested: Bool
     @State private var isEditingDescription = false
     @State private var editedDescription = ""
+    @State private var pendingDescription: ((String?) -> Void)?
     @State private var isEditingName = false
     @State private var editedName = ""
+    @State private var pendingRename: ((String) -> Void)?
     @State private var isEditingEmoji = false
     @State private var editedEmoji = ""
+    @State private var pendingEmoji: ((String?) -> Void)?
 
     public init(
         sessionName: String,
@@ -114,6 +117,7 @@ public struct DescriptionEditingModifier<AdditionalMenu: View>: ViewModifier {
                     isDisabled: isDisabled,
                     onEdit: {
                         editedDescription = currentDescription ?? ""
+                        pendingDescription = { [sessionName, onSetDescription] in onSetDescription(sessionName, $0) }
                         isEditingDescription = true
                     },
                     onRemove: {
@@ -126,6 +130,7 @@ public struct DescriptionEditingModifier<AdditionalMenu: View>: ViewModifier {
                     isDisabled: isDisabled,
                     onEdit: {
                         editedEmoji = currentEmoji ?? ""
+                        pendingEmoji = { [sessionName, onSetEmoji] in onSetEmoji(sessionName, $0) }
                         isEditingEmoji = true
                     },
                     onRemove: {
@@ -143,8 +148,8 @@ public struct DescriptionEditingModifier<AdditionalMenu: View>: ViewModifier {
                 text: $editedName,
                 onSave: { raw in
                     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard trimmed != sessionName else { return }
-                    onRename(sessionName, trimmed)
+                    pendingRename?(trimmed)
+                    pendingRename = nil
                 }
             ))
             .modifier(TextEntryPresentation(
@@ -155,14 +160,18 @@ public struct DescriptionEditingModifier<AdditionalMenu: View>: ViewModifier {
                 text: $editedDescription,
                 onSave: { raw in
                     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    onSetDescription(sessionName, trimmed.isEmpty ? nil : trimmed)
+                    pendingDescription?(trimmed.isEmpty ? nil : trimmed)
+                    pendingDescription = nil
                 }
             ))
             .modifier(EmojiEntryPresentation(
                 isPresented: $isEditingEmoji,
                 editedEmoji: $editedEmoji,
                 sessionName: sessionName,
-                onSetEmoji: onSetEmoji
+                onSetEmoji: { _, emoji in
+                    pendingEmoji?(emoji)
+                    pendingEmoji = nil
+                }
             ))
             .onChange(of: isRenameRequested) { _, requested in
                 guard requested else { return }
@@ -174,6 +183,10 @@ public struct DescriptionEditingModifier<AdditionalMenu: View>: ViewModifier {
     private func beginRenaming() {
         guard !isDisabled else { return }
         editedName = sessionName
+        pendingRename = { [sessionName, onRename] name in
+            guard name != sessionName else { return }
+            onRename(sessionName, name)
+        }
         isEditingName = true
     }
 }

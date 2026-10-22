@@ -31,10 +31,22 @@ authors and contributors.
 | [SwiftFormat](https://github.com/nicklockwood/SwiftFormat) (build tool) | MIT |
 | [SFSymbolsMacro](https://github.com/gpambrozio/SFSymbolsMacro) (fork of [lukepistrol/SFSymbolsMacro](https://github.com/lukepistrol/SFSymbolsMacro)) | MIT |
 | [GitWorkbench](https://github.com/gpambrozio/GitWorkbench) | MIT |
+| [ZIPFoundation](https://github.com/weichsel/ZIPFoundation) | MIT |
 
 Transitive dependencies from the Apple, Vapor, and Point-Free ecosystems are
 Apache-2.0 or MIT; the pinned set is in
 [`CtrlxPackage/Package.resolved`](CtrlxPackage/Package.resolved).
+
+## Artifact previews (Mac and iOS)
+
+| Project | License |
+|---|---|
+| [Mermaid 12.2.0](https://github.com/mermaid-js/mermaid) | MIT; bundled dependency notices |
+
+The unmodified browser bundle and Mermaid's full license are included in
+`CtrlxCommon/Resources/ArtifactPreview`. `upstream.json` records the exact npm
+archive integrity and JavaScript SHA-256; upstream dependency notices remain
+in the bundle. The renderer is loaded locally, with no runtime CDN dependency.
 
 ## Agent Browser (macOS development runtime)
 

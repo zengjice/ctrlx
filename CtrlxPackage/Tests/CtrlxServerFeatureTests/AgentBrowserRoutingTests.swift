@@ -90,7 +90,7 @@ struct AgentBrowserRoutingTests {
     }
 
         private nonisolated static func row(session: String, paneID: String = "%1", shellPID: String = "100") -> String {
-            [shellPID, paneID, session, "1", "0", "codex", "/tmp", "80", "24", "1", "@1"]
+            [shellPID, paneID, session, "1", "0", "codex", "/tmp", "80", "24", "1", "@1", "123:456", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"]
                 .joined(separator: String(PaneInfo.fieldSeparator))
         }
 
@@ -113,6 +113,7 @@ struct AgentBrowserRoutingTests {
                 #expect(route.panes.map(\.sessionName) == ["renamed", "work"])
                 #expect(route.panes.first == route.pane && service.panes.isEmpty)
                 #expect(calls.value == 1)
+                #expect(route.pane.workspaceIdentity?.serverID == "123:456")
             }
         }
 

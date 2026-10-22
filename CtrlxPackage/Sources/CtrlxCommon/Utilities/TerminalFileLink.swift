@@ -43,9 +43,68 @@ public enum TerminalFileLinkDetector {
     }
 
     public static func links(rows: [Row], columns: Int) -> [TerminalFileLink] {
-        guard columns > 0, columns <= 1024 else { return [] }
-        var units: [Unit] = []
+        guard columns > 0, columns <= 1_024 else { return [] }
+        var result: [TerminalFileLink] = []
+        var pending: [Row] = []
+        var tableColumns: [Range<Int>]?
+        func flush() {
+            if let tableColumns {
+                for range in tableColumns {
+                    result += scan(rows: pending.map { row in
+                        .init(number: row.number, cells: row.cells.filter { range.contains($0.column) })
+                    })
+                }
+            } else {
+                result += scan(rows: pending)
+            }
+            pending.removeAll(keepingCapacity: true)
+        }
         for row in rows.prefix(256) {
+            if let ranges = dividerColumns(row, columns: columns) {
+                flush()
+                tableColumns = ranges
+                continue
+            }
+            if let ranges = tableColumns {
+                let content = row.cells.filter { $0.width > 0 && !$0.character.isWhitespace }
+                let fits = !row.wrapped && !content.isEmpty && content.allSatisfy { cell in
+                    ranges.contains { $0.contains(cell.column) && cell.column + cell.width <= $0.upperBound }
+                }
+                if !fits {
+                    flush()
+                    tableColumns = nil
+                }
+            }
+            pending.append(row)
+        }
+        flush()
+        return result.sorted {
+            ($0.spans[0].row, $0.spans[0].columns.lowerBound) < ($1.spans[0].row, $1.spans[0].columns.lowerBound)
+        }
+    }
+
+    /// Codex renders borderless tables with separated horizontal rules. Only
+    /// those explicit column bounds permit joining fragments past adjacent text.
+    private static func dividerColumns(_ row: Row, columns: Int) -> [Range<Int>]? {
+        guard !row.wrapped else { return nil }
+        var ranges: [Range<Int>] = []
+        for cell in row.cells where cell.width > 0 && !cell.character.isWhitespace {
+            guard
+                cell.width == 1, cell.column >= 0, cell.column < columns,
+                cell.character == "─" || cell.character == "━" || cell.character == "-" else { return nil }
+            if let last = ranges.last, last.upperBound == cell.column {
+                ranges[ranges.count - 1] = last.lowerBound..<(cell.column + 1)
+            } else {
+                ranges.append(cell.column..<(cell.column + 1))
+            }
+        }
+        guard ranges.count >= 2, ranges.allSatisfy({ $0.count >= 3 }) else { return nil }
+        return ranges
+    }
+
+    private static func scan(rows: [Row]) -> [TerminalFileLink] {
+        var units: [Unit] = []
+        for row in rows {
             if !units.isEmpty, !row.wrapped {
                 units.append(.init(character: "\n", row: row.number, columns: 0..<0))
             }

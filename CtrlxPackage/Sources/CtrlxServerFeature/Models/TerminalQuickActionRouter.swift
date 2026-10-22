@@ -58,6 +58,29 @@ final class TerminalQuickActionEndpoint {
 final class TerminalQuickActionRouter {
     private(set) var voiceInputRequest = 0
 
+    struct VoiceInputHold: Equatable {
+        enum State { case pressed, released, cancelled }
+        let id = UUID()
+        let token: Token
+        var state = State.pressed
+    }
+
+    private(set) var voiceInputHold: VoiceInputHold?
+
+    func beginVoiceInputHold() -> UUID? {
+        guard
+            let token, matches(token), active?.isReady == true,
+            voiceInputHold?.state != .pressed else { return nil }
+        let hold = VoiceInputHold(token: token)
+        voiceInputHold = hold
+        return hold.id
+    }
+
+    func endVoiceInputHold(_ id: UUID, cancelled: Bool = false) {
+        guard voiceInputHold?.id == id, voiceInputHold?.state == .pressed else { return }
+        voiceInputHold?.state = cancelled ? .cancelled : .released
+    }
+
     func toggleVoiceInput() {
         guard active?.isAvailable == true else { return }
         voiceInputRequest &+= 1
@@ -110,12 +133,14 @@ final class TerminalQuickActionRouter {
         guard endpoint.isMounted else { return }
         requestedFocus = nil
         guard active !== endpoint else { return }
+        voiceInputHold = nil
         focusRevision &+= 1
         active = endpoint
     }
 
     func retire(_ endpoint: TerminalQuickActionEndpoint) {
         guard active === endpoint else { return }
+        voiceInputHold = nil
         active = nil
     }
 

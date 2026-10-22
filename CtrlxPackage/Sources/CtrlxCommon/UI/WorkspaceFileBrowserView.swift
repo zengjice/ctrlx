@@ -17,6 +17,7 @@ public struct WorkspaceFileBrowserView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var upload = FileBrowserUpload()
     @State private var uploadRequest: UploadRequest?
+    @State private var imageUploadRequest: ImageUploadRequest?
     @State private var destination: Destination?
     @State private var showsImporter = false
     @State private var showsFolderPrompt = false
@@ -33,6 +34,12 @@ public struct WorkspaceFileBrowserView: View {
         let id = UUID()
         let destination: Destination
         let urls: [URL]
+    }
+
+    private struct ImageUploadRequest {
+        let id = UUID()
+        let destination: Destination
+        let content: WorkspaceClipboardContent
     }
     private struct FolderRequest: Identifiable {
         let id = UUID()
@@ -59,7 +66,10 @@ public struct WorkspaceFileBrowserView: View {
                         Text("\(upload.sentBytes.formatted(.byteCount(style: .file))) / \(upload.totalBytes.formatted(.byteCount(style: .file)))")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Button("Cancel") { uploadRequest = nil }
+                    Button("Cancel") {
+                        uploadRequest = nil
+                        imageUploadRequest = nil
+                    }
                 }.padding(10)
             } else if let summary = upload.summary {
                 ScrollView {
@@ -93,6 +103,18 @@ public struct WorkspaceFileBrowserView: View {
             if uploadRequest?.id == request.id { uploadRequest = nil }
         }
         .task(id: folderRequest?.id) { await createFolder() }
+        .task(id: imageUploadRequest?.id) {
+            guard let request = imageUploadRequest else { return }
+            await upload.run(image: request.content, directory: request.destination.path, source: request.destination.source) {
+                tab.refresh += 1
+            }
+            if imageUploadRequest?.id == request.id {
+                imageUploadRequest = nil
+            }
+        }
+        #if os(macOS)
+        .onPasteCommand(of: [.png, .jpeg, .tiff]) { _ in pasteImage() }
+        #endif
         .onDisappear {
             tab.releasePreview()
             // The iOS document picker can cover this view without closing its tab.
@@ -187,6 +209,9 @@ public struct WorkspaceFileBrowserView: View {
                     }
                     .accessibilityIdentifier("file-browser-upload")
                     .disabled(writesBusy || tab.path == nil || tab.isLoading || source.uploadUnavailableReason != nil)
+                    Button("Paste Image", action: pasteImage)
+                        .disabled(writesBusy || tab.path == nil || source.uploadUnavailableReason != nil)
+                        .accessibilityIdentifier("file-browser-paste-image")
                     if let reason = source.creationUnavailableReason ?? source.uploadUnavailableReason {
                         Text(reason)
                     }
@@ -223,7 +248,17 @@ public struct WorkspaceFileBrowserView: View {
         .disabled(source.unavailableReason != nil)
     }
 
-    private var writesBusy: Bool { uploadRequest != nil || upload.isRunning || folderRequest != nil }
+    private var writesBusy: Bool { uploadRequest != nil || imageUploadRequest != nil || upload.isRunning || folderRequest != nil }
+
+    private func pasteImage() {
+        guard captureDestination(), let destination else { return }
+        do {
+            let content = try clipboard.workspaceContent()
+            guard content.kind != .text else { throw FileBrowserError.message("Copy an image to save it in this directory.") }
+            imageUploadRequest = ImageUploadRequest(destination: destination, content: content)
+        } catch { actionMessage = error.localizedDescription }
+        self.destination = nil
+    }
 
     private func captureDestination() -> Bool {
         guard let path = tab.path, !writesBusy, source.unavailableReason == nil else { return false }
@@ -234,6 +269,7 @@ public struct WorkspaceFileBrowserView: View {
 
     private func cancelWrites() {
         uploadRequest = nil
+        imageUploadRequest = nil
         folderRequest = nil
         destination = nil
         showsImporter = false
@@ -326,6 +362,7 @@ private struct FileBrowserFilePreview: View {
     @State private var capture = FilePreviewCapture()
     @State private var captureRequest: UUID?
     @State private var isAnnotating = false
+    @State private var clipboardMessage: String?
 
     private var preferredTarget: AgentImageTarget? {
         annotationContext?.targets.first { $0.paneID == tab.sourcePaneID }
@@ -356,9 +393,20 @@ private struct FileBrowserFilePreview: View {
                            let text = String(data: data, encoding: .utf8) {
                             Button("Copy Text") { clipboard.setString(text) }
                         }
+                        if let data = tab.previewData, tab.preview?.kind == .image {
+                            Button("Copy Image") {
+                                do {
+                                    try clipboard.setWorkspaceContent(WorkspaceClipboard.image(data))
+                                    clipboardMessage = "Image copied."
+                                } catch { clipboardMessage = error.localizedDescription }
+                            }
+                        }
                         Button("Refresh Preview") { tab.refresh += 1 }
                     } label: { Label("File Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly) }
                 }.disabled(isAnnotating).padding(10)
+                if let clipboardMessage {
+                    Text(clipboardMessage).font(.caption).padding(.horizontal, 10)
+                }
                 Divider()
                 FileBrowserOpenActions(path: path, source: source)
                     .id(key)
@@ -483,6 +531,7 @@ private struct FileBrowserPreview: View {
     let capture: FilePreviewCapture
     @State private var image: CGImage?
     @State private var imageFailed = false
+    @FocusState private var imageFocused: Bool
     var body: some View {
         Group {
             switch kind {
@@ -504,6 +553,23 @@ private struct FileBrowserPreview: View {
                 if let image {
                     FilePreviewSnapshotView(capture: capture) {
                         Image(decorative: image, scale: 1).resizable().scaledToFit().padding()
+                            #if os(macOS)
+                            .focusable()
+                            .focused($imageFocused)
+                            .onTapGesture { imageFocused = true }
+                            .onCopyCommand {
+                                guard let content = try? WorkspaceClipboard.image(data) else { return [] }
+                                let provider = NSItemProvider()
+                                provider.registerDataRepresentation(
+                                    forTypeIdentifier: content.kind == .png ? UTType.png.identifier : UTType.jpeg.identifier,
+                                    visibility: .all
+                                ) { completion in
+                                    completion(content.data, nil)
+                                    return nil
+                                }
+                                return [provider]
+                            }
+                            #endif
                     }
                 } else if imageFailed { Text("This image cannot be decoded.") }
                 else { ProgressView() }

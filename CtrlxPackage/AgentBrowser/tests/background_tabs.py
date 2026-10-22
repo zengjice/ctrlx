@@ -20,7 +20,8 @@ class BackgroundTabs(DevTools):
         pids = [run['pid'] for run in self.runs]
         pages = []
         for owner, path in ((0, 'alpha'), (0, 'beta'), (1, 'other-workspace')):
-            tab = (await self.cli_action(owner, 'action', 'open', '--url', self.url + path))['result']['id']
+            extra = ['--new'] if path == 'beta' else []
+            tab = (await self.cli_action(owner, 'action', 'open', *extra, '--url', self.url + path))['result']['id']
             await self.cli_action(owner, 'action', 'wait', '--tab', tab)
             pages.append(tab)
         # Only the private fixture's grants; never borrow or log production ones.

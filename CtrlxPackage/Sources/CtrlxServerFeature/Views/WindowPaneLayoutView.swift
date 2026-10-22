@@ -144,9 +144,24 @@ struct WindowPaneLayoutView: View {
 
         @Environment(MirrorWindowManager.self) private var windowManager
         @Environment(TmuxService.self) private var tmuxService
+        @Environment(AppCoordinator.self) private var coordinator
         @State private var isHovering = false
 
         var body: some View {
+            if
+                let recovery = coordinator.workspaceRecovery,
+                let failure = recovery.failure(for: paneInfo.paneId), failure.blocksInput {
+                ScrollView {
+                    WorkspaceRecoveryFailureView(recovery: recovery, failure: failure).padding()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .bottomLeading) { WorkspaceRecoveryDraftView(paneID: paneState.paneId) }
+            } else {
+                terminal
+            }
+        }
+
+        private var terminal: some View {
             TerminalContainerView(
                 paneState: paneState,
                 autoFocus: isSingle || isActiveInTmux,
@@ -161,15 +176,17 @@ struct WindowPaneLayoutView: View {
                     // to this window land on the same active pane. Idempotent
                     // when the pane is already active (e.g., on initial focus).
                     let target = paneInfo.paneId
+                    let identity = paneState.workspaceIdentity
                     Task {
                         do {
-                            try await tmuxService.selectPane(target)
+                            try await tmuxService.selectPane(target, expectedWorkspacePane: identity)
                         } catch {
                             print("Failed to select tmux pane \(target): \(error)")
                         }
                     }
                 }
             )
+            .id("\(paneInfo.tmuxServerID ?? ""):\(paneState.workspaceIdentity?.paneID.uuidString ?? paneState.paneId)")
             .modifier(VisiblePaneAttentionModifier(paneId: paneState.paneId))
             .overlay {
                 if !isSingle {
@@ -180,12 +197,16 @@ struct WindowPaneLayoutView: View {
             .overlay {
                 PaneEditorOverlay(paneId: paneState.paneId)
             }
+            .overlay(alignment: .bottomLeading) {
+                WorkspaceRecoveryDraftView(paneID: paneState.paneId)
+            }
             .overlay(alignment: .topTrailing) {
                 PaneSplitButtons { direction in
                     do {
                         _ = try await tmuxService.splitPane(
                             paneInfo.paneId,
-                            horizontal: direction == .horizontal
+                            horizontal: direction == .horizontal,
+                            expectedWorkspacePane: paneState.workspaceIdentity
                         )
                     } catch {
                         print("Failed to split pane: \(error)")

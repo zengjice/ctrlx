@@ -11,17 +11,32 @@ public struct TerminalStreamMessage: Codable, Sendable, Identifiable {
     public let paneId: String
     public let timestamp: Date
     public let updateType: StreamUpdateType
+    /// The subscription which admitted this frame; absent on older Hosts.
+    public let leaseId: UUID?
 
     public init(
         id: UUID = UUID(),
         paneId: String,
         timestamp: Date = Date(),
-        updateType: StreamUpdateType
+        updateType: StreamUpdateType,
+        leaseId: UUID? = nil
     ) {
         self.id = id
         self.paneId = paneId
         self.timestamp = timestamp
         self.updateType = updateType
+        self.leaseId = leaseId
+    }
+
+    public func withLeaseId(_ leaseId: UUID?) -> Self {
+        .init(id: id, paneId: paneId, timestamp: timestamp, updateType: updateType, leaseId: leaseId)
+    }
+
+    public func matchesLease(_ expected: UUID?, requiresLease: Bool) -> Bool {
+        if let leaseId {
+            return leaseId == expected
+        }
+        return !requiresLease
     }
 
     // MARK: - Update Types

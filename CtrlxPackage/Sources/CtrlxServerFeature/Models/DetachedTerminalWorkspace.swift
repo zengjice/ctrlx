@@ -1,12 +1,57 @@
 import CtrlxCommon
+import CtrlxNetworking
 import Foundation
 import Observation
 
 /// Per-native-window presentation state; the terminal and browser services remain shared.
 @MainActor @Observable
 final class WorkbenchTabStore {
+    struct Selection: Equatable {
+        var hostID: String?
+        var sessionName: String
+        var windowID: String?
+    }
+
     var local: [String: SessionFileTabsState] = [:]
     var remote: [RemoteSessionTabsKey: SessionFileTabsState] = [:]
+    var remoteRecoveryReferences: [RemoteSessionTabsKey: ViewerWorkspaceReference] = [:]
+    var restoredRemoteSessions: Set<RemoteSessionTabsKey> = []
+    var unavailableRemoteFileIDs: Set<UUID> = []
+    var recoverySelection: Selection?
+    var restoredSelection: Selection?
+    var restorationRevision = 0
+    @ObservationIgnored private(set) var userSelectionRevision = 0
+    @ObservationIgnored private var remoteTabSelectionRevisions: [RemoteSessionTabsKey: Int] = [:]
+    var restoredLocalSessions: Set<String> = []
+    var recoveryFileTrees: [String: SavedFileTree] = [:]
+    var recoveryGitPaths: [String: String] = [:]
+    var recoveryGitStates: [String: WorkspaceGitState] = [:]
+    var pendingGitRecoverySessions: Set<String> = []
+    var restoredRecoveryWindowIDs: Set<UUID> = []
+    var restoredRecoveryFileIDs: Set<UUID> = []
+    @ObservationIgnored var capturePresentation: (() -> Void)?
+
+    /// Automatic fallbacks and Host snapshots must not cancel a pending restore.
+    func userDidSelectSession() {
+        userSelectionRevision += 1
+        restoredSelection = nil
+    }
+
+    func userDidSelectTab(hostID: String?, session: String) {
+        userDidSelectSession()
+        if let hostID {
+            remoteTabSelectionRevisions[.init(hostId: hostID, sessionName: session), default: 0] += 1
+        }
+    }
+
+    func tabSelectionRevision(hostID: String, session: String) -> Int {
+        remoteTabSelectionRevisions[.init(hostId: hostID, sessionName: session), default: 0]
+    }
+
+    func takeGitRecovery(for session: String) -> WorkspaceGitState? {
+        guard pendingGitRecoverySessions.remove(session) != nil else { return nil }
+        return recoveryGitStates[session]
+    }
 
     func existing(hostID: String?, session: String) -> SessionFileTabsState? {
         if let hostID {
@@ -35,13 +80,40 @@ final class WorkbenchTabStore {
 
     func renameSession(hostID: String?, from oldName: String, to newName: String, windowIDs: [String: String]) {
         if let hostID {
-            guard let tabs = remote.removeValue(forKey: .init(hostId: hostID, sessionName: oldName)) else { return }
+            let oldKey = RemoteSessionTabsKey(hostId: hostID, sessionName: oldName)
+            let newKey = RemoteSessionTabsKey(hostId: hostID, sessionName: newName)
+            if let revision = remoteTabSelectionRevisions.removeValue(forKey: oldKey) {
+                remoteTabSelectionRevisions[newKey] = revision
+            }
+            if let reference = remoteRecoveryReferences.removeValue(forKey: oldKey) {
+                remoteRecoveryReferences[newKey] = reference
+            }
+            if restoredRemoteSessions.remove(oldKey) != nil {
+                restoredRemoteSessions.insert(newKey)
+            }
+            if recoverySelection?.hostID == hostID, recoverySelection?.sessionName == oldName {
+                recoverySelection?.sessionName = newName
+                if restoredSelection == nil {
+                    restoredSelection = recoverySelection
+                    restorationRevision += 1
+                }
+            }
+            if restoredSelection?.hostID == hostID, restoredSelection?.sessionName == oldName {
+                restoredSelection?.sessionName = newName
+                restorationRevision += 1
+            }
+            guard let tabs = remote.removeValue(forKey: oldKey) else { return }
             tabs.remapWindowIDs(windowIDs)
             remote[.init(hostId: hostID, sessionName: newName)] = tabs
         } else {
             guard let tabs = local.removeValue(forKey: oldName) else { return }
             tabs.remapWindowIDs(windowIDs)
             local[newName] = tabs
+            recoveryGitStates[newName] = recoveryGitStates.removeValue(forKey: oldName)
+            recoveryGitPaths[newName] = recoveryGitPaths.removeValue(forKey: oldName)
+            if pendingGitRecoverySessions.remove(oldName) != nil {
+                pendingGitRecoverySessions.insert(newName)
+            }
         }
     }
 
@@ -52,8 +124,8 @@ final class WorkbenchTabStore {
 
 @MainActor @Observable
 final class DetachedTerminalWorkspace {
-    let id = UUID()
-    let anchor: DetachedTerminalTarget
+    let id: UUID
+    var anchor: DetachedTerminalTarget
     var sessionName: String?
     var members: [DetachedTerminalTarget]
     var selection: TabDragPayload
@@ -61,7 +133,8 @@ final class DetachedTerminalWorkspace {
     let tabs = WorkbenchTabStore()
     @ObservationIgnored var onClose: () -> Void = { }
 
-    init(target: DetachedTerminalTarget, sessionName: String? = nil) {
+    init(id: UUID = UUID(), target: DetachedTerminalTarget, sessionName: String? = nil) {
+        self.id = id
         self.anchor = target
         self.sessionName = sessionName
         self.members = [target]
@@ -87,6 +160,22 @@ final class DetachedTerminalWorkspace {
 }
 
 enum WorkspaceTerminalSelection {
+    struct Window: Equatable {
+        let hostID: String
+        let id: String
+        let stableId: String
+        let sessionName: String
+        let isWindowActive: Bool
+
+        init(_ window: TmuxWindow, hostID: String) {
+            self.hostID = hostID
+            self.id = window.id
+            self.stableId = window.stableId
+            self.sessionName = window.sessionName
+            self.isWindowActive = window.isWindowActive
+        }
+    }
+
     static func leftWindowID(
         current: String?, orderedIDs: [String], activeID: String?,
         rightSide: Set<String>, followsActive: Bool = false,
@@ -94,6 +183,9 @@ enum WorkspaceTerminalSelection {
     ) -> String? {
         let eligible = orderedIDs.filter { owns($0) && !rightSide.contains($0) }
         let active = activeID.flatMap { eligible.contains($0) ? $0 : nil }
+        if let current, !orderedIDs.contains(current) {
+            return eligible.first
+        }
         if followsActive, let active {
             return active
         }
@@ -144,9 +236,10 @@ extension SessionFileTabsState {
         guard !hasTerminal else { return }
         let order = TabDragPayload.reconciledOrder(
             windowIds: [], fileTabIds: openFileTabs.map(\.id), browserTabIds: openBrowserTabs.map(\.id),
-            storedOrder: tabOrder, includeFileExplorer: false, includeGit: false
+            storedOrder: tabOrder, includeFileExplorer: false, includeGit: isGitOpen
         )
         switch order.first(where: { !rightSide.contains($0) }) {
+        case .git: selectLeftGit()
         case let .file(id): selectedFileTabId = id
         case let .browser(id): selectedBrowserTabId = id
         default: break
@@ -161,6 +254,7 @@ extension SessionFileTabsState {
         case .window: break
         case let .file(id):
             guard let index = openFileTabs.firstIndex(where: { $0.id == id }) else { return false }
+            cancelClosingHostFileTab(id)
             destination.openFileTabs.append(openFileTabs.remove(at: index))
             destination.directoryTabs[id] = directoryTabs.removeValue(forKey: id)
             destination.scrollOffsets[id] = scrollOffsets.removeValue(forKey: id)

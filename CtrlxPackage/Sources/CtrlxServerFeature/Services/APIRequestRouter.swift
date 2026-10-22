@@ -169,7 +169,7 @@
         /// viewers (delivered via APNs when the viewer is offline).
         let onNotify: (@Sendable (String, String, String?, Bool) async -> Void)?
 
-        let onEditorOpen: (@Sendable (String, String) async -> Void)?
+        let onEditorOpen: (@Sendable (String, String) async throws -> Void)?
 
         let onIdentify: (@Sendable (String?) async -> [String: JSONValue]?)?
         let onBrowserStart: (@Sendable (String) async throws -> Void)?
@@ -274,7 +274,7 @@
             onSendText: (@Sendable (String, String?, Bool) async throws -> Void)? = nil,
             onSendKey: (@Sendable (String, String?) async throws -> Void)? = nil,
             onNotify: (@Sendable (String, String, String?, Bool) async -> Void)? = nil,
-            onEditorOpen: (@Sendable (String, String) async -> Void)? = nil,
+            onEditorOpen: (@Sendable (String, String) async throws -> Void)? = nil,
             onIdentify: (@Sendable (String?) async -> [String: JSONValue]?)? = nil,
             onBrowserStart: (@Sendable (String) async throws -> Void)? = nil,
             onProjectList: (@Sendable () async -> [[String: JSONValue]])? = nil,
@@ -688,7 +688,7 @@
                         return .invalidParams(id: id, "file_path required")
                     }
                     // This blocks until editing is done
-                    await onEditorOpen?(paneId, filePath)
+                    try await onEditorOpen?(paneId, filePath)
                     return .ok(id: id)
 
                 // MARK: - Projects

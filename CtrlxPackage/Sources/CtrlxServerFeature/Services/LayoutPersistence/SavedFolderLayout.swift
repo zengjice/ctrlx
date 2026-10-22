@@ -25,6 +25,8 @@
 
         /// Unified tab-strip ordering, as logical references.
         var tabOrder: [SavedTabRef]
+        /// Order only: never recreates transient Host pages or devices.
+        var linkedTabOrder: [PaneLinkedTabID]?
         /// Tab-strip entries that were moved to the right split pane.
         var rightSide: [SavedTabRef]
         /// Active tab in the left pane (`nil` → file tree / terminal).
@@ -45,6 +47,7 @@
             fileTabs: [SavedFileTab] = [],
             browserTabs: [SavedBrowserTab] = [],
             tabOrder: [SavedTabRef] = [],
+            linkedTabOrder: [PaneLinkedTabID]? = nil,
             rightSide: [SavedTabRef] = [],
             selectedLeft: SavedTabRef? = nil,
             selectedRight: SavedTabRef? = nil,
@@ -55,6 +58,7 @@
             self.fileTabs = fileTabs
             self.browserTabs = browserTabs
             self.tabOrder = tabOrder
+            self.linkedTabOrder = linkedTabOrder
             self.rightSide = rightSide
             self.selectedLeft = selectedLeft
             self.selectedRight = selectedRight
@@ -65,7 +69,7 @@
         /// True when there's nothing worth persisting or restoring. Used to avoid
         /// writing empty records and to short-circuit seeding.
         var isEmpty: Bool {
-            fileTabs.isEmpty && browserTabs.isEmpty && tabOrder.isEmpty && rightSide.isEmpty
+            fileTabs.isEmpty && browserTabs.isEmpty && tabOrder.isEmpty && rightSide.isEmpty && (linkedTabOrder?.isEmpty ?? true)
         }
     }
 

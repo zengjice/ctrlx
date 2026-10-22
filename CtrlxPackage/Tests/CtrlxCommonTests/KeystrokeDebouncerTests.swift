@@ -81,10 +81,10 @@ struct KeystrokeDebouncerTests {
                 }
                 defer { debouncer.cancelAll() }
                 debouncer.enqueue([.text("draft")])
-                debouncer.enqueueCodexQuestionExpansion(expectedCount: 4)
+                debouncer.enqueueCodexQuestionExpansion(expectedCount: 4, expectedQuestionID: "session:call")
                 debouncer.enqueueImmediately([.backspace])
                 await Task.megaYield()
-                #expect(sent.value == [.keys([.text("draft")]), .expandCodexQuestions(4), .keys([.backspace])])
+                #expect(sent.value == [.keys([.text("draft")]), .expandCodexQuestions(4, questionID: "session:call"), .keys([.backspace])])
             }
         }
     }

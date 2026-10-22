@@ -152,8 +152,8 @@ struct ExitPlanModeResponseView: View {
 
     private func respond(_ decision: PlanDecision) async {
         state.isSending = true
-        await submit(.approvePlan(decision: decision, editedPlan: nil))
-        state.isSending = false
+        defer { state.isSending = false }
+        guard await submit(.approvePlan(decision: decision, editedPlan: nil)) else { return }
         state.response = decision == .approve ? .accepted : .rejected
     }
 }
@@ -183,7 +183,7 @@ struct ExitPlanModeResponseView: View {
                 ExitPlanModeResponseView(
                     request: request,
                     isConnected: true,
-                    submit: { _ in },
+                    submit: { _ in true },
                     state: state
                 )
             }

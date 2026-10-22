@@ -31,11 +31,16 @@ private struct TabStripItemStyleModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .foregroundStyle(isSelected ? .primary : .secondary)
+            .foregroundStyle(isSelected ? settings.theme.workspacePrimaryTextColor : settings.theme.workspaceSecondaryTextColor)
             .background(isSelected ? settings.theme.activeTabBackgroundColor : Color.clear)
             .overlay(alignment: .bottom) {
                 if isSelected {
-                    if settings.theme == .anysphereDark {
+                    if settings.theme.workspaceColorScheme == .light {
+                        Rectangle()
+                            .fill(settings.theme.workspaceAccentColor)
+                            .frame(height: 3)
+                            .allowsHitTesting(false)
+                    } else if settings.theme.usesSubtleTabBorder {
                         Rectangle()
                             .fill(settings.theme.workspaceBorderColor)
                             .frame(height: 1)
@@ -51,7 +56,7 @@ private struct TabStripItemStyleModifier: ViewModifier {
                 // tabs live on the right pane when the layout is split.
                 if isSplit, isOnRightSplit {
                     Rectangle()
-                        .fill(Color.accentColor.opacity(0.6))
+                        .fill(settings.theme.workspaceAccentColor.opacity(0.6))
                         .frame(width: 2)
                 }
             }

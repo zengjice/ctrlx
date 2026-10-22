@@ -6,6 +6,12 @@ implemented contracts below and §4.8 for Host-backed Files/Viewer tabs; use
 and restore semantics. Original plan checklists and acceptance apply to their
 recorded revision, not every subsequent release.
 
+Host-owned Files may already be present when private layout seeding begins.
+They do not make the private workbench non-empty: restoration merges legacy
+private tabs while retaining live Host models, selection and placement. Host
+Files identities are excluded from private snapshots and never recreated from
+disk. iOS uses the same separation when its session context first becomes known.
+
 Historical status (2026-06-19): **Implemented + E2E-proven** on branch
 `feat/folder-layout-persistence`; flush-on-quit and file-tree expansion still
 pending at that checkpoint.
@@ -235,6 +241,10 @@ restore, a `.window(index:)` maps only if the new session actually has a window
 at that index, otherwise it is dropped. So a saved layout is mostly about the
 *auxiliary* tabs (files / browser / git / explorer) and the split *shape*; the
 terminal windows come from whatever the live session currently has.
+
+Git is now opt-in: seeding a new session from a folder layout excludes its Git
+references and selection. Recovery of the original workspace still restores
+explicitly open Git tabs; closing Git removes it from subsequent snapshots.
 
 ### 4.5 Cold-launch specifics (R7)
 

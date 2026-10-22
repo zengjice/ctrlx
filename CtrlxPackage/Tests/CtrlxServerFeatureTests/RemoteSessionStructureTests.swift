@@ -47,6 +47,31 @@ struct RemoteSessionStructureTests {
             .renames(from: old).isEmpty)
     }
 
+    @Test("Recycled pane numbers never imply a rename across Host roots, tmux incarnations or persistent sessions", arguments: ["root", "server", "session", "pane", "legacyTransition"])
+    func rejectsRecycledRoutes(change: String) {
+        let key = PaneKey(pairId: "A", paneId: "%0")
+        let scope = WorkspaceIdentityScope(hostID: UUID(), serverID: "100:1")
+        var before = pane("%0", session: "before")
+        before.workspaceIdentity = .init(serverID: "100:1", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        var after = before
+        after.sessionName = "after"
+        var nextScope = scope
+        switch change {
+        case "root": nextScope.hostID = UUID()
+        case "server":
+            nextScope.serverID = "200:2"
+            after.workspaceIdentity?.serverID = "200:2"
+        case "session": after.workspaceIdentity?.sessionID = UUID()
+        case "pane": after.workspaceIdentity?.paneID = UUID()
+        default: after.workspaceIdentity = nil
+        }
+        let original = RemoteSessionStructure(panes: [key: before], scopes: ["A": scope])
+        let renamed = RemoteSessionStructure(panes: [key: after], scopes: ["A": nextScope])
+        #expect(renamed.renames(from: original).isEmpty)
+        after.workspaceIdentity = before.workspaceIdentity
+        #expect(RemoteSessionStructure(panes: [key: after], scopes: ["A": scope]).renames(from: original).count == 1)
+    }
+
     @Test
     func catalogSyncWaitsForMatchingRoutingWithoutConfusingHosts() {
         let structure = RemoteSessionStructure(panes: [

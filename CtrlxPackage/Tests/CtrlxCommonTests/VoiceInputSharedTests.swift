@@ -20,6 +20,9 @@ struct VoiceInputSharedTests {
             $0[PreferencesService.self] = preferences
         } operation: {
             let settings = VoiceCorrectionSettings()
+            #expect(settings.language == .system)
+            settings.language = .simplifiedChinese
+            #expect(VoiceCorrectionSettings().language == .simplifiedChinese)
             #expect(settings.provider == .volcengineArk)
             #expect(settings.selection?.modelID == "saved-model")
             #expect(settings.modelIDs(for: .volcengineArk) == ["saved-model"])
@@ -63,15 +66,18 @@ struct VoiceInputSharedTests {
     func permissionDenied() async {
         let ownership = VoiceInputRecordingOwnership()
         await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { .denied }, microphone: {
                 Issue.record("Microphone must not be requested after denied speech permission")
                 return false
             })
         } operation: {
             let voice = VoiceInputController(ownership: ownership)
-            voice.toggleRecording(context: "pane context", correctionSelection: nil)
+            voice.toggleRecording(context: .init(terminalText: "pane context"), correctionSelection: nil)
             for _ in 0..<200 {
-                if voice.phase == .idle { break }
+                if voice.phase == .idle {
+                    break
+                }
                 try? await Task.sleep(for: .milliseconds(10))
             }
             #expect(voice.phase == .idle)
@@ -86,6 +92,7 @@ struct VoiceInputSharedTests {
         let gate = PermissionGate()
         let ownership = VoiceInputRecordingOwnership()
         await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
             $0[VoiceInputAuthorization.self] = .init(speech: { await gate.wait() }, microphone: {
                 Issue.record("Cancelled preparation must not request microphone access")
                 return false
@@ -108,16 +115,20 @@ struct VoiceInputSharedTests {
 
     @Test("A second controller cannot start while the first is preparing")
     func multipleControllers() {
-        let ownership = VoiceInputRecordingOwnership()
-        let first = VoiceInputController(ownership: ownership)
-        let second = VoiceInputController(ownership: ownership)
-        first.toggleRecording(context: nil, correctionSelection: nil)
-        second.toggleRecording(context: nil, correctionSelection: nil)
-        #expect(second.phase == .idle)
-        #expect(second.errorMessage != nil)
-        first.cancel()
-        second.cancel()
-        #expect(ownership.acquire() != nil)
+        withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let ownership = VoiceInputRecordingOwnership()
+            let first = VoiceInputController(ownership: ownership)
+            let second = VoiceInputController(ownership: ownership)
+            first.toggleRecording(context: nil, correctionSelection: nil)
+            second.toggleRecording(context: nil, correctionSelection: nil)
+            #expect(second.phase == .idle)
+            #expect(second.errorMessage != nil)
+            first.cancel()
+            second.cancel()
+            #expect(ownership.acquire() != nil)
+        }
     }
 
     private actor PermissionGate {

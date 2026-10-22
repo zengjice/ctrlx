@@ -1,8 +1,8 @@
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
-import CtrlxPluginProtocol
 import Testing
 @testable import CtrlxServerFeature
 
@@ -10,31 +10,48 @@ private actor ForkTestCore: AgentSessionForking {
     func commandForFork(sessionID: String, projectPath: String) async throws -> AgentForkLaunch {
         AgentForkLaunch(command: LaunchCommand(command: "codex", args: ["fork", sessionID, "-C", projectPath], env: ["CODEX_HOME": "/config"]))
     }
-    func commandForLaunch(projectPath _: String) async -> LaunchCommand? { nil }
+
+    func commandForLaunch(projectPath _: String) async -> LaunchCommand? {
+        nil
+    }
+
     func initialize(_: PluginEnv, host _: any PluginHost) async throws { }
-    func handleIngress(_: IngressFrame) async -> PluginEvent? { nil }
+    func handleIngress(_: IngressFrame) async -> PluginEvent? {
+        nil
+    }
+
     func deliverResponse(sessionID _: String, requestID _: String, _: AgentResponse) async { }
     func refreshProjects() async { }
-    func install(configRoot _: String?) async throws -> InstallResult { .alreadyInstalled }
+    func install(configRoot _: String?) async throws -> InstallResult {
+        .alreadyInstalled
+    }
+
     func uninstall(configRoot _: String?) async throws { }
-    func installStatus(configRoot _: String?) async -> PluginInstallStatus { .installed(version: "1") }
-    func applySettings(_: Data) async -> SettingsResult { .applied }
+    func installStatus(configRoot _: String?) async -> PluginInstallStatus {
+        .installed(version: "1")
+    }
+
+    func applySettings(_: Data) async -> SettingsResult {
+        .applied
+    }
+
     func shutdown() async { }
 }
 
 @MainActor
-private final class ForkFixture {
+final private class ForkFixture {
     let original: AgentForkSource
     var current: AgentForkSource?
     var launches: [(session: String, name: String, preparation: SessionLaunchPreparation)] = []
     var refreshes = 0
+    var launchSources: [AgentForkSource] = []
 
     init() throws {
-        original = try #require(AgentForkSource(pane: PaneState(
+        self.original = try #require(AgentForkSource(pane: PaneState(
             paneId: "%1", sessionName: "source", tmuxWindowId: "@7", currentPath: "/repo 'quoted'/src",
             agentSession: .init(paneId: "%1", pluginID: "codex"), claudeSessionID: UUID().uuidString
         )))
-        current = original
+        self.current = original
     }
 
     func service(failsLaunch: Bool = false) -> AgentForkService {
@@ -50,16 +67,19 @@ private final class ForkFixture {
             },
             refresh: {
                 MainActor.preconditionIsolated()
-                await Task.detached {}.value
+                await Task.detached { }.value
                 MainActor.preconditionIsolated()
                 self.refreshes += 1
             },
-            launch: { session, name, preparation in
+            launch: { source, name, preparation in
                 MainActor.preconditionIsolated()
-                await Task.detached {}.value
+                await Task.detached { }.value
                 MainActor.preconditionIsolated()
-                self.launches.append((session, name, preparation))
-                if failsLaunch { throw AgentForkError("Window created (%99), but Agent launch failed. Check that tab before retrying.") }
+                self.launches.append((source.sessionName, name, preparation))
+                self.launchSources.append(source)
+                if failsLaunch {
+                    throw AgentForkError("Window created (%99), but Agent launch failed. Check that tab before retrying.")
+                }
                 return "%99"
             }
         )
@@ -75,6 +95,101 @@ private actor ForkBackgroundCaller {
 
 @MainActor
 struct AgentForkServiceTests {
+    @Test(
+        "Restored source numbers cannot revive a Fork, preparation, checkout continuation or cached reply",
+        arguments: ["before", "prepare", "directory", "worktree", "retry"],
+        [false, true]
+    )
+    func workspaceReplacement(phase: String, restart: Bool) async throws {
+        let fixture = try ForkFixture()
+        let identity = WorkspacePaneIdentity(serverID: "1:2", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        func source(_ identity: WorkspacePaneIdentity?) throws -> AgentForkSource {
+            try #require(AgentForkSource(pane: PaneState(
+                paneId: fixture.original.paneID, sessionName: fixture.original.sessionName,
+                tmuxWindowId: fixture.original.windowID, currentPath: fixture.original.workingDirectory,
+                agentSession: .init(paneId: fixture.original.paneID, pluginID: fixture.original.pluginID),
+                claudeSessionID: fixture.original.sessionID, workspaceIdentity: identity
+            )))
+        }
+        let original = try source(identity)
+        var replacementIdentity = identity
+        if restart {
+            replacementIdentity.serverID = "3:4"
+        } else {
+            replacementIdentity.paneID = UUID()
+        }
+        let replacement = try source(replacementIdentity)
+        fixture.current = phase == "before" ? replacement : original
+        let expected = try phase == "directory" ? source(nil) : original
+        let service = fixture.service()
+        let worktreePath = "/repo/.worktrees/new/src"
+        try await withDependencies {
+            $0[SessionDirectoryClient.self].resolve = { path in
+                if phase == "directory" {
+                    await MainActor.run { fixture.current = replacement }
+                }
+                return path
+            }
+            $0[AgentForkWorktreeClient.self].inspect = { path in
+                if phase == "prepare" {
+                    await MainActor.run { fixture.current = replacement }
+                }
+                return .init(repositoryRoot: path, primaryRoot: path, head: "abc", relativeDirectory: "", hasUncommittedChanges: false)
+            }
+            $0[AgentForkWorktreeClient.self].create = { _, _ in
+                await MainActor.run { fixture.current = replacement }
+                return worktreePath
+            }
+        } operation: {
+            if phase == "prepare" {
+                await #expect(throws: AgentForkError.self) { try await service.prepare(expected) }
+            } else {
+                let request = ForkAgentSession(source: expected, worktree: phase == "worktree" ? .init(name: "new", expectedHead: "abc") : nil)
+                if phase == "retry" {
+                    let created = try await service.fork(request)
+                    #expect(created == "%99")
+                    fixture.current = replacement
+                }
+                do {
+                    _ = try await service.fork(request)
+                    Issue.record("A reconstructed source must not complete an old Fork")
+                } catch {
+                    #expect(error is AgentForkError)
+                    if phase == "worktree" {
+                        #expect(error.localizedDescription.contains(worktreePath))
+                    }
+                }
+            }
+            #expect(fixture.launches.count == (phase == "retry" ? 1 : 0))
+        }
+    }
+
+    @Test("Legacy Fork binds the current workspace before launch; contradictory transport identity is rejected")
+    func legacyWorkspaceBinding() async throws {
+        let fixture = try ForkFixture()
+        let identity = WorkspacePaneIdentity(serverID: "1:2", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        fixture.current = try #require(AgentForkSource(pane: .init(
+            paneId: fixture.original.paneID, sessionName: fixture.original.sessionName,
+            tmuxWindowId: fixture.original.windowID, currentPath: fixture.original.workingDirectory,
+            agentSession: .init(paneId: fixture.original.paneID, pluginID: fixture.original.pluginID),
+            claudeSessionID: fixture.original.sessionID, workspaceIdentity: identity
+        )))
+        let service = fixture.service()
+        try await withDependencies {
+            $0[SessionDirectoryClient.self].resolve = { $0 }
+        } operation: {
+            var stale = identity
+            stale.serverID = "3:4"
+            await #expect(throws: AgentForkError.self) {
+                try await service.fork(.init(source: fixture.original), expectedWorkspacePane: stale)
+            }
+            #expect(fixture.launches.isEmpty)
+            let result = try await service.fork(.init(source: fixture.original))
+            #expect(result == "%99")
+            #expect(fixture.launchSources.first?.workspaceIdentity == identity)
+        }
+    }
+
     @Test("Viewer background requests keep all Host callbacks on MainActor across suspension", arguments: [false, true])
     func callbackIsolation(usingWorktree: Bool) async throws {
         let fixture = try ForkFixture()
@@ -157,7 +272,9 @@ struct AgentForkServiceTests {
             try await withDependencies {
                 $0[SessionDirectoryClient.self].resolve = { $0 }
                 $0[AgentForkWorktreeClient.self].create = { _, _ in
-                    if switchSource { await MainActor.run { fixture.current = nil } }
+                    if switchSource {
+                        await MainActor.run { fixture.current = nil }
+                    }
                     return path
                 }
             } operation: {
@@ -202,7 +319,9 @@ struct AgentForkServiceTests {
         try await withDependencies {
             $0[SessionDirectoryClient.self].resolve = { $0 }
             $0[AgentForkWorktreeClient.self].create = { _, request in
-                if request.name == "existing" { throw AgentForkError("Branch already exists: existing. Choose a different name.") }
+                if request.name == "existing" {
+                    throw AgentForkError("Branch already exists: existing. Choose a different name.")
+                }
                 return "/repo/.worktrees/\(request.name)/src"
             }
         } operation: {

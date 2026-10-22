@@ -3,6 +3,7 @@
     import CtrlxCommon
     import CtrlxNetworking
     import Dependencies
+    import OSLog
     import SwiftTerm
 
     // MARK: - Focus Border Overlay
@@ -183,6 +184,20 @@
 
         private var linkGesture = TerminalLinkGestureState()
         private var pendingLinkActivationTask: Task<Void, Never>?
+        private var pendingContentClickTask: Task<Void, Never>?
+        private var contentClickEligible = false
+        private let voicePress = MacVoiceInputPress()
+        private var voiceOwnsMouseSequence = false
+
+        func cancelVoicePress() {
+            voicePress.cancel()
+        }
+
+        func cancelContentClick() {
+            pendingContentClickTask?.cancel()
+            pendingContentClickTask = nil
+            contentClickEligible = false
+        }
 
         override var acceptsFirstResponder: Bool {
             false
@@ -226,6 +241,8 @@
         }
 
         override func scrollWheel(with event: NSEvent) {
+            cancelContentClick()
+            voicePress.cancel()
             if event.phase.contains(.began) || event.phase.contains(.cancelled)
                 || event.momentumPhase.contains(.ended) {
                 scrollAccumulator.reset()
@@ -283,6 +300,42 @@
         }
 
         override func mouseDown(with event: NSEvent) {
+            cancelContentClick()
+            contentClickEligible = event.clickCount == 1
+                && event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty
+                && interactiveView?.isEditorActive == false
+                && interactiveView?.terminalView.hasMarkedText() == false
+                && interactiveView?.shouldReportMouseEvent(event) == false
+            voicePress.cancel()
+            voiceOwnsMouseSequence = false
+            if
+                let interactive = interactiveView,
+                let router = interactive.voiceInputRouter,
+                interactive.isVoiceInputPressCandidate(event) {
+                voiceOwnsMouseSequence = true
+                onMouseDown?()
+                let token = router.token
+                var holdID: UUID?
+                voicePress.mouseDown(event, begin: { [weak interactive, weak router] in
+                    guard
+                        let interactive, let router, router.matches(token),
+                        router.active === interactive.voiceInputEndpoint,
+                        interactive.window?.isKeyWindow == true,
+                        interactive.window?.firstResponder === interactive.terminalView,
+                        interactive.isVoiceInputPressCandidate(event) else { return false }
+                    holdID = router.beginVoiceInputHold()
+                    return holdID != nil
+                }, finish: { [weak router] cancelled in
+                    if let holdID {
+                        router?.endVoiceInputHold(holdID, cancelled: cancelled)
+                    }
+                })
+                return
+            }
+            forwardMouseDown(event)
+        }
+
+        private func forwardMouseDown(_ event: NSEvent) {
             lastDragPosition = nil
             if linkGesture.mouseDown(clickCount: event.clickCount) {
                 cancelPendingLinkActivation()
@@ -311,6 +364,12 @@
         }
 
         override func mouseDragged(with event: NSEvent) {
+            cancelContentClick()
+            if voiceOwnsMouseSequence {
+                guard let down = voicePress.mouseDragged(event) else { return }
+                voiceOwnsMouseSequence = false
+                forwardMouseDown(down)
+            }
             linkGesture.mouseDragged()
 
             // Only synthesize app-owned drags. Shift bypass and disabled reporting
@@ -353,6 +412,11 @@
         }
 
         override func mouseUp(with event: NSEvent) {
+            if voiceOwnsMouseSequence {
+                voiceOwnsMouseSequence = false
+                guard let down = voicePress.mouseUp() else { return }
+                forwardMouseDown(down)
+            }
             let shouldActivateLink = linkGesture.mouseUp(clickCount: event.clickCount)
             defer {
                 lastDragPosition = nil
@@ -368,12 +432,20 @@
                 }
                 let allowed = TerminalURLDetector.defaultAllowedSchemes
                 if let url = interactive.url(at: point, allowedSchemes: allowed) {
+                    let behaviorOverride: BrowserLinkBehavior?
+                    if event.modifierFlags.contains(.command) {
+                        behaviorOverride = .alwaysInApp
+                    } else if event.modifierFlags.contains(.option) {
+                        behaviorOverride = .alwaysInDefaultBrowser
+                    } else {
+                        behaviorOverride = nil
+                    }
                     // The first mouse-up of a double or triple click also has
                     // clickCount == 1. Stage the action for the system's own
                     // double-click interval; the next mouse-down cancels it.
                     // This keeps link clicks working without stealing word/row
                     // selection gestures.
-                    scheduleLinkActivation(in: interactive) { $0.openURL(url) }
+                    scheduleLinkActivation(in: interactive) { $0.openURL(url, behaviorOverride: behaviorOverride) }
                     return
                 }
             }
@@ -393,6 +465,37 @@
                 interactive.autoCopyOnSelect,
                 interactive.getSelectedTextTrimmed() != nil {
                 interactive.copySelectionToClipboard()
+            }
+
+            if
+                shouldActivateLink, contentClickEligible,
+                event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
+                scheduleContentClick()
+            }
+        }
+
+        private func scheduleContentClick() {
+            guard let interactive = interactiveView, let window = interactive.window else { return }
+            let size = interactive.bounds.size
+            // A first mouse-up may still become a double-click selection. Wait just as
+            // link activation does; never resize underneath selection or composition.
+            pendingContentClickTask = Task { @MainActor [weak self, weak interactive, weak window] in
+                do {
+                    try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval))
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                self.pendingContentClickTask = nil
+                guard
+                    let interactive, let window,
+                    interactive.window === window, window.isKeyWindow, !window.inLiveResize,
+                    window.firstResponder === interactive.terminalView,
+                    !interactive.isHiddenOrHasHiddenAncestor, !interactive.isEditorActive,
+                    !interactive.terminalView.hasMarkedText(), !interactive.isMouseModeActive,
+                    interactive.terminalView.getSelection()?.isEmpty != false,
+                    interactive.bounds.size == size else { return }
+                interactive.onContentClick?()
             }
         }
 
@@ -416,6 +519,7 @@
         }
 
         override func rightMouseDown(with event: NSEvent) {
+            cancelContentClick()
             if interactiveView?.shouldReportMouseEvent(event) == true {
                 terminalView?.rightMouseDown(with: event)
             } else {
@@ -438,6 +542,7 @@
         }
 
         override func otherMouseDown(with event: NSEvent) {
+            cancelContentClick()
             if interactiveView?.shouldReportMouseEvent(event) == true {
                 terminalView?.otherMouseDown(with: event)
             }
@@ -476,7 +581,7 @@
     /// - Preserves scroll position when new content arrives
     /// - Shows a focus highlight only when multiple panes share a window
     /// - Supports horizontal scrolling for wide terminals
-    /// - Detects plain-text URLs: Cmd+hover highlights, Cmd+click opens in browser
+    /// - Opens web links with preferences, or Command/Option destination overrides
     final class InteractiveTerminalView: NSView {
         let terminalView: TerminalView
         private var horizontalScroller: NSScroller?
@@ -492,18 +597,43 @@
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
 
-        /// Pane metadata, not text/title matching. Used only for precise wheel
-        /// sensitivity while the terminal is in the alternate screen.
+        /// Pane metadata, not text/title matching. Used for wheel sensitivity,
+        /// Codex color adaptation and application-owned selection copying.
         var scrollingAgentID: String? {
             didSet {
-                if oldValue != scrollingAgentID { scrollOverlay?.resetScrollGesture() }
+                if oldValue != scrollingAgentID {
+                    scrollOverlay?.resetScrollGesture()
+                    updateExplicitColorTransform()
+                }
             }
         }
 
         /// Sends a guarded intent to the host, not a raw synthetic keypress.
-        var onExpandCodexQuestions: (@MainActor (Int) async -> Bool)?
+        var onExpandCodexQuestions: (@MainActor (Int, String?) async -> Bool)?
+        var codexQuestionID: String? {
+            didSet {
+                guard oldValue != codexQuestionID else { return }
+                cancelQuestionCheck()
+                lastQuestionCount = nil
+                lastQuestionDiagnostic = nil
+                scheduleQuestionCheck()
+            }
+        }
+
+        private static let questionLogger = Logger(subsystem: "com.jicezeng.ctrlx", category: "CodexQuestions")
+        private var lastQuestionDiagnostic: String?
         private var questionCheckTask: Task<Void, Never>?
         private var questionCheckID: UUID?
+        private var deferredQuestionCheck: QuestionCheck?
+        private var isFeedingTerminalData = false
+
+        private struct QuestionCheck {
+            let id: UUID
+            let prompt: CodexQuestionPrompt
+            let questionID: String?
+            let inputRevision: UInt64
+        }
+
         private var lastQuestionCount: Int?
         private var questionInputRevision: UInt64 = 0
 
@@ -537,9 +667,10 @@
         /// Callback invoked when the user clicks a URL in the terminal. The
         /// callback should return `true` if it handled the URL (and the
         /// terminal view should do nothing further) or `false` to fall back to
-        /// `NSWorkspace.shared.open(_:)`. When the callback is `nil`, all URLs
-        /// are forwarded to `NSWorkspace`.
-        var onOpenURL: (@MainActor (URL) -> Bool)?
+        /// `NSWorkspace.shared.open(_:)`. The optional behavior overrides
+        /// preferences for this click only. An explicit Host request never
+        /// falls back to this device's browser.
+        var onOpenURL: (@MainActor (URL, BrowserLinkBehavior?) -> Bool)?
         var onOpenPath: (@MainActor (String) -> Void)?
 
         /// When false, the terminal won't auto-grab focus on window add or window-becomes-key.
@@ -554,10 +685,39 @@
             }
         }
 
-        /// Fires whenever this view becomes the window's first responder
-        /// (mouse click, programmatic, tabbing). Used to propagate focus back
-        /// to tmux via `select-pane` so external clients see the same active pane.
+        /// Synchronizes input routing and tmux selection, including repeated
+        /// mouse-down notifications while this terminal already has focus.
         var onBecomeFirstResponder: (@MainActor () -> Void)?
+        /// A programmatic responder transition, delivered once the terminal is visible.
+        var onFocusRestored: (@MainActor () -> Void)?
+        private var pendingFocusRestoration = false
+        /// A completed plain content click, separate from programmatic focus and selections.
+        var onContentClick: (@MainActor () -> Void)?
+        weak var voiceInputRouter: TerminalQuickActionRouter?
+        weak var voiceInputEndpoint: TerminalQuickActionEndpoint?
+
+        func cancelVoiceInputPress() {
+            scrollOverlay?.cancelVoicePress()
+            scrollOverlay?.cancelContentClick()
+        }
+
+        fileprivate func isVoiceInputPressCandidate(_ event: NSEvent) -> Bool {
+            guard
+                voiceInputEndpoint?.isAvailable == true, voiceInputEndpoint?.isReady == true,
+                event.clickCount == 1,
+                event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty,
+                !isEditorActive, !terminalView.hasMarkedText(),
+                !terminalView.canScroll || terminalView.scrollPosition == 1,
+                terminalView.getSelection()?.isEmpty != false,
+                cellSize.width > 0, cellSize.height > 0 else { return false }
+            let point = terminalView.convert(event.locationInWindow, from: nil)
+            guard terminalView.bounds.contains(point) else { return false }
+            return MacTerminalVoiceInputRegion.contains(
+                column: Int(point.x / cellSize.width),
+                row: Int((terminalView.bounds.height - point.y) / cellSize.height),
+                in: getTerminal()
+            )
+        }
 
         var preserveUserScroll = false
         var onResize: ((NSSize) -> Void)?
@@ -669,7 +829,7 @@
                 self?.scrollHorizontally(by: delta)
             }
             overlay.onMouseDown = { [weak self] in
-                self?.focusTerminal()
+                self?.focusTerminal(source: .mouse)
             }
             overlay.onMouseMoved = { [weak self] event in
                 self?.handleMouseMoved(event)
@@ -728,15 +888,42 @@
             false
         }
 
+        enum FocusSource {
+            case programmatic
+            case mouse
+        }
+
         @discardableResult
-        func focusTerminal() -> Bool {
-            guard let window, window.makeFirstResponder(terminalView) else { return false }
+        func focusTerminal(source: FocusSource = .programmatic) -> Bool {
+            // Mouse focus must wait for the completed-click gesture checks, including
+            // when it supersedes a programmatic focus waiting for remote bootstrap.
+            if source == .mouse {
+                pendingFocusRestoration = false
+            }
+            guard let window else { return false }
+            let restoresFocus = window.firstResponder !== terminalView
+            guard window.makeFirstResponder(terminalView) else { return false }
             if let contentView = window.contentView {
                 updateFocusBorders(in: contentView)
             }
             onBecomeFirstResponder?()
+            if source == .programmatic, restoresFocus {
+                pendingFocusRestoration = true
+            }
+            completePendingFocusRestoration()
             scheduleQuestionCheck()
             return true
+        }
+
+        func completePendingFocusRestoration() {
+            guard pendingFocusRestoration else { return }
+            guard let window, window.firstResponder === terminalView, !isEditorActive else {
+                pendingFocusRestoration = false
+                return
+            }
+            guard !isHiddenOrHasHiddenAncestor else { return }
+            pendingFocusRestoration = false
+            onFocusRestored?()
         }
 
         private func updateFocusBorders(in view: NSView) {
@@ -757,13 +944,12 @@
 
             // Pause automation while the user types/composes. A manual opener
             // consumes this queue too, so Escape won't immediately reopen it.
+            scrollOverlay?.cancelContentClick()
             if event.keyCode == 123, event.modifierFlags.intersection([.shift, .control, .option, .command]) == .shift {
                 lastQuestionCount = currentQuestionPrompt?.count
             }
             questionInputRevision &+= 1
-            questionCheckTask?.cancel()
-            questionCheckTask = nil
-            questionCheckID = nil
+            cancelQuestionCheck()
             scheduleQuestionCheck(delay: .seconds(1))
 
             if let controlKey = TerminalControlKeyMapper.key(
@@ -803,6 +989,7 @@
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            scrollOverlay?.cancelContentClick()
 
             // Clean up old observers
             for observer in windowObservers {
@@ -815,6 +1002,8 @@
             }
 
             guard let window else {
+                pendingFocusRestoration = false
+                cancelVoiceInputPress()
                 cancelQuestionCheck()
                 return
             }
@@ -873,6 +1062,7 @@
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in
+                    self?.scrollOverlay?.cancelContentClick()
                     self?.terminalView.hasFocus = false
                     self?.isFocused = false
                 }
@@ -1308,6 +1498,15 @@
                     copySelectionToClipboard()
                     return true
                 }
+                if
+                    scrollingAgentID == "codex",
+                    event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+                    let onRawInput {
+                    // CSI-u preserves Command (Super); TmuxKey conversion would
+                    // lose that modifier. Never substitute interrupting Ctrl+C.
+                    onRawInput(Data("\u{1b}[99;9u".utf8))
+                    return true
+                }
                 return false
 
             default:
@@ -1624,10 +1823,12 @@
         /// Opens a URL by giving `onOpenURL` first chance to handle it. Falls
         /// back to the `URLOpener` dependency (`NSWorkspace.shared.open` in
         /// production, a file-backed log in E2E tests) when the callback is
-        /// absent or declines to handle the URL.
-        fileprivate func openURL(_ url: URL) {
+        /// absent or declines to handle the URL, unless the user chose Host.
+        fileprivate func openURL(_ url: URL, behaviorOverride: BrowserLinkBehavior? = nil) {
             guard !url.isFileURL else { return }
-            if onOpenURL?(url) == true { return }
+            if onOpenURL?(url, behaviorOverride) == true || behaviorOverride == .alwaysInApp {
+                return
+            }
             @Dependency(URLOpener.self) var urlOpener
             urlOpener.openInDefaultBrowser(url)
         }
@@ -1882,6 +2083,20 @@
             nativeBackgroundColor = palette.background.nativeColor
             richCopyANSIColors = palette.nativeANSIColors
             appliedTheme = theme
+            updateExplicitColorTransform()
+        }
+
+        private func updateExplicitColorTransform() {
+            guard let palette = appliedTheme?.palette, scrollingAgentID == "codex" else {
+                terminalView.explicitColorTransform = nil
+                return
+            }
+            terminalView.explicitColorTransform = { color, foreground, inverse in
+                guard let color = color.usingColorSpace(.sRGB) else { return color }
+                let rgb = TerminalRGB(hex: UInt32((color.redComponent * 255).rounded()) << 16
+                    | UInt32((color.greenComponent * 255).rounded()) << 8 | UInt32((color.blueComponent * 255).rounded()))
+                return CodexTerminalColorAdaptation.color(rgb, foreground: foreground, inverse: inverse, palette: palette).nativeColor
+            }
         }
 
         var nativeForegroundColor: NSColor {
@@ -1930,13 +2145,22 @@
         }
 
         func feed(byteArray: ArraySlice<UInt8>) {
+            isFeedingTerminalData = true
+            defer {
+                isFeedingTerminalData = false
+                scheduleQuestionCheck()
+            }
             terminalView.feed(byteArray: byteArray)
             extractAndClearPayloads(afterFeeding: byteArray)
             scheduleURLUnderlineUpdate(contentChanged: true)
-            scheduleQuestionCheck()
         }
 
         func feedPreservingScroll(_ bytes: ArraySlice<UInt8>) {
+            isFeedingTerminalData = true
+            defer {
+                isFeedingTerminalData = false
+                scheduleQuestionCheck()
+            }
             let savedPosition = scrollPosition
             // Consider "at bottom" if:
             // - Position >= 0.999 (actually at bottom)
@@ -1948,66 +2172,112 @@
                 terminalView.scroll(toPosition: savedPosition)
             }
             scheduleURLUnderlineUpdate(contentChanged: true)
-            scheduleQuestionCheck()
         }
 
         // MARK: - Codex question auto-expansion
 
         var canExpandCodexQuestions: Bool {
-            guard onExpandCodexQuestions != nil, NSApp.isActive,
-                  let window, window.isKeyWindow, window.firstResponder === terminalView,
-                  !isHiddenOrHasHiddenAncestor, !isEditorActive,
-                  !terminalView.hasMarkedText(), NSEvent.pressedMouseButtons == 0,
-                  terminalView.getSelection()?.isEmpty != false
-            else { return false }
-            return !terminalView.canScroll || terminalView.scrollPosition == 1
+            questionExpansionBlockReason == nil
+        }
+
+        var questionExpansionBlockReason: String? {
+            guard onExpandCodexQuestions != nil else { return "no-handler" }
+            guard NSApp.isActive else { return "app-inactive" }
+            guard let window, window.isKeyWindow else { return "window-not-key" }
+            guard window.firstResponder === terminalView else { return "terminal-not-focused" }
+            guard !isHiddenOrHasHiddenAncestor, !isEditorActive else { return "terminal-hidden-or-editor" }
+            guard !terminalView.hasMarkedText() else { return "composing-text" }
+            guard NSEvent.pressedMouseButtons == 0 else { return "mouse-down" }
+            guard terminalView.getSelection()?.isEmpty != false else { return "text-selected" }
+            guard !terminalView.canScroll || terminalView.scrollPosition == 1 else { return "scrollback" }
+            return nil
         }
 
         var currentQuestionPrompt: CodexQuestionPrompt? {
-            let terminal = getTerminal()
-            let row = terminal.buffer.y
-            guard row >= 0, row < terminal.rows else { return nil }
-            // Only the composer and its nearby footer, never scan scrollback.
-            let start = max(0, row - 8)
-            let lines = (start...row).map {
-                terminal.getLine(row: $0)?.translateToString(trimRight: true) ?? ""
-            }
-            return CodexQuestionPrompt(lines: lines, cursorRow: row - start, cursorColumn: terminal.buffer.x)
+            try? CodexQuestionPrompt(terminal: getTerminal())
+        }
+
+        private var isQuestionFrameComplete: Bool {
+            !isFeedingTerminalData && !getTerminal().synchronizedOutputActive
         }
 
         fileprivate func scheduleQuestionCheck(delay: Duration = .milliseconds(350)) {
-            guard questionCheckTask == nil, canExpandCodexQuestions,
-                  let candidate = currentQuestionPrompt,
-                  candidate.count != lastQuestionCount
-            else { return }
-            let revision = questionInputRevision
-            let checkID = UUID()
-            questionCheckID = checkID
+            guard isQuestionFrameComplete, questionCheckTask == nil, onExpandCodexQuestions != nil else { return }
+            if let check = deferredQuestionCheck {
+                deferredQuestionCheck = nil
+                questionCheckTask = Task { @MainActor [weak self] in
+                    await self?.performQuestionCheck(check)
+                }
+                return
+            }
+            let candidate: CodexQuestionPrompt
+            do {
+                candidate = try CodexQuestionPrompt(terminal: getTerminal())
+            } catch {
+                reportQuestionCheck(error.rawValue, count: nil)
+                return
+            }
+            if let reason = questionExpansionBlockReason {
+                reportQuestionCheck(reason, count: candidate.count)
+                return
+            }
+            guard candidate.count != lastQuestionCount else {
+                reportQuestionCheck("already-handled", count: candidate.count)
+                return
+            }
+            reportQuestionCheck("scheduled", count: candidate.count)
+            let check = QuestionCheck(
+                id: UUID(), prompt: candidate, questionID: codexQuestionID,
+                inputRevision: questionInputRevision
+            )
+            questionCheckID = check.id
             questionCheckTask = Task { @MainActor [weak self] in
                 do { try await Task.sleep(for: delay) } catch { return }
-                guard let self else { return }
-                var shouldRecheck = true
-                defer {
-                    if self.questionCheckID == checkID {
-                        self.questionCheckTask = nil
-                        self.questionCheckID = nil
-                        if shouldRecheck {
-                            self.scheduleQuestionCheck()
-                        }
+                await self?.performQuestionCheck(check)
+            }
+        }
+
+        private func performQuestionCheck(_ check: QuestionCheck) async {
+            guard !Task.isCancelled, questionCheckID == check.id else { return }
+            // The deadline may fall inside a synchronized redraw. Wait for its
+            // completion event without restarting the 350 ms stability window.
+            guard isQuestionFrameComplete else {
+                questionCheckTask = nil
+                deferredQuestionCheck = check
+                reportQuestionCheck("waiting-for-frame", count: check.prompt.count)
+                return
+            }
+            var shouldRecheck = true
+            defer {
+                if questionCheckID == check.id {
+                    questionCheckTask = nil
+                    questionCheckID = nil
+                    if shouldRecheck {
+                        scheduleQuestionCheck()
                     }
                 }
-                guard !Task.isCancelled, self.questionInputRevision == revision,
-                      self.canExpandCodexQuestions, self.currentQuestionPrompt == candidate
-                else { return }
-                let handled = await self.onExpandCodexQuestions?(candidate.count) ?? false
-                guard !Task.isCancelled, self.questionCheckID == checkID else { return }
-                if handled {
-                    self.lastQuestionCount = candidate.count
-                }
-                // No timer loop after a rejected attempt. Later native output
-                // or eligibility changes can retry the same queue.
-                shouldRecheck = handled || self.currentQuestionPrompt != candidate
             }
+            guard
+                questionInputRevision == check.inputRevision,
+                canExpandCodexQuestions, currentQuestionPrompt == check.prompt
+            else { return }
+            let handled = await onExpandCodexQuestions?(check.prompt.count, check.questionID) ?? false
+            guard !Task.isCancelled, questionCheckID == check.id else { return }
+            reportQuestionCheck(handled ? "acknowledged" : "not-acknowledged", count: check.prompt.count)
+            if handled {
+                lastQuestionCount = check.prompt.count
+            }
+            // No timer loop after a rejected attempt. Later native output
+            // or eligibility changes can retry the same queue.
+            shouldRecheck = handled || (isQuestionFrameComplete && currentQuestionPrompt != check.prompt)
+        }
+
+        private func reportQuestionCheck(_ reason: String, count: Int?) {
+            let diagnostic = "\(reason):\(count ?? -1)"
+            guard diagnostic != lastQuestionDiagnostic else { return }
+            lastQuestionDiagnostic = diagnostic
+            let paneID = terminalAccessibilityIdentifier ?? "unknown"
+            Self.questionLogger.notice("Mac question check: pane=\(paneID, privacy: .public) count=\(count ?? -1) reason=\(reason, privacy: .public)")
         }
 
         func stopQuestionChecks() {
@@ -2019,6 +2289,7 @@
             questionCheckTask?.cancel()
             questionCheckTask = nil
             questionCheckID = nil
+            deferredQuestionCheck = nil
         }
 
         func scroll(toPosition position: Double) {

@@ -1,4 +1,5 @@
 #if os(macOS)
+    import CtrlxCommon
     import CtrlxNetworking
     import Foundation
     import Logging
@@ -21,6 +22,7 @@
 
         /// Active control clients keyed by session name
         private var clients: [String: TmuxControlClient] = [:]
+        private var clientServerIDs: [ObjectIdentifier: String] = [:]
 
         /// MainActor reentrancy during actor setup must not create a second
         /// connection for the same session. The entire check/create operation
@@ -34,14 +36,15 @@
         private var isShuttingDown = false
 
         /// Callback for dimension changes (forwarded to PaneStreamManager)
-        private var _onDimensionChange: (@MainActor (String, Int, Int) -> Void)?
+        private var _onDimensionChange: (@MainActor (String, Int, Int, String) -> Void)?
 
         /// Callback when panes may have changed (pane exited or session disconnected).
         /// Listeners should refresh their pane list and clean up stale sessions.
         private var _onPanesChanged: (@MainActor () -> Void)?
 
         /// Decoded and sanitized live terminal bytes.
-        private var _onOutput: (@MainActor (String, Data) -> Void)?
+        private var _onOutput: (@MainActor (String, Data, String) -> Void)?
+        private var onConnectionReady: (@MainActor (String, String) -> Void)?
 
         /// Pane output remains disabled until at least one mirror subscribes.
         private var outputEnabledPaneIdsBySession: [String: Set<String>] = [:]
@@ -53,7 +56,7 @@
 
         /// Sets the callback for dimension changes.
         /// Called when any tracked pane's dimensions change.
-        public func setOnDimensionChange(_ handler: @escaping @MainActor (String, Int, Int) -> Void) {
+        public func setOnDimensionChange(_ handler: @escaping @MainActor (String, Int, Int, String) -> Void) {
             _onDimensionChange = handler
         }
 
@@ -64,8 +67,12 @@
             _onPanesChanged = handler
         }
 
-        public func setOnOutput(_ handler: @escaping @MainActor (String, Data) -> Void) {
+        public func setOnOutput(_ handler: @escaping @MainActor (String, Data, String) -> Void) {
             _onOutput = handler
+        }
+
+        func setOnConnectionReady(_ handler: @escaping @MainActor (String, String) -> Void) {
+            onConnectionReady = handler
         }
 
         /// Gets or creates a control client for the specified session.
@@ -99,6 +106,9 @@
                 return existing
             }
 
+            if let previous = clients.removeValue(forKey: sessionName) {
+                clientServerIDs.removeValue(forKey: ObjectIdentifier(previous))
+            }
             logger.info("Creating new control client", metadata: [
                 "session": "\(sessionName)",
             ])
@@ -106,23 +116,28 @@
             let client = TmuxControlClient(tmuxPath: tmuxPath, socketPath: socketPath)
 
             // Set up dimension change handler
-            await client.setOnDimensionChange { [weak self] paneId, width, height in
-                Task { @MainActor [weak self] in
-                    self?.handleDimensionChange(paneId: paneId, width: width, height: height)
+            await client.setOnDimensionChange { [weak self, weak client] paneId, width, height in
+                Task { @MainActor [weak self, weak client] in
+                    guard
+                        let self, let client,
+                        let serverID = self.clientServerIDs[ObjectIdentifier(client)] else { return }
+                    self._onDimensionChange?(paneId, width, height, serverID)
                 }
             }
 
             // Set up pane exit handler (pane closed but session still running)
-            await client.setOnPaneExited { [weak self] paneId in
-                Task { @MainActor [weak self] in
-                    self?.handlePanesChanged(reason: "pane \(paneId) exited")
+            await client.setOnPaneExited { [weak self, weak client] paneId in
+                Task { @MainActor [weak self, weak client] in
+                    guard let self, let client, self.clientServerIDs[ObjectIdentifier(client)] != nil else { return }
+                    self.handlePanesChanged(reason: "pane \(paneId) exited")
                 }
             }
 
             // Set up layout change handler (pane added/removed/resized)
-            await client.setOnLayoutChange { [weak self] in
-                Task { @MainActor [weak self] in
-                    self?.handlePanesChanged(reason: "layout changed")
+            await client.setOnLayoutChange { [weak self, weak client] in
+                Task { @MainActor [weak self, weak client] in
+                    guard let self, let client, self.clientServerIDs[ObjectIdentifier(client)] != nil else { return }
+                    self.handlePanesChanged(reason: "layout changed")
                 }
             }
 
@@ -138,25 +153,47 @@
                 }
             }
 
-            await client.setOnOutput { [weak self] paneId, data in
-                self?._onOutput?(paneId, data)
+            await client.setOnOutput { [weak self, weak client] paneId, data in
+                guard
+                    let self, let client,
+                    let serverID = self.clientServerIDs[ObjectIdentifier(client)] else { return }
+                self._onOutput?(paneId, data, serverID)
             }
 
             do {
                 try Task.checkCancellation()
                 try await client.connect(sessionTarget: sessionName)
+                let identity = try await client.sendCommand("display-message -p '#{pid}:#{start_time}'")
+                let serverID = identity.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !identity.isError, !serverID.isEmpty else { throw TmuxControlError.notConnected }
+                clientServerIDs[ObjectIdentifier(client)] = serverID
+                onConnectionReady?(sessionName, serverID)
                 for paneId in outputEnabledPaneIdsBySession[sessionName] ?? [] {
                     await client.setPaneOutputEnabled(paneId: paneId, enabled: true)
                 }
                 try Task.checkCancellation()
                 guard !isShuttingDown else { throw TmuxControlError.notConnected }
             } catch {
+                clientServerIDs.removeValue(forKey: ObjectIdentifier(client))
                 await client.disconnect()
                 throw error
             }
             clients[sessionName] = client
 
             return client
+        }
+
+        func serverIdentity(for sessionName: String) async throws -> String {
+            let client = try await getClient(for: sessionName)
+            guard let identity = clientServerIDs[ObjectIdentifier(client)] else { throw TmuxControlError.notConnected }
+            return identity
+        }
+
+        private func checkServer(_ client: TmuxControlClient, expected: String?) throws {
+            guard let expected else { return }
+            guard clientServerIDs[ObjectIdentifier(client)] == expected else {
+                throw TmuxControlError.commandFailed(message: "The tmux server changed.")
+            }
         }
 
         /// Registers a pane for dimension tracking via the control client.
@@ -168,9 +205,11 @@
         public func registerPaneDimensions(
             paneId: String,
             sessionName: String,
-            dimensions: (width: Int, height: Int)
+            dimensions: (width: Int, height: Int),
+            expectedServerID: String? = nil
         ) async throws {
             let client = try await getClient(for: sessionName)
+            try checkServer(client, expected: expectedServerID)
             await client.registerPaneDimensions(paneId: paneId, width: dimensions.width, height: dimensions.height)
 
             logger.info("Registered pane for dimension tracking", metadata: [
@@ -184,9 +223,11 @@
             _ command: String,
             sessionName: String,
             timeout: TimeInterval = 5,
+            expectedServerID: String? = nil,
             onResponse: (@MainActor @Sendable (CommandResponse) -> Void)? = nil
         ) async throws -> CommandResponse {
             let client = try await getClient(for: sessionName)
+            try checkServer(client, expected: expectedServerID)
             return try await client.sendCommand(
                 command,
                 timeout: timeout,
@@ -197,9 +238,11 @@
         func sendCommandList(
             _ commands: [String],
             sessionName: String,
+            expectedServerID: String? = nil,
             onResponse: (@MainActor @Sendable (CommandResponse) -> Void)? = nil
         ) async throws -> [CommandResponse] {
             let client = try await getClient(for: sessionName)
+            try checkServer(client, expected: expectedServerID)
             return try await client.sendCommandList(commands, onResponse: onResponse)
         }
 
@@ -208,13 +251,18 @@
         func setPaneOutputEnabled(
             paneId: String,
             sessionName: String,
-            enabled: Bool
+            enabled: Bool,
+            expectedServerID: String? = nil
         ) async throws {
             if enabled {
                 let client = try await getClient(for: sessionName)
+                try checkServer(client, expected: expectedServerID)
                 outputEnabledPaneIdsBySession[sessionName, default: []].insert(paneId)
                 await client.setPaneOutputEnabled(paneId: paneId, enabled: true)
             } else {
+                if let client = clients[sessionName] {
+                    try checkServer(client, expected: expectedServerID)
+                }
                 outputEnabledPaneIdsBySession[sessionName]?.remove(paneId)
                 if outputEnabledPaneIdsBySession[sessionName]?.isEmpty == true {
                     outputEnabledPaneIdsBySession.removeValue(forKey: sessionName)
@@ -252,20 +300,36 @@
             paneId: String,
             sessionName: String,
             data: Data,
-            onFirstCommandWritten: (@Sendable () -> Void)? = nil
+            onFirstCommandWritten: (@Sendable () -> Void)? = nil,
+            expectedWorkspacePane: WorkspacePaneIdentity? = nil
         ) async throws -> Bool {
             guard let commands = TmuxControlInputEncoder.commands(paneId: paneId, rawBytes: data) else {
                 return false
             }
+            let guardedCommands: [String]
+            if let expectedWorkspacePane {
+                guardedCommands = try commands.map { command in
+                    // The raw-byte encoder emits only a numeric pane target
+                    // and hexadecimal bytes, so these tokens need no parsing.
+                    try WorkspaceTerminalInputGuard.arguments(
+                        target: paneId, identity: expectedWorkspacePane,
+                        commands: [command.split(separator: " ").map(String.init)]
+                    ).map(\.posixSingleQuoted).joined(separator: " ")
+                }
+            } else {
+                guardedCommands = commands
+            }
             return try await sendInputCommandsIfConnected(
-                commands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten
+                guardedCommands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten,
+                checksWorkspaceIdentity: expectedWorkspacePane != nil
             )
         }
 
         private func sendInputCommandsIfConnected(
             _ commands: [String],
             sessionName: String,
-            onFirstCommandWritten: (@Sendable () -> Void)?
+            onFirstCommandWritten: (@Sendable () -> Void)?,
+            checksWorkspaceIdentity: Bool = false
         ) async throws -> Bool {
             guard !commands.isEmpty else { return true }
             guard let client = clients[sessionName], await client.isConnected else { return false }
@@ -274,10 +338,22 @@
             for (index, command) in commands.enumerated() {
                 let response: CommandResponse
                 do {
-                    response = try await client.sendCommand(
-                        command,
-                        onWritten: index == 0 ? onFirstCommandWritten : nil
-                    )
+                    if checksWorkspaceIdentity {
+                        // Each branch contains exactly one command. Wait for
+                        // it as well as if-shell, otherwise its late response
+                        // could be mistaken for the next input's result.
+                        let responses = try await client.sendCommandList(
+                            [command], onWritten: index == 0 ? onFirstCommandWritten : nil,
+                            additionalResponseCount: 1
+                        )
+                        guard let last = responses.last else { throw TmuxControlError.notConnected }
+                        response = last
+                    } else {
+                        response = try await client.sendCommand(
+                            command,
+                            onWritten: index == 0 ? onFirstCommandWritten : nil
+                        )
+                    }
                 } catch TmuxControlError.notConnected where !completedCommand {
                     return false
                 } catch {
@@ -286,6 +362,9 @@
 
                 guard !response.isError else {
                     throw TmuxControlError.commandFailed(message: response.output)
+                }
+                if checksWorkspaceIdentity {
+                    try WorkspaceTerminalInputGuard.validate(output: response.output)
                 }
                 completedCommand = true
             }
@@ -297,8 +376,9 @@
         /// - Parameters:
         ///   - paneId: The pane ID
         ///   - sessionName: The session this pane belongs to
-        public func unregisterPane(paneId: String, sessionName: String) async {
+        public func unregisterPane(paneId: String, sessionName: String, expectedServerID: String? = nil) async {
             guard let client = clients[sessionName] else { return }
+            guard expectedServerID == nil || clientServerIDs[ObjectIdentifier(client)] == expectedServerID else { return }
             await client.unregisterPane(paneId: paneId)
 
             logger.info("Unregistered pane", metadata: [
@@ -324,6 +404,7 @@
                 // client. Keep that authoritative connection; the old client's
                 // exit callback still targets oldName, so disconnecting it cannot
                 // remove the replacement.
+                clientServerIDs.removeValue(forKey: ObjectIdentifier(client))
                 await client.disconnect()
                 return
             }
@@ -352,10 +433,15 @@
             isShuttingDown = true
             let flights = Array(connectionFlights.values)
             connectionFlights.removeAll()
-            for flight in flights { flight.task.cancel() }
-            for flight in flights { _ = try? await flight.task.value }
+            for flight in flights {
+                flight.task.cancel()
+            }
+            for flight in flights {
+                _ = try? await flight.task.value
+            }
             let clientsToDisconnect = clients
             clients.removeAll()
+            clientServerIDs.removeAll()
             outputEnabledPaneIdsBySession.removeAll()
 
             // Each client owns an independent child process. Stop them in
@@ -396,15 +482,6 @@
 
         // MARK: - Private Methods
 
-        private func handleDimensionChange(paneId: String, width: Int, height: Int) {
-            logger.debug("Dimension change from control client", metadata: [
-                "paneId": "\(paneId)",
-                "width": "\(width)",
-                "height": "\(height)",
-            ])
-            _onDimensionChange?(paneId, width, height)
-        }
-
         private func handlePanesChanged(reason: String) {
             logger.info("Panes changed", metadata: ["reason": "\(reason)"])
             _onPanesChanged?()
@@ -421,6 +498,7 @@
                 "reason": "\(reason ?? "unknown")",
             ])
             clients.removeValue(forKey: sessionName)
+            clientServerIDs.removeValue(forKey: ObjectIdentifier(client))
             handlePanesChanged(reason: "session \(sessionName) disconnected")
 
             guard outputEnabledPaneIdsBySession[sessionName]?.isEmpty == false else { return }

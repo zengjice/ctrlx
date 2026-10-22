@@ -123,7 +123,7 @@ struct StopResponseView: View {
         let trimmed = state.replyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         state.isSending = true
         Task {
-            await submit(.replyAfterStop(text: trimmed))
+            _ = await submit(.replyAfterStop(text: trimmed))
             state.isSending = false
         }
     }
@@ -148,7 +148,7 @@ struct StopResponseView: View {
                 StopResponseView(
                     request: request,
                     isConnected: true,
-                    submit: { _ in },
+                    submit: { _ in true },
                     state: state
                 )
             }
@@ -181,7 +181,7 @@ struct StopResponseView: View {
                 StopResponseView(
                     request: request,
                     isConnected: true,
-                    submit: { _ in },
+                    submit: { _ in true },
                     state: state
                 )
             }

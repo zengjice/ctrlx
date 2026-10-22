@@ -10,7 +10,7 @@ struct RemoteSimulatorProtocolTests {
             SessionStateMessage.self,
             from: Data(#"{"pairId":"old","paneStates":{},"homeDirectory":""}"#.utf8)
         )
-        #expect(old.supportsSimulatorViewing == nil && old.simulatorTabs == nil)
+        #expect(old.supportsSimulatorViewing == nil && old.supportsPaneSimulator == nil && old.simulatorTabs == nil && old.supportsSimulatorClosing == nil)
         let tab = RemoteSimulatorTab(
             id: UUID(),
             sessionName: "work",
@@ -20,19 +20,24 @@ struct RemoteSimulatorProtocolTests {
             runtime: "iOS 27",
             isPrimary: true
         )
-        let state = SessionStateMessage(pairId: "a", paneStates: [:], supportsSimulatorViewing: true, simulatorTabs: [tab]).withPairId("b")
+        let state = SessionStateMessage(pairId: "a", paneStates: [:], supportsSimulatorViewing: true, supportsPaneSimulator: true, supportsSimulatorClosing: true, simulatorTabs: [tab]).withPairId("b")
         let copy = try JSONDecoder().decode(SessionStateMessage.self, from: JSONEncoder().encode(state))
-        #expect(copy.pairId == "b" && copy.supportsSimulatorViewing == true && copy.simulatorTabs == [tab])
+        #expect(copy.pairId == "b" && copy.supportsSimulatorViewing == true && copy.supportsPaneSimulator == true && copy.simulatorTabs == [tab] && copy.supportsSimulatorClosing == true)
         let request = BrowseSimulator(sessionName: "work", tabID: tab.id, frameMaxDimension: 1_280)
         #expect(try JSONDecoder().decode(CommandType.self, from: JSONEncoder().encode(request.commandType)) == request.commandType)
         let frame = RemoteSimulatorFrame(jpeg: Data([1, 2]), width: 320, height: 640)
-        let response = CommandResponseMessage(commandId: UUID(), success: true, simulator: .init(tab: tab, frame: frame))
+        let response = CommandResponseMessage(commandId: UUID(), success: true, simulator: .init(tab: tab, frame: frame), simulatorTab: tab)
         #expect(try JSONDecoder().decode(CommandResponseMessage.self, from: JSONEncoder().encode(response)).simulator == response.simulator)
         let legacy = try JSONDecoder().decode(
             CommandResponseMessage.self,
             from: JSONEncoder().encode(CommandResponseMessage.success(for: UUID()))
         )
-        #expect(legacy.simulator == nil)
+        #expect(legacy.simulator == nil && legacy.simulatorTab == nil)
+        let close = CloseSimulator(sessionName: "work", tabID: tab.id)
+        #expect(try JSONDecoder().decode(CommandType.self, from: JSONEncoder().encode(close.commandType)) == close.commandType)
+        let open = OpenPaneSimulator(sessionName: "work", sourcePaneID: "%1")
+        #expect(try JSONDecoder().decode(CommandType.self, from: JSONEncoder().encode(open.commandType)) == open.commandType)
+        #expect(try JSONDecoder().decode(CommandResponseMessage.self, from: JSONEncoder().encode(response)).simulatorTab == tab)
     }
 
     @Test

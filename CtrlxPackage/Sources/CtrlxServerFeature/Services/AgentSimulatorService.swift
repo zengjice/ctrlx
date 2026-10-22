@@ -16,10 +16,12 @@
         private var workspaces: [UUID: SimulatorWorkspace] = [:]
         private var tabs: [UUID: SimulatorTabState] = [:]
         private var routePanes: [PaneInfo] = []
+        private var routeRevision: UInt64 = 0
+        var resolveSourcePane: (@MainActor (String, String) async throws -> PaneInfo)?
         private var resolveRoute: (@MainActor (Int32) async throws -> AgentPaneRoute)?
         private var opening = 0
         private var primaryDevices: [String: UUID] = [:]
-        private var pendingOpens: [String: (owner: SimulatorOwner, task: Task<SimulatorTabState, Error>)] = [:]
+        private var pendingOpens: [String: (owner: SimulatorOwner?, task: Task<SimulatorTabState, Error>)] = [:]
         private let detachedWorkspaceID = UUID()
         var onTabsChanged: (@MainActor () -> Void)?
         private var frameCaptures: [UUID: (dimension: Int, task: Task<RemoteSimulatorFrame, Error>)] = [:]
@@ -53,7 +55,8 @@
 
         private func expireInactiveDevices() {
             for state in Array(tabs.values) {
-                let ownerEnded = (try? system.inspect(state.owner.pid).owner) != state.owner
+                if let lease = state.remoteControl, lease.expires <= .now { releaseSimulatorControl(state) }
+                let ownerEnded = state.owner.map { (try? system.inspect($0.pid).owner) != $0 } ?? false
                 let idle = !state.visible && !state.writing && state.lastActivity.duration(to: .now) > .seconds(600)
                 if ownerEnded || idle {
                     close(state)
@@ -106,11 +109,21 @@
         }
 
         func updateSimulatorRoutes(_ panes: [PaneInfo]) {
+            routeRevision &+= 1
             let renames = SessionRenameMapping.detect(from: routePanes, to: panes)
             routePanes = panes
-            for state in tabs.values {
+            for state in Array(tabs.values) {
                 let matches = panes.filter { $0.paneId == state.paneID }
-                guard matches.count == 1, let pane = matches.first else { continue }
+                guard matches.count == 1, let pane = matches.first else {
+                    if state.owner == nil {
+                        close(state)
+                    }
+                    continue
+                }
+                if let identity = state.sourcePane.workspaceIdentity, !identity.isSamePane(as: pane.workspaceIdentity) {
+                    close(state)
+                    continue
+                }
                 if renames.contains(where: { $0.oldName == state.sourcePane.sessionName && $0.newName == pane.sessionName }) {
                     // MainView migrates the whole session collection. Detaching here
                     // would remove its tabs before that migration and lose selection.
@@ -146,16 +159,27 @@
                 guard pid > 1, seen.insert(pid).inserted else { break }
                 let process = try system.inspect(pid)
                 guard process.owner.uid == getuid() else { break }
-                if ["codex", "claude", "opencode", "omp", "pi"].contains(URL(fileURLWithPath: process.executable).lastPathComponent) {
+                let executable = URL(fileURLWithPath: process.executable)
+                if ["codex", "claude", "opencode", "omp", "pi"].contains(executable.lastPathComponent) {
+                    return process.owner
+                }
+                // Claude's native installer resolves its launcher to claude/versions/<version>.
+                let directory = executable.deletingLastPathComponent()
+                if
+                    directory.lastPathComponent == "versions",
+                    directory.deletingLastPathComponent().lastPathComponent == "claude",
+                    executable.lastPathComponent.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil {
                     return process.owner
                 }
                 pid = process.parentPID
             }
             throw SimulatorFailure(
-                "Run simulator actions from a local coding agent in CtrlX. The socket caller has no supported agent ancestor")
+                "Run simulator actions from a local coding agent in CtrlX. The socket caller has no supported agent ancestor"
+            )
         }
 
-        private func validate(_ owner: SimulatorOwner) throws {
+        private func validate(_ owner: SimulatorOwner?) throws {
+            guard let owner else { return }
             guard try system.inspect(owner.pid).owner == owner else {
                 throw SimulatorFailure("The owning agent process exited or changed identity")
             }
@@ -294,7 +318,7 @@
             return response.frame.jpeg
         }
 
-        func handleSimulator(_ request: BrowseSimulator) async throws -> RemoteSimulatorResponse {
+        func handleSimulator(_ request: BrowseSimulator, viewerID: String? = nil) async throws -> RemoteSimulatorResponse {
             guard
                 supportsSimulatorViewing, let state = tabs[request.tabID], !state.isClosed,
                 state.sourcePane.sessionName == request.sessionName else {
@@ -331,7 +355,12 @@
                         let width = result["width"]?.intValue, let height = result["height"]?.intValue else {
                         throw SimulatorFailure("Invalid simulator preview response")
                     }
-                    let value = RemoteSimulatorFrame(jpeg: jpeg, width: width, height: height)
+                    let geometry = result["geometry"]?.objectValue
+                    let inputGeometry = geometry.flatMap { values -> RemoteSimulatorInputGeometry? in
+                        guard let epoch = values["epoch"]?.stringValue, let version = values["geometryVersion"]?.intValue, version > 0 else { return nil }
+                        return RemoteSimulatorInputGeometry(epoch: epoch, geometryVersion: UInt64(version))
+                    }
+                    let value = RemoteSimulatorFrame(jpeg: jpeg, width: width, height: height, inputGeometry: inputGeometry)
                     guard value.isValid else { throw SimulatorFailure("Invalid or oversized simulator preview") }
                     return value
                 }
@@ -344,7 +373,163 @@
                 throw SimulatorFailure("Simulator changed session or closed during preview")
             }
             state.markActivity()
-            return RemoteSimulatorResponse(tab: remoteDescriptor(state), frame: frame)
+            var controlID: UUID?
+            if
+                var lease = state.remoteControl, lease.id == request.controlID,
+                lease.viewerID == viewerID, lease.surfaceID == request.surfaceID, lease.expires > .now {
+                lease.expires = .now.advanced(by: .seconds(20))
+                state.remoteControl = lease
+                controlID = lease.id
+            }
+            return RemoteSimulatorResponse(tab: remoteDescriptor(state), frame: frame, controlID: controlID, generation: state.generation)
+        }
+
+        func disconnectSimulatorViewer(_ viewerID: String) {
+            for state in tabs.values where state.remoteControl?.viewerID == viewerID {
+                releaseSimulatorControl(state)
+            }
+        }
+
+        private func releaseSimulatorControl(_ state: SimulatorTabState) {
+            guard state.remoteControl != nil else { return }
+            state.remoteControl = nil
+            state.generation += 1
+            let previous = state.manualInput
+            state.manualInput = Task { [weak state] in
+                await previous?.value
+                guard let state, !state.isClosed else { return }
+                do { _ = try await state.handle.worker.request(["command": .string("cancel")]) }
+                catch { state.error = error.localizedDescription }
+            }
+        }
+
+        func controlSimulator(_ request: ControlSimulator, viewerID: String) async throws -> RemoteSimulatorControlResponse {
+            guard
+                let state = tabs[request.tabID], !state.isClosed, !closing,
+                state.sourcePane.sessionName == request.sessionName, let coordinator else {
+                throw SimulatorFailure("This Host simulator is no longer available")
+            }
+            try validate(state.owner)
+            if let lease = state.remoteControl, lease.expires <= .now {
+                releaseSimulatorControl(state)
+            }
+            if request.operation == .releaseControl {
+                if
+                    let lease = state.remoteControl, lease.id == request.controlID,
+                    lease.viewerID == viewerID, lease.surfaceID == request.surfaceID {
+                    releaseSimulatorControl(state)
+                }
+                return RemoteSimulatorControlResponse(controlID: nil, generation: state.generation)
+            }
+            guard !state.writing else { throw SimulatorFailure("A simulator operation is still in progress") }
+            state.writing = true
+            defer { state.writing = false }
+            if request.operation == .takeControl {
+                guard state.remoteControl == nil else { throw SimulatorFailure("Another Viewer controls this simulator") }
+                let generation = state.generation
+                let revision = state.manualInputRevision
+                await state.manualInput?.value
+                try Task.checkCancellation()
+                guard !state.isClosed, state.generation == generation, state.manualInputRevision == revision else { throw SimulatorFailure("Simulator changed during takeover") }
+                state.writer = nil
+                state.generation += 1
+                let lease = BrowserControlLease(id: UUID(), viewerID: viewerID, surfaceID: request.surfaceID, expires: .now.advanced(by: .seconds(20)))
+                state.remoteControl = lease
+                do {
+                    _ = try await state.handle.worker.request(["command": .string("cancel")])
+                    try Task.checkCancellation()
+                    guard state.remoteControl?.id == lease.id, !state.isClosed else { throw SimulatorFailure("Simulator control was released") }
+                } catch {
+                    if state.remoteControl?.id == lease.id {
+                        releaseSimulatorControl(state)
+                    }
+                    throw error
+                }
+                state.markActivity()
+                return RemoteSimulatorControlResponse(controlID: lease.id, generation: state.generation)
+            }
+            func checkControl() throws {
+                try Task.checkCancellation()
+                try validate(state.owner)
+                guard
+                    !closing, !state.isClosed, state.sourcePane.sessionName == request.sessionName,
+                    let lease = state.remoteControl, lease.viewerID == viewerID, lease.surfaceID == request.surfaceID,
+                    lease.id == request.controlID, lease.expires > .now, request.generation == state.generation else {
+                    throw SimulatorFailure("Simulator control changed. Take Control again")
+                }
+            }
+            try checkControl()
+            state.markActivity()
+            state.remoteControl?.expires = .now.advanced(by: .seconds(20))
+            var clipboard: WorkspaceClipboardContent?
+            func press(_ usage: Int) async throws {
+                for event in try SimulatorKeyPress(usage: usage, modifiers: ["command"]).events {
+                    try checkControl()
+                    _ = try await state.handle.worker.request(["command": .string("key"), "usage": .int(event.usage), "down": .bool(event.down)])
+                }
+            }
+            do {
+                switch request.operation {
+                case let .touch(phase, x, y, expected):
+                    guard (0...2).contains(phase), x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else { throw SimulatorFailure("Invalid simulator touch") }
+                    let geometry = try await coordinator.geometry(state.handle)
+                    try checkControl()
+                    guard geometry.epoch == expected.epoch, geometry.geometryVersion == expected.geometryVersion else { throw SimulatorFailure("Simulator geometry changed. Wait for a new frame") }
+                    let point = try geometry.normalizedDevicePoint(SimulatorPoint(x: x * geometry.displayWidth, y: y * geometry.displayHeight))
+                    try await touch(state, point: point, phase: phase, geometry: geometry)
+                case let .paste(content):
+                    guard content.isValid else { throw SimulatorFailure("Invalid clipboard content") }
+                    _ = try await state.handle.worker.request(["command": .string("clipboard-write"), "content": .object([
+                        "kind": .string(content.kind.rawValue), "data": .string(content.data.base64EncodedString()),
+                    ])])
+                    try checkControl()
+                    try await press(25)
+                case .copy,
+                     .readClipboard:
+                    let before = try await state.handle.worker.request([
+                        "command": .string("clipboard-read"),
+                        "revisionOnly": .bool(request.operation == .copy),
+                    ])
+                    try checkControl()
+                    var copied = request.operation == .readClipboard ? before : nil
+                    if request.operation == .copy {
+                        guard let revision = before["revision"]?.stringValue, !revision.isEmpty else {
+                            throw SimulatorFailure("Simulator clipboard revision is unavailable")
+                        }
+                        try await press(6)
+                        for _ in 0..<10 {
+                            try await Task.sleep(for: .milliseconds(100))
+                            try checkControl()
+                            let result = try await state.handle.worker.request([
+                                "command": .string("clipboard-read"),
+                                "afterRevision": .string(revision),
+                            ])
+                            try checkControl()
+                            if result["revision"]?.stringValue != revision {
+                                copied = result
+                                break
+                            }
+                        }
+                    }
+                    guard
+                        let content = copied?["content"]?.objectValue,
+                        let rawKind = content["kind"]?.stringValue, let kind = WorkspaceClipboardContent.Kind(rawValue: rawKind),
+                        let encoded = content["data"]?.stringValue, let data = Data(base64Encoded: encoded) else {
+                        throw SimulatorFailure("Nothing was copied. Select content first, or use Get Simulator Clipboard after copying inside the simulator")
+                    }
+                    let value = WorkspaceClipboardContent(kind: kind, data: data)
+                    clipboard = try WorkspaceClipboard.prepare(value)
+                case .takeControl,
+                     .releaseControl: break
+                }
+                try checkControl()
+                return RemoteSimulatorControlResponse(controlID: request.controlID, generation: state.generation, clipboard: clipboard)
+            } catch {
+                if state.remoteControl?.id == request.controlID {
+                    releaseSimulatorControl(state)
+                }
+                throw error
+            }
         }
 
         private func resolvePane(for owner: SimulatorOwner) async throws -> PaneInfo {
@@ -352,7 +537,6 @@
             let route = try await resolveRoute(owner.pid)
             try validate(owner)
             guard !closing else { throw SimulatorFailure("Simulator host is closing") }
-            // The same live snapshot supplies ownership and complete-session rename detection.
             updateSimulatorRoutes(route.panes)
             return route.pane
         }
@@ -364,30 +548,89 @@
         ) async throws -> SimulatorTabState {
             let pane: PaneInfo
             do { pane = try await resolvePane(for: owner) } catch {
-                throw SimulatorFailure("Cannot route this agent to a CtrlX pane: \(error.localizedDescription). Launch Codex using ctrlx ios run -- codex")
+                throw SimulatorFailure(
+                    "Cannot route this agent to a CtrlX pane: \(error.localizedDescription). Run the agent in a local CtrlX terminal. For Codex, use ctrlx ios run -- codex"
+                )
             }
+            return try await openDevice(parameters: parameters, owner: owner, pane: pane, coordinator: coordinator) {
+                try await self.resolvePane(for: owner)
+            }
+        }
+
+        func closeSimulator(_ request: CloseSimulator) async throws {
+            guard
+                !closing, let state = tabs[request.tabID], !state.isClosed,
+                state.sourcePane.sessionName == request.sessionName else {
+                throw SimulatorFailure("This Host simulator is no longer available in the session")
+            }
+            try validate(state.owner)
+            close(state)
+            await closeTasks[state.id]?.value
+            if let error = state.error {
+                throw SimulatorFailure("Tab closed; device cleanup failed: \(error)")
+            }
+        }
+
+        func openPaneSimulator(_ request: OpenPaneSimulator, expectedWorkspacePane: WorkspacePaneIdentity?) async throws -> RemoteSimulatorTab {
+            guard let coordinator, !closing, let identity = expectedWorkspacePane else {
+                throw SimulatorFailure("Refresh the session before opening a Host simulator")
+            }
+            let resolve: @MainActor () async throws -> PaneInfo = {
+                try await self.resolveHumanPane(request, identity: identity)
+            }
+            let pane = try await resolve()
+            let state = try await openDevice(parameters: [:], owner: nil, pane: pane, coordinator: coordinator, resolve: resolve)
+            return remoteDescriptor(state)
+        }
+
+        private func resolveHumanPane(_ request: OpenPaneSimulator, identity: WorkspacePaneIdentity) async throws -> PaneInfo {
+            guard let resolveSourcePane, !closing else { throw SimulatorFailure("Simulator pane routing is unavailable") }
+            let revision = routeRevision
+            let pane = try await resolveSourcePane(request.sessionName, request.sourcePaneID)
+            try Task.checkCancellation()
+            guard
+                pane.paneId == request.sourcePaneID, pane.sessionName == request.sessionName,
+                identity.isSamePane(as: pane.workspaceIdentity) else {
+                throw SimulatorFailure("The source terminal changed. Select it again to open iOS Simulator")
+            }
+            if revision != routeRevision {
+                let matches = routePanes.filter { $0.paneId == pane.paneId }
+                guard
+                    matches.count == 1, let current = matches.first,
+                    identity.isSamePane(as: current.workspaceIdentity), current.sessionName == pane.sessionName,
+                    current.stableWindowId == pane.stableWindowId else {
+                    throw SimulatorFailure("The source terminal changed while opening iOS Simulator")
+                }
+            }
+            return pane
+        }
+
+        private func openDevice(
+            parameters: [String: JSONValue], owner: SimulatorOwner?, pane: PaneInfo,
+            coordinator: SimulatorCoordinator, resolve: @escaping @MainActor () async throws -> PaneInfo
+        ) async throws -> SimulatorTabState {
             try validate(owner)
             guard !closing else { throw SimulatorFailure("Simulator host is closing") }
             if parameters["new"]?.boolValue == true {
-                return try await createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator)
+                return try await createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator, resolve: resolve)
             }
             let state: SimulatorTabState
             if let id = primaryDevices[pane.paneId], let existing = tabs[id], !existing.isClosed {
                 state = existing
             } else if let pending = pendingOpens[pane.paneId] {
-                guard pending.owner == owner else { throw SimulatorFailure("Another agent is opening this pane's default simulator") }
+                guard owner == nil || pending.owner == nil || pending.owner == owner else { throw SimulatorFailure("Another agent is opening this pane's default simulator") }
                 state = try await pending.task.value
             } else {
                 let task = Task { @MainActor in
                     defer { self.pendingOpens.removeValue(forKey: pane.paneId) }
-                    return try await self.createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator)
+                    return try await self.createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator, resolve: resolve)
                 }
                 pendingOpens[pane.paneId] = (owner, task)
                 state = try await task.value
             }
             try Task.checkCancellation()
             try validate(owner)
-            guard !state.isClosed, !closing, state.owner == owner else {
+            guard !state.isClosed, !closing, owner == nil || state.owner == nil || state.owner == owner else {
                 throw SimulatorFailure("This pane's simulator is unavailable or belongs to another agent process")
             }
             for (key, actual) in [
@@ -406,11 +649,19 @@
             guard required.isSubset(of: Set(state.handle.requiredFeatures)) else {
                 throw SimulatorFailure("The pane's default simulator has different required features. Use open --new or close it first")
             }
-            let current = try await resolvePane(for: owner)
-            guard current.paneId == state.paneID, !state.isClosed, !closing else {
+            let current = try await resolve()
+            guard
+                current.paneId == state.paneID, !state.isClosed, !closing,
+                owner == nil || state.owner == nil || state.owner == owner,
+                state.sourcePane.workspaceIdentity.map({ $0.isSamePane(as: current.workspaceIdentity) }) ?? true else {
                 throw SimulatorFailure("The source pane changed while opening the simulator")
             }
             try validate(owner)
+            try validate(state.owner)
+            if state.owner == nil, let owner {
+                state.owner = owner
+            }
+            updateRoute(state, pane: current)
             attach(state)
             state.markActivity()
             return state
@@ -418,9 +669,10 @@
 
         private func createDevice(
             parameters: [String: JSONValue],
-            owner: SimulatorOwner,
+            owner: SimulatorOwner?,
             sourcePane: PaneInfo,
-            coordinator: SimulatorCoordinator
+            coordinator: SimulatorCoordinator,
+            resolve: @escaping @MainActor () async throws -> PaneInfo
         ) async throws -> SimulatorTabState {
             let configuration = try await coordinator.configuration()
             guard !closing, tabs.count + opening + closeTasks.count < configuration.maximumDevices else {
@@ -455,8 +707,8 @@
                 }
             )
             do {
-                pane = try await resolvePane(for: owner)
-                guard pane.paneId == sourcePane.paneId else { throw SimulatorFailure("The agent moved to another pane while opening the simulator") }
+                pane = try await resolve()
+                guard pane.paneId == sourcePane.paneId, sourcePane.workspaceIdentity.map({ $0.isSamePane(as: pane.workspaceIdentity) }) ?? true else { throw SimulatorFailure("The agent moved to another pane while opening the simulator") }
                 try validate(owner)
             } catch {
                 try await coordinator.close(handle, shutdown: true)
@@ -1394,6 +1646,7 @@
         }
 
         func manualTouch(_ state: SimulatorTabState, point: SimulatorPoint, phase: Int, receivedAt: Double) {
+            if phase == 0 { releaseSimulatorControl(state) }
             state.markActivity()
             state.manualInputRevision += 1
             let takeover = phase == 0 && state.writer != nil
@@ -1465,6 +1718,7 @@
         }
 
         func manualKey(_ state: SimulatorTabState, usage: Int, down: Bool) {
+            releaseSimulatorControl(state)
             state.markActivity()
             state.manualInputRevision += 1
             state.pendingMove = nil
@@ -1483,7 +1737,7 @@
         }
 
         func claimWriter(_ state: SimulatorTabState, cancelInput: @MainActor () async throws -> Void) async throws {
-            guard !state.writing else { throw SimulatorFailure("A simulator operation is still in progress") }
+            guard !state.writing, state.remoteControl == nil else { throw SimulatorFailure("The simulator is busy or controlled by a Viewer") }
             state.writing = true
             defer { state.writing = false }
             let generation = state.generation
@@ -1506,6 +1760,7 @@
         }
 
         func manualHome(_ state: SimulatorTabState) {
+            releaseSimulatorControl(state)
             state.markActivity()
             state.manualInputRevision += 1
             state.pendingMove = nil
@@ -1596,8 +1851,11 @@
     @MainActor @Observable
     final class SimulatorTabState {
         let handle: SimulatorDeviceHandle
-        var id: UUID { handle.id }
-        let owner: SimulatorOwner
+        var id: UUID {
+            handle.id
+        }
+
+        var owner: SimulatorOwner?
         var sourcePane: PaneInfo
         var paneID: String { sourcePane.paneId }
         var workspaceID: UUID
@@ -1610,6 +1868,7 @@
         var error: String?
         var hasPresentedFrame = false
         var isClosed = false
+        @ObservationIgnored var remoteControl: BrowserControlLease?
         @ObservationIgnored var generation = 0
         // Keyboard activity must revoke pending claims without discarding queued touch events.
         @ObservationIgnored var manualInputRevision = 0
@@ -1638,7 +1897,7 @@
         }
 
         init(
-            handle: SimulatorDeviceHandle, owner: SimulatorOwner, sourcePane: PaneInfo, workspaceID: UUID, view: SimulatorMetalView,
+            handle: SimulatorDeviceHandle, owner: SimulatorOwner?, sourcePane: PaneInfo, workspaceID: UUID, view: SimulatorMetalView,
             service: AgentSimulatorService
         ) {
             self.handle = handle

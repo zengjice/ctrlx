@@ -42,7 +42,7 @@ final public class ViewerConnectionManager {
     public var onAgentNotification: ((AgentNotificationMessage) -> Void)?
 
     /// Called when session state is received from any host
-    public var onSessionState: ((SessionStateMessage) -> Void)?
+    public var onSessionState: (@MainActor (SessionStateMessage) -> Void)?
 
     /// Called when a partner's public key is received or updated.
     ///
@@ -294,12 +294,13 @@ final public class ViewerConnectionManager {
         _ command: C,
         paneId: String,
         hostId: String,
-        timeout: TimeInterval = 15
+        timeout: TimeInterval = 15,
+        inputBinding: ViewerWorkspaceInputBinding? = nil
     ) async -> Result<C.Response, Error> {
         guard let connection = connections[hostId] else {
             return .failure(ViewerRelayClientError.notConnected)
         }
-        return await connection.sendCommand(command, paneId: paneId, timeout: timeout)
+        return await connection.sendCommand(command, paneId: paneId, timeout: timeout, inputBinding: inputBinding)
     }
 
     /// Request session state from all connected hosts.
@@ -364,7 +365,7 @@ final public class ViewerConnectionManager {
         }
     }
 
-    private func setupConnectionCallbacks(_ connection: ViewerConnection) {
+    func setupConnectionCallbacks(_ connection: ViewerConnection) {
         let hostId = connection.id
 
         connection.setupCallbacks(
@@ -384,9 +385,9 @@ final public class ViewerConnectionManager {
                 }
             },
             onSessionState: { [weak self] state in
-                Task { @MainActor [weak self] in
-                    self?.onSessionState?(state)
-                }
+                // Remap workspace ownership in the same main-actor turn that
+                // publishes the new Files catalog, before SwiftUI observes it.
+                self?.onSessionState?(state)
             },
             onPartnerKeyReceived: { [weak self] publicKey, keyId in
                 guard let self else { return }

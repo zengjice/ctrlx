@@ -8,6 +8,10 @@
     @Observable
     @MainActor
     final public class VoiceCorrectionSettings {
+        public var language: VoiceInputLanguage = .system {
+            didSet { preferences.setString(language.rawValue, "voiceInputLanguage") }
+        }
+
         public var provider: VoiceCorrectionProvider = .volcengineArk {
             didSet { preferences.setString(provider.rawValue, "voiceCorrectionProvider") }
         }
@@ -21,6 +25,7 @@
         private var testedModelIDsByProvider: [String: [String]] = [:]
 
         public init() {
+            self.language = VoiceInputLanguage(rawValue: preferences.string("voiceInputLanguage") ?? "") ?? .system
             self.provider = VoiceCorrectionProvider(
                 rawValue: preferences.string("voiceCorrectionProvider") ?? ""
             ) ?? .volcengineArk

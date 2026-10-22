@@ -381,6 +381,33 @@ Entering a terminal tab requests one automatic Fit after its viewport is ready,
 including in a detached workspace. Closing Files or a browser back to a terminal
 also fits once; returning to another file/browser tab does not. Passive geometry
 changes, moving, enlarging or entering fullscreen do not schedule another Fit.
+After resizing, programmatic terminal focus or the next ordinary single click in terminal
+content fits that terminal's owned tmux window once, using the current scene/split
+viewport. Repeated focus changes or clicks with the same successfully fitted target
+grid do not fit again.
+Moving a terminal right or back left reuses this focus path for both Local and Viewer,
+including when the mounted view changes but its tmux window ID stays the same.
+Only a programmatic first-responder transition requests focus Fit. Mouse-down only
+synchronizes input routing, whether the terminal already has focus or is entered from
+another pane; its Fit must pass the completed-click checks below. Mouse focus also cancels
+any deferred focus Fit. If a remote terminal gains programmatic focus while bootstrap
+hides it, deliver that pending Fit when bootstrap reveals it, provided it still owns
+keyboard focus and no mouse gesture has superseded the request.
+Moving a tab does not directly resize an unfocused terminal. Manual and
+automatic Fit invalidate the planned targets' previous baselines, then record each
+target only after its resize succeeds. Failed and unattempted targets remain retryable
+by a new focus or click; geometry/snapshot updates alone never retry them. Each plan captures
+its Host, session and window before awaiting, so completion cannot update a newly
+selected target's baseline. Hosts, tabs and scenes keep separate baselines.
+With workspace identities, the plan also retains its original physical window.
+The Host checks that identity in the tmux queue both when reading the layout and
+when applying the resize. A restarted server or reused window ID rejects the old
+plan; selecting another pane in the same live window does not. Viewer automatic
+Fit waits for usable identity metadata before consuming its pending request.
+The click waits for the system double-click interval and excludes drag/word/row
+selection, links, modifiers, mouse-reporting terminal apps, voice holds and IME
+composition. Typing, scrolling, hiding/removing the terminal or losing focus cancels
+the delayed action. Clicking Files or browser content does not fit a terminal.
 Activating the owning window requests one Fit for its displayed terminal,
 preferring the focused terminal when split; inactive windows wait. The Host skips
 resizing when live tmux dimensions match the request; a cached client layout

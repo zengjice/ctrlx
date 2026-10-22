@@ -50,11 +50,11 @@ public enum CloseRemoteWindowIOSScenario {
         TestStep.iosTap(.labelContains("other"))
         TestStep.iosWaitForElement(.labelContains("ios-close:1"), timeout: 5)
 
-        // Open menu again and tap "Close Window"
+        // Open menu again and tap "Close Tab"
         TestStep.iosTap(.labelContains("other"))
         TestStep.wait(seconds: 1)
         TestStep.iosScreenshot(label: "ios-window-menu-close-option")
-        TestStep.iosTap(.label("Close Window"))
+        TestStep.iosTap(.label("Close Tab"))
 
         // Window 1 should be gone, should be back on window 0
         TestStep.iosWaitForElement(.labelContains("ios-close:0"), timeout: 10)

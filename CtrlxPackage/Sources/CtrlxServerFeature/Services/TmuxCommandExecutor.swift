@@ -11,13 +11,13 @@ public actor TmuxCommandExecutor {
 
     private let logger = Logger(label: "com.jicezeng.ctrlx.commandexecutor")
     private let tmuxService: TmuxService
-    private let sendRawInputIfConnected: @Sendable (String, Data) async throws -> Bool
+    private let sendRawInputIfConnected: @Sendable (String, Data, WorkspacePaneIdentity?) async throws -> Bool
 
     // MARK: - Initialization
 
     public init(
         tmuxService: TmuxService,
-        sendRawInputIfConnected: @escaping @Sendable (String, Data) async throws -> Bool = { _, _ in false }
+        sendRawInputIfConnected: @escaping @Sendable (String, Data, WorkspacePaneIdentity?) async throws -> Bool = { _, _, _ in false }
     ) {
         self.tmuxService = tmuxService
         self.sendRawInputIfConnected = sendRawInputIfConnected
@@ -29,8 +29,11 @@ public actor TmuxCommandExecutor {
     /// - Parameter command: The command to execute
     /// - Returns: Response indicating success or failure
     public func execute(_ command: CommandMessage) async -> CommandResponseMessage {
-        let logType = if case .pasteTerminalText = command.command { "pasteTerminalText" }
-            else { String(describing: command.command) }
+        let logType = if case .pasteTerminalText = command.command {
+            "pasteTerminalText"
+        } else {
+            String(describing: command.command)
+        }
         logger.info("Executing command", metadata: [
             "command": "\(logType)",
             "paneId": "\(command.paneId)",
@@ -39,7 +42,7 @@ public actor TmuxCommandExecutor {
         do {
             switch command.command {
             case let .sendKeystroke(spec):
-                try await executeSendKeystroke(paneId: command.paneId, keys: spec.keystrokes)
+                try await tmuxService.sendKeystrokes(command.paneId, keys: spec.keystrokes, expectedWorkspacePane: command.expectedWorkspacePane)
 
             case let .pasteTerminalText(spec):
                 guard spec.text.utf8.count <= PasteTerminalText.maximumUTF8Bytes else {
@@ -53,11 +56,16 @@ public actor TmuxCommandExecutor {
                     target: command.paneId,
                     content: spec.text,
                     bufferName: "ctrlx-paste-\(command.id.uuidString)",
-                    preserveLineFeeds: true
+                    preserveLineFeeds: true,
+                    expectedWorkspacePane: command.expectedWorkspacePane
                 )
 
             case let .expandCodexQuestions(spec):
-                let handled = try await tmuxService.expandCodexQuestions(paneID: command.paneId, expectedCount: spec.expectedCount)
+                let handled = try await tmuxService.expandCodexQuestions(
+                    paneID: command.paneId, expectedCount: spec.expectedCount,
+                    expectedQuestionID: spec.expectedQuestionID,
+                    expectedWorkspacePane: command.expectedWorkspacePane
+                )
                 return CommandResponseMessage(commandId: command.id, success: true, codexQuestionsHandled: handled)
 
             case let .sendRawInput(spec):
@@ -68,12 +76,12 @@ public actor TmuxCommandExecutor {
                 // only when no control-mode bytes were written, never on error.
                 let started = ContinuousClock.now
                 defer { TerminalTransportMetrics.shared.recordDuration(.rawInputSend, since: started) }
-                if try await !sendRawInputIfConnected(command.paneId, data) {
-                    try await tmuxService.sendRawBytes(command.paneId, data: data)
+                if try await !sendRawInputIfConnected(command.paneId, data, command.expectedWorkspacePane) {
+                    try await tmuxService.sendRawBytes(command.paneId, data: data, expectedWorkspacePane: command.expectedWorkspacePane)
                 }
 
             case .cancelOperation:
-                try await tmuxService.sendInterrupt(command.paneId)
+                try await tmuxService.sendKeys(command.paneId, keys: "C-c", expectedWorkspacePane: command.expectedWorkspacePane)
 
             case let .resizeTmuxPane(spec):
                 // A tmux window has one global grid. Only a direct user action
@@ -87,29 +95,35 @@ public actor TmuxCommandExecutor {
                 try await tmuxService.fitWindow(
                     command.paneId,
                     width: spec.width,
-                    height: spec.height
+                    height: spec.height,
+                    expectedWorkspacePane: command.expectedWorkspacePane
                 )
 
             case let .splitTmuxPane(spec):
                 let newPaneId = try await tmuxService.splitPane(
                     command.paneId,
-                    horizontal: spec.direction == .horizontal
+                    horizontal: spec.direction == .horizontal,
+                    expectedWorkspacePane: command.expectedWorkspacePane
                 )
                 return .success(for: command.id, paneId: newPaneId)
 
             case .selectTmuxPane:
-                try await tmuxService.selectPane(command.paneId)
+                try await tmuxService.selectPane(command.paneId, expectedWorkspacePane: command.expectedWorkspacePane)
 
             case .selectTmuxWindow:
-                try await tmuxService.selectWindow(command.paneId)
+                try await tmuxService.selectWindow(command.paneId, expectedWorkspacePane: command.expectedWorkspacePane)
 
             case .startTerminalStream,
                  .listSessionDirectories,
                  .createSessionDirectory,
                  .prepareSessionWorktree,
+                 .readDashboard,
                  .browseFiles,
                  .browseBrowser,
                  .browseSimulator,
+                 .controlSimulator,
+                 .openPaneSimulator,
+                 .closeSimulator,
                  .stopTerminalStream,
                  .createTmuxSession,
                  .createTmuxWindow,
@@ -145,15 +159,6 @@ public actor TmuxCommandExecutor {
             ])
             return .failure(for: command.id, error: error.localizedDescription)
         }
-    }
-
-    // MARK: - Private Command Handlers
-
-    private func executeSendKeystroke(paneId: String, keys: [TmuxKey]) async throws {
-        // Batch consecutive keys by literal mode to minimize tmux process
-        // spawns; the shared implementation lives on TmuxService so the plugin
-        // `sendKeys` sink can reuse it.
-        try await tmuxService.sendKeystrokes(paneId, keys: keys)
     }
 }
 

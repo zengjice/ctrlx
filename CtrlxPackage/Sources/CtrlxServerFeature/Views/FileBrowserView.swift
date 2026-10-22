@@ -141,7 +141,7 @@ final class FileBrowserState {
     /// `ListScrollPreserver`. Reset by `reloadTree` when the directory
     /// changes — a different tree makes the old offset meaningless.
     var treeScrollY: CGFloat = 0
-    /// Monotonic counter bumped from outside the view (e.g., the Cmd-Shift-F
+    /// Monotonic counter bumped from outside the view (e.g., the Cmd-Option-F
     /// menu command) to request the search field take keyboard focus. The view
     /// observes the value and drives `@FocusState` when it changes; using a
     /// counter (rather than a Bool) re-fires focus even when the field is
@@ -311,9 +311,44 @@ final class SessionFileTabsState {
     /// Files opened as their own tabs via the "Open in New Tab" context menu.
     var openFileTabs: [OpenFileTab] = []
     var directoryTabs: [UUID: FileBrowserTab] = [:]
+    @ObservationIgnored private var closingHostFileTabs: [UUID: (FileTabCloseResult) -> Void] = [:]
 
-    func terminalFilesTab(windowID: String) -> FileBrowserTab? {
-        openFileTabs.compactMap { directoryTabs[$0.id] }.first { $0.terminalLinkWindowID == windowID }
+    struct FileTabCloseResult: Equatable {
+        let wasSelectedLeft: Bool
+        let origin: FileTabOrigin?
+    }
+
+    func beginClosingHostFileTab(_ id: UUID, onClose: @escaping (FileTabCloseResult) -> Void) -> Bool {
+        guard directoryTabs[id]?.hostTab != nil, closingHostFileTabs[id] == nil else { return false }
+        closingHostFileTabs[id] = onClose
+        return true
+    }
+
+    func cancelClosingHostFileTab(_ id: UUID) {
+        closingHostFileTabs.removeValue(forKey: id)
+    }
+
+    /// A Host catalog can confirm closure before its command reply. Consume the
+    /// explicit close once, using selection at removal time rather than click time.
+    @discardableResult
+    func removeFileTab(_ id: UUID) -> FileTabCloseResult? {
+        let onClose = closingHostFileTabs.removeValue(forKey: id)
+        guard let index = openFileTabs.firstIndex(where: { $0.id == id }) else { return nil }
+        let wasSelectedLeft = selectedFileTabId == id && !rightSide.contains(.file(id))
+        let result = FileTabCloseResult(wasSelectedLeft: wasSelectedLeft, origin: wasSelectedLeft ? openFileTabs[index].origin : nil)
+        openFileTabs.remove(at: index)
+        directoryTabs.removeValue(forKey: id)?.releasePreview()
+        scrollOffsets.removeValue(forKey: id)
+        tabOrder.removeAll { $0 == .file(id) }
+        rightSide.remove(.file(id))
+        if selectedFileTabId == id {
+            selectedFileTabId = nil
+        }
+        if selectedRight == .file(id) {
+            selectedRight = nil
+        }
+        onClose?(result)
+        return result
     }
 
     func migrateLegacyExplorer(directory: String) {
@@ -343,11 +378,27 @@ final class SessionFileTabsState {
     /// Git belongs to this workbench's session, including when no terminal remains on the left.
     var isGitSelected = false
 
+    var isGitOpen: Bool {
+        tabOrder.contains(.git)
+    }
+
     func selectLeftGit() {
         guard !rightSide.contains(.git) else { return }
+        if !isGitOpen {
+            tabOrder.append(.git)
+        }
         selectedFileTabId = nil
         selectedBrowserTabId = nil
         isGitSelected = true
+    }
+
+    func closeGit() {
+        tabOrder.removeAll { $0 == .git }
+        rightSide.remove(.git)
+        isGitSelected = false
+        if selectedRight == .git {
+            selectedRight = nil
+        }
     }
 
     /// Directory tabs own their content; only editor tabs need the legacy tree underneath.
@@ -435,6 +486,12 @@ final class SessionFileTabsState {
         }
         closingHostBrowserTabIDs.subtract(removed)
         openBrowserTabs.removeAll { removed.contains($0.id) }
+        tabOrder.removeAll {
+            if case let .browser(id) = $0 {
+                return removed.contains(id)
+            }
+            return false
+        }
         for id in removed {
             remoteBrowserTabs.removeValue(forKey: id)
             rightSide.remove(.browser(id))
@@ -490,6 +547,12 @@ final class SessionFileTabsState {
         let removed = Set(remoteSimulatorTabs.keys).subtracting(live)
         let removedSelectedLeft = selectedBrowserTabId.map { removed.contains($0) } ?? false
         openBrowserTabs.removeAll { removed.contains($0.id) }
+        tabOrder.removeAll {
+            if case let .browser(id) = $0 {
+                return removed.contains(id)
+            }
+            return false
+        }
         for id in removed {
             remoteSimulatorTabs.removeValue(forKey: id)
             rightSide.remove(.browser(id))
@@ -527,12 +590,18 @@ final class SessionFileTabsState {
 
     @discardableResult
     func reconcileRemoteRightPaneSelection(sessionWindowIDs: [String]) -> Bool {
+        reconcileRightPaneSelection(sessionWindowIDs: sessionWindowIDs, includeLocalTabs: false)
+    }
+
+    @discardableResult
+    func reconcileRightPaneSelection(sessionWindowIDs: [String], includeLocalTabs: Bool) -> Bool {
         if let selectedRight, !rightSide.contains(selectedRight) {
             self.selectedRight = nil
         }
         guard isSplit else { return false }
 
         let leftEmpty = (!sessionWindowIDs.isEmpty || !openFileTabs.isEmpty || !openBrowserTabs.isEmpty)
+            && (!isGitOpen || rightSide.contains(.git))
             && sessionWindowIDs.allSatisfy { rightSide.contains(.window($0)) }
             && openBrowserTabs.allSatisfy { rightSide.contains(.browser($0.id)) }
             && openFileTabs.allSatisfy { rightSide.contains(.file($0.id)) }
@@ -543,20 +612,16 @@ final class SessionFileTabsState {
         }
 
         guard selectedRight == nil else { return false }
-        if
-            let window = rightSide.first(where: {
-                if case .window = $0 {
-                    true
-                } else {
-                    false
-                }
-            }) {
-            selectedRight = window
-        } else if let browser = openBrowserTabs.last(where: { rightSide.contains(.browser($0.id)) }) {
-            selectedRight = .browser(browser.id)
-        } else if let file = openFileTabs.last(where: { rightSide.contains(.file($0.id)) }) {
-            selectedRight = .file(file.id)
-        }
+        let remaining = TabDragPayload.reconciledOrder(
+            windowIds: sessionWindowIDs, fileTabIds: openFileTabs.map(\.id), browserTabIds: openBrowserTabs.map(\.id),
+            storedOrder: tabOrder, includeFileExplorer: includeLocalTabs, includeGit: includeLocalTabs
+        ).filter { rightSide.contains($0) }
+        selectedRight = remaining.first(where: {
+            if case .window = $0 {
+                return true
+            }
+            return false
+        }) ?? remaining.first
         return false
     }
 
@@ -607,17 +672,17 @@ final class SessionFileTabsState {
         })
     }
 
-    /// Shared terminal placement is not private workbench content. A Host
-    /// snapshot may arrive before the saved file/browser layout is hydrated;
-    /// terminal-only state must not suppress that restore.
+    /// Host terminals and Files can arrive before the saved private layout.
     var isPrivateWorkbenchEmpty: Bool {
-        openFileTabs.isEmpty
+        openFileTabs.allSatisfy { directoryTabs[$0.id]?.hostTab != nil }
             && openBrowserTabs.isEmpty
+            && !isGitOpen
             && !rightSide.contains { payload in
-                if case .window = payload {
-                    return false
+                switch payload {
+                case .window: return false
+                case let .file(id): return directoryTabs[id]?.hostTab == nil
+                default: return true
                 }
-                return true
             }
     }
 

@@ -28,6 +28,9 @@ final public class SessionDetailService {
 
     /// Reference to the relay client for communication
     private let relayClient: ViewerRelayClient
+    private let onDraftChange: (@MainActor (UUID, String) -> Void)?
+    private let onDraftSubmitted: (@MainActor (UUID, String) -> Void)?
+    private let inputBinding: ViewerWorkspaceInputBinding
 
     // MARK: - Private State
 
@@ -94,11 +97,21 @@ final public class SessionDetailService {
 
     // MARK: - Initialization
 
-    public init(paneId: String, hostId: String, sessionStore: SessionStore, relayClient: ViewerRelayClient) {
+    public init(
+        paneId: String,
+        hostId: String,
+        sessionStore: SessionStore,
+        relayClient: ViewerRelayClient,
+        onDraftChange: (@MainActor (UUID, String) -> Void)? = nil,
+        onDraftSubmitted: (@MainActor (UUID, String) -> Void)? = nil
+    ) {
         self.paneId = paneId
         self.hostId = hostId
         self.sessionStore = sessionStore
         self.relayClient = relayClient
+        self.onDraftChange = onDraftChange
+        self.onDraftSubmitted = onDraftSubmitted
+        self.inputBinding = relayClient.workspaceInputState.binding(paneID: paneId)
 
         // Perform initial update and start observation
         updateResponseState()
@@ -205,6 +218,9 @@ final public class SessionDetailService {
             requestID: requestID,
             sessionStore: sessionStore
         )
+        if let state = responseState {
+            state.onReplyDraftChange = { [onDraftChange, id = state.recoveryDraftID] text in onDraftChange?(id, text) }
+        }
     }
 
     /// Clears the open form (the agent advanced to `working`, or the session is
@@ -213,6 +229,8 @@ final public class SessionDetailService {
     /// state.
     private func clearResponseState() {
         guard lastProcessedRequestID != nil else { return }
+        // A Host transition invalidates the form, not the user's unsent text.
+        responseState?.onReplyDraftChange = nil
         responseState?.replyDraft = ""
         #if os(iOS)
             sessionStore.setResponse(nil, forRequestID: replyAfterStopRequestID)
@@ -226,13 +244,16 @@ final public class SessionDetailService {
     /// Marks the session as handled locally and notifies the host
     public func markHandledIfNeeded() async {
         guard session?.needsAttention == true else { return }
+        do {
+            _ = try inputBinding.expectedPane(current: relayClient.workspaceInputState.binding(paneID: paneId))
+        } catch { return }
         sessionStore.markSessionHandled(paneId: paneId, hostId: hostId)
-        _ = await relayClient.sendCommand(MarkHandled(), paneId: paneId)
+        _ = await relayClient.sendCommand(MarkHandled(), paneId: paneId, inputBinding: inputBinding)
     }
 
     /// Send a command to the host for this pane (fire-and-forget style)
     public func sendCommand(_ command: CommandType) async {
-        await relayClient.send(command, paneId: paneId)
+        await relayClient.send(command, paneId: paneId, inputBinding: inputBinding)
     }
 
     /// Agent-agnostic keys for the synthesized reply composer. Empty text keeps
@@ -250,9 +271,12 @@ final public class SessionDetailService {
     static func finishReplySubmission(
         succeeded: Bool,
         submittedState: ResponseState?,
+        submittedDraft: String?,
         currentState: ResponseState?
     ) {
-        guard succeeded, let submittedState, currentState === submittedState else { return }
+        guard
+            succeeded, let submittedState, currentState === submittedState,
+            submittedState.replyDraft == submittedDraft else { return }
         submittedState.replyDraft = ""
     }
 
@@ -266,22 +290,45 @@ final public class SessionDetailService {
         pluginID: String,
         requestID: String
     ) async -> Bool {
+        do {
+            _ = try inputBinding.expectedPane(current: relayClient.workspaceInputState.binding(paneID: paneId))
+        } catch { return false }
+        guard responseState?.requestID == requestID, responseState?.pluginID == pluginID else { return false }
         if case let .replyAfterStop(text) = response {
             let submittedState = responseState
+            let submittedDraft = submittedState?.replyDraft
             let keys = Self.replyAfterStopKeystrokes(for: text)
-            let succeeded = await relayClient.send(.sendKeystroke(keys), paneId: paneId)
+            let acknowledge: Bool? = if case .pane = inputBinding {
+                true
+            } else {
+                nil
+            }
+            let result = await relayClient.sendCommand(SendKeystroke(keys, acknowledgeCompletion: acknowledge), paneId: paneId, inputBinding: inputBinding)
+            let succeeded: Bool
+            switch result {
+            case let .success(response): succeeded = response.success
+            case .failure: succeeded = false
+            }
+            if succeeded, let submittedState, let submittedDraft {
+                onDraftSubmitted?(submittedState.recoveryDraftID, submittedDraft)
+            }
             Self.finishReplySubmission(
                 succeeded: succeeded,
                 submittedState: submittedState,
+                submittedDraft: submittedDraft,
                 currentState: responseState
             )
             return succeeded
         } else {
+            // The plugin channel confirms only transport, not native delivery.
+            // Keep its authored text until explicitly discarded; never restore
+            // the old request or guess that a disappearing form was submitted.
             return await relayClient.submitAgentResponse(
                 sessionId: paneId,
                 pluginId: pluginID,
                 requestId: requestID,
-                response: response
+                response: response,
+                inputBinding: inputBinding
             )
         }
     }

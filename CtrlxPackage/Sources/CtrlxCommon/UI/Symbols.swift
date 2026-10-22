@@ -20,6 +20,7 @@ public enum Symbols: String {
     case arrowLeft = "arrow.left"
     case arrowRight = "arrow.right"
     case arrowTriangleBranch = "arrow.triangle.branch"
+    case arrowUpArrowDown = "arrow.up.arrow.down"
     case arrowUpCircleFill = "arrow.up.circle.fill"
     case arrowUpLeftAndArrowDownRight = "arrow.up.left.and.arrow.down.right"
     case arrowUpRightSquare = "arrow.up.right.square"
@@ -45,6 +46,7 @@ public enum Symbols: String {
     case circleLefthalfFilled = "circle.lefthalf.filled"
     case docBadgeGearshapeFill = "doc.badge.gearshape.fill"
     case docOnClipboard = "doc.on.clipboard"
+    case docOnDoc = "doc.on.doc"
     case docPlaintextFill = "doc.plaintext.fill"
     case docTextFill = "doc.text.fill"
     case docZipper = "doc.zipper"
@@ -65,6 +67,7 @@ public enum Symbols: String {
     case gearshape
     case gearshapeFill = "gearshape.fill"
     case globe
+    case handDraw = "hand.draw"
     case handsAndSparklesFill = "hands.and.sparkles.fill"
     case hourglass = "hourglass"
     case house
@@ -86,6 +89,7 @@ public enum Symbols: String {
     case magnifyingglass
     case mic
     case micFill = "mic.fill"
+    case minus
     case minusCircleFill = "minus.circle.fill"
     case moonFill = "moon.fill"
     case number

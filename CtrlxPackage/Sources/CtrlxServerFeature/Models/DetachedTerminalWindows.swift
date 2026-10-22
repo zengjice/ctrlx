@@ -1,5 +1,6 @@
 import AppKit
 import CtrlxCommon
+import CtrlxNetworking
 import Observation
 
 /// Presentation identity, independent of session names and tmux window indices.
@@ -34,12 +35,24 @@ final class DetachedTerminalWindows {
 
     private(set) var workspaces: [UUID: DetachedTerminalWorkspace] = [:]
     let mainTabs = WorkbenchTabStore()
+    var mainSceneID = UUID()
     private(set) var presentationRevision = 0
     var targets: Set<DetachedTerminalTarget> {
         Set(workspaces.values.flatMap(\.members))
     }
 
+    struct SourcePaneRequest {
+        let id = UUID()
+        let hostID: String?
+        let pane: PaneState
+    }
+
+    var sourcePaneRequest: SourcePaneRequest?
     var mainRequest: Request?
+    var restoredWindowIDs: [UUID] = []
+    @ObservationIgnored weak var mainWindow: NSWindow?
+    @ObservationIgnored var restoredFrames: [UUID: CGRect] = [:]
+    @ObservationIgnored var restoredMainFrame: CGRect?
     @ObservationIgnored private var windows: [UUID: NSWindow] = [:]
     @ObservationIgnored private var positions: [UUID: CGPoint] = [:]
     @ObservationIgnored private var closeObservers: [UUID: NSObjectProtocol] = [:]
@@ -145,6 +158,68 @@ final class DetachedTerminalWindows {
         return workspace(containing: target)?.id
     }
 
+    /// Project each Host tab once across this Mac's native windows; retain navigation when moving it.
+    func syncFileTabs(hostID: String?, descriptors: [HostFileTab], sessionWindows: [String: [String]]) {
+        let stores = [mainTabs] + workspaces.values.map(\.tabs)
+        func sessions(_ store: WorkbenchTabStore) -> [String: SessionFileTabsState] {
+            if let hostID {
+                return Dictionary(uniqueKeysWithValues: store.remote.filter { $0.key.hostId == hostID }.map { ($0.key.sessionName, $0.value) })
+            }
+            return store.local
+        }
+        let live = Set(descriptors.map(\.id))
+        var movedFrom: Set<ObjectIdentifier> = []
+        for descriptor in descriptors {
+            let existing = stores.flatMap { store in sessions(store).map { (store, $0.key, $0.value) } }
+                .first { $0.2.directoryTabs[descriptor.id] != nil }
+            let old = existing?.2.directoryTabs[descriptor.id]?.hostTab
+            let destinationStore: WorkbenchTabStore
+            if let existing, old?.sessionName == descriptor.sessionName, old?.windowID == descriptor.windowID {
+                destinationStore = existing.0
+            } else {
+                destinationStore = store(for: owner(hostID: hostID, windowID: descriptor.windowID)) ?? mainTabs
+            }
+            let destination = destinationStore.tabs(hostID: hostID, session: descriptor.sessionName)
+            if let existing, existing.2 !== destination {
+                existing.2.move(.file(descriptor.id), to: destination)
+                movedFrom.insert(ObjectIdentifier(existing.2))
+            }
+            if let tab = destination.directoryTabs[descriptor.id] {
+                tab.updateHostTab(descriptor)
+            } else {
+                destination.directoryTabs[descriptor.id] = FileBrowserTab(hostTab: descriptor)
+                destination.openFileTabs.append(.init(id: descriptor.id, path: "Files", directoryPath: "", isDirectory: true))
+            }
+        }
+        for store in stores {
+            for (session, tabs) in sessions(store) {
+                let removed = tabs.directoryTabs.values.filter { $0.hostTab != nil && !live.contains($0.id) }
+                for tab in removed {
+                    tabs.removeFileTab(tab.id)
+                }
+                guard !removed.isEmpty || movedFrom.contains(ObjectIdentifier(tabs)) else { continue }
+                let ids = (sessionWindows[session] ?? []).filter { id in
+                    self.store(for: owner(hostID: hostID, windowID: id)) === store
+                }
+                tabs.reconcileRightPaneSelection(sessionWindowIDs: ids, includeLocalTabs: hostID == nil)
+                tabs.repairLeftContent(hasTerminal: ids.contains { !tabs.rightSide.contains(.window($0)) })
+            }
+        }
+    }
+
+    func claimFile(_ id: UUID, hostID: String?, session: String, workspaceID: UUID?) {
+        guard let destination = store(for: workspaceID)?.tabs(hostID: hostID, session: session) else { return }
+        for store in [mainTabs] + workspaces.values.map(\.tabs) {
+            guard
+                let source = store.existing(hostID: hostID, session: session), source !== destination,
+                source.directoryTabs[id] != nil else { continue }
+            if source.move(.file(id), to: destination) {
+                presentationRevision += 1
+                closeEmptyWorkspaces()
+            }
+        }
+    }
+
     func browserOwner(hostID: String?, session: String, id: UUID, windowID: String?) -> UUID? {
         for workspace in workspaces.values where workspace.anchor.hostID == hostID {
             if workspace.tabs.existing(hostID: hostID, session: session)?.openBrowserTabs.contains(where: { $0.id == id }) == true {
@@ -206,12 +281,19 @@ final class DetachedTerminalWindows {
         attach(window, toWorkspace: workspace.id)
     }
 
-    func attach(_ window: NSWindow, toWorkspace id: UUID) {
+    func attach(_ window: NSWindow, toWorkspace id: UUID?) {
+        guard let id else {
+            mainWindow = window
+            return
+        }
         guard workspaces[id] != nil, windows[id] !== window else { return }
         if let observer = closeObservers.removeValue(forKey: id) {
             NotificationCenter.default.removeObserver(observer)
         }
         windows[id] = window
+        if let frame = restoredFrames.removeValue(forKey: id) {
+            Self.restoreFrame(frame, to: window)
+        }
         closeObservers[id] = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: nil) { [weak self, weak window] _ in
             MainActor.assumeIsolated {
                 guard let self, let window else { return }
@@ -270,14 +352,50 @@ final class DetachedTerminalWindows {
             let target = DetachedTerminalTarget(hostID: hostID, windowID: windowID),
             let workspace = workspace(containing: target) else { return false }
         workspace.select(target)
-        if let window = windows[workspace.id] {
-            // A disconnected display must not strand the window off-screen.
-            if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
-                window.center()
-            }
-            window.deminiaturize(nil)
-            window.makeKeyAndOrderFront(nil)
+        focusNativeWindow(workspaceID: workspace.id)
+        return true
+    }
+
+    /// Resolve ownership when the notification is opened, not when it was delivered.
+    func reveal(
+        _ selection: PendingMenuBarSelection,
+        localPanes: [PaneInfo], remoteSessions: SessionStore?,
+        openMain: () -> Void
+    ) -> UUID? {
+        let hostID: String?
+        let windowID: String?
+        switch selection {
+        case let .local(paneID):
+            hostID = nil
+            windowID = localPanes.first { $0.paneId == paneID }?.stableWindowId
+        case let .remote(host, _, paneID):
+            hostID = host
+            windowID = remoteSessions?.paneState(for: paneID, hostId: host)?.stableWindowId
         }
+        if let windowID, focus(hostID: hostID, windowID: windowID) {
+            return owner(hostID: hostID, windowID: windowID)
+        }
+        openMain()
+        return nil
+    }
+
+    /// Activation retries must not reselect tabs or bring unrelated windows forward.
+    @discardableResult
+    func focusNativeWindow(workspaceID: UUID?, activate: () -> Void = { }) -> Bool {
+        let window = if let workspaceID {
+            windows[workspaceID]
+        } else {
+            mainWindow
+        }
+        guard let window else { return false }
+        activate()
+        // A disconnected display must not strand the window off-screen.
+        if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
+            window.center()
+        }
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         return true
     }
 
@@ -294,6 +412,46 @@ final class DetachedTerminalWindows {
             x: max(visibleFrame.minX, min(origin.x, visibleFrame.maxX - size.width)),
             y: max(visibleFrame.minY, min(origin.y, visibleFrame.maxY - size.height))
         )
+    }
+
+    static func restoreFrame(_ frame: CGRect, to window: NSWindow) {
+        guard let screen = NSScreen.screens.first(where: { $0.visibleFrame.intersects(frame) }) ?? NSScreen.main else { return }
+        let size = CGSize(width: min(max(400, frame.width), screen.visibleFrame.width), height: min(max(250, frame.height), screen.visibleFrame.height))
+        window.setFrame(CGRect(origin: clampedOrigin(frame.origin, size: size, visibleFrame: screen.visibleFrame), size: size), display: true)
+    }
+
+    var mainFrame: CGRect? {
+        restoredMainFrame ?? mainWindow?.frame
+    }
+
+    func restoreMainFrame(_ frame: CGRect) {
+        restoredMainFrame = frame
+        applyRestoredMainFrame()
+    }
+
+    func applyRestoredMainFrame() {
+        // SwiftUI applies its initial window size when ordering the window on
+        // screen. Keep the saved frame until that initial presentation finishes.
+        guard let window = mainWindow, window.isVisible, let frame = restoredMainFrame else { return }
+        restoredMainFrame = nil
+        Self.restoreFrame(frame, to: window)
+    }
+
+    func frame(for workspaceID: UUID) -> CGRect? {
+        windows[workspaceID]?.frame ?? restoredFrames[workspaceID]
+    }
+
+    func restoreWorkspace(id: UUID, members: [DetachedTerminalTarget], session: String, frame: CGRect?, fallbackAnchor: DetachedTerminalTarget? = nil) -> DetachedTerminalWorkspace? {
+        if let existing = workspaces[id] {
+            return existing
+        }
+        guard let anchor = members.first ?? fallbackAnchor, members.allSatisfy({ !targets.contains($0) }) else { return nil }
+        let workspace = DetachedTerminalWorkspace(id: id, target: anchor, sessionName: session)
+        workspace.members = members
+        workspaces[id] = workspace
+        restoredFrames[id] = frame
+        restoredWindowIDs.append(id)
+        return workspace
     }
 
     /// A returning right-side tab must not also become the left renderer.

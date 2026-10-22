@@ -6,6 +6,14 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)tryToTerminateWithoutModalLoop;
 @end
 
+@protocol CXApplicationDiagnosticsDelegate <NSObject>
+// Synchronous: AppKit may terminate the process immediately after reporting.
+- (void)recordAppKitException:(NSException *)exception;
+@optional
+// Main thread, bounded metadata only; no page content, URLs or request headers.
+- (void)recordBrowserDiagnostic:(NSDictionary<NSString *, id> *)event;
+@end
+
 // CEF stays in a separately built native library. Swift/SPM clients need only
 // this small AppKit contract, never CEF headers or a downloaded SDK to compile.
 @protocol CXBrowserHostDelegate <NSObject>
@@ -15,6 +23,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)browserTabChanged:(NSString *)identifier title:(NSString *)title url:(NSString *)url loading:(BOOL)loading;
 - (void)browserTabSelected:(NSString *)identifier;
 - (void)browserTabClosed:(NSString *)identifier;
+@optional
+// Human navigation from the trusted extension manager, scoped to its source tab.
+// A nil token confirms no native control grant remains (including Host takeover).
+- (void)browserTab:(NSString *)identifier openWebStoreURL:(NSString *)url controlToken:(nullable NSString *)controlToken completion:(void (^)(NSString * _Nullable identifier, NSString * _Nullable error))completion;
+// Native runtime supplies a one-use, observed human activation, never page JS.
+- (void)browserTab:(NSString *)identifier openExternalURL:(NSString *)url controlToken:(nullable NSString *)controlToken;
 @end
 
 @protocol CXBrowserRuntime <NSObject>
@@ -34,12 +48,24 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)requestBrowserTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData * _Nullable result, NSString * _Nullable error))completion;
 - (void)beginShutdown;
 - (BOOL)finishShutdown;
+@optional
+// Human-only Chrome-style windows share this Host's profile. Older native
+// bundles omit these selectors; callers must report unavailable capability.
+- (void)openExtensionWindowForTab:(NSString *)identifier completion:(void (^)(NSString * _Nullable identifier, NSString * _Nullable error))completion NS_SWIFT_NAME(openExtensionWindow(forTab:completion:));
+- (void)showExtensionManagerForTab:(NSString *)identifier completion:(void (^)(NSString * _Nullable error))completion NS_SWIFT_NAME(showExtensionManager(forTab:completion:));
+- (void)showBrowserWindow:(NSString *)identifier;
+- (void)requestBrowserExtensionsForTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData * _Nullable result, NSString * _Nullable error))completion NS_SWIFT_NAME(requestBrowserExtensions(forTab:request:completion:));
+// Explicit profile/window grant. Ordinary page control cannot call this surface.
+- (BOOL)setExtensionControl:(nullable NSString *)token forTab:(NSString *)identifier;
+- (void)requestExtensionSurfaceForTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData * _Nullable result, NSString * _Nullable error))completion NS_SWIFT_NAME(requestExtensionSurface(forTab:request:completion:));
 @end
 
 // Call before SwiftUI's App.main creates NSApplication. Absence of the optional
 // native library is supported for ordinary SPM/tests and non-browser builds.
 FOUNDATION_EXPORT BOOL CXBrowserPrepareApplication(void);
 FOUNDATION_EXPORT void CXBrowserSetTerminationDelegate(id<CXBrowserTerminationDelegate> delegate);
+FOUNDATION_EXPORT void CXBrowserSetDiagnosticsDelegate(id<CXApplicationDiagnosticsDelegate> delegate);
+FOUNDATION_EXPORT void CXBrowserSetDebugMode(BOOL enabled);
 FOUNDATION_EXPORT id<CXBrowserRuntime> _Nullable CXBrowserCreateRuntime(void);
 FOUNDATION_EXPORT NSString * _Nullable CXBrowserLoadError(void);
 NS_ASSUME_NONNULL_END

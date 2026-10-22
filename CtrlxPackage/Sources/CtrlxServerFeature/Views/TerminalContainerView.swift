@@ -15,7 +15,8 @@ typealias TerminalTitleChangeHandler = @MainActor (String) -> Void
 
 /// Callback type for handling URL clicks in the terminal. Returns `true` if the
 /// callback handled the URL, `false` to fall back to `NSWorkspace.shared.open`.
-typealias TerminalOpenURLHandler = @MainActor (URL, String) -> Bool
+/// The source pane and one-click behavior override travel with the URL.
+typealias TerminalOpenURLHandler = @MainActor (URL, String, BrowserLinkBehavior?) -> Bool
 
 /// Tracks the last pane dimensions delivered by SwiftUI so width-only and
 /// height-only layout changes are both observed exactly once.
@@ -61,6 +62,7 @@ struct TerminalContainerView: NSViewRepresentable {
     @Environment(EditorSessionManager.self) private var editorSessionManager
     @Environment(\.terminalQuickActions) private var quickActions
     @Environment(\.openTerminalFileLink) private var openFileLink
+    @Environment(\.terminalViewportInteraction) private var viewportInteraction
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
@@ -95,8 +97,10 @@ struct TerminalContainerView: NSViewRepresentable {
 
         // URL-click handler is set on every layout pass so it picks up fresh
         // state captured by parent closures (window/session selection).
-        coordinator.terminalView.onOpenURL = { url in onOpenURL?(url, paneState.paneId) ?? false }
+        coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
+        coordinator.terminalView.onContentClick = { viewportInteraction?(nil, paneState.paneId) }
+        coordinator.terminalView.onFocusRestored = { viewportInteraction?(nil, paneState.paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
         quickActions?.applyRequestedFocus(to: coordinator.terminalView, hostID: nil, paneID: paneState.paneId, autoFocus: autoFocus)
@@ -128,8 +132,10 @@ struct TerminalContainerView: NSViewRepresentable {
 
         // Re-bind the URL click handler so closures captured here reflect the
         // current parent state on every layout pass.
-        nsView.onOpenURL = { url in onOpenURL?(url, paneState.paneId) ?? false }
+        nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
+        nsView.onContentClick = { viewportInteraction?(nil, paneState.paneId) }
+        coordinator.terminalView.onFocusRestored = { viewportInteraction?(nil, paneState.paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
         // Update container size on layout changes
@@ -164,6 +170,8 @@ struct TerminalContainerView: NSViewRepresentable {
         private(set) var quickActionEndpoint: TerminalQuickActionEndpoint?
         private weak var quickActionRouter: TerminalQuickActionRouter?
         private var subscriptionId: UUID?
+        private var connectionTask: Task<Void, Never>?
+        private var isStopped = false
         private var streamState: StreamState = .disconnected
         private var columns = 80
         private var rows = 24
@@ -270,6 +278,7 @@ struct TerminalContainerView: NSViewRepresentable {
         ) {
             self.paneState = paneState
             terminalView.scrollingAgentID = paneState.agentSession?.pluginID
+            terminalView.codexQuestionID = paneState.codexQuestionID
             self.paneStreamManager = paneStreamManager
             self.tmuxService = tmuxService
             self.onStateChange = onStateChange
@@ -310,7 +319,7 @@ struct TerminalContainerView: NSViewRepresentable {
                 self?.keyCoalescer.enqueue(keys)
             }
 
-            terminalView.onExpandCodexQuestions = { [weak self] count in
+            terminalView.onExpandCodexQuestions = { [weak self] count, questionID in
                 guard let self else { return false }
                 self.keyCoalescer.flushPending()
                 let generation = self.inputGeneration
@@ -322,7 +331,7 @@ struct TerminalContainerView: NSViewRepresentable {
                       let paneID = self.paneState?.paneId, let tmux = self.tmuxService
                 else { return false }
                 do {
-                    return try await tmux.expandCodexQuestions(paneID: paneID, expectedCount: count)
+                    return try await tmux.expandCodexQuestions(paneID: paneID, expectedCount: count, expectedQuestionID: questionID)
                 } catch {
                     // Optional convenience must not replace a healthy terminal
                     // with an error view. The manual shortcut still works.
@@ -377,9 +386,10 @@ struct TerminalContainerView: NSViewRepresentable {
                 self?.handleTitleChange(title)
             }
 
-            // Start connection
-            Task {
-                await connect(paneState: paneState, tmuxService: tmuxService)
+            // The native view owns bootstrap as well as the eventual subscription.
+            connectionTask = Task { [weak self] in
+                guard let self, !Task.isCancelled, !self.isStopped else { return }
+                await self.connect(paneState: paneState, tmuxService: tmuxService)
             }
         }
 
@@ -497,10 +507,13 @@ struct TerminalContainerView: NSViewRepresentable {
         func updatePaneState(_ newState: PaneState) {
             paneState = newState
             terminalView.scrollingAgentID = newState.agentSession?.pluginID
+            terminalView.codexQuestionID = newState.codexQuestionID
         }
 
         func bindQuickActions(_ router: TerminalQuickActionRouter?, onFocus: (@MainActor () -> Void)?) {
             quickActionRouter = router
+            terminalView.voiceInputRouter = router
+            terminalView.voiceInputEndpoint = quickActionEndpoint
             terminalView.onBecomeFirstResponder = { [weak self] in
                 if let self, let endpoint = self.quickActionEndpoint {
                     self.quickActionRouter?.focus(endpoint)
@@ -510,6 +523,12 @@ struct TerminalContainerView: NSViewRepresentable {
         }
 
         func stop() {
+            isStopped = true
+            connectionTask?.cancel()
+            connectionTask = nil
+            terminalView.cancelVoiceInputPress()
+            terminalView.voiceInputRouter = nil
+            terminalView.voiceInputEndpoint = nil
             terminalView.stopQuestionChecks()
             if let endpoint = quickActionEndpoint {
                 endpoint.invalidate()
@@ -517,12 +536,14 @@ struct TerminalContainerView: NSViewRepresentable {
                 Task { @MainActor in router?.retire(endpoint) }
             }
             terminalView.onBecomeFirstResponder = nil
+            terminalView.onFocusRestored = nil
             // Disconnect input handlers first so no new tmux commands fire
             // after the pane is destroyed (prevents SIGABRT from NSTask).
             terminalView.onInput = nil
             terminalView.onRawInput = nil
             terminalView.onFileDrop = nil
             terminalView.onOpenPath = nil
+            terminalView.onContentClick = nil
 
             pendingKeyTask?.cancel()
             pendingKeyTask = nil
@@ -549,6 +570,8 @@ struct TerminalContainerView: NSViewRepresentable {
         // MARK: Connection
 
         private func connect(paneState: PaneState, tmuxService: TmuxService) async {
+            let expectedWorkspacePane = paneState.workspaceIdentity
+            let paneID = paneState.paneId
             updateState(.connecting)
 
             // Get initial dimensions from tmux. Rows must match the tmux pane
@@ -560,6 +583,7 @@ struct TerminalContainerView: NSViewRepresentable {
                 updateTerminalDimensions(cols: paneState.width, rows: paneState.height)
             }
 
+            guard !Task.isCancelled, !isStopped else { return }
             clear()
 
             // Subscribe to stream
@@ -569,25 +593,31 @@ struct TerminalContainerView: NSViewRepresentable {
             }
 
             do {
-                let target = paneState.target
+                let target = paneID
                 // Note: onTitleChange is intentionally omitted here. Title changes are detected
                 // locally by SwiftTerm's delegate (terminalView.onTitleChange) and then reported
                 // back to PaneStreamManager via reportTitleChange(), which forwards to other
                 // subscribers. This avoids a circular callback loop.
                 let result = try await paneStreamManager.subscribe(
-                    paneId: paneState.paneId,
+                    paneId: paneID,
                     target: target,
+                    expectedWorkspacePane: expectedWorkspacePane,
                     onData: { [weak self] data in
                         self?.handleData(data)
                     },
                     onDimensionChange: { [weak self] newWidth, newHeight in
-                        self?.handleStreamDimensionChange(width: newWidth, height: newHeight)
+                        guard let self, !self.isStopped else { return }
+                        self.handleStreamDimensionChange(width: newWidth, height: newHeight)
                     },
                     onResync: { [weak self] result in
                         self?.handleResync(result)
                     }
                 )
 
+                guard !Task.isCancelled, !isStopped else {
+                    await paneStreamManager.unsubscribe(result.subscriptionId)
+                    return
+                }
                 subscriptionId = result.subscriptionId
                 updateState(.connected)
 
@@ -604,6 +634,7 @@ struct TerminalContainerView: NSViewRepresentable {
                 // the enable sequences so SwiftTerm enters the correct mode.
                 await syncMouseMode(target: target, tmuxService: tmuxService)
             } catch {
+                guard !Task.isCancelled, !isStopped else { return }
                 updateState(.error(error.localizedDescription))
             }
         }
@@ -611,6 +642,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // MARK: Title Handling
 
         private func handleTitleChange(_ title: String) {
+            guard !isStopped else { return }
             // Notify the parent view
             onTitleChange?(title)
 
@@ -627,6 +659,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // MARK: Data Handling
 
         private func handleData(_ data: Data) {
+            guard !isStopped else { return }
             feedCoalescer.enqueue(data)
         }
 
@@ -672,6 +705,7 @@ struct TerminalContainerView: NSViewRepresentable {
         }
 
         private func handleResync(_ result: Result<PaneStreamManager.SubscriptionResult, Error>) {
+            guard !isStopped else { return }
             switch result {
             case let .success(snapshot):
                 updateTerminalDimensions(cols: snapshot.width, rows: snapshot.height)

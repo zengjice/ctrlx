@@ -1,11 +1,11 @@
 #if os(macOS)
     import AppKit
     import ClaudeCodePluginCore
+    import CodexPluginCore
     import CtrlxCommon
     import CtrlxNetworking
-    import CodexPluginCore
-    import Dependencies
     import CtrlxPluginProtocol
+    import Dependencies
     import SwiftUI
     import UniformTypeIdentifiers
 
@@ -16,6 +16,7 @@
     /// through `AppCoordinator`.
     public struct AgentsSettingsView: View {
         @Environment(AppCoordinator.self) private var coordinator
+        @Environment(\.openWindow) private var openWindow
 
         @State private var selectedAgentID = ""
         /// Single source-of-truth driving the Add-Plugin sheet (URL or zip). Two
@@ -31,8 +32,9 @@
             VStack(spacing: 0) {
                 // Restart-required banner: one line per applied update, until
                 // the app restarts (restarting IS the remedy — state is in-memory).
-                if let updateManager = coordinator.pluginUpdateManager,
-                   !updateManager.restartNotices.isEmpty {
+                if
+                    let updateManager = coordinator.pluginUpdateManager,
+                    !updateManager.restartNotices.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(updateManager.restartNotices) { notice in
                             Label(restartText(notice), symbol: .exclamationmarkTriangle)
@@ -79,6 +81,20 @@
                 }
 
                 Divider()
+
+                HStack {
+                    Text("Codex & Claude Code CLI").foregroundStyle(.secondary)
+                    Spacer()
+                    Button(coordinator.agentCLIInstallations?.isPerformingOperation == true ? "View Agent Setup…" : "Agent Setup…") {
+                        coordinator.agentCLIInstallations?.dismissStartupPrompt()
+                        coordinator.agentCLIInstallations?.refresh()
+                        openWindow(id: "agent-cli-setup")
+                    }
+                    .disabled(coordinator.agentCLIInstallations == nil)
+                    .accessibilityIdentifier("agentCLISetupButton")
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
 
                 // Toolbar row at the bottom of the tab
                 HStack {
@@ -145,7 +161,9 @@
             }
             // Auto-select a freshly installed plugin in the picker.
             .onChange(of: coordinator.lastInstalledPluginID) { _, newID in
-                if let newID { selectedAgentID = newID }
+                if let newID {
+                    selectedAgentID = newID
+                }
             }
             .onChange(of: coordinator.agentSettingsSelection) { _, newID in
                 if let newID {
@@ -392,8 +410,9 @@
 
                 // Updates (URL-installed plugins only — bundled and
                 // folder-dropped plugins have no update source)
-                if let updateManager = coordinator.pluginUpdateManager,
-                   updateManager.isUpdatable(pluginID) {
+                if
+                    let updateManager = coordinator.pluginUpdateManager,
+                    updateManager.isUpdatable(pluginID) {
                     Section("Updates") {
                         Toggle(
                             "Check for updates automatically",
@@ -481,21 +500,34 @@
             .task(id: pluginID) {
                 await loadSettings()
             }
+            .onChange(of: coordinator.agentCLIInstallations?.commandRevision) {
+                guard isLoaded, let agent = InstallableAgentCLI(rawValue: pluginID) else { return }
+                if commandPath == agent.command {
+                    let data = coordinator.pluginSettingsData(id: pluginID)
+                    let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                    commandPath = settings?["command_path"] as? String ?? commandPath
+                }
+                if case .available = coordinator.agentCLIInstallations?.entries[agent]?.availability {
+                    agentUnavailable = false
+                }
+            }
         }
 
         // MARK: - Computed helpers
 
-        @ViewBuilder private func configFolderRow(path: String, removable: Bool) -> some View {
+        @ViewBuilder
+        private func configFolderRow(path: String, removable: Bool) -> some View {
             let remove: (() -> Void)? = removable ? {
                 additionalConfigFolders.removeAll { $0 == path }
                 persist()
             } : nil
-            if (pluginID == "codex" || pluginID == "claude-code"), let installations = coordinator.agentPluginInstallations {
+            if pluginID == "codex" || pluginID == "claude-code", let installations = coordinator.agentPluginInstallations {
                 BundledAgentPluginRow(
                     installations: installations,
                     location: AgentPluginLocation(pluginID: pluginID, configRoot: removable ? path : nil),
                     folderPath: path, agentName: agentDisplayName, onRemove: remove
                 )
+                .id(coordinator.agentCLIInstallations?.commandRevision ?? 0)
             } else {
                 AgentConfigFolderRow(pluginID: pluginID, folderPath: path, isRemovable: removable, onRemove: remove)
             }
@@ -543,7 +575,8 @@
                     .font(.caption)
                     .foregroundStyle(.red)
                     .accessibilityIdentifier("agentUpdateStatus-\(pluginID)")
-            case .checking, nil:
+            case .checking,
+                 nil:
                 EmptyView()
             }
         }
@@ -612,8 +645,17 @@
             }
 
             // Check agent availability for the default root
+            let loadedCommand = commandPath
             let status = await coordinator.pluginInstallStatus(id: pluginID, configRoot: nil)
             agentUnavailable = (status == .agentUnavailable)
+            // CLI setup may finish while the plugin check is suspended. Preserve typed drafts,
+            // but don't let the next toggle save the pre-install command back over the new path.
+            if let agent = InstallableAgentCLI(rawValue: pluginID), commandPath == loadedCommand {
+                commandPath = AgentCLICommandSettings.command(in: coordinator.pluginSettingsData(id: pluginID), agent: agent)
+                if case let .available(path, _, _) = coordinator.agentCLIInstallations?.entries[agent]?.availability, path == commandPath {
+                    agentUnavailable = false
+                }
+            }
 
             isLoaded = true
         }
@@ -825,6 +867,7 @@
                     .foregroundStyle(.orange)
                     .help("Install the \(pluginID) CLI to enable plugin installation for this folder")
                     .disabled(true)
+
             case let .checkFailed(message):
                 Text("Check failed: \(message)")
                     .font(.caption)

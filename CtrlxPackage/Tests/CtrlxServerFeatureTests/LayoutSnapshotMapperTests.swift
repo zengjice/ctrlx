@@ -1,4 +1,5 @@
 #if os(macOS)
+    import CtrlxCommon
     import CtrlxNetworking
     import Foundation
     import Testing
@@ -74,10 +75,33 @@
 
         // MARK: - Restore
 
+        @Test("Folder seeding omits Git while workspace recovery preserves it", arguments: [false, true])
+        func gitRestorePolicy(includeGit: Bool) {
+            let layout = SavedFolderLayout(
+                tabOrder: [.window(index: 0), .git],
+                rightSide: [.git],
+                selectedRight: .git
+            )
+            let tabs = SessionFileTabsState()
+            LayoutSnapshotMapper.apply(
+                layout, to: tabs, fileBrowser: nil, includeGit: includeGit,
+                windowIdForIndex: { _ in "@1" },
+                makeBrowserState: { BrowserTabState(initialURL: $0.url) }
+            )
+            #expect(tabs.isGitOpen == includeGit)
+            #expect(tabs.rightSide.contains(.git) == includeGit)
+            #expect(tabs.selectedRight == (includeGit ? .git : nil))
+            tabs.closeGit()
+            let saved = LayoutSnapshotMapper.snapshot(from: tabs, fileBrowser: nil, windowIndexForId: { _ in 0 })
+            #expect(!saved.tabOrder.contains(.git))
+            #expect(!saved.rightSide.contains(.git))
+            #expect(saved.selectedRight == nil)
+        }
+
         @Test("Transient Chromium tabs never replace or restore as existing WebKit tabs")
-        func chromiumTabsAreNotRestoredAsWebKit() {
-            let webKit = BrowserTab(url: URL(string: "https://example.com")!)
-            var chromium = BrowserTab(url: URL(string: "https://swift.org")!)
+        func chromiumTabsAreNotRestoredAsWebKit() throws {
+            let webKit = try BrowserTab(url: #require(URL(string: "https://example.com")))
+            var chromium = try BrowserTab(url: #require(URL(string: "https://swift.org")))
             chromium.isAgentBrowser = true
             let tabs = SessionFileTabsState()
             tabs.openBrowserTabs = [webKit, chromium]
@@ -94,8 +118,13 @@
             #expect(layout.rightSide.isEmpty)
 
             let restored = SessionFileTabsState()
-            LayoutSnapshotMapper.apply(layout, to: restored, fileBrowser: nil,
-                windowIdForIndex: { _ in nil }, makeBrowserState: { BrowserTabState(initialURL: $0.url) })
+            LayoutSnapshotMapper.apply(
+                layout,
+                to: restored,
+                fileBrowser: nil,
+                windowIdForIndex: { _ in nil },
+                makeBrowserState: { BrowserTabState(initialURL: $0.url) }
+            )
             #expect(restored.openBrowserTabs.map(\.id) == [webKit.id])
             #expect(restored.browserStates[webKit.id] != nil)
             #expect(restored.agentBrowserStates.isEmpty)
@@ -138,13 +167,13 @@
         }
 
         @Test("Browser tabs round-trip their URLs, ids and live state")
-        func browserRoundTrip() {
+        func browserRoundTrip() throws {
             let b1 = UUID()
             let b2 = UUID()
             let tabs = SessionFileTabsState()
-            tabs.openBrowserTabs = [
-                BrowserTab(id: b1, url: URL(string: "https://example.com")!, displayTitle: "Ex"),
-                BrowserTab(id: b2, url: URL(string: "https://swift.org")!, parentTabId: b1),
+            tabs.openBrowserTabs = try [
+                BrowserTab(id: b1, url: #require(URL(string: "https://example.com")), displayTitle: "Ex"),
+                BrowserTab(id: b2, url: #require(URL(string: "https://swift.org")), parentTabId: b1),
             ]
             tabs.selectedBrowserTabId = b2
             tabs.tabOrder = [.browser(b1), .browser(b2)]
@@ -176,13 +205,52 @@
             #expect(restored.tabOrder == [.browser(b1), .browser(b2)])
         }
 
-        @Test("Shared terminals do not suppress private layout restore")
-        func sharedTerminalLayoutMergesWithPrivateTabs() {
-            let browserId = UUID()
+        @Test("Host Files do not suppress private restore or lose their live presentation", arguments: [false, true], [nil, "host"] as [String?])
+        func hostFilesMergeWithPrivateRestore(onRight: Bool, host: String?) throws {
+            let manager = DetachedTerminalWindows()
+            let hostFile = HostFileTab(sessionName: "work", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host")
+            manager.syncFileTabs(hostID: host, descriptors: [hostFile], sessionWindows: ["work": ["@1"]])
+            let tabs = manager.mainTabs.tabs(hostID: host, session: "work")
+            let live = try #require(tabs.directoryTabs[hostFile.id])
+            live.navigate("/host/selected")
+            tabs.tabOrder = [.file(hostFile.id)]
+            if onRight {
+                tabs.rightSide = [.file(hostFile.id)]
+                tabs.selectedRight = .file(hostFile.id)
+            } else {
+                tabs.selectedFileTabId = hostFile.id
+            }
+            tabs.splitRatio = 0.7
+            #expect(tabs.isPrivateWorkbenchEmpty)
+
+            let legacy = FileBrowserTab(path: "/private")
             let saved = SavedFolderLayout(
+                fileTabs: [.init(id: legacy.id, path: "Files", directoryPath: "", browser: legacy.snapshot)],
+                tabOrder: [.file(id: legacy.id)],
+                selectedLeft: .file(id: legacy.id), splitRatio: 0.4
+            )
+            LayoutSnapshotMapper.apply(saved, to: tabs, fileBrowser: nil, windowIdForIndex: { _ in nil }, makeBrowserState: { BrowserTabState(initialURL: $0.url) })
+
+            #expect(!tabs.isPrivateWorkbenchEmpty)
+            #expect(tabs.directoryTabs[hostFile.id] === live)
+            #expect(live.path == "/host/selected")
+            #expect(tabs.openFileTabs.map(\.id) == [legacy.id, hostFile.id])
+            #expect(tabs.tabOrder == [.file(legacy.id), .file(hostFile.id)])
+            #expect(tabs.selectedFileTabId == (onRight ? legacy.id : hostFile.id))
+            #expect(tabs.selectedRight == (onRight ? .file(hostFile.id) : nil))
+            #expect(tabs.splitRatio == (onRight ? 0.7 : 0.4))
+            let resaved = LayoutSnapshotMapper.snapshot(from: tabs, fileBrowser: nil, windowIndexForId: { _ in nil })
+            #expect(resaved.fileTabs.map(\.id) == [legacy.id])
+            #expect(resaved.rightSide.isEmpty)
+        }
+
+        @Test("Shared terminals do not suppress private layout restore")
+        func sharedTerminalLayoutMergesWithPrivateTabs() throws {
+            let browserId = UUID()
+            let saved = try SavedFolderLayout(
                 browserTabs: [SavedBrowserTab(
                     id: browserId,
-                    url: URL(string: "https://example.com")!
+                    url: #require(URL(string: "https://example.com"))
                 )],
                 tabOrder: [.browser(id: browserId)],
                 rightSide: [.browser(id: browserId)],
@@ -218,12 +286,12 @@
         }
 
         @Test("A private right tab remains selected when the shared terminal collapses")
-        func collapsedSharedTerminalSelectsPrivateTab() {
+        func collapsedSharedTerminalSelectsPrivateTab() throws {
             let browserId = UUID()
-            let saved = SavedFolderLayout(
+            let saved = try SavedFolderLayout(
                 browserTabs: [SavedBrowserTab(
                     id: browserId,
-                    url: URL(string: "https://example.com")!
+                    url: #require(URL(string: "https://example.com"))
                 )],
                 tabOrder: [.browser(id: browserId), .window(index: 1)],
                 rightSide: [.browser(id: browserId), .window(index: 1)],
@@ -254,15 +322,15 @@
         }
 
         @Test("Viewer persistence drops every Host-owned or unsupported tab reference")
-        func viewerPrivateLayoutSanitizesGeneralLayout() {
+        func viewerPrivateLayoutSanitizesGeneralLayout() throws {
             let browserId = UUID()
             let missingBrowserId = UUID()
             let fileId = UUID()
-            let saved = SavedFolderLayout(
+            let saved = try SavedFolderLayout(
                 fileTabs: [SavedFileTab(id: fileId, path: "/proj/a.swift", directoryPath: "/proj")],
                 browserTabs: [SavedBrowserTab(
                     id: browserId,
-                    url: URL(string: "https://example.com")!
+                    url: #require(URL(string: "https://example.com"))
                 )],
                 tabOrder: [
                     .window(index: 1), .fileExplorer, .git, .file(id: fileId),
@@ -318,12 +386,12 @@
         // MARK: - Host terminal-layout authority
 
         @Test("A background session restores its persisted terminal split without opening private tabs")
-        func restoresBackgroundTerminalSplit() {
+        func restoresBackgroundTerminalSplit() throws {
             let browserId = UUID()
-            let saved = SavedFolderLayout(
+            let saved = try SavedFolderLayout(
                 browserTabs: [SavedBrowserTab(
                     id: browserId,
-                    url: URL(string: "https://example.com")!
+                    url: #require(URL(string: "https://example.com"))
                 )],
                 tabOrder: [.window(index: 0), .window(index: 1), .browser(id: browserId)],
                 rightSide: [.window(index: 1), .browser(id: browserId)],
@@ -370,9 +438,9 @@
 
         @Test("SavedFolderLayout survives a JSON round trip")
         func codableRoundTrip() throws {
-            let layout = SavedFolderLayout(
+            let layout = try SavedFolderLayout(
                 fileTabs: [SavedFileTab(id: UUID(), path: "/p/a", directoryPath: "/p")],
-                browserTabs: [SavedBrowserTab(id: UUID(), url: URL(string: "https://x.io")!)],
+                browserTabs: [SavedBrowserTab(id: UUID(), url: #require(URL(string: "https://x.io")))],
                 tabOrder: [.window(index: 2), .fileExplorer, .git],
                 rightSide: [.git],
                 selectedLeft: nil,

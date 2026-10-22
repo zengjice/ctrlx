@@ -57,6 +57,9 @@ struct TerminalPasteTransportTests {
                     if case let .pasteTerminalText(paste) = command.command {
                         #expect(paste.text == "first\nsecond\n")
                     }
+                    if case let .expandCodexQuestions(question) = command.command {
+                        #expect(question.expectedQuestionID == "session:call")
+                    }
                     events.append("input-start")
                     for await _ in inputGate {
                         break
@@ -83,7 +86,7 @@ struct TerminalPasteTransportTests {
                 let frameCount = await relay.encryptedFrames
                 let inputTask = Task {
                     if questions {
-                        await viewer.sendCommand(ExpandCodexQuestions(expectedCount: 1), paneId: "%7")
+                        await viewer.sendCommand(ExpandCodexQuestions(expectedCount: 1, expectedQuestionID: "session:call"), paneId: "%7")
                     } else {
                         await viewer.sendCommand(PasteTerminalText(text: "first\nsecond\n"), paneId: "%7")
                     }
@@ -154,6 +157,184 @@ struct TerminalPasteTransportTests {
                     releaseFile.yield()
                     #expect(await fileTask.value)
                     #expect(events.last == "file-end")
+                }
+                if !questions {
+                    var legacyDrop: CommandMessage?
+                    host.onCommand = { command in
+                        legacyDrop = command
+                        return .success(for: command.id)
+                    }
+                    let imageDrop = SendDroppedFiles(files: [.init(name: "image.png", data: Data([1, 2, 3]))])
+                    let legacyBinding = viewer.workspaceInputState.binding(paneID: "%7")
+                    #expect(try await viewer.sendCommand(imageDrop, paneId: "%7", inputBinding: legacyBinding).get().success)
+                    #expect(legacyDrop?.command == imageDrop.commandType)
+                    #expect(legacyDrop?.expectedWorkspacePane == nil)
+                    let responses = LockIsolated<[AgentResponseSubmissionMessage]>([])
+                    host.onAgentResponseSubmission = { response in responses.withValue { $0.append(response) } }
+                    #expect(await viewer.submitAgentResponse(sessionId: "%7", pluginId: "echo", requestId: "legacy", response: .prompt(text: "old Host")))
+                    try await waitUntil { responses.value.count == 1 }
+                    #expect(responses.value.first?.expectedWorkspacePane == nil)
+                    let hostID = UUID()
+                    let original = WorkspacePaneIdentity(serverID: "10:100", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+                    let oldState = SessionStateMessage(
+                        pairId: "", paneStates: ["%7": .init(paneId: "%7", sessionName: "input", tmuxWindowId: "@1", workspaceIdentity: original)],
+                        supportsTerminalPaste: true, supportsCodexQuestionAcknowledgement: true, supportsTerminalFit: true,
+                        workspaceIdentity: .init(hostID: hostID, serverID: original.serverID), supportsWorkspaceInputIdentity: true
+                    )
+                    host.onSessionStateRequest = { oldState }
+                    await host.pushSessionState()
+                    try await waitUntil { viewer.workspaceInputState.catalog?.scope.serverID == original.serverID }
+                    let editorBinding = viewer.workspaceInputState.binding(paneID: "%7")
+                    let windowBinding = viewer.workspaceInputState.windowBinding(target: "@1")
+                    let sessionBinding = viewer.workspaceInputState.sessionBinding(name: "input")
+                    #expect(await viewer.submitAgentResponse(sessionId: "%7", pluginId: "echo", requestId: "original", response: .prompt(text: "original"), inputBinding: editorBinding))
+                    try await waitUntil { responses.value.count == 2 }
+                    #expect(responses.value.last?.expectedWorkspacePane == original)
+                    let (pasteGate, releasePaste) = AsyncStream<Void>.makeStream()
+                    defer { releasePaste.finish() }
+                    var delivered: [CommandMessage] = []
+                    host.onCommand = { command in
+                        delivered.append(command)
+                        if case .pasteTerminalText = command.command {
+                            for await _ in pasteGate {
+                                break
+                            }
+                        }
+                        return .success(for: command.id)
+                    }
+                    let oldQueue = KeystrokeDebouncer(paneId: "%7", relayClient: viewer)
+                    defer { oldQueue.cancelAll() }
+                    var queuedQuestionResult: Bool?
+                    oldQueue.enqueuePasteText("before-restart")
+                    oldQueue.enqueueImmediately([.text("must-not-cross-restart")])
+                    oldQueue.enqueueCodexQuestionExpansion(expectedCount: 1) { queuedQuestionResult = $0 }
+                    try await waitUntil { delivered.count == 1 }
+                    #expect(delivered.first?.expectedWorkspacePane == original)
+                    var restored = original
+                    restored.serverID = "20:200"
+                    let newState = SessionStateMessage(
+                        pairId: "", paneStates: ["%7": .init(paneId: "%7", sessionName: "input", tmuxWindowId: "@1", workspaceIdentity: restored)],
+                        supportsTerminalPaste: true, supportsCodexQuestionAcknowledgement: true, supportsTerminalFit: true,
+                        workspaceIdentity: .init(hostID: hostID, serverID: restored.serverID), supportsWorkspaceInputIdentity: true
+                    )
+                    host.onSessionStateRequest = { newState }
+                    await host.pushSessionState()
+                    try await waitUntil { viewer.workspaceInputState.catalog?.scope.serverID == restored.serverID }
+                    #expect(await !viewer.submitAgentResponse(sessionId: "%7", pluginId: "echo", requestId: "original", response: .prompt(text: "must not send"), inputBinding: editorBinding))
+                    #expect(responses.value.count == 2)
+                    #expect(await viewer.submitAgentResponse(sessionId: "%7", pluginId: "echo", requestId: "fresh", response: .prompt(text: "restored")))
+                    try await waitUntil { responses.value.count == 3 }
+                    #expect(responses.value.last?.expectedWorkspacePane == restored)
+                    releasePaste.yield()
+                    try await waitUntil { queuedQuestionResult != nil }
+                    #expect(queuedQuestionResult == false)
+                    #expect(delivered.count == 1)
+                    let freshQueue = KeystrokeDebouncer(paneId: "%7", relayClient: viewer)
+                    defer { freshQueue.cancelAll() }
+                    freshQueue.enqueueImmediately([.text("after-restart")])
+                    try await waitUntil { delivered.count == 2 }
+                    #expect(delivered.last?.expectedWorkspacePane == restored)
+
+                    let staleStart = await viewer.sendCommand(StartTerminalStream(leaseId: UUID()), paneId: "%7", inputBinding: editorBinding)
+                    if case .success = staleStart {
+                        Issue.record("Stale stream start crossed the Host restart")
+                    }
+                    #expect(delivered.count == 2)
+
+                    let editorID = UUID()
+                    let oldSubmit = await viewer.sendCommand(SubmitEditorContent(content: "stale editor", expectedSessionID: editorID), paneId: "%7", inputBinding: editorBinding)
+                    let oldCancel = await viewer.sendCommand(CancelEditorSession(expectedSessionID: editorID), paneId: "%7", inputBinding: editorBinding)
+                    if case .success = oldSubmit {
+                        Issue.record("Stale editor submit crossed the Host restart")
+                    }
+                    if case .success = oldCancel {
+                        Issue.record("Stale editor cancel crossed the Host restart")
+                    }
+                    #expect(delivered.count == 2)
+                    let freshSubmit = await viewer.sendCommand(SubmitEditorContent(content: "current editor", expectedSessionID: editorID), paneId: "%7")
+                    if case let .failure(error) = freshSubmit {
+                        Issue.record("Current editor rejected: \(error)")
+                    }
+                    #expect(delivered.last?.expectedWorkspacePane == restored)
+                    #expect(delivered.last?.command == SubmitEditorContent(content: "current editor", expectedSessionID: editorID).commandType)
+
+                    let streamLease = UUID()
+                    let freshStart = await viewer.sendCommand(StartTerminalStream(leaseId: streamLease), paneId: "%7")
+                    if case let .failure(error) = freshStart {
+                        Issue.record("Current stream rejected: \(error)")
+                    }
+                    #expect(delivered.last?.expectedWorkspacePane == restored)
+                    #expect(delivered.last?.command == StartTerminalStream(leaseId: streamLease).commandType)
+
+                    let beforeActions = delivered.count
+                    let forkSource = try #require(AgentForkSource(pane: .init(
+                        paneId: "%7", sessionName: "input", tmuxWindowId: "@1", currentPath: "/tmp",
+                        agentSession: .init(paneId: "%7", pluginID: "codex"), claudeSessionID: UUID().uuidString,
+                        workspaceIdentity: original
+                    )))
+                    let actions: [(CommandType, String, ViewerWorkspaceInputBinding)] = [
+                        (imageDrop.commandType, "%7", editorBinding),
+                        (SetYoloMode(enabled: true).commandType, "%7", editorBinding),
+                        (MarkHandled().commandType, "%7", editorBinding),
+                        (SplitTmuxPane(direction: .horizontal).commandType, "%7", editorBinding),
+                        (SelectTmuxPane().commandType, "%7", editorBinding),
+                        (SelectTmuxWindow().commandType, "input:0", windowBinding),
+                        (SetWindowName(windowId: "@1", name: "renamed").commandType, "", windowBinding),
+                        (RenameTmuxSession(sessionName: "input", newName: "renamed").commandType, "", sessionBinding),
+                        (SetSessionDescription(sessionName: "input", description: "description").commandType, "", sessionBinding),
+                        (SetSessionColor(sessionName: "input", color: .blue).commandType, "", sessionBinding),
+                        (SetSessionEmoji(sessionName: "input", emoji: "🌿").commandType, "", sessionBinding),
+                        (SetSessionState(sessionName: "input", state: .waiting).commandType, "", sessionBinding),
+                        (MoveTmuxWindows(sessionName: "input", windowIds: ["@1"]).commandType, "", sessionBinding),
+                        (CreateTmuxWindow(sessionName: "input").commandType, "", sessionBinding),
+                        (PrepareAgentFork(source: forkSource).commandType, "", editorBinding),
+                        (ForkAgentSession(source: forkSource).commandType, "", editorBinding),
+                        (SetSharedTerminalLayout(sessionName: "input", leftWindowId: "@1").commandType, "", sessionBinding),
+                        (ResizeTmuxPane(width: 100, height: 30, userInitiated: true).commandType, "@1", windowBinding),
+                        (CheckRunningProcesses(target: .window("@1")).commandType, "", windowBinding),
+                        (CheckRunningProcesses(target: .session("input")).commandType, "", sessionBinding),
+                        (KillTmuxWindow(windowId: "@1").commandType, "", windowBinding),
+                        (KillTmuxSession(sessionName: "input").commandType, "", sessionBinding),
+                    ]
+                    for (command, target, binding) in actions {
+                        #expect(await !viewer.send(command, paneId: target, inputBinding: binding))
+                    }
+                    #expect(delivered.count == beforeActions)
+                    for (index, action) in actions.enumerated() {
+                        #expect(await viewer.send(action.0, paneId: action.1))
+                        try await waitUntil { delivered.count == beforeActions + index + 1 }
+                        #expect(delivered.last?.expectedWorkspacePane == restored)
+                        #expect(delivered.last?.command == action.0)
+                    }
+
+                    for success in [false, true] {
+                        let (completionGate, complete) = AsyncStream<Void>.makeStream()
+                        defer { complete.finish() }
+                        var received = false
+                        var acknowledged: Bool?
+                        host.onCommand = { command in
+                            #expect(command.expectedWorkspacePane == restored)
+                            #expect(command.command.requiresResponse)
+                            received = true
+                            for await _ in completionGate {
+                                break
+                            }
+                            return success ? .success(for: command.id) : .failure(for: command.id, error: "Terminal changed")
+                        }
+                        let submission = Task {
+                            let result = await viewer.sendCommand(SendKeystroke([.text("draft"), .enter], acknowledgeCompletion: true), paneId: "%7")
+                            switch result {
+                            case let .success(response): acknowledged = response.success
+                            case .failure: acknowledged = false
+                            }
+                        }
+                        try await waitUntil { received }
+                        try await Task.sleep(for: .milliseconds(50))
+                        #expect(acknowledged == nil)
+                        complete.yield()
+                        await submission.value
+                        #expect(acknowledged == success)
+                    }
                 }
                 #expect(await relay.unexpectedTypes.isEmpty)
                 #expect(await relay.errors.isEmpty)
@@ -227,6 +408,10 @@ struct TerminalPasteTransportTests {
                 try await waitUntil { host.isViewerConnected && viewer.isHostConnected && receivedState.value }
                 let frameCount = await relay.encryptedFrames
                 #expect(!viewer.hostSupportsCodexQuestionAcknowledgement)
+                let draft = await viewer.sendCommand(SendKeystroke([.text("draft")], acknowledgeCompletion: true), paneId: "%7")
+                if case .success = draft {
+                    Issue.record("Old Host accepted acknowledged draft submission")
+                }
                 let questions = await viewer.sendCommand(ExpandCodexQuestions(expectedCount: 1), paneId: "%7")
                 if case .success = questions {
                     Issue.record("Old Host accepted acknowledged question expansion")

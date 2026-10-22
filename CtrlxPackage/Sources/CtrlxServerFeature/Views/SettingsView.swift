@@ -202,6 +202,16 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            Section("Workspace Recovery") {
+                Picker("Restore at startup", selection: $settings.workspaceRecoveryMode) {
+                    Text("Layout, terminals and Agent conversations").tag(WorkspaceRecoveryMode.layoutAndAgents)
+                    Text("Layout and terminals only").tag(WorkspaceRecoveryMode.layoutOnly)
+                    Text("Off").tag(WorkspaceRecoveryMode.disabled)
+                }
+                Text("Restores saved workspaces after a restart. Existing tmux sessions stay running. Terminal commands and drafts are never sent automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("tmux") {
                 HStack {
                     TextField("Path to tmux", text: $settings.tmuxPath)
@@ -216,6 +226,16 @@ struct GeneralSettingsView: View {
                     TextField("Default", text: $settings.tmuxSocket)
                         .help("Leave empty to use the default tmux socket")
                 }
+            }
+
+            Section {
+                Toggle("Debug Mode", isOn: $settings.debugModeEnabled)
+                    .accessibilityIdentifier("debug-mode-toggle")
+            } header: {
+                Text("Diagnostics")
+            } footer: {
+                Text("Show additional diagnostic information across CtrlX. Off by default on this device.")
+                Text("On Mac, browser recording diagnostics are saved locally while enabled. Turning this off stops collection and keeps existing logs.")
             }
 
             Section("Updates") {

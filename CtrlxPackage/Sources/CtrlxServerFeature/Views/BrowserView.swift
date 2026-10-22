@@ -26,6 +26,7 @@ struct BrowserTab: Identifiable, Equatable {
     var url: URL
     var displayTitle: String?
     var originWindowId: String?
+    var sourcePaneID: String?
     var parentTabId: UUID?
     /// Native Chromium tabs (agent-owned or human-only) are transient. Never
     /// restore them as WebKit pages or grant a new Codex control over old tabs.
@@ -40,12 +41,14 @@ struct BrowserTab: Identifiable, Equatable {
         url: URL,
         displayTitle: String? = nil,
         originWindowId: String? = nil,
+        sourcePaneID: String? = nil,
         parentTabId: UUID? = nil
     ) {
         self.id = id
         self.url = url
         self.displayTitle = displayTitle
         self.originWindowId = originWindowId
+        self.sourcePaneID = sourcePaneID
         self.parentTabId = parentTabId
     }
 
@@ -1098,15 +1101,29 @@ struct BrowserURLConfirmationView: View {
                 }
             }
 
-            HStack {
-                Button("In Host Browser") {
-                    onResolve(.inApp, rememberScope)
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!BrowserWebURL.isSupported(url))
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Button("In Host Browser") {
+                        onResolve(.inApp, rememberScope)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!BrowserWebURL.isSupported(url))
 
-                Button("In This Device's Browser") {
-                    onResolve(.defaultBrowser, rememberScope)
+                    Text("⌘-click a terminal link")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Command-click a terminal link")
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Button("In This Device's Browser") {
+                        onResolve(.defaultBrowser, rememberScope)
+                    }
+
+                    Text("⌥-click a terminal link")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Option-click a terminal link")
                 }
 
                 Button("Cancel", role: .cancel) {

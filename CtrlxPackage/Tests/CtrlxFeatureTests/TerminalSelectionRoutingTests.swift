@@ -11,6 +11,258 @@
     @MainActor
     @Suite("Terminal input-row selection routing", .serialized)
     struct TerminalSelectionRoutingTests {
+        @Test("Plain terminal content toggles the keyboard with custom prompts and drafts")
+        func plainTerminalKeyboard() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            view.scrollingAgentID = nil
+            feed(view, "output\r\n(base) Office ➜  project echo draft")
+            var requests: [Bool] = []
+            var keys: [TmuxKey] = []
+            var raw: [Data] = []
+            view.onInput = { keys += $0 }
+            view.onRawInput = { raw.append($0) }
+            view.onKeyboardRequest = { [weak view] value in
+                requests.append(value)
+                view?.updateInput(isEnabled: true, keyboardRequested: value)
+            }
+            for row in [0, 1, 3, 1] {
+                view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 4.5, y: view.cellDimension.height * (CGFloat(row) + 0.5)))
+                await view.inputFocusUpdates.pendingTask?.value
+            }
+            #expect(requests == [true, false, true, false])
+            #expect(keys.isEmpty && raw.isEmpty)
+            feed(view, "\u{1b}[?1049hmenu\u{1b}[?1003h\u{1b}[?1006h")
+            view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 4.5, y: view.cellDimension.height * 3.5))
+            #expect(requests == [true, false, true, false])
+            #expect(!raw.isEmpty)
+        }
+
+        @Test("Empty input taps toggle keyboard intent without emitting input", arguments: [false, true])
+        func emptyInputKeyboard(mouseMode: Bool) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "body\r\n\u{1b}[48;5;236m› Ask Codex to do anything\u{1b}[K\u{1b}[2;3H")
+            if mouseMode {
+                feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+            }
+            let proxy = try inputProxy(in: window)
+            var requested = false
+            var raw: [Data] = []
+            var keys: [TmuxKey] = []
+            view.onRawInput = { raw.append($0) }
+            view.onInput = { keys += $0 }
+            view.onKeyboardRequest = { [weak view] value in
+                requested = value
+                view?.updateInput(isEnabled: true, keyboardRequested: requested)
+            }
+            for expected in [true, false] {
+                view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 10.5, y: view.cellDimension.height * 1.5))
+                await view.inputFocusUpdates.pendingTask?.value
+                #expect(requested == expected)
+                #expect(proxy.isFirstResponder)
+                #expect(keys.isEmpty && raw.isEmpty)
+            }
+        }
+
+        @Test("Draft taps reopen the keyboard while retaining cursor navigation", arguments: [false, true])
+        func draftKeyboardRouting(mouseMode: Bool) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "body\r\n\u{1b}[48;5;236m› hello world\u{1b}[K")
+            if mouseMode {
+                feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+            }
+            let proxy = try inputProxy(in: window)
+            var requests: [Bool] = []
+            var keys: [TmuxKey] = []
+            var raw: [Data] = []
+            view.onKeyboardRequest = { [weak view] value in
+                requests.append(value)
+                view?.updateInput(isEnabled: true, keyboardRequested: value)
+            }
+            view.onInput = { keys += $0 }
+            view.onRawInput = { raw.append($0) }
+            // Tapping output must not reveal the keyboard, including mouse mode.
+            view.handleContentTap(at: CGPoint(x: view.cellDimension.width * 1.5, y: view.cellDimension.height * 0.5))
+            #expect(requests.isEmpty)
+            raw = []
+            let point = CGPoint(x: view.cellDimension.width * 4.5, y: view.cellDimension.height * 1.5)
+            view.handleContentTap(at: point)
+            await view.inputFocusUpdates.pendingTask?.value
+            #expect(requests == [true])
+            #expect(mouseMode ? !raw.isEmpty : !keys.isEmpty)
+            #expect(proxy.isFirstResponder && proxy.inputView == nil)
+            // Repeated cursor taps keep an open keyboard open.
+            view.handleContentTap(at: point)
+            await view.inputFocusUpdates.pendingTask?.value
+            #expect(requests == [true])
+            view.updateInput(isEnabled: true, keyboardRequested: false)
+            await view.inputFocusUpdates.pendingTask?.value
+            view.handleContentTap(at: point)
+            await view.inputFocusUpdates.pendingTask?.value
+            #expect(requests == [true, true])
+            #expect(proxy.isFirstResponder && proxy.inputView == nil)
+            keys = []
+            proxy.insertText("X")
+            #expect(keys == [.text("X")])
+            if !mouseMode {
+                keys = []
+                tap(view, count: 2, column: 4, row: 1)
+                #expect(requests == [true, true] && keys.isEmpty && !view.selectionActive)
+                #expect(proxy.isFirstResponder)
+            }
+        }
+
+        @Test("Empty-input taps respect IME, inactive and selection guards")
+        func emptyInputGuards() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "body\r\n> ")
+            let proxy = try inputProxy(in: window)
+            var toggles = 0
+            view.onKeyboardRequest = { _ in toggles += 1 }
+            let point = CGPoint(x: view.cellDimension.width * 5.5, y: view.cellDimension.height * 1.5)
+            proxy.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0))
+            view.handleContentTap(at: point)
+            #expect(toggles == 0)
+            proxy.unmarkText()
+            view.updateInput(isEnabled: false, keyboardRequested: false)
+            await view.inputFocusUpdates.pendingTask?.value
+            view.handleContentTap(at: point)
+            #expect(toggles == 0)
+            view.updateInput(isEnabled: true, keyboardRequested: false)
+            await view.inputFocusUpdates.pendingTask?.value
+            tap(view, count: 2, column: 1, row: 0)
+            view.handleContentTap(at: point)
+            #expect(toggles == 0)
+        }
+
+        @Test("Questions padding and multiline answers open and keep the keyboard open", arguments: [false, true])
+        func questionAnswerKeyboard(mouseMode: Bool) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            var requests: [Bool] = []
+            var keys: [TmuxKey] = []
+            view.onInput = { keys += $0 }
+            view.onRawInput = { _ in }
+            view.onKeyboardRequest = { [weak view] value in
+                requests.append(value)
+                view?.updateInput(isEnabled: true, keyboardRequested: value)
+            }
+            for draft in ["", "Type your answer (optional)", "first line"] {
+                paintQuestionAnswer(view, draft: draft, multiline: draft == "first line")
+                if mouseMode {
+                    feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+                }
+                view.updateInput(isEnabled: true, keyboardRequested: false)
+                await view.inputFocusUpdates.pendingTask?.value
+                requests = []
+                for row in [4, 5, 6, 7] {
+                    view.handleContentTap(at: CGPoint(
+                        x: 20.5 * view.cellDimension.width, y: (CGFloat(row) + 0.5) * view.cellDimension.height
+                    ))
+                    await view.inputFocusUpdates.pendingTask?.value
+                }
+                #expect(requests == [true])
+                #expect(proxy.isFirstResponder && proxy.inputView == nil)
+                keys = []
+                proxy.insertText("中")
+                #expect(keys == [.text("中")])
+            }
+        }
+
+        @Test("Highlighted options preserve notes keyboard handling", arguments: [false, true], [false, true])
+        func questionNotesKeyboard(inverse: Bool, mouseMode: Bool) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            var requests: [Bool] = []
+            var keys: [TmuxKey] = []
+            view.onInput = { keys += $0 }
+            view.onRawInput = { _ in }
+            view.onKeyboardRequest = { [weak view] value in
+                requests.append(value)
+                view?.updateInput(isEnabled: true, keyboardRequested: value)
+            }
+            for multiline in [false, true] {
+                let style = inverse ? "\u{1b}[0;7m" : "\u{1b}[48;2;190;210;255m"
+                paintQuestionAnswer(view, draft: multiline ? "first line" : "Add notes", multiline: multiline, optionStyle: style)
+                if mouseMode {
+                    feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+                }
+                view.updateInput(isEnabled: true, keyboardRequested: false)
+                await view.inputFocusUpdates.pendingTask?.value
+                requests = []
+                for row in [2, 5, 6, 11, 12] {
+                    view.handleContentTap(at: CGPoint(x: 20.5 * view.cellDimension.width, y: (CGFloat(row) + 0.5) * view.cellDimension.height))
+                }
+                #expect(requests.isEmpty)
+                for row in 7...10 {
+                    view.handleContentTap(at: CGPoint(x: 20.5 * view.cellDimension.width, y: (CGFloat(row) + 0.5) * view.cellDimension.height))
+                    await view.inputFocusUpdates.pendingTask?.value
+                }
+                #expect(requests == [true])
+                #expect(proxy.isFirstResponder && proxy.inputView == nil)
+                keys = []
+                proxy.insertText("中")
+                #expect(keys == [.text("中")])
+            }
+        }
+
+        @Test("Questions keyboard requests retain cursor, redraw, IME and input guards")
+        func questionKeyboardGuards() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            paintQuestionAnswer(view)
+            feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+            let proxy = try inputProxy(in: window)
+            var requests: [Bool] = []
+            view.onRawInput = { _ in }
+            view.onKeyboardRequest = { requests.append($0) }
+            let point = CGPoint(x: 20.5 * view.cellDimension.width, y: 7.5 * view.cellDimension.height)
+            feed(view, "\u{1b}[?25l")
+            view.handleContentTap(at: point)
+            feed(view, "\u{1b}[?25h\u{1b}[?2026h")
+            view.handleContentTap(at: point)
+            feed(view, "\u{1b}[?2026l")
+            proxy.setMarkedText("zhong", selectedRange: .init(location: 5, length: 0))
+            view.handleContentTap(at: point)
+            proxy.unmarkText()
+            view.updateInput(isEnabled: false, keyboardRequested: false)
+            await view.inputFocusUpdates.pendingTask?.value
+            view.handleContentTap(at: point)
+            view.updateInput(isEnabled: true, keyboardRequested: false)
+            await view.inputFocusUpdates.pendingTask?.value
+            view.scrollingAgentID = "claude-code"
+            view.handleContentTap(at: point)
+            view.scrollingAgentID = "codex"
+            // Header, question and footer remain outside the answer.
+            for row in [2, 3, 8, 9] {
+                view.handleContentTap(at: CGPoint(x: point.x, y: (CGFloat(row) + 0.5) * view.cellDimension.height))
+            }
+            tap(view, count: 2, column: 2, row: 0)
+            #expect(view.selectionActive)
+            view.handleContentTap(at: point)
+            #expect(requests.isEmpty)
+        }
+
+        @Test("Links inside Questions keep their local action instead of opening the keyboard")
+        func questionAnswerLink() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            paintQuestionAnswer(view, draft: "https://example.com")
+            let url = try #require(URL(string: "https://example.com"))
+            var opened: [URL] = []
+            var requests: [Bool] = []
+            view.onOpenURL = { opened.append($0) }
+            view.onKeyboardRequest = { requests.append($0) }
+            view.handleContentTap(at: CGPoint(x: 8.5 * view.cellDimension.width, y: 5.5 * view.cellDimension.height))
+            #expect(opened == [url])
+            #expect(requests.isEmpty)
+        }
+
         @Test("The whole current input row opts out, including blank cells and wide glyphs")
         func inputRow() async throws {
             let (window, view) = await makeView()
@@ -510,6 +762,20 @@
             #expect(sent.count == count)
         }
 
+        @Test("IME composition invalidates pending dictation before committing terminal text")
+        func compositionInvalidatesVoice() async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let proxy = try inputProxy(in: window)
+            var invalidations = 0
+            var keys: [TmuxKey] = []
+            view.onCompositionStart = { invalidations += 1 }
+            view.onInput = { keys += $0 }
+            proxy.setMarkedText("zhong", selectedRange: .init(location: 5, length: 0))
+            #expect(invalidations == 1)
+            #expect(keys.isEmpty)
+        }
+
         @Test("Cross-row taps never send keys for body, padding, mouse mode, IME or inactive input")
         func multilineInputGates() async throws {
             let (window, view) = await makeView()
@@ -538,7 +804,9 @@
             let (window, view) = await makeView()
             defer { close(window, view) }
             if scrollback {
-                for _ in 0..<100 { feed(view, "history\r\n") }
+                for _ in 0..<100 {
+                    feed(view, "history\r\n")
+                }
             }
             paintMultilineDraft(view)
             feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
@@ -549,8 +817,10 @@
             view.onInput = { keys.append($0) }
             view.onRawInput = { raw.append($0) }
             let row = view.getTerminal().buffer.yDisp + 1
-            view.handleContentTap(at: CGPoint(x: 5.5 * view.cellDimension.width,
-                                             y: (CGFloat(row) + 0.5) * view.cellDimension.height))
+            view.handleContentTap(at: CGPoint(
+                x: 5.5 * view.cellDimension.width,
+                y: (CGFloat(row) + 0.5) * view.cellDimension.height
+            ))
             #expect(raw == [Data("\u{1b}[<0;6;2M\u{1b}[<0;6;2m".utf8)])
             #expect(keys.isEmpty)
             // Starting a fresh keyboard context must not delete the old draft.
@@ -579,7 +849,9 @@
         func mouseClickGates() async throws {
             let (window, view) = await makeView()
             defer { close(window, view) }
-            for _ in 0..<100 { feed(view, "history\r\n") }
+            for _ in 0..<100 {
+                feed(view, "history\r\n")
+            }
             paintMultilineDraft(view)
             feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
             let proxy = try inputProxy(in: window)
@@ -608,8 +880,10 @@
             var raw: [Data] = []
             view.onInput = { keys.append($0) }
             view.onRawInput = { raw.append($0) }
-            view.handleContentTap(at: CGPoint(x: 7.5 * view.cellDimension.width,
-                                             y: 2.5 * view.cellDimension.height))
+            view.handleContentTap(at: CGPoint(
+                x: 7.5 * view.cellDimension.width,
+                y: 2.5 * view.cellDimension.height
+            ))
             #expect(keys == [[.right, .right, .right]])
             #expect(raw.isEmpty)
         }
@@ -636,6 +910,36 @@
 
         private func feed(_ view: InteractiveTerminalView, _ text: String) {
             view.feedTerminalData(Array(text.utf8)[...])
+        }
+
+        private func paintQuestionAnswer(_ view: InteractiveTerminalView, draft: String = "Type your answer (optional)", multiline: Bool = false, optionStyle: String? = nil) {
+            feed(view, "\u{1b}[0m\u{1b}[2J\u{1b}[1;1Houtput")
+            var rows = [
+                "",
+                "  Question 1/1 (1 unanswered)",
+                "  Share details.",
+                "",
+                "  › " + draft,
+                multiline ? "    second line" : "",
+                "",
+                "  enter to submit answer",
+                "  esc to interrupt",
+                "",
+            ]
+            if optionStyle != nil {
+                rows.insert(contentsOf: ["", "  › 1. Selected option", "    2. Another option"], at: 3)
+            }
+            for (index, text) in rows.enumerated() {
+                var content = text
+                if index == 4, let optionStyle {
+                    content = "  " + optionStyle + String(text.dropFirst(2)).padding(toLength: view.getTerminal().cols - 4, withPad: " ", startingAt: 0)
+                        + "\u{1b}[0;48;5;236m  "
+                }
+                feed(view, "\u{1b}[\(index + 2);1H\u{1b}[48;5;236m\u{1b}[2K\(content)")
+            }
+            let cursorRow = (multiline ? 7 : 6) + (optionStyle == nil ? 0 : 3)
+            feed(view, "\u{1b}[0m\u{1b}[\(cursorRow);5H\u{1b}[?25h")
+            view.scroll(toPosition: 1)
         }
 
         private func paintMultilineDraft(_ view: InteractiveTerminalView) {
@@ -694,6 +998,7 @@
             let viewport = UIScrollView(frame: window.bounds)
             controller.view.addSubview(viewport)
             let terminal = InteractiveTerminalView(frame: CGRect(x: 0, y: 0, width: 400, height: 300), font: nil)
+            terminal.scrollingAgentID = "codex"
             viewport.addSubview(terminal)
             terminal.attachInputProxy(to: viewport)
             window.makeKeyAndVisible()
@@ -765,14 +1070,16 @@
     }
 
     @MainActor
-    private final class CompletedTerminalMenuTap: UITapGestureRecognizer {
+    final private class CompletedTerminalMenuTap: UITapGestureRecognizer {
         var point = CGPoint.zero
 
         override var state: UIGestureRecognizer.State {
             get { .ended }
-            set {}
+            set { }
         }
 
-        override func location(in view: UIView?) -> CGPoint { point }
+        override func location(in view: UIView?) -> CGPoint {
+            point
+        }
     }
 #endif

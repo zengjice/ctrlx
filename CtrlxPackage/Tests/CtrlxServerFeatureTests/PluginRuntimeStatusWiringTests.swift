@@ -17,6 +17,31 @@
     @MainActor
     @Suite
     struct PluginRuntimeStatusWiringTests {
+        @Test("Session state menus reject replaced sessions while allowing changed child panes")
+        func sessionStateIdentity() {
+            let manager = makeWindowManager()
+            let old = WorkspacePaneIdentity(serverID: "10:100", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            var current = old
+            current.sessionID = UUID()
+            current.windowID = UUID()
+            current.paneID = UUID()
+            manager.updatePaneStates(from: [PaneInfo(
+                paneId: "%7", target: "work:0.0", sessionName: "work",
+                windowIndex: 0, paneIndex: 0, command: "zsh", currentPath: "/tmp",
+                width: 80, height: 24, isActive: true, workspaceIdentity: current
+            )])
+            #expect(!manager.setCLISessionState(.waiting, forSession: "work", expectedWorkspacePane: old))
+            #expect(manager.paneStates["%7"]?.cliSessionState == nil)
+            var binding = current
+            binding.windowID = UUID()
+            binding.paneID = UUID()
+            #expect(manager.setCLISessionState(.waiting, forSession: "work", expectedWorkspacePane: binding))
+            #expect(manager.paneStates["%7"]?.cliSessionState == .waiting)
+            binding.serverID = "20:200"
+            #expect(!manager.setCLISessionState(.idle, forSession: "work", expectedWorkspacePane: binding))
+            #expect(manager.paneStates["%7"]?.cliSessionState == .waiting)
+        }
+
         // MARK: - Helpers
 
         /// A `MirrorWindowManager` built with throwaway collaborators. The status

@@ -24,7 +24,16 @@ struct TerminalStreamOwnership: Equatable, Sendable {
     private var viewerLeases: [String: Lease]
 
     init(viewerId: String, leaseId: UUID? = nil) {
-        viewerLeases = [viewerId: Lease(leaseId)]
+        self.viewerLeases = [viewerId: Lease(leaseId)]
+    }
+
+    var leaseIDs: [String: UUID] {
+        viewerLeases.compactMapValues { lease in
+            if case let .identified(id) = lease {
+                return id
+            }
+            return nil
+        }
     }
 
     var count: Int {
@@ -37,6 +46,10 @@ struct TerminalStreamOwnership: Equatable, Sendable {
 
     func contains(_ viewerId: String) -> Bool {
         viewerLeases[viewerId] != nil
+    }
+
+    func contains(_ viewerId: String, leaseId: UUID?) -> Bool {
+        viewerLeases[viewerId] == Lease(leaseId)
     }
 
     /// Installs the viewer's latest lease. Returns true when ownership changed.

@@ -3,16 +3,18 @@ import Testing
 
 @Suite("Terminal single-tap ownership")
 struct TerminalContentTapRoutingTests {
-    @Test("Selection, links and input gates precede both input routes", arguments: 0..<32)
+    @Test("Selection, links and input gates precede keyboard toggling and remote input", arguments: 0..<128)
     func routing(combination: Int) {
         let selected = combination & 1 != 0
         let link = combination & 2 != 0
         let enabled = combination & 4 != 0
         let mouse = combination & 8 != 0
         let live = combination & 16 != 0
+        let empty = combination & 32 != 0
+        let plain = combination & 64 != 0
         let action = TerminalContentTapRouting.action(
             selectionActive: selected, hasLink: link, canSendInput: enabled,
-            mouseModeActive: mouse, isLiveScreen: live
+            mouseModeActive: mouse, isLiveScreen: live, isEmptyInputArea: empty, isPlainTerminal: plain
         )
         if selected {
             #expect(action == .ignore)
@@ -20,9 +22,70 @@ struct TerminalContentTapRoutingTests {
             #expect(action == .openLink)
         } else if !enabled || !live {
             #expect(action == .ignore)
+        } else if empty || (plain && !mouse) {
+            #expect(action == .toggleKeyboard)
         } else {
             #expect(action == (mouse ? .mouseClick : .cursorNavigation))
         }
+    }
+
+    @Test("An empty prompt and Codex placeholder toggle, but real or unknown text does not", arguments: [false, true])
+    func emptyPrompt(mouse: Bool) {
+        for text in ["› ", "› Ask Codex to do anything", "> ", "❯ "] {
+            #expect(isEmpty([line(text)], cursorColumn: 2, mouse: mouse))
+        }
+        for text in ["› draft", "› 未发送的内容", "› other placeholder", "› Ask Codex to do anything else"] {
+            #expect(!isEmpty([line(text)], cursorColumn: 2, mouse: mouse))
+        }
+        #expect(!isEmpty([line("› draft")], cursorColumn: 7, mouse: mouse))
+        #expect(!isEmpty([line("› draft > ")], cursorColumn: 10, mouse: mouse))
+        #expect(!isEmpty([line("")], cursorColumn: 0, mouse: mouse))
+        #expect(isEmpty([line("user@host % ")], cursorColumn: 12, mouse: false))
+        #expect(!isEmpty([line("selected item")], cursorColumn: 2, mouse: true))
+    }
+
+    @Test("Empty shaded padding toggles; output, footer and multiline drafts keep their actions")
+    func boxedInput() {
+        let empty = [line("", shaded: true), line("› Ask Codex to do anything", shaded: true), line("", shaded: true), line("footer")]
+        for row in 0...2 {
+            #expect(TerminalContentTapRouting.isEmptyInputArea(
+                lines: empty, cursor: .init(column: 2, row: 1), tap: .init(column: 15, row: row), mouseModeActive: true
+            ))
+        }
+        #expect(!TerminalContentTapRouting.isEmptyInputArea(
+            lines: empty, cursor: .init(column: 2, row: 1), tap: .init(column: 15, row: 3), mouseModeActive: true
+        ))
+        let multiline = [line("› ", shaded: true), line("  draft on next line", shaded: true)]
+        #expect(!isEmpty(multiline, cursorColumn: 2, mouse: true))
+        #expect(!TerminalContentTapRouting.isEmptyInputArea(
+            lines: [line("› draft", shaded: true), line("", shaded: true)],
+            cursor: .init(column: 0, row: 1), tap: .init(column: 15, row: 1), mouseModeActive: false
+        ))
+    }
+
+    private func isEmpty(_ lines: [TerminalMultilineCursorNavigation.Line], cursorColumn: Int, mouse: Bool) -> Bool {
+        TerminalContentTapRouting.isEmptyInputArea(
+            lines: lines, cursor: .init(column: cursorColumn, row: 0), tap: .init(column: 20, row: 0), mouseModeActive: mouse
+        )
+    }
+
+    @Test("Keyboard reopening recognizes multiline drafts but excludes output and TUI menus", arguments: [false, true])
+    func draftInputArea(mouse: Bool) {
+        let lines = [line("output"), line("› first", shaded: true), line("  second", shaded: true), line("footer")]
+        for row in lines.indices {
+            #expect(TerminalContentTapRouting.isInputArea(
+                lines: lines, cursor: .init(column: 4, row: 2), tap: .init(column: 3, row: row), mouseModeActive: mouse
+            ) == (row == 1 || row == 2))
+        }
+        #expect(!TerminalContentTapRouting.isInputArea(
+            lines: [line("selected menu item")], cursor: .init(column: 5, row: 0),
+            tap: .init(column: 3, row: 0), mouseModeActive: true
+        ))
+    }
+
+    private func line(_ text: String, shaded: Bool = false) -> TerminalMultilineCursorNavigation.Line {
+        let characters = Array(text.padding(toLength: 60, withPad: " ", startingAt: 0))
+        return .init(cells: characters.map { .init(character: $0, width: 1, inputBackground: shaded) })
     }
 }
 
@@ -31,7 +94,7 @@ struct TerminalContentTapRoutingTests {
 
     @Suite("Native terminal mouse click encoding")
     struct TerminalMouseClickTests {
-        @Test("Normal/button/any tracking sends exactly one left press and release", arguments: [1000, 1002, 1003])
+        @Test("Normal/button/any tracking sends exactly one left press and release", arguments: [1_000, 1_002, 1_003])
         func sgrClick(mode: Int) {
             let delegate = Delegate()
             let terminal = Terminal(delegate: delegate, options: .init(cols: 80, rows: 24))
@@ -57,7 +120,9 @@ struct TerminalContentTapRoutingTests {
         func scrollbackCoordinates() {
             let delegate = Delegate()
             let terminal = Terminal(delegate: delegate, options: .init(cols: 80, rows: 24))
-            for _ in 0..<60 { terminal.feed(text: "history\r\n") }
+            for _ in 0..<60 {
+                terminal.feed(text: "history\r\n")
+            }
             terminal.feed(text: "\u{1b}[?1003h\u{1b}[?1006h")
             let liveRow = terminal.buffer.yDisp
             #expect(liveRow > 0)
@@ -113,11 +178,15 @@ struct TerminalContentTapRoutingTests {
             )
         }
 
-        private func bytes(_ strings: String...) -> [[UInt8]] { strings.map { Array($0.utf8) } }
+        private func bytes(_ strings: String...) -> [[UInt8]] {
+            strings.map { Array($0.utf8) }
+        }
 
-        private final class Delegate: TerminalDelegate {
+        final private class Delegate: TerminalDelegate {
             var writes: [[UInt8]] = []
-            func send(source: Terminal, data: ArraySlice<UInt8>) { writes.append(Array(data)) }
+            func send(source: Terminal, data: ArraySlice<UInt8>) {
+                writes.append(Array(data))
+            }
         }
     }
 #endif

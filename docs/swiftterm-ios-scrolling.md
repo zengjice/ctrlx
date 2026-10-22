@@ -85,7 +85,11 @@ swipe, without changing the leading-edge recognizer. Selection disables switchin
 Wide content scrolls normally until the corresponding edge: right drags can
 navigate only at the left edge, and left drags only at the right edge (including
 adjusted content insets). Reaching an edge mid-drag does not switch a Window.
-Keyboard controls, Files and browser tabs are not swipe targets. Selection reuses
+Keyboard controls and Files/browser/simulator content are not Window-swipe targets.
+For pane-linked content, the top title button provides a separate horizontal swipe:
+64 points on release selects the adjacent child in the same pane group, and either
+outer boundary returns to the exact source pane. Tapping the title still opens Tabs.
+This leaves webpage scrolling and Simulator touch input unchanged. Selection reuses
 the window picker path (including cancelling pending creation/fit); no terminal
 resizing, extra stream subscription, Host or Relay change is introduced.
 Refreshing SwiftUI callbacks does not reset a running recognizer or change its
@@ -142,8 +146,8 @@ fixed-delay presentation snippets are **not** the current implementation.
 
 ## Terminal fit and clipboard paste
 
-The top-right toolbar provides **Fit Terminal to Screen**, next to image upload
-and the other session controls, rather than inside the window-title menu. It measures each
+The top-right toolbar provides **Fit Terminal to Screen** alongside the other
+session controls. Image input lives in the bottom **+ / Attachments** menu. Fit measures each
 terminal's available viewport using its actual font cell size, excluding
 telemetry and controls, then combines the pane layout into one window grid.
 Each split is constrained by its smallest proportional child capacity, not a
@@ -192,7 +196,7 @@ list owns the one-shot request and consumes it before sending, even if the
 command fails. Before measurement, leaving the page, disconnecting, manually
 fitting, switching windows or splitting cancels it. There is no fixed delay,
 rendering gate, repeated fitting on rotation/keyboard changes or Relay change.
-Unsupported Hosts keep 120 × 40. Settings → New Session can disable automatic
+Unsupported Hosts keep 120 × 40. Settings → New Session Defaults can disable automatic
 sizing and retain explicit rows/columns; migration preserves legacy customized
 fixed sizes and enables automatic sizing for the old 120 × 40 default.
 
@@ -317,6 +321,14 @@ show/hide, the copy page and exit/re-entry; check for new AttributeGraph cycles.
 
 ## Input toolbar layout
 
+In **Bottom Bar** mode the first control is **+ / Attachments**, replacing the
+keyboard button. It opens the existing Photo Library, image files, Camera and
+Paste Image menu, including the same preview and captured-pane upload flow.
+The image button is removed from the navigation bar in both layout modes.
+The keyboard **Button Position** setting under **Settings → Keyboard & Input**
+is retained: **Top Right** keeps its keyboard/voice controls and shows only Attachments in the bottom row; **Bottom
+Bar** shows the complete input toolbar. The keyboard-on-entry setting is unchanged.
+
 The first-row input controls and SwiftTerm's second-row shortcut accessory share
 the 32-point `TerminalInputControlMetrics.buttonHeight`. Voice is microphone-only
 in the first row, using tap-to-toggle dictation and its accessibility label. Esc is
@@ -325,9 +337,16 @@ it does not auto-repeat. The accessory hides Esc, horizontal arrows (already
 present in the first row) and optional function keys,
 then distributes its remaining controls across the available width. This is a
 presentation configuration only: Ctrl/modifier handling, up/down auto-repeat,
-touch mode, keyboard switching and the input proxy keep their existing paths.
-SwiftTerm's `showsEscapeKey` defaults to `true`; only CtrlX opts out, so other
-consumers retain their existing keyboard. Layout tests cover both configurations.
+keyboard switching and the input proxy keep their existing paths.
+The hand/touch toggle is hidden in CtrlX, and the remaining nine keys share the
+available width without inserting a replacement. **More → Touch Mode** retains
+**Select Text** (default) and **Send Mouse Events** for the focused pane. The
+choice is local to this Viewer/session screen and independent for each pane;
+closed panes are removed. It controls SwiftTerm's multi-tap mouse reporting,
+while CtrlX's single-tap, link and scroll routing remains unchanged.
+SwiftTerm's `showsEscapeKey` and `showsTouchToggle` default to `true`; only CtrlX
+opts out, so other consumers retain their existing keyboard. Layout tests cover
+both configurations.
 
 The extended keyboard (the rightmost keyboard toggle, with Home/End and function
 keys) has a separate six-button row: `⇧←`, `⇧→`, `⇧↑`, `⇧↓`, `⇧Tab`, `⇧Enter`.
@@ -342,24 +361,33 @@ involved; the existing Mac modified-key handling is reused.
 
 ### Tap-to-toggle voice input
 
-The iOS `VoiceInputButton` is a native SwiftUI `Button`, not a zero-distance
+The iOS voice control is a native SwiftUI `Button`, not a zero-distance
 drag gesture. One tap starts dictation; the microphone turns red when recording.
 A second tap finishes recognition/correction; it never sends Return. `Send`
 remains a separate explicit action. A tap while preparing cancels preparation;
 finalization disables repeat taps until the result is ready. Touch and VoiceOver
 use the same action, and context/draft preparation happens only on start.
 
-Terminal voice controls are keyed by host + pane so switching targets cancels
-the old recording instead of forwarding later text to another pane. Disconnect,
-leaving the view/app, or opening the toolbar's phrase/command panel cancels input
-without deleting text already entered. Modern speech startup checks cancellation
+Terminal voice controls share `TerminalVoiceInputSession` with Mac. Live text stays
+in a compact in-page strip (stage, two lines of recent text, and a cancel icon);
+only the finalized result is enqueued once, without Return or backspace. The
+microphone is the sole start/stop control. The preview overlay does not change
+terminal size or first responder. Toolbar/hardware Escape cancels a recording
+before sending any terminal keys; when idle it retains normal terminal behavior.
+Each recording captures Host/pane and local input revision. Switching targets,
+typing (including starting IME composition), disconnecting, leaving the view/app,
+or opening the toolbar's phrase/command panel cancels it without modifying earlier
+input. Modern speech startup checks cancellation
 after async preparation, and late callbacks are checked against the current
 session. A cancelled session that never activated audio cannot deactivate a new
 one. Recognition, context extraction, correction and provider settings now live
-in `CtrlxCommon` and are also used by Mac; iOS retains its live-input adapter.
+in `CtrlxCommon` and are also used by Mac, including the preview and insertion guard.
+Native reply editors provide their actual bound draft as read-only context; the
+terminal's UIKit shadow document is never treated as the Agent's complete draft.
 See [shared voice behavior](terminal-quick-actions.md#context-aware-voice-input).
 `VoiceInputPhaseTests` covers tap routing, accessibility,
-and preservation of existing terminal input; device audio remains a manual check.
+and native-draft append behavior. `VoiceInputDeliveryTests` covers one-shot delivery,
+context provenance and late results; device audio remains a manual check.
 
 ### Custom quick phrases
 
@@ -443,10 +471,10 @@ detection does not turn Return into a newline. Keeping the delay in the existing
 key protocol prevents network batching from removing this boundary. The command
 cancels pending cursor correction like other toolbar keys.
 It does not arm the background prompt monitor. The button retains the 32-point
-control height. Keyboard is capped at 64 points (and may shrink further or use
-its icon when space is tight), instead of taking all spare width. Send reserves
-64 points, roughly twice the previous icon-only button, and always shows `Send`.
-The first row uses 4-point gaps to keep the wider Send reachable on narrow phones.
+minimum control height. All built-in first-row controls share a 44-point width
+at the default text size, scaling together with Dynamic Type; only custom buttons
+size to their labels. Send always shows `Send` and stays pinned outside the
+horizontal scroll area. The first row keeps its 4-point gaps.
 No terminal renderer, SwiftTerm gesture, wire protocol or host change is needed.
 
 Coverage: `AgentCommandMenuTests` checks catalog isolation, unique command IDs,
@@ -480,8 +508,9 @@ keyboard's hidden caret, so subsequent typing stayed inside the quotes.
 - Parent toolbar controls use the pane coordinator's existing FIFO alongside
   keyboard edits, instead of a separate toolbar queue. This preserves the order
   of quote insertion, caret movement and subsequent input, even before a flush.
-- Voice keeps its separate end-of-document `TerminalInputDocumentSynchronizer`;
-  recognition correction, terminal selection and deferred focus are unchanged.
+- Voice no longer maintains an end-of-document shadow. It previews locally, then
+  prepares external input and inserts the finalized text once. IME composition
+  invalidates pending voice input before any candidate bytes are committed.
 
 Coverage: `TerminalInputCursorSynchronizerTests` checks paired delimiters,
 middle edits, Unicode offsets, reset boundaries and an old/new caret matrix.
@@ -505,6 +534,33 @@ Completed single taps now have exactly one owner:
 
 - Existing selection consumes the tap; it cannot click through. Links still
   open locally, without also sending a terminal click.
+- In **Bottom Bar** mode, ordinary terminal tabs toggle the keyboard when tapping
+  the live terminal content, including output and blank cells. This does not
+  depend on shell prompt punctuation and emits no input, even with a draft.
+  Agent tabs retain the input-area behavior below. Alternate-screen and
+  mouse-reporting programs retain their terminal interactions.
+- In **Bottom Bar** mode, an empty live input surface toggles the software
+  keyboard through the existing parent/standalone keyboard intent. It emits no
+  terminal keys or mouse packets. The known Codex `Ask Codex to do anything`
+  placeholder counts as empty; grey color alone and the local keyboard's shadow
+  text do not establish emptiness. Tapping a nonempty input area preserves cursor
+  navigation or native TUI clicking and requests an open keyboard. Repeated taps
+  never hide it; after hiding it, another input tap reopens it for continued typing.
+  Bounded multiline drafts qualify; output, links and unrelated TUI menus do not.
+  IME composition, inactive input, history and unstable redraws cannot toggle.
+  The single-tap recognizer still waits for double/triple taps and long press,
+  so the existing copy/paste menu and selection behavior are unchanged.
+- Expanded **Codex Questions** uses its question header, focused answer prompt
+  and footer to identify the answer separately from the popup. Header scanning
+  follows the popup's unchanged two-column margins, allowing selected options
+  to use a different background or inverse video. The answer itself still
+  requires a consistent background and valid continuation indentation.
+  Tapping the answer, its top/bottom padding or a multiline continuation opens
+  the keyboard; repeated taps keep it open, including an empty answer. Choices,
+  question text and footer hints are outside this region. Cursor visibility,
+  stable redraw, active input, live-screen, IME, link and selection guards still
+  apply. This only changes keyboard intent; existing terminal click/cursor
+  routing remains in place and no answer is submitted automatically.
 - In mouse mode, an active, focused, mounted input view on the live screen
   sends a primary-button press/release. SwiftTerm encodes the negotiated mouse
   protocol; CtrlX collects its synchronous writes into **one raw-input batch**
@@ -513,8 +569,7 @@ Completed single taps now have exactly one owner:
   viewport or scrollback. Off-grid/history taps and marked-text composition
   cannot send clicks. The remote TUI owns hit testing, including multiline and
   wide-character cursor placement; CtrlX sends no speculative arrow fallback.
-- With mouse reporting off, the existing arrow-based navigation below remains
-  unchanged. No agent-name/version heuristic is used.
+- With mouse reporting off, Agent tabs retain the arrow-based navigation below.
 
 SwiftTerm's automatic mouse reporting remains disabled for gestures: only the
 shared single-tap handler opts into the new path. Double/triple tap selection,
@@ -529,6 +584,11 @@ and checks exact press/release bytes, protocol changes, alternate-screen redraw,
 history offsets, grid bounds and pixel reporting. iOS-only
 `TerminalSelectionRoutingTests` additionally checks the real view's raw batch,
 IME/focus/history gates, unchanged multi-tap selection and the legacy arrow path.
+`CodexQuestionInputAreaTests` covers expanded answer bounds, notes versus options,
+multiline drafts, wrapped footer hints and incomplete/unknown layouts. SwiftTerm
+ANSI regressions cover highlighted/inverse options (including wrapped labels),
+notes padding and continuations, and broken surface boundaries; the native
+selection-routing tests also cover these styles, Questions keyboard intent and input guards.
 An isolated real Codex 0.158.0/tmux probe verified insertion at clicked positions
 in unsent single-line, explicit-multiline, Chinese and soft-wrapped drafts;
 this verifies Codex's mouse handling, not end-to-end iPhone gesture delivery.

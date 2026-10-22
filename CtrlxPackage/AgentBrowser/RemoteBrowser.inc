@@ -18,6 +18,7 @@
   std::map<std::string, std::string> humanControl_;
   std::map<std::string, NSSize> remoteViewports_;
   std::map<std::string, NSMutableDictionary*> remotePressedPointers_;
+  std::map<std::string, NSDictionary*> remoteClipboardPoints_;
   std::map<std::pair<int, int>, RemotePending> remotePending_;
   std::map<std::tuple<std::string, int, NSUInteger>, std::shared_ptr<RemoteFrame>> remoteFrames_;
 
@@ -64,6 +65,7 @@
       for (auto& [key, frame] : remoteFrames_) if (std::get<0>(key) == id) frames.push_back(frame);
       for (auto& frame : frames) RemoteFrameFinish(id, frame, nil, @"Page closed or renderer detached.");
       humanControl_.erase(id); remoteViewports_.erase(id); remotePressedPointers_.erase(id);
+      remoteClipboardPoints_.erase(id);
     }
   }
   void ReapRemote() {
@@ -89,6 +91,7 @@
     auto found = tabs_.find(id);
     if (found == tabs_.end()) return false;
     if (!token.length) {
+      AgentBrowserCancelHumanInput(found->second.browser);
       humanControl_.erase(id);
       auto pointer = remotePressedPointers_.find(id);
       if (pointer != remotePressedPointers_.end()) {
@@ -104,6 +107,7 @@
     // offer Take Control again after it finishes, without replaying anything.
     if (humanControl_.contains(id) || Busy(found->second.browser)) return false;
     for (auto& [key, deadline] : engineCaptures_) if (key.first == found->second.browser->GetIdentifier()) return false;
+    AgentBrowserCancelHumanInput(found->second.browser);
     humanControl_[id] = token.UTF8String;
     // Resume any earlier network interception before handing the page to a
     // person; an Agent cannot keep requests paused while its commands are gated.
@@ -114,11 +118,18 @@
     for (auto& [id, tab] : tabs_) if (tab.browser->IsSame(browser)) return humanControl_.contains(id);
     return false;
   }
+  std::string HumanControlToken(CefRefPtr<CefBrowser> browser) {
+    for (auto& [id, tab] : tabs_) if (tab.browser->IsSame(browser)) {
+      auto found = humanControl_.find(id);
+      return found == humanControl_.end() ? "" : found->second;
+    }
+    return "";
+  }
   void RemoteRequest(NSString* identifier, NSData* bytes, void (^completion)(NSData*, NSString*)) {
     CEF_REQUIRE_UI_THREAD();
     std::string id = identifier.UTF8String ?: "";
     auto found = tabs_.find(id);
-    NSDictionary* request = bytes.length <= 65536 ? Parse(bytes.bytes, bytes.length) : nil;
+    NSDictionary* request = bytes.length <= 768 * 1024 ? Parse(bytes.bytes, bytes.length) : nil;
     if (found == tabs_.end() || ![request isKindOfClass:NSDictionary.class]) {
       completion(nil, @"Unknown page or invalid request."); return;
     }
@@ -209,8 +220,10 @@
     }
     if ([action isEqual:@"navigate"]) {
       if (!ValidURL(request[@"url"]) && ![request[@"url"] isEqual:@"about:blank"]) { reply(nil, @"Invalid HTTP(S) URL."); return; }
+      AgentBrowserCancelHumanInput(browser);
       browser->GetMainFrame()->LoadURL([request[@"url"] UTF8String]); reply(@{}, nil); return;
     }
+    if ([@[@"back", @"forward", @"reload", @"close"] containsObject:action]) AgentBrowserCancelHumanInput(browser);
     if ([action isEqual:@"back"]) { browser->GoBack(); reply(@{}, nil); return; }
     if ([action isEqual:@"forward"]) { browser->GoForward(); reply(@{}, nil); return; }
     if ([action isEqual:@"reload"]) { browser->Reload(); reply(@{}, nil); return; }
@@ -230,6 +243,51 @@
       if (![text isKindOfClass:NSString.class] || text.length > 16000) { reply(nil, @"Invalid browser text."); return; }
       RemoteCall(id, "Input.insertText", @{@"text": text}, reply); return;
     }
+    if ([action isEqual:@"copy"] || [action isEqual:@"paste"]) {
+      const bool copy = [action isEqual:@"copy"];
+      NSString* expression;
+      if (copy) {
+        NSDictionary* point = remoteClipboardPoints_.contains(id) ? remoteClipboardPoints_.at(id) : nil;
+        expression = BrowserClipboardCopyScript(point[@"x"], point[@"y"]);
+      } else {
+        NSString* kind = request[@"kind"];
+        NSData* data = [request[@"data"] isKindOfClass:NSString.class]
+          ? [[NSData alloc] initWithBase64EncodedString:request[@"data"] options:0] : nil;
+        if (![@[@"text", @"png", @"jpeg"] containsObject:kind] || !data.length || data.length > 384 * 1024) {
+          reply(nil, @"Invalid clipboard content."); return;
+        }
+        expression = BrowserClipboardPasteScript(String(JSON(kind)), String(JSON(request[@"data"])));
+      }
+      const auto generation = found->second.generation;
+      RemoteCall(id, "Runtime.evaluate", @{@"expression": expression, @"returnByValue": @YES, @"userGesture": @YES},
+        [this, id, lease, generation, copy, reply](NSDictionary* response, NSString* error) {
+          auto tab = tabs_.find(id);
+          if (tab == tabs_.end() || tab->second.generation != generation || !humanControl_.contains(id) ||
+              humanControl_.at(id) != lease.UTF8String) { reply(nil, @"The page or control changed."); return; }
+          NSDictionary* value = response[@"result"][@"value"];
+          NSString* exception = response[@"exceptionDetails"][@"exception"][@"description"];
+          if (error || response[@"exceptionDetails"] || ![value isKindOfClass:NSDictionary.class]) {
+            reply(nil, error ?: exception ?: @"The page did not accept the clipboard operation."); return;
+          }
+          NSString* imageURL = value[@"imageURL"];
+          if (!copy || !imageURL) { reply(value, nil); return; }
+          if (![imageURL isKindOfClass:NSString.class] || !(ValidURL(imageURL) || [imageURL hasPrefix:@"data:image/"])) {
+            reply(nil, @"This image URL cannot be copied."); return;
+          }
+          CefRefPtr<Bridge> self = this;
+          tab->second.browser->GetHost()->DownloadImage(imageURL.UTF8String, false, 1280, false,
+            new BrowserClipboardImage([self, id, lease, generation, reply](NSData* data, NSString* kind) {
+              auto current = self->tabs_.find(id);
+              if (current == self->tabs_.end() || current->second.generation != generation ||
+                  !self->humanControl_.contains(id) || self->humanControl_.at(id) != lease.UTF8String) {
+                reply(nil, @"The page or control changed."); return;
+              }
+              if (!data) { reply(nil, @"The selected image could not be copied within 384 KiB."); return; }
+              reply(@{@"kind":kind, @"data":[data base64EncodedStringWithOptions:0]}, nil);
+            }));
+        }, 768 * 1024);
+      return;
+    }
     if ([action isEqual:@"mouse"]) {
       NSString* type = request[@"type"];
       if (![@[@"mousePressed", @"mouseReleased", @"mouseMoved", @"mouseWheel"] containsObject:type]) { reply(nil, @"Invalid pointer event."); return; }
@@ -240,6 +298,9 @@
       NSString* button = request[@"button"] ?: @"none";
       if (![@[@"none", @"left", @"right", @"middle"] containsObject:button]) { reply(nil, @"Invalid pointer button."); return; }
       params[@"type"] = type; params[@"button"] = button;
+      if ([type isEqual:@"mousePressed"]) remoteClipboardPoints_[id] = @{@"x":params[@"x"], @"y":params[@"y"]};
+      if ([type isEqual:@"mousePressed"] && [button isEqual:@"left"])
+        AgentBrowserHumanInput(browser, lease.UTF8String);
       if ([type isEqual:@"mousePressed"] || ([type isEqual:@"mouseMoved"] && remotePressedPointers_.contains(id)))
         remotePressedPointers_[id] = [params mutableCopy];
       if ([type isEqual:@"mouseReleased"]) remotePressedPointers_.erase(id);
@@ -251,6 +312,8 @@
       // CDP's virtual key code is required by Chromium for editing shortcuts.
       NSMutableString* shortcut = [NSMutableString string];
       const int mask = [request[@"modifiers"] intValue];
+      if (mask == 0 && ([@[@"Enter", @"Return", @" ", @"Space"] containsObject:key]))
+        AgentBrowserHumanInput(browser, lease.UTF8String);
       for (auto pair : {std::pair{1, @"Alt+"}, {2, @"Control+"}, {4, @"Meta+"}, {8, @"Shift+"}})
         if (mask & pair.first) [shortcut appendString:pair.second];
       [shortcut appendString:[key.lowercaseString isEqual:@"a"] ? @"A" : key];

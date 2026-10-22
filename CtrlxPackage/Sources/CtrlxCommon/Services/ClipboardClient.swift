@@ -67,6 +67,8 @@ public struct ClipboardClient: Sendable {
     /// Returns the current image on the clipboard, or nil if there is none.
     /// Prefers an existing efficient representation before decoding pixels.
     public var getImage: @Sendable () -> ClipboardImage? = { nil }
+
+    public var setImage: @Sendable (_ image: ClipboardImage) -> Void
 }
 
 // MARK: - File-Backed Implementation (E2E)
@@ -86,7 +88,8 @@ public extension ClipboardClient {
             setRichText: { _, plainText in store.write(plainText) },
             setFileURL: { _ in },
             hasImage: { store.readImage() != nil },
-            getImage: { store.readImage() }
+            getImage: { store.readImage() },
+            setImage: { store.writeImage($0) },
         )
     }
 }
@@ -94,7 +97,7 @@ public extension ClipboardClient {
 final private class FileBackedClipboard: Sendable {
     private static let logger = Logger(
         subsystem: "com.jicezeng.ctrlx",
-        category: "FileBackedClipboard"
+        category: "FileBackedClipboard",
     )
 
     private let lock = OSAllocatedUnfairLock()
@@ -128,6 +131,8 @@ final private class FileBackedClipboard: Sendable {
         lock.withLock {
             do {
                 try value.write(toFile: path, atomically: true, encoding: .utf8)
+                try? FileManager.default.removeItem(atPath: imagePath)
+                try? FileManager.default.removeItem(atPath: imageFormatPath)
             } catch {
                 Self.logger.error("Failed to write clipboard file at \(self.path): \(error)")
             }
@@ -158,6 +163,18 @@ final private class FileBackedClipboard: Sendable {
             return ClipboardImage(data: data, format: format)
         }
     }
+
+    func writeImage(_ image: ClipboardImage) {
+        lock.withLock {
+            do {
+                try Data().write(to: URL(fileURLWithPath: path))
+                try image.data.write(to: URL(fileURLWithPath: imagePath))
+                try image.format.rawValue.write(toFile: imageFormatPath, atomically: true, encoding: .utf8)
+            } catch {
+                Self.logger.error("Failed to write clipboard image: \(error)")
+            }
+        }
+    }
 }
 
 // MARK: - DependencyKey
@@ -172,7 +189,8 @@ extension ClipboardClient: DependencyKey {
             setRichText: { _, plainText in store.value = plainText },
             setFileURL: { _ in },
             hasImage: { false },
-            getImage: { nil }
+            getImage: { nil },
+            setImage: { _ in },
         )
     }
 
@@ -199,19 +217,20 @@ extension ClipboardClient: DependencyKey {
                     NSPasteboard.general.writeObjects([url as NSURL])
                 },
                 hasImage: {
-                    let pb = NSPasteboard.general
-                    return pb.data(forType: .png) != nil || pb.data(forType: .tiff) != nil
+                    NSPasteboard.general.availableType(from: [.png, .init("public.jpeg"), .tiff]) != nil
                 },
                 getImage: {
-                    let pb = NSPasteboard.general
-                    if let png = pb.data(forType: .png) {
-                        return ClipboardImage(data: png, format: .png)
+                    Self.readImage(from: .general)
+                },
+                setImage: { image in
+                    NSPasteboard.general.clearContents()
+                    let type: NSPasteboard.PasteboardType = switch image.format {
+                    case .png: .png
+                    case .jpeg: .init("public.jpeg")
+                    case .tiff: .tiff
                     }
-                    if let tiff = pb.data(forType: .tiff) {
-                        return ClipboardImage(data: tiff, format: .tiff)
-                    }
-                    return nil
-                }
+                    NSPasteboard.general.setData(image.data, forType: type)
+                },
             )
         #elseif os(iOS)
             ClipboardClient(
@@ -241,11 +260,36 @@ extension ClipboardClient: DependencyKey {
                         return ClipboardImage(data: png, format: .png)
                     }
                     return nil
-                }
+                },
+                setImage: { image in
+                    let type = switch image.format {
+                    case .png: UTType.png.identifier
+                    case .jpeg: UTType.jpeg.identifier
+                    case .tiff: UTType.tiff.identifier
+                    }
+                    UIPasteboard.general.setItems([[type: image.data]])
+                },
             )
         #endif
     }
 }
+
+#if os(macOS)
+    extension ClipboardClient {
+        static func readImage(from pasteboard: NSPasteboard) -> ClipboardImage? {
+            if let png = pasteboard.data(forType: .png) {
+                return ClipboardImage(data: png, format: .png)
+            }
+            if let jpeg = pasteboard.data(forType: .init("public.jpeg")) {
+                return ClipboardImage(data: jpeg, format: .jpeg)
+            }
+            if let tiff = pasteboard.data(forType: .tiff) {
+                return ClipboardImage(data: tiff, format: .tiff)
+            }
+            return nil
+        }
+    }
+#endif
 
 final private class InMemoryClipboard: Sendable {
     private let lock = OSAllocatedUnfairLock<String?>(initialState: nil)

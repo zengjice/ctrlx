@@ -16,6 +16,7 @@
         let paneId: String
         let hostId: String
         let scrollingAgentID: String?
+        let codexQuestionID: String?
 
         /// Binding to the response state for displaying response options above the terminal
         @Binding var responseState: ResponseState?
@@ -56,6 +57,8 @@
         /// Whether a parent-managed multi-pane layout wants the software keyboard.
         /// The selected pane keeps its shortcut bar available even when this is false.
         let parentKeyboardRequested: Bool
+        let mouseReportingEnabled: Bool
+        let onKeyboardRequest: (@MainActor (Bool) -> Void)?
 
         /// Submits a structured `AgentResponse` for the open response form.
         let submitResponse: ResponseSender
@@ -64,6 +67,7 @@
         /// The parent uses this only to detect user-submitted Agent turns.
         let onTerminalInput: @MainActor ([TmuxKey]) -> Void
         let onTerminalInputQueued: @MainActor () -> Void
+        let onCancelVoiceInput: @MainActor () -> Bool
 
         /// Lets a parent-owned input bar capture this pane's terminal text only
         /// when dictation starts, without continuously mirroring terminal output.
@@ -100,10 +104,12 @@
             guard let openBrowserLink else { return nil }
             return { url in openBrowserLink(.init(url: url, paneID: paneId, hostID: hostId)) }
         }
+
         private var openPathAction: (@MainActor (String) -> Void)? {
             guard let openFileLink else { return nil }
             return { path in openFileLink(.init(path: path, paneID: paneId, hostID: hostId)) }
         }
+
         @State private var coordinator: StreamCoordinator
         @State private var presentedTerminal: TerminalState?
 
@@ -111,6 +117,7 @@
         @State private var isInteractive = false
         @State private var quickActionPresentation = TerminalQuickActionPresentation()
         @State private var phraseInputRevision: UInt64 = 0
+        @State private var voiceSession = TerminalVoiceInputSession()
         @State private var keyboardIsTransitioning = false
         @Environment(\.scenePhase) private var scenePhase
 
@@ -121,6 +128,7 @@
         /// Immutable terminal text shown in the native iOS copy surface.
         @State private var textSnapshot: TerminalTextSnapshot?
         @State private var linkPresentation = TerminalLinkPresentation()
+        @State private var clipboardImagePaste: TerminalImagePasteRequest?
 
         /// Restores toolbar-controlled terminal input after the copy sheet closes.
         /// Parent-controlled multi-pane input is restored by its existing binding.
@@ -133,6 +141,7 @@
             paneId: String,
             hostId: String,
             scrollingAgentID: String? = nil,
+            codexQuestionID: String? = nil,
             responseState: Binding<ResponseState?>,
             terminalTitle: Binding<String?>,
             clipboardContent: Binding<String?> = .constant(nil),
@@ -144,11 +153,14 @@
             isActive: Bool = true,
             isInputSuspended: Bool = false,
             parentKeyboardRequested: Bool = false,
+            mouseReportingEnabled: Bool = false,
+            onKeyboardRequest: (@MainActor (Bool) -> Void)? = nil,
             settings: IOSSettings,
             telemetry: SessionTelemetry? = nil,
             submitResponse: @escaping ResponseSender,
             onTerminalInput: @escaping @MainActor ([TmuxKey]) -> Void = { _ in },
             onTerminalInputQueued: @escaping @MainActor () -> Void = { },
+            onCancelVoiceInput: @escaping @MainActor () -> Bool = { false },
             onTerminalPaste: @escaping @MainActor (String) -> Void = { _ in },
             onPasteImage: (@MainActor (ClipboardImage?) -> Void)? = nil,
             onVoiceInputContextProviderChange: @escaping @MainActor (
@@ -166,6 +178,7 @@
             self.paneId = paneId
             self.hostId = hostId
             self.scrollingAgentID = scrollingAgentID
+            self.codexQuestionID = codexQuestionID
             self._responseState = responseState
             self._terminalTitle = terminalTitle
             self._clipboardContent = clipboardContent
@@ -178,10 +191,13 @@
             self.isActive = isActive
             self.isInputSuspended = isInputSuspended
             self.parentKeyboardRequested = parentKeyboardRequested
+            self.mouseReportingEnabled = mouseReportingEnabled
+            self.onKeyboardRequest = onKeyboardRequest
             self.telemetry = telemetry
             self.submitResponse = submitResponse
             self.onTerminalInput = onTerminalInput
             self.onTerminalInputQueued = onTerminalInputQueued
+            self.onCancelVoiceInput = onCancelVoiceInput
             self.onVoiceInputContextProviderChange = onVoiceInputContextProviderChange
             self.onCursorNavigationCancellationChange = onCursorNavigationCancellationChange
             self.onExternalInputSenderChange = onExternalInputSenderChange
@@ -229,6 +245,8 @@
 
                 // Keep the copy action reachable when the navigation bar is hidden.
                 terminalContent
+                    .foregroundStyle(Color(uiColor: settings.terminalTheme.palette.foreground.nativeColor))
+                    .background(Color(uiColor: settings.terminalTheme.palette.background.nativeColor))
                     .overlay(alignment: .topTrailing) {
                         if hideNavigationBar {
                             HStack(spacing: 8) {
@@ -237,9 +255,9 @@
                                 }
                                 if showKeyboardButton, settings.terminalKeyboardControlPosition == .topRight {
                                     TerminalVoiceInputButton(
-                                        isDisabled: !canSendTerminalInput,
-                                        contextProvider: terminalVoiceInputContext,
-                                        sendKeys: sendTerminalKeys
+                                        session: voiceSession, context: phraseContext,
+                                        isDisabled: !canSendTerminalInput || quickActionPresentation.isPresented,
+                                        contextProvider: terminalVoiceInputContext
                                     )
                                     .id(phraseContext.target)
                                     keyboardOverlayButton
@@ -255,18 +273,34 @@
                 phraseContext: phraseContext,
                 sendPhrase: sendPhrase
             ))
+            .modifier(TerminalVoiceInputOverlay(
+                session: voiceSession, context: phraseContext,
+                isSuspended: !canSendTerminalInput || isInputSuspended || textSnapshot != nil
+                    || linkPresentation.suspendsTerminalInput || quickActionPresentation.isPresented,
+                insert: insertVoiceTranscript
+            ))
+            .onChange(of: isInputSuspended || textSnapshot != nil || linkPresentation.suspendsTerminalInput) { _, suspended in
+                if suspended, isActive {
+                    // The parent toolbar owns dictation for embedded panes.
+                    // A child sheet must invalidate that capture as well.
+                    phraseInputRevision &+= 1
+                    onTerminalInputQueued()
+                }
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if showKeyboardButton, settings.terminalKeyboardControlPosition == .bottomBar {
+                if showKeyboardButton {
                     TerminalKeyboardBar(
-                        keyboardRequested: isInteractive,
+                        voiceSession: voiceSession,
+                        relayClient: relayClient,
+                        clipboardPaste: $clipboardImagePaste,
                         isEnabled: isConnected && coordinator.streamState == .streaming,
-                        action: { isInteractive.toggle() },
                         contextProvider: terminalVoiceInputContext,
                         sendKeys: sendTerminalKeys,
                         phraseContext: phraseContext,
                         quickActionPresentation: $quickActionPresentation,
                         customButtonStore: settings.customButtons,
-                        sendCustomButton: sendCustomButton
+                        sendCustomButton: sendCustomButton,
+                        showsTerminalControls: settings.terminalKeyboardControlPosition == .bottomBar
                     )
                 }
             }
@@ -280,9 +314,9 @@
                 if showKeyboardButton, settings.terminalKeyboardControlPosition == .topRight, !hideNavigationBar {
                     ToolbarItem(placement: .topBarTrailing) {
                         TerminalVoiceInputButton(
-                            isDisabled: !canSendTerminalInput,
-                            contextProvider: terminalVoiceInputContext,
-                            sendKeys: sendTerminalKeys
+                            session: voiceSession, context: phraseContext,
+                            isDisabled: !canSendTerminalInput || quickActionPresentation.isPresented,
+                            contextProvider: terminalVoiceInputContext
                         )
                         .id(phraseContext.target)
                     }
@@ -313,27 +347,32 @@
             }
             .alert("Paste Failed", isPresented: .init(
                 get: { coordinator.pasteError != nil },
-                set: { if !$0 { coordinator.pasteError = nil } }
+                set: {
+                    if !$0 {
+                        coordinator.pasteError = nil
+                    }
+                }
             )) {
                 Button("OK") { coordinator.pasteError = nil }
             } message: {
                 Text(coordinator.pasteError ?? "")
             }
-            .task(id: StreamTaskID(isConnected: isConnected, retryGeneration: streamRetryGeneration)) {
+            .task(id: StreamTaskID(isConnected: isConnected, retryGeneration: streamRetryGeneration, inputBinding: relayClient.workspaceInputState.binding(paneID: paneId))) {
                 await synchronizeStreamingWithConnection()
             }
             .onAppear {
                 onCopyActionChange(coordinator.streamState == .streaming ? presentTextSnapshot : nil)
                 let coordinator = coordinator
                 onVoiceInputContextProviderChange { [weak coordinator] in
-                    coordinator?.voiceInputContext()
+                    VoiceInputContextSnapshot(terminalText: coordinator?.voiceInputContext())
                 }
                 onCursorNavigationCancellationChange { [weak coordinator] in
                     coordinator?.terminalState?.cancelCursorNavigation?()
                 }
                 onExternalInputSenderChange { [weak coordinator, relayClient] keys, immediately, onSent in
-                    guard let coordinator, coordinator.isReadyForToolbarInput,
-                          relayClient.isHostConnected, !keys.isEmpty else { return false }
+                    guard
+                        let coordinator, coordinator.isReadyForToolbarInput,
+                        relayClient.isHostConnected, !keys.isEmpty else { return false }
                     coordinator.terminalState?.prepareForExternalInput?()
                     coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: immediately, onSent: onSent)
                     return true
@@ -371,7 +410,9 @@
                 coordinator.terminalState?.onKeyboardTransitionChange?(false)
             }
             .onChange(of: coordinator.streamState) { _, newState in
-                if newState != .streaming { presentedTerminal = nil }
+                if newState != .streaming {
+                    presentedTerminal = nil
+                }
                 onCopyActionChange(newState == .streaming ? presentTextSnapshot : nil)
                 if
                     newState == .ended,
@@ -483,8 +524,8 @@
             )
         }
 
-        private func terminalVoiceInputContext() -> String? {
-            VoiceInputContext.makeTerminalContext(
+        private func terminalVoiceInputContext() -> VoiceInputContextSnapshot? {
+            VoiceInputContextSnapshot(
                 terminalText: coordinator.voiceInputContext()
             )
         }
@@ -502,8 +543,11 @@
             case .streaming:
                 if let state = coordinator.terminalState, presentedTerminal === state {
                     .ready
-                } else { .preparing }
-            case .idle, .connecting: .preparing
+                } else {
+                    .preparing
+                }
+            case .idle,
+                 .connecting: .preparing
             }
         }
 
@@ -525,9 +569,13 @@
                     )
                     TerminalStreamContainerView(
                         terminalState: state,
+                        theme: settings.terminalTheme,
                         scrollingAgentID: scrollingAgentID,
+                        codexQuestionID: codexQuestionID,
                         inputEnabled: inputPresentation.inputEnabled,
+                        mouseReportingEnabled: mouseReportingEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
+                        onKeyboardRequest: settings.terminalKeyboardControlPosition == .bottomBar ? setKeyboardRequested : nil,
                         keyboardIsTransitioning: keyboardIsTransitioning,
                         questionExpansionEnabled: scenePhase == .active && isConnected && !isInputSuspended
                             && relayClient.hostSupportsCodexQuestionAcknowledgement
@@ -535,14 +583,19 @@
                             && coordinator.isReadyForToolbarInput && responseState?.request.isBlocking != true,
                         onExpandCodexQuestions: { count, completion in
                             guard isConnected, relayClient.isHostConnected else { return false }
-                            return coordinator.enqueueCodexQuestionExpansion(count: count, relayClient: relayClient, onResult: completion)
+                            return coordinator.enqueueCodexQuestionExpansion(count: count, questionID: codexQuestionID, relayClient: relayClient, onResult: completion)
                         },
                         onInput: { keys in
                             enqueueTerminalKeys(keys)
                         },
                         onRawInput: { data in
                             phraseInputRevision &+= 1
+                            onTerminalInputQueued()
                             coordinator.enqueueRawInput(data: data, relayClient: relayClient)
+                        },
+                        onCompositionStart: {
+                            phraseInputRevision &+= 1
+                            onTerminalInputQueued()
                         },
                         onPasteText: { text in
                             guard canSendTerminalInput, coordinator.isReadyForToolbarInput else { return }
@@ -606,10 +659,22 @@
         }
 
         private var terminalImagePasteAction: (@MainActor (ClipboardImage?) -> Void)? {
-            guard let onPasteImage else { return nil }
+            guard onPasteImage != nil || showKeyboardButton else { return nil }
             return { image in
                 guard canSendTerminalInput, coordinator.isReadyForToolbarInput else { return }
-                onPasteImage(image)
+                if let onPasteImage {
+                    onPasteImage(image)
+                } else if showKeyboardButton {
+                    clipboardImagePaste = TerminalImagePasteRequest(paneId: paneId, image: image)
+                }
+            }
+        }
+
+        private func setKeyboardRequested(_ requested: Bool) {
+            if showKeyboardButton {
+                isInteractive = requested
+            } else {
+                onKeyboardRequest?(requested)
             }
         }
 
@@ -635,7 +700,19 @@
             enqueueTerminalKeys(keys)
         }
 
+        private func insertVoiceTranscript(_ text: String) -> Bool {
+            guard
+                phraseContext.canSend, canSendTerminalInput, !isInputSuspended, textSnapshot == nil,
+                !linkPresentation.suspendsTerminalInput, !quickActionPresentation.isPresented else { return false }
+            coordinator.terminalState?.prepareForExternalInput?()
+            enqueueTerminalKeys([.text(text)])
+            return true
+        }
+
         private func enqueueTerminalKeys(_ keys: [TmuxKey]) {
+            if keys == [.escape], voiceSession.cancelIfPresented() || onCancelVoiceInput() {
+                return
+            }
             guard canSendTerminalInput, !keys.isEmpty else { return }
             phraseInputRevision &+= 1
             onTerminalInputQueued()
@@ -665,8 +742,9 @@
         }
 
         private func sendCustomButton(_ request: TerminalCustomButtonRequest) -> Bool {
-            guard !isInputSuspended, !quickActionPresentation.suspendsTerminalInput,
-                  request.isValid(in: phraseContext, savedButtons: settings.customButtons.buttons) else { return false }
+            guard
+                !isInputSuspended, !quickActionPresentation.suspendsTerminalInput,
+                request.isValid(in: phraseContext, savedButtons: settings.customButtons.buttons) else { return false }
             coordinator.terminalState?.prepareForExternalInput?()
             let keys = request.button.action.keys
             phraseInputRevision &+= 1
@@ -680,7 +758,7 @@
         // MARK: - Streaming
 
         private func synchronizeStreamingWithConnection() async {
-            guard isConnected else {
+            guard isConnected, relayClient.workspaceInputState.binding(paneID: paneId) != .unavailable else {
                 coordinator.prepareForReconnect()
                 return
             }
@@ -689,6 +767,7 @@
         }
 
         private func startStreaming() async {
+            let inputBinding = relayClient.workspaceInputState.binding(paneID: paneId)
             var startMode = coordinator.nextStartMode()
 
             // One retry handles a command response lost during an otherwise
@@ -712,7 +791,9 @@
                 let handlerRegistrationId = relayClient.registerTerminalStreamHandler(
                     for: currentPaneId
                 ) { message in
-                    guard currentCoordinator.streamSessionId == streamSessionId else { return }
+                    guard
+                        currentCoordinator.streamSessionId == streamSessionId,
+                        message.matchesLease(leaseId, requiresLease: relayClient.workspaceInputState.supportsStreamIdentity) else { return }
                     currentCoordinator.handleStreamMessage(message)
                 }
                 coordinator.setHandlerRegistrationId(handlerRegistrationId)
@@ -736,7 +817,8 @@
                 coordinator.willSendStartRequest()
                 let result = await relayClient.sendCommand(
                     StartTerminalStream(leaseId: leaseId),
-                    paneId: paneId
+                    paneId: paneId,
+                    inputBinding: inputBinding
                 )
 
                 guard coordinator.streamSessionId == streamSessionId else { return }
@@ -808,6 +890,7 @@
         private struct StreamTaskID: Equatable {
             let isConnected: Bool
             let retryGeneration: Int
+            let inputBinding: ViewerWorkspaceInputBinding
         }
     }
 
@@ -854,8 +937,8 @@
         @ObservationIgnored private var bootstrapAccumulator = TerminalStreamSnapshotAccumulator()
         @ObservationIgnored private var recoveryPolicy = TerminalStreamRecoveryPolicy()
         @ObservationIgnored private var resetAccumulator = TerminalStreamSnapshotAccumulator()
-        // Command availability must refresh when an atomic reset starts/ends,
-        // even while streamState stays .streaming throughout the reset.
+        /// Command availability must refresh when an atomic reset starts/ends,
+        /// even while streamState stays .streaming throughout the reset.
         private var pendingResetState: TerminalStreamMessage.InitialState?
 
         private var bootstrapDimensions: (width: Int, height: Int)?
@@ -872,6 +955,7 @@
             terminalState?.cancelCursorNavigation?()
             terminalState?.cancelQuestionCheck?()
             keystrokeDebouncer?.cancelAll()
+            keystrokeDebouncer = nil
         }
 
         func voiceInputContext() -> String? {
@@ -1002,12 +1086,12 @@
             keystrokeDebouncer?.enqueueRawInput(data)
         }
 
-        func enqueueCodexQuestionExpansion(count: Int, relayClient: ViewerRelayClient, onResult: @escaping @MainActor (Bool) -> Void) -> Bool {
+        func enqueueCodexQuestionExpansion(count: Int, questionID: String?, relayClient: ViewerRelayClient, onResult: @escaping @MainActor (Bool) -> Void) -> Bool {
             guard isReadyForToolbarInput else { return false }
             if keystrokeDebouncer == nil {
                 keystrokeDebouncer = makeInputQueue(relayClient: relayClient)
             }
-            keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count, onResult: onResult)
+            keystrokeDebouncer?.enqueueCodexQuestionExpansion(expectedCount: count, expectedQuestionID: questionID, onResult: onResult)
             return true
         }
 
@@ -1034,9 +1118,10 @@
                     initial.contentByteCount,
                     initialContent: content
                 )
-                guard bootstrapPolicy.receiveInitialState(
-                    snapshotIsComplete: expectedByteCount == nil
-                ) else { return }
+                guard
+                    bootstrapPolicy.receiveInitialState(
+                        snapshotIsComplete: expectedByteCount == nil
+                    ) else { return }
 
                 bootstrapDimensions = (initial.width, initial.height)
                 bootstrapScrollbackLineLimit = TerminalScrollbackPolicy.normalizedLineLimit(
@@ -1073,10 +1158,11 @@
                     bootstrapDimensions = (snapshot.width, snapshot.height)
                     bootstrapScrollbackLineLimit = scrollbackLineLimit
                     bootstrapBuffer.appendDimensions(cols: snapshot.width, rows: snapshot.height)
-                    if let expectedByteCount = validSnapshotByteCount(
-                        snapshot.contentByteCount,
-                        initialContent: content
-                    ) {
+                    if
+                        let expectedByteCount = validSnapshotByteCount(
+                            snapshot.contentByteCount,
+                            initialContent: content
+                        ) {
                         bootstrapPolicy.expectSnapshotCompletion()
                         beginBootstrapSnapshot(
                             expectedByteCount: expectedByteCount,
@@ -1413,15 +1499,19 @@
     ///
     /// Uses `InteractiveTerminalView` which keeps its shortcut accessory available
     /// independently from the software keyboard.
-    private struct TerminalStreamContainerView: UIViewRepresentable {
+    struct TerminalStreamContainerView: UIViewRepresentable {
         let terminalState: TerminalState
+        let theme: TerminalTheme
         let scrollingAgentID: String?
+        let codexQuestionID: String?
 
         /// Whether this terminal owns the input accessory and accepts input.
         let inputEnabled: Bool
+        var mouseReportingEnabled = false
 
         /// Whether the software keyboard should be visible below the accessory.
         let keyboardRequested: Bool
+        let onKeyboardRequest: (@MainActor (Bool) -> Void)?
         let keyboardIsTransitioning: Bool
 
         let questionExpansionEnabled: Bool
@@ -1432,6 +1522,7 @@
 
         /// Callback for raw escape sequences (e.g., SGR mouse events) ready for relay transmission
         let onRawInput: @MainActor (Data) -> Void
+        let onCompositionStart: @MainActor () -> Void
         let onPasteText: @MainActor (String) -> Void
         let onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
@@ -1462,20 +1553,23 @@
             terminalView.translatesAutoresizingMaskIntoConstraints = false
 
             // Configure terminal
-            terminalView.nativeForegroundColor = UIColor(white: 0.9, alpha: 1)
-            terminalView.nativeBackgroundColor = UIColor.black
+            terminalView.applyTheme(theme)
+            terminalView.allowMouseReporting = mouseReportingEnabled
             terminalView.isScrollEnabled = true
             terminalView.inputAssistantItem.leadingBarButtonGroups = []
             terminalView.inputAssistantItem.trailingBarButtonGroups = []
 
             // Wire up input callback
             terminalView.onInput = onInput
+            terminalView.onKeyboardRequest = onKeyboardRequest
             terminalView.onRawInput = onRawInput
+            terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
             terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
             terminalView.onOpenURL = onOpenURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
+            terminalView.codexQuestionID = codexQuestionID
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
 
@@ -1484,7 +1578,7 @@
             // retain the Host's exact pixel dimensions; resizing the terminal
             // renderer to fill the viewport silently changes its rows/columns.
             let scrollView = BottomAnchoredTerminalScrollView()
-            scrollView.backgroundColor = .black
+            scrollView.backgroundColor = theme.palette.background.nativeColor
             scrollView.showsHorizontalScrollIndicator = true
             scrollView.showsVerticalScrollIndicator = false
             scrollView.alwaysBounceVertical = false
@@ -1498,7 +1592,8 @@
             context.coordinator.outerScrollView = scrollView
 
             let canvasView = UIView()
-            canvasView.backgroundColor = .black
+            canvasView.backgroundColor = theme.palette.background.nativeColor
+            context.coordinator.canvasView = canvasView
             canvasView.translatesAutoresizingMaskIntoConstraints = false
             scrollView.addSubview(canvasView)
             canvasView.addSubview(terminalView)
@@ -1641,17 +1736,25 @@
         func updateUIView(_ scrollView: UIScrollView, context: Context) {
             guard let terminalView = context.coordinator.terminalView else { return }
 
+            terminalView.applyTheme(theme)
+            terminalView.allowMouseReporting = mouseReportingEnabled
+            scrollView.backgroundColor = theme.palette.background.nativeColor
+            context.coordinator.canvasView?.backgroundColor = theme.palette.background.nativeColor
+
             // A UIViewRepresentable may outlive many value-type SwiftUI views.
             // Refresh callbacks on every update so the native terminal never
             // sends through the host, pane, or monitoring state captured by its
             // first render.
             terminalView.onInput = onInput
+            terminalView.onKeyboardRequest = onKeyboardRequest
             terminalView.onRawInput = onRawInput
+            terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
             terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
             terminalView.onOpenURL = onOpenURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
+            terminalView.codexQuestionID = codexQuestionID
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
             context.coordinator.onViewportGridChange = onViewportGridChange
@@ -1674,6 +1777,7 @@
             coordinator.presentationTask?.cancel()
             coordinator.windowSwipe?.onSwitchWindow = nil
             coordinator.terminalView?.onOpenURL = nil
+            coordinator.terminalView?.onKeyboardRequest = nil
             coordinator.terminalView?.invalidateInput()
         }
 
@@ -1682,6 +1786,7 @@
             var terminalView: InteractiveTerminalView?
             weak var terminalState: TerminalState?
             weak var outerScrollView: BottomAnchoredTerminalScrollView?
+            weak var canvasView: UIView?
             var windowSwipe: TerminalWindowSwipeGesture?
             var cellSize: CGSize = .zero
             var widthConstraint: NSLayoutConstraint?
@@ -1856,7 +1961,9 @@
         func setKeyboardTransitioning(_ transitioning: Bool) {
             guard keyboardIsTransitioning != transitioning else { return }
             keyboardIsTransitioning = transitioning
-            if transitioning { onViewportChange?(nil) }
+            if transitioning {
+                onViewportChange?(nil)
+            }
             setNeedsLayout()
         }
 
@@ -1880,10 +1987,11 @@
         override func layoutSubviews() {
             super.layoutSubviews()
 
-            if initialPresentationPolicy.consumeIfReady(
-                isAttachedToWindow: window != nil,
-                hasUsableBounds: bounds.width > 0 && bounds.height > 0
-            ) {
+            if
+                initialPresentationPolicy.consumeIfReady(
+                    isAttachedToWindow: window != nil,
+                    hasUsableBounds: bounds.width > 0 && bounds.height > 0
+                ) {
                 let presentation = initialTailPresentation
                 initialTailPresentation = nil
                 presentation?()
@@ -1892,8 +2000,9 @@
             anchorToBottomIfNeeded()
             // Fit must not consume geometry from before deferred focus or a
             // keyboard/accessory transition. Inactive panes need no responder.
-            guard window != nil, !keyboardIsTransitioning,
-                  isInputPresentationReady?() == true else {
+            guard
+                window != nil, !keyboardIsTransitioning,
+                isInputPresentationReady?() == true else {
                 onViewportChange?(nil)
                 return
             }
@@ -1912,11 +2021,12 @@
         }
 
         private func anchorToBottomIfNeeded() {
-            guard let targetOffset = anchorPolicy.targetOffset(
-                maximumOffset: Double(bottomOffset),
-                cursorTop: cursorTop?().map { Double($0) },
-                topInset: Double(adjustedContentInset.top)
-            ) else {
+            guard
+                let targetOffset = anchorPolicy.targetOffset(
+                    maximumOffset: Double(bottomOffset),
+                    cursorTop: cursorTop?().map { Double($0) },
+                    topInset: Double(adjustedContentInset.top)
+                ) else {
                 return
             }
             let targetY = CGFloat(targetOffset)
@@ -1968,7 +2078,7 @@
                 terminalTitle: .init(get: { nil }, set: { _ in }),
                 isConnected: true,
                 settings: settings,
-                submitResponse: { _ in }
+                submitResponse: { _ in true }
             )
         }
         .environment(ViewerRelayClient())

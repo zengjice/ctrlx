@@ -13,8 +13,10 @@ to your task; the versioned plans are not an onboarding checklist.
 | Terminal rendering, input, sizing and gestures | [Mac sizing](swiftterm-sizing.md), [iOS viewport/input](swiftterm-ios-scrolling.md), [rendering investigations](terminal-rendering-investigation.md) | `CtrlxServerFeature/Views/InteractiveTerminalView.swift`, `CtrlxFeature/Views/LiveTerminalView.swift`; SwiftTerm pin in [Package.swift](../CtrlxPackage/Package.swift) |
 | Agent lifecycle, launch, resume, Fork and Questions | [Services](services-reference.md) | `CtrlxServerFeature/Plugins/`, `CtrlxPluginProtocol/`, `ClaudeCodePluginCore/`, `CodexPluginCore/`, `CtrlxCommon/Models/CodexQuestionPrompt.swift` |
 | Add or change a sidecar agent | [Sidecar contract](plugins/sidecar-authoring.md), [pi](../plugins/pi/README.md), [omp](../plugins/omp/README.md), [opencode](../plugins/opencode/README.md) | `CtrlxServerFeature/Plugins/Sidecar/`; plugin implementations in repository `plugins/` |
+| Worktree merge status on Mac Host/Viewer and iOS | [Services](services-reference.md#worktree-merge-status) | `CtrlxServerFeature/Services/WorktreeStatusClient.swift`, `CtrlxCommon/UI/WorktreeStatusView.swift` |
 | Files, uploads, preview annotations, terminal path links | [Files](file-browser.md) | `CtrlxCommon/UI/WorkspaceFileBrowserView.swift`, `CtrlxCommon/Utilities/TerminalFileLink.swift`, `CtrlxServerFeature/Services/FileBrowserClient.swift` |
 | Browser tabs, Viewer control, annotations | [Browser](agent-browser.md), [engines](agent-browser-engines.md), [remaining work](agent-browser-todo.md) | `CtrlxServerFeature/Services/AgentBrowserService.swift`, `CtrlxCommon/UI/RemoteBrowserView.swift`; native runtime in repository `CtrlxPackage/AgentBrowser/` |
+| Browser extensions, ZIP/CRX installation, native extension windows | [Usage and limits](agent-browser.md#browser-extensions), [design and acceptance](browser-extensions-design.md) | `CtrlxServerFeature/Services/BrowserExtensions/`, `CtrlxCommon/UI/RemoteBrowserExtensionsView.swift`; native `BrowserExtensions.inc` and `ExtensionSurface.inc` |
 | iOS Simulator control, pane reuse, Viewer viewing, screenshot annotation, recording and storage | [Agent iOS design](agent-simulator-design.md), [agent operations](../plugin/ctrlx/skills/agent-ios/references/operations.md) | `CtrlxServerFeature/Services/AgentSimulatorService.swift`, `CtrlxCommon/UI/RemoteSimulatorView.swift`, `CtrlxServerFeature/Services/SimulatorCoordinator.swift`, `CtrlxCLI/Commands/SimulatorCommands.swift` |
 | Layout persistence | [Layout contract](folder-layout-persistence-plan.md) | `CtrlxServerFeature/Services/LayoutPersistence/`, `CtrlxFeature/Models/IOSFileBrowserWorkspace.swift` |
 | Quick actions, phrases, voice input and custom buttons | [Quick actions](terminal-quick-actions.md) | `CtrlxCommon/` shared models/UI/voice core; `CtrlxFeature/` iOS and `CtrlxServerFeature/` Mac input UI |
@@ -46,6 +48,20 @@ removed, reclaiming about 9.6 GiB; the original Google APIs AVD, its data and
 diagnostic evidence remain. Cloud-phone comparisons and a CtrlX Android backend
 are proposals, not completed work. Earlier framework research is in
 [the simulator research](ios-simulator-research.md#补充调研google-artemis).
+
+Workspace recovery in 3.0.76 follows [工作现场恢复设计](workspace-recovery-design.md):
+session/window/pane reconstruction, detached-window layouts, Agent resume, drafts,
+Host/Viewer responsibilities and acceptance criteria. [Implementation progress](v3.0.76/IMPLEMENTATION_PLAN.md)
+records completed software integration and deferred hardware acceptance.
+Real reboot/login and physical display-removal acceptance are deferred by the
+user's 2026-10-16 decision.
+The existing folder-template persistence contract remains in the layout document above.
+
+The [Dashboard design](dashboard-design.md) defines the Mac/iOS overview of shared
+Agent account quotas, Host resources and collected usage. The first implementation
+has passed focused tests, Mac/iOS Simulator builds and isolated UI acceptance.
+The document records source conditions and remaining Claude subscription,
+cross-physical-Host and iPhone acceptance.
 
 ## How to read status and history
 

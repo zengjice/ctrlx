@@ -3,6 +3,35 @@ import CtrlxCommon
 import GitWorkbench
 import SwiftUI
 
+struct GitRecoveryContent<Content: View>: View {
+    let entry: GitStoreEntry
+    @ViewBuilder let content: () -> Content
+    @State private var retry = 0
+
+    var body: some View {
+        Group {
+            if entry.pendingRecovery == nil {
+                content()
+            } else if let issue = entry.recoveryIssue {
+                VStack(spacing: 12) {
+                    Text("Git view could not be restored").font(.headline)
+                    Text(issue).foregroundStyle(.secondary).textSelection(.enabled)
+                    HStack {
+                        Button("Retry") { retry += 1 }
+                        Button("Open Git without saved selection") { entry.openWithoutSavedSelection() }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView("Restoring Git view…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: retry) { await entry.load() }
+    }
+}
+
 /// The Git tab's content (issue #258): a thin wrapper around the third-party
 /// ``GitWorkbenchView`` so the rest of the app deals with a Ctrlx-shaped
 /// view and a single place to attach an accessibility identifier for E2E.
@@ -31,11 +60,23 @@ struct GitBrowserView: View {
     let onShowInFileExplorer: (String) -> Void
 
     @Environment(AppSettings.self) private var settings
+    @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(\.openSettings) private var openSettings
+    @State private var worktreeTrackingID = UUID()
 
     var body: some View {
         GitWorkbenchView(store: store)
             .accessibilityIdentifier("git-workbench")
+            .safeAreaInset(edge: .top, alignment: .leading, spacing: 0) {
+                WorktreeStatusButton(
+                    repositories: windowManager.worktreeRepositories,
+                    paths: Set([windowManager.gitWorktreePathsByDirectory[directoryPath]].compactMap { $0 })
+                )
+                .padding(.horizontal, 12)
+            }
+            .onAppear { windowManager.trackGitDirectory(directoryPath, for: worktreeTrackingID) }
+            .onChange(of: directoryPath) { _, path in windowManager.trackGitDirectory(path, for: worktreeTrackingID) }
+            .onDisappear { windowManager.trackGitDirectory(nil, for: worktreeTrackingID) }
             .onChangesDoubleClick { url in
                 NSWorkspace.shared.open(url)
             }

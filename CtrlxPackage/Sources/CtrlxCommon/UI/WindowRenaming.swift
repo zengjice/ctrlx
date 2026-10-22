@@ -12,6 +12,8 @@ public struct WindowRenamingModifier<AdditionalMenu: View>: ViewModifier {
 
     @State private var isEditingName = false
     @State private var editedName = ""
+    /// Keep the target captured when editing began, even if the tab is replaced.
+    @State private var pendingRename: ((String) -> Void)?
 
     public init(
         currentName: String,
@@ -48,7 +50,8 @@ public struct WindowRenamingModifier<AdditionalMenu: View>: ViewModifier {
                 onSave: { raw in
                     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { return }
-                    onRename(trimmed)
+                    pendingRename?(trimmed)
+                    pendingRename = nil
                 }
             ))
     }
@@ -56,6 +59,7 @@ public struct WindowRenamingModifier<AdditionalMenu: View>: ViewModifier {
     private func beginRenaming() {
         guard !isDisabled else { return }
         editedName = currentName
+        pendingRename = onRename
         isEditingName = true
     }
 }

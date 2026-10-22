@@ -5,6 +5,9 @@ import SwiftUI
 /// Keeps menu routing scene-local, including when several workbenches are visible.
 struct MenuCommandsModifier: ViewModifier {
     let onOpenContentSearch: @MainActor () -> Void
+    let tabCount: Int
+    let canSelectAdjacentTab: Bool
+    let onSelectTabAtIndex: @MainActor (Int) -> Void
     let onSelectPreviousTab: @MainActor () -> Void
     let onSelectNextTab: @MainActor () -> Void
     let onSelectPreviousSession: @MainActor () -> Void
@@ -19,6 +22,9 @@ struct MenuCommandsModifier: ViewModifier {
         content
             .focusedSceneValue(\.workbenchMenuActions, WorkbenchMenuActions(
                 openContentSearch: onOpenContentSearch,
+                tabCount: tabCount,
+                canSelectAdjacentTab: canSelectAdjacentTab,
+                selectTabAtIndex: onSelectTabAtIndex,
                 selectPreviousTab: onSelectPreviousTab,
                 selectNextTab: onSelectNextTab,
                 selectPreviousSession: allowsSessionNavigation ? onSelectPreviousSession : nil,
@@ -134,28 +140,15 @@ struct AlertsModifier: ViewModifier {
                     Text(error)
                 }
             }
-            .alert(
-                closeConfirmation?.title ?? "Close?",
-                isPresented: .init(
-                    get: { closeConfirmation != nil },
-                    set: {
-                        if !$0 {
-                            closeConfirmation = nil
-                        }
-                    }
-                )
-            ) {
-                if let confirmation = closeConfirmation {
-                    Button("Close Anyway", role: .destructive) {
+            .alert(item: $closeConfirmation) { confirmation in
+                Alert(
+                    title: Text(confirmation.title),
+                    message: Text(confirmation.message),
+                    primaryButton: .destructive(Text(confirmation.closesLastWindow ? "Close Session" : "Close Anyway")) {
                         onPerformClose(confirmation.target)
-                    }
-                    .keyboardShortcut(.defaultAction)
-                }
-                Button("Cancel", role: .cancel) { closeConfirmation = nil }
-            } message: {
-                if let confirmation = closeConfirmation {
-                    Text(confirmation.message)
-                }
+                    },
+                    secondaryButton: .cancel()
+                )
             }
     }
 }

@@ -5,10 +5,7 @@ extension View {
     @ViewBuilder
     func voiceInputAccessory(text: Binding<String>, isDisabled: Bool) -> some View {
         #if os(iOS)
-            padding(.trailing, 36)
-                .overlay(alignment: .bottomTrailing) {
-                    VoiceInputButton(text: text, isDisabled: isDisabled)
-                }
+            modifier(VoiceInputAccessory(text: text, isDisabled: isDisabled))
         #else
             self
         #endif
@@ -18,16 +15,19 @@ extension View {
 #if os(iOS)
     import CtrlxNetworking
 
-    typealias TerminalVoiceInputContextProvider = @MainActor () -> String?
+    typealias TerminalVoiceInputContextProvider = @MainActor () -> VoiceInputContextSnapshot?
 
     private struct TerminalInputControlStyle: ViewModifier {
         let isActive: Bool
+        let fixedWidth: Bool
+        @ScaledMetric(relativeTo: .caption) private var buttonWidth = TerminalInputControlMetrics.buttonWidth
 
         func body(content: Content) -> some View {
             content
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(isActive ? Color.red : Color.primary)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, fixedWidth ? 6 : 10)
+                .frame(width: fixedWidth ? buttonWidth : nil)
                 .frame(minHeight: TerminalInputControlMetrics.buttonHeight)
                 .background(
                     Capsule()
@@ -41,24 +41,17 @@ extension View {
     }
 
     extension View {
-        func terminalInputControlStyle(isActive: Bool = false) -> some View {
-            modifier(TerminalInputControlStyle(isActive: isActive))
+        func terminalInputControlStyle(isActive: Bool = false, fixedWidth: Bool = true) -> some View {
+            modifier(TerminalInputControlStyle(isActive: isActive, fixedWidth: fixedWidth))
         }
     }
 
-    struct VoiceInputButton: View {
-        @Environment(IOSSettings.self) private var settings
-        @Environment(\.scenePhase) private var scenePhase
-
-        @Binding var text: String
+    private struct VoiceInputControl: View {
+        let controller: VoiceInputController
         let isDisabled: Bool
         var showsLabel = false
         var usesControlStyle = false
-        var onInputStart: (() -> Void)?
-        var contextProvider: TerminalVoiceInputContextProvider = { nil }
-
-        @State private var controller = VoiceInputController()
-        @State private var baseText = ""
+        let toggleRecording: () -> Void
 
         var body: some View {
             Button(action: toggleRecording) {
@@ -78,21 +71,6 @@ extension View {
             .accessibilityHint(controller.phase.accessibilityHint)
             .accessibilityIdentifier("terminal-voice-input-control")
             .sensoryFeedback(.impact(weight: .light), trigger: controller.isRecording)
-            .onChange(of: controller.transcript, updateText)
-            .onChange(of: isDisabled) {
-                if isDisabled {
-                    controller.cancel()
-                }
-            }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase != .active { controller.cancel() }
-            }
-            .onDisappear(perform: controller.cancel)
-            .alert("Voice Input Unavailable", isPresented: isShowingError) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(controller.errorMessage ?? "Please try again.")
-            }
         }
 
         @ViewBuilder private var buttonContent: some View {
@@ -139,83 +117,106 @@ extension View {
                 icon()
                 Text(controller.isRecording ? "Stop" : "Voice")
             }
-            .terminalInputControlStyle(isActive: controller.isRecording)
+            .terminalInputControlStyle(isActive: controller.isRecording, fixedWidth: false)
             .scaleEffect(controller.isRecording ? 1.04 : 1)
             .animation(.easeInOut(duration: 0.15), value: controller.isRecording)
         }
+    }
 
-        private func toggleRecording() {
-            guard !isDisabled, controller.phase.tapAction != .none else { return }
-            let isStarting = controller.phase.tapAction == .start
-            if isStarting { prepareInput() }
-            controller.toggleRecording(
-                context: isStarting ? contextProvider() : nil,
-                correctionSelection: isStarting ? settings.voiceCorrection.selection : nil
-            )
-        }
+    /// Native reply editors own their full draft; unlike terminals, they can
+    /// provide it as explicit context and append only after finalization.
+    private struct VoiceInputAccessory: ViewModifier {
+        @Environment(IOSSettings.self) private var settings
+        @Environment(\.scenePhase) private var scenePhase
+        @Binding var text: String
+        let isDisabled: Bool
+        @State private var controller = VoiceInputController()
+        @State private var baseText = ""
 
-        private var isShowingError: Binding<Bool> {
-            Binding(
-                get: { controller.errorMessage != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        controller.errorMessage = nil
+        func body(content: Content) -> some View {
+            VStack(alignment: .leading, spacing: 8) {
+                content.padding(.trailing, 36)
+                    .overlay(alignment: .bottomTrailing) {
+                        VoiceInputControl(controller: controller, isDisabled: isDisabled, toggleRecording: toggle)
                     }
+                if controller.isFeedbackVisible {
+                    VoiceInputPreview(voice: controller, cancel: cancel)
                 }
+            }
+            .onChange(of: controller.completedTranscript) {
+                guard let transcript = controller.takeCompletedTranscript() else { return }
+                let valid = !transcript.isEmpty && !isDisabled && text == baseText && scenePhase == .active
+                if valid {
+                    text = VoiceInputTextComposer.appending(transcript, to: baseText)
+                }
+                controller.recordDelivery(enqueued: valid)
+            }
+            .onChange(of: text) {
+                if controller.phase != .idle && text != baseText {
+                    cancel()
+                }
+            }
+            .onChange(of: isDisabled) {
+                if isDisabled {
+                    cancel()
+                }
+            }
+            .onChange(of: scenePhase) {
+                if scenePhase != .active {
+                    cancel()
+                }
+            }
+            .onDisappear(perform: cancel)
+            .modifier(VoiceInputErrorAlert(voice: controller))
+        }
+
+        private func toggle() {
+            guard !isDisabled else { return }
+            let starting = controller.phase == .idle
+            if starting {
+                baseText = text
+            }
+            controller.toggleRecording(
+                context: starting ? .init(inputDraft: baseText) : nil,
+                correctionSelection: starting ? settings.voiceCorrection.selection : nil
             )
         }
 
-        private func prepareInput() {
-            onInputStart?()
-            baseText = text
-        }
-
-        private func updateText() {
-            let updatedText = VoiceInputTextComposer.appending(controller.transcript, to: baseText)
-            if text != updatedText {
-                text = updatedText
-            }
+        private func cancel() {
+            controller.cancel()
         }
     }
 
-    /// Dictation is an end-of-document correction stream, independent of the
-    /// native keyboard's caret-aware shadow editor.
     struct TerminalVoiceInputButton: View {
+        @Environment(IOSSettings.self) private var settings
+        let session: TerminalVoiceInputSession
+        let context: TerminalPhraseContext
         let isDisabled: Bool
         var showsLabel = false
         var usesControlStyle = false
         var contextProvider: TerminalVoiceInputContextProvider = { nil }
-        let sendKeys: ([TmuxKey]) -> Void
-
-        @State private var transcript = ""
-        @State private var synchronizer = TerminalInputDocumentSynchronizer()
-
         var body: some View {
-            VoiceInputButton(
-                text: $transcript,
-                isDisabled: isDisabled,
+            VoiceInputControl(
+                controller: session.voice,
+                isDisabled: isDisabled || !context.canSend,
                 showsLabel: showsLabel,
                 usesControlStyle: usesControlStyle,
-                onInputStart: beginInput,
-                contextProvider: contextProvider
+                toggleRecording: toggle
             )
-            .onChange(of: transcript, synchronizeInput)
+            .onChange(of: isDisabled) {
+                if isDisabled {
+                    session.cancel()
+                }
+            }
         }
 
-        private func beginInput() {
-            synchronizer.reset()
-            transcript = ""
-        }
-
-        private func synchronizeInput() {
-            let delta = synchronizer.advance(to: transcript)
-            var keys = Array(repeating: TmuxKey.backspace, count: delta.deletionCount)
-            if !delta.insertion.isEmpty {
-                keys.append(.text(delta.insertion))
-            }
-            if !keys.isEmpty {
-                sendKeys(keys)
-            }
+        private func toggle() {
+            guard !isDisabled else { return }
+            let starting = session.voice.phase == .idle
+            session.toggle(
+                in: context, snapshot: starting ? contextProvider() : nil,
+                selection: starting ? settings.voiceCorrection.selection : nil
+            )
         }
     }
 #endif

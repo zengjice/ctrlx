@@ -12,6 +12,16 @@ final public class MirrorWindowManager {
     /// Contains tmux metadata, agent session, terminal title, and yolo mode.
     public private(set) var paneStates: [String: PaneState] = [:]
 
+    public private(set) var worktreeRepositories: [RepositoryWorktreeStatus] = []
+    private(set) var gitWorktreePathsByDirectory: [String: String] = [:]
+
+    @ObservationIgnored private var visibleGitDirectories: [UUID: String] = [:]
+
+    @ObservationIgnored
+    @Dependency(WorktreeStatusClient.self) private var worktreeStatus
+
+    @ObservationIgnored private var gitRefreshID: UUID?
+
     /// Canonical terminal-window arrangements published to every Viewer.
     /// Layout revisions are assigned here on the Host; the Relay is stateless.
     public private(set) var sharedTerminalLayouts: [String: SharedTerminalLayout] = [:]
@@ -108,6 +118,12 @@ final public class MirrorWindowManager {
 
     // MARK: - Pane State Management
 
+    func recordCodexQuestion(paneID: String, questionID: String) {
+        var state = paneStates[paneID] ?? PaneState(paneId: paneID)
+        state.codexQuestionID = questionID
+        paneStates[paneID] = state
+    }
+
     /// Updates the pane states dictionary from tmux pane metadata.
     /// Creates new entries for newly discovered panes, updates metadata for existing panes,
     /// and removes entries for panes that no longer exist (cleaning up associated state).
@@ -137,7 +153,12 @@ final public class MirrorWindowManager {
         // Update or create entries for current panes
         for pane in panes {
             if var state = updatedStates[pane.paneId] {
+                let pathChanged = state.currentPath != pane.currentPath
                 if pane.updateMetadata(of: &state) {
+                    if pathChanged {
+                        state.gitBranch = nil
+                        state.gitWorktreePath = nil
+                    }
                     updatedStates[pane.paneId] = state
                     changed = true
                 }
@@ -176,29 +197,31 @@ final public class MirrorWindowManager {
         if changed {
             paneStates = updatedStates
         }
-        let liveWindowIdsBySession = Dictionary(grouping: updatedStates.values, by: \.sessionName)
-            .mapValues { Set($0.map(\.stableWindowId)) }
+        let liveWindowIdsBySession = Dictionary(grouping: TmuxWindow.groupPanes(Array(updatedStates.values)), by: \.sessionName)
+            .mapValues { $0.map(\.stableId) }
         var reconciledLayouts: [String: SharedTerminalLayout] = [:]
         for (sessionName, layout) in sharedTerminalLayouts {
             guard
                 let liveWindowIds = liveWindowIdsBySession[sessionName],
-                liveWindowIds.contains(layout.leftWindowId)
+                let leftWindowId = liveWindowIds.contains(layout.leftWindowId) ? layout.leftWindowId
+                : liveWindowIds.first(where: { !layout.rightWindowIds.contains($0) }) ?? liveWindowIds.first
             else { continue }
 
             let rightWindowIds = layout.rightWindowIds.filter {
-                $0 != layout.leftWindowId && liveWindowIds.contains($0)
+                $0 != leftWindowId && liveWindowIds.contains($0)
             }
             let selectedRightWindowId = layout.selectedRightWindowId
                 .flatMap { rightWindowIds.contains($0) ? $0 : nil }
                 ?? rightWindowIds.first
             if
+                leftWindowId == layout.leftWindowId,
                 rightWindowIds == layout.rightWindowIds,
                 selectedRightWindowId == layout.selectedRightWindowId {
                 reconciledLayouts[sessionName] = layout
             } else {
                 let revision = layout.revision == UInt64.max ? layout.revision : layout.revision + 1
                 reconciledLayouts[sessionName] = SharedTerminalLayout(
-                    leftWindowId: layout.leftWindowId,
+                    leftWindowId: leftWindowId,
                     rightWindowIds: rightWindowIds,
                     selectedRightWindowId: selectedRightWindowId,
                     splitRatio: layout.splitRatio,
@@ -270,7 +293,10 @@ final public class MirrorWindowManager {
     /// call after every pane refresh; existing canonical layouts are never
     /// overwritten, so a layout changed by either peer always wins over a late
     /// disk read.
+    var defersWorkspaceLayoutInitialization = false
+
     public func initializeSharedTerminalLayoutsIfNeeded() {
+        guard !defersWorkspaceLayoutInitialization else { return }
         let windowsBySession = Dictionary(
             grouping: TmuxWindow.groupPanes(
                 paneStates.values.filter { !$0.sessionName.isEmpty }
@@ -892,8 +918,13 @@ final public class MirrorWindowManager {
     /// (`doneWorking`) goes idle; an `awaiting*` form is owed an explicit response
     /// so it survives viewing — the guard now lives inside `AgentSession.markHandled`.
     /// - Parameter paneId: The pane ID whose session should be marked handled
-    public func markSessionHandled(paneId: String) {
+    @discardableResult
+    public func markSessionHandled(paneId: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) -> Bool {
+        if let expectedWorkspacePane, paneStates[paneId]?.workspaceIdentity?.isSamePane(as: expectedWorkspacePane) != true {
+            return false
+        }
         paneStates[paneId]?.agentSession?.markHandled()
+        return true
     }
 
     // MARK: - CLI Session State Override
@@ -926,11 +957,27 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - state: The override to apply, or `nil` to clear.
     ///   - sessionName: The tmux session name.
-    public func setCLISessionState(_ state: CLISessionState?, forSession sessionName: String) {
-        for (paneId, paneState) in paneStates where paneState.sessionName == sessionName {
-            paneStates[paneId]?.cliSessionState = state
+    @discardableResult
+    public func setCLISessionState(_ state: CLISessionState?, forSession sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) -> Bool {
+        let paneIDs = sessionPaneIDs(named: sessionName, matching: expectedWorkspacePane)
+        guard !paneIDs.isEmpty else { return false }
+        for paneID in paneIDs {
+            paneStates[paneID]?.cliSessionState = state
         }
         Task { await onSessionMetadataChanged?() }
+        return true
+    }
+
+    private func sessionPaneIDs(named name: String, matching identity: WorkspacePaneIdentity?) -> [String] {
+        paneStates.compactMap { paneID, state in
+            guard state.sessionName == name else {
+                return nil
+            }
+            if let identity, !identity.isSameSession(as: state.workspaceIdentity) {
+                return nil
+            }
+            return paneID
+        }
     }
 
     /// Clears the manual state override on `paneId` and every sibling pane in
@@ -959,13 +1006,18 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - enabled: Whether to enable or disable yolo mode
     ///   - paneId: The pane ID to set yolo mode for
-    public func setYoloMode(enabled: Bool, for paneId: String) {
+    @discardableResult
+    public func setYoloMode(enabled: Bool, for paneId: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) -> Bool {
+        if let expectedWorkspacePane, paneStates[paneId]?.workspaceIdentity?.isSamePane(as: expectedWorkspacePane) != true {
+            return false
+        }
         if paneStates[paneId] != nil {
             paneStates[paneId]?.yoloMode = enabled
         } else {
             // Create minimal state if needed
             paneStates[paneId] = PaneState(paneId: paneId, yoloMode: enabled)
         }
+        return true
     }
 
     /// Whether yolo mode is enabled for the given pane
@@ -981,17 +1033,14 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - description: The description text, or nil to clear
     ///   - sessionName: The tmux session name
-    public func setSessionDescription(_ description: String?, for sessionName: String) {
-        let normalizedDescription = description?.isEmpty == true ? nil : description
-        // Optimistic local update for immediate UI feedback; tmux remains the source
-        // of truth and the next refresh reconciles from it.
-        for (paneId, state) in paneStates where state.sessionName == sessionName {
-            paneStates[paneId]?.customDescription = normalizedDescription
+    public func setSessionDescription(_ description: String?, for sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        let identity = expectedWorkspacePane ?? paneStates.values.first(where: { $0.sessionName == sessionName })?.workspaceIdentity
+        let value = description?.isEmpty == true ? nil : description
+        try await tmuxService.setSessionDescription(value, for: sessionName, expectedWorkspacePane: identity)
+        for paneID in sessionPaneIDs(named: sessionName, matching: identity) {
+            paneStates[paneID]?.customDescription = value
         }
-        Task { [tmuxService] in
-            try? await tmuxService.setSessionDescription(normalizedDescription, for: sessionName)
-            await onSessionMetadataChanged?()
-        }
+        await onSessionMetadataChanged?()
     }
 
     // MARK: - Session Colors
@@ -1001,23 +1050,14 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - color: The color, or nil to clear
     ///   - sessionName: The tmux session name
-    public func setSessionColor(_ color: SessionColor?, for sessionName: String) {
-        // Optimistic local update for immediate UI feedback; tmux remains the source
-        // of truth and the next refresh reconciles from it.
-        for (paneId, state) in paneStates where state.sessionName == sessionName {
-            paneStates[paneId]?.customColor = color
+    public func setSessionColor(_ color: SessionColor?, for sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        let identity = expectedWorkspacePane ?? paneStates.values.first(where: { $0.sessionName == sessionName })?.workspaceIdentity
+        let value = color
+        try await tmuxService.setSessionColor(value, for: sessionName, expectedWorkspacePane: identity)
+        for paneID in sessionPaneIDs(named: sessionName, matching: identity) {
+            paneStates[paneID]?.customColor = value
         }
-        Task { [tmuxService, logger] in
-            do {
-                try await tmuxService.setSessionColor(color, for: sessionName)
-            } catch {
-                logger.warning("Failed to persist session color", metadata: [
-                    "session": "\(sessionName)",
-                    "error": "\(error)",
-                ])
-            }
-            await onSessionMetadataChanged?()
-        }
+        await onSessionMetadataChanged?()
     }
 
     // MARK: - Session Emoji
@@ -1027,107 +1067,60 @@ final public class MirrorWindowManager {
     /// - Parameters:
     ///   - emoji: The emoji string, or nil/empty to clear
     ///   - sessionName: The tmux session name
-    public func setSessionEmoji(_ emoji: String?, for sessionName: String) {
-        let normalizedEmoji = emoji?.isEmpty == true ? nil : emoji
-        // Optimistic local update for immediate UI feedback; tmux remains the source
-        // of truth and the next refresh reconciles from it.
-        for (paneId, state) in paneStates where state.sessionName == sessionName {
-            paneStates[paneId]?.customEmoji = normalizedEmoji
+    public func setSessionEmoji(_ emoji: String?, for sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+        let identity = expectedWorkspacePane ?? paneStates.values.first(where: { $0.sessionName == sessionName })?.workspaceIdentity
+        let value = emoji?.isEmpty == true ? nil : emoji
+        try await tmuxService.setSessionEmoji(value, for: sessionName, expectedWorkspacePane: identity)
+        for paneID in sessionPaneIDs(named: sessionName, matching: identity) {
+            paneStates[paneID]?.customEmoji = value
         }
-        Task { [tmuxService, logger] in
-            do {
-                try await tmuxService.setSessionEmoji(normalizedEmoji, for: sessionName)
-            } catch {
-                logger.warning("Failed to persist session emoji", metadata: [
-                    "session": "\(sessionName)",
-                    "error": "\(error)",
-                ])
-            }
-            await onSessionMetadataChanged?()
-        }
+        await onSessionMetadataChanged?()
     }
 
     // MARK: - Git Branch Detection
 
-    private static let gitPath = "/usr/bin/git"
+    func trackGitDirectory(_ path: String?, for viewID: UUID) {
+        visibleGitDirectories[viewID] = path
+    }
 
-    /// Refreshes git branch info for all panes that have a current path. The Git
-    /// tab's changed-file badge (issue #573) is driven separately, straight off
-    /// the per-session GitWorkbench store's `summary`; the sidebar branch keeps
-    /// using a single cheap `git rev-parse` here rather than GitWorkbench's
-    /// heavier `loadStatus()`.
     func refreshGitBranches() async {
-        var panesForPath: [String: [String]] = [:]
-        for (paneId, state) in paneStates {
-            guard let path = state.currentPath, !path.isEmpty else { continue }
-            panesForPath[path, default: []].append(paneId)
+        let refreshID = UUID()
+        gitRefreshID = refreshID
+        let paths = paneStates.compactMapValues { state in
+            state.currentPath.flatMap { $0.isEmpty ? nil : $0 }
         }
+        let result = await worktreeStatus.refresh(Array(Set(paths.values).union(visibleGitDirectories.values)))
+        guard gitRefreshID == refreshID else { return }
 
-        let branchesByPath = await withTaskGroup(
-            of: (String, String?).self,
-            returning: [(String, String?)].self
-        ) { group in
-            for path in panesForPath.keys {
-                group.addTask { [processRunner] in
-                    let branch = await Self.detectGitBranch(at: path, processRunner: processRunner)
-                    return (path, branch)
-                }
-            }
-
-            var result: [(String, String?)] = []
-            for await (path, branch) in group {
-                result.append((path, branch))
-            }
-            return result
-        }
-
-        // Re-read after the task group: this actor was re-entrant while git ran,
-        // so starting from the pre-await dictionary could overwrite newer agent
-        // or terminal state. Publish once, and only when a branch really changed.
-        var updatedStates = paneStates
+        // Read again after I/O: a pane may have moved or received newer agent
+        // state while Git was running. Never overwrite that newer state.
+        var updated = paneStates
         var changed = false
-        for (path, branch) in branchesByPath {
-            for paneId in panesForPath[path] ?? [] {
-                guard
-                    var state = updatedStates[paneId],
-                    state.currentPath == path,
-                    state.gitBranch != branch
-                else { continue }
-                state.gitBranch = branch
-                updatedStates[paneId] = state
+        for (paneID, path) in paths {
+            guard var state = updated[paneID], state.currentPath == path else { continue }
+            let location = result.locations[path]
+            if state.gitBranch != location?.branch || state.gitWorktreePath != location?.root {
+                state.gitBranch = location?.branch
+                state.gitWorktreePath = location?.root
+                updated[paneID] = state
                 changed = true
             }
         }
         if changed {
-            paneStates = updatedStates
+            paneStates = updated
+        }
+        let roots = result.locations.mapValues(\.root)
+        if gitWorktreePathsByDirectory != roots {
+            gitWorktreePathsByDirectory = roots
+        }
+        if worktreeRepositories != result.repositories {
+            worktreeRepositories = result.repositories
+            changed = true
+        }
+        if changed {
+            await onSessionMetadataChanged?()
         }
     }
-
-    /// Detects the git branch for a given directory path.
-    /// Returns nil if the path is not inside a git repository.
-    private static func detectGitBranch(
-        at path: String,
-        processRunner: ProcessRunner
-    ) async -> String? {
-        guard FileManager.default.fileExists(atPath: path) else { return nil }
-        guard
-            let result = try? await processRunner.run(
-                gitPath,
-                ["-C", path, "rev-parse", "--abbrev-ref", "HEAD"],
-                nil,
-                5
-            ) else { return nil }
-
-        guard result.isSuccess else { return nil }
-        let branch = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if branch.isEmpty { return nil }
-        // `git rev-parse --abbrev-ref HEAD` returns the literal "HEAD" when the
-        // working copy is in a detached-HEAD state. Surface that explicitly
-        // rather than showing "HEAD" in the sidebar.
-        if branch == "HEAD" { return "(detached)" }
-        return branch
-    }
-
 }
 
 #if DEBUG

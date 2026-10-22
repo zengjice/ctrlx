@@ -268,7 +268,7 @@ actor TmuxControlClient {
         processGeneration &+= 1
         let generation = processGeneration
 
-        var arguments = ["-C", "-f", "ignore-size", "attach", "-t", sessionTarget]
+        var arguments = ["-C", "attach", "-f", "ignore-size", "-t", sessionTarget]
         if let socketPath, !socketPath.isEmpty {
             arguments = ["-S", socketPath] + arguments
         }
@@ -442,7 +442,8 @@ actor TmuxControlClient {
         _ commands: [String],
         timeout: TimeInterval = 5,
         onWritten: (@Sendable () -> Void)? = nil,
-        onResponse: (@MainActor @Sendable (CommandResponse) -> Void)? = nil
+        onResponse: (@MainActor @Sendable (CommandResponse) -> Void)? = nil,
+        additionalResponseCount: Int = 0
     ) async throws -> [CommandResponse] {
         guard !commands.isEmpty else { return [] }
         guard let stdin else {
@@ -468,7 +469,10 @@ actor TmuxControlClient {
             let response = try await withCheckedThrowingContinuation { continuation in
                 pendingCommandQueue.append(PendingCommand(
                     id: commandNumber,
-                    responseCount: commands.count,
+                    // A synchronous if-shell emits its own block followed by
+                    // the selected branch's blocks. Its caller must include
+                    // those known responses before a later request can drain.
+                    responseCount: commands.count + additionalResponseCount,
                     continuation: continuation,
                     onResponse: onResponse
                 ))

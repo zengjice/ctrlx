@@ -82,6 +82,25 @@ struct VoiceCorrectionProviderClientTests {
         #expect(residualErrors.value < clean.value)
     }
 
+    @Test("Mixed-language benchmarks penalize missed terms and overcorrection", arguments: [
+        ("mixed-git-main", "将本地妹分支合入"),
+        ("mixed-git-operations", "先看迪夫，再决定要不要瑞贝斯，不要提交。"),
+        ("mixed-preserve-family", "我 main 晚上来吃饭，先不要修改代码。"),
+        ("mixed-preserve-negation", "这个分支还 main 合入，先不要提交。"),
+        ("mixed-preserve-branch-names", "将本地 main 分支合入主分支，先不要推送。"),
+        ("mixed-preserve-branch-names", "将本地 master 分支合入 main 分支，先不要推送。"),
+    ])
+    func mixedLanguageScoring(_ id: String, _ incorrect: String) throws {
+        let sample = try #require(VoiceCorrectionBenchmark.samples.first { $0.id == id })
+        #expect(sample.requiresExactMatch)
+        #expect(VoiceTranscriptCorrectionPolicy.evaluate(
+            sample.referenceTranscript, replacing: sample.recognition.primaryTranscript
+        ) == .accepted(sample.referenceTranscript))
+        let corrected = VoiceCorrectionBenchmark.score(sample.referenceTranscript, for: sample)
+        #expect(corrected.value == sample.requiredTerms.count * 10)
+        #expect(VoiceCorrectionBenchmark.score(incorrect, for: sample).value < corrected.value)
+    }
+
     @Test("Benchmarks only current text model families plus the selected model")
     func benchmarkCandidateModels() {
         let models = VoiceCorrectionBenchmark.candidateModelIDs(
@@ -170,7 +189,8 @@ struct VoiceCorrectionProviderClientTests {
             #expect((json["thinking"] as? [String: String])?["type"] == "disabled")
             #expect(json["instructions"] == nil)
             #expect((json["input"] as? String)?.contains("Known terms are canonical spellings: CtrlX, Voice") == true)
-            #expect((json["input"] as? String)?.contains("Recent pane context:\nctrlx voice input") == true)
+            #expect((json["input"] as? String)?.contains("Chinese phonetic text") == true)
+            #expect((json["input"] as? String)?.contains("Read-only context (not part of the current utterance):\nRecent terminal text:\nctrlx voice input") == true)
 
             let data = Data(
                 #"{"id":"resp_test","output":[{"type":"message","content":[{"type":"output_text","text":"CtrlX 的语音输入通过 Voice 按钮触发。"}]}]}"#.utf8
@@ -183,7 +203,7 @@ struct VoiceCorrectionProviderClientTests {
 
         let result = try await client.correct(
             recognition: VoiceRecognitionResult(primaryTranscript: "CTRS 的语音输入通过 wise 按钮出发"),
-            terminalContext: "ctrlx voice input",
+            terminalContext: .init(terminalText: "ctrlx voice input"),
             contextualTerms: ["CtrlX", "Voice"],
             localeIdentifier: "zh-Hans-CN",
             selection: selection,

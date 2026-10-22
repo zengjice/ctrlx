@@ -5,6 +5,7 @@
 #include "PageActions.h"
 #include "PageKeys.h"
 #include "RemoteBrowserFrame.h"
+#include "BrowserRecordingWriter.h"
 #include "EngineServer.h"
 #include <atomic>
 #include <libproc.h>
@@ -26,6 +27,7 @@
 #include "include/cef_parser.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_helpers.h"
+#include "BrowserClipboard.h"
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -33,6 +35,7 @@ constexpr size_t kMaxRequest = 65536;
 constexpr size_t kMaxResponse = 8 * 1024 * 1024;
 int engineServers = 0; // CEF UI RunLoop only, including shutdown completion.
 std::atomic_size_t remoteImageJobs{0};
+std::atomic_size_t browserRecordingJobs{0};
 
 std::string JSON(id value) {
   NSData* data = [NSJSONSerialization dataWithJSONObject:value
@@ -96,6 +99,8 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Remove(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
+    for (auto& [id, tab] : tabs_) if (tab.browser->IsSame(browser) && recordings_.contains(id))
+      StopRecording(recordings_.at(id), @"tab-closed");
 #if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
     ForgetProbeView(browser->GetIdentifier());
 #endif
@@ -115,6 +120,7 @@ class Bridge final : public CefDevToolsMessageObserver {
 
   void Stop() {
     CEF_REQUIRE_UI_THREAD();
+    for (auto& [id, recording] : recordings_) StopRecording(recording, @"host-stopped");
 #if defined(CTRLX_UPSTREAM_BROWSER_PROBE)
     while (!probeViews_.empty()) ForgetProbeView(probeViews_.begin()->first);
 #endif
@@ -239,6 +245,7 @@ class Bridge final : public CefDevToolsMessageObserver {
   }
 #include "EngineBridge.inc"
 #include "RemoteBrowser.inc"
+#include "BrowserRecording.inc"
  public:
   void OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* data, size_t size) override {
     EngineEvent(browser, method, data, size);
@@ -348,6 +355,7 @@ class Bridge final : public CefDevToolsMessageObserver {
       Reap();
       nextReap_ = Clock::now() + std::chrono::seconds(1);
     }
+    RecordingTick();
     // Nonblocking and bounded per tick: no socket wait on Chromium's UI thread.
     if (clients_.size() < 8) {
       int fd = accept(listener_, nullptr, nullptr);
@@ -414,6 +422,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if (it == clients_.end() || !it->second.busy) return;
     if (!Authorized(id)) return;
     auto browser = it->second.browser;
+    AgentBrowserCancelHumanInput(browser);
     const int message = ++nextMessage_;
     auto parsed = CefParseJSON(JSON(params), JSON_PARSER_RFC);
     pending_.emplace(std::pair{browser->GetIdentifier(), message}, Pending{id, it->second.generation, std::move(done)});
@@ -516,12 +525,14 @@ class Bridge final : public CefDevToolsMessageObserver {
     if ([command isEqual:@"open"]) {
       NSString* url = request[@"url"];
       if (!ValidURL(url)) { Reply(id, nil, @"Only HTTP(S) URLs without embedded credentials are allowed."); return; }
-      if (tabs_.size() >= 64) { Reply(id, nil, @"Close unused tabs first (64-tab limit)."); return; }
+      if (request[@"new"] && CFGetTypeID((__bridge CFTypeRef)request[@"new"]) != CFBooleanGetTypeID()) {
+        Reply(id, nil, @"new must be a boolean."); return;
+      }
       // Routing queries tmux asynchronously. Never block the UI/CEF thread on
       // process I/O, and never substitute the currently focused terminal.
       client.busy = true;
       client.opening = true;
-      callbacks_.open(client.run, ownership_.runs.at(client.run).pid, url.UTF8String,
+      callbacks_.open(client.run, ownership_.runs.at(client.run).pid, url.UTF8String, [request[@"new"] boolValue],
           [self = CefRefPtr<Bridge>(this), id] {
         auto it = self->clients_.find(id);
         return self->listener_ >= 0 && it != self->clients_.end() && it->second.busy &&
@@ -539,6 +550,7 @@ class Bridge final : public CefDevToolsMessageObserver {
       });
       return;
     }
+    if (RecordingRequest(id, request)) return;
     if (![@[@"read", @"click", @"type", @"fill", @"press", @"scroll", @"wait", @"select", @"check",
            @"screenshot", @"navigate", @"close", @"show"] containsObject:command]) {
       Reply(id, nil, @"Unsupported command; arbitrary CDP/evaluation and cross-group control are not exposed."); return;
@@ -564,6 +576,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if ([command isEqual:@"navigate"]) {
       NSString* destination = request[@"url"];
       if (!ValidURL(destination)) { Reply(id, nil, @"Invalid HTTP(S) URL."); return; }
+      AgentBrowserCancelHumanInput(client.browser);
       client.browser->GetMainFrame()->LoadURL(destination.UTF8String);
       Reply(id, @{}); return;
     }
@@ -623,11 +636,8 @@ class Bridge final : public CefDevToolsMessageObserver {
           [this, id](NSDictionary* result) { Reply(id, result); });
       return;
     }
-    // DOM focus alone does not make a hidden native CEF tab an input target.
-    // Reveal/focus this already-authorized tab before real CDP input; never
-    // route input to whichever tab the human happened to leave selected.
-    callbacks_.select(client.browser);
-    client.browser->GetHost()->SetFocus(true);
+    // Page input targets this authorized browser, independently of the user's
+    // selected workspace and native keyboard focus. Only "show" selects a tab.
     if ([command isEqual:@"press"]) {
       NSDictionary* down = PageKeyDown(params[@"key"]);
       if (!down) { Reply(id, nil, @"Unsupported page key. Use Enter/Tab/Escape/Space/arrows/Home/End/PageUp/PageDown/Backspace/Delete with modifiers, or Meta+A/Control+A."); return; }
@@ -705,6 +715,7 @@ bool AssignAgentBrowserTab(NSString* tab, NSString* run) { return bridge && brid
 bool AgentBrowserTabBusy(CefRefPtr<CefBrowser> browser) { return bridge && bridge->Busy(browser); }
 bool SetAgentBrowserHumanControl(NSString* tab, NSString* token) { return bridge && bridge->SetHumanControl(tab, token); }
 bool AgentBrowserHumanControlled(CefRefPtr<CefBrowser> browser) { return bridge && bridge->HumanControlled(browser); }
+std::string AgentBrowserHumanControlToken(CefRefPtr<CefBrowser> browser) { return bridge ? bridge->HumanControlToken(browser) : ""; }
 void RequestRemoteBrowserTab(NSString* tab, NSData* request, void (^completion)(NSData*, NSString*)) {
   if (bridge) bridge->RemoteRequest(tab, request, completion);
   else completion(nil, @"Browser stopped.");
@@ -721,4 +732,4 @@ bool AgentBrowserDialog(CefRefPtr<CefBrowser> browser, cef_jsdialog_type_t type,
 }
 void AgentBrowserDialogReset(CefRefPtr<CefBrowser> browser) { if (bridge) bridge->DialogReset(browser); }
 void StopAgentBrowser() { if (bridge) bridge->Stop(); bridge = nullptr; }
-bool AgentBrowserTransportsStopped() { return engineServers == 0 && remoteImageJobs.load() == 0; }
+bool AgentBrowserTransportsStopped() { return engineServers == 0 && remoteImageJobs.load() == 0 && browserRecordingJobs.load() == 0; }

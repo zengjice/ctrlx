@@ -18,8 +18,10 @@ struct RemoteWindowTabBar: View {
     @Environment(AppSettings.self) private var settings
 
     let windows: [TmuxWindow]
+    var sourcePanes: [PaneState] = []
     let selectedWindow: TmuxWindow?
     let isHostConnected: Bool
+    let hasCurrentHostState: Bool
     /// In-app browser tabs scoped to this remote session. Empty when no
     /// terminal-link click has spawned a tab yet.
     let openBrowserTabs: [BrowserTab]
@@ -51,7 +53,7 @@ struct RemoteWindowTabBar: View {
     let onReorderBrowserTabs: ([UUID]) -> Void
     var onSelectFileTab: ((UUID) -> Void)?
     var onCloseFileTab: ((UUID) -> Void)?
-    let onOpenFiles: (TmuxWindow) -> Void
+    let onOpenFiles: (TmuxWindow, Bool) -> Void
     var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
 
     /// Cached width of the split-mode tab strip. Measured via the background
@@ -90,19 +92,16 @@ struct RemoteWindowTabBar: View {
         sessionTabs?.rightSide.contains(payload) ?? false
     }
 
-    /// Source-of-truth ordering for the tab strip — reconciles the persisted
-    /// `sessionTabs.tabOrder` with the live windows / browser tabs so newly-
-    /// discovered entries are slotted in and removed entries drop out without
-    /// rewriting the array elsewhere. New windows insert at the end of the
-    /// windows subsequence (right before the first browser tab); new browser
-    /// tabs append at the very end. Remote sessions have no file explorer, file
-    /// tabs, or Git tab, hence `includeFileExplorer: false` and
-    /// `includeGit: false`.
-    ///
-    /// Shares `TabDragPayload.reconciledOrder` with the local strip and both
-    /// keyboard cyclers so all four surfaces stay in lockstep (issue #566).
+    /// Keep source labels for children whose terminal is in another workbench.
+    private var groupPanes: [PaneState] {
+        let ids = PaneLinkedTabs.ordered(windows.map(\.stableId), stored: sessionTabs?.tabOrder.compactMap(\.windowId) ?? [])
+        let visible = ids.flatMap { id in windows.first { $0.stableId == id }?.panes ?? [] }
+        let seen = Set(visible.map(\.paneId))
+        return visible + sourcePanes.filter { !seen.contains($0.paneId) }
+    }
+
     private var effectiveTabOrder: [TabDragPayload] {
-        TabDragPayload.reconciledOrder(
+        let order = TabDragPayload.reconciledOrder(
             windowIds: windows.map(\.stableId),
             fileTabIds: sessionTabs?.openFileTabs.map(\.id) ?? [],
             browserTabIds: openBrowserTabs.map(\.id),
@@ -110,6 +109,11 @@ struct RemoteWindowTabBar: View {
             includeFileExplorer: false,
             includeGit: false
         )
+        return sessionTabs?.groupedTabOrder(order, paneOrder: groupPanes.map(\.paneId)) ?? order
+    }
+
+    private var persistableTabOrder: [TabDragPayload]? {
+        hasCurrentHostState ? effectiveTabOrder : nil
     }
 
     /// Effective order restricted to entries visible on the left section in
@@ -154,22 +158,17 @@ struct RemoteWindowTabBar: View {
         // Persist the reconciled order so newly-appended windows / browsers
         // and pruned entries survive view rebuilds and session switches. The
         // computed value is idempotent so this can't loop.
-        .onChange(of: effectiveTabOrder) { _, new in
+        .onChange(of: persistableTabOrder, initial: true) { _, new in
+            // Disconnect clears the live pane list, not the saved tab order.
+            guard let new else { return }
             if sessionTabs?.tabOrder != new {
-                sessionTabs?.tabOrder = new
-            }
-        }
-        .onAppear {
-            let computed = effectiveTabOrder
-            if sessionTabs?.tabOrder != computed {
-                sessionTabs?.tabOrder = computed
+                sessionTabs?.recordVisibleTabOrder(new)
             }
         }
     }
 
-    @ViewBuilder
-    private var tabBarDivider: some View {
-        if settings.theme == .anysphereDark {
+    @ViewBuilder private var tabBarDivider: some View {
+        if settings.theme.usesSubtleTabBorder {
             Rectangle()
                 .fill(settings.theme.workspaceBorderColor)
                 .frame(height: 1)
@@ -182,7 +181,7 @@ struct RemoteWindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                ForEach(effectiveTabOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: effectiveTabOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 trailingDropZone(for: .single)
@@ -196,7 +195,7 @@ struct RemoteWindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                ForEach(leftSectionOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: leftSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 trailingDropZone(for: .left)
@@ -209,7 +208,7 @@ struct RemoteWindowTabBar: View {
     private var rightSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-                ForEach(rightSectionOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: rightSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 trailingDropZone(for: .right)
@@ -265,7 +264,9 @@ struct RemoteWindowTabBar: View {
                 openBrowserTabView(tab)
             }
         case let .file(id):
-            if let tab = sessionTabs?.directoryTabs[id] { fileTab(tab) }
+            if let tab = sessionTabs?.directoryTabs[id] {
+                fileTab(tab)
+            }
         case .fileExplorer,
              .git:
             EmptyView()
@@ -289,8 +290,13 @@ struct RemoteWindowTabBar: View {
             Button { onSelectFileTab?(tab.id) } label: {
                 Label(tab.title, symbol: .folder).lineLimit(1).padding(.horizontal, 10).padding(.vertical, 6)
             }.buttonStyle(.plain)
-            TabSplitToggleButton(isSplit: isSplit, isOnRight: onRight, tabKind: "file tab", tabName: tab.title,
-                                 action: { onToggleSplit(payload) })
+            TabSplitToggleButton(
+                isSplit: isSplit,
+                isOnRight: onRight,
+                tabKind: "file tab",
+                tabName: tab.title,
+                action: { onToggleSplit(payload) }
+            )
             TabCloseButton(isVisible: true, accessibilityLabel: "Close \(tab.title)", action: { onCloseFileTab?(tab.id) })
                 .padding(.trailing, 6)
         }
@@ -339,11 +345,16 @@ struct RemoteWindowTabBar: View {
                 additionalMenu: {
                     Button("Open in Separate Window") { onDetachWindow?(window, nil) }
                         .disabled(onDetachWindow == nil || DetachedTerminalTarget(hostID: nil, windowID: window.stableId) == nil)
-                    Button { onOpenFiles(window) } label: {
+                    Button { onOpenFiles(window, false) } label: {
                         Label("Open Files", symbol: .folderBadgePlus)
                     }
-                    .disabled(!isHostConnected)
+                    .disabled(!isHostConnected || window.panes.isEmpty)
                     .accessibilityIdentifier("window-open-files-\(window.stableId)")
+                    Button { onOpenFiles(window, true) } label: {
+                        Label("Open Another Files Tab", symbol: .folderBadgePlus)
+                    }
+                    .disabled(!isHostConnected || window.panes.isEmpty)
+                    .accessibilityIdentifier("window-open-another-files-\(window.stableId)")
 
                     Button { onOpenBrowser(window) } label: {
                         Label("Open Browser on Host", symbol: .globe)
@@ -371,8 +382,8 @@ struct RemoteWindowTabBar: View {
             TabCloseButton(
                 isVisible: isSelected || isHovered,
                 isDisabled: !isHostConnected,
-                accessibilityLabel: "Close window: \(windowName)",
-                helpText: "Close window",
+                accessibilityLabel: "Close tab: \(windowName)",
+                helpText: "Close tab",
                 action: { onCloseWindow(window) }
             )
             .padding(.trailing, 6)
@@ -426,14 +437,14 @@ struct RemoteWindowTabBar: View {
 
     private func handleDrop(payloads: [TabDragPayload], target: TabDragPayload) -> Bool {
         defer { dropIndicator = nil }
-        guard let source = payloads.first, source != target else { return false }
+        guard let source = payloads.first, source != target, sessionTabs?.canReorder(source, before: target) == true else { return false }
 
         let previousOrder = effectiveTabOrder
         guard let order = TabDragPayload.moving(source, before: target, in: previousOrder) else { return false }
         let windowOrderChanged = order.compactMap(\.windowId) != windows.map(\.stableId)
         guard !windowOrderChanged || sessionTabs?.isWindowReorderPending != true else { return false }
 
-        sessionTabs?.tabOrder = order
+        sessionTabs?.recordVisibleTabOrder(order)
 
         adjustSplitSideIfNeeded(source: source, to: sectionOf(target))
         syncSubsequences(from: order, rollbackOrder: previousOrder)
@@ -460,17 +471,27 @@ struct RemoteWindowTabBar: View {
             insertIndex = (order.lastIndex { !isOnRight($0) } ?? -1) + 1
         }
 
-        order.insert(moved, at: min(insertIndex, order.count))
+        let destination: Int
+        if source.isLinkedContent {
+            destination = (order.lastIndex { sessionTabs?.canReorder(source, before: $0) == true } ?? -1) + 1
+        } else if source.windowId != nil {
+            destination = (order.lastIndex { $0.windowId != nil } ?? -1) + 1
+        } else {
+            destination = insertIndex
+        }
+        order.insert(moved, at: min(destination, order.count))
         let windowOrderChanged = order.compactMap(\.windowId) != windows.map(\.stableId)
         guard !windowOrderChanged || sessionTabs?.isWindowReorderPending != true else { return false }
-        sessionTabs?.tabOrder = order
+        sessionTabs?.recordVisibleTabOrder(order)
         adjustSplitSideIfNeeded(source: source, to: section)
         syncSubsequences(from: order, rollbackOrder: previousOrder)
         return true
     }
 
     private func sectionOf(_ ref: TabDragPayload) -> TabSection {
-        if isOnRight(ref) { return .right }
+        if isOnRight(ref) {
+            return .right
+        }
         return isSplit ? .left : .single
     }
 
@@ -483,11 +504,21 @@ struct RemoteWindowTabBar: View {
     private func syncSubsequences(from order: [TabDragPayload], rollbackOrder: [TabDragPayload]) {
         if let tabs = sessionTabs {
             let files = Dictionary(uniqueKeysWithValues: tabs.openFileTabs.map { ($0.id, $0) })
-            tabs.openFileTabs = order.compactMap { if case let .file(id) = $0 { files[id] } else { nil } }
+            tabs.openFileTabs = order.compactMap {
+                if case let .file(id) = $0 {
+                    files[id]
+                } else {
+                    nil
+                }
+            }
         }
         let windowIds = order.compactMap(\.windowId)
         let browserIds: [UUID] = order.compactMap { ref in
-            if case let .browser(id) = ref { return id } else { return nil }
+            if case let .browser(id) = ref {
+                return id
+            } else {
+                return nil
+            }
         }
 
         if windowIds != windows.map(\.stableId), !windowIds.isEmpty {

@@ -45,4 +45,39 @@ struct TerminalStreamLeaseCommandTests {
         #expect(start.leaseId == nil)
         #expect(stop.leaseId == nil)
     }
+
+    @Test("Stream frames retain their lease and reject stale or missing leases on capable Hosts")
+    func streamFrameIdentity() throws {
+        let current = UUID()
+        let stale = UUID()
+        let updates: [TerminalStreamMessage.StreamUpdateType] = [
+            .initialState(.init(width: 80, height: 24, content: Data())),
+            .resetState(.init(width: 80, height: 24, content: Data())),
+            .dataChunk(.init(data: Data("bytes".utf8))),
+            .dimensionChange(.init(width: 90, height: 30)),
+            .titleChange(.init(title: "title")),
+            .notification(.init(body: "notice")),
+            .clipboardUpdate(.init(content: "clipboard")),
+            .streamEnd,
+        ]
+        for update in updates {
+            let legacy = TerminalStreamMessage(paneId: "%0", updateType: update)
+            let modern = legacy.withLeaseId(current)
+            let decoded = try JSONDecoder().decode(TerminalStreamMessage.self, from: JSONEncoder().encode(modern))
+            #expect(decoded.leaseId == current && decoded.id == legacy.id && decoded.updateType == update)
+            #expect(decoded.matchesLease(current, requiresLease: true))
+            #expect(!decoded.matchesLease(stale, requiresLease: true))
+            #expect(!decoded.matchesLease(stale, requiresLease: false))
+            #expect(!decoded.matchesLease(nil, requiresLease: false))
+            let oldDecoded = try JSONDecoder().decode(TerminalStreamMessage.self, from: JSONEncoder().encode(legacy))
+            #expect(oldDecoded.leaseId == nil)
+            #expect(oldDecoded.matchesLease(current, requiresLease: false))
+            #expect(!oldDecoded.matchesLease(current, requiresLease: true))
+        }
+        let state = SessionStateMessage(pairId: "old", paneStates: [:], supportsTerminalStreamIdentity: true)
+        let decoded = try JSONDecoder().decode(SessionStateMessage.self, from: JSONEncoder().encode(state.withPairId("new")))
+        #expect(decoded.pairId == "new" && decoded.supportsTerminalStreamIdentity == true)
+        let oldState = try JSONDecoder().decode(SessionStateMessage.self, from: JSONEncoder().encode(SessionStateMessage(pairId: "old", paneStates: [:])))
+        #expect(oldState.supportsTerminalStreamIdentity == nil)
+    }
 }

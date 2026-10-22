@@ -1,13 +1,208 @@
 #if os(macOS)
     import AppKit
+    import ConcurrencyExtras
     import CtrlxCommon
+    import CtrlxNetworking
     import Dependencies
     import Testing
     @testable import CtrlxServerFeature
 
+    /// The CLI test process has no foreground app; only window activation is supplied.
+    @MainActor
+    final private class TerminalMouseTestWindow: NSWindow {
+        var keyForTesting = false
+        override var isKeyWindow: Bool {
+            keyForTesting
+        }
+    }
+
     @MainActor
     @Suite("Mac terminal mouse routing", .serialized)
     struct MacTerminalMouseRoutingTests {
+        @Test("Focus Fit requires a real first-responder transition")
+        func focusRestoration() {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            window.makeFirstResponder(nil)
+            var restorations = 0
+            var notifications = 0
+            view.onFocusRestored = { restorations += 1 }
+            view.onBecomeFirstResponder = { notifications += 1 }
+
+            #expect(view.focusTerminal())
+            #expect(restorations == 1)
+            #expect(view.focusTerminal())
+            #expect(restorations == 1)
+            #expect(notifications == 2)
+            #expect(panes[1].focusTerminal())
+            #expect(view.focusTerminal())
+            #expect(restorations == 2)
+        }
+
+        @Test("Hidden bootstrap defers focus Fit and checks focus again at reveal", arguments: [false, true])
+        func hiddenFocusRestoration(focusLeaves: Bool) {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            window.makeFirstResponder(nil)
+            var restorations = 0
+            view.onFocusRestored = { restorations += 1 }
+            view.isHidden = true
+            #expect(view.focusTerminal())
+            #expect(view.focusTerminal())
+            #expect(restorations == 0)
+            if focusLeaves {
+                #expect(panes[1].focusTerminal())
+            }
+
+            view.isHidden = false
+            view.completePendingFocusRestoration()
+            view.completePendingFocusRestoration()
+            #expect(restorations == (focusLeaves ? 0 : 1))
+            #expect(view.focusTerminal())
+            #expect(restorations == 1)
+        }
+
+        @Test("Mouse focus never becomes a deferred bootstrap Fit", arguments: [false, true])
+        func hiddenMouseFocus(previousProgrammaticFocus: Bool) {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            window.makeFirstResponder(nil)
+            var restorations = 0
+            view.onFocusRestored = { restorations += 1 }
+            view.isHidden = true
+            if previousProgrammaticFocus {
+                #expect(view.focusTerminal())
+            }
+            #expect(view.focusTerminal(source: .mouse))
+            #expect(restorations == 0)
+
+            view.isHidden = false
+            view.completePendingFocusRestoration()
+            #expect(view.focusTerminal())
+            #expect(restorations == 0)
+            #expect(panes[1].focusTerminal())
+            #expect(view.focusTerminal())
+            #expect(restorations == 1)
+        }
+
+        @Test("An enlarged terminal fits only after a completed plain click", arguments: [false, true])
+        func resizedContentClick(fromOtherPane: Bool) async throws {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            let target = TerminalTabFit.Target(hostID: nil, sessionName: "dev", windowID: "@1")
+            var fit = TerminalTabFit()
+            var requests: [ResizeTmuxPane] = []
+            func grid() -> ResizeTmuxPane {
+                .init(width: Int(view.bounds.width / view.cellSize.width), height: Int(view.bounds.height / view.cellSize.height), userInitiated: true)
+            }
+            fit.recordFit(for: target, request: grid())
+            view.onContentClick = {
+                let request = grid()
+                fit.requestAfterViewportChange(target, measuredRequest: request)
+                if let request = fit.takeRequest(for: target, isAvailable: true, isPresentationReady: true, measuredRequest: request) {
+                    requests.append(request)
+                    fit.recordFit(for: target, request: request)
+                }
+            }
+            view.onFocusRestored = view.onContentClick
+            view.focusTerminal()
+            #expect(window.isKeyWindow)
+            window.setContentSize(NSSize(width: 1_800, height: 800))
+            view.frame.size = NSSize(width: 1_000, height: 800)
+            view.layoutSubtreeIfNeeded()
+            #expect(requests.isEmpty)
+            for index in 0..<2 {
+                if fromOtherPane {
+                    panes[1].focusTerminal()
+                }
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [], afterStep: { _ in
+                    #expect(requests.count == index)
+                    #expect(window.firstResponder === view.terminalView)
+                })
+                try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+                #expect(requests == [grid()])
+                #expect(window.firstResponder === view.terminalView)
+            }
+        }
+
+        @Test("Selection, links and application mouse clicks never request content Fit", arguments: ["drag", "doubleClick", "tripleClick", "link", "mouse", "shift", "editor", "ime"], [false, true])
+        func contentClickExclusions(action: String, fromOtherPane: Bool) async throws {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            panes[fromOtherPane ? 1 : 0].focusTerminal()
+            var clicks = 0
+            var links = 0
+            view.onContentClick = { clicks += 1 }
+            view.onFocusRestored = view.onContentClick
+            view.frame.size = NSSize(width: 1_000, height: 600)
+            view.layoutSubtreeIfNeeded()
+            view.onOpenURL = { _, _ in links += 1
+                return true
+            }
+            if action == "link" {
+                view.feed(byteArray: Array("\u{1b}[Hhttps://example.com".utf8)[...])
+            }
+            if action == "mouse" {
+                enableMouseMode(1_002, in: view)
+            }
+            if action == "editor" {
+                view.isEditorActive = true
+            }
+            if action == "ime" {
+                view.terminalView.setMarkedText("拼", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            if action == "drag" {
+                try drag(in: view)
+            } else {
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: action == "shift" ? .shift : [])
+                if action == "doubleClick" || action == "tripleClick" {
+                    try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [], clickCount: 2)
+                    if action == "tripleClick" {
+                        try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [], clickCount: 3)
+                    }
+                }
+            }
+            try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+            #expect(clicks == 0)
+            #expect(links == (action == "link" ? 1 : 0))
+        }
+
+        @Test("Delayed content clicks are cancelled by input or a stale presentation", arguments: ["key", "scroll", "focus", "hidden", "removed", "inactive", "stop"])
+        func pendingContentClickCancellation(action: String) async throws {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            var clicks = 0
+            view.onContentClick = { clicks += 1 }
+            let recipient = try mouseRecipient(in: view)
+            try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [])
+            switch action {
+            case "key":
+                let event = try #require(NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, characters: "a",
+                    charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0
+                ))
+                _ = view.interceptTerminalKeyDown(event)
+            case "scroll":
+                recipient.scrollWheel(with: TerminalTestScrollEvent(
+                    window: window, location: view.terminalView.convert(NSPoint(x: 20, y: 500), to: nil), modifiers: []
+                ))
+            case "focus": window.makeFirstResponder(panes[1].terminalView)
+            case "hidden": view.isHidden = true
+            case "inactive": (window as? TerminalMouseTestWindow)?.keyForTesting = false
+            case "removed": view.removeFromSuperview()
+            default: view.cancelVoiceInputPress()
+            }
+            try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+            #expect(clicks == 0)
+        }
+
         @Test("Plain drag selects in both original and split panes", arguments: [0, 1])
         func plainSelection(paneIndex: Int) throws {
             let (window, panes) = makeTerminalWindow()
@@ -143,6 +338,86 @@
             }
         }
 
+        @Test("Window copy dispatch targets only the focused Codex pane", arguments: [0, 1], [false, true])
+        func codexCopy(paneIndex: Int, localSelection: Bool) throws {
+            let clipboard = ClipboardClient.previewValue
+            try withDependencies {
+                $0[ClipboardClient.self] = clipboard
+            } operation: {
+                let (window, panes) = makeTerminalWindow(key: true)
+                defer { withExtendedLifetime(window) { } }
+                var rawInput = [[Data](), [Data]()]
+                var keys: [TmuxKey] = []
+                for (index, pane) in panes.enumerated() {
+                    pane.scrollingAgentID = "codex"
+                    pane.onRawInput = { rawInput[index].append($0) }
+                    pane.onInput = { keys.append(contentsOf: $0) }
+                }
+                let view = panes[paneIndex]
+                if localSelection {
+                    try drag(in: view)
+                } else {
+                    // A TUI draws its own selection without a SwiftTerm selection.
+                    view.feed(byteArray: Array("\u{1b}[H\u{1b}[7malpha\u{1b}[0m bravo".utf8)[...])
+                    view.focusTerminal()
+                    #expect(view.getSelectedTextTrimmed() == nil)
+                }
+                clipboard.setString("previous clipboard")
+
+                #expect(try window.performKeyEquivalent(with: copyEvent(in: window)))
+
+                #expect(rawInput[1 - paneIndex].isEmpty)
+                #expect(keys.isEmpty)
+                if localSelection {
+                    #expect(rawInput[paneIndex].isEmpty)
+                    #expect(clipboard.getString() == "pha br")
+                    #expect(view.getSelectedTextTrimmed() == "pha br")
+                } else {
+                    #expect(rawInput[paneIndex] == [Data("\u{1b}[99;9u".utf8)])
+                    #expect(clipboard.getString() == "previous clipboard")
+                }
+            }
+        }
+
+        @Test("Application copy leaves other agents, editors and modified shortcuts alone", arguments: ["shell", "otherAgent", "editor", "textField", "control", "option", "shift", "disconnected"])
+        func codexCopyExclusions(action: String) throws {
+            let (window, panes) = makeTerminalWindow(key: true)
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[1]
+            view.scrollingAgentID = "codex"
+            view.focusTerminal()
+            var rawInput: [Data] = []
+            var keys: [TmuxKey] = []
+            var modifiers: NSEvent.ModifierFlags = .command
+            view.onRawInput = { rawInput.append($0) }
+            view.onInput = { keys.append(contentsOf: $0) }
+            switch action {
+            case "shell": view.scrollingAgentID = nil
+            case "otherAgent": view.scrollingAgentID = "claude-code"
+            case "editor": view.isEditorActive = true
+            case "textField":
+                let editor = NSTextView(frame: .zero)
+                window.contentView?.addSubview(editor)
+                window.makeFirstResponder(editor)
+            case "control": modifiers.insert(.control)
+            case "option": modifiers.insert(.option)
+            case "shift": modifiers.insert(.shift)
+            default: view.onRawInput = nil
+            }
+
+            #expect(try !view.performKeyEquivalent(with: copyEvent(in: window, modifiers: modifiers)))
+            #expect(rawInput.isEmpty)
+            #expect(keys.isEmpty)
+        }
+
+        private func copyEvent(in window: NSWindow, modifiers: NSEvent.ModifierFlags = .command) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "c",
+                charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8
+            ))
+        }
+
         @Test("An app can explicitly capture Shift mouse input")
         func applicationShiftCapture() throws {
             let (window, panes) = makeTerminalWindow()
@@ -228,6 +503,104 @@
 
             #expect(view.getSelectedTextTrimmed() == "tps://")
             #expect(rawInput.isEmpty)
+        }
+
+        @Test(
+            "Web-link clicks retain their one-click destination through deferred activation",
+            arguments: [NSEvent.ModifierFlags(), .command, .option, [.command, .option]], [false, true]
+        )
+        func webLinkClickDestination(modifiers: NSEvent.ModifierFlags, mouseReporting: Bool) async throws {
+            for osc8 in [false, true] {
+                let systemURLs = LockIsolated<[URL]>([])
+                try await withDependencies {
+                    $0[URLOpener.self] = URLOpener(openInDefaultBrowser: { url in systemURLs.withValue { $0.append(url) } })
+                } operation: {
+                    let (window, panes) = makeTerminalWindow()
+                    defer { withExtendedLifetime(window) { } }
+                    let view = panes[1]
+                    let url = try #require(URL(string: "https://example.com/path"))
+                    let text = osc8 ? "\u{1b}]8;;\(url.absoluteString)\u{7}website\u{1b}]8;;\u{7}" : url.absoluteString
+                    view.feed(byteArray: Array("\u{1b}[H\u{1b}[2K\(text)".utf8)[...])
+                    if mouseReporting {
+                        enableMouseMode(1_002, in: view)
+                    }
+                    var urls: [URL] = []
+                    var overrides: [BrowserLinkBehavior?] = []
+                    var rawInput: [Data] = []
+                    view.onRawInput = { rawInput.append($0) }
+                    view.onOpenURL = { url, behavior in
+                        urls.append(url)
+                        overrides.append(behavior)
+                        return behavior != .alwaysInDefaultBrowser
+                    }
+
+                    try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers)
+                    #expect(urls.isEmpty)
+                    try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+
+                    let expected: BrowserLinkBehavior? = modifiers.contains(.command) ? .alwaysInApp
+                        : modifiers.contains(.option) ? .alwaysInDefaultBrowser : nil
+                    #expect(urls == [url])
+                    #expect(overrides == [expected])
+                    #expect(systemURLs.value == (expected == .alwaysInDefaultBrowser ? [url] : []))
+                    #expect(rawInput.isEmpty)
+                }
+            }
+        }
+
+        @Test("An explicit Host click never falls back to this device's browser")
+        func unhandledHostLinkDoesNotOpenLocally() async throws {
+            let systemURLs = LockIsolated<[URL]>([])
+            try await withDependencies {
+                $0[URLOpener.self] = URLOpener(openInDefaultBrowser: { url in systemURLs.withValue { $0.append(url) } })
+            } operation: {
+                let (window, panes) = makeTerminalWindow()
+                defer { withExtendedLifetime(window) { } }
+                let view = panes[0]
+                view.feed(byteArray: Array("\u{1b}[H\u{1b}[2Khttps://example.com".utf8)[...])
+                var calls = 0
+                view.onOpenURL = { _, behavior in
+                    calls += 1
+                    #expect(behavior == .alwaysInApp)
+                    return false
+                }
+
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: .command)
+                try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+
+                #expect(calls == 1)
+                #expect(systemURLs.value.isEmpty)
+            }
+        }
+
+        @Test(
+            "Modified drag and multi-click selection never open web links",
+            arguments: [NSEvent.ModifierFlags.command, .option], ["drag", "doubleClick", "tripleClick"]
+        )
+        func modifiedLinkSelection(modifiers: NSEvent.ModifierFlags, action: String) async throws {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[1]
+            view.feed(byteArray: Array("\u{1b}[H\u{1b}[2Khttps://example.com".utf8)[...])
+            var opened = 0
+            view.onOpenURL = { _, _ in
+                opened += 1
+                return true
+            }
+
+            if action == "drag" {
+                try drag(in: view, modifiers: modifiers)
+            } else {
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers)
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers, clickCount: 2)
+                if action == "tripleClick" {
+                    try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers, clickCount: 3)
+                }
+            }
+            try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+
+            #expect(opened == 0)
+            #expect(view.getSelectedTextTrimmed() != nil)
         }
 
         @Test("Wheel reporting follows the same Shift and reporting policy", arguments: [false, true], [false, true])
@@ -325,10 +698,10 @@
             #expect(raw.count == 1)
         }
 
-        private func makeTerminalWindow() -> (NSWindow, [InteractiveTerminalView]) {
+        private func makeTerminalWindow(key: Bool = false) -> (NSWindow, [InteractiveTerminalView]) {
             _ = NSApplication.shared
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1600, height: 600),
+            let window = TerminalMouseTestWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1_600, height: 600),
                 styleMask: .borderless, backing: .buffered, defer: false
             )
             let root = NSView(frame: NSRect(x: 0, y: 0, width: 1600, height: 600))
@@ -343,6 +716,7 @@
                 view.feed(byteArray: Array("alpha bravo charlie\r\nsecond row\r\n".utf8)[...])
                 return view
             }
+            window.keyForTesting = key
             return (window, panes)
         }
 

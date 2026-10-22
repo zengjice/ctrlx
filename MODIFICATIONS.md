@@ -7,6 +7,559 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.90 — Linked tab actions on iOS
+
+- Add resource-specific iOS More and Tabs menus, keeping linked browser,
+  file and simulator actions associated with their source terminal pane.
+- Allow explicit closing of Host simulator tabs from iOS when the Host
+  advertises support. Validate the current tab/session/owner, finish recording
+  and device shutdown, and preserve later tab selections when replies arrive.
+- Clarify terminal close labels and preserve final-terminal session confirmation.
+- Release validation: the bounded serial Swift regression passed with 3,676
+  tests reported across 522 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. The first run stalled waiting for a
+  socket-test reader to exit; the unchanged full retry passed, including that test.
+- Both boundary checks, the website build and 89 publisher/COS/installer tests
+  passed. SwiftFormat retains 288 existing findings on unchanged lines in six
+  files, matching the source review. All 31 reviewed file hashes match.
+- The earlier isolated UI attempt stopped before feature steps when Host
+  settings failed to open; it is not passing UI evidence. Physical-iPhone and
+  paired Viewer feature acceptance were not rerun during release validation.
+- Signed Mac and iOS device-SDK Release builds passed. Mac distribution uses
+  build 23 through COS, with signature, source metadata and complete
+  public-download integrity checks before installer promotion.
+
+## 3.0.89 — Browser extension access and iOS question input
+
+- Open extension settings directly and route Chrome Web Store links into
+  workspace browser tabs, preserving Host/Viewer control and older-peer behavior.
+- Add opt-in browser recording diagnostics, with bounded lifecycle/resource
+  records that stop when debugging is disabled. Refresh bundled browser skills.
+- Adapt Codex light colors to dark terminal themes, unify Agent notification
+  titles/subtitles, and open the iOS keyboard from Codex answer and notes areas
+  while retaining terminal selection, link and text-composition behavior.
+- Prepare and correct the CEF extension-header compatibility patch; its source
+  and experimental validation do not replace the distributed CEF runtime.
+- Release validation: the bounded serial Swift regression passed with 3,675
+  tests reported across 522 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, the website
+  build, 89 publisher/COS/installer tests and the CEF patch's lightweight
+  callback/continuation checks passed.
+- Reused native extension, recording-diagnostic and iOS keyboard acceptance
+  after checking source hashes and reviewing later changes for impact. The
+  keyboard's 16 native regression checks match the current implementation.
+  Live remote Codex, cross-machine Viewer and APNs acceptance were not rerun.
+  Two already-committed Swift files retain 799 formatting findings.
+- Signed Mac and iOS device-SDK Release builds passed. Mac distribution uses
+  build 22 through COS, with signature, source metadata and complete
+  public-download integrity checks before installer promotion.
+
+## 3.0.88 — Background browser recording
+
+- Add Host-owned background H.264 recording through `record-start`,
+  `record-status` and `record-stop`, with a maximum duration of ten minutes.
+  Keep page navigation, Agent actions and Viewer control available during capture.
+- Write bounded viewport samples directly to private MP4 files. Preserve owner
+  isolation and stale-recording checks, and finalize recordings on manual stop,
+  duration expiry, tab close, Agent exit or normal Host shutdown.
+- Release validation: the bounded serial Swift regression passed with 3,645
+  tests reported across 517 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, changed Swift
+  file formatting, the website build and 89 publisher/COS/installer tests passed.
+- All 16 implementation and test/documentation hashes match the existing
+  600-second production-runtime recording and Viewer/control/legacy-recording
+  acceptance. The accepted video hash also matches. This evidence is reused;
+  physical Viewer devices and a live Codex reasoning session were not retested.
+- Signed Mac and iOS device-SDK Release builds passed. Mac distribution uses
+  build 21 through COS, with signature, source metadata and complete
+  public-download integrity checks before installer promotion.
+
+## 3.0.87 — Split terminal focus and iOS navigation
+
+- Fit a terminal to its current split viewport when programmatic focus returns,
+  including after a remote terminal finishes loading. Keep mouse gestures on
+  the completed-click path so selection, links, mouse-reporting applications
+  and text composition cannot trigger an early resize.
+- Move iOS window actions below the selected tab title and put per-pane Touch
+  Mode in the terminal menu. Keep the keyboard accessory focused on input keys
+  with the published SwiftTerm fork revision pinned in both dependency locks.
+- Organize iOS settings into focused connection, terminal, keyboard, voice,
+  sync, session-default and About pages while preserving stored preferences
+  and credentials. Keep the Mac voice-settings presentation unchanged.
+- Release validation: the bounded serial Swift regression passed with 3,642
+  tests reported across 516 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, the website
+  build and 89 publisher/COS/distributed-installer tests passed.
+- Implementation hashes match the existing 12-case native focus-gesture probe
+  and iOS touch-mode acceptance. The iOS settings review also matches the current
+  source; physical-iPhone and full paired Mac UI acceptance were not rerun.
+  SwiftFormat reports 132 existing findings in four already-committed files.
+- Signed Mac and iOS device-SDK Release builds passed. Mac distribution uses
+  build 20 through COS, with signature, source metadata and complete
+  public-download integrity checks before installer promotion.
+
+## 3.0.86 — Stable remote clipboard feedback
+
+- Show copy, clipboard-read and paste confirmations as a non-interactive
+  overlay in remote browser and simulator views on Mac and iOS. Repeated
+  clipboard operations and clearing feedback preserve the canvas size,
+  position, image scale and input focus.
+- Release validation: the bounded serial Swift regression passed with 3,638
+  tests reported across 516 suites, including four native AppKit/SwiftUI
+  layout and input cases. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded.
+- Both boundary checks, the website build and 89 publisher/COS/distributed-
+  installer tests passed. The new helper and regression test pass SwiftFormat;
+  the two existing remote views retain 732 pre-existing formatting findings.
+  Physical-iPhone clipboard interaction and paired Viewer UI acceptance
+  were not rerun as part of release validation.
+- The signed iOS device-SDK Release build passed. Mac distribution uses build
+  19 through COS, with signature, source metadata and complete public-download
+  integrity checks before installer promotion.
+
+## 3.0.85 — Browser focus and passkey sign-in
+
+- Keep Agent browser creation, navigation, page input and popups in the
+  background without changing the user's selected workspace or native keyboard
+  focus. Preserve explicit page reveal, human tab selection and extension-window
+  presentation in both browser engines.
+- Declare Bluetooth usage in the Mac Host for nearby-device passkey sign-in.
+  Prevent macOS from terminating CtrlX when Chromium initializes Bluetooth;
+  permission remains controlled by the system prompt.
+- Release validation: the bounded serial Swift regression passed with 3,637
+  tests reported across 515 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, the website
+  build, 89 publisher/COS/distributed-installer tests, the Bluetooth privacy
+  regression and SwiftFormat checks for the two changed Swift files passed.
+- Reused isolated browser background-input and external-application acceptance
+  evidence after verifying all relevant source hashes (49 and 21 checks,
+  including setup and completion). Bluetooth permission allow/deny evidence
+  also matches the current implementation; full Qovery sign-in and paired
+  Mac/iPhone UI acceptance were not rerun.
+- The signed iOS device-SDK Release build passed. Mac distribution uses build
+  18 through COS, with signature, source metadata and complete public-download
+  integrity checks before installer promotion.
+
+## 3.0.84 — Pane-linked tabs and Viewer clipboard
+
+- Group file, browser and simulator tabs by their source terminal pane on Mac
+  and iOS. Keep navigation within the group, return to the source terminal at
+  either boundary and preserve mixed tab order across reconnects.
+- Align Mac tab swipes with visual tab positions and improve selected-tab
+  contrast in light themes. Make Mac Git tabs explicitly opened and closable.
+- Add Files, Browser, iOS Simulator and Fork shortcuts to iOS terminal rows.
+  Allow a Viewer to open the source pane's simulator on the Host, reusing its
+  existing device and rejecting stale file-link responses.
+- Support explicit text and image copy/paste in Host file, browser and
+  simulator tabs from Mac and iOS Viewers. Preserve original JPEG data, bound
+  the encoded payload and verify simulator clipboard revisions and completed
+  writes before forwarding paste.
+- Restore clipboard forwarding after tmux pipe disconnections without adding
+  another terminal byte stream.
+- Hide accounts that do not support quota queries, including API accounts,
+  from the Mac titlebar and its overflow count; retain them in Dashboard.
+- Release validation: the bounded serial Swift regression passed with 3,637
+  tests reported across 515 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. Both boundary checks, the website
+  build and 89 publisher/COS/distributed-installer tests passed.
+- Fresh native titlebar, tab-drop and simulator-clipboard fixtures passed.
+  Earlier native browser and simulator acceptance evidence was retained after
+  verifying the relevant source hashes; paired Mac/iPhone UI acceptance was
+  not rerun. SwiftFormat still reports 2,265 findings in 24 already-committed
+  files touched since the previous release; packaging does not reformat them.
+- The signed iOS device-SDK Release build passed. Mac distribution uses build
+  17 through COS, with signature, source metadata and complete public-download
+  integrity checks before installer promotion.
+
+## 3.0.83 — Quota shortcuts and reliable terminal navigation
+
+- Show compact account quota rings in Mac local, remote and detached workbench
+  titlebars, with hover summaries, pinned details and overflow at narrow widths.
+  Reuse Dashboard account identity, freshness rules and existing polling.
+- Show connection, pending-session and low-quota status in the iOS Dashboard
+  entry. Preserve cross-Host identities and combine attention and quota alerts.
+- Add vertical swipes on the iOS status and first input-control rows: swipe up
+  opens Tabs and swipe down hides the keyboard. Preserve ordinary taps,
+  horizontal scrolling, held buttons, drafts and excluded input surfaces.
+- After closing the selected terminal, select the first surviving terminal tab
+  and preserve pane identity through tmux renumbering and state/reply ordering.
+  Confirm before closing the final session window, including an idle shell;
+  keep background tabs, split workspaces and reconnect recovery independent.
+- Recognize repository links wrapped within Codex table columns while bounding
+  hit targets to the link fragments and rejecting cross-column continuations.
+- Observe the process-provenance test fixture's exit asynchronously. Remove its
+  blocking cleanup wait while retaining process identity and configuration checks.
+- Release validation: the bounded serial Swift regression passed with 3,600
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Two earlier runs stalled in the process-provenance fixture's
+  blocking cleanup. After the fixture fix, its three focused tests and the
+  complete same-scope regression passed, including the live-process probe.
+- Four fresh isolated Mac titlebar interaction cases passed, covering main and
+  detached windows, quota details, narrow layouts and system double-click actions.
+  Both boundary checks, 89 publisher/COS/distributed-installer tests, website
+  build and changed-line SwiftFormat checks passed. There are 180 pre-existing
+  format findings in three files and one existing personal shell-wrapper
+  argument-forwarding failure; the distributed installer passed all 26 tests.
+- Signed Mac and iOS device-SDK Release builds passed. Physical-iPhone UI and
+  full paired-Mac runtime acceptance were not rerun in this release validation.
+- Distribution: Mac build 16 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.82 — Reliable quotas, Codex questions and Mac light themes
+
+- Prevent Codex quota queries from stalling during child-process cleanup. Observe
+  exit asynchronously within the existing 20-second deadline; retain the last
+  quota and observation time on failure, with an explicit timeout status.
+- Isolate Host account queries per plugin so a slow provider cannot stop other
+  accounts refreshing. Keep the one-minute query interval, mark overdue sources
+  unavailable and discard responses from removed or stopped sources.
+- Normalize unwritten terminal cells and resolve Unicode graphemes when reading
+  Codex question prompts on Mac and iOS. Preserve actual drafts, cursor guards
+  and the terminal buffer; improve recognition diagnostics without logging text.
+- Apply the shared Codex light-theme color adaptation to local, remote and
+  detached Mac terminals. Repaint existing content when the theme or Agent
+  changes, retaining inverse-video contrast and original terminal data.
+- Replace a blocking cleanup wait in the tmux Fit test fixture with the existing
+  asynchronous process runner, preserving its layout and ownership assertions.
+- Release validation: the bounded serial Swift regression passed with 3,570
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. All 24 focused tests passed, including repeated quota queries,
+  timeout/cancellation, terminal recognition, native Mac color rendering and
+  tmux layout preservation. Three fresh theme screenshots were reviewed.
+- Both boundary checks, 89 publisher/COS/distributed-installer tests, website
+  build and changed-line SwiftFormat checks passed. There are 54 existing format
+  findings in the Mac terminal file and one existing personal shell-wrapper
+  argument-forwarding failure; the distributed installer passed all 26 tests.
+- Signed Mac and iOS device-SDK Release builds passed. Expired local iOS
+  provisioning profiles were renewed through Xcode automatic signing. Physical
+  iPhone UI interaction and multi-Mac runtime acceptance were not rerun here.
+- Distribution: Mac build 15 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.81 — Dashboard quicklook, quota alerts and iOS terminal input
+
+- Show waiting panes, account quota summaries and Dashboard access in the Mac
+  status menu. Share foreground quota monitoring with iOS and notify once when
+  verified fresh account data crosses to 10% remaining. Deduplicate shared
+  accounts and quota cycles; ignore stale, offline and conflicting observations.
+- Preserve iOS notification navigation when switching sessions from Dashboard.
+- Improve Codex text and surface contrast on light iOS terminal themes while
+  preserving reverse-video colors. Let plain-terminal taps toggle the keyboard
+  without changing link, selection or mouse-reporting behavior.
+- Pin the published SwiftTerm explicit-color transform revision in both Apple
+  dependency locks; terminal data remains unchanged by display adaptation.
+- Release validation: the bounded serial Swift regression passed with 3,558
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. The first run stalled in an existing process-cleanup wait;
+  the identical-scope rerun passed, including that probe. Both boundary checks,
+  89 publisher/COS/distributed-installer tests, 22 bundled-skill tests, the
+  production-callback notification navigation regression, website build and
+  changed-file SwiftFormat passed. One separate personal shell-wrapper test
+  failed because the local ctrlx-install function does not forward arguments;
+  the distributed installer passed all 26 of its tests.
+- Signed Mac and iOS device-SDK Release builds passed. A same-source signed Mac
+  Debug build passed all 58 isolated Host/Viewer menu and Dashboard steps;
+  fresh screenshots were reviewed. Physical-iPhone UI interaction and real
+  system-notification delivery were not exercised by this release validation.
+- Distribution: Mac build 14 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.80 — Multi-host Dashboard and native Agent CLI maintenance
+
+- Add a shared Mac/iOS Dashboard for Agent account quotas, Host CPU/memory/disk
+  and collected usage. Deduplicate shared accounts and Host identities, preserve
+  source timestamps, distinguish unavailable/stale data and gate older peers.
+- Add Mac Agent Setup with bounded startup detection, explicit native Codex and
+  Claude Code installation, managed updates and launch repair. Verify official
+  signatures before removing quarantine, preserve working/custom commands and
+  refresh guarded settings after successful path repair.
+- Give iOS its own terminal theme setting, independent of Mac Host appearance,
+  and apply the shared palette to active terminals without restarting sessions.
+- Update the Mac installer to skip an already verified identical build, support
+  explicit force/verbose flags and retain detailed installation logs locally.
+- Release validation: the bounded serial Swift regression passed with 3,544
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 90 publisher/COS/installer tests, 22
+  bundled-skill tests, the website build, signed Mac Release and iOS device-SDK
+  Release builds passed. Eight Agent Setup offscreen UI cases passed; the
+  same-source signed Mac Debug build passed the 57-step Dashboard Host/Viewer
+  scenario with isolated state, tmux sockets and a private Relay. Reviewed the
+  fresh Agent Setup and Dashboard screenshots. Live CLI installation/update,
+  cross-machine and iPhone UI acceptance were not run. SwiftFormat reports 46
+  existing findings in two files, identical to 3.0.79 and outside changed lines.
+- Distribution: Mac build 13 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.79 — Mac themes, browser app handoff and layout diagnostics
+
+- Add Codex Light for Mac local, remote and detached workspaces, with a shared
+  terminal/sidebar/tab palette and readable ANSI colors. Agent-emitted RGB
+  colors and Agent syntax-theme settings remain independent.
+- Allow human-activated application links in the embedded browser to open the
+  registered app on the Host Mac. Preserve the original webpage, report launch
+  results to Viewers and reject automatic or Agent-originated handoffs.
+- Capture private, bounded AppKit toolbar/window-layout exception diagnostics
+  before forwarding the exception to AppKit. This collects evidence; it does
+  not claim to fix or recover from the original intermittent layout failure.
+- Recognize Codex question prompts followed by complete weekly-usage warnings,
+  without rearming dismissed questions when only the warning changes.
+- Add iOS window/file tab reordering and an optional image confirmation sheet,
+  off by default. Preserve selection and upload target identity, save local
+  file-tab order and show failed uploads for manual retry.
+- Release validation: the bounded serial Swift regression passed with 3,486
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. The first run stalled in the existing process-provenance probe;
+  the complete identical-scope rerun passed. Both boundary checks, 63 publisher/COS
+  tests, 22 bundled-skill tests, the website build, signed Mac Release build and
+  arm64 iOS Simulator build passed. Isolated signed-App acceptance passed 21
+  external-application checks and both AppKit diagnostic scenarios; native
+  activation/URL core tests also passed. SwiftFormat reports findings in four
+  files, including the new banner line following existing indentation; a clean
+  whole-file formatting pass is not claimed. Theme UI, real third-party app
+  handoff and full iOS UI acceptance were not rerun in this release workflow.
+- Distribution: Mac build 12 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.78 — App-wide debug mode and quieter voice input
+
+- Add a device-local Debug Mode setting on Mac and iOS, off by default. Keep
+  it in the application's general diagnostics settings rather than the voice
+  settings; voice completion feedback is currently its only consumer.
+- Successful voice insertion closes its feedback strip without completion or
+  correction notices by default. Debug Mode retains those notices and copyable
+  transcript-review evidence. Recording previews and permission, recording and
+  insertion errors remain visible regardless of the setting.
+- Release validation: the bounded serial Swift regression passed with 3,462
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Voice delivery tests cover Debug Mode on and off. Both boundary
+  checks, 63 publisher/COS tests, 22 bundled-skill tests, the website build,
+  signed Mac Release build and arm64 iOS Simulator build passed. The six changed
+  Swift files have no formatting findings on changed lines; one pre-existing
+  whole-file SwiftFormat finding remains. Interactive microphone and settings
+  UI acceptance were not rerun in this release workflow.
+- Distribution: Mac build 11 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.77 — Compact permission-mode icons
+
+- Show permission modes as compact icons on Mac and iOS for both Codex and
+  Claude Code, including session lists, terminal status bars and session details.
+  Keep mode-specific colors and the red bypass warning; retain mode names in
+  accessibility labels and Mac hover help.
+- Release validation: the bounded serial Swift regression passed with 3,462
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Permission-mode presentation tests, both boundary checks, 63
+  publisher/COS tests, 22 bundled-skill tests, the website build, signed Mac
+  Release build and arm64 iOS Simulator build passed. The changed Swift file
+  passes SwiftFormat. Full UI and screen-reader acceptance were not rerun in
+  this release workflow.
+- Distribution: Mac build 10 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.76 — Workspace recovery, browser extensions and faster local files
+
+- Restore saved tmux topology, directories, main/detached window layouts,
+  Files/Git selections and unsent drafts. Optionally resume verified Codex and
+  Claude conversations; offer layout-only and disabled recovery modes. Preserve
+  private Mac Viewer/iOS presentation across Host reconstruction, and reject
+  delayed input or commands aimed at replaced terminals. Real OS reboot/login
+  and physical display-removal acceptance remain explicitly deferred.
+- Manage Host browser extensions from Mac and iOS: preview permissions, import
+  ZIP/verified CRX3 packages, install from the Chrome Web Store, update, enable,
+  disable and remove extensions. Use native extension-compatible windows and
+  separately granted Viewer control. Compatibility remains extension-specific;
+  native messaging and cross-machine acceptance are not established.
+- Keep Codex question checks stable through terminal redraws, scope session
+  worktree details to terminal tabs, route notifications to the owning window,
+  and forward Command-C to Codex selections.
+- Improve voice capture, correction cancellation and transcript fidelity. Load
+  browser guidance at Agent session start and prioritize the Agent iOS skill
+  when operating owned simulators. Bundle Codex plugin 1.1.11 and Claude Code
+  plugin 1.3.12.
+- Speed up local file previews and directory paging while preserving remote
+  file behavior.
+- Release validation: the bounded serial Swift regression passed with 3,462
+  tests reported and nine opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Update shell-integration test fixtures for the guarded tmux
+  creation identity and input command format. Both boundary checks, 63
+  publisher/COS tests, 22 bundled-skill tests, the website build, signed Mac
+  Release build and arm64 iOS Simulator build passed. All 33 bundled plugin
+  source files match the source checkout. Existing isolated browser-extension
+  and workspace-recovery acceptance is recorded in their implementation docs;
+  this release workflow did not repeat those UI runs or hardware acceptance.
+  SwiftFormat still reports findings in 35 of the 258 Swift files changed since
+  3.0.75, including 23 changed-line findings; the updated fixture lines pass
+  scoped lint. No full formatting pass is claimed.
+- Distribution: Mac build 9 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.75 — Click-to-fit Mac terminals and reliable file-link guidance
+
+- After resizing a Mac terminal viewport, an ordinary content click fits its
+  owned tmux window once. Record the viewport baseline only after each target
+  succeeds, so failed and unattempted split targets remain retryable. Preserve
+  selection, links, application mouse reporting, voice holds and IME input;
+  cancel delayed clicks when input, focus or presentation changes.
+- Supply the shared file-link output guidance through Codex and Claude Code
+  SessionStart hooks, including resume, clear, compact and fork. Keep lifecycle
+  forwarding unchanged and omit unavailable or malformed guidance silently.
+  Bundle Codex plugin 1.1.9 and Claude Code plugin 1.3.10.
+- Document the proposed workspace recovery behavior after a computer reboot.
+  This is a design record; reboot recovery is not implemented by this release.
+- Release validation: the bounded serial Swift regression passed with 3,176
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, 21 bundled-skill
+  and hook tests, the website build, signed Mac Release build and arm64 iOS
+  Simulator build passed. The Mac bundle's plugin versions, hooks and file-link
+  guidance match the source. Native terminal-click and Fit completion regressions
+  are included in the Swift suite. SwiftFormat has no findings on changed lines
+  across 11 Swift files; existing whole-file findings remain. Full detached-window
+  E2E, paired-device and real-agent file-reference
+  adherence acceptance were not run in this release workflow.
+- Distribution: Mac build 8 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.74 — Mac workbench gestures and compact worktree status
+
+- Show compact pending, merged and unavailable worktree status controls in Mac
+  and iOS session lists. Compare each repository against its unique local main
+  or master branch; ambiguous bases remain unavailable. Preserve older Viewer
+  compatibility and make the automatic-order reset button easier to use.
+- Switch Mac workbench tabs with horizontal two-finger trackpad swipes, using
+  the split where the gesture began. Switch once per completed gesture while
+  preserving vertical scrolling, modified scrolling and tab-strip scrolling.
+- Restore native double-click behavior in empty titlebar areas for main and
+  detached workbenches, respecting macOS window-action preferences.
+- Reject drops from a different Host or session with an inline explanation,
+  consuming the drop so it cannot accidentally tear the tab into a new window.
+- Release validation: the bounded serial Swift regression passed with 3,168
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. All 19 changed Swift files pass SwiftFormat. Both boundary
+  checks, 63 publisher/COS tests, the website build, signed Mac Release and arm64
+  iOS Simulator builds, and native worktree-status, tab-drop and titlebar UI
+  fixtures passed. Native swipe-routing regressions are included in the Swift
+  suite. Physical trackpad and paired-device acceptance were not run in this
+  release workflow.
+- Distribution: Mac build 7 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.73 — Shared pane tabs, worktree status and clearer voice correction
+
+- Reuse Host-owned Files tabs across clients while preserving private navigation,
+  selection and layouts, including iOS workspace restoration. Keep human and
+  Agent browser defaults separate; Agent `open` reuses its pane's primary page,
+  preserves identical-URL page state, and supports explicit extras with `--new`.
+- Show worktree commits pending merge into local `main` in Mac and iOS sidebars,
+  with a complete repository worktree list and explicit unavailable states.
+  Host-scoped, additive snapshots preserve compatibility with older peers.
+- Add Mac terminal-link shortcuts: Command-click opens on the source Host and
+  Option-click opens in this Mac's default browser without changing preferences.
+  Show the shortcuts in the destination picker.
+- Explain voice-correction readiness in settings and show when inserted text
+  remains an uncorrected transcription, preserving focus and one-shot delivery.
+- Bundle updated browser guidance: Codex plugin 1.1.8 and Claude Code plugin 1.3.9.
+- Release validation: the bounded serial Swift regression passed with 3,151
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, the website build,
+  signed Mac Release and arm64 iOS Simulator builds, native worktree/voice UI tests
+  and browser CLI/ownership tests passed. Both browser engines passed pane-default
+  acceptance in a private, signed App with fixture owners and mock Keychain,
+  including normal Host exit.
+  SwiftFormat has no findings on changed lines across 65 Swift files; existing
+  whole-file findings remain. Real-agent, paired-device and microphone/correction
+  quality acceptance were not run in this release workflow.
+- Distribution: Mac build 6 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.72 — Mixed-language voice correction and consistent input controls
+
+- Merge `macinput`: improve Chinese/English speech correction with common Git
+  vocabulary while preserving ordinary Chinese, explicit branch names, negations
+  and existing draft text. Keep complete utterances and response reserves within
+  legacy correction budgets; add mixed-language and intent-preservation fixtures.
+- Align built-in iOS first-row input buttons to a shared 44-point width at the
+  default text size, scaling with Dynamic Type. Recording and loading states keep
+  that width; custom buttons remain content-sized.
+- Release validation: the bounded serial Swift regression passed with 3,113
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, website build,
+  signed Mac Release build and arm64 iOS Simulator build passed. All 13 changed
+  Swift files pass SwiftFormat. UIKit-only layout tests, real speech-recognition
+  and correction-quality benchmarks, and physical iPhone acceptance were not run.
+- Distribution: Mac build 5 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.71 — Reopen the keyboard when tapping an iOS draft
+
+- Merge `ux`: in iOS Bottom Bar mode, tapping existing draft text opens the
+  keyboard while preserving cursor navigation or native TUI clicking. Repeated
+  taps keep it open, and tapping again after hiding it resumes editing.
+- Recognize bounded multiline drafts without treating terminal output or
+  unrelated TUI menus as input. Preserve empty-prompt keyboard toggling,
+  selection gestures and composition guards.
+- Release validation: the bounded serial Swift regression passed with 3,108
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, website build,
+  Mac Debug build and arm64 iOS Simulator build passed. SwiftFormat has no
+  findings on changed lines; existing findings outside those ranges remain.
+  UIKit-only interaction tests and physical iPhone gesture acceptance were not
+  run in this Mac release workflow.
+- Distribution: Mac build 4 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+
+## 3.0.70 — Hold-to-talk input and session order controls
+
+- Merge `ux`: add Restore Automatic Order beside the new-session button in
+  Mac Local and remote Host headers, matching iOS. Keep the context-menu action
+  and disable restoration when the section has no saved manual order.
+- Support hold to talk on Mac Local and Viewer terminals: hold the microphone
+  or a recognized blank prompt cell for 350 ms, then release to insert the final
+  text without Return. Preserve short clicks and selection drags; cancel a
+  pending recording when released during permission preparation. Align the
+  wider microphone with the other 32-point quick-action buttons.
+- Move iOS image input into the bottom Attachments menu. In Bottom Bar mode,
+  tapping a known empty live prompt toggles the keyboard without sending input;
+  preserve draft cursor placement, IME composition and selection gestures.
+- Keep distributed build numbers increasing across marketing versions; this
+  release uses build 3. Document the iOS synchronization requirement.
+- Release validation: the bounded serial Swift regression passed with 3,107
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, website build,
+  Mac Debug build, arm64 iOS Simulator build and the isolated native voice-input
+  interaction test passed. SwiftFormat has no findings on changed lines;
+  whole-file findings outside the changed ranges remain.
+- Distribution: Mac package through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion. Real
+  microphone/permission and iPhone gesture acceptance remain separate from
+  these automated checks; this release does not install iOS.
+
+## 3.0.69 — Inline voice previews and unified Mac shortcuts
+
+- Merge `macinput`: share context snapshots and one-shot voice delivery across
+  Mac and iOS. Show a compact inline preview without resizing the terminal or
+  opening a popover; insert the final text once, without Return. Cancel stale
+  recordings on input edits, IME composition, target changes or scoped Escape.
+  Keep correction fallback and stage diagnostics explicit.
+- Unify extended Mac shortcuts under Command-Option. Navigate all tab types in
+  the focused split and switch sidebar sessions with the arrow keys; remove
+  redundant terminal-only navigation bindings.
+- Track Codex question identity through Host and Viewer updates, preserving
+  notifications that arrive during a stale pane refresh. Add refusal diagnostics
+  and preserve Codex plugin reinstall diagnostics.
+- Merge `feature-bug`: simulator Viewers annotate the frame already displayed,
+  freezing its image and recipient without waiting for another screenshot.
+  Resume preview polling after cancellation or capture failure.
+- Release validation: the bounded serial Swift regression passed with 3,098
+  tests reported and five opt-in probes skipped; Apple Intelligence evaluations
+  were excluded. Both boundary checks, 63 publisher/COS tests, website build,
+  Mac Debug build, arm64 iOS Simulator build and the isolated native voice-preview
+  interaction test passed. All 37 Swift files in the voice-input merge pass
+  SwiftFormat.
+- Distribution: Mac package through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion. Real
+  microphone/permission, recognition-quality and paired-device simulator
+  annotation acceptance remain separate; this release does not install iOS.
+
 ## 3.0.68 — Reliable question expansion and consistent session activity
 
 - Acknowledge guarded Codex question expansion before deduplicating it. Failed

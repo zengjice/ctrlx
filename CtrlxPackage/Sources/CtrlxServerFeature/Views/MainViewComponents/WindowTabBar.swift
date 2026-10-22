@@ -36,6 +36,7 @@ struct WindowTabBar: View {
     let onSelectFileBrowser: () -> Void
     /// Activates the Git tab for the current window (issue #258).
     let onSelectGitBrowser: () -> Void
+    let onCloseGitBrowser: () -> Void
     let onSelectFileTab: (UUID) -> Void
     let onCloseFileTab: (UUID) -> Void
     let onSelectBrowserTab: (UUID) -> Void
@@ -58,7 +59,7 @@ struct WindowTabBar: View {
     let onReorderFileTabs: ([UUID]) -> Void
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
-    let onOpenFiles: (LocalTmuxWindow) -> Void
+    let onOpenFiles: (LocalTmuxWindow, Bool) -> Void
     var onDetachWindow: ((LocalTmuxWindow, CGPoint?) -> Void)?
 
     @Environment(MirrorWindowManager.self) private var windowManager
@@ -73,6 +74,7 @@ struct WindowTabBar: View {
 
     @State private var hoveredWindowId: String?
     @State private var hoveredFileTabId: UUID?
+    @State private var isGitHovered = false
 
     /// Currently-displayed drop indicator: nil while nothing is being dragged.
     /// The bar shows a vertical accent line to the left of the matching tab
@@ -121,23 +123,26 @@ struct WindowTabBar: View {
         sessionTabs.rightSide.contains(payload)
     }
 
-    /// Source-of-truth ordering for the tab strip — reconciles the persisted
-    /// `sessionTabs.tabOrder` with the live windows / file tabs / browser tabs
-    /// so newly-discovered entries are slotted in and removed entries drop
-    /// out without rewriting the array elsewhere. The view body renders from
-    /// this and the `.onChange` below writes it back into `sessionTabs` so the
-    /// order survives session switches.
+    /// Keep source labels for children whose terminal is in another workbench.
+    private var groupPanes: [PaneState] {
+        let ids = PaneLinkedTabs.ordered(session.windows.map(\.stableId), stored: sessionTabs.tabOrder.compactMap(\.windowId))
+        let visible = ids.flatMap { id in session.windows.first { $0.stableId == id }?.panes ?? [] }
+            .compactMap { windowManager.paneStates[$0.paneId] }
+        let seen = Set(visible.map(\.paneId))
+        return visible + windowManager.paneStates.values.filter { $0.sessionName == session.sessionName && !seen.contains($0.paneId) }
+            .sorted { ($0.windowIndex, $0.paneIndex) < ($1.windowIndex, $1.paneIndex) }
+    }
+
     private var effectiveTabOrder: [TabDragPayload] {
-        // Local sessions get both the file-explorer and Git singletons
-        // (`includeGit` defaults to true), so the Git tab takes part in
-        // drag-reordering and keyboard cycling alongside everything else.
-        TabDragPayload.reconciledOrder(
+        // Session-wide tabs precede the pane-linked groups.
+        let order = TabDragPayload.reconciledOrder(
             windowIds: session.windows.map(\.stableId),
             fileTabIds: openFileTabs.map(\.id),
             browserTabIds: openBrowserTabs.map(\.id),
             storedOrder: sessionTabs.tabOrder,
             includeFileExplorer: false
         )
+        return sessionTabs.groupedTabOrder(order, paneOrder: groupPanes.map(\.paneId))
     }
 
     /// Effective order restricted to entries visible on the left section in
@@ -192,20 +197,19 @@ struct WindowTabBar: View {
         // so this can't loop.
         .onChange(of: effectiveTabOrder) { _, new in
             if sessionTabs.tabOrder != new {
-                sessionTabs.tabOrder = new
+                sessionTabs.recordVisibleTabOrder(new)
             }
         }
         .onAppear {
             let computed = effectiveTabOrder
             if sessionTabs.tabOrder != computed {
-                sessionTabs.tabOrder = computed
+                sessionTabs.recordVisibleTabOrder(computed)
             }
         }
     }
 
-    @ViewBuilder
-    private var tabBarDivider: some View {
-        if settings.theme == .anysphereDark {
+    @ViewBuilder private var tabBarDivider: some View {
+        if settings.theme.usesSubtleTabBorder {
             Rectangle()
                 .fill(settings.theme.workspaceBorderColor)
                 .frame(height: 1)
@@ -218,7 +222,7 @@ struct WindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                ForEach(effectiveTabOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: effectiveTabOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 if let suggestion = openSuggestionStore.suggestionsBySession[session.sessionName] {
@@ -242,7 +246,7 @@ struct WindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                ForEach(leftSectionOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: leftSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 if let suggestion = openSuggestionStore.suggestionsBySession[session.sessionName] {
@@ -260,7 +264,7 @@ struct WindowTabBar: View {
     private var rightSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-                ForEach(rightSectionOrder, id: \.self) { ref in
+                PaneLinkedTabStrip(order: rightSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
                     tabView(for: ref)
                 }
                 trailingDropZone(for: .right)
@@ -336,7 +340,8 @@ struct WindowTabBar: View {
         NewTabMenuButton(
             helpText: "New agent or terminal in \(session.sessionName)",
             agentConfiguration: agentConfiguration,
-            onNewTerminal: onNewWindow
+            onNewTerminal: onNewWindow,
+            onOpenGit: onSelectGitBrowser
         )
     }
 
@@ -391,14 +396,16 @@ struct WindowTabBar: View {
     /// assert both from one element.
     private func gitAccessibilityValue(isSelected: Bool) -> String {
         var parts: [String] = []
-        if isSelected { parts.append("selected") }
-        if gitChangedFileCount > 0 { parts.append("\(gitChangedFileCount) changed files") }
+        if isSelected {
+            parts.append("selected")
+        }
+        if gitChangedFileCount > 0 {
+            parts.append("\(gitChangedFileCount) changed files")
+        }
         return parts.joined(separator: ", ")
     }
 
-    /// The Git tab button (issue #258). A singleton like `fileBrowserButton`,
-    /// living immediately to its right, with the same split-toggle and
-    /// drag-and-drop affordances.
+    /// One Git tab per session, opened from the "+" menu.
     private var gitBrowserButton: some View {
         let tabIsOnRight = isOnRight(.git)
         let isSelected = tabIsOnRight
@@ -429,6 +436,7 @@ struct WindowTabBar: View {
             .buttonStyle(.plain)
             .help("Git changes for \(session.sessionName)")
             .accessibilityLabel("Git")
+            .accessibilityIdentifier("git-tab")
             .accessibilityValue(gitAccessibilityValue(isSelected: isSelected))
 
             TabSplitToggleButton(
@@ -438,9 +446,16 @@ struct WindowTabBar: View {
                 tabName: "Git",
                 action: { onToggleSplit(.git) }
             )
+            TabCloseButton(
+                isVisible: isSelected || isGitHovered,
+                accessibilityLabel: "Close Git tab",
+                helpText: "Close Git tab",
+                action: onCloseGitBrowser
+            )
             .padding(.trailing, 6)
         }
         .tabStripItemStyle(isSelected: isSelected, isOnRightSplit: tabIsOnRight, isSplit: isSplit)
+        .onHover { isGitHovered = $0 }
         .overlay(alignment: .leading) {
             DropIndicator(visible: dropIndicator == .git)
         }
@@ -488,10 +503,16 @@ struct WindowTabBar: View {
                 additionalMenu: {
                     Button("Open in Separate Window") { onDetachWindow?(window, nil) }
                         .disabled(onDetachWindow == nil || DetachedTerminalTarget(hostID: nil, windowID: window.stableId) == nil)
-                    Button { onOpenFiles(window) } label: {
+                    Button { onOpenFiles(window, false) } label: {
                         Label("Open Files", symbol: .folderBadgePlus)
                     }
+                    .disabled(window.panes.isEmpty)
                     .accessibilityIdentifier("window-open-files-\(window.stableId)")
+                    Button { onOpenFiles(window, true) } label: {
+                        Label("Open Another Files Tab", symbol: .folderBadgePlus)
+                    }
+                    .disabled(window.panes.isEmpty)
+                    .accessibilityIdentifier("window-open-another-files-\(window.stableId)")
 
                     Button { onOpenBrowser(window) } label: {
                         Label("Open Browser", symbol: .globe)
@@ -518,8 +539,8 @@ struct WindowTabBar: View {
 
             TabCloseButton(
                 isVisible: isSelected || isHovered,
-                accessibilityLabel: "Close window: \(windowName)",
-                helpText: "Close window",
+                accessibilityLabel: "Close tab: \(windowName)",
+                helpText: "Close tab",
                 action: { onCloseWindow(window) }
             )
             .padding(.trailing, 6)
@@ -597,8 +618,11 @@ struct WindowTabBar: View {
             isDirectory: tab.isDirectory,
             onOpenFileInNewTab: nil,
             onShowInFileExplorer: { path in
-                if tab.isDirectory { onSelectFileTab(tab.id) }
-                else { onShowInFileExplorer(path) }
+                if tab.isDirectory {
+                    onSelectFileTab(tab.id)
+                } else {
+                    onShowInFileExplorer(path)
+                }
             }
         )
         .onHover { hovering in
@@ -702,14 +726,14 @@ struct WindowTabBar: View {
     /// so other consumers see the same order.
     private func handleDrop(payloads: [TabDragPayload], target: TabDragPayload) -> Bool {
         defer { dropIndicator = nil }
-        guard let source = payloads.first, source != target else { return false }
+        guard let source = payloads.first, source != target, sessionTabs.canReorder(source, before: target) else { return false }
 
         let previousOrder = effectiveTabOrder
         guard let order = TabDragPayload.moving(source, before: target, in: previousOrder) else { return false }
         let windowOrderChanged = order.windowIds != session.windows.map(\.stableId)
         guard !windowOrderChanged || !sessionTabs.isWindowReorderPending else { return false }
 
-        sessionTabs.tabOrder = order
+        sessionTabs.recordVisibleTabOrder(order)
 
         // If the drop crosses the split, also flip the source tab's side
         // membership so it shows up in the pane the user dropped it into.
@@ -750,10 +774,18 @@ struct WindowTabBar: View {
             insertIndex = (order.lastIndex { !isOnRight($0) } ?? -1) + 1
         }
 
-        order.insert(moved, at: min(insertIndex, order.count))
+        let destination: Int
+        if source.isLinkedContent {
+            destination = (order.lastIndex { sessionTabs.canReorder(source, before: $0) } ?? -1) + 1
+        } else if source.windowId != nil {
+            destination = (order.lastIndex { $0.windowId != nil } ?? -1) + 1
+        } else {
+            destination = insertIndex
+        }
+        order.insert(moved, at: min(destination, order.count))
         let windowOrderChanged = order.windowIds != session.windows.map(\.stableId)
         guard !windowOrderChanged || !sessionTabs.isWindowReorderPending else { return false }
-        sessionTabs.tabOrder = order
+        sessionTabs.recordVisibleTabOrder(order)
         adjustSplitSideIfNeeded(source: source, to: section)
         syncSubsequences(from: order, rollbackOrder: previousOrder)
         return true
@@ -763,7 +795,9 @@ struct WindowTabBar: View {
     /// can land on either side now — windows render their terminal on the
     /// right pane, the file explorer renders the file tree on the right.
     private func sectionOf(_ ref: TabDragPayload) -> TabSection {
-        if isOnRight(ref) { return .right }
+        if isOnRight(ref) {
+            return .right
+        }
         return isSplit ? .left : .single
     }
 
@@ -785,10 +819,18 @@ struct WindowTabBar: View {
     private func syncSubsequences(from order: [TabDragPayload], rollbackOrder: [TabDragPayload]) {
         let windowIds = order.windowIds
         let fileIds: [UUID] = order.compactMap { ref in
-            if case let .file(id) = ref { return id } else { return nil }
+            if case let .file(id) = ref {
+                return id
+            } else {
+                return nil
+            }
         }
         let browserIds: [UUID] = order.compactMap { ref in
-            if case let .browser(id) = ref { return id } else { return nil }
+            if case let .browser(id) = ref {
+                return id
+            } else {
+                return nil
+            }
         }
 
         if windowIds != session.windows.map(\.stableId), !windowIds.isEmpty {
@@ -908,7 +950,7 @@ enum TabDragPayload: Codable, Hashable, Transferable {
     /// surviving entry keeps the user's interleaved position.
     ///
     /// Shared by the visible `WindowTabBar`, the visible `RemoteWindowTabBar`,
-    /// and the Cmd-Shift-[ / Cmd-Shift-] keyboard navigation (both local and
+    /// and the Cmd-Option-Left / Cmd-Option-Right keyboard navigation (both local and
     /// remote) so every surface walks the strip in the exact same order — see
     /// issue #566, where the keyboard path used a fixed kind-grouped order and
     /// ignored reordering.
@@ -918,10 +960,8 @@ enum TabDragPayload: Codable, Hashable, Transferable {
     /// entry is neither kept nor inserted and new windows slot in before the
     /// first browser tab instead of before the (absent) explorer.
     ///
-    /// The Git tab (issue #258) is another local-only singleton: it sits
-    /// immediately to the right of the file explorer in the default layout and,
-    /// like the explorer, doesn't exist on remote sessions. Pass
-    /// `includeGit: false` for remote so `.git` is neither kept nor inserted.
+    /// Git is a local-only, explicitly opened tab. Preserve it when present
+    /// in the stored order; never synthesize it. Remote sessions exclude it.
     static func reconciledOrder(
         windowIds: [String],
         fileTabIds: [UUID],
@@ -956,7 +996,13 @@ enum TabDragPayload: Codable, Hashable, Transferable {
         if includeFileExplorer {
             insertAt = order.firstIndex(of: .fileExplorer) ?? order.count
         } else {
-            insertAt = order.firstIndex { if case .browser = $0 { true } else { false } } ?? order.count
+            insertAt = order.firstIndex {
+                if case .browser = $0 {
+                    true
+                } else {
+                    false
+                }
+            } ?? order.count
         }
         for window in liveWindows where seen.insert(window).inserted {
             order.insert(window, at: insertAt)
@@ -964,16 +1010,6 @@ enum TabDragPayload: Codable, Hashable, Transferable {
         }
         if includeFileExplorer, seen.insert(.fileExplorer).inserted {
             order.insert(.fileExplorer, at: insertAt)
-        }
-        // The Git button sits immediately to the right of the file-explorer
-        // button (issue #258); for a new git entry not yet in the stored order,
-        // slot it just after the explorer (or at the front of the singletons
-        // when the explorer is absent).
-        if includeGit, seen.insert(.git).inserted {
-            let gitInsertAt = includeFileExplorer
-                ? (order.firstIndex(of: .fileExplorer).map { $0 + 1 } ?? order.count)
-                : insertAt
-            order.insert(.git, at: min(gitInsertAt, order.count))
         }
         // New file/browser tabs append at the end.
         for tab in liveFiles + liveBrowsers where seen.insert(tab).inserted {

@@ -1,9 +1,43 @@
 import CtrlxNetworking
+import Foundation
 import Testing
 @testable import CtrlxServerFeature
 
 @Suite("PaneInfo parsing")
 struct PaneInfoTests {
+    @Test("Persistent identities are parsed atomically with metadata and clear reused runtime state")
+    func workspaceIdentity() throws {
+        let identity = WorkspacePaneIdentity(serverID: "100:1", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let line = Self.currentLine + Self.sep + [identity.serverID, identity.sessionID.uuidString, identity.windowID.uuidString, identity.paneID.uuidString].joined(separator: Self.sep)
+        let pane = try #require(PaneInfo(fromTmuxOutput: line))
+        #expect(pane.workspaceIdentity == identity)
+        var state = PaneState(paneId: pane.paneId, agentSession: .init(paneId: pane.paneId, pluginID: "codex"), codexQuestionID: "old-question")
+        #expect(pane.updateMetadata(of: &state))
+        #expect(state.agentSession != nil && state.workspaceIdentity == identity)
+        let movedLine = line
+            .replacingOccurrences(of: identity.sessionID.uuidString, with: UUID().uuidString)
+            .replacingOccurrences(of: identity.windowID.uuidString, with: UUID().uuidString)
+        let moved = try #require(PaneInfo(fromTmuxOutput: movedLine))
+        #expect(moved.updateMetadata(of: &state))
+        #expect(state.agentSession != nil && state.codexQuestionID == "old-question")
+        let nextLine = line.replacingOccurrences(of: "100:1", with: "200:2")
+        let next = try #require(PaneInfo(fromTmuxOutput: nextLine))
+        #expect(next.updateMetadata(of: &state))
+        #expect(state.agentSession == nil && state.codexQuestionID == nil)
+        #expect(state.workspaceIdentity?.serverID == "200:2")
+        #expect(HostSessionStateSnapshot.workspaceIdentity(hostID: UUID(), panes: [state.paneId: state])?.serverID == "200:2")
+        #expect(PaneInfo(fromTmuxOutput: Self.currentLine)?.workspaceIdentity == nil)
+    }
+
+    @Test("The physical server identity survives incomplete recovery metadata")
+    func serverIdentityBeforeRecoveryIDs() throws {
+        let line = Self.currentLine + Self.sep + "100:1" + String(repeating: Self.sep, count: 3)
+        let pane = try #require(PaneInfo(fromTmuxOutput: line))
+        #expect(pane.tmuxServerID == "100:1")
+        #expect(pane.workspaceIdentity == nil)
+        #expect(PaneInfo(fromTmuxOutput: Self.currentLine)?.tmuxServerID == nil)
+    }
+
     /// ASCII Unit Separator (U+001F) — the field delimiter the live tmux
     /// format produces. Pulled into a constant so the fixture strings stay
     /// legible.

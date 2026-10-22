@@ -1,25 +1,104 @@
 # Host-backed Files tabs
 
+## Viewer 剪贴板
+
+Mac / iOS Viewer 的 Copy Path、Copy Text、Copy Image 写入当前 Viewer 的系统剪贴板。
+图片预览支持复制；Mac 聚焦图片后可用 ⌘C。Paste Image（Mac 也支持粘贴命令）把
+剪贴板图片上传到点击时捕获的 Host / 目录，使用已有分块上传、校验和及原子发布。
+切换来源或目录会取消未完成上传；不覆盖同名文件。它不解释剪贴板里的路径为本地文件，
+也不提供跨机器文件夹剪切。文本预览仍为只读。
+
+共享图片限制为原始 384 KiB、JSON 编码后 576 KiB（含 Base64 和斜杠转义）；同时满足
+两项限制的 PNG/JPEG 保留原字节和像素尺寸，Mac 在 TIFF 之前读取原始 JPEG。
+超限图片重新编码，必要时等比缩小并保留透明度。
+普通文件导入继续使用原有文件上传能力，不受剪贴板图片限制影响。
+
 Mac Host, Mac Viewer and iOS share `WorkspaceFileBrowserView`.
 Right-click a terminal window tab on Mac Host/Viewer and choose **Open Files**.
-On iOS, tap the window title to open the **Tabs** list, then use that window row's
-`⋯` menu → **Open Files**. Tapping a row switches tabs; its menu operates on that
-row without first switching the terminal. Fork, rename and close use the same
-per-window menu. New Terminal / Agent remain separate creation actions at the
+On iOS, the current terminal has a compact icon row below its title:
+**Open Files**, **Open Browser on Host**, **Open iOS Simulator**, **Fork** and
+**Fit Terminal to Screen**. The title opens the **Tabs** list; terminal rows
+contain only the name and selection mark and retain long-press reordering.
+Switch to a terminal before using its actions. The top-right **More** menu
+combines terminal copy/session controls and per-pane **Touch Mode** with rename, close and the open/Fork
+actions, including **Open Another Files Tab**. Fit retains its existing Host-wide
+resize behavior; moving the control does not change the resize command.
+The simulator shortcut opens an existing simulator belonging to the current
+window, offers a picker when there are several, and creates the source pane's
+default device on the Host when none exists. Creation requires the Host's
+`supportsPaneSimulator` capability; older Hosts can still expose existing
+devices. The Viewer shows opening progress and can stop waiting without closing
+the shared Host device.
+New Terminal / Agent remain separate creation actions at the
 bottom of the iOS list; the Mac `+` menu does not create Files.
 Each session can keep multiple independent Files tabs alongside terminals and
 web browsers. On Mac, these are ordinary reorderable, closable, splittable tabs.
+Normal **Open Files** and terminal file links reuse the source pane's human
+default tab. **Open Another Files Tab** explicitly creates an extra without
+replacing that default. Tab identity and source routing belong to the Host;
+directory, preview, ordering, split placement and selection belong to each client.
 On iOS, a Files tab fills the session content area. The title opens a native
-medium/large tab-list sheet without a nested navigation stack. Actions are
-applied after dismissing this list, before presenting a Fork/Agent sheet or alert.
+medium/large tab-list sheet without a nested navigation stack. List selections are
+applied after dismissing the sheet; toolbar actions run directly for the current
+window, resolving its stable ID again before opening a sheet or alert.
+Files, Host Browser and iOS Simulator tabs also have a top-right **More** menu:
+**Go to Terminal Tab** returns to the bound source, and **Close Tab** closes the
+current resource using its stable tab ID. The source action is unavailable if
+that terminal is gone. The tab list keeps its per-resource close menus, including
+Simulator. Host-backed close actions require a connection; simulator closing also
+requires the Host's `supportsSimulatorClosing` capability. An older Host shows
+that close action disabled. Closing a shared resource removes it on the Host and
+all Viewers; it does not close its source terminal. Simulator closure shuts down
+the device after recording cleanup. Terminal/Agent close menus and confirmations
+use **Close Tab** on both platforms; the final terminal tab still asks to close
+the entire session.
 Files rows expose only their own selection/close actions, not terminal operations.
+
+### Mac Git tab
+
+Open the session's Git tab with **+ → Open Git**. It supports the close button
+and **⌘W**, including in the right split. Closing returns to the remaining
+content without closing tmux windows or changing the repository. Reopening
+reuses the session's Git view state, including an unsent commit message.
+New sessions do not open Git automatically, including when inheriting a saved
+folder layout. Workspace recovery preserves explicitly open tabs; a closed Git
+tab stays closed. Closing a file that came from Git returns there only while
+that Git tab is still open.
+
+### Pane-linked tab groups
+
+Files, Host browser pages and iOS Simulator tabs are grouped by their actual
+source pane within one Host/session. Children from different panes never share
+a group, even when they belong to the same tmux window or directory. Groups
+follow terminal order; children retain their client-private mixed-type order,
+and new children append to their group. Reordering does not rebind a source.
+
+Mac keeps terminal tabs and session-wide Git before the child groups. Each group
+has a thin colored outline and source name; multi-pane windows add the pane
+number. iOS uses the same names/colors in its Tabs list, with native long-press
+reordering within each group. Selection still uses the ordinary underline or
+checkmark. Unbound legacy tabs appear under Other; a surviving child whose
+source is gone is labeled Source closed and never falls back to an unrelated pane.
+
+Previous/next from a terminal visits only terminal tabs. From a child it visits
+only its group's visible children; either boundary returns to the exact source
+pane. Mac operates within the focused split and can reveal the source in another
+split or native workbench. On iOS, horizontal swipes over the top tab title switch
+child tabs; tapping the title still opens Tabs. Browser/Simulator content gestures,
+terminal swipe navigation and the bottom bar's vertical gestures retain their
+existing behavior. Terminal navigation does not implicitly enter a child group.
+
+Order is local to each client. Saving catalog IDs for ordering does not recreate
+browser pages or simulators: only live Host descriptors make those tabs available.
+During partial catalog delivery, reordering replaces only the current group's
+visible members in the saved order; missing IDs and other groups keep their slots.
 
 ## Directories and lifetime
 
-- A new tab captures a pane inside the window whose menu was used: prefer the
+- A new tab captures a pane inside the window whose action was used: prefer the
   focused pane only if it belongs to that window, then its active/first pane.
   Focus in another window can never redirect the initial directory. iOS captures
-  the stable window ID and resolves the target again after the list closes; a
+  the stable window ID and resolves the target again before the action; a
   closed target fails rather than falling back to the currently selected window.
   The Host resolves the agent's
   project directory, then a fresh `pane_current_path`, then its home directory.
@@ -27,25 +106,105 @@ Files rows expose only their own selection/close actions, not terminal operation
 - Once opened, its directory does not follow later `cd` operations. **Source Pane
   Directory** explicitly resolves it again. Up, Home and the path field navigate
   independently in each tab.
-- Closing the source pane does not destroy the Files tab. Persisted layouts keep
-  paths, expanded folders, hidden-file preference and selected file, not ephemeral
-  pane IDs or file contents. Mac uses its existing Host + folder layout store;
-  iOS saves a private Host + folder workspace. Both restore and save use the Host's
-  active window/pane directory (agent project, then cwd). A context change updates
-  the save target even if no tabs changed; it never reloads over live tabs. Initial
-  restoration waits for a known directory instead of using a placeholder home path.
-  Layouts are not broadcast to peers.
-- Refresh is explicit. There is no background directory polling; previews release
-  their data when hidden. Reopening reloads current Host contents.
+- `HostFileTabService` allocates UUIDs and coalesces normal opens by source pane
+  and human group, not by directory, window or requesting Viewer. It validates
+  fresh pane membership before lookup/creation; reuse remains possible at the
+  30-tab session limit. Source moves/renames update descriptors without changing
+  UUIDs. Closing a shared tab or removing its source pane removes it on all clients.
+  Opens capture the source's persistent pane and tmux incarnation before any path
+  lookup or queued UI work. Capable Viewers send that identity in
+  `CommandMessage.expectedWorkspacePane` under `supportsWorkspaceInputIdentity`;
+  the Host checks it against fresh metadata before reusing or allocating a tab.
+  A newer published route snapshot invalidates an older pending source query.
+  Late replies are checked again before client adoption, including after catalog
+  refresh. Reused numeric pane IDs cannot inherit old tabs; a live pane move keeps
+  its Files UUID. Peers without the identity capability retain legacy behavior.
+  Source-directory and repository-link reads retain the same source binding.
+  The Host checks the actual tmux incarnation/persistent pane in the directory
+  query and again after filesystem work, so a stale published pane cache cannot
+  admit a replaced terminal's result. Viewers check before sending and after the
+  reply. Explicit absolute-path navigation/previews and Home without a source
+  pane remain independent of terminal lifetime.
+  With workspace recovery enabled, the Host restores catalog UUIDs only after
+  mapping their saved persistent session/window/pane identities to live routes.
+  The client restores its directory, expanded folders and selected file separately;
+  an unavailable file keeps its selection and reports the read error. Without
+  recovery the Host starts a fresh catalog. Persisted raw tmux IDs alone never
+  resurrect tabs. Implementation and acceptance status are tracked in
+  [workspace recovery](v3.0.76/IMPLEMENTATION_PLAN.md).
+- `SessionStateMessage.supportsPaneFiles` / `fileTabs` advertise the catalog.
+  `BrowseFiles.tabs` opens/closes through the same service as local Mac actions,
+  off the terminal keyboard receive loop. Old Hosts reject these actions before
+  transmission; no new Relay message type/deployment is needed. Pre-existing
+  device-private tabs are preserved as legacy tabs, not guessed into Host ownership
+  by directory. Shared tab IDs are not independently restored from private layouts.
+  A Host catalog arriving before first entry does not suppress private restoration:
+  saved private tabs merge with the existing Host models without replacing their
+  navigation or selection. Persistence excludes Host-owned Files identities.
+- iOS retains each live Files workspace at the app level, keyed by Host and
+  session, rather than recreating it with the session detail page. Returning to
+  the session list and re-entering keeps the same tab objects;
+  entry still starts at the Host's active terminal window. Full Host snapshots
+  reconcile the Host catalog, including while the session page is closed.
+  Host/transport disconnect and connection replacement keep identity/navigation,
+  while releasing hidden preview buffers. Only a fresh Host catalog or unpairing
+  removes those identities. Mac shares a presentation registry across its main and
+  detached workbenches, so one Host ID cannot create duplicate local tabs.
+  Session-state publication and recovery identity/ownership remapping run in the
+  same MainActor turn before SwiftUI reconciles the Files catalog. Do not queue
+  that callback into a separate task: new runtime numbers can otherwise route
+  through an old native-window owner during Host reconstruction.
+  Reusing Files from another workbench moves the live tab and triggers the same
+  selection/split repair and empty-workbench cleanup as a cross-window tab drag.
+- On Mac, closing the selected left Files tab returns to its live source window
+  and requests automatic terminal Fit. Host catalog and close-reply ordering do
+  not duplicate this completion. A background/unselected tab, failed close,
+  transfer to another workbench or passive removal from another client never
+  steals focus or requests Fit. Remaining right-side content, including local
+  Git, keeps a valid selection.
+- Refresh is explicit. There is no background directory polling; views release
+  their preview data when hidden. Reopening validates current Host contents;
+  local previews can reuse the Host's bounded, revision-checked memory cache.
+
+`HostFileTabServiceTests`, `IOSFileBrowserWorkspaceStoreTests` and
+`DetachedTerminalWindowsTests` cover concurrent reuse, extras, re-entry/reconnect,
+Host isolation, route migration, close propagation and split-selection repair.
+Protocol/connection tests cover absent capabilities and encrypted catalog/command
+transport. Actual multi-device tab switching still requires paired-client acceptance.
 
 ## Supported operations
 
 ### Explicit terminal file links
 
+Image (`png`, `jpg`, `jpeg`, `gif`, `heic`, `webp`, `tiff`, `bmp`) and Mermaid
+(`mmd`, `mermaid`) references open a client-local preview sheet on Mac Host,
+Mac Viewer and iOS. No Files catalog entry is created and terminal selection,
+layout and viewport are preserved. Mac supports pinch zoom and Escape; iOS
+supports pinch/double-tap zoom, full-screen viewing and swipe-to-dismiss.
+The More menu provides Fit, Copy Image, Share Image and Open in Files. Mermaid
+also offers Diagram/Source and Copy Source. Images show a bounded static preview
+(first frame for animated formats, at most 4096 pixels on the longest side).
+Copy/Share Image uses that preview; the original remains available through Files.
+
+Mermaid 12.2.0 is bundled and rendered in a nonpersistent system WKWebView on
+the viewing device, following that device's appearance. It does not require the
+Host's CEF runtime or an online renderer. The isolated document blocks network
+access and navigation, uses strict Mermaid rendering, limits source to 64 KiB
+and 500 edges, and times out unsuccessful rendering. Invalid diagrams retain
+their source view. The pinned upstream bundle, hash and license are under
+`CtrlxCommon/Resources/ArtifactPreview`; upstream dependency notices are retained.
+
+Preview reads reuse the existing bounded, revision-checked file pipeline and
+revalidate the repository context after transfer. Host/pane context is captured
+at the click; late or invalid reads cannot publish a different source's image.
+The file-link skill asks agents to save complete Mermaid source and reference
+it explicitly. Terminal-only code blocks and arbitrary web image URLs are not
+auto-detected. Existing file commands suffice; the Relay protocol is unchanged.
+
 Mac Host, Mac Viewer and iOS recognize the literal marker
 `<repo:outputs/report.pdf>`, emitted as inline code to preserve both delimiters.
 This is a lightweight application convention, **not a registered URI standard**.
-There is no private CtrlX URI, CLI generation step, link registry or startup hook.
+There is no private CtrlX URI, CLI generation step or link registry.
 Ordinary paths, slash commands, local Markdown targets and `file://`/OSC 8
 file targets are not inferred or opened. Web links retain their own handling.
 Compatibility with previous file-link output is deliberately dropped.
@@ -61,7 +220,13 @@ Spaces and reserved punctuation use UTF-8 percent encoding; literal percent sign
 must be `%25`. Chinese may remain literal or be encoded. Decoding happens once:
 a filename containing literal `%27` must not become an apostrophe on the Host.
 Complete markers survive soft/hard visual wraps, including a wrap inside the
-prefix or percent escape. Missing delimiters, whitespace, malformed escapes,
+prefix or percent escape. In Codex's borderless tables, separated horizontal
+rules define column bounds: wrapped marker fragments are joined only within
+the same column, and underlines/hit targets cover only those fragments. Table
+separators, blank cells/rows and text crossing a column boundary stop a partial
+marker; columns are not inferred from ordinary whitespace-aligned prose. The
+divider and complete marker must be within the bounded scan window below.
+Missing delimiters, whitespace, malformed escapes,
 control characters and paths exceeding 4096 UTF-8 bytes are rejected. No filename
 or continuation is guessed.
 
@@ -83,16 +248,16 @@ chosen KISS boundary, rather than a per-output provenance registry.
 
 Click/tap an underlined marker to open Files in the same session. A directory
 opens directly; a file selects its existing inline preview. Video still waits
-for Play. Each source terminal window reuses its own link-created Files tab,
-even across directories or panes. The association uses the stable tmux window ID
-inside that Host/session's private workspace. Different windows never share it
-merely because files are in the same directory. Manual **Open Files** tabs stay
-independent. Closing the link-created tab allows the next link to create a new
-one. Reuse updates the source pane, preserving the tab UUID and Mac split placement.
-
-The window association is live-only: saved layouts retain the directory/selection,
-not that association. Restored tabs remain independent. Changing windows, leaving
-the view or changing the source agent during resolution prevents late navigation.
+for Play. Links and manual **Open Files** use the same pane's human default tab.
+Two panes in one window remain separate even when they reference the same path;
+moving the same pane to another window preserves its tab. Clicking Agent output
+is a human action, not creation of an Agent Files group (there is no Agent Files
+API). Explicit extras and legacy tabs never become defaults by directory matching.
+Closing the default allows a new one on the next open. Returning to the session
+list or reconnecting retains the Host ID. Reuse navigates only the requesting
+client, preserving the other clients' views and the existing Mac split placement.
+Changing windows, leaving the view or changing the source agent during resolution
+prevents late navigation, including switching to Git in the same Mac window.
 The Viewer never resolves a remote path against its own filesystem.
 
 Decorations, hover and activation share one bounded visible-row snapshot,
@@ -103,14 +268,44 @@ protection. The scanner performs no filesystem I/O or network work.
 
 ### Agent output convention and migration
 
-The short independent `file-links` skill remains one of four shared skills.
-Its canonical source is `plugin/ctrlx/skills/file-links/SKILL.md`, packaged for
-Claude Code and mirrored into Codex by `scripts/sync-codex-skills.sh`.
-Bundled skill versions: Codex **1.1.3**, Claude Code **1.3.4**.
+The output convention has one canonical source:
+`plugin/ctrlx/skills/file-links/SKILL.md`, packaged for Claude Code and mirrored
+into Codex by `scripts/sync-codex-skills.sh`. The skill remains explicitly usable,
+but routine file references do not depend on the model selecting it implicitly.
+Each plugin's existing `SessionStart` hook reads that bundled skill, strips its
+frontmatter, and returns its body as `hookSpecificOutput.additionalContext`.
+Both plugins include the [default iOS Simulator entry point](agent-simulator-design.md#agent-工具选择入口)
+in the same context block.
+The existing registrations cover startup, resume, clear, compact and fork, following
+the [Codex](https://learn.chatgpt.com/docs/hooks#sessionstart) and
+[Claude Code](https://code.claude.com/docs/en/hooks#sessionstart) hook contracts.
+Other events only forward lifecycle data: there is no per-turn reminder, Stop
+blocking, repository instruction-file edit, extra CLI call or path inference.
+
+Context is emitted only inside tmux after the existing ingress socket send succeeds.
+An unavailable ingress omits all context. A missing, unreadable, invalid UTF-8,
+malformed or oversized skill omits only that skill's context without failing the
+hook; each skill read is bounded to 5000 bytes plus an overflow check. Lifecycle
+forwarding is unchanged. The convention
+applies to user-facing references, not paths in commands, code or configuration.
+Prior read/write/existence evidence can be reused rather than rechecking each link.
+
+Current bundle versions are recorded in `plugin/codex/ctrlx/.codex-plugin/plugin.json`
+and `plugin/ctrlx/.claude-plugin/plugin.json`.
 Update the Host and each Mac/iOS Viewer, update the installed agent plugin,
-then start a new agent session. Updating only the App does not refresh a cached
-agent plugin. Both TUIs should receive an inline-code literal marker, never a
-Markdown link target that the renderer can hide or shorten.
+then start a new agent session with plugin hooks enabled/trusted. Updating only
+the App does not refresh a cached agent plugin. Both TUIs should receive an
+inline-code literal marker, never a Markdown link target that the renderer can
+hide or shorten.
+
+`python3 scripts/tests/test_agent_skills.py` exercises the real hook scripts with
+isolated ingress sockets and the built-plugin skill mirroring step. It checks
+all five SessionStart sources, unchanged ingress frames, canonical body delivery,
+silent non-start events and failure paths. These are wiring tests, not proof of
+real-model adherence. For that acceptance, ask each CLI to report an edited file,
+generated output and folder **without naming the skill**, repeat after resume and
+compaction, and include Chinese/spaced names and source line references. Commands,
+web URLs, deleted files and external paths must remain unmarked.
 
 Tests cover marker recognition, every soft/hard wrap boundary, inertial viewport
 snapshots, single decoding, source-context changes and actual Git worktree/symlink
@@ -339,9 +534,31 @@ Disconnect cancels pending work and prevents old-connection replies.
   Files, symbolic links and unknown entry types retain metadata checks. Hidden
   listings include dot-prefixed names and entries marked with macOS `UF_HIDDEN`;
   otherwise both are skipped before sorting and pagination.
-- Reads: regular files only, 128 KiB chunks; text up to 512 KiB, images/PDFs up to
-  8 MiB. Descriptor/path revisions are checked around reads; mixed-version data
-  is never shown. Directory page revisions are also checked before appending.
+  Continuation pages reuse the latest sorted directory snapshot (at most 10,000
+  entries), after checking its path, hidden setting and directory revision.
+  Offset zero always enumerates again, so reopening/Refresh picks up changed
+  child metadata and hidden flags. Larger directories retain uncached paging.
+  Previewing a listed file always reads its current metadata independently.
+- Reads: regular files only; text up to 512 KiB, images/PDFs up to 8 MiB. Remote
+  previews keep the 128 KiB wire chunks. Local previews use one in-process request
+  and one open descriptor, retaining cancellation and descriptor/path revision
+  checks. The Host keeps only the two latest local preview byte buffers (at most
+  16 MiB total, no disk cache); every reuse checks current readability and file
+  revision. The UI also rechecks the final revision before displaying data, so
+  stale, replaced or deleted files cannot revive a cached preview. Media and
+  Office still use their validated local URLs. Directory page revisions are
+  checked before appending.
+
+  Reproduce the local I/O comparison with
+  `CTRLX_FILES_PERFORMANCE=1 ./scripts/unit-tests.sh -- --filter HostFilesPerformanceTests`.
+  A 2026-10-16 isolated Debug comparison against `640d36e` measured 1201-entry
+  full directory pagination at 132.7 → 24.7 ms (median of five); first 8 MiB
+  preview loading at 10.1 → 4.6 ms, and four subsequent hide/reopen loads at
+  6.80 → 0.32 ms (median). Each old preview made 64 chunk requests; the local
+  path makes none. The fixture uses warm filesystem caches and synthetic bytes;
+  these are file-loading timings, not image decoding, visible frame latency or
+  browser/simulator FPS measurements. Native browser and simulator rendering
+  paths are unchanged by this optimization.
 - Explicit downloads: regular files up to 1 GiB, the same 128 KiB encrypted
   chunks and revision checks, written one chunk at a time off the UI actor.
   This does not relax the inline-preview or search bounds. Even empty files
@@ -360,6 +577,10 @@ Focused coverage: `HostFileBrowserTests`, `FileBrowserLayoutTests`,
 `HostFileUploadTests`, `FileBrowserUploadTests`,
 `FileBrowserTabTests`, `FileBrowserTransferTests`, `FileBrowserProtocolTests`, `IOSFileBrowserWorkspaceTests`,
 `LayoutSnapshotMapperTests`, and `TerminalPasteTransportTests`.
+`IOSFileBrowserWorkspaceStoreTests` covers repeated session-page re-entry,
+Host/session isolation, window reordering, source removal/movement and invalidation
+after disconnect or connection replacement. These are model tests; real iPhone
+navigation acceptance is separate.
 `TerminalFileLinkTests` covers explicit URI encoding, all hard/soft wrap boundaries,
 truncation and ordinary-path rejection, Chinese OSC 8 hit cells, web precedence,
 input protection, Host-only resolution, unavailable files and cancellation.
@@ -414,6 +635,11 @@ same window, then from a different window pointing at the same directory. Move
 the first Files tab to the Mac right split, rename/reorder its source window,
 and repeat the links; keep manually opened Files tabs unchanged. Close the
 link-created tab and click again to verify a fresh tab is created.
+On iOS, also return to the session list and re-enter three times, clicking a link
+from the same window each time: its Files tab UUID/count must remain unchanged.
+Keep a manual Files tab and another window's link-created tab open to verify
+they are not reused. Removing the source window must leave its Files contents
+available without transferring ownership to another window.
 Also preview a local MP4 larger than 8 MiB, open it in the default app, then
 download/open it on Mac Viewer and iOS. Verify Quick Look/share, cancel mid-copy,
 change the source file mid-copy, and test against a Host without download support.

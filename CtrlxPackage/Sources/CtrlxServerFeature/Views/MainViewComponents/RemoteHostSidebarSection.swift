@@ -74,6 +74,7 @@ struct RemoteHostSidebarSection: View {
                     Task { await connection?.enableReconnectAndRetry() }
                 }
             } else if hasContent {
+                WorktreeStatusButton(repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [])
                 // The remote host's cross-session usage rollup (issue #598),
                 // from its SessionStateMessage — same collapsible cell the
                 // local section and the iOS list show.
@@ -107,6 +108,8 @@ struct RemoteHostSidebarSection: View {
             symbol: .laptopcomputer,
             isNewSessionDisabled: connection?.isHostConnected != true,
             newSessionButtonIdentifier: "new-session-remote-\(host.id)",
+            hasManualSessionOrder: !settings.remoteSessionOrder(for: host.id).isEmpty,
+            onRestoreAutomaticOrder: { settings.setRemoteSessionOrder([], for: host.id) },
             trailing: {
                 HStack(spacing: 6) {
                     Circle()
@@ -211,6 +214,10 @@ struct RemoteHostSidebarSection: View {
         .accessibilityChildren {
             SessionProgressAccessibilityProxy(progress: sessionProgress)
         }
+        .modifier(SessionWorktreeStatusModifier(
+            repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [],
+            paths: Set(session.windows.flatMap(\.panes).compactMap(\.gitWorktreePath))
+        ))
         .modifier(DescriptionEditingModifier(
             sessionName: session.sessionName,
             currentDescription: session.customDescription,

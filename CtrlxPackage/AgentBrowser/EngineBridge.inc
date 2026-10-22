@@ -180,6 +180,7 @@
     if (humanControl_.contains(engineGrants_.at(token).tab)) {
       EngineError(connection, wireID, @"A person is controlling this page. Wait for Return to Agent."); return;
     }
+    AgentBrowserCancelHumanInput(tab.browser);
     NSString* session = request[@"sessionId"] ?: @"";
     if (![method isKindOfClass:NSString.class] || ![params isKindOfClass:NSDictionary.class] ||
         ![session isKindOfClass:NSString.class] ||
@@ -203,7 +204,7 @@
       if (session.length || params.count) { EngineError(connection, wireID, @"Only the current root target is queryable."); return; }
     }
     if ([method isEqual:@"Target.attachToTarget"]) {
-      bool busy = engineCaptureAttaching_.contains(browserID);
+      bool busy = engineCaptureAttaching_.contains(browserID) || RecordingActive(engineGrants_.at(token).tab);
       for (const auto& [key, deadline] : engineCaptures_) busy |= key.first == browserID;
       if (session.length || busy || !enginePageTargets_.contains(browserID) ||
           ![params[@"targetId"] isEqual:String(enginePageTargets_.at(browserID))]) {
@@ -289,7 +290,6 @@
     }
     if (enginePending_.size() >= 128) { EngineError(connection, wireID, @"Engine is busy; operation not sent."); return; }
     if ([method isEqual:@"Target.attachToTarget"]) engineCaptureAttaching_.insert(browserID);
-    if ([method hasPrefix:@"Input."]) { callbacks_.select(tab.browser); tab.browser->GetHost()->SetFocus(true); }
     const int message = ++nextMessage_;
     bool navigation = [@[@"Page.navigate", @"Page.reload", @"Page.navigateToHistoryEntry"] containsObject:method];
     enginePending_[{tab.browser->GetIdentifier(), message}] = {connection, wireID, token, tab.generation, Clock::now() + std::chrono::seconds(10), navigation, session, method};

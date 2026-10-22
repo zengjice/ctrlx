@@ -38,6 +38,24 @@ public enum DetachedTerminalWindowScenario {
             TestStep.macWaitForElementQuery(.identifier("terminal-%0"), timeout: 10, instance: instance)
             TestStep.macScreenshot(label: "detached", compare: false, instance: instance)
 
+            // Stay in the detached window throughout: resizing alone must not Fit,
+            // but an ordinary content click must use its new viewport.
+            TestStep.macResizeWindow(width: 740, height: 500, instance: instance)
+            TestStep.macCGClickElement(query: .identifier("terminal-%0"), instance: instance)
+            TestStep.wait(seconds: 1)
+            TestStep.tmuxStoreDisplayMessage(target: "detached-test:0", format: "#{window_width}x#{window_height}", storeAs: "beforeResize")
+            TestStep.tmuxStoreDisplayMessage(target: "detached-test:1", format: "#{window_width}x#{window_height}", storeAs: "otherBeforeResize")
+            TestStep.macResizeWindow(width: 1_100, height: 740, instance: instance)
+            TestStep.wait(seconds: 1)
+            TestStep.tmuxStoreDisplayMessage(target: "detached-test:0", format: "#{window_width}x#{window_height}", storeAs: "afterPassiveResize")
+            TestStep.assertStoredEqual(key: "beforeResize", otherKey: "afterPassiveResize")
+            TestStep.macCGClickElement(query: .identifier("terminal-%0"), instance: instance)
+            TestStep.wait(seconds: 1)
+            TestStep.tmuxStoreDisplayMessage(target: "detached-test:0", format: "#{window_width}x#{window_height}", storeAs: "afterClickFit")
+            TestStep.assertStoredNotEqual(key: "beforeResize", otherKey: "afterClickFit")
+            TestStep.tmuxStoreDisplayMessage(target: "detached-test:1", format: "#{window_width}x#{window_height}", storeAs: "otherAfterResize")
+            TestStep.assertStoredEqual(key: "otherBeforeResize", otherKey: "otherAfterResize")
+
             TestStep.macCGClickElement(query: .identifier("terminal-%0"), instance: instance)
             TestStep.macType(text: "echo DETACHED_INPUT_ONLY", pressReturn: true, instance: instance)
             TestStep.tmuxWaitForPaneContent(target: "detached-test:0.0", contains: "DETACHED_INPUT_ONLY", timeout: 10)

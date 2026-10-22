@@ -32,6 +32,11 @@ final public class SessionStore {
     /// Per-pane state keyed by `(pairId, paneId)` to disambiguate panes
     /// whose IDs collide across hosts.
     public private(set) var paneStates: [PaneKey: PaneState] = [:]
+    public private(set) var workspaceCatalogsByHost: [String: ViewerWorkspaceCatalog] = [:]
+    private var lastWorkspaceScopeByHost: [String: WorkspaceIdentityScope] = [:]
+
+    /// Paths are meaningful only within their source Host.
+    public private(set) var worktreeRepositoriesByHost: [String: [RepositoryWorktreeStatus]] = [:]
 
     /// Agent projects grouped by source host's pairId
     public private(set) var agentProjectsByHost: [String: [AgentProject]] = [:]
@@ -250,6 +255,19 @@ final public class SessionStore {
     /// Handle a full session state update from a host
     public func handleStateUpdate(_ state: SessionStateMessage) {
         let hostId = state.pairId
+        let catalog = ViewerWorkspaceCatalog(state: state)
+        let previousScope = lastWorkspaceScopeByHost[hostId]
+        let workspaceChanged = catalog.map { previousScope != nil && previousScope != $0.scope } ?? false
+        workspaceCatalogsByHost[hostId] = catalog
+        if let scope = catalog?.scope {
+            lastWorkspaceScopeByHost[hostId] = scope
+        }
+        if workspaceChanged {
+            // Layout revisions and finished-turn summaries belong to a tmux
+            // incarnation, not to whichever pane reuses its numeric route.
+            sharedTerminalLayoutsByHost.removeValue(forKey: hostId)
+            lastTurnSummaryByPane = lastTurnSummaryByPane.filter { $0.key.pairId != hostId }
+        }
 
         logger.info(
             "Received full session state from host \(hostId): \(state.paneStates.count) panes, \(state.agentProjects?.count ?? 0) projects"
@@ -260,6 +278,10 @@ final public class SessionStore {
         var newPaneStates = paneStates.filter { $0.key.pairId != hostId }
 
         for (paneId, paneState) in state.paneStates {
+            let old = paneStates[PaneKey(pairId: hostId, paneId: paneId)]?.workspaceIdentity
+            if let old, !old.isSamePane(as: paneState.workspaceIdentity) {
+                lastTurnSummaryByPane.removeValue(forKey: PaneKey(pairId: hostId, paneId: paneId))
+            }
             newPaneStates[PaneKey(pairId: hostId, paneId: paneId)] = paneState
         }
 
@@ -280,6 +302,7 @@ final public class SessionStore {
             lastTurnSummaryByPane.removeValue(forKey: key)
         }
 
+        worktreeRepositoriesByHost[hostId] = state.worktreeRepositories
         agentProjectsByHost[hostId] = state.agentProjects ?? []
         if state.supportsAgentFork == true {
             hostsSupportingAgentFork.insert(hostId)
@@ -341,8 +364,11 @@ final public class SessionStore {
 
     /// Clear all sessions and panes for a specific host
     public func clearSessions(for hostId: String) {
+        workspaceCatalogsByHost.removeValue(forKey: hostId)
         paneStates = paneStates.filter { $0.key.pairId != hostId }
         lastTurnSummaryByPane = lastTurnSummaryByPane.filter { $0.key.pairId != hostId }
+
+        worktreeRepositoriesByHost.removeValue(forKey: hostId)
 
         // Clear stored projects
         agentProjectsByHost.removeValue(forKey: hostId)

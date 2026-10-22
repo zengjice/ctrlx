@@ -136,9 +136,10 @@ final public class ViewerConnection: Identifiable {
     public func sendCommand<C: CommandSpec>(
         _ command: C,
         paneId: String,
-        timeout: TimeInterval = 15
+        timeout: TimeInterval = 15,
+        inputBinding: ViewerWorkspaceInputBinding? = nil
     ) async -> Result<C.Response, Error> {
-        await relayClient.sendCommand(command, paneId: paneId, timeout: timeout)
+        await relayClient.sendCommand(command, paneId: paneId, timeout: timeout, inputBinding: inputBinding)
     }
 
     /// Request current session state from this host
@@ -188,7 +189,7 @@ final public class ViewerConnection: Identifiable {
         onAgentSessionStatus: (@Sendable (AgentSessionStatusMessage) -> Void)? = nil,
         onPluginPresentations: (@Sendable (PluginPresentationsMessage) -> Void)? = nil,
         onAgentNotification: (@Sendable (AgentNotificationMessage) -> Void)? = nil,
-        onSessionState: (@Sendable (SessionStateMessage) -> Void)? = nil,
+        onSessionState: (@MainActor @Sendable (SessionStateMessage) -> Void)? = nil,
         onPartnerKeyReceived: (@MainActor @Sendable (String, String) async -> Void)? = nil,
         onTransportInterrupted: (@MainActor @Sendable () async -> Void)? = nil,
         onHostDisconnected: (@MainActor @Sendable () async -> Void)? = nil,

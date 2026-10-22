@@ -1,5 +1,37 @@
 # Agent Browser
 
+## 浏览器后台录屏
+
+Agent 可通过 `ctrlx browser record-start/record-status/record-stop` 对自己的
+Host 浏览器标签录制静音 MP4。最长 10 分钟，默认 10 fps，视频直接保存到 Host
+新文件；录制期间可以继续操作网页，Viewer 仍按原有控制权规则接管。
+到时、关标签、Agent 退出或 Host 正常退出会停止并收尾。使用状态返回的
+`completed` 确认文件可用，再通过文件浏览器查看或下载。参数、资源限制、
+异常情况及与旧短录屏命令的区别见 [浏览器引擎](agent-browser-engines.md#managed-expansion-workflows)。
+
+排查偶发录屏崩溃时，在实际录制的 Mac Host 上开启 **Settings → General →
+Diagnostics → Debug Mode**（默认关闭，立即生效）。关键阶段及每 5 秒的进度、
+Host 内存和窗口布局摘要写入 `~/Library/Logs/CtrlX/Browser/`，最多 3 × 2 MiB；
+关闭开关停止采集、保留已有日志。复现后将整个目录和对应 macOS `.ips` 崩溃报告
+一起提供。不会记录网页内容、URL、请求头或终端文本；详见
+[诊断日志](services-reference.md#appkit-layout-diagnostics)。
+
+## Viewer 显式剪贴板
+
+Host 的 `supportsWorkspaceClipboard` 能力开启配对 Mac / iOS Viewer 的 Copy / Paste。
+复制当前网页选中文字，或最后点击的图片，到 Viewer 本地剪贴板；粘贴发送本地文本或图片。
+Mac 内容区支持 ⌘C / ⌘V，iOS 保留工具栏按钮及外接键盘快捷键。
+复制、粘贴成功提示叠加在画面底部，不占用布局高度，也不拦截点击或触控；
+连续操作不会因提示出现或清空而改变 Viewer 画布尺寸和页面显示比例。
+操作使用现有页面控制 lease、surface ID、页面 generation 和加密 Relay；离开、接管变化或
+注释模式会丢弃尚未完成的复制结果。不会轮询或同步 Host 全局剪贴板。
+
+CEF 使用固定的页面脚本读取选区，并给当前焦点派发带 `DataTransfer` 的 paste 事件；
+普通输入框 / contenteditable 使用编辑命令完成默认粘贴。图片事件是否接收由网页决定，
+不伪装成可信系统事件。无法访问的跨域子框架、密码复制和不接受图片的控件明确报错。
+文本和图片载荷最多 384 KiB，同时限制 JSON 编码后为 576 KiB（含 Base64 和斜杠转义）。
+复制和粘贴的图片超过编码预算时重新编码或缩小；旧 Host 隐藏复制能力，保留既有纯文本输入方式。
+
 Current embedded-browser contract, followed by dated acceptance history. The
 Apple Development-signed runtime is distributed through the private Mac channel;
 this does not mean hardened-runtime/notarized distribution is approved. Formal
@@ -21,6 +53,16 @@ second invokes the operating device's default browser, unchanged. Mac global and
 per-domain preferences keep their stored values but “in app” now means Host.
 The existing split-on-link preference is retained. iOS tap and long-press use
 the same destination picker. Unsupported Host URLs fail without local fallback.
+
+On Mac Local and Mac Viewer, **Command-click** opens a terminal web link directly
+in the source Host's browser; **Option-click** opens it in this Mac's default
+browser. These one-click overrides bypass the picker and saved domain/global
+preferences without changing them. Command wins if both keys are held. The
+modifier is captured on mouse-up before the double-click delay, so releasing the
+key does not change the destination. Drag/multi-click selection and repository
+file links keep their existing behavior; iOS touch handling is unchanged.
+The Mac destination picker shows each shortcut below its matching button,
+explicitly describing a terminal-link click rather than a dialog-button shortcut.
 
 On iOS the picker is a SwiftUI sheet, not a popover anchored to the scrollable
 terminal. It shows a bounded URL preview and separate Host / this-device actions
@@ -55,6 +97,73 @@ Chromium pages remain transient across App restarts. The `vercel` / `ctrlx`
 automation-backend selection is independent. If Chromium is unavailable, report
 an error rather than substituting WebKit or the system browser.
 
+### Background Agent operation
+
+Agent page creation/reuse, navigation, popups and page actions run without
+selecting a workspace tab, raising the Host window or taking native keyboard
+focus. Both engines send page input to the authorized browser directly; DOM
+focus inside that page is independent of the user's current AppKit responder.
+`action show --tab` is the explicit request to reveal a page. Human Open Browser,
+tab selection and extension-window actions retain their UI presentation.
+Agent popups also start in the background when a Viewer controls their parent;
+their first later explicit `show` must not be discarded as an initial selection.
+
+`tests/background_input.py` runs both public engines in an isolated signed app.
+It checks actual page effects and preservation of another session's visible
+page and native text input, same-session background tabs, visible-page input,
+popup creation/closure, screenshots, navigation and explicit `show`.
+
+### Passkey Bluetooth permission
+
+Chromium's WebAuthn sign-in flow can initialize Bluetooth for nearby-device
+passkeys in the main Host process. The Mac app declares
+`NSBluetoothAlwaysUsageDescription` in `CtrlxServer/Info.plist`; the built app
+must retain it. Without this description, macOS TCC terminates the entire Host
+when that API is reached, rather than returning a recoverable page error.
+Bluetooth authorization remains a macOS system prompt when needed; adding the
+description does not grant permission or request it at app startup.
+
+### External applications
+
+Clicking an application-protocol link (for example Feishu authorization) opens
+the registered application on the **Host Mac**, without a second confirmation.
+The original webpage and its login state stay in place. Mac/iOS Viewers use the
+same Host launch path; a page banner reports the application opened on the Host,
+or explains that no handler is registered / the system could not open it. Native
+application interaction still takes place on the Host, outside browser sharing.
+
+CEF navigation and popup callbacks share a one-use human activation. It comes
+only from AppKit page clicks / Enter / Space, or typed Viewer input with a valid
+page control lease. It expires after five seconds and can follow iframe,
+asynchronous, popup and HTTP redirect paths; a completed destination load,
+another navigation, source closure or control change invalidates it. Agent CDP
+commands cannot manufacture an activation and clear a prior human activation.
+Load completion is armed only after the requested destination commits in
+`OnLoadStart`, and is matched to that browser/frame. An earlier document's
+completion cannot revoke a pending same-tab or popup redirect, even when the
+browser, frame and URL are reused. A committed destination may launch during
+loading; its completion still revokes the activation.
+Normal web, browser-internal, script and file protocols never enter this OS
+handoff path. This does not grant local-network permissions, change site security
+policy, copy browser credentials or rewrite authentication callbacks.
+
+The optional `RemoteBrowserTab.externalApplicationNotice` is display-only and
+backward compatible; no new remote launch command or Relay change is required.
+The Host keeps the full application URL locally and passes it intact to macOS.
+Only the application name or error message is shared with Viewers.
+
+Validation: `BrowserExternalApplicationTests` covers Host dispatch, exact URLs,
+launch errors and stale Viewer leases; the existing remote protocol/control/session
+suites remain passing. `tests/external_application.mm` checks activation expiry,
+consumption and protocol filtering. `tests/external_applications.py` runs against
+the isolated signed probe app and verifies AppKit clicks, iframe/async/popup/HTTP
+redirect handoffs (including old-document completion during pending same-tab,
+same-URL reload and popup redirects), committed destination load policy,
+duplicate suppression, Agent refusal and Viewer input/revocation. The native
+fixture asserts callback order before releasing delayed HTTP responses.
+Its launch recorder substitutes the OS handoff, so it does not open personal apps
+or establish real Feishu tenant authorization / physical-iPhone acceptance.
+
 Regression coverage: `PaneBrowserOpeningTests`, `AgentBrowserRoutingTests`,
 `RemoteBrowserProtocolTests` and the connection capability test cover reuse,
 plain panes, source revalidation, ownership/leases, cancellation, parking and
@@ -77,6 +186,93 @@ access are tracked in the [Agent Browser TODO](agent-browser-todo.md), with per-
 implementation status. Verified public capabilities and remaining limits are in
 the [capability audit](agent-browser-capability-audit.md).
 
+## Browser extensions
+
+The browser's **Extensions** button provides Chrome Web Store link/ID installation,
+ZIP/CRX import, permission review, enable/disable, manual update and removal.
+Extensions declaring an options page also show **Settings** before Enable/Disable
+on Mac Host, Mac Viewer and iOS. Enable a disabled extension before opening its
+settings. **Extension Advanced Management** opens Chromium's full extension manager.
+**Browse Store** opens Chrome Web Store in a new embedded tab linked to the same
+source pane. Store links in **Extension Advanced Management** use that route too;
+they do not create a separate native store window. Mac Viewer and iOS select the
+returned Host tab without changing the Host's selection. On an extension detail
+page, **Install on Host** opens the existing permission preview with its ID filled
+in (and the existing update flow when already installed). Download, signature
+checks and installation remain on the source Host. The website's own “Add to
+Chrome” button is not the supported installation entry point. Older Hosts omit
+the new store-browsing capability; link/ID installation remains available.
+Store handoff metadata accompanies a valid native-window frame, so older Viewers
+can keep polling and reacquire control without reopening the panel. Physical Host
+takeover rebinds the manager's store links to the local source and clears the
+stale Swift lease on local navigation; queued Viewer callbacks retain their old
+token and remain rejected. The manager retains its source independently of the
+grant, so real Host input also restores local links after Viewer release or the
+20-second native lease expires. Input in unrelated windows or injected by a
+Viewer does not restore local routing.
+
+2026-10-21 store-navigation validation passed 38 focused protocol/control/URL tests,
+the signed `--options-mode tab` probe (actual manager store link, same-tab routing,
+no native store popup, active/released/expired grants, and options regression),
+and Mac Debug builds. The expiry regression waits for the production 20-second timeout.
+The earlier iOS Simulator build remains applicable to the unchanged Viewer code.
+Physical-device and cross-machine UI acceptance remain unverified.
+
+Extensions are installed in the source **Host's CtrlX profile** and apply across
+its sessions. They do not install into system Chrome or a Viewer's local profile.
+The first version supports Manifest V3 and signed CRX3; ZIP packages are identified
+as unsigned. Store downloads are signature-checked and loaded from Host-managed
+directories, with manual **Update → Check Chrome Web Store** rather than Chrome's
+automatic store updates. Native Chromium may require an additional confirmation.
+
+On Mac Host, choose **Open in Extension Window** for pages that need extension
+actions. This opens a separate CtrlX-owned Chrome-style window with its native
+toolbar and extension popups. Existing embedded pages remain available, but
+extensions relying on Chrome's active-tab/window APIs need the extension window.
+Installations and extension settings persist across restarts; open pages remain
+transient.
+
+**Settings** resolves the extension's current `options_ui` / `options_page`
+declaration on the Host. It opens a reusable native options window, using Chromium's
+embedded options UI when `open_in_tab` is false. The Viewer switches to that native
+window automatically, under the existing extension-control grant. Options addresses
+and native window IDs are not accepted from the Viewer or exposed to Agent page
+commands. Older Hosts omit options availability, so their Viewers retain the
+advanced-management route. Settings are shared by Viewers of the same Host profile.
+
+Mac Viewer and iOS use **Browser Extensions → Take Extension Control**. This is
+separate from ordinary page control. The **Window** view carries the Host's full
+native window and child popups, with pointer, scrolling, text/paste and supported
+editing keys; **Fit Host Window** changes the shared Host window size. Host input
+takes control back. Closing/backgrounding the panel, losing the connection or
+closing the source releases its grant. Newer capabilities are required on both
+ends; an old Host never causes installation on the Viewer as a fallback.
+
+An install attempt consumes its permission preview. If the Host reports an error
+or timeout, the Viewer returns to the list and can **Refresh** without releasing
+control. Packages submitted to Chromium are retained because installation may
+still complete; a busy runtime must finish before further management operations.
+Failures before submission clean up the unused package.
+
+Local acceptance covers Mac Host/Viewer and iOS Simulator, package/wire/control
+tests, real ENV-Plugin 3.4.12 request-header effects and persistence, and Mac store
+installation/manual replacement. ENV debugger API coexistence was checked;
+native messaging helpers and all-extension compatibility were not. This is not
+physical-device or cross-machine distribution acceptance. See the
+[implementation and evidence record](browser-extensions-design.md) for exact
+checks and retained runtime limitations. If store downloads fail only in CtrlX,
+check process-specific proxy rules as well as domain connectivity: a local Surge
+DIRECT rule for CtrlX caused the documented TLS failure despite successful curl
+and differently named Foundation requests.
+
+Cross-origin request-header modification has a confirmed limitation in the
+pinned CEF: ENV-Plugin's `x-maas-env` injection enters the CORS preflight header
+list and can make otherwise working sites fail. The prior ENV acceptance was
+same-origin. Both embedded and Chrome-style windows are affected. A candidate
+CEF source patch and strict cross-origin regression are recorded in
+[Cross-origin header compatibility](browser-extensions-design.md#cross-origin-header-compatibility);
+the patch is not yet compiled into the shipped runtime.
+
 ## Embedded routing
 
 The shared `agent-browser` skill (packaged for Codex and Claude Code) defaults
@@ -88,9 +284,40 @@ reported without silently switching to Computer Use, another browser client or
 standalone Playwright. Browser switching requires the user's choice. This is
 skill guidance, not a tool-permission sandbox; no global agent settings change.
 
-The shared skill also guides task-based tab creation versus reuse, without a
-one-tab limit or automatic cleanup. See its [owned-tab guidance](../plugin/ctrlx/skills/agent-browser/SKILL.md#owned-tabs).
-The CLI semantics remain unchanged: `open` creates a tab; `navigate` reuses one.
+Codex and Claude Code inject this short entrypoint alongside `file-links` and
+`agent-ios` through the existing `SessionStart` hook, after lifecycle forwarding
+to the local Host succeeds. It covers startup, resume, clear, compact and fork;
+the hook reads the bundled skill without opening pages or running browser commands.
+The injected source path anchors relative links; the agent reads the full
+workflow only when webpage interaction is needed. Each entrypoint is independent:
+a missing, unreadable, malformed or oversized file is skipped without blocking
+the other guidance or lifecycle event.
+
+This requires updating the cached plugin to Codex 1.1.11 / Claude Code 1.3.12
+or later and triggering `SessionStart` with hooks enabled and trusted. Repository
+edits alone do not update running agents. Isolated hook tests verify delivery and
+bundle contents; they do not guarantee a model's tool choice.
+
+The shared skill guides default reuse versus explicit extra tabs. See its
+[owned-tab guidance](../plugin/ctrlx/skills/agent-browser/references/workflow.md#owned-tabs).
+`open` reuses the source pane's **Agent primary page**; `open --new` creates an
+extra without replacing it, and `navigate --tab` still targets a specific page.
+Same normalized URLs do not reload. Creation/reuse runs serially on CEF's UI loop;
+capacity limits apply only to creation. Popups and extras never become defaults.
+An expired owner or a different process cannot inherit a page/control grant merely
+by occupying the same pane. Busy or human-controlled pages reject Agent reuse.
+Human menu/link opens still use the distinct human primary page; viewing or
+annotating an Agent page does not create a human copy or change its ownership.
+The typed human `.create` operation explicitly creates an extra; `.openPane`
+remains the normal reusable operation. No global per-window browser is introduced.
+These `open` semantics require bundled guidance from Codex 1.1.8 / Claude Code
+1.3.9 or later; rebuild the Host and update the installed plugin together.
+
+`tests/pane_defaults.py` exercises both engines through the public CLI in an
+isolated signed App, with native fixture owners, private profile/tmux/API sockets
+and mock Keychain. The 2026-10-15 run passed identical-URL DOM preservation,
+explicit extras, default close/recreation and normal Host exit. This is fixture
+acceptance, not real-Codex/Claude or paired Viewer UI acceptance.
 
 Open CtrlX on the **same Mac** as the terminal agent. Start `codex` or `claude` normally;
 there is no `ctrlx browser run` requirement. On `browser action open`, the CLI
@@ -198,7 +425,8 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   another surface/Viewer cannot steal it. Manual pages attempt acquisition on
   first display. **Return to Agent / Release Control**, Host **Take Back**,
   disconnect or a 20-second lease expiry release it (expiry checked every 5 s).
-  Acquisition refuses in-flight Agent work/recording. Both CLI backends,
+  Acquisition refuses in-flight Agent work and legacy short recording; the
+  independent Host background recording can continue during Viewer control. Both CLI backends,
   including existing Vercel gateway attachments, reject commands during handoff.
   The Host page blocks direct keyboard/pointer input until Take Back.
 - Viewers scale the existing viewport by default. **Fit to This Device** is an
@@ -210,7 +438,9 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   Transport failure releases control.
 - Mac uses native IME composition; iOS commits UITextView composition before
   sending text, with explicit Keyboard and Paste buttons. One finger scrolls;
-  two fingers drag. System/CEF popup UI, file chooser, remote clipboard reads,
+  two fingers drag; long press holds a pointer for selection. Copy/Paste transfer
+  bounded text/images with the current page lease (see Viewer clipboard above).
+  System/CEF popup UI and file chooser,
   remote audio/video streaming and remote DevTools are not included.
 
 Validation scope and outstanding physical-device acceptance are tracked in

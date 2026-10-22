@@ -138,7 +138,24 @@
             #expect(refreshes == 0)
         }
 
-        private func makeWindow(paneId: String) -> LocalTmuxWindow {
+        @Test("Creation selection ignores the same numeric pane on another tmux server")
+        func createdPaneIncarnation() async {
+            let replacement = makeWindow(paneId: "%0", serverID: "20:200")
+            let created = makeWindow(paneId: "%0", serverID: "10:100")
+            var windows = [replacement]
+            let result = await PaneSurfaceRetry.localWindow(
+                containing: "%0", serverID: "10:100", attempts: 2, delay: .zero,
+                windows: { windows }, refresh: { windows = [created] }
+            )
+            #expect(result == created)
+            let rejected = await PaneSurfaceRetry.localWindow(
+                containing: "%0", serverID: "10:100", attempts: 1,
+                windows: { [replacement] }, refresh: { }
+            )
+            #expect(rejected == nil)
+        }
+
+        private func makeWindow(paneId: String, serverID: String? = nil) -> LocalTmuxWindow {
             let pane = PaneInfo(
                 paneId: paneId,
                 target: "work:5.0",
@@ -151,7 +168,8 @@
                 height: 40,
                 isActive: true,
                 windowName: "terminal 6",
-                isWindowActive: true
+                isWindowActive: true,
+                tmuxServerID: serverID
             )
             return LocalTmuxWindow(
                 id: pane.windowId,

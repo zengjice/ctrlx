@@ -143,6 +143,10 @@ updates, but verify decoding, capability gating and envelope limits per change.
 ## Files, browser and workspace ownership
 
 - **Files:** common UI on all clients; paths resolve on the selected Host.
+  `HostFileTabService` owns the catalog and one human default per source pane;
+  manual opens and terminal links reuse it, explicit extras do not replace it.
+  `supportsPaneFiles` gates shared open/close. Client navigation remains private,
+  while Host IDs survive Viewer re-entry/disconnect and follow source-pane moves.
   `FileBrowserClient` / `HostFileBrowser` provide bounded filesystem work,
   `HostFileUploads` manages writes, and per-connection file queues keep it
   outside terminal input. Terminal link recognition runs in shared client code;
@@ -154,7 +158,9 @@ updates, but verify decoding, capability gating and envelope limits per change.
   remain local. `supportsPaneBrowser` gates the new command on Viewers.
   `vercel` / `ctrlx` selects the automation backend, not the rendering
   engine. Agent authority follows a verified process instance, not the focused
-  pane. Viewer control requires a lease; there is no raw remote CDP gateway.
+  pane. Agent `open` reuses its own pane default; `--new` preserves an extra.
+  Human and Agent defaults never share control grants. Viewer control requires
+  a lease; there is no raw remote CDP gateway.
   See [browser](agent-browser.md) and [engines](agent-browser-engines.md).
 - **Layouts:** session/window/pane terminal geometry is distinct from private
   Files/browser tab selection and per-folder workspace persistence. Shared Host
@@ -198,12 +204,14 @@ updates, but verify decoding, capability gating and envelope limits per change.
   pane refreshes reconcile local renames by matching pane-ID sets, remove closed
   sessions and append new sessions. Unchanged ranks do not write preferences.
 - The sidebar, menu bar and keyboard session cycling use the same local sorter.
-- Right-click Local or a remote Host header → **Restore Automatic Order** to
-  clear only that section's preference and resume the configured Mac strategy.
-  On iOS, a **Restore Automatic Order** icon button sits beside **+** in each
-  Host's session-list header, without a separate ordering row or strategy text.
-  Restoring clears that device's manual rank for the Host and resumes the
-  activity-first rule. The button is disabled when no manual rank is saved.
+- Mac and iOS show an up/down-arrow **Restore Automatic Order** button beside
+  **+** in each session-list header (including Mac's Local section), without a
+  separate ordering row or strategy text. Restoring clears only that device's
+  manual rank for the section. Mac resumes its configured sort mode; iOS resumes
+  the activity-first rule. A single click restores the order. On Mac the button
+  has a 24-point hit area; with no manual rank it is disabled, explicitly dimmed,
+  and its tooltip says the section is already using automatic order.
+  Mac also retains the section header's right-click menu action.
   No manual ordering is sent to tmux or the Relay.
 
 ## Concurrency and platform services

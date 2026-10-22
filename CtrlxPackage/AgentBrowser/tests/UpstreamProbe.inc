@@ -15,6 +15,7 @@
   std::map<int, NSMutableArray*> probeEvents_;
   std::set<int> probeOverflow_;
   std::map<int, size_t> probeRemoteCaptureCounts_;
+  NSTextView* probeFocusInput_ = nil;
   struct ProbeView {
     NSView* view;
     id observer;
@@ -50,6 +51,30 @@
     client.browser = tabs_.at(client.tab).browser;
     client.generation = tabs_.at(client.tab).generation;
     int browserID = client.browser->GetIdentifier();
+    if ([command isEqual:@"probe.focus"]) {
+      NSString* action = request[@"action"];
+      if ([action isEqual:@"input"]) {
+        [probeFocusInput_ removeFromSuperview];
+        probeFocusInput_ = [[NSTextView alloc] initWithFrame:NSMakeRect(10, 10, 240, 40)];
+        [NSApp.keyWindow.contentView addSubview:probeFocusInput_];
+        [NSApp.keyWindow makeFirstResponder:probeFocusInput_];
+      }
+      NSWindow* window = NSApp.keyWindow;
+      NSDictionary* result = @{
+        @"active": @(NSApp.isActive), @"keyWindow": @(window.windowNumber),
+        @"firstResponder": [NSString stringWithFormat:@"%p", window.firstResponder],
+        @"inputFocused": @(probeFocusInput_ && window.firstResponder == probeFocusInput_),
+        @"inputText": probeFocusInput_.string ?: @""
+      };
+      if ([action isEqual:@"stop"]) {
+        [probeFocusInput_ removeFromSuperview];
+        probeFocusInput_ = nil;
+      }
+      Reply(id, result); return true;
+    }
+    if ([command isEqual:@"probe.external-app"]) {
+      Reply(id, ProbeExternalApplication(client.browser, request)); return true;
+    }
     if ([command isEqual:@"probe.remote-view"]) {
       NSView* view = (__bridge NSView*)client.browser->GetHost()->GetWindowHandle();
       if ([request[@"action"] isEqual:@"start"]) {
@@ -130,10 +155,6 @@
              @"Page.captureScreenshot", @"Page.setLifecycleEventsEnabled", @"Network.enable",
              @"Network.disable", @"Browser.getVersion", @"Emulation.setPageScaleFactor"] containsObject:method])) {
       Reply(id, nil, @"Probe CDP method denied."); return true;
-    }
-    if ([method hasPrefix:@"Input."]) {
-      callbacks_.select(client.browser);
-      client.browser->GetHost()->SetFocus(true);
     }
     client.busy = true;
     Call(id, method.UTF8String, params, [this, id](NSDictionary* result) { Reply(id, result); });

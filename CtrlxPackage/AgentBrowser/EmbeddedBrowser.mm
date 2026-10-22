@@ -2,6 +2,8 @@
 // sandboxed subprocesses; no separate visible browser application is created.
 #import "../Sources/CtrlxBrowserBridge/include/CtrlxBrowserBridge.h"
 #include "AgentBrowser.h"
+#include "Ownership.h"
+#include "ExternalApplication.h"
 #include <atomic>
 #include <map>
 #include "include/cef_app.h"
@@ -9,6 +11,7 @@
 #include "include/cef_client.h"
 #include "include/cef_command_line.h"
 #include "include/cef_cookie.h"
+#include "include/cef_parser.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_helpers.h"
 #include "include/wrapper/cef_library_loader.h"
@@ -41,9 +44,106 @@ static CXEmbeddedBrowserRuntime *runtime;
 static std::unique_ptr<CefScopedLibraryLoader> library;
 static std::map<int, CefRefPtr<CefBrowser>> browsers;
 static std::map<int, NSString *> identifiers;
+static BrowserPrimaryTabs primaryAgentTabs;
 // DevTools are human-only native windows, never agent-controlled page tabs.
 static std::map<int, CefRefPtr<CefBrowser>> devToolsBrowsers;
 static std::atomic_size_t pendingDevTools{0};
+static std::map<int, CefRefPtr<CefBrowser>> extensionTools;
+static std::map<int, int> extensionWindows;
+static void ReleaseExtensionControlFor(NSString *identifier);
+static std::map<int, std::shared_ptr<ExternalApplicationActivation>> externalActivations;
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+static NSMutableArray *externalApplicationProbe;
+static NSMutableArray *externalApplicationLoads;
+static void ProbeExternalApplicationLoad(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+    NSString *event, const CefString& url) {
+  if (frame->IsMain() && externalApplicationLoads)
+    [externalApplicationLoads addObject:@{@"event": event, @"browser": @(browser->GetIdentifier()),
+      @"frame": @(frame->GetIdentifier().ToString().c_str()), @"url": @(url.ToString().c_str())}];
+}
+#endif
+
+void AgentBrowserCancelHumanInput(CefRefPtr<CefBrowser> browser) {
+  CEF_REQUIRE_UI_THREAD();
+  auto found = externalActivations.find(browser->GetIdentifier());
+  if (found != externalActivations.end()) { found->second->Cancel(); externalActivations.erase(found); }
+}
+
+void AgentBrowserHumanInput(CefRefPtr<CefBrowser> browser, const std::string& control) {
+  CEF_REQUIRE_UI_THREAD();
+  const int id = browser->GetIdentifier();
+  AgentBrowserCancelHumanInput(browser);
+  if (!runtime.isReady || !identifiers.contains(id)) return;
+  externalActivations[id] = std::make_shared<ExternalApplicationActivation>(identifiers.at(id).UTF8String, control);
+}
+
+static void OpenExternalApplication(CefRefPtr<CefBrowser> browser, const CefString& url) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!runtime.isReady || !ExternalApplicationURL(@(url.ToString().c_str()))) return;
+  auto found = externalActivations.find(browser->GetIdentifier());
+  if (found == externalActivations.end() || !found->second->Consume()) return;
+  auto activation = found->second;
+  auto source = AgentBrowserTarget(@(activation->source.c_str()));
+  if (!source || !source->IsValid() || AgentBrowserHumanControlToken(source) != activation->control) return;
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+  if (externalApplicationProbe) {
+    [externalApplicationProbe addObject:@{@"source": @(activation->source.c_str()), @"url": @(url.ToString().c_str()),
+                                          @"control": @(activation->control.c_str())}];
+    return; // Isolated native acceptance observes dispatch without launching personal apps.
+  }
+#endif
+  if ([runtime.delegate respondsToSelector:@selector(browserTab:openExternalURL:controlToken:)])
+    [runtime.delegate browserTab:@(activation->source.c_str()) openExternalURL:@(url.ToString().c_str())
+                   controlToken:activation->control.empty() ? nil : @(activation->control.c_str())];
+}
+
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+NSDictionary *ProbeExternalApplication(CefRefPtr<CefBrowser> browser, NSDictionary *request) {
+  NSString *action = request[@"action"];
+  if ([action isEqual:@"start"]) {
+    externalApplicationProbe = [NSMutableArray array];
+    externalApplicationLoads = [NSMutableArray array];
+  }
+  if ([action isEqual:@"click"]) {
+    NSView *view = (__bridge NSView*)browser->GetHost()->GetWindowHandle();
+    [view.window makeKeyAndOrderFront:nil];
+    NSPoint point = NSMakePoint([request[@"x"] doubleValue], [request[@"y"] doubleValue]);
+    if (!view.isFlipped) point.y = view.bounds.size.height - point.y;
+    point = [view convertPoint:point toView:nil];
+    for (auto type : {NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp}) {
+      NSEvent *event = [NSEvent mouseEventWithType:type location:point modifierFlags:0
+        timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:view.window.windowNumber context:nil
+        eventNumber:1 clickCount:1 pressure:1];
+      [NSApp sendEvent:event];
+    }
+  }
+  return @{@"events": [externalApplicationProbe copy] ?: @[], @"loads": [externalApplicationLoads copy] ?: @[]};
+}
+#endif
+
+static void RevealWindow(CefRefPtr<CefBrowser> browser) {
+  NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
+  [view.window makeKeyAndOrderFront:nil];
+  browser->GetHost()->SetFocus(true);
+}
+
+// Chrome's own extension/settings windows have profile scope, not Agent page
+// authority. Track even native-UI-created tools through the shutdown barrier.
+class ExtensionToolClient final : public CefClient, public CefLifeSpanHandler {
+ public:
+  CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+    CEF_REQUIRE_UI_THREAD();
+    extensionTools[browser->GetIdentifier()] = browser;
+    if (runtime.closing) browser->GetHost()->CloseBrowser(true);
+  }
+  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+    CEF_REQUIRE_UI_THREAD();
+    extensionTools.erase(browser->GetIdentifier());
+  }
+ private:
+  IMPLEMENT_REFCOUNTING(ExtensionToolClient);
+};
 
 class DevToolsClient final : public CefClient, public CefLifeSpanHandler {
  public:
@@ -107,8 +207,8 @@ static bool WebURL(const std::string& raw) {
 class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     public CefDisplayHandler, public CefLoadHandler, public CefRequestHandler, public CefDownloadHandler, public CefJSDialogHandler {
  public:
-  EmbeddedClient(std::string owner, NSView *container, NSDictionary *route, NSString *parent)
-      : owner_(std::move(owner)), container_(container), route_(route), parent_(parent) {}
+  EmbeddedClient(std::string owner, NSView *container, NSDictionary *route, NSString *parent, bool extensionWindow = false)
+      : owner_(std::move(owner)), container_(container), route_(route), parent_(parent), extensionWindow_(extensionWindow) {}
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
@@ -129,9 +229,12 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
     browsers[browser->GetIdentifier()] = browser;
+    if (popupActivation_) externalActivations[browser->GetIdentifier()] = popupActivation_;
     NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
-    view.frame = container_.bounds;
-    view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    if (!extensionWindow_) {
+      view.frame = container_.bounds;
+      view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    }
     AddAgentBrowserTab(browser, owner_);
     for (NSDictionary *tab in AgentBrowserTabs()) {
       auto target = AgentBrowserTarget(tab[@"id"]);
@@ -140,9 +243,10 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     if (!identifier_) { browser->GetHost()->CloseBrowser(true); return; }
     identifiers[browser->GetIdentifier()] = identifier_;
     [runtime.delegate browserTabCreated:identifier_ view:container_ route:route_ owner:@(owner_.c_str()) parent:parent_];
-    [runtime.delegate browserTabSelected:identifier_];
+    if (owner_.empty() || extensionWindow_) [runtime.delegate browserTabSelected:identifier_];
   }
   bool DoClose(CefRefPtr<CefBrowser>) override {
+    if (extensionWindow_) return false;
     // Never let CEF close the parent CtrlX NSWindow when closing one tab.
     container_.subviews = @[];
     [container_ removeFromSuperview];
@@ -150,9 +254,15 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   }
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
+    AgentBrowserCancelHumanInput(browser);
+    ReleaseExtensionControlFor(identifier_);
     CloseDevToolsFor(browser);
     RemoveAgentBrowserTab(browser);
+    primaryAgentTabs.Remove(browser->GetIdentifier());
     browsers.erase(browser->GetIdentifier());
+    std::erase_if(extensionWindows, [id = browser->GetIdentifier()](const auto& pair) {
+      return pair.first == id || pair.second == id;
+    });
     identifiers.erase(browser->GetIdentifier());
     [container_ removeFromSuperview];
     container_ = nil;
@@ -162,12 +272,19 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
       const CefString& url, const CefString&, WindowOpenDisposition, bool,
       const CefPopupFeatures&, CefWindowInfo& info, CefRefPtr<CefClient>& client,
       CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
-    if (runtime.closing || browsers.size() >= 64 || (!url.empty() && !WebURL(url))) return true;
+    if (!url.empty() && !WebURL(url)) { OpenExternalApplication(browser, url); return true; }
+    if (runtime.closing || browsers.size() >= 64) return true;
     NSView *container = [runtime.delegate browserContainerForRoute:route_];
     if (!container) return true;
-    client = new EmbeddedClient(AgentBrowserOwner(browser), container, route_, identifier_);
-    info.SetAsChild((__bridge void *)container, CefRect(0, 0, container.bounds.size.width, container.bounds.size.height));
-    info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+    auto popup = new EmbeddedClient(AgentBrowserOwner(browser), container, route_, identifier_, extensionWindow_);
+    auto activation = externalActivations.find(browser->GetIdentifier());
+    if (activation != externalActivations.end()) popup->popupActivation_ = activation->second;
+    client = popup;
+    if (extensionWindow_) info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    else {
+      info.SetAsChild((__bridge void *)container, CefRect(0, 0, container.bounds.size.width, container.bounds.size.height));
+      info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+    }
     return false;
   }
   void OnBeforeDevToolsPopup(CefRefPtr<CefBrowser> browser, CefWindowInfo&,
@@ -177,14 +294,44 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     client = new DevToolsClient(browser->GetIdentifier());
   }
   bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
-      CefRefPtr<CefRequest> request, bool, bool) override {
+      CefRefPtr<CefRequest> request, bool, bool redirect) override {
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+    ProbeExternalApplicationLoad(browser, frame, @"before-browse", request->GetURL());
+#endif
+    if (ExternalApplicationURL(@(request->GetURL().ToString().c_str()))) {
+      OpenExternalApplication(browser, request->GetURL()); return true;
+    }
     if (!frame->IsMain()) return false;
     if (!WebURL(request->GetURL())) return true;
+    auto activation = externalActivations.find(browser->GetIdentifier());
+    if (activation != externalActivations.end() && request->GetURL() != "about:blank")
+      activation->second->Navigation(browser->GetIdentifier(), request->GetURL(), redirect);
     AgentBrowserNavigation(browser);
     return false;
   }
+  bool OnOpenURLFromTab(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>,
+      const CefString& url, WindowOpenDisposition, bool) override {
+    if (WebURL(url)) return false;
+    OpenExternalApplication(browser, url); return true;
+  }
+  void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int) override {
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+    ProbeExternalApplicationLoad(browser, frame, @"load-end", frame->GetURL());
+#endif
+    if (!frame->IsMain() || frame->GetURL() == "about:blank") return;
+    auto activation = externalActivations.find(browser->GetIdentifier());
+    if (activation != externalActivations.end())
+      activation->second->Loaded(browser->GetIdentifier(), frame->GetIdentifier());
+  }
   void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType) override {
-    if (frame->IsMain()) AgentBrowserNavigation(browser);
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+    ProbeExternalApplicationLoad(browser, frame, @"load-start", frame->GetURL());
+#endif
+    if (!frame->IsMain()) return;
+    auto activation = externalActivations.find(browser->GetIdentifier());
+    if (activation != externalActivations.end())
+      activation->second->Committed(browser->GetIdentifier(), frame->GetIdentifier(), frame->GetURL());
+    AgentBrowserNavigation(browser);
   }
   void Changed(CefRefPtr<CefBrowser> browser) {
     if (!identifier_) return;
@@ -197,19 +344,34 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     title_ = @(title.ToString().c_str()); Changed(browser);
   }
   void OnLoadingStateChange(CefRefPtr<CefBrowser> browser, bool, bool, bool) override { Changed(browser); }
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, TerminationStatus status,
+      int errorCode, const CefString&) override {
+    if (AgentBrowserDebugMode()) RecordBrowserDiagnostic(@{@"event": @"renderer-terminated",
+      @"browserID": @(browser->GetIdentifier()), @"status": @(status), @"errorCode": @(errorCode)});
+  }
   NSDictionary *Presentation() {
     // Read-only routing/attachment diagnostics, filtered by ownership by Tabs.
     return @{@"session": route_[@"session"] ?: @"", @"window": route_[@"window"] ?: @"",
-             @"pane": route_[@"pane"] ?: @"", @"embedded": @YES,
-             @"visible": @(container_.window.isVisible && !container_.isHiddenOrHasHiddenAncestor)};
+             @"pane": route_[@"pane"] ?: @"", @"embedded": @(!extensionWindow_),
+             @"visible": @(extensionWindow_ ? NativeWindowVisible() :
+                 (container_.window.isVisible && !container_.isHiddenOrHasHiddenAncestor))};
   }
+  NSDictionary *Route() { return route_; }
+  bool IsExtensionWindow() const { return extensionWindow_; }
  private:
+  bool NativeWindowVisible() {
+    auto browser = AgentBrowserTarget(identifier_);
+    NSView *view = browser ? (__bridge NSView *)browser->GetHost()->GetWindowHandle() : nil;
+    return view.window.isVisible;
+  }
   std::string owner_;
   NSView *container_;
   NSDictionary *route_;
   NSString *parent_;
   NSString *identifier_;
   NSString *title_;
+  bool extensionWindow_;
+  std::shared_ptr<ExternalApplicationActivation> popupActivation_;
   IMPLEMENT_REFCOUNTING(EmbeddedClient);
 };
 
@@ -221,6 +383,47 @@ class BrowserUITask final : public CefTask {
   std::function<void()> work_;
   IMPLEMENT_REFCOUNTING(BrowserUITask);
 };
+
+#include "BrowserExtensions.inc"
+#include "ExtensionSurface.inc"
+
+#include "ExtensionStoreRouting.inc"
+
+static void OpenExtensionWindow(NSString *target, bool remote, void (^reply)(NSString *, NSString *)) {
+  auto source = AgentBrowserTarget(target);
+  if (runtime.closing || !source || !source->IsValid() || !browsers.contains(source->GetIdentifier()) ||
+      (!remote && AgentBrowserHumanControlled(source))) {
+    reply(nil, @"The source page is closed or controlled by a Viewer."); return;
+  }
+  auto client = static_cast<EmbeddedClient*>(source->GetHost()->GetClient().get());
+  if (client->IsExtensionWindow()) { RevealWindow(source); reply(target, nil); return; }
+  auto existing = extensionWindows.find(source->GetIdentifier());
+  if (existing != extensionWindows.end() && browsers.contains(existing->second)) {
+    auto browser = browsers.at(existing->second);
+    if (AgentBrowserHumanControlled(browser) && (!remote || ![extensionControlledPage isEqual:identifiers.at(existing->second)])) {
+      reply(nil, @"The extension window is controlled by a Viewer."); return;
+    }
+    RevealWindow(browser); reply(identifiers.at(existing->second), nil); return;
+  }
+  std::string url = source->GetMainFrame()->GetURL();
+  if (!WebURL(url) || browsers.size() >= 64) { reply(nil, @"The page cannot open an extension window."); return; }
+  NSMutableDictionary *route = [client->Route() mutableCopy];
+  route[@"presentation"] = @"extensionWindow";
+  route[@"primary"] = @"false";
+  NSView *container = [runtime.delegate browserContainerForRoute:route];
+  if (!container) { reply(nil, @"The source workspace was closed."); return; }
+  CefWindowInfo info;
+  info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+  info.bounds = CefRect(0, 0, 1100, 750);
+  auto browser = CefBrowserHost::CreateBrowserSync(info,
+      new EmbeddedClient(AgentBrowserOwner(source), container, route, target, true),
+      url, CefBrowserSettings(), nullptr, nullptr);
+  if (!browser || !identifiers.contains(browser->GetIdentifier())) {
+    [container removeFromSuperview]; reply(nil, @"Chromium could not create the extension window."); return;
+  }
+  extensionWindows[source->GetIdentifier()] = browser->GetIdentifier();
+  reply(identifiers.at(browser->GetIdentifier()), nil);
+}
 
 // Own strings across the asynchronous Swift lookup; references supplied by the
 // socket request handler expire as soon as that handler returns.
@@ -243,7 +446,7 @@ static void CreateRoutedTab(const std::string& owner, NSDictionary *route, const
   done(browser, browser ? nil : @"Chromium could not create the embedded page.");
 }
 
-static void OpenTab(std::string owner, int pid, std::string url,
+static void OpenTab(std::string owner, int pid, std::string url, bool newTab,
     std::function<bool()> current, std::function<void(CefRefPtr<CefBrowser>, NSString*)> done) {
   [runtime.delegate resolveBrowserProcess:pid completion:^(NSDictionary *route, NSString *error) {
     // Process discovery awaits Swift I/O. Resume Chromium creation on CEF's
@@ -252,7 +455,24 @@ static void OpenTab(std::string owner, int pid, std::string url,
     CEF_REQUIRE_UI_THREAD();
     if (!current()) { done(nullptr, @"Open request expired. No page was opened."); return; }
     if (!route) { done(nullptr, error ?: @"Source session unavailable. No page was opened."); return; }
-    CreateRoutedTab(owner, route, url, done);
+    NSString *pane = route[@"pane"];
+    if (![pane isKindOfClass:NSString.class] || !pane.length) { done(nullptr, @"Source pane unavailable."); return; }
+    if (!newTab) if (auto existing = primaryAgentTabs.Find(pane.UTF8String, owner); existing && browsers.contains(*existing)) {
+      auto browser = browsers.at(*existing);
+      if (AgentBrowserOwner(browser) != owner || AgentBrowserHumanControlled(browser) || AgentBrowserTabBusy(browser)) {
+        done(nullptr, @"The pane's Agent browser is busy or controlled by a person. No navigation was sent."); return;
+      }
+      CefURLParts currentParts, destinationParts;
+      const bool same = CefParseURL(browser->GetMainFrame()->GetURL(), currentParts) && CefParseURL(url, destinationParts) &&
+          CefString(&currentParts.spec) == CefString(&destinationParts.spec);
+      if (!same) { AgentBrowserCancelHumanInput(browser); browser->GetMainFrame()->LoadURL(url); }
+      done(browser, nil);
+      return;
+    }
+    CreateRoutedTab(owner, route, url, [=](auto browser, NSString *creationError) {
+      if (browser && !newTab) primaryAgentTabs.Set(pane.UTF8String, owner, browser->GetIdentifier());
+      done(browser, creationError);
+    });
     }));
   }];
 }
@@ -267,6 +487,7 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
     if (mockKeychain_) command->AppendSwitch("use-mock-keychain");
   }
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
+  CefRefPtr<CefClient> GetDefaultClient() override { return new ExtensionToolClient(); }
   void OnContextInitialized() override { [runtime contextReady]; }
  private:
   const bool mockKeychain_;
@@ -277,12 +498,36 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
 @property(nonatomic) BOOL handlingSendEvent;
 @end
 static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
+static __weak id<CXApplicationDiagnosticsDelegate> applicationDiagnosticsDelegate;
+static bool browserDebugMode = false;
+
+bool AgentBrowserDebugMode() { return browserDebugMode; }
+void RecordBrowserDiagnostic(NSDictionary* event) {
+  if (!browserDebugMode || !NSThread.isMainThread ||
+      ![applicationDiagnosticsDelegate respondsToSelector:@selector(recordBrowserDiagnostic:)]) return;
+  @try {
+    [applicationDiagnosticsDelegate recordBrowserDiagnostic:event];
+  } @catch (NSException* exception) {
+    browserDebugMode = false;
+    NSLog(@"[agent-browser] Diagnostic callback failed; collection disabled (%@)", exception.name);
+  }
+}
 @implementation CXBrowserApplication
+- (void)reportException:(NSException *)exception {
+  @try {
+    if (NSThread.isMainThread) [applicationDiagnosticsDelegate recordAppKitException:exception];
+  } @catch (NSException *diagnosticFailure) {
+    NSLog(@"CtrlX could not capture AppKit diagnostics (%@)", diagnosticFailure.name);
+  }
+  // Preserve AppKit's reporting/crash policy; a snapshot is not recovery.
+  [super reportException:exception];
+}
 - (BOOL)isHandlingSendEvent { return self.handlingSendEvent; }
 - (void)sendEvent:(NSEvent *)event {
+  TakeExtensionControlFromHost(event);
   // CDP input bypasses NSApplication. Physical Host input must not race the
   // remote controller, including a CEF field that was already first responder.
-  if (runtime.started) for (auto& [id, browser] : browsers) {
+  if (runtime.started && extensionInputDepth == 0) for (auto& [id, browser] : browsers) {
     if (!AgentBrowserHumanControlled(browser)) continue;
     NSView *view = (__bridge NSView*)browser->GetHost()->GetWindowHandle();
     if (event.window != view.window) continue;
@@ -293,6 +538,20 @@ static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
       event.type == NSEventTypeLeftMouseDragged || event.type == NSEventTypeRightMouseDown ||
       event.type == NSEventTypeRightMouseUp || event.type == NSEventTypeScrollWheel;
     if (pointer && !view.isHiddenOrHasHiddenAncestor && NSPointInRect([view convertPoint:event.locationInWindow fromView:nil], view.bounds)) return;
+  }
+  if (runtime.started && (event.type == NSEventTypeLeftMouseDown ||
+      (event.type == NSEventTypeKeyDown && !event.isARepeat && (event.keyCode == 36 || event.keyCode == 49 || event.keyCode == 76)))) {
+    for (auto& [id, browser] : browsers) {
+      NSView *view = (__bridge NSView*)browser->GetHost()->GetWindowHandle();
+      if (!view.window || event.window != view.window || view.isHiddenOrHasHiddenAncestor) continue;
+      NSView *target = event.type == NSEventTypeLeftMouseDown
+        ? [view.window.contentView hitTest:[view.window.contentView convertPoint:event.locationInWindow fromView:nil]]
+        : ([view.window.firstResponder isKindOfClass:NSView.class] ? (NSView*)view.window.firstResponder : nil);
+      if (target && [target isDescendantOf:view]) {
+        AgentBrowserHumanInput(browser, extensionInputDepth ? AgentBrowserHumanControlToken(browser) : "");
+        break;
+      }
+    }
   }
   if (runtime.started) { CefScopedSendingEvent scope; [super sendEvent:event]; }
   else [super sendEvent:event];
@@ -406,11 +665,11 @@ static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
 }
 - (void)navigateTab:(NSString *)identifier url:(NSString *)url {
   auto browser = AgentBrowserTarget(identifier);
-  if (browser && WebURL(url.UTF8String)) browser->GetMainFrame()->LoadURL(url.UTF8String);
+  if (browser && WebURL(url.UTF8String)) { AgentBrowserCancelHumanInput(browser); browser->GetMainFrame()->LoadURL(url.UTF8String); }
 }
-- (void)goBack:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->GoBack(); }
-- (void)goForward:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->GoForward(); }
-- (void)reloadTab:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) browser->Reload(); }
+- (void)goBack:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserCancelHumanInput(browser); browser->GoBack(); } }
+- (void)goForward:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserCancelHumanInput(browser); browser->GoForward(); } }
+- (void)reloadTab:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserCancelHumanInput(browser); browser->Reload(); } }
 - (void)showDevTools:(NSString *)identifier {
   if (!self.started || self.closing) return;
   // Creating native Chromium windows must not reenter a Swift main-actor job.
@@ -428,11 +687,163 @@ static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
                                    CefBrowserSettings(), CefPoint());
   }));
 }
+- (void)openExtensionWindowForTab:(NSString *)identifier completion:(void (^)(NSString *, NSString *))completion {
+  NSString *target = [identifier copy];
+  void (^reply)(NSString *, NSString *) = [completion copy];
+  if (!self.isReady || !CefPostTask(TID_UI, new BrowserUITask([target, reply] {
+    if (extensionSurface && extensionSurface->Active()) {
+      reply(nil, @"A Viewer controls browser extensions. Take control back first."); return;
+    }
+    OpenExtensionWindow(target, false, reply);
+  }))) reply(nil, @"Chromium is not ready.");
+}
+- (void)showExtensionManagerForTab:(NSString *)identifier completion:(void (^)(NSString *))completion {
+  NSString *target = [identifier copy];
+  void (^reply)(NSString *) = [completion copy];
+  if (!self.isReady || !CefPostTask(TID_UI, new BrowserUITask([target, reply] {
+    if (extensionSurface && extensionSurface->Active()) {
+      reply(@"A Viewer controls browser extensions. Take control back first."); return;
+    }
+    auto source = AgentBrowserTarget(target);
+    if (runtime.closing || !source || !source->IsValid() || !browsers.contains(source->GetIdentifier()) ||
+        AgentBrowserHumanControlled(source)) { reply(@"The source page is closed or controlled by a Viewer."); return; }
+    auto browser = EnsureExtensionManager();
+    if (browser) {
+      ConfigureExtensionStore(browser, target, nil);
+      RevealWindow(browser);
+    }
+    reply(browser ? nil : @"Chromium could not open extension management.");
+  }))) reply(@"Chromium is not ready.");
+}
+- (void)requestBrowserExtensionsForTab:(NSString *)identifier request:(NSData *)request
+    completion:(void (^)(NSData *, NSString *))completion {
+  NSString *target = [identifier copy];
+  NSData *bytes = [request copy];
+  void (^reply)(NSData *, NSString *) = [completion copy];
+  if (!self.isReady || bytes.length > 65536 || !CefPostTask(TID_UI, new BrowserUITask([target, bytes, reply] {
+    NSDictionary *request = [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
+    if (![request isKindOfClass:NSDictionary.class]) { reply(nil, @"Invalid extension request."); return; }
+    const bool remote = request[@"lease"] != nil;
+    if ((remote && !AuthorizeExtensionRequest(target, request)) ||
+        (!remote && extensionSurface && extensionSurface->Active())) {
+      reply(nil, @"Extension control changed. Take Control again."); return;
+    }
+    auto source = AgentBrowserTarget(target);
+    if (runtime.closing || !source || !source->IsValid() || !browsers.contains(source->GetIdentifier()) ||
+        (!remote && AgentBrowserHumanControlled(source))) { reply(nil, @"The source page is closed or controlled by a Viewer."); return; }
+    auto browser = EnsureExtensionManager();
+    if (!browser) { reply(nil, @"Chromium could not open extension management."); return; }
+    ConfigureExtensionStore(browser, target, remote ? request[@"lease"] : nil);
+    if (remote && ([request[@"operation"] isEqual:@"uninstall"] ||
+        ([request[@"operation"] isEqual:@"setEnabled"] && [request[@"enabled"] boolValue]))) {
+      RevealWindow(browser);
+      NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
+      extensionSurface->SetWindow(view.window);
+    }
+    auto client = static_cast<ExtensionManagerClient*>(browser->GetHost()->GetClient().get());
+    client->Request(request, reply, [target, request, remote](NSString *url) -> NSString * {
+      // Metadata lookup is asynchronous. Recheck the grant before opening or
+      // focusing a native window, including Host takeover while it was pending.
+      auto source = AgentBrowserTarget(target);
+      if (runtime.closing || !source || !source->IsValid() || !browsers.contains(source->GetIdentifier()) ||
+          (remote ? !AuthorizeExtensionRequest(target, request) :
+              ((extensionSurface && extensionSurface->Active()) || AgentBrowserHumanControlled(source))))
+        return @"Extension control changed before settings opened.";
+      auto options = OpenExtensionOptionsWindow(url);
+      if (!options) return @"Could not open extension settings.";
+      NSView *view = (__bridge NSView *)options->GetHost()->GetWindowHandle();
+      if (remote && !extensionSurface->SetWindow(view.window)) return @"Extension settings are unavailable.";
+      return nil;
+    });
+  }))) reply(nil, @"Chromium is not ready or the extension request is too large.");
+}
+- (BOOL)setExtensionControl:(NSString *)token forTab:(NSString *)identifier {
+  if (!self.isReady) return NO;
+  if (!token.length) {
+    if (extensionSurface && [extensionAnchor isEqual:identifier]) extensionSurface->Revoke();
+    return YES;
+  }
+  if (extensionSurface && extensionSurface->Active()) return NO;
+  auto source = AgentBrowserTarget(identifier);
+  if (!source || !source->IsValid() || !browsers.contains(source->GetIdentifier()) ||
+      !SetAgentBrowserHumanControl(identifier, token)) return NO;
+  extensionAnchor = [identifier copy];
+  extensionControlledPage = nil;
+  NSString *anchor = extensionAnchor;
+  extensionSurface = std::make_shared<ExtensionSurface>(token, [anchor] {
+    auto browser = AgentBrowserTarget(anchor);
+    return runtime.isReady && browser && browser->IsValid() && browsers.contains(browser->GetIdentifier());
+  }, [anchor] {
+    SetAgentBrowserHumanControl(anchor, nil);
+    if (extensionControlledPage && ![extensionControlledPage isEqual:anchor])
+      SetAgentBrowserHumanControl(extensionControlledPage, nil);
+    extensionControlledPage = nil;
+  });
+  auto client = static_cast<EmbeddedClient*>(source->GetHost()->GetClient().get());
+  if (client->IsExtensionWindow()) {
+    NSView *view = (__bridge NSView *)source->GetHost()->GetWindowHandle();
+    extensionSurface->SetWindow(view.window);
+  }
+  return YES;
+}
+- (void)requestExtensionSurfaceForTab:(NSString *)identifier request:(NSData *)request
+    completion:(void (^)(NSData *, NSString *))completion {
+  NSString *target = [identifier copy];
+  NSData *bytes = [request copy];
+  void (^reply)(NSData *, NSString *) = [completion copy];
+  if (!self.isReady || bytes.length > 65536 || !CefPostTask(TID_UI, new BrowserUITask([target, bytes, reply] {
+    NSDictionary *request = [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
+    if (![request isKindOfClass:NSDictionary.class] || !AuthorizeExtensionRequest(target, request)) {
+      reply(nil, @"Extension control expired. Take Control again."); return;
+    }
+    if ([request[@"action"] isEqual:@"ping"]) {
+      reply([@"{}" dataUsingEncoding:NSUTF8StringEncoding], nil);
+    } else if ([request[@"action"] isEqual:@"showManager"]) {
+      auto browser = EnsureExtensionManager();
+      if (!browser) { reply(nil, @"Chromium could not open extension management."); return; }
+      ConfigureExtensionStore(browser, target, request[@"lease"]);
+      RevealWindow(browser);
+      NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
+      if (!extensionSurface->SetWindow(view.window)) { reply(nil, @"Extension management is unavailable."); return; }
+      reply([@"{}" dataUsingEncoding:NSUTF8StringEncoding], nil);
+    } else if ([request[@"action"] isEqual:@"openWindow"]) {
+      auto grant = extensionSurface;
+      OpenExtensionWindow(target, true, ^(NSString *page, NSString *error) {
+        if (error) { reply(nil, error); return; }
+        if (!grant->Authorize(request[@"lease"])) { reply(nil, @"Extension control expired."); return; }
+        if (![page isEqual:target] && ![extensionControlledPage isEqual:page] &&
+            !SetAgentBrowserHumanControl(page, request[@"lease"])) {
+          reply(nil, @"The extension window is busy."); return;
+        }
+        extensionControlledPage = page;
+        auto browser = AgentBrowserTarget(page);
+        NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
+        if (!grant->SetWindow(view.window)) { reply(nil, @"The extension window is unavailable."); return; }
+        reply([NSJSONSerialization dataWithJSONObject:@{@"tabID": page} options:0 error:nil], nil);
+      });
+    } else extensionSurface->Request(request, reply);
+  }))) reply(nil, @"Chromium is not ready or the extension request is too large.");
+}
+- (void)showBrowserWindow:(NSString *)identifier {
+  NSString *target = [identifier copy];
+  if (!self.isReady) return;
+  CefPostTask(TID_UI, new BrowserUITask([target] {
+    auto browser = AgentBrowserTarget(target);
+    if (runtime.closing || !browser || !browsers.contains(browser->GetIdentifier()) || AgentBrowserHumanControlled(browser)) return;
+    auto client = static_cast<EmbeddedClient*>(browser->GetHost()->GetClient().get());
+    if (client->IsExtensionWindow()) RevealWindow(browser);
+  }));
+}
 - (void)closeTab:(NSString *)identifier {
   auto browser = AgentBrowserTarget(identifier);
   if (browser) { CloseDevToolsFor(browser); browser->GetHost()->CloseBrowser(true); }
 }
 - (BOOL)setHumanControl:(NSString *)token forTab:(NSString *)identifier {
+  if (extensionSurface && extensionSurface->Active() &&
+      ([extensionAnchor isEqual:identifier] || [extensionControlledPage isEqual:identifier])) {
+    if (token.length) return NO;
+    extensionSurface->Revoke();
+  }
   return self.started && !self.closing && SetAgentBrowserHumanControl(identifier, token);
 }
 - (void)requestBrowserTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData *, NSString *))completion {
@@ -444,6 +855,7 @@ static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
   }))) completion(nil, @"Chromium could not schedule the request.");
 }
 - (void)beginShutdown {
+  if (extensionSurface) extensionSurface->Revoke();
   self.closing = YES;
   [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(runBrowserLoop) object:nil];
   self.startScheduled = NO;
@@ -453,10 +865,12 @@ static __weak id<CXBrowserTerminationDelegate> applicationTerminationDelegate;
   for (auto& [id, browser] : copy) { CloseDevToolsFor(browser); browser->GetHost()->CloseBrowser(true); }
   auto tools = devToolsBrowsers;
   for (auto& [id, browser] : tools) browser->GetHost()->CloseBrowser(true);
+  auto extensions = extensionTools;
+  for (auto& [id, browser] : extensions) browser->GetHost()->CloseBrowser(true);
 }
 - (BOOL)finishShutdown {
   if (!self.started) { [self traceShutdownStage:@"finished"]; return YES; }
-  if (!browsers.empty() || !devToolsBrowsers.empty() || pendingDevTools.load() != 0) {
+  if (!browsers.empty() || !devToolsBrowsers.empty() || !extensionTools.empty() || pendingDevTools.load() != 0 || pendingExtensionCaptures != 0) {
     [self traceShutdownStage:@"waiting-pages"];
     return NO;
   }
@@ -544,4 +958,10 @@ extern "C" __attribute__((visibility("default"))) id CXEmbeddedBrowserCreateRunt
 }
 extern "C" __attribute__((visibility("default"))) void CXEmbeddedBrowserSetTerminationDelegate(id<CXBrowserTerminationDelegate> delegate) {
   applicationTerminationDelegate = delegate;
+}
+extern "C" __attribute__((visibility("default"))) void CXEmbeddedBrowserSetDiagnosticsDelegate(id<CXApplicationDiagnosticsDelegate> delegate) {
+  applicationDiagnosticsDelegate = delegate;
+}
+extern "C" __attribute__((visibility("default"))) void CXEmbeddedBrowserSetDebugMode(BOOL enabled) {
+  browserDebugMode = enabled;
 }

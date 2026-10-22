@@ -1,5 +1,6 @@
 import CtrlxCommon
 import CtrlxNetworking
+import Foundation
 import Testing
 @testable import CtrlxFeature
 
@@ -8,15 +9,71 @@ import Testing
 struct NewWindowCreationTests {
     private let phoneFit = ResizeTmuxPane(width: 65, height: 51, userInitiated: true)
 
-    @Test("Terminal and Agent windows follow and fit the returned pane in either arrival order",
-          arguments: [true, false], [nil, "codex", "claude-code"] as [String?])
+    @Test("New-session replies wait for matching state and carry identity into delayed Fit", arguments: [false, true])
+    func newSessionIncarnation(snapshotFirst: Bool) throws {
+        let scope = WorkspaceIdentityScope(hostID: UUID(), serverID: "10:100")
+        let identity = WorkspacePaneIdentity(serverID: "10:100", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let pane = PaneState(paneId: "%2", sessionName: "new", tmuxWindowId: "@2", workspaceIdentity: identity)
+        let state = SessionStateMessage(pairId: "office", paneStates: ["%2": pane], workspaceIdentity: scope, supportsWorkspaceInputIdentity: true)
+        let store = SessionStore()
+        var input = ViewerWorkspaceInputState()
+        var creation = NewSessionCreation()
+        let revision = creation.begin(hostID: "office", automaticFit: true)
+        if snapshotFirst {
+            store.handleStateUpdate(state)
+            input.update(state)
+        }
+        creation.receivePaneID("%2", revision: revision, createdPaneScope: scope)
+        if !snapshotFirst {
+            let pending = creation.takeDestination(paneStates: store.paneStates, isConnected: true, inputState: input)
+            #expect(pending == nil)
+            store.handleStateUpdate(state)
+            input.update(state)
+        }
+        let resolved = creation.takeDestination(paneStates: store.paneStates, isConnected: true, inputState: input)
+        #expect(resolved?.sessionName == "new")
+        var fit = try #require(resolved?.initialFit)
+        var replacement = identity
+        replacement.serverID = "20:200"
+        let fitted = fit.takeRequest(
+            isAvailable: true, paneIDs: ["%2"], measuredRequest: phoneFit,
+            currentSessionBinding: .session(pairID: "office", hostID: scope.hostID, identity: replacement)
+        )
+        #expect(fitted == nil)
+    }
+
+    @Test("A delayed creation reply cannot select a reused number on a replacement Host or server", arguments: [false, true])
+    func newSessionReplacement(replaceHost: Bool) {
+        let scope = WorkspaceIdentityScope(hostID: UUID(), serverID: "10:100")
+        let currentScope = WorkspaceIdentityScope(hostID: replaceHost ? UUID() : scope.hostID, serverID: replaceHost ? "10:100" : "20:200")
+        let pane = PaneState(paneId: "%2", sessionName: "unrelated", tmuxWindowId: "@2", workspaceIdentity: .init(serverID: currentScope.serverID ?? "", sessionID: UUID(), windowID: UUID(), paneID: UUID()))
+        let state = SessionStateMessage(pairId: "office", paneStates: ["%2": pane], workspaceIdentity: currentScope, supportsWorkspaceInputIdentity: true)
+        var input = ViewerWorkspaceInputState()
+        input.update(state)
+        let store = SessionStore()
+        store.handleStateUpdate(state)
+        var creation = NewSessionCreation()
+        let revision = creation.begin(hostID: "office", automaticFit: true)
+        creation.receivePaneID("%2", revision: revision, createdPaneScope: scope)
+        let resolved = creation.takeDestination(paneStates: store.paneStates, isConnected: true, inputState: input)
+        #expect(resolved == nil)
+        #expect(creation.paneID == "%2")
+    }
+
+    @Test(
+        "Terminal and Agent windows follow and fit the returned pane in either arrival order",
+        arguments: [true, false],
+        [nil, "codex", "claude-code"] as [String?]
+    )
     func arrivalOrder(snapshotFirst: Bool, agent: String?) throws {
         let store = SessionStore()
         pushSnapshot(to: store, includeNewWindow: false, agent: agent)
         let source = try #require(store.windows(for: "office").first)
         var creation = NewSessionCreation()
         let revision = creation.begin(hostID: "office", automaticFit: true)
-        if snapshotFirst { pushSnapshot(to: store, agent: agent) }
+        if snapshotFirst {
+            pushSnapshot(to: store, agent: agent)
+        }
         #expect(creation.takeWindowDestination(
             selectedPaneID: "%1", paneStates: store.paneStates, isConnected: true
         ) == nil)
@@ -53,7 +110,7 @@ struct NewWindowCreationTests {
     }
 
     @Test("A cached new pane cannot grant a fit while the source window is displayed")
-    func waitsForSelection() throws {
+    func waitsForSelection() {
         let store = SessionStore()
         pushSnapshot(to: store)
         var creation = NewSessionCreation()
@@ -115,7 +172,9 @@ struct NewWindowCreationTests {
         let store = SessionStore()
         var creation = NewSessionCreation()
         let revision = creation.begin(hostID: "office", automaticFit: true)
-        if replyFirst { creation.receivePaneID("%2", revision: revision) }
+        if replyFirst {
+            creation.receivePaneID("%2", revision: revision)
+        }
         creation.cancel()
         let accepted = creation.receivePaneID("%2", revision: revision)
         #expect(!accepted)
@@ -136,6 +195,65 @@ struct NewWindowCreationTests {
             selectedPaneID: "%2", paneStates: store.paneStates, isConnected: true
         ) == nil)
         #expect(creation.paneID == "%2")
+    }
+
+    @Test("A replacement session cancels pending selection before or after the creation reply", arguments: [false, true])
+    func replacementSession(replyFirst: Bool) {
+        let hostID = UUID()
+        let original = WorkspacePaneIdentity(serverID: "1:2", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let binding = ViewerWorkspaceInputBinding.session(pairID: "office", hostID: hostID, identity: original)
+        var creation = NewSessionCreation()
+        let revision = creation.begin(hostID: "office", automaticFit: true, sessionBinding: binding)
+        if replyFirst {
+            creation.receivePaneID("%2", revision: revision)
+        }
+        // Different children of the same session are valid snapshot routes.
+        var current = original
+        current.paneID = UUID()
+        current.windowID = UUID()
+        let valid = creation.validateSessionBinding(.session(pairID: "office", hostID: hostID, identity: current))
+        #expect(valid)
+        current.serverID = "3:4"
+        let replacementAccepted = creation.validateSessionBinding(.session(pairID: "office", hostID: hostID, identity: current))
+        let replyAccepted = creation.receivePaneID("%2", revision: revision)
+        #expect(!replacementAccepted)
+        #expect(!replyAccepted)
+        #expect(creation.paneID == nil)
+        #expect(creation.hostID == nil)
+    }
+
+    @Test("The selected creation keeps its session binding until a delayed Fit is consumed", arguments: [false, true])
+    func delayedFit(replaceSession: Bool) throws {
+        let hostID = UUID()
+        let original = WorkspacePaneIdentity(serverID: "1:2", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let binding = ViewerWorkspaceInputBinding.session(pairID: "office", hostID: hostID, identity: original)
+        let store = SessionStore()
+        pushSnapshot(to: store)
+        var creation = NewSessionCreation()
+        let revision = creation.begin(hostID: "office", automaticFit: true, sessionBinding: binding)
+        creation.receivePaneID("%2", revision: revision)
+        let destination = creation.takeWindowDestination(selectedPaneID: "%2", paneStates: store.paneStates, isConnected: true)
+        var fit = try #require(destination?.initialFit)
+        #expect(creation.paneID == nil)
+        #expect(fit.takeRequest(
+            isAvailable: true,
+            paneIDs: ["%2"],
+            measuredRequest: phoneFit,
+            isPresentationReady: false,
+            currentSessionBinding: binding
+        ) == nil)
+        var current = original
+        if replaceSession {
+            current.serverID = "3:4"
+        }
+        let request = fit.takeRequest(
+            isAvailable: true,
+            paneIDs: ["%2"],
+            measuredRequest: phoneFit,
+            currentSessionBinding: .session(pairID: "office", hostID: hostID, identity: current)
+        )
+        #expect(request == (replaceSession ? nil : phoneFit))
+        #expect(fit.paneID == nil)
     }
 
     private func selection(_ creation: NewSessionCreation, store: SessionStore, selectedWindowID: String) -> WindowSelectionReconciliation {

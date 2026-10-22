@@ -8,7 +8,7 @@ private actor WebSocketMessageDecoder {
     private let decoder: JSONDecoder
 
     init() {
-        decoder = JSONDecoder()
+        self.decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
     }
 
@@ -63,7 +63,9 @@ final public class ViewerRelayClient {
         case error(String)
 
         public var isConnected: Bool {
-            if case .connected = self { return true }
+            if case .connected = self {
+                return true
+            }
             return false
         }
 
@@ -98,27 +100,55 @@ final public class ViewerRelayClient {
     public private(set) var isHostConnected = false
 
     public private(set) var hostSupportsTerminalPaste = false
+    public private(set) var workspaceInputState = ViewerWorkspaceInputState()
     public private(set) var hostSupportsCodexQuestionAcknowledgement = false
     public private(set) var hostSupportsDirectoryCreation = false
     public private(set) var hostSupportsSessionWorktrees = false
     public private(set) var hostSupportsFileBrowsing = false
+    public private(set) var hostSupportsPaneFiles = false
+    public private(set) var fileTabs: [HostFileTab] = []
     public private(set) var hostSupportsRepositoryFileLinks = false
     public private(set) var hostSupportsFileDownloads = false
     public private(set) var hostSupportsFileUploads = false
     public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
+    public private(set) var hostSupportsWorkspaceClipboard = false
     public private(set) var hostSupportsBrowserSharing = false
+    public private(set) var hostSupportsBrowserExtensions = false
     public private(set) var hostSupportsPaneBrowser = false
     public private(set) var hostSupportsAgentImageInput = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
     public private(set) var hostSupportsSimulatorViewing = false
+    public private(set) var hostSupportsPaneSimulator = false
+    public private(set) var hostSupportsSimulatorClosing = false
+    public private(set) var hostSupportsDashboard = false
     public private(set) var simulatorTabs: [RemoteSimulatorTab] = []
+
+    func rememberOpenedSimulator(_ tab: RemoteSimulatorTab) {
+        if let index = simulatorTabs.firstIndex(where: { $0.id == tab.id }) {
+            simulatorTabs[index] = tab
+        } else {
+            simulatorTabs.append(tab)
+        }
+    }
 
     func rememberOpenedBrowser(_ tab: RemoteBrowserTab) {
         if let index = browserTabs.firstIndex(where: { $0.id == tab.id }) {
             browserTabs[index] = tab
         } else {
             browserTabs.append(tab)
+        }
+    }
+
+    func forgetClosedFileTab(_ id: UUID) {
+        fileTabs.removeAll { $0.id == id }
+    }
+
+    func rememberOpenedFileTab(_ tab: HostFileTab) {
+        if let index = fileTabs.firstIndex(where: { $0.id == tab.id }) {
+            fileTabs[index] = tab
+        } else {
+            fileTabs.append(tab)
         }
     }
 
@@ -234,7 +264,7 @@ final public class ViewerRelayClient {
     public var onAgentNotification: (@Sendable (AgentNotificationMessage) -> Void)?
 
     /// Called when session state is received from host
-    public var onSessionState: (@Sendable (SessionStateMessage) -> Void)?
+    public var onSessionState: (@MainActor @Sendable (SessionStateMessage) -> Void)?
 
     /// Per-pane terminal stream handlers, keyed by pane ID.
     /// Multiple panes can receive stream data concurrently.
@@ -341,6 +371,7 @@ final public class ViewerRelayClient {
 
         if self.pairId != pairId {
             simulatorTabs = []
+            fileTabs = []
         }
         self.serverURL = serverURL
         self.pairId = pairId
@@ -508,26 +539,46 @@ final public class ViewerRelayClient {
     public func sendCommand<C: CommandSpec>(
         _ command: C,
         paneId: String,
-        timeout: TimeInterval = 15
+        timeout: TimeInterval = 15,
+        inputBinding: ViewerWorkspaceInputBinding? = nil
     ) async -> Result<C.Response, Error> {
         guard state.isConnected else {
             return .failure(ViewerRelayClientError.notConnected)
         }
 
         switch command.commandType {
+        case .readDashboard where !hostSupportsDashboard:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view its Dashboard"))
+        case let .sendKeystroke(spec) where spec.acknowledgeCompletion == true && !workspaceInputState.supportsIdentity:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to confirm draft submission"))
         case let .sendDroppedFiles(spec) where spec.expectedAgent != nil && !hostSupportsAgentImageInput:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add annotated screenshots to an Agent"))
+        case .controlSimulator where !hostSupportsWorkspaceClipboard:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host to use simulator clipboard controls."))
         case .browseSimulator where !hostSupportsSimulatorViewing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view iOS simulators"))
+        case .closeSimulator where !hostSupportsSimulatorClosing:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to close simulator tabs"))
+        case .openPaneSimulator where !hostSupportsPaneSimulator:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open a pane's iOS simulator"))
         case .browseBrowser where !hostSupportsBrowserSharing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
         case let .browseBrowser(spec):
+            if spec.operation == .copy || spec.operation.isClipboardPaste, !hostSupportsWorkspaceClipboard {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to copy and paste in workspace tabs"))
+            }
+            if case .extensions = spec.operation, !hostSupportsBrowserExtensions {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage browser extensions"))
+            }
             if case .openPane = spec.operation, !hostSupportsPaneBrowser {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open a pane's browser"))
             }
         case .browseFiles where !hostSupportsFileBrowsing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to browse files"))
         case let .browseFiles(spec):
+            if case .tabs = spec.operation, !hostSupportsPaneFiles {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Files tabs"))
+            }
             if case .repositoryInfo = spec.operation, !hostSupportsRepositoryFileLinks {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to open repository file links"))
             }
@@ -553,7 +604,72 @@ final public class ViewerRelayClient {
             break
         }
 
-        let commandMessage = CommandMessage(paneId: paneId, command: command.commandType)
+        let targetBinding: ViewerWorkspaceInputBinding?
+        switch command.commandType {
+        case .startTerminalStream,
+             .sendKeystroke,
+             .sendRawInput,
+             .sendDroppedFiles,
+             .pasteTerminalText,
+             .expandCodexQuestions,
+             .submitEditorContent,
+             .cancelEditorSession,
+             .setYoloMode,
+             .markHandled,
+             .splitTmuxPane,
+             .selectTmuxPane,
+             .cancelOperation:
+            targetBinding = workspaceInputState.binding(paneID: paneId)
+        case .resizeTmuxPane,
+             .selectTmuxWindow:
+            targetBinding = workspaceInputState.windowBinding(target: paneId)
+        case let .killTmuxWindow(spec):
+            targetBinding = workspaceInputState.windowBinding(target: spec.windowId)
+        case let .setWindowName(spec):
+            targetBinding = workspaceInputState.windowBinding(target: spec.windowId)
+        case let .killTmuxSession(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .renameTmuxSession(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSessionDescription(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSessionColor(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSessionEmoji(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSessionState(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .prepareAgentFork(spec):
+            targetBinding = workspaceInputState.binding(paneID: spec.source.paneID)
+        case let .openPaneSimulator(spec):
+            targetBinding = workspaceInputState.binding(paneID: spec.sourcePaneID)
+        case let .forkAgentSession(spec):
+            targetBinding = workspaceInputState.binding(paneID: spec.source.paneID)
+        case let .createTmuxWindow(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .moveTmuxWindows(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .setSharedTerminalLayout(spec):
+            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .checkRunningProcesses(spec):
+            switch spec.target {
+            case let .window(id): targetBinding = workspaceInputState.windowBinding(target: id)
+            case let .session(name): targetBinding = workspaceInputState.sessionBinding(name: name)
+            }
+        case let .browseFiles(spec):
+            targetBinding = spec.operation.usesSourcePane && !paneId.isEmpty ? workspaceInputState.binding(paneID: paneId) : nil
+        default:
+            targetBinding = nil
+        }
+        let expectedWorkspacePane: WorkspacePaneIdentity?
+        if let current = targetBinding {
+            do {
+                expectedWorkspacePane = try (inputBinding ?? current).expectedPane(current: current)
+            } catch { return .failure(error) }
+        } else {
+            expectedWorkspacePane = nil
+        }
+        let commandMessage = CommandMessage(paneId: paneId, command: command.commandType, expectedWorkspacePane: expectedWorkspacePane)
 
         // Fire-and-forget: just write to the WebSocket and return a synthetic success.
         // The command type declares it doesn't need a response, so no handler or timeout.
@@ -596,11 +712,12 @@ final public class ViewerRelayClient {
 
                 Task {
                     guard self.pendingCommands[commandMessage.id] != nil else { return }
-                    guard await self.sendEncrypted(
-                        .command(commandMessage),
-                        using: task,
-                        generation: generation
-                    ) else {
+                    guard
+                        await self.sendEncrypted(
+                            .command(commandMessage),
+                            using: task,
+                            generation: generation
+                        ) else {
                         self.timeoutTasks.removeValue(forKey: commandMessage.id)?.cancel()
                         if let handler = self.pendingCommands.removeValue(forKey: commandMessage.id) {
                             handler(.failure(ViewerRelayClientError.commandFailed("Unable to send relay message")))
@@ -632,20 +749,22 @@ final public class ViewerRelayClient {
     /// the enum variant to the underlying generic method. Useful when the caller doesn't
     /// need the response (fire-and-forget style).
     @discardableResult
-    public func send(_ command: CommandType, paneId: String) async -> Bool {
+    public func send(_ command: CommandType, paneId: String, inputBinding: ViewerWorkspaceInputBinding? = nil) async -> Bool {
         switch command {
+        case let .readDashboard(spec):
+            return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .sendKeystroke(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .pasteTerminalText(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .expandCodexQuestions(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .cancelOperation(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .startTerminalStream(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .stopTerminalStream(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .createTmuxSession(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .listSessionDirectories(spec):
@@ -653,61 +772,67 @@ final public class ViewerRelayClient {
         case let .createSessionDirectory(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .browseFiles(spec):
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
+        case let .controlSimulator(spec):
             return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+        case let .closeSimulator(spec):
+            return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .browseSimulator(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
+        case let .openPaneSimulator(spec):
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .browseBrowser(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .resizeTmuxPane(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .setSharedTerminalLayout(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setYoloMode(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .markHandled(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .renameTmuxSession(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setSessionDescription(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setSessionColor(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setSessionEmoji(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setSessionState(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .setWindowName(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .moveTmuxWindows(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .splitTmuxPane(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .selectTmuxPane(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .selectTmuxWindow(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .createTmuxWindow(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .prepareAgentFork(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .prepareSessionWorktree(spec):
             return await (try? sendCommand(spec, paneId: "").get()) != nil
         case let .forkAgentSession(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .submitEditorContent(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .cancelEditorSession(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .sendRawInput(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .checkRunningProcesses(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .killTmuxWindow(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .killTmuxSession(spec):
-            return (try? await sendCommand(spec, paneId: "").get()) != nil
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .sendDroppedFiles(spec):
-            return (try? await sendCommand(spec, paneId: paneId).get()) != nil
+            return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         }
     }
 
@@ -767,18 +892,25 @@ final public class ViewerRelayClient {
         sessionId: String,
         pluginId: String,
         requestId: String,
-        response: AgentResponse
+        response: AgentResponse,
+        inputBinding: ViewerWorkspaceInputBinding? = nil
     ) async -> Bool {
         guard state.isConnected else {
             logger.debug("Not connected, cannot submit agent response")
             return false
         }
+        let expectedWorkspacePane: WorkspacePaneIdentity?
+        do {
+            let current = workspaceInputState.binding(paneID: sessionId)
+            expectedWorkspacePane = try (inputBinding ?? current).expectedPane(current: current)
+        } catch { return false }
         let message = AgentResponseSubmissionMessage(
             pairId: pairId ?? "",
             sessionId: sessionId,
             pluginId: pluginId,
             requestId: requestId,
-            response: response
+            response: response,
+            expectedWorkspacePane: expectedWorkspacePane
         )
         return await sendEncrypted(.agentResponseSubmission(message))
     }
@@ -1047,19 +1179,27 @@ final public class ViewerRelayClient {
 
         case let .sessionState(sessionState):
             logger.info("Received session state from host")
+            workspaceInputState.update(sessionState)
             hostSupportsTerminalPaste = sessionState.supportsTerminalPaste == true
             hostSupportsCodexQuestionAcknowledgement = sessionState.supportsCodexQuestionAcknowledgement == true
             hostSupportsDirectoryCreation = sessionState.supportsDirectoryCreation == true
             hostSupportsSessionWorktrees = sessionState.supportsSessionWorktrees == true
             hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
+            hostSupportsPaneFiles = sessionState.supportsPaneFiles == true
+            fileTabs = sessionState.fileTabs ?? []
             hostSupportsRepositoryFileLinks = sessionState.supportsRepositoryFileLinks == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
+            hostSupportsWorkspaceClipboard = sessionState.supportsWorkspaceClipboard == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
+            hostSupportsBrowserExtensions = sessionState.supportsBrowserExtensions == true
             hostSupportsPaneBrowser = sessionState.supportsPaneBrowser == true
             hostSupportsAgentImageInput = sessionState.supportsAgentImageInput == true
             browserTabs = sessionState.browserTabs ?? []
             hostSupportsSimulatorViewing = sessionState.supportsSimulatorViewing == true
+            hostSupportsPaneSimulator = sessionState.supportsPaneSimulator == true
+            hostSupportsSimulatorClosing = sessionState.supportsSimulatorClosing == true
+            hostSupportsDashboard = sessionState.supportsDashboard == true
             simulatorTabs = sessionState.simulatorTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             onSessionState?(sessionState)
@@ -1084,6 +1224,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
@@ -1135,6 +1276,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
@@ -1157,7 +1299,9 @@ final public class ViewerRelayClient {
             }
             // Compatible — now safe to surface the host as connected and ask for state.
             isHostConnected = true
-            if case .encrypted = message { quickPhraseSync?.receiveHello(peerHello.quickPhraseSync) }
+            if case .encrypted = message {
+                quickPhraseSync?.receiveHello(peerHello.quickPhraseSync)
+            }
             await requestSessionState()
 
         case let .quickPhraseSync(payload):
@@ -1168,6 +1312,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
@@ -1185,6 +1330,7 @@ final public class ViewerRelayClient {
             resetFileUploads()
             resetBrowserState()
             hostSupportsTerminalPaste = false
+            workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
             hostSupportsDirectoryCreation = false
             hostSupportsSessionWorktrees = false
@@ -1394,8 +1540,7 @@ final public class ViewerRelayClient {
             !Task.isCancelled,
             state.isConnected,
             connectionGeneration.isCurrent(generation),
-            webSocketTask === task
-        {
+            webSocketTask === task {
             // Idle period between keep-alive pings.
             let jitter = isFirstRound ? initialPingJitterSeconds : 0
             isFirstRound = false
@@ -1438,7 +1583,7 @@ final public class ViewerRelayClient {
     /// the same MainActor turn. Short test intervals intentionally use no jitter.
     private var initialPingJitterSeconds: Int {
         guard pingIntervalSeconds >= 5, let pairId else { return 0 }
-        let checksum = pairId.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0x7FFF_FFFF }
+        let checksum = pairId.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0x7FFFFFFF }
         return checksum % 5
     }
 
@@ -1489,6 +1634,7 @@ final public class ViewerRelayClient {
         resetFileUploads()
         resetBrowserState()
         hostSupportsTerminalPaste = false
+        workspaceInputState.invalidate()
         hostSupportsCodexQuestionAcknowledgement = false
         hostSupportsDirectoryCreation = false
         hostSupportsSessionWorktrees = false
@@ -1532,12 +1678,18 @@ final public class ViewerRelayClient {
 
     private func resetFileUploads() {
         hostSupportsFileUploads = false
+        hostSupportsPaneFiles = false
         fileTransferEpoch = UUID()
     }
 
     private func resetBrowserState() {
+        hostSupportsWorkspaceClipboard = false
         hostSupportsBrowserSharing = false
+        hostSupportsBrowserExtensions = false
         hostSupportsSimulatorViewing = false
+        hostSupportsPaneSimulator = false
+        hostSupportsSimulatorClosing = false
+        hostSupportsDashboard = false
         hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false
     }

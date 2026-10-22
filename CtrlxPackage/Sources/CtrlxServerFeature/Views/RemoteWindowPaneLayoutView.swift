@@ -127,18 +127,21 @@ struct RemoteWindowPaneLayoutView: View {
             connection: connection,
             settings: settings,
             scrollingAgentID: pane.agentSession?.pluginID,
+            codexQuestionID: pane.codexQuestionID,
             showStatusBar: false,
             isEditorActive: pane.editorSession != nil,
             onOpenURL: onOpenURL
         )
         .modifier(VisiblePaneAttentionModifier(paneId: pane.paneId, connection: connection))
+        .overlay(alignment: .bottomLeading) { WorkspaceRecoveryDraftView(paneID: pane.paneId, hostID: connection.id) }
         .overlay {
             if let editorInfo = pane.editorSession {
                 RemotePaneEditorOverlay(
                     sessionId: editorInfo.sessionId,
                     initialContent: editorInfo.content,
                     connection: connection,
-                    paneId: pane.paneId
+                    paneId: pane.paneId,
+                    inputBinding: connection.relayClient.workspaceInputState.binding(paneID: pane.paneId)
                 )
             }
         }
@@ -163,12 +166,14 @@ struct RemoteWindowPaneLayoutView: View {
         @State private var isHovering = false
 
         var body: some View {
+            let binding = connection.relayClient.workspaceInputState.binding(paneID: paneState.paneId)
             RemoteTerminalContainerView(
                 paneId: paneState.paneId,
                 hostName: connection.hostName,
                 connection: connection,
                 settings: settings,
                 scrollingAgentID: paneState.agentSession?.pluginID,
+                codexQuestionID: paneState.codexQuestionID,
                 showStatusBar: false,
                 isEditorActive: paneState.editorSession != nil,
                 autoFocus: isSingle || isActiveInTmux,
@@ -181,7 +186,7 @@ struct RemoteWindowPaneLayoutView: View {
                     Task {
                         _ = await connection.sendCommand(
                             SelectTmuxPane(),
-                            paneId: target
+                            paneId: target, inputBinding: binding
                         )
                     }
                 },
@@ -200,15 +205,19 @@ struct RemoteWindowPaneLayoutView: View {
                         sessionId: editorInfo.sessionId,
                         initialContent: editorInfo.content,
                         connection: connection,
-                        paneId: paneState.paneId
+                        paneId: paneState.paneId,
+                        inputBinding: connection.relayClient.workspaceInputState.binding(paneID: paneState.paneId)
                     )
                 }
+            }
+            .overlay(alignment: .bottomLeading) {
+                WorkspaceRecoveryDraftView(paneID: paneState.paneId, hostID: connection.id)
             }
             .overlay(alignment: .topTrailing) {
                 PaneSplitButtons { direction in
                     _ = await connection.sendCommand(
                         SplitTmuxPane(direction: direction),
-                        paneId: paneState.paneId
+                        paneId: paneState.paneId, inputBinding: binding
                     )
                 }
                 .opacity(isHovering ? 1 : 0)
@@ -250,40 +259,55 @@ private struct RemotePaneEditorOverlay: View {
     let initialContent: String
     let connection: ViewerConnection
     let paneId: String
+    let inputBinding: ViewerWorkspaceInputBinding
 
     @Environment(RemoteEditorContentStore.self) private var store
+    @State private var errorMessage: String?
+
+    private var key: RemoteEditorContentStore.Key {
+        .init(hostID: connection.id, sessionID: sessionId)
+    }
 
     var body: some View {
         PromptEditorOverlay(
             content: Binding(
-                get: { store.editedContents[sessionId] ?? initialContent },
-                set: { store.editedContents[sessionId] = $0 }
+                get: { store.editedContents[key] ?? initialContent },
+                set: { store.editedContents[key] = $0 }
             ),
             onSubmit: { content in
                 Task {
                     // Only clear on success — on a transient relay failure the host's
                     // session stays open and the overlay remains visible, so keeping
                     // the edit in the store lets the user retry without retyping.
-                    if
-                        case .success = await connection.sendCommand(
-                            SubmitEditorContent(content: content),
-                            paneId: paneId
-                        ) {
-                        store.clear(sessionId: sessionId)
+                    switch await connection.relayClient.sendCommand(
+                        SubmitEditorContent(content: content, expectedSessionID: sessionId),
+                        paneId: paneId, inputBinding: inputBinding
+                    ) {
+                    case .success: store.clear(key, submittedText: content)
+                    case let .failure(error): errorMessage = error.localizedDescription
                     }
                 }
             },
             onCancel: {
                 Task {
-                    if
-                        case .success = await connection.sendCommand(
-                            CancelEditorSession(),
-                            paneId: paneId
-                        ) {
-                        store.clear(sessionId: sessionId)
+                    switch await connection.relayClient.sendCommand(
+                        CancelEditorSession(expectedSessionID: sessionId),
+                        paneId: paneId, inputBinding: inputBinding
+                    ) {
+                    case .success: store.clear(key)
+                    case let .failure(error): errorMessage = error.localizedDescription
                     }
                 }
             }
         )
+        .alert("Cannot Update Editor", isPresented: Binding(get: { errorMessage != nil }, set: {
+            if !$0 {
+                errorMessage = nil
+            }
+        })) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "The editor request could not be completed.")
+        }
     }
 }

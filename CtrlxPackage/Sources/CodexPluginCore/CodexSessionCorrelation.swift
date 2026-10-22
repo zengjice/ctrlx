@@ -20,17 +20,24 @@ struct CodexSessionCorrelation: Sendable {
     /// `FileManager.default` is used inline (not stored) so the value stays a
     /// trivially-`Sendable` immutable struct — it's handed to the core actor and
     /// also held by the test, so it must cross isolation safely.
-    private var fileManager: FileManager { .default }
+    private var fileManager: FileManager {
+        .default
+    }
 
-    /// The default store rooted at `~/.ctrlx/codex-sessions/`.
+    /// Preserve the installed app's legacy location; an isolated plugin state
+    /// directory must never reconcile or remove another app's pane records.
     static func live(
+        stateDirectory: URL? = nil,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> CodexSessionCorrelation {
-        CodexSessionCorrelation(
-            root: home
-                .appendingPathComponent(".ctrlx")
-                .appendingPathComponent("codex-sessions")
-        )
+        let ctrlxRoot = home.appendingPathComponent(".ctrlx")
+        let defaultState = ctrlxRoot.appendingPathComponent("state/plugins/codex")
+        if
+            let stateDirectory,
+            stateDirectory.resolvingSymlinksInPath().path != defaultState.resolvingSymlinksInPath().path {
+            return CodexSessionCorrelation(root: stateDirectory.appendingPathComponent("codex-sessions"))
+        }
+        return CodexSessionCorrelation(root: ctrlxRoot.appendingPathComponent("codex-sessions"))
     }
 
     // MARK: - Record

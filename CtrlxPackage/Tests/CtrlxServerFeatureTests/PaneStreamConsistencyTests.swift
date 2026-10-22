@@ -71,6 +71,34 @@
             }
         }
 
+        @Test("A replacement control connection resynchronizes an existing subscriber")
+        func reconnectResynchronizes() async throws {
+            try await withPane { fixture in
+                let terminal = CapturedTerminal(cols: 40, rows: 12)
+                var resets = 0
+                let subscription = try await fixture.streams.subscribe(
+                    paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                    onData: { terminal.feed($0) },
+                    onResync: { result in
+                        switch result {
+                        case let .success(snapshot):
+                            terminal.replace(with: snapshot)
+                            resets += 1
+                        case let .failure(error): Issue.record("Reconnect failed: \(error)")
+                        }
+                    }
+                )
+                terminal.feed(subscription.initialContent)
+                let client = try await fixture.clients.getClient(for: fixture.pane.sessionName)
+                await client.disconnect()
+                try await fixture.write("AFTER_RECONNECT")
+                _ = try await fixture.clients.getClient(for: fixture.pane.sessionName)
+                try await waitUntil { resets > 0 && terminal.text.contains("AFTER_RECONNECT") }
+                #expect(try await fixture.visibleText() == terminal.text)
+                await fixture.streams.unsubscribe(subscription.subscriptionId)
+            }
+        }
+
         @Test("Concurrent first requests create exactly one session control client")
         func concurrentConnectionCreationIsCoalesced() async throws {
             try await withPane { fixture in

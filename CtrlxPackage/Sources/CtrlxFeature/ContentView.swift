@@ -15,6 +15,8 @@
         @State private var settings = IOSSettings()
         @State private var connectionManager: ViewerConnectionManager?
         @State private var sessionStore = SessionStore()
+        @State private var dashboardStore = DashboardStore()
+        @State private var fileWorkspaces = IOSFileBrowserWorkspaceStore()
         @State private var initializationError: String?
 
         @Environment(\.scenePhase) private var scenePhase
@@ -57,6 +59,8 @@
             }
             .environment(settings)
             .environment(sessionStore)
+            .environment(dashboardStore)
+            .environment(fileWorkspaces)
             .environment(agentBackgroundMonitoring)
             .preferredColorScheme(settings.appearanceMode.colorScheme)
             .fileBrowserCacheMaintenance()
@@ -68,9 +72,25 @@
                 #endif
                 agentBackgroundMonitoring.noteSceneActive(scenePhase == .active)
                 agentBackgroundMonitoring.prepare()
+                await fileWorkspaces.prepareRecovery()
+                fileWorkspaces.retainHosts(Set(settings.pairedHosts.map(\.id)))
                 await initializeConnectionManager()
                 setupConnectionManagerHandlers()
                 await autoConnectIfNeeded()
+            }
+            .task(id: dashboardMonitorHosts) {
+                guard scenePhase == .active else { return }
+                await dashboardStore.monitor {
+                    settings.pairedHosts.map {
+                        .remote($0, manager: connectionManager, usage: sessionStore.usageOverview(for: $0.id))
+                    }
+                }
+            }
+            .onChange(of: connectionManager?.managedHostIDs ?? []) {
+                fileWorkspaces.retainHosts(Set(settings.pairedHosts.map(\.id)))
+            }
+            .onChange(of: settings.pairedHosts.map(\.id)) { _, hostIDs in
+                fileWorkspaces.retainHosts(Set(hostIDs))
             }
             .onChange(of: scenePhase) { _, newPhase in
                 handleScenePhaseChange(newPhase)
@@ -78,6 +98,28 @@
             .onChange(of: settings.agentBackgroundMonitoringEnabled) { _, enabled in
                 handleAgentBackgroundMonitoringPreferenceChange(enabled)
             }
+            .alert("Workspace Recovery", isPresented: .init(
+                get: { fileWorkspaces.recoveryError != nil },
+                set: {
+                    if !$0 {
+                        fileWorkspaces.dismissRecoveryError()
+                    }
+                }
+            )) {
+                Button("OK") { fileWorkspaces.dismissRecoveryError() }
+            } message: {
+                Text(fileWorkspaces.recoveryError ?? "")
+            }
+        }
+
+        /// Only foreground/readiness changes restart polling; ordinary session
+        /// updates must not restart the timer or repeatedly query the Host.
+        private var dashboardMonitorHosts: [String: Bool]? {
+            guard scenePhase == .active else { return nil }
+            return Dictionary(uniqueKeysWithValues: settings.pairedHosts.map { host in
+                let connection = connectionManager?.connection(for: host.id)
+                return (host.id, connection?.isHostConnected == true && connection?.relayClient.hostSupportsDashboard == true)
+            })
         }
 
         private func handleAgentBackgroundMonitoringPreferenceChange(_ enabled: Bool) {
@@ -96,6 +138,9 @@
         /// When returning to foreground, we immediately attempt reconnection to avoid
         /// waiting for exponential backoff timers.
         private func handleScenePhaseChange(_ phase: ScenePhase) {
+            if phase != .active {
+                Task { await fileWorkspaces.flushRecovery() }
+            }
             // Keep the notification service's foreground flag in sync so the
             // backgrounded-only local-notification fallback fires correctly.
             pushService.setAppActive(phase == .active)
@@ -143,9 +188,10 @@
                 Task { @MainActor in
                     sessionStore.handleAgentStatus(status)
                     agentBackgroundMonitoring.handle(status) { notification in
-                        guard agentBackgroundMonitoring.reserveNotificationDelivery(
-                            for: notification
-                        ) else { return }
+                        guard
+                            agentBackgroundMonitoring.reserveNotificationDelivery(
+                                for: notification
+                            ) else { return }
                         pushService.scheduleLocalNotification(
                             title: notification.title,
                             subtitle: notification.subtitle,
@@ -198,9 +244,10 @@
                         )
                     }
                     guard notification.shouldPresent(isAppActive: pushService.isAppActive) else { return }
-                    guard agentBackgroundMonitoring.reserveNotificationDelivery(
-                        for: notification
-                    ) else { return }
+                    guard
+                        agentBackgroundMonitoring.reserveNotificationDelivery(
+                            for: notification
+                        ) else { return }
                     if let action = notification.action {
                         await NotificationActionService.shared.scheduleActionableLocalNotification(
                             title: presentation.title,
@@ -224,23 +271,24 @@
             }
 
             connectionManager.onSessionState = {
-                [pushService, sessionStore, agentBackgroundMonitoring] state in
-                Task { @MainActor in
-                    sessionStore.handleStateUpdate(state)
-                    agentBackgroundMonitoring.handle(state) { notification in
-                        guard agentBackgroundMonitoring.reserveNotificationDelivery(
+                [weak connectionManager, pushService, sessionStore, fileWorkspaces, agentBackgroundMonitoring] state in
+                guard let client = connectionManager?.connection(for: state.pairId)?.relayClient else { return }
+                fileWorkspaces.update(state, client: client)
+                sessionStore.handleStateUpdate(state)
+                agentBackgroundMonitoring.handle(state) { notification in
+                    guard
+                        agentBackgroundMonitoring.reserveNotificationDelivery(
                             for: notification
                         ) else { return }
-                        pushService.scheduleLocalNotification(
-                            title: notification.title,
-                            subtitle: notification.subtitle,
-                            body: notification.body,
-                            paneId: notification.paneId,
-                            hostId: notification.hostId,
-                            delay: 1,
-                            backgroundOnly: true
-                        )
-                    }
+                    pushService.scheduleLocalNotification(
+                        title: notification.title,
+                        subtitle: notification.subtitle,
+                        body: notification.body,
+                        paneId: notification.paneId,
+                        hostId: notification.hostId,
+                        delay: 1,
+                        backgroundOnly: true
+                    )
                 }
             }
 
@@ -259,20 +307,23 @@
                 }
             }
 
-            connectionManager.onHostDisconnected = { [sessionStore, agentBackgroundMonitoring] hostId in
+            connectionManager.onHostDisconnected = { [sessionStore, fileWorkspaces, agentBackgroundMonitoring] hostId in
                 agentBackgroundMonitoring.removeHost(hostId)
+                fileWorkspaces.suspendHost(hostId)
                 sessionStore.clearSessions(for: hostId)
             }
 
-            connectionManager.onTransportInterrupted = { [sessionStore] hostId in
+            connectionManager.onTransportInterrupted = { [sessionStore, fileWorkspaces] hostId in
                 // The Host may still be running. Clear stale UI state, but leave
                 // the finite Agent monitor alive so it can drive reconnection.
+                fileWorkspaces.suspendHost(hostId)
                 sessionStore.clearSessions(for: hostId)
             }
 
             connectionManager.onUnpaired = {
-                [settings, sessionStore, agentBackgroundMonitoring] hostId in
+                [settings, sessionStore, fileWorkspaces, agentBackgroundMonitoring] hostId in
                 agentBackgroundMonitoring.removeHost(hostId)
+                fileWorkspaces.removeHost(hostId)
                 sessionStore.clearSessions(for: hostId)
                 settings.removePairing(id: hostId)
             }
@@ -374,6 +425,8 @@
 
         @State private var sessionsNavigationPath = NavigationPath()
         @State private var showingSettings = false
+        @State private var showingDashboard = false
+        @State private var dashboardDestination: SessionNavigation?
 
         @State private var pushService = PushNotificationService.shared
         /// Tracks the currently displayed session pane ID for deep link deduplication.
@@ -386,24 +439,20 @@
             // so dismissing the Settings sheet and pushing onto the nav
             // stack don't fight each other (avoids a sleep workaround in
             // handleDeepLink).
-            Group {
-                NavigationStack(path: $sessionsNavigationPath) {
-                    SessionListView(
-                        navigationPath: $sessionsNavigationPath,
-                        onOpenSettings: { showingSettings = true }
-                    )
-                }
+            NavigationStack(path: $sessionsNavigationPath) {
+                SessionListView(
+                    navigationPath: $sessionsNavigationPath,
+                    onOpenSettings: { showingSettings = true },
+                    onOpenDashboard: { showingDashboard = true }
+                )
             }
-            .sheet(isPresented: $showingSettings) {
+            .sheet(isPresented: $showingSettings, onDismiss: {
+                if pushService.pendingDashboard {
+                    openDashboardNotification()
+                }
+            }) {
                 NavigationStack {
-                    SettingsView()
-                        .toolbar {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button("Done") {
-                                    showingSettings = false
-                                }
-                            }
-                        }
+                    SettingsView(onDone: { showingSettings = false })
                 }
                 // Sheets present in a separate window context, so the
                 // root view's `.preferredColorScheme` doesn't always
@@ -411,7 +460,29 @@
                 // here so toggling the picker updates the sheet's chrome.
                 .preferredColorScheme(settings.appearanceMode.colorScheme)
             }
+            .sheet(isPresented: $showingDashboard, onDismiss: {
+                if let destination = dashboardDestination {
+                    dashboardDestination = nil
+                    // Replacing a one-entry path does not trigger the count observer.
+                    currentlyDisplayedPaneId = nil
+                    sessionsNavigationPath = NavigationPath()
+                    sessionsNavigationPath.append(destination)
+                }
+            }) {
+                IOSDashboardView { host, session in
+                    dashboardDestination = SessionNavigation(sessionName: session, hostId: host)
+                }
+                .presentationDetents([.large])
+            }
+            .onChange(of: pushService.pendingDashboard) { _, pending in
+                if pending {
+                    openDashboardNotification()
+                }
+            }
             .task {
+                if pushService.pendingDashboard {
+                    openDashboardNotification()
+                }
                 await connectIfNeeded()
             }
             .onChange(of: pushService.pendingDeepLink) { _, _ in
@@ -434,6 +505,15 @@
                     handleDeepLink(deepLink)
                 }
             }
+        }
+
+        private func openDashboardNotification() {
+            if showingSettings {
+                showingSettings = false
+                return
+            }
+            pushService.pendingDashboard = false
+            showingDashboard = true
         }
 
         /// Navigate to a specific session when a deep link is received.
@@ -466,7 +546,9 @@
                     for _ in 0..<5 {
                         try? await Task.sleep(for: .milliseconds(500))
                         paneState = sessionStore.paneState(for: deepLink.paneId, hostId: deepLink.hostId)
-                        if paneState != nil { break }
+                        if paneState != nil {
+                            break
+                        }
                     }
                 }
 
@@ -490,397 +572,6 @@
                 deviceId: settings.deviceId,
                 deviceName: settings.deviceName
             )
-        }
-    }
-
-    // MARK: - Settings View
-
-    struct SettingsView: View {
-        @Environment(IOSSettings.self) private var settings
-        @Environment(ViewerConnectionManager.self) private var connectionManager
-        @Environment(AgentBackgroundMonitoringService.self) private var backgroundMonitoring
-
-        /// In-flight edit buffer for the device name field. Synced to/from
-        /// `settings.deviceName` so the field shows the system name when no
-        /// custom name is set.
-        @State private var deviceNameDraft = ""
-
-        /// The device name that was committed to settings on the last edit.
-        /// Used to detect whether the user actually changed the name when the
-        /// field loses focus, so we only reconnect when something differs.
-        @State private var lastCommittedDeviceName = ""
-
-        /// Tracks focus on the device-name field so we can also commit when
-        /// the user dismisses the keyboard by tapping elsewhere — `onSubmit`
-        /// alone would silently discard the draft.
-        @FocusState private var deviceNameFieldFocused: Bool
-
-        /// Available monospace fonts for terminal display
-        static let availableFonts = [
-            "Menlo",
-            "SF Mono",
-            "Courier New",
-            "Monaco",
-            "Courier",
-        ]
-
-        var body: some View {
-            List {
-                // Connection Status Section
-                Section("Connection") {
-                    LabeledContent("Status") {
-                        HStack {
-                            Circle()
-                                .fill(connectionStatusColor)
-                                .frame(width: 8, height: 8)
-                            Text(connectionStatusText)
-                        }
-                    }
-
-                    if !connectionManager.anyHostConnected {
-                        Button("Connect All") {
-                            Task {
-                                guard let serverURL = URL(string: settings.externalServerURL) else { return }
-                                await connectionManager.connectAll(
-                                    pairedHosts: settings.pairedHosts,
-                                    serverURL: serverURL,
-                                    deviceId: settings.deviceId,
-                                    deviceName: settings.deviceName
-                                )
-                            }
-                        }
-                    } else {
-                        Button("Disconnect All") {
-                            Task {
-                                await connectionManager.disconnectAll()
-                            }
-                        }
-                    }
-                }
-
-                // Device Name Section
-                Section {
-                    TextField(settings.systemDeviceName, text: $deviceNameDraft)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-                        .submitLabel(.done)
-                        .focused($deviceNameFieldFocused)
-                        .onSubmit { commitDeviceName() }
-                        .onChange(of: deviceNameFieldFocused) { _, isFocused in
-                            if !isFocused { commitDeviceName() }
-                        }
-                        .accessibilityIdentifier("device-name-field")
-                } header: {
-                    Text("Device Name")
-                } footer: {
-                    Text("Shown to the Macs you've paired with. Leave blank to use the system name (\(settings.systemDeviceName)).")
-                }
-
-                // Paired Hosts Section
-                Section {
-                    NavigationLink {
-                        ManageHostsView()
-                    } label: {
-                        HStack {
-                            Text("Paired Hosts")
-                            Spacer()
-                            Text("\(settings.pairedHosts.count)")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                // Quick phrase device sync (independent of terminal roles)
-                Section {
-                    NavigationLink {
-                        QuickPhraseSyncSettingsView(store: settings.quickPhrases)
-                    } label: {
-                        Label("Quick Phrase Sync", symbol: .textBubbleFill)
-                    }
-                    .accessibilityIdentifier("quick-phrase-sync-settings-link")
-                }
-
-                // Appearance Section
-                Section {
-                    @Bindable var settings = settings
-
-                    Picker("Theme", selection: $settings.appearanceMode) {
-                        ForEach(AppearanceMode.allCases) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("Appearance")
-                } footer: {
-                    Text("Choose Light, Dark, or follow the iOS system setting.")
-                }
-
-                // Terminal Section
-                Section {
-                    @Bindable var settings = settings
-
-                    Picker("Keyboard Control", selection: $settings.terminalKeyboardControlPosition) {
-                        ForEach(TerminalKeyboardControlPosition.allCases, id: \.self) { position in
-                            Text(position.displayName).tag(position)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    Toggle("Show Keyboard on Entry", isOn: $settings.showTerminalKeyboardOnEntry)
-                        .accessibilityIdentifier("terminal-keyboard-on-entry-toggle")
-
-                    Picker("Font", selection: $settings.terminalFontName) {
-                        ForEach(Self.availableFonts, id: \.self) { font in
-                            Text(font).tag(font)
-                        }
-                    }
-
-                    HStack {
-                        Text("Font Size")
-                        Spacer()
-                        Text("\(Int(settings.terminalFontSize)) pt")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Slider(
-                        value: $settings.terminalFontSize,
-                        in: 6...20,
-                        step: 1
-                    )
-                } header: {
-                    Text("Terminal")
-                } footer: {
-                    Text("Choose the keyboard's initial state and control position, and customize the terminal font.")
-                }
-
-                Section {
-                    @Bindable var settings = settings
-
-                    Toggle("Agent Quick Input", isOn: $settings.agentQuickInputEnabled)
-
-                    if #available(iOS 26.0, *) {
-                        Toggle(
-                            "Background Agent Monitoring",
-                            isOn: $settings.agentBackgroundMonitoringEnabled
-                        )
-                        .accessibilityIdentifier("agent-background-monitoring-toggle")
-
-                        switch backgroundMonitoring.monitoringStatus {
-                        case .inactive:
-                            if let failure = backgroundMonitoring.lastStartFailure {
-                                Text("Could not start: \(failure)")
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                                    .textSelection(.enabled)
-                            } else if settings.agentBackgroundMonitoringEnabled {
-                                LabeledContent("Monitoring Status") {
-                                    Text("Ready")
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-
-                        case .starting:
-                            LabeledContent("Monitoring Status") {
-                                Text("Starting")
-                                    .foregroundStyle(.secondary)
-                            }
-
-                        case .active:
-                            LabeledContent("Monitoring Status") {
-                                Text("Active")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    } else {
-                        LabeledContent("Background Agent Monitoring") {
-                            Text("Requires iOS 26")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Agent Input")
-                } footer: {
-                    Text(
-                        "Quick Input shows a reply field above agent terminals. "
-                            + "Background monitoring starts with an Agent input and ends after "
-                            + "all monitored Agents finish or need input. iOS shows no permission "
-                            + "prompt. If the system ends a session early, the next Agent input "
-                            + "starts a new one; iOS does not allow silent background renewal."
-                    )
-                }
-
-                VoiceCorrectionSettingsSection(
-                    settings: settings.voiceCorrection
-                )
-
-                // New Session Section
-                Section {
-                    @Bindable var settings = settings
-
-                    TextField("Session Name", text: $settings.newSessionName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    Toggle("Automatically Fit to Screen", isOn: $settings.newSessionAutoFit)
-
-                    if !settings.newSessionAutoFit {
-                        Stepper(
-                            "Width: \(settings.newSessionWidth) columns",
-                            value: $settings.newSessionWidth,
-                            in: 40...300,
-                            step: 10
-                        )
-
-                        Stepper(
-                            "Height: \(settings.newSessionHeight) rows",
-                            value: $settings.newSessionHeight,
-                            in: 10...100,
-                            step: 5
-                        )
-                    }
-                } header: {
-                    Text("New Session")
-                } footer: {
-                    Text("Automatic sizing fits each new session once using its terminal viewport and font. Hosts without Fit support use 120 × 40. Existing sessions are unchanged. Fit changes the Host and all Viewers. If a session name already exists, a number is appended.")
-                }
-
-                // Server Section
-                Section("Server") {
-                    @Bindable var settings = settings
-                    TextField("Server URL", text: $settings.externalServerURL)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        .autocorrectionDisabled()
-
-                    Toggle("Auto-connect on launch", isOn: $settings.autoReconnect)
-                }
-
-                // About Section
-                Section("About") {
-                    LabeledContent("Version") {
-                        Text(AppBuildInfo.current.displayVersion)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.trailing)
-                    }
-
-                    LabeledContent("Device ID") {
-                        Text(settings.deviceId)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                // Distribution provenance
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("CtrlX is an independent distribution based on Gallager and licensed under GNU AGPL-3.0. It is not affiliated with or endorsed by the Gallager project.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Link(destination: AppBuildInfo.current.correspondingSourceURL) {
-                        HStack {
-                            Text("CtrlX Source")
-                            Spacer()
-                            Text("GitHub")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Link(destination: ProductIdentity.upstreamURL) {
-                        HStack {
-                            Text("Gallager Upstream")
-                            Spacer()
-                            Text("GitHub")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Origin and License")
-                }
-
-                // Licenses Section
-                Section {
-                    NavigationLink {
-                        ThirdPartyLicensesView()
-                    } label: {
-                        Text("Licenses")
-                    }
-                }
-            }
-            .navigationTitle("Settings")
-            .onAppear {
-                deviceNameDraft = settings.customDeviceName ?? ""
-                lastCommittedDeviceName = deviceNameDraft
-            }
-            .onDisappear {
-                // SwiftUI tears down the view (and `@FocusState`) when the
-                // sheet dismisses, so `.onChange(of: deviceNameFieldFocused)`
-                // can't be relied on as the only commit trigger. Commit any
-                // pending edit here so closing the sheet preserves the name.
-                commitDeviceName()
-            }
-        }
-
-        /// Persist the edited device name and push the update to paired hosts.
-        ///
-        /// Treats whitespace-only input as "clear back to system name" by
-        /// storing `nil`, which makes `IOSSettings.deviceName` fall back to
-        /// `UIDevice.current.name`. To propagate the change to already-connected
-        /// hosts, disconnects and reconnects all of them — the new name rides
-        /// along on the next `RegisterViewerMessage`.
-        private func commitDeviceName() {
-            let trimmed = deviceNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed != lastCommittedDeviceName else {
-                return
-            }
-
-            settings.customDeviceName = trimmed.isEmpty ? nil : trimmed
-            lastCommittedDeviceName = trimmed
-
-            // Push the new name to any currently connected hosts by reconnecting.
-            guard
-                settings.isPaired,
-                let serverURL = URL(string: settings.externalServerURL)
-            else { return }
-
-            Task {
-                await connectionManager.disconnectAll()
-                await connectionManager.connectAll(
-                    pairedHosts: settings.pairedHosts,
-                    serverURL: serverURL,
-                    deviceId: settings.deviceId,
-                    deviceName: settings.deviceName
-                )
-            }
-        }
-
-        private var connectionStatusColor: Color {
-            if connectionManager.anyHostConnected {
-                return .green
-            } else if connectionManager.isConnecting {
-                return .yellow
-            } else {
-                return .gray
-            }
-        }
-
-        private var connectionStatusText: String {
-            let connectedCount = connectionManager.activeConnections.filter(\.isHostConnected).count
-            let totalCount = settings.pairedHosts.count
-
-            if connectedCount == totalCount && totalCount > 0 {
-                return totalCount == 1 ? "Connected" : "All Connected"
-            } else if connectedCount > 0 {
-                return "\(connectedCount)/\(totalCount) Online"
-            } else if connectionManager.isConnecting {
-                return "Connecting..."
-            } else {
-                return "Disconnected"
-            }
         }
     }
 

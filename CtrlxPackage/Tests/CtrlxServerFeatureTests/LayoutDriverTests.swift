@@ -40,9 +40,9 @@
                 let tmux = TmuxService(tmuxPath: tmuxPath, socketPath: socketPath)
                 let driver = LayoutDriver(
                     tmuxAccessor: { tmux },
-                    descriptionApplier: { _, _ in },
-                    colorApplier: { _, _ in },
-                    progressApplier: { _, _ in }
+                    descriptionApplier: { _, _, _ in },
+                    colorApplier: { _, _, _ in },
+                    progressApplier: { _, _, _ in }
                 )
 
                 // Single-window layout — that's the case that exposed #501.
@@ -155,9 +155,9 @@
                 let tmux = TmuxService(tmuxPath: tmuxPath, socketPath: socketPath)
                 let driver = LayoutDriver(
                     tmuxAccessor: { tmux },
-                    descriptionApplier: { _, _ in },
-                    colorApplier: { _, _ in },
-                    progressApplier: { _, _ in }
+                    descriptionApplier: { _, _, _ in },
+                    colorApplier: { _, _, _ in },
+                    progressApplier: { _, _, _ in }
                 )
                 try await body(driver)
             }

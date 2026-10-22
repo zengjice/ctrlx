@@ -26,6 +26,10 @@ public struct PeerHelloMessage: Codable, Sendable {
 /// Complete session state for sync between host and viewer
 public struct SessionStateMessage: Codable, Sendable {
     public let pairId: String
+    /// Absent on older Hosts. Presence enables persistent workspace references.
+    public let workspaceIdentity: WorkspaceIdentityScope?
+    public let supportsWorkspaceInputIdentity: Bool?
+    public let supportsTerminalStreamIdentity: Bool?
     /// Unified per-pane state keyed by pane ID
     public let paneStates: [String: PaneState]
     /// Discovered agent projects on the host (each tagged by `pluginID`).
@@ -47,14 +51,18 @@ public struct SessionStateMessage: Codable, Sendable {
     public let sidebarSortMode: String?
 
     /// Host-owned terminal-window layouts keyed by tmux session name. This is
-    /// deliberately narrower than the app's workbench state: file/browser
-    /// tabs, focus and scroll position remain private to each client.
+    /// deliberately narrower than the workbench: auxiliary tab catalogs are
+    /// shared separately; placement, selection and scroll stay client-local.
     public let sharedTerminalLayouts: [String: SharedTerminalLayout]?
+    /// nil on older Hosts; published once per repository, rather than per pane.
+    public let worktreeRepositories: [RepositoryWorktreeStatus]?
     /// Absent on older hosts: viewers retain manual entry and send no lookup.
     public let supportsDirectoryBrowsing: Bool?
     public let supportsDirectoryCreation: Bool?
     public let supportsSessionWorktrees: Bool?
     public let supportsFileBrowsing: Bool?
+    public let supportsPaneFiles: Bool?
+    public let fileTabs: [HostFileTab]?
     public let supportsFileDownloads: Bool?
     public let supportsFileUploads: Bool?
     public let supportsRepositoryFileLinks: Bool?
@@ -67,11 +75,16 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsCodexQuestionAcknowledgement: Bool?
     /// Explicit fit preserves the Host window's pane topology and proportions.
     public let supportsTerminalFit: Bool?
+    public let supportsWorkspaceClipboard: Bool?
     public let supportsBrowserSharing: Bool?
+    public let supportsBrowserExtensions: Bool?
     public let supportsPaneBrowser: Bool?
     public let supportsAgentImageInput: Bool?
     public let browserTabs: [RemoteBrowserTab]?
     public let supportsSimulatorViewing: Bool?
+    public let supportsPaneSimulator: Bool?
+    public let supportsSimulatorClosing: Bool?
+    public let supportsDashboard: Bool?
     public let simulatorTabs: [RemoteSimulatorTab]?
 
     public init(
@@ -82,6 +95,7 @@ public struct SessionStateMessage: Codable, Sendable {
         usageOverview: UsageOverview? = nil,
         sidebarSortMode: String? = nil,
         sharedTerminalLayouts: [String: SharedTerminalLayout]? = nil,
+        worktreeRepositories: [RepositoryWorktreeStatus]? = nil,
         supportsDirectoryBrowsing: Bool? = nil,
         supportsDirectoryCreation: Bool? = nil,
         supportsSessionWorktrees: Bool? = nil,
@@ -94,24 +108,39 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsFileDownloads: Bool? = nil,
         supportsFileUploads: Bool? = nil,
         supportsRepositoryFileLinks: Bool? = nil,
+        supportsWorkspaceClipboard: Bool? = nil,
         supportsBrowserSharing: Bool? = nil,
+        supportsBrowserExtensions: Bool? = nil,
         supportsPaneBrowser: Bool? = nil,
         supportsAgentImageInput: Bool? = nil,
         browserTabs: [RemoteBrowserTab]? = nil,
         supportsSimulatorViewing: Bool? = nil,
-        simulatorTabs: [RemoteSimulatorTab]? = nil
+        supportsPaneSimulator: Bool? = nil,
+        supportsSimulatorClosing: Bool? = nil,
+        supportsDashboard: Bool? = nil,
+        simulatorTabs: [RemoteSimulatorTab]? = nil,
+        supportsPaneFiles: Bool? = nil, fileTabs: [HostFileTab]? = nil,
+        workspaceIdentity: WorkspaceIdentityScope? = nil,
+        supportsWorkspaceInputIdentity: Bool? = nil,
+        supportsTerminalStreamIdentity: Bool? = nil
     ) {
         self.pairId = pairId
+        self.workspaceIdentity = workspaceIdentity
+        self.supportsWorkspaceInputIdentity = supportsWorkspaceInputIdentity
+        self.supportsTerminalStreamIdentity = supportsTerminalStreamIdentity
         self.paneStates = paneStates
         self.agentProjects = agentProjects
         self.homeDirectory = homeDirectory
         self.usageOverview = usageOverview
         self.sidebarSortMode = sidebarSortMode
         self.sharedTerminalLayouts = sharedTerminalLayouts
+        self.worktreeRepositories = worktreeRepositories
         self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
         self.supportsDirectoryCreation = supportsDirectoryCreation
         self.supportsSessionWorktrees = supportsSessionWorktrees
         self.supportsFileBrowsing = supportsFileBrowsing
+        self.supportsPaneFiles = supportsPaneFiles
+        self.fileTabs = fileTabs
         self.supportsFileDownloads = supportsFileDownloads
         self.supportsFileUploads = supportsFileUploads
         self.supportsRepositoryFileLinks = supportsRepositoryFileLinks
@@ -120,11 +149,16 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsTerminalPaste = supportsTerminalPaste
         self.supportsCodexQuestionAcknowledgement = supportsCodexQuestionAcknowledgement
         self.supportsTerminalFit = supportsTerminalFit
+        self.supportsWorkspaceClipboard = supportsWorkspaceClipboard
         self.supportsBrowserSharing = supportsBrowserSharing
+        self.supportsBrowserExtensions = supportsBrowserExtensions
         self.supportsPaneBrowser = supportsPaneBrowser
         self.supportsAgentImageInput = supportsAgentImageInput
         self.browserTabs = browserTabs
         self.supportsSimulatorViewing = supportsSimulatorViewing
+        self.supportsPaneSimulator = supportsPaneSimulator
+        self.supportsSimulatorClosing = supportsSimulatorClosing
+        self.supportsDashboard = supportsDashboard
         self.simulatorTabs = simulatorTabs
     }
 
@@ -141,6 +175,7 @@ public struct SessionStateMessage: Codable, Sendable {
             usageOverview: usageOverview,
             sidebarSortMode: sidebarSortMode,
             sharedTerminalLayouts: sharedTerminalLayouts,
+            worktreeRepositories: worktreeRepositories,
             supportsDirectoryBrowsing: supportsDirectoryBrowsing,
             supportsDirectoryCreation: supportsDirectoryCreation,
             supportsSessionWorktrees: supportsSessionWorktrees,
@@ -153,12 +188,21 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsFileDownloads: supportsFileDownloads,
             supportsFileUploads: supportsFileUploads,
             supportsRepositoryFileLinks: supportsRepositoryFileLinks,
+            supportsWorkspaceClipboard: supportsWorkspaceClipboard,
             supportsBrowserSharing: supportsBrowserSharing,
+            supportsBrowserExtensions: supportsBrowserExtensions,
             supportsPaneBrowser: supportsPaneBrowser,
             supportsAgentImageInput: supportsAgentImageInput,
             browserTabs: browserTabs,
             supportsSimulatorViewing: supportsSimulatorViewing,
-            simulatorTabs: simulatorTabs
+            supportsPaneSimulator: supportsPaneSimulator,
+            supportsSimulatorClosing: supportsSimulatorClosing,
+            supportsDashboard: supportsDashboard,
+            simulatorTabs: simulatorTabs,
+            supportsPaneFiles: supportsPaneFiles, fileTabs: fileTabs,
+            workspaceIdentity: workspaceIdentity,
+            supportsWorkspaceInputIdentity: supportsWorkspaceInputIdentity,
+            supportsTerminalStreamIdentity: supportsTerminalStreamIdentity
         )
     }
 }
@@ -212,6 +256,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// `windowIndex`, this does not change when windows are reordered.
     /// Optional for wire compatibility with older hosts.
     public var tmuxWindowId: String?
+    public var workspaceIdentity: WorkspacePaneIdentity?
 
     /// The pane index within the window
     public var paneIndex: Int
@@ -268,6 +313,9 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// The git branch name for this pane's current working directory, if it's a git repo
     public var gitBranch: String?
 
+    /// Canonical Host worktree path, used only to join its repository snapshot.
+    public var gitWorktreePath: String?
+
     // MARK: - Agent Session
 
     /// The coding-agent session running in this pane, if any
@@ -276,6 +324,10 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// Host receipt time of the latest plugin state update. Viewing a session
     /// does not change this. Optional for snapshots from older Hosts.
     public var lastAgentActivityAt: Date?
+
+    /// Latest Codex question hook identity. Its presence advertises support for
+    /// identity-checked expansion; older Hosts omit it. Not a response form.
+    public var codexQuestionID: String?
 
     // MARK: - Behavior Flags
 
@@ -381,8 +433,10 @@ public struct PaneState: Codable, Sendable, Identifiable {
         customEmoji: String? = nil,
         terminalTitle: String? = nil,
         gitBranch: String? = nil,
+        gitWorktreePath: String? = nil,
         agentSession: AgentSession? = nil,
         lastAgentActivityAt: Date? = nil,
+        codexQuestionID: String? = nil,
         yoloMode: Bool = false,
         cliSessionState: CLISessionState? = nil,
         editorSession: EditorSessionInfo? = nil,
@@ -391,13 +445,15 @@ public struct PaneState: Codable, Sendable, Identifiable {
         permissionMode: String? = nil,
         permissionModeTrigger: String? = nil,
         telemetry: SessionTelemetry? = nil,
-        recap: SessionRecap? = nil
+        recap: SessionRecap? = nil,
+        workspaceIdentity: WorkspacePaneIdentity? = nil
     ) {
         self.paneId = paneId
         self.target = target
         self.sessionName = sessionName
         self.windowIndex = windowIndex
         self.tmuxWindowId = tmuxWindowId
+        self.workspaceIdentity = workspaceIdentity
         self.paneIndex = paneIndex
         self.command = command
         self.currentPath = currentPath
@@ -412,8 +468,10 @@ public struct PaneState: Codable, Sendable, Identifiable {
         self.customEmoji = customEmoji
         self.terminalTitle = terminalTitle
         self.gitBranch = gitBranch
+        self.gitWorktreePath = gitWorktreePath
         self.agentSession = agentSession
         self.lastAgentActivityAt = lastAgentActivityAt
+        self.codexQuestionID = codexQuestionID
         self.yoloMode = yoloMode
         self.cliSessionState = cliSessionState
         self.editorSession = editorSession

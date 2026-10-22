@@ -183,6 +183,7 @@
             let id: UUID
             let paneId: String
             let maximumSnapshotScrollbackLineLimit: Int?
+            let expectedWorkspacePane: WorkspacePaneIdentity?
             let onData: @MainActor (Data) -> Void
             let onDimensionChange: (@MainActor (Int, Int) -> Void)?
             let onTitleChange: (@MainActor (String) -> Void)?
@@ -199,6 +200,8 @@
         /// doesn't (yet) have a subscriber.
         private struct ReaderContext {
             let reader: PipePaneReader
+            let serverID: String
+            var workspaceIdentity: WorkspacePaneIdentity?
             var target: String
             var sessionName: String
             var width: Int
@@ -322,14 +325,16 @@
         func sendRawBytesIfConnected(
             paneId: String,
             data: Data,
-            onFirstCommandWritten: (@Sendable () -> Void)? = nil
+            onFirstCommandWritten: (@Sendable () -> Void)? = nil,
+            expectedWorkspacePane: WorkspacePaneIdentity? = nil
         ) async throws -> Bool {
             guard let context = readers[paneId] else { return false }
             return try await controlClientManager.sendRawBytesIfConnected(
                 paneId: paneId,
                 sessionName: context.sessionName,
                 data: data,
-                onFirstCommandWritten: onFirstCommandWritten
+                onFirstCommandWritten: onFirstCommandWritten,
+                expectedWorkspacePane: expectedWorkspacePane
             )
         }
 
@@ -375,11 +380,21 @@
             self.fifoDirectory = fifoDirectory
 
             // Wire up dimension changes from control client
-            controlClientManager.setOnDimensionChange { [weak self] paneId, width, height in
-                self?.updateDimensions(paneId: paneId, width: width, height: height)
+            controlClientManager.setOnDimensionChange { [weak self] paneId, width, height, serverID in
+                guard let self, self.readers[paneId]?.serverID == serverID else { return }
+                self.updateDimensions(paneId: paneId, width: width, height: height)
             }
-            controlClientManager.setOnOutput { [weak self] paneId, data in
-                self?.handleControlOutput(paneId: paneId, data: data)
+            controlClientManager.setOnOutput { [weak self] paneId, data, serverID in
+                guard let self, self.readers[paneId]?.serverID == serverID else { return }
+                self.handleControlOutput(paneId: paneId, data: data)
+            }
+            controlClientManager.setOnConnectionReady { [weak self] sessionName, serverID in
+                guard let self else { return }
+                // A new control connection can miss bytes even when tmux itself
+                // survived. Gate resumed output behind an authoritative snapshot.
+                for (paneID, reader) in self.readers where reader.sessionName == sessionName && reader.serverID == serverID {
+                    self.requestResync(paneId: paneID, subscriptionIds: reader.subscriberIds)
+                }
             }
         }
 
@@ -419,6 +434,16 @@
             }
         }
 
+        func validateStreamTarget(paneId: String, expected: WorkspacePaneIdentity?) async throws -> (sessionName: String, serverID: String) {
+            let target = try await tmuxService.paneStreamTarget(paneId)
+            if let expected {
+                guard expected.serverID == target.serverID, expected.paneID == target.persistentPaneID else {
+                    throw TmuxError.invalidPane(target: paneId)
+                }
+            }
+            return (target.sessionName, target.serverID)
+        }
+
         /// Subscribe to a pane stream.
         ///
         /// Every subscriber is registered behind a private bootstrap gate before
@@ -439,6 +464,7 @@
         public func subscribe(
             paneId: String,
             target: String,
+            expectedWorkspacePane: WorkspacePaneIdentity? = nil,
             maximumSnapshotScrollbackLineLimit: Int? = nil,
             onData: @escaping @MainActor (Data) -> Void,
             onDimensionChange: (@MainActor (Int, Int) -> Void)? = nil,
@@ -456,6 +482,7 @@
                 id: subscriptionId,
                 paneId: paneId,
                 maximumSnapshotScrollbackLineLimit: maximumSnapshotScrollbackLineLimit,
+                expectedWorkspacePane: expectedWorkspacePane,
                 onData: onData,
                 onDimensionChange: onDimensionChange,
                 onTitleChange: onTitleChange,
@@ -464,27 +491,18 @@
                 onResync: onResync
             )
 
-            // Pane discovery normally creates the reader before any subscribe is
-            // possible, but a subscribe can race in (e.g. a pane created seconds
-            // before the next refresh). Start a reader on demand so the first
-            // viewer doesn't have to wait for the periodic refresh tick.
-            if readers[paneId] == nil {
-                // A stable pane target ("%7") is not a session name. Resolve it
-                // once on discovery races; all later operations use the reader's
-                // owning session so output and snapshots share one connection.
-                let sessionName = try await tmuxService.getPaneSessionName(paneId)
-                let dims = (try? await tmuxService.getPaneDimensions(paneId)) ?? (width: 80, height: 24)
+            // Resolve the live route even when a previous reader has the same
+            // runtime ID: the owning session can change across tmux recovery.
+            let live = try await validateStreamTarget(paneId: paneId, expected: expectedWorkspacePane)
+            let dims = (try? await tmuxService.getPaneDimensions(paneId)) ?? (width: 80, height: 24)
+            guard
                 await ensureReader(
-                    paneId: paneId,
-                    sessionName: sessionName,
-                    target: target,
-                    initialWidth: dims.width,
-                    initialHeight: dims.height,
-                    seedTitle: nil
-                )
-            }
+                    paneId: paneId, sessionName: live.sessionName, target: target,
+                    initialWidth: dims.width, initialHeight: dims.height, seedTitle: nil,
+                    expectedServerID: live.serverID, workspaceIdentity: expectedWorkspacePane
+                ) else { throw TmuxError.invalidPane(target: target) }
 
-            guard var context = readers[paneId] else {
+            guard var context = readers[paneId], context.serverID == live.serverID else {
                 throw TmuxError.invalidPane(target: target)
             }
 
@@ -505,7 +523,8 @@
                     try await controlClientManager.setPaneOutputEnabled(
                         paneId: paneId,
                         sessionName: context.sessionName,
-                        enabled: true
+                        enabled: true,
+                        expectedServerID: context.serverID
                     )
                 } catch {
                     await rollbackBootstrap(subscriptionId: subscriptionId, paneId: paneId)
@@ -540,7 +559,8 @@
                     try await controlClientManager.registerPaneDimensions(
                         paneId: paneId,
                         sessionName: captureContext.sessionName,
-                        dimensions: (width: captureContext.width, height: captureContext.height)
+                        dimensions: (width: captureContext.width, height: captureContext.height),
+                        expectedServerID: captureContext.serverID
                     )
                     if var refreshed = readers[paneId], refreshed.reader === context.reader {
                         refreshed.hasRegisteredDimensions = true
@@ -564,6 +584,8 @@
                     controlClientManager: controlClientManager,
                     sessionName: captureContext.sessionName,
                     scrollbackLineLimit: snapshotScrollbackLineLimit,
+                    expectedWorkspacePane: expectedWorkspacePane,
+                    expectedServerID: captureContext.serverID,
                     onSnapshotBoundary: { [weak self] in
                         guard var pending = self?.subscriptions[subscriptionId] else { return }
                         pending.bootstrap.markSnapshotBoundary()
@@ -644,7 +666,8 @@
                 try? await controlClientManager.setPaneOutputEnabled(
                     paneId: paneId,
                     sessionName: context.sessionName,
-                    enabled: false
+                    enabled: false,
+                    expectedServerID: context.serverID
                 )
                 logger.info("Last subscriber gone, control output disabled", metadata: [
                     "paneId": "\(paneId)",
@@ -717,6 +740,7 @@
         /// - Returns: Current content, width, and height if the pane has subscribers; nil otherwise
         public func currentContent(
             for paneId: String,
+            expectedWorkspacePane: WorkspacePaneIdentity? = nil,
             maximumSnapshotScrollbackLineLimit: Int? = nil,
             onSnapshotBoundary: (@MainActor @Sendable () -> Void)? = nil
         ) async -> (content: Data, width: Int, height: Int, scrollbackLineLimit: Int)? {
@@ -742,11 +766,14 @@
                     controlClientManager: controlClientManager,
                     sessionName: context.sessionName,
                     scrollbackLineLimit: snapshotScrollbackLineLimit,
+                    expectedWorkspacePane: expectedWorkspacePane,
+                    expectedServerID: context.serverID,
                     onSnapshotBoundary: onSnapshotBoundary
                 )
             else {
                 return nil
             }
+            guard readers[paneId]?.reader === context.reader else { return nil }
             return (content, context.width, context.height, viewerScrollbackLineLimit)
         }
 
@@ -842,7 +869,7 @@
         /// Start readers for all panes not already known. Called once on
         /// startup after initial pane discovery.
         public func startMonitoring(panes: [PaneInfo]) async {
-            for pane in panes where readers[pane.paneId] == nil {
+            for pane in panes {
                 let seedTitle = isCustomPaneTitle(pane.paneTitle) ? pane.paneTitle : nil
                 await ensureReader(
                     paneId: pane.paneId,
@@ -850,7 +877,9 @@
                     target: pane.target,
                     initialWidth: pane.width,
                     initialHeight: pane.height,
-                    seedTitle: seedTitle
+                    seedTitle: seedTitle,
+                    expectedServerID: pane.tmuxServerID,
+                    workspaceIdentity: pane.workspaceIdentity
                 )
             }
         }
@@ -875,53 +904,64 @@
                 to: currentSessionPaneIds
             )
             for (oldName, newName) in renamedSessions {
-                await controlClientManager.sessionRenamed(from: oldName, to: newName)
+                let unchanged = panes.filter { $0.sessionName == newName }.allSatisfy { pane in
+                    guard let serverID = pane.tmuxServerID else { return true }
+                    return readers[pane.paneId]?.serverID == serverID
+                }
+                if unchanged {
+                    await controlClientManager.sessionRenamed(from: oldName, to: newName)
+                }
             }
 
             let staleIds = readers.keys.filter { !currentPaneIds.contains($0) }
             for paneId in staleIds {
-                await tearDownReader(paneId: paneId)
+                _ = await readerStartGate.run(paneId: paneId) { [weak self] in
+                    await self?.tearDownReader(paneId: paneId)
+                    return true
+                }
             }
 
-            for pane in panes where readers[pane.paneId] == nil {
+            var acceptedPaneIDs: Set<String> = []
+            for pane in panes {
                 let seedTitle = isCustomPaneTitle(pane.paneTitle) ? pane.paneTitle : nil
-                await ensureReader(
+                let ready = await ensureReader(
                     paneId: pane.paneId,
                     sessionName: pane.sessionName,
                     target: pane.target,
                     initialWidth: pane.width,
                     initialHeight: pane.height,
-                    seedTitle: seedTitle
+                    seedTitle: seedTitle,
+                    expectedServerID: pane.tmuxServerID,
+                    workspaceIdentity: pane.workspaceIdentity
                 )
+                if
+                    ready, let reader = readers[pane.paneId],
+                    pane.tmuxServerID == nil || reader.serverID == pane.tmuxServerID,
+                    pane.workspaceIdentity == nil || reader.workspaceIdentity == pane.workspaceIdentity {
+                    acceptedPaneIDs.insert(pane.paneId)
+                }
             }
 
             // `%layout-change` is the low-latency path, but control-mode events
             // can be missed during reconnect. The periodic tmux snapshot is the
             // authority, so reconcile every existing reader as well as newly
             // created ones and forward any correction to live subscribers.
-            for pane in panes {
+            for pane in panes where acceptedPaneIDs.contains(pane.paneId) {
                 updateDimensions(paneId: pane.paneId, width: pane.width, height: pane.height)
-            }
-
-            // `rename-session` preserves pane IDs and live pipe-pane readers,
-            // but every textual target changes. Update the reader context so
-            // capture, mouse-mode and teardown commands stop using the old target.
-            for pane in panes {
-                guard var context = readers[pane.paneId] else { continue }
-                guard context.target != pane.target || context.sessionName != pane.sessionName else { continue }
-                context.target = pane.target
-                context.sessionName = pane.sessionName
-                readers[pane.paneId] = context
             }
 
             // Seed/update custom titles missed by the OSC reader (e.g. titles
             // tmux already had before pipe-pane attached).
-            for pane in panes where isCustomPaneTitle(pane.paneTitle) {
+            for pane in panes where acceptedPaneIDs.contains(pane.paneId) && isCustomPaneTitle(pane.paneTitle) {
                 guard var context = readers[pane.paneId] else { continue }
                 guard context.terminalTitle != pane.paneTitle else { continue }
                 context.terminalTitle = pane.paneTitle
                 readers[pane.paneId] = context
                 onTitleChange?(pane.paneId, pane.target, pane.paneTitle)
+            }
+
+            for paneId in acceptedPaneIDs {
+                await checkReaderHealth(paneId: paneId)
             }
         }
 
@@ -950,21 +990,42 @@
             target: String,
             initialWidth: Int,
             initialHeight: Int,
-            seedTitle: String?
+            seedTitle: String?,
+            expectedServerID: String? = nil,
+            workspaceIdentity: WorkspacePaneIdentity? = nil
         ) async -> Bool {
             guard !isShuttingDown else { return false }
-            if readers[paneId] != nil { return true }
-
             return await readerStartGate.run(paneId: paneId) { [weak self] in
                 guard let self, !self.isShuttingDown else { return false }
-                if self.readers[paneId] != nil { return true }
+                let serverID: String
+                do { serverID = try await self.controlClientManager.serverIdentity(for: sessionName) }
+                catch {
+                    self.logger.debug("Could not resolve reader server", metadata: ["paneId": "\(paneId)", "error": "\(error)"])
+                    return false
+                }
+                guard expectedServerID == nil || expectedServerID == serverID else { return false }
+                if var current = self.readers[paneId] {
+                    let replacedPane: Bool
+                    if let previous = current.workspaceIdentity, let workspaceIdentity {
+                        replacedPane = !previous.isSamePane(as: workspaceIdentity)
+                    } else {
+                        replacedPane = false
+                    }
+                    let replaced = current.serverID != serverID || replacedPane
+                    if replaced {
+                        await self.tearDownReader(paneId: paneId)
+                    } else {
+                        current.target = target
+                        current.sessionName = sessionName
+                        current.workspaceIdentity = workspaceIdentity ?? current.workspaceIdentity
+                        self.readers[paneId] = current
+                        return true
+                    }
+                }
                 return await self.startReader(
-                    paneId: paneId,
-                    sessionName: sessionName,
-                    target: target,
-                    initialWidth: initialWidth,
-                    initialHeight: initialHeight,
-                    seedTitle: seedTitle
+                    paneId: paneId, sessionName: sessionName, target: target,
+                    initialWidth: initialWidth, initialHeight: initialHeight, seedTitle: seedTitle,
+                    serverID: serverID, workspaceIdentity: workspaceIdentity
                 )
             }
         }
@@ -975,7 +1036,9 @@
             target: String,
             initialWidth: Int,
             initialHeight: Int,
-            seedTitle: String?
+            seedTitle: String?,
+            serverID: String,
+            workspaceIdentity: WorkspacePaneIdentity?
         ) async -> Bool {
             let reader = PipePaneReader(paneId: paneId, fifoDirectory: fifoDirectory)
             await reader.setDelegate(self)
@@ -983,7 +1046,8 @@
             do {
                 try await reader.startPipePane(
                     controlClientManager: controlClientManager,
-                    sessionName: sessionName
+                    sessionName: sessionName,
+                    expectedServerID: serverID
                 )
                 guard
                     !Task.isCancelled,
@@ -998,6 +1062,8 @@
                 }
                 readers[paneId] = ReaderContext(
                     reader: reader,
+                    serverID: serverID,
+                    workspaceIdentity: workspaceIdentity,
                     target: target,
                     sessionName: sessionName,
                     width: initialWidth,
@@ -1038,7 +1104,8 @@
             try? await controlClientManager.setPaneOutputEnabled(
                 paneId: paneId,
                 sessionName: context.sessionName,
-                enabled: false
+                enabled: false,
+                expectedServerID: context.serverID
             )
 
             // Drop subscriptions belonging to this pane (caller likely already
@@ -1055,7 +1122,8 @@
             if context.hasRegisteredDimensions {
                 await controlClientManager.unregisterPane(
                     paneId: paneId,
-                    sessionName: context.sessionName
+                    sessionName: context.sessionName,
+                    expectedServerID: context.serverID
                 )
             }
 
@@ -1064,22 +1132,27 @@
 
         // MARK: - PipePaneReaderDelegate
 
-        public func pipePaneReader(
-            _ paneId: String,
+        func pipePaneReader(
+            _ reader: PipePaneReader,
+            paneId: String,
             didReceiveNotification notification: TerminalStreamMessage.TerminalNotification
         ) {
+            guard readers[paneId]?.reader === reader else { return }
             forwardNotification(paneId: paneId, notification: notification)
         }
 
-        public func pipePaneReader(_ paneId: String, didReceiveTitle title: String) {
+        func pipePaneReader(_ reader: PipePaneReader, paneId: String, didReceiveTitle title: String) {
+            guard readers[paneId]?.reader === reader else { return }
             handleStreamTitleChange(paneId: paneId, title: title)
         }
 
-        public func pipePaneReader(_ paneId: String, didReceiveClipboard content: String) {
+        func pipePaneReader(_ reader: PipePaneReader, paneId: String, didReceiveClipboard content: String) {
+            guard readers[paneId]?.reader === reader else { return }
             forwardClipboard(paneId: paneId, content: content)
         }
 
-        public func pipePaneReader(_ paneId: String, didReceiveProgress progress: TerminalProgressState) {
+        func pipePaneReader(_ reader: PipePaneReader, paneId: String, didReceiveProgress progress: TerminalProgressState) {
+            guard readers[paneId]?.reader === reader else { return }
             onProgress?(paneId, progress)
         }
 
@@ -1088,7 +1161,33 @@
             paneId: String,
             didTerminate reason: PipePaneReaderTermination
         ) {
+            scheduleReaderRecovery(paneId: paneId, reader: reader, reason: reason.description)
+        }
+
+        private func checkReaderHealth(paneId: String) async {
+            guard !isShuttingDown, let context = readers[paneId], readerRecoveryTasks[paneId] == nil else { return }
+            do {
+                // FileHandle may never signal EOF when a FIFO loses its writer.
+                // Query live tmux state rather than trusting an old pane snapshot.
+                let pipe = try await controlClientManager.sendCommand(
+                    "display-message -p -t '\(paneId)' '#{pane_pipe}'",
+                    sessionName: context.sessionName,
+                    expectedServerID: context.serverID
+                )
+                let healthy = await context.reader.isHealthy
+                if pipe.output.trimmingCharacters(in: .whitespacesAndNewlines) == "0" || !healthy {
+                    scheduleReaderRecovery(paneId: paneId, reader: context.reader, reason: "periodic health check")
+                }
+            } catch {
+                logger.debug("Could not check pane reader", metadata: [
+                    "paneId": "\(paneId)", "error": "\(error)",
+                ])
+            }
+        }
+
+        private func scheduleReaderRecovery(paneId: String, reader: PipePaneReader, reason: String) {
             guard
+                !Task.isCancelled,
                 !isShuttingDown,
                 readers[paneId]?.reader === reader,
                 readerRecoveryTasks[paneId] == nil
@@ -1154,7 +1253,8 @@
                 try? await controlClientManager.setPaneOutputEnabled(
                     paneId: paneId,
                     sessionName: context.sessionName,
-                    enabled: false
+                    enabled: false,
+                    expectedServerID: context.serverID
                 )
             }
         }
@@ -1179,7 +1279,8 @@
                 do {
                     try await reader.startPipePane(
                         controlClientManager: controlClientManager,
-                        sessionName: context.sessionName
+                        sessionName: context.sessionName,
+                        expectedServerID: context.serverID
                     )
                 } catch {
                     logger.warning("Failed to restart pane reader; retrying", metadata: [
@@ -1250,6 +1351,8 @@
                         controlClientManager: controlClientManager,
                         sessionName: context.sessionName,
                         scrollbackLineLimit: snapshotScrollbackLineLimit,
+                        expectedWorkspacePane: context.subscriberIds.compactMap { subscriptions[$0]?.expectedWorkspacePane }.first,
+                        expectedServerID: context.serverID,
                         onSnapshotBoundary: { [weak self] in
                             guard var bootstrap = self?.resyncBootstraps[paneId] else { return }
                             bootstrap.markSnapshotBoundary()

@@ -16,6 +16,11 @@
             "⇧← to answer", "⇧ + ← to answer", "Shift + Left to answer",
         ]
         private nonisolated static let supportedSuffixes = ["", " · 14s", " · 1m 02s"]
+        private nonisolated static let usageWarnings = [
+            ["                              ⚠ weekly limit: 8% left · /status"],
+            ["⚠ weekly limit: only 1% left"],
+            ["⚠ weekly limit:", "8% left ·", "/status"],
+        ]
 
         private nonisolated static func screen(
             count: Int = 4,
@@ -125,6 +130,50 @@
             let decoded = try JSONDecoder().decode(CommandMessage.self, from: JSONEncoder().encode(command))
             #expect(decoded.command == .expandCodexQuestions(ExpandCodexQuestions(expectedCount: 4)))
             #expect(decoded.command.requiresResponse)
+        }
+
+        @Test("Usage warnings fit within the native terminal's live footer read", arguments: usageWarnings)
+        func nativeUsageWarning(warning: [String]) {
+            let view = InteractiveTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+            view.getTerminal().resize(cols: 69, rows: 24)
+            var lines = Self.screen(count: 1, hint: "⇧← to answer", suffix: " · 19s")
+            lines.insert(contentsOf: warning + [""], at: 5)
+            let cursorRow = 6 + warning.count
+            let bytes = Array(("\u{1b}[?1049h\u{1b}[1;1H" + lines.joined(separator: "\r\n") + "\u{1b}[\(cursorRow + 1);3H").utf8)
+            view.feed(byteArray: bytes[...])
+            #expect(view.currentQuestionPrompt?.count == 1)
+            #expect(!view.canExpandCodexQuestions)
+        }
+
+        @Test("Host rechecks warning footers and opens only once with the current identity and empty composer", arguments: usageWarnings)
+        func hostUsageWarning(warning: [String]) async throws {
+            let commands = LockIsolated<[[String]]>([])
+            let composer = LockIsolated("› draft")
+            try await withDependencies {
+                $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                    commands.withValue { $0.append(arguments) }
+                    var lines = Self.screen(count: 1, composer: composer.value, hint: "⇧← to answer", suffix: " · 19s")
+                    lines.insert(contentsOf: warning + [""], at: 5)
+                    let output = arguments.contains("capture-pane")
+                        ? "codex\t2\t\(6 + warning.count)\t0\n" + lines.joined(separator: "\n") : ""
+                    return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
+                }
+            } operation: {
+                let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
+                tmux.recordCodexQuestion(paneID: "%7", questionID: "session:new")
+                let draft = try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "session:new")
+                #expect(!draft)
+                composer.setValue("› Ask Codex to do anything")
+                let stale = try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "session:old")
+                let wrongCount = try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 2, expectedQuestionID: "session:new")
+                #expect(!stale && !wrongCount)
+                #expect(!commands.value.contains { $0.contains("send-keys") })
+                for _ in 0..<2 {
+                    let handled = try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "session:new")
+                    #expect(handled)
+                }
+            }
+            #expect(commands.value.filter { $0.contains("send-keys") } == [["send-keys", "-t", "%7", "S-Left"]])
         }
 
         @Test("Host and multiple viewers share one deduplicated opener", arguments: supportedHints)
@@ -260,6 +309,171 @@
                 _ = try await (first, second)
             }
             #expect(commands.value.filter { $0.contains("send-keys") }.count == 1)
+        }
+
+        @Test("New question identity reopens the same count without zero; repeats and stale intents do not")
+        func consecutiveQuestionIdentities() async throws {
+            let sends = LockIsolated(0)
+            try await withDependencies {
+                $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                    if arguments.contains("send-keys") {
+                        sends.withValue { $0 += 1 }
+                    }
+                    let output = arguments.contains("capture-pane")
+                        ? "codex\t2\t5\t0\n" + Self.screen(count: 1).joined(separator: "\n") : ""
+                    return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
+                }
+            } operation: { () async throws in
+                let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
+                #expect(tmux.recordCodexQuestion(paneID: "%7", questionID: "a"))
+                #expect(try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "a"))
+                #expect(!tmux.recordCodexQuestion(paneID: "%7", questionID: "a"))
+                #expect(try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "a"))
+                #expect(sends.value == 1) // Escape/redraw and a second viewer.
+                #expect(tmux.recordCodexQuestion(paneID: "%7", questionID: "b"))
+                #expect(try await !tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "a"))
+                #expect(try await !tmux.expandCodexQuestions(paneID: "%7", expectedCount: 0, expectedQuestionID: "a"))
+                #expect(sends.value == 1)
+                #expect(try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "b"))
+                #expect(try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "b"))
+                #expect(sends.value == 2)
+            }
+        }
+
+        @Test("A question arriving during an awaited Host check or send cannot inherit the old acknowledgement", arguments: ["capture-pane", "send-keys"])
+        func identityChangesDuringExpansion(step: String) async throws {
+            let changeQuestion = LockIsolated<(@MainActor @Sendable () -> Void)?>(nil)
+            try await withDependencies {
+                $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                    if arguments.contains(step) {
+                        let change = changeQuestion.withValue { action in
+                            let result = action
+                            action = nil
+                            return result
+                        }
+                        await change?()
+                    }
+                    let output = arguments.contains("capture-pane")
+                        ? "codex\t2\t5\t0\n" + Self.screen(count: 1).joined(separator: "\n") : ""
+                    return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
+                }
+            } operation: { () async throws in
+                let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
+                tmux.recordCodexQuestion(paneID: "%7", questionID: "a")
+                changeQuestion.setValue { tmux.recordCodexQuestion(paneID: "%7", questionID: "b") }
+                #expect(try await !tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "a"))
+                #expect(tmux.codexQuestionStates["%7"] == nil)
+                #expect(try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "b"))
+            }
+        }
+
+        private nonisolated static func paneRow(_ id: String, title: String = "codex") -> String {
+            [
+                id, "work", "0", String(id.dropFirst()), "codex", "/tmp", "80", "24",
+                "1", title, "layout", "terminal", "1", "", "", "", "@0",
+            ].joined(separator: String(PaneInfo.fieldSeparator))
+        }
+
+        @Test("A stale pane snapshot preserves a new question and its opener until discovery", arguments: [false, true])
+        func newQuestionDuringRefresh(handledDuringRefresh: Bool) async throws {
+            let rows = LockIsolated(Self.paneRow("%1"))
+            let beforePublish = LockIsolated<(@MainActor @Sendable () async throws -> Void)?>(nil)
+            let sends = LockIsolated(0)
+            try await withDependencies {
+                $0[PreferencesService.self] = .inMemory()
+                $0[LoginItemService.self] = .previewValue
+                $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                    var output = ""
+                    if arguments.contains("list-panes") {
+                        output = rows.value
+                        let action = beforePublish.withValue { action in
+                            defer { action = nil }
+                            return action
+                        }
+                        // The subprocess snapshot is already taken while the
+                        // MainActor can receive a hook before publishing it.
+                        try await action?()
+                    } else if arguments.contains("capture-pane") {
+                        output = "codex\t2\t5\t0\n" + Self.screen(count: 1).joined(separator: "\n")
+                    } else if arguments.contains("send-keys") {
+                        sends.withValue { $0 += 1 }
+                    }
+                    return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
+                }
+            } operation: { () async throws in
+                let tmux = TmuxService(tmuxPath: "/usr/bin/true")
+                let manager = MirrorWindowManager(
+                    settings: AppSettings(), tmuxService: tmux,
+                    paneStreamManager: PaneStreamManager(tmuxService: tmux, controlClientManager: TmuxControlClientManager()),
+                    editorSessionManager: EditorSessionManager()
+                )
+                manager.updatePaneStates(from: await tmux.refreshPanes())
+                rows.setValue(Self.paneRow("%1", title: "updated"))
+                beforePublish.setValue { () async throws in
+                    tmux.recordCodexQuestion(paneID: "%7", questionID: "new")
+                    manager.recordCodexQuestion(paneID: "%7", questionID: "new")
+                    rows.setValue(Self.paneRow("%1", title: "updated") + "\n" + Self.paneRow("%7"))
+                    if handledDuringRefresh {
+                        #expect(try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "new"))
+                    }
+                }
+                manager.updatePaneStates(from: await tmux.refreshPanes())
+                #expect(tmux.panes.map(\.paneId) == ["%1"])
+                #expect(tmux.codexQuestionIDs["%7"] == "new")
+                #expect(manager.paneStates["%7"]?.codexQuestionID == "new")
+                #expect(tmux.codexQuestionStates["%7"]?.count == (handledDuringRefresh ? 1 : nil))
+
+                manager.updatePaneStates(from: await tmux.refreshPanes())
+                #expect(manager.paneStates["%7"]?.sessionName == "work")
+                let questionID = try #require(manager.paneStates["%7"]?.codexQuestionID)
+                #expect(try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: questionID))
+                #expect(try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: questionID))
+                #expect(sends.value == 1)
+
+                rows.setValue(Self.paneRow("%1", title: "updated"))
+                manager.updatePaneStates(from: await tmux.refreshPanes())
+                #expect(tmux.codexQuestionIDs["%7"] == nil)
+                #expect(tmux.codexQuestionStates["%7"] == nil)
+                #expect(manager.paneStates["%7"] == nil)
+            }
+        }
+
+        @Test("A question updated during refresh survives once; a later unchanged empty snapshot cleans it up")
+        func updatedQuestionDuringRefresh() async throws {
+            let rows = LockIsolated(Self.paneRow("%7"))
+            let beforePublish = LockIsolated<(@MainActor @Sendable () -> Void)?>(nil)
+            try await withDependencies {
+                $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                    var output = ""
+                    if arguments.contains("list-panes") {
+                        output = rows.value
+                        let action = beforePublish.withValue { action in
+                            defer { action = nil }
+                            return action
+                        }
+                        await action?()
+                    } else if arguments.contains("capture-pane") {
+                        output = "codex\t2\t5\t0\n" + Self.screen(count: 1).joined(separator: "\n")
+                    }
+                    return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
+                }
+            } operation: { () async throws in
+                let tmux = TmuxService(tmuxPath: "/usr/bin/true")
+                await tmux.refreshPanes()
+                tmux.recordCodexQuestion(paneID: "%7", questionID: "old")
+                #expect(try await tmux.expandCodexQuestions(paneID: "%7", expectedCount: 1, expectedQuestionID: "old"))
+                rows.setValue("")
+                beforePublish.setValue { tmux.recordCodexQuestion(paneID: "%7", questionID: "new") }
+                await tmux.refreshPanes()
+                #expect(tmux.panes.isEmpty)
+                #expect(tmux.codexQuestionIDs["%7"] == "new")
+                #expect(tmux.codexQuestionStates["%7"] == nil)
+                // The next fresh snapshot confirms closure, even though the
+                // observable pane list is still empty.
+                await tmux.refreshPanes()
+                #expect(tmux.codexQuestionIDs["%7"] == nil)
+                #expect(tmux.codexQuestionStates["%7"] == nil)
+            }
         }
 
         @Test("Native wrapper observes the rendered footer, not raw chunk boundaries", arguments: supportedHints, supportedSuffixes)

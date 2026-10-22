@@ -157,7 +157,7 @@ These are all **requests** (CtrlX expects a response for each):
 |--------|-------------|
 | `initialize` | Sent once at startup. `params` is a serialized `PluginEnvWire` object (see below). The sidecar must respond before CtrlX considers it ready. |
 | `translate_event` | Deliver a hook event. `params` is an `IngressFrameWire` object: `{pluginID, context, payload}` (camelCase `pluginID` — note this differs from the snake_case `plugin_id` your hook writes to the ingress socket in Section 4). |
-| `deliver_response` | Deliver the result of a `prompt_user` request (when `capabilities.modal_prompts` is true). |
+| `deliver_response` | Deliver a structured Agent response with `{sessionID, requestID, response}`, including permission/question forms and optional modal prompts. |
 | `refresh_projects` | Ask the sidecar to rescan and re-emit its project list. |
 | `command_for_launch` | Ask for the launch command to start the agent in a new pane. Returns a `{command, args, env}` object. |
 | `install` | Ask the sidecar to install the agent's plugin into the agent's own config (e.g. `.claude/` hooks). |
@@ -195,10 +195,20 @@ of this section.)
 |--------|-------------|
 | `set_projects` | Inform the app of the current project list. `params` is an array of project objects. |
 | `emit_event` | Emit a plugin event to the app (e.g. a session state change). |
-| `send_text` | Ask the app to type text into the currently focused pane. |
-| `send_keys` | Ask the app to send key sequences to the currently focused pane. |
+| `send_text` | Type into the explicitly named pane. `params`: `{sessionID, text}`. |
+| `send_keys` | Send key sequences to the explicitly named pane. `params`: `{sessionID, keys}`. |
 | `log` | Write a log line to the plugin's sidecar log. `params`: `{level, message}` where `level` is one of `"debug"`, `"info"`, `"warn"`, `"error"`. |
 | `prompt_user` | Only valid when `capabilities.modal_prompts` is true. Asks CtrlX to show a modal dialog. `params`: `{title, message?}`. CtrlX responds via a `deliver_response` request. |
+
+For `deliver_response`, send all related `send_text` / `send_keys` notifications
+with the submitted `sessionID` **before** returning the RPC response. CtrlX
+processes this stream in order and retains the original terminal and request
+identity until that response arrives. A replacement terminal or retracted form
+rejects the write; changing focus never changes the destination. Concurrent
+responses for the same pane are rejected. If delivery times out, CtrlX stops
+that sidecar stream and child so late notifications cannot become fresh input;
+re-enable the plugin to reconnect. Unsolicited sends outside a response use the
+explicit pane's current identity and do not represent a deferred form reply.
 
 #### Requests (Sidecar sends, App responds)
 

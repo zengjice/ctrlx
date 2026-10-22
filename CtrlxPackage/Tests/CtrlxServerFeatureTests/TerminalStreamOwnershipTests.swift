@@ -9,15 +9,17 @@
         struct Delivery {
             let message: TerminalStreamMessage
             let recipients: Set<String>
+            let leaseIDs: [String: UUID]
         }
 
         private(set) var deliveries: [Delivery] = []
 
         func sendTerminalStream(
             _ streamMessage: TerminalStreamMessage,
-            to viewerIds: Set<String>
+            to viewerIds: Set<String>,
+            leaseIDs: [String: UUID]
         ) async {
-            deliveries.append(Delivery(message: streamMessage, recipients: viewerIds))
+            deliveries.append(Delivery(message: streamMessage, recipients: viewerIds, leaseIDs: leaseIDs))
         }
 
         var dataDeliveries: [(data: Data, recipients: Set<String>)] {
@@ -47,6 +49,7 @@
         struct Delivery {
             let message: TerminalStreamMessage
             let recipients: Set<String>
+            let leaseIDs: [String: UUID]
         }
 
         private(set) var deliveries: [Delivery] = []
@@ -57,9 +60,10 @@
 
         func sendTerminalStream(
             _ streamMessage: TerminalStreamMessage,
-            to viewerIds: Set<String>
+            to viewerIds: Set<String>,
+            leaseIDs: [String: UUID]
         ) async {
-            deliveries.append(Delivery(message: streamMessage, recipients: viewerIds))
+            deliveries.append(Delivery(message: streamMessage, recipients: viewerIds, leaseIDs: leaseIDs))
             guard shouldSuspendFirstDelivery else { return }
 
             shouldSuspendFirstDelivery = false
@@ -75,7 +79,9 @@
         }
 
         func waitUntilFirstDeliveryIsSuspended() async {
-            if isFirstDeliverySuspended { return }
+            if isFirstDeliverySuspended {
+                return
+            }
             await withCheckedContinuation { continuation in
                 suspensionWaiters.append(continuation)
             }
@@ -202,6 +208,7 @@
             #expect(sender.deliveries.count == 1)
             #expect(sender.deliveries[0].recipients == ["viewer-a"])
             #expect(sender.deliveries[0].message.updateType == .streamEnd)
+            #expect(sender.deliveries[0].leaseIDs == ["viewer-a": newLease])
         }
 
         @Test("Disconnecting one viewer preserves other viewers and panes")
@@ -313,9 +320,11 @@
                 switch input {
                 case let .data(data):
                     context.appendIncomingData(data)
-                case let .snapshotBoundary(viewerId):
+                case let .snapshotBoundary(viewerId, _):
                     context.discardBootstrapData(for: viewerId)
-                case .finishBootstrap, .reset, .resyncFailed:
+                case .finishBootstrap,
+                     .reset,
+                     .resyncFailed:
                     Issue.record("Unexpected control event")
                 }
             }
@@ -445,7 +454,9 @@
                     recipients: ["viewer-a"]
                 )
             }
-            for _ in 0..<10 { await Task.yield() }
+            for _ in 0..<10 {
+                await Task.yield()
+            }
 
             #expect(sender.deliveryKinds == ["initial"])
             sender.resumeFirstDelivery()
@@ -454,6 +465,92 @@
 
             #expect(sender.deliveryKinds == ["initial", "data", "data", "reset", "data"])
             #expect(sender.deliveries.allSatisfy { $0.recipients == ["viewer-a"] })
+        }
+
+        @Test("Pane discovery stops a replaced identity even when the runtime ID survives")
+        func discoveryReplacesIdentity() async {
+            let sender = CapturingTerminalStreamSender()
+            let identity = WorkspacePaneIdentity(serverID: "1:1", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            let lease = UUID()
+            let context = StreamContext(paneId: "%1", viewerId: "viewer", leaseId: lease, workspaceIdentity: identity)
+            let service = TerminalStreamService(streamSender: sender, activeStreams: ["%1": context])
+            func pane(_ identity: WorkspacePaneIdentity) -> PaneInfo {
+                .init(
+                    paneId: "%1",
+                    target: "s:0.0",
+                    sessionName: "s",
+                    windowIndex: 0,
+                    tmuxWindowId: "@0",
+                    paneIndex: 0,
+                    command: "sh",
+                    currentPath: "/tmp",
+                    width: 80,
+                    height: 24,
+                    isActive: true,
+                    workspaceIdentity: identity
+                )
+            }
+            var moved = identity
+            moved.sessionID = UUID()
+            moved.windowID = UUID()
+            await service.stopStreamsForClosedPanes(currentPanes: [pane(moved)])
+            #expect(service.isStreaming(paneId: "%1"))
+            var restarted = moved
+            restarted.serverID = "2:2"
+            await service.stopStreamsForClosedPanes(currentPanes: [pane(restarted)])
+            #expect(!service.isStreaming(paneId: "%1"))
+            #expect(sender.deliveries.count == 1)
+            #expect(sender.deliveries.first?.message.updateType == .streamEnd)
+            #expect(sender.deliveries.first?.leaseIDs == ["viewer": lease])
+        }
+
+        @Test("A snapshot keeps its original lease across a replacement subscription")
+        func snapshotKeepsAdmittedLease() async {
+            let sender = SuspendingTerminalStreamSender()
+            let service = TerminalStreamService(streamSender: sender)
+            let original = UUID()
+            let replacement = UUID()
+            let context = StreamContext(paneId: "%1", viewerId: "viewer-a", leaseId: original)
+            context.beginBootstrap(for: "viewer-b", leaseId: UUID())
+            let leases = context.ownership.leaseIDs
+            let task = Task {
+                await service.sendSnapshot(
+                    kind: .initial, paneId: "%1", width: 80, height: 24,
+                    content: Data(repeating: 0x61, count: 150_000), scrollbackLineLimit: 100,
+                    recipients: context.ownership.subscribers, leaseIDs: context.ownership.leaseIDs
+                )
+            }
+            await sender.waitUntilFirstDeliveryIsSuspended()
+            context.beginBootstrap(for: "viewer-a", leaseId: replacement)
+            sender.resumeFirstDelivery()
+            await task.value
+            #expect(sender.deliveries.count == 4)
+            #expect(sender.deliveries.allSatisfy { $0.leaseIDs == leases })
+        }
+
+        @Test("A late bootstrap completion cannot make the replacement lease ready")
+        func staleBootstrapDoesNotCompleteReplacement() async {
+            let sender = SuspendingTerminalStreamSender()
+            let service = TerminalStreamService(streamSender: sender)
+            let original = UUID()
+            let replacement = UUID()
+            let context = StreamContext(paneId: "%1", viewerId: "viewer-a", leaseId: original)
+            context.appendIncomingData(Data("original".utf8))
+            let task = Task {
+                await service.completeBootstrap(for: "viewer-a", barrierId: UUID(), context: context, paneId: "%1", leaseId: original)
+            }
+            await sender.waitUntilFirstDeliveryIsSuspended()
+            context.beginBootstrap(for: "viewer-a", leaseId: replacement)
+            context.appendIncomingData(Data("new".utf8))
+            sender.resumeFirstDelivery()
+            await task.value
+            #expect(!context.isReady("viewer-a"))
+            #expect(context.isBootstrapping("viewer-a"))
+            #expect(sender.deliveries.allSatisfy { $0.leaseIDs == ["viewer-a": original] })
+            await service.completeBootstrap(for: "viewer-a", barrierId: UUID(), context: context, paneId: "%1", leaseId: replacement)
+            #expect(context.isReady("viewer-a"))
+            #expect(sender.deliveries.last?.leaseIDs == ["viewer-a": replacement])
+            #expect(sender.deliveries.last?.message.updateType == .dataChunk(.init(data: Data("new".utf8))))
         }
 
         @Test("Oversized live output is split into bounded relay messages")
@@ -499,12 +596,12 @@
                 return
             }
             #expect(received.initialContent == Data("snapshot".utf8))
-            guard case let .snapshotBoundary(boundaryViewerId)? = buffer.dequeue() else {
+            guard case let .snapshotBoundary(boundaryViewerId, _)? = buffer.dequeue() else {
                 Issue.record("Expected preserved snapshot boundary")
                 return
             }
             #expect(boundaryViewerId == "viewer-a")
-            guard case let .finishBootstrap(viewerId, receivedBarrier)? = buffer.dequeue() else {
+            guard case let .finishBootstrap(viewerId, receivedBarrier, _)? = buffer.dequeue() else {
                 Issue.record("Expected preserved bootstrap barrier")
                 return
             }
@@ -573,6 +670,5 @@
             #expect(!fast.isSlow)
             #expect(slow.isSlow)
         }
-
     }
 #endif

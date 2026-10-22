@@ -9,27 +9,32 @@
     struct SessionNavigation: Hashable {
         let sessionName: String
         let hostId: String
+        var reference: ViewerWorkspaceReference? = nil
     }
 
     /// View displaying a list of active Claude sessions and terminals from all paired hosts.
     struct SessionListView: View {
         @Binding var navigationPath: NavigationPath
         let onOpenSettings: () -> Void
+        let onOpenDashboard: () -> Void
 
         @Environment(SessionStore.self) private var sessionStore
+        @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
         @Environment(ViewerConnectionManager.self) private var connectionManager
         @Environment(IOSSettings.self) private var settings
+        @Environment(DashboardStore.self) private var dashboardStore
 
         @State private var creatingSelection: ProjectPickerSelection?
         @State private var sessionCreation = NewSessionCreation()
         @State private var initialSessionFit: NewSessionSizing.InitialFit?
         @State private var createdSessionDestination: SessionNavigation?
         @State private var creationError: String?
-        @State private var renameError: String?
+        @State private var sessionActionError: String?
         @State private var selectedHostForNewSession: PairedHost?
         @State private var closeConfirmation: TerminalCloseConfirmation<SessionNavigation>?
         @State private var closeError: String?
         @State private var isClosingSession = false
+        @State private var attemptedNavigationRecovery = false
 
         var body: some View {
             Group {
@@ -42,18 +47,18 @@
             .navigationTitle("Sessions")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SessionNavigation.self) { destination in
-                if let connection = connectionManager.connection(for: destination.hostId) {
-                    WindowLayoutView(
-                        sessionName: destination.sessionName,
-                        hostId: destination.hostId,
-                        relayClient: connection.relayClient,
-                        settings: settings,
-                        initialSessionFit: $initialSessionFit,
-                        automaticallyFitOnEntry: destination != createdSessionDestination
-                    )
-                } else {
-                    hostDisconnectedView
-                }
+                SessionWorkspaceDestination(
+                    destination: destination, initialSessionFit: $initialSessionFit,
+                    automaticallyFitOnEntry: destination != createdSessionDestination
+                )
+            }
+            .onChange(of: fileWorkspaces.catalogs, initial: true) {
+                guard
+                    !attemptedNavigationRecovery, navigationPath.isEmpty,
+                    let saved = fileWorkspaces.recovery.selectedSession,
+                    let route = fileWorkspaces.catalogs[saved.pairID]?.resolve(saved) else { return }
+                attemptedNavigationRecovery = true
+                navigationPath.append(SessionNavigation(sessionName: route.sessionName, hostId: saved.pairID, reference: saved))
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -66,7 +71,7 @@
                     .accessibilityLabel("Settings")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    overallConnectionStatusView
+                    IOSDashboardStatusButton(status: dashboardStatus, openDashboard: onOpenDashboard)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     EditButton()
@@ -74,8 +79,10 @@
                 }
             }
             .onChange(of: navigationPath.count) {
+                attemptedNavigationRecovery = true
                 sessionCreation.cancel()
                 if navigationPath.isEmpty {
+                    fileWorkspaces.selectSession(nil)
                     initialSessionFit = nil
                     createdSessionDestination = nil
                 }
@@ -83,15 +90,24 @@
             .onChange(of: createdSessionName) {
                 navigateToCreatedSessionIfReady()
             }
+            .onChange(of: creationInputState) {
+                navigateToCreatedSessionIfReady()
+            }
             .onChange(of: creationHostIsConnected) {
-                if !creationHostIsConnected { sessionCreation.cancel() }
+                if !creationHostIsConnected {
+                    sessionCreation.cancel()
+                }
             }
             .onDisappear {
                 sessionCreation.cancel()
             }
             .alert("Session Creation Failed", isPresented: .init(
                 get: { creationError != nil },
-                set: { if !$0 { creationError = nil } }
+                set: {
+                    if !$0 {
+                        creationError = nil
+                    }
+                }
             )) {
                 Button("OK") {
                     creationError = nil
@@ -101,27 +117,31 @@
                     Text(error)
                 }
             }
-            .alert("Session Rename Failed", isPresented: .init(
-                get: { renameError != nil },
+            .alert("Session Update Failed", isPresented: .init(
+                get: { sessionActionError != nil },
                 set: {
                     if !$0 {
-                        renameError = nil
+                        sessionActionError = nil
                     }
                 }
             )) {
-                Button("OK") { renameError = nil }
+                Button("OK") { sessionActionError = nil }
             } message: {
-                if let renameError {
-                    Text(renameError)
+                if let sessionActionError {
+                    Text(sessionActionError)
                 }
             }
             .alert("Close Session?", isPresented: .init(
                 get: { closeConfirmation != nil },
-                set: { if !$0 { closeConfirmation = nil } }
+                set: {
+                    if !$0 {
+                        closeConfirmation = nil
+                    }
+                }
             )) {
                 if let confirmation = closeConfirmation {
                     Button("Close Anyway", role: .destructive) {
-                        confirmCloseSession(confirmation.target)
+                        confirmCloseSession(confirmation.target, inputBinding: confirmation.inputBinding)
                     }
                 }
                 Button("Cancel", role: .cancel) { closeConfirmation = nil }
@@ -132,7 +152,11 @@
             }
             .alert("Session Close Failed", isPresented: .init(
                 get: { closeError != nil },
-                set: { if !$0 { closeError = nil } }
+                set: {
+                    if !$0 {
+                        closeError = nil
+                    }
+                }
             )) {
                 Button("OK") { closeError = nil }
             } message: {
@@ -143,7 +167,9 @@
             .sheet(item: $selectedHostForNewSession, onDismiss: {
                 // Our success dismissal retains the pane while its snapshot is
                 // in flight. A user dismissal before the reply cancels routing.
-                if sessionCreation.paneID == nil { sessionCreation.cancel() }
+                if sessionCreation.paneID == nil {
+                    sessionCreation.cancel()
+                }
             }) { host in
                 ProjectPickerSheet(
                     host: host,
@@ -175,43 +201,57 @@
                         onClose: { sessionName in
                             requestCloseSession(SessionNavigation(sessionName: sessionName, hostId: host.id))
                         },
-                        onRename: { sessionName, newName in
+                        onRename: { [inputState = connectionManager.connection(for: host.id)?.relayClient.workspaceInputState] sessionName, newName in
+                            let binding = inputState?.sessionBinding(name: sessionName) ?? .unavailable
                             Task {
                                 let result = await connectionManager.sendCommand(
                                     RenameTmuxSession(sessionName: sessionName, newName: newName),
                                     paneId: "",
-                                    hostId: host.id
+                                    hostId: host.id,
+                                    inputBinding: binding
                                 )
                                 switch result {
                                 case .success:
                                     settings.replaceRemoteSessionName(sessionName, with: newName, for: host.id)
                                 case let .failure(error):
-                                    renameError = error.localizedDescription
+                                    sessionActionError = error.localizedDescription
                                 }
                             }
                         },
-                        onSetDescription: { sessionName, description in
+                        onSetDescription: { [inputState = connectionManager.connection(for: host.id)?.relayClient.workspaceInputState] sessionName, description in
+                            let binding = inputState?.sessionBinding(name: sessionName) ?? .unavailable
                             Task {
                                 let command = SetSessionDescription(sessionName: sessionName, description: description)
-                                _ = await connectionManager.sendCommand(command, paneId: "", hostId: host.id)
+                                if case let .failure(error) = await connectionManager.sendCommand(command, paneId: "", hostId: host.id, inputBinding: binding) {
+                                    sessionActionError = error.localizedDescription
+                                }
                             }
                         },
-                        onSetColor: { sessionName, color in
+                        onSetColor: { [inputState = connectionManager.connection(for: host.id)?.relayClient.workspaceInputState] sessionName, color in
+                            let binding = inputState?.sessionBinding(name: sessionName) ?? .unavailable
                             Task {
                                 let command = SetSessionColor(sessionName: sessionName, color: color)
-                                _ = await connectionManager.sendCommand(command, paneId: "", hostId: host.id)
+                                if case let .failure(error) = await connectionManager.sendCommand(command, paneId: "", hostId: host.id, inputBinding: binding) {
+                                    sessionActionError = error.localizedDescription
+                                }
                             }
                         },
-                        onSetEmoji: { sessionName, emoji in
+                        onSetEmoji: { [inputState = connectionManager.connection(for: host.id)?.relayClient.workspaceInputState] sessionName, emoji in
+                            let binding = inputState?.sessionBinding(name: sessionName) ?? .unavailable
                             Task {
                                 let command = SetSessionEmoji(sessionName: sessionName, emoji: emoji)
-                                _ = await connectionManager.sendCommand(command, paneId: "", hostId: host.id)
+                                if case let .failure(error) = await connectionManager.sendCommand(command, paneId: "", hostId: host.id, inputBinding: binding) {
+                                    sessionActionError = error.localizedDescription
+                                }
                             }
                         },
-                        onSetState: { sessionName, state in
+                        onSetState: { [inputState = connectionManager.connection(for: host.id)?.relayClient.workspaceInputState] sessionName, state in
+                            let binding = inputState?.sessionBinding(name: sessionName) ?? .unavailable
                             Task {
                                 let command = SetSessionState(sessionName: sessionName, state: state)
-                                _ = await connectionManager.sendCommand(command, paneId: "", hostId: host.id)
+                                if case let .failure(error) = await connectionManager.sendCommand(command, paneId: "", hostId: host.id, inputBinding: binding) {
+                                    sessionActionError = error.localizedDescription
+                                }
                             }
                         }
                     )
@@ -226,21 +266,23 @@
 
         private func requestCloseSession(_ target: SessionNavigation) {
             guard !isClosingSession else { return }
+            let binding = connectionManager.connection(for: target.hostId)?.relayClient.workspaceInputState.sessionBinding(name: target.sessionName) ?? .unavailable
             isClosingSession = true
             Task {
                 defer { isClosingSession = false }
                 let result = await connectionManager.sendCommand(
                     CheckRunningProcesses(target: .session(target.sessionName)),
                     paneId: "",
-                    hostId: target.hostId
+                    hostId: target.hostId,
+                    inputBinding: binding
                 )
                 switch result {
                 case let .success(response):
                     let processes = response.runningProcesses ?? []
                     if processes.isEmpty {
-                        await performCloseSession(target)
+                        await performCloseSession(target, inputBinding: binding)
                     } else {
-                        closeConfirmation = TerminalCloseConfirmation(target: target, runningProcesses: processes)
+                        closeConfirmation = TerminalCloseConfirmation(target: target, runningProcesses: processes, inputBinding: binding)
                     }
                 case let .failure(error):
                     closeError = error.localizedDescription
@@ -248,21 +290,22 @@
             }
         }
 
-        private func confirmCloseSession(_ target: SessionNavigation) {
+        private func confirmCloseSession(_ target: SessionNavigation, inputBinding: ViewerWorkspaceInputBinding) {
             guard !isClosingSession else { return }
             isClosingSession = true
             closeConfirmation = nil
             Task {
                 defer { isClosingSession = false }
-                await performCloseSession(target)
+                await performCloseSession(target, inputBinding: inputBinding)
             }
         }
 
-        private func performCloseSession(_ target: SessionNavigation) async {
+        private func performCloseSession(_ target: SessionNavigation, inputBinding: ViewerWorkspaceInputBinding) async {
             let result = await connectionManager.sendCommand(
                 KillTmuxSession(sessionName: target.sessionName),
                 paneId: "",
-                hostId: target.hostId
+                hostId: target.hostId,
+                inputBinding: inputBinding
             )
             if case let .failure(error) = result {
                 closeError = error.localizedDescription
@@ -288,43 +331,19 @@
             }
         }
 
-        // MARK: - Overall Connection Status
+        // MARK: - Dashboard Status
 
-        private var overallConnectionStatusView: some View {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(overallConnectionStatusColor)
-                    .frame(width: 8, height: 8)
-
-                Text(overallConnectionStatusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-
-        private var overallConnectionStatusColor: Color {
-            if connectionManager.anyHostConnected {
-                return .green
-            } else if connectionManager.isConnecting {
-                return .yellow
-            } else {
-                return .red
-            }
-        }
-
-        private var overallConnectionStatusText: String {
-            let connectedCount = connectionManager.activeConnections.filter(\.isHostConnected).count
-            let totalCount = settings.pairedHosts.count
-
-            if connectedCount == totalCount && totalCount > 0 {
-                return totalCount == 1 ? "Connected" : "All Connected"
-            } else if connectedCount > 0 {
-                return "\(connectedCount)/\(totalCount) Online"
-            } else if connectionManager.isConnecting {
-                return "Connecting..."
-            } else {
-                return "Disconnected"
-            }
+        private var dashboardStatus: IOSDashboardStatus {
+            let pairedHostIDs = Set(settings.pairedHosts.map(\.id))
+            let connections = connectionManager.activeConnections.filter { pairedHostIDs.contains($0.id) }
+            return IOSDashboardStatus(
+                pairedHostIDs: pairedHostIDs,
+                connectedHostIDs: Set(connections.filter(\.isHostConnected).map(\.id)),
+                isConnecting: connections.contains { $0.state == .connecting },
+                paneStates: sessionStore.paneStates,
+                dashboardHosts: dashboardStore.hosts,
+                at: Date()
+            )
         }
 
         // MARK: - New Session Creation
@@ -332,6 +351,11 @@
         private var createdSessionName: String? {
             guard let hostID = sessionCreation.hostID, let paneID = sessionCreation.paneID else { return nil }
             return sessionStore.paneState(for: paneID, hostId: hostID)?.sessionName
+        }
+
+        private var creationInputState: ViewerWorkspaceInputState {
+            guard let hostID = sessionCreation.hostID else { return .init() }
+            return connectionManager.connection(for: hostID)?.relayClient.workspaceInputState ?? .init()
         }
 
         private var creationHostIsConnected: Bool {
@@ -344,11 +368,17 @@
                 sessionCreation.cancel()
                 return
             }
-            guard let destination = sessionCreation.takeDestination(
-                paneStates: sessionStore.paneStates, isConnected: creationHostIsConnected
-            ) else { return }
+            guard
+                let destination = sessionCreation.takeDestination(
+                    paneStates: sessionStore.paneStates, isConnected: creationHostIsConnected,
+                    inputState: creationInputState
+                ) else { return }
             initialSessionFit = destination.initialFit
-            let navigation = SessionNavigation(sessionName: destination.sessionName, hostId: destination.hostID)
+            let navigation = SessionNavigation(
+                sessionName: destination.sessionName,
+                hostId: destination.hostID,
+                reference: sessionStore.workspaceCatalogsByHost[destination.hostID]?.reference(sessionName: destination.sessionName)
+            )
             createdSessionDestination = navigation
             navigationPath.append(navigation)
         }
@@ -393,7 +423,7 @@
                     selectedHostForNewSession = nil
                     return
                 }
-                sessionCreation.receivePaneID(paneID, revision: revision)
+                sessionCreation.receivePaneID(paneID, revision: revision, createdPaneScope: response.createdPaneScope)
                 selectedHostForNewSession = nil
                 // Consume cached state now, or let its arrival drive navigation.
                 // Sending a refresh does not wait for the Host's snapshot.
@@ -458,6 +488,7 @@
                     }
                     .accessibilityIdentifier("host-version-mismatch-row")
                 } else if hasContent {
+                    WorktreeStatusButton(repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [])
                     // Cross-session usage rollup for this host (issue #598).
                     // Renders as its own List rows (header + detail rows when
                     // expanded) and owns their insets/separators internally.
@@ -504,7 +535,11 @@
             // supplies an indeterminate fallback when no pane reports progress.
             let sessionProgress = session.windows.flatMap(\.panes).effectiveProgress
 
-            NavigationLink(value: SessionNavigation(sessionName: session.sessionName, hostId: host.id)) {
+            NavigationLink(value: SessionNavigation(
+                sessionName: session.sessionName,
+                hostId: host.id,
+                reference: sessionStore.workspaceCatalogsByHost[host.id]?.reference(sessionName: session.sessionName)
+            )) {
                 VStack(spacing: 0) {
                     if let claudePane = claudePaneInSession, let claudeSession = claudePane.agentSession {
                         SessionRowView(
@@ -542,6 +577,11 @@
                     }
                 }
             }
+            .accessibilityValue(cliSessionState?.statusLabel ?? claudePaneInSession?.agentSession?.statusLabel ?? "")
+            .modifier(SessionWorktreeStatusModifier(
+                repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [],
+                paths: Set(session.windows.flatMap(\.panes).compactMap(\.gitWorktreePath))
+            ))
             .padding(.leading, 16)
             .padding(.bottom, 16)
             .overlay(alignment: .leading) {
@@ -555,7 +595,6 @@
                         .padding(.leading, 16)
                 }
             }
-            .accessibilityValue(cliSessionState?.statusLabel ?? claudePaneInSession?.agentSession?.statusLabel ?? "")
             .modifier(SessionSwipeActionsModifier(
                 session: session,
                 isDisabled: connection?.isHostConnected != true,
@@ -604,7 +643,7 @@
                 Spacer()
 
                 Button(action: onRestoreAutomaticOrder) {
-                    Symbols.arrowClockwise.image
+                    Symbols.arrowUpArrowDown.image
                         .font(.caption)
                         .frame(width: 44, height: 44)
                 }
@@ -1146,6 +1185,7 @@
     private struct SessionListPreview: View {
         @State private var navigationPath = NavigationPath()
         @State private var sessionStore = SessionStore()
+        @State private var fileWorkspaces = IOSFileBrowserWorkspaceStore()
         @State private var settings = IOSSettings()
         @State private var connectionManager: ViewerConnectionManager?
 
@@ -1161,10 +1201,12 @@
             Group {
                 if let connectionManager {
                     NavigationStack(path: $navigationPath) {
-                        SessionListView(navigationPath: $navigationPath, onOpenSettings: { })
+                        SessionListView(navigationPath: $navigationPath, onOpenSettings: { }, onOpenDashboard: { })
                             .environment(sessionStore)
+                            .environment(fileWorkspaces)
                             .environment(connectionManager)
                             .environment(settings)
+                            .environment(DashboardStore())
                     }
                 } else {
                     ProgressView()

@@ -6,9 +6,9 @@ import Foundation
 /// on a remote host:
 /// 1. Create a session with two windows on the host
 /// 2. Viewer closes an idle window via the tab bar X button — no confirmation
-/// 3. Run a process in the remaining window, close the session via toolbar
+/// 3. Run a process in the remaining window, then close its final tab
 /// 4. Confirmation alert appears listing the running process
-/// 5. Click "Close Anyway" — session is killed on the host
+/// 5. Cancel, retry, then confirm "Close Session" — session is killed on the host
 public enum CloseRemoteWindowMacScenario {
     public static let scenario = CtrlxE2ELib.scenario(
         "Close Remote Window Mac Viewer",
@@ -67,7 +67,7 @@ public enum CloseRemoteWindowMacScenario {
         )
 
         // Close the selected window via the X button (no confirmation — idle window)
-        TestStep.macClickButton(titled: "Close window", instance: 1)
+        TestStep.macClickButton(titled: "Close tab", instance: 1)
 
         // Window 1 should be gone, viewer should show window 0
         TestStep.macWaitForElementQueryToDisappear(
@@ -109,16 +109,21 @@ public enum CloseRemoteWindowMacScenario {
             timeout: 10
         )
 
-        // Close session via toolbar button
-        TestStep.macClickButton(titled: "Close session", instance: 1)
+        // Closing the final terminal tab asks to close its whole session.
+        TestStep.macClickButton(titled: "Close tab", instance: 1)
 
         // Confirmation alert should appear
         TestStep.macWaitForElement(titled: "Close Session?", timeout: 5, instance: 1)
         TestStep.macScreenshot(label: "viewer-close-session-confirmation", instance: 1)
 
-        // 7. Confirm with "Close Anyway" (default action — press Return)
+        TestStep.macPressKey(.escape, instance: 1)
+        TestStep.waitForTmuxDisplayMessage(target: "mac-close:0", format: "#{session_windows}", contains: "1", timeout: 5)
+        TestStep.macClickButton(titled: "Close tab", instance: 1)
+        TestStep.macWaitForElement(titled: "Close Session", timeout: 5, instance: 1)
+
+        // 7. Confirm closing the entire session.
         TestStep.log("Phase 6: Confirm close — session should be killed")
-        TestStep.macPressKey(.return, instance: 1)
+        TestStep.macCGClickElement(query: .allOf([.role("AXButton"), .label("Close Session")]), instance: 1)
 
         // Session should be gone from both host and viewer
         TestStep.macWaitForElementToDisappear(titled: "mac-close", timeout: 10, instance: 1)

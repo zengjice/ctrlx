@@ -255,6 +255,7 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
 
     private static let allScenarios: [TestScenario] = [
         WorkbenchKeyboardScenario.scenario,
+        WorkbenchKeyboardScenario.remoteTabs,
         WorkbenchKeyboardScenario.newTerminalDirectory,
         WorkbenchKeyboardScenario.splitFilesDirectory,
         NewTerminalScenario.scenario,
@@ -302,9 +303,30 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
         MultiWindowTabsScenario.scenario,
         DetachedTerminalWindowScenario.scenario,
         DetachedTerminalWindowScenario.macViewer,
+        WorkspaceRecoveryScenario.scenario,
+        WorkspaceLinkedWindowScenario.scenario,
+        WorkspaceRecoveryPerformanceScenario.scenario,
+        WorkspaceCloseIdentityScenario.scenario,
+        WorkspaceCloseIdentityScenario.disabledRecovery,
+        WorkspaceContentRecoveryScenario.scenario,
+        WorkspaceAgentRecoveryScenario.scenario,
+        WorkspaceAgentRecoveryScenario.modes,
+        WorkspaceViewerRecoveryScenario.scenario,
+        WorkspaceIOSRecoveryScenario.scenario,
+        WorkspaceIOSRecoveryScenario.agentIOSHost,
+        EchoResponseRoundTripScenario.agentIOSHost,
         MultiWindowTabsIOSScenario.scenario,
         MultiWindowTabsMacViewerScenario.scenario,
         WindowRenameScenario.scenario,
+        SessionRenameScenario.scenario,
+        SessionMetadataScenario.scenario,
+        WorkspaceLayoutActionsScenario.scenario,
+        WorkspaceCreationScenario.scenario,
+        WorkspaceCreationScenario.newSessions,
+        WorkspaceCreationScenario.agentIOSNewSessionHost,
+        WorkspaceCLIScenario.scenario,
+        WorkspaceForkScenario.scenario,
+        WorkspaceForkScenario.agentIOSHost,
         MouseSupportScenario.scenario,
         RemoteMouseSupportScenario.scenario,
         FileBrowserScenario.scenario,
@@ -339,6 +361,8 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
         SessionColorSyncScenario.scenario,
         SessionStateMenuScenario.scenario,
         SessionEmojiSyncScenario.scenario,
+        WorkspaceDashboardScenario.scenario,
+        WorkspaceDashboardScenario.macScenario,
         AppearanceModeScenario.scenario,
         RenameViewerDeviceScenario.scenario,
         TerminalEnvVarsScenario.scenario,
@@ -409,7 +433,7 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
     ]
 
     private func resolveScenarios() -> [TestScenario] {
-        guard let scenario else { return Self.allScenarios }
+        guard let scenario else { return Self.allScenarios.filter { !$0.tags.contains("manual") } }
         let requested = scenario
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }

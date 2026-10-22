@@ -57,40 +57,56 @@ public struct MenuBarExtraView: View {
         let remote = remoteSessionsByHost
         let hasAny = !local.isEmpty || !remote.isEmpty
 
-        // Cross-session usage rollup (issue #598): today's total across active
-        // sessions, plus the top projects. In the dropdown — the dock badge
-        // only carries the needs-attention count.
-        if let overview = coordinator.usageOverview, !overview.isEmpty {
-            Text("Today — \(usageTodayLine(overview))")
-            ForEach(overview.projects.prefix(3)) { project in
-                Text("\(project.projectName): \(project.costUSD.usdCostString)")
+        Text("Needs attention")
+        ForEach(local) { session in
+            localSessionRows(for: session, waitingOnly: true)
+        }
+        ForEach(remote, id: \.host.id) { entry in
+            ForEach(entry.sessions) { session in
+                remoteSessionRows(for: session, host: entry.host, waitingOnly: true)
             }
-            Divider()
         }
 
-        Group {
+        Divider()
+        Text("Accounts")
+        let summaries = coordinator.dashboardStore.quotaSummaries()
+        if summaries.isEmpty {
+            Text(coordinator.dashboardStore.isRefreshing ? "Reading account information…" : "Account information unavailable")
+        }
+        ForEach(summaries) { summary in
+            Button {
+                showDashboard()
+            } label: {
+                Label(
+                    "\(summary.title) — \(summary.detail) · \(summary.hosts)",
+                    symbol: summary.isLow ? .exclamationmarkTriangle : .chartLineUptrendXyaxis
+                )
+            }
+        }
+        Button("Dashboard…", action: showDashboard)
+            .accessibilityIdentifier("menubar-dashboard")
+
+        Divider()
+        Menu("All Sessions") {
             if !hasAny {
                 Text("No active sessions")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(local) { session in
-                    localSessionRows(for: session)
-                }
-
-                ForEach(remote, id: \.host.id) { entry in
-                    Divider()
-                    Text(entry.host.displayName(showUsername: settings.hasDuplicateHostName(for: entry.host)))
-                        .foregroundStyle(.secondary)
-
-                    ForEach(entry.sessions) { session in
-                        remoteSessionRows(for: session, host: entry.host)
-                    }
+            }
+            ForEach(local) { session in
+                localSessionRows(for: session)
+            }
+            ForEach(remote, id: \.host.id) { entry in
+                Divider()
+                Text(entry.host.displayName(showUsername: settings.hasDuplicateHostName(for: entry.host)))
+                ForEach(entry.sessions) { session in
+                    remoteSessionRows(for: session, host: entry.host)
                 }
             }
         }
-        // macOS 27 hides menu images by default; these icons convey session state.
         .labelStyle(.titleAndIcon)
 
+        if let overview = coordinator.usageOverview, !overview.isEmpty {
+            Text("Today — \(usageTodayLine(overview))")
+        }
         Divider()
 
         Button {
@@ -100,7 +116,7 @@ public struct MenuBarExtraView: View {
         } label: {
             Label("Show Sessions", symbol: .terminal)
         }
-        .keyboardShortcut("p", modifiers: [.command, .shift])
+        .keyboardShortcut("p", modifiers: [.command, .option])
 
         Button {
             NSApp.setActivationPolicy(.regular)
@@ -117,6 +133,12 @@ public struct MenuBarExtraView: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q", modifiers: .command)
+    }
+
+    private func showDashboard() {
+        NSApp.setActivationPolicy(.regular)
+        openWindow(id: "dashboard")
+        Self.bringAppToFront()
     }
 
     // MARK: - Helpers
@@ -158,15 +180,16 @@ public struct MenuBarExtraView: View {
     /// position: one row per agent pane (window/pane order), or the session's
     /// single terminal-only row when no pane owns an agent.
     @ViewBuilder
-    private func localSessionRows(for session: LocalTmuxSession) -> some View {
+    private func localSessionRows(for session: LocalTmuxSession, waitingOnly: Bool = false) -> some View {
         let panes = session.windows.flatMap(\.panes).compactMap { windowManager.paneStates[$0.paneId] }
         let agents = panes.compactMap(\.agentSession)
+        let visible = agents.filter { !waitingOnly || localDisplayedState(for: $0) == .waiting }
         if agents.isEmpty {
-            if let terminal = panes.terminalOnlySessions().first {
+            if let terminal = panes.terminalOnlySessions().first, !waitingOnly || terminal.displayedState == .waiting {
                 localTerminalSessionButton(for: terminal)
             }
         } else {
-            ForEach(agents, id: \.paneId) { agent in
+            ForEach(visible, id: \.paneId) { agent in
                 localSessionButton(for: agent)
             }
         }
@@ -175,15 +198,16 @@ public struct MenuBarExtraView: View {
     /// Rows for one remote tmux session — same shape as `localSessionRows`,
     /// built from the pane states the host pushed.
     @ViewBuilder
-    private func remoteSessionRows(for session: TmuxSession, host: PairedHost) -> some View {
+    private func remoteSessionRows(for session: TmuxSession, host: PairedHost, waitingOnly: Bool = false) -> some View {
         let panes = session.windows.flatMap(\.panes)
         let agents = panes.compactMap(\.agentSession)
+        let visible = agents.filter { !waitingOnly || remoteDisplayedState(for: $0, host: host) == .waiting }
         if agents.isEmpty {
-            if let terminal = panes.terminalOnlySessions().first {
+            if let terminal = panes.terminalOnlySessions().first, !waitingOnly || terminal.displayedState == .waiting {
                 remoteTerminalSessionButton(for: terminal, host: host)
             }
         } else {
-            ForEach(agents, id: \.paneId) { agent in
+            ForEach(visible, id: \.paneId) { agent in
                 remoteSessionButton(for: agent, host: host)
             }
         }
@@ -220,7 +244,7 @@ public struct MenuBarExtraView: View {
             Self.bringAppToFront()
         } label: {
             rowLabel(
-                title: remoteTitle(for: session, host: host),
+                title: "\(remoteTitle(for: session, host: host)) · \(host.displayName(showUsername: settings.hasDuplicateHostName(for: host)))",
                 displayedState: remoteDisplayedState(for: session, host: host) ?? .idle
             )
         }
@@ -256,7 +280,7 @@ public struct MenuBarExtraView: View {
             rowLabel(
                 title: session.displayTitle(
                     homeDirectory: coordinator.remoteSessionStore?.homeDirectoryByHost[host.id]
-                ),
+                ) + " · " + host.displayName(showUsername: settings.hasDuplicateHostName(for: host)),
                 displayedState: session.displayedState
             )
         }
@@ -327,10 +351,12 @@ public struct MenuBarExtraView: View {
 /// don't respect color modifiers directly.
 public struct MenuBarLabel: View {
     let pendingCount: Int
+    let lowQuotaCount: Int
     @Environment(\.openWindow) private var openWindow
 
-    public init(pendingCount: Int) {
+    public init(pendingCount: Int, lowQuotaCount: Int = 0) {
         self.pendingCount = pendingCount
+        self.lowQuotaCount = lowQuotaCount
     }
 
     /// The icon view with color and badge - rendered to NSImage (only used when pendingCount > 0)
@@ -343,6 +369,9 @@ public struct MenuBarLabel: View {
             Text("\(pendingCount)")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(.white)
+            if lowQuotaCount > 0 {
+                Symbols.exclamationmarkTriangle.image.foregroundStyle(.white)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
@@ -363,9 +392,17 @@ public struct MenuBarLabel: View {
         Group {
             if pendingCount > 0, let image = renderedImage {
                 Image(nsImage: image)
+            } else if lowQuotaCount > 0 {
+                Symbols.exclamationmarkTriangle.image
             } else {
                 Symbols.sparkles.image
             }
+        }
+        .accessibilityLabel("CtrlX · \(pendingCount) need attention · \(lowQuotaCount) accounts low on quota")
+        .onReceive(NotificationCenter.default.publisher(for: DashboardNotificationClient.openNotification)) { _ in
+            NSApp.setActivationPolicy(.regular)
+            openWindow(id: "dashboard")
+            MenuBarExtraView.bringAppToFront()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openPanesWindow)) { _ in
             openWindow(id: "panes")

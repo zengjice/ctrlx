@@ -40,6 +40,7 @@ for operation in ('identity', 'action tabs'):
 unsupported = run(['browser', 'action', 'Runtime.evaluate'])
 assert unsupported.returncode != 0 and 'Unsupported browser operation' in unsupported.stderr
 for operation, flags in (
+    ('open', ['--new', '--url', 'https://example.test']),
     ('fill', ['--selector', '#input', '--text', '']),
     ('press', ['--key', 'Shift+Tab']),
     ('scroll', ['--delta-y', '-300']),
@@ -52,6 +53,7 @@ for operation, flags in (
     parsed = run(['browser', 'action', operation, '--tab', 'test', *flags], env=clean_env)
     assert parsed.returncode != 0 and 'Cannot identify a calling agent' in parsed.stderr, (operation, parsed.stderr)
 for operation, flags, error in (
+    ('read', ['--new'], '--new is only supported by open'),
     ('fill', ['--selector', '#input'], '--text'),
     ('press', [], '--key'), ('select', ['--selector', '#input'], '--value'),
     ('check', ['--selector', '#input'], '--checked'),

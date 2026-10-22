@@ -8,6 +8,7 @@ struct VoiceCorrectionBenchmarkSample {
     let rejectedTerms: [String]
     let referenceTranscript: String
     var requiresExactMatch = false
+    var isCritical = false
 }
 
 struct VoiceCorrectionBenchmarkScore: Equatable {
@@ -28,6 +29,11 @@ struct VoiceCorrectionModelTestResult: Identifiable, Equatable {
     let rejectedTermHits: Int
     let elapsedSeconds: TimeInterval
     let sampleCount: Int
+    var failedCriticalSampleIDs: [String] = []
+
+    var isEligible: Bool {
+        failedCriticalSampleIDs.isEmpty
+    }
 
     var id: String {
         modelID
@@ -158,6 +164,16 @@ enum VoiceCorrectionBenchmark {
     developer@mac ctrlx %
     """
 
+    private static let gitBranchTerminalContext = """
+    developer@mac project % git branch --list
+    * feature-bug
+      main
+      master
+      develop
+    developer@mac project % git status --short
+     M Sources/Input.swift
+    """
+
     static let samples = [
         VoiceCorrectionBenchmarkSample(
             id: "ctrlx-introduction",
@@ -200,13 +216,62 @@ enum VoiceCorrectionBenchmark {
             referenceTranscript: "我觉得这些相近的词明显跟整个语句的意思不匹配，你再认真优化一下"
         ),
         VoiceCorrectionBenchmarkSample(
+            id: "mixed-git-main",
+            recognition: VoiceRecognitionResult(primaryTranscript: "将本地妹分支合入"),
+            terminalContext: nil,
+            requiredTerms: ["本地", "main", "合入"],
+            rejectedTerms: ["妹"],
+            referenceTranscript: "将本地 main 分支合入",
+            requiresExactMatch: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-git-operations",
+            recognition: VoiceRecognitionResult(primaryTranscript: "先看迪夫，再决定要不要瑞贝斯，不要提交。"),
+            terminalContext: gitBranchTerminalContext,
+            requiredTerms: ["diff", "要不要", "rebase", "不要提交"],
+            rejectedTerms: ["迪夫", "瑞贝斯"],
+            referenceTranscript: "先看 diff，再决定要不要 rebase，不要提交。",
+            requiresExactMatch: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-preserve-family",
+            recognition: VoiceRecognitionResult(primaryTranscript: "我妹妹晚上来吃饭，先不要修改代码。"),
+            terminalContext: gitBranchTerminalContext,
+            requiredTerms: ["我妹妹", "吃饭", "不要修改代码"],
+            rejectedTerms: ["main"],
+            referenceTranscript: "我妹妹晚上来吃饭，先不要修改代码。",
+            requiresExactMatch: true,
+            isCritical: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-preserve-negation",
+            recognition: VoiceRecognitionResult(primaryTranscript: "这个分支还没合入，先不要提交。"),
+            terminalContext: gitBranchTerminalContext,
+            requiredTerms: ["还没合入", "不要提交"],
+            rejectedTerms: ["main"],
+            referenceTranscript: "这个分支还没合入，先不要提交。",
+            requiresExactMatch: true,
+            isCritical: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-preserve-branch-names",
+            recognition: VoiceRecognitionResult(primaryTranscript: "将本地 master 分支合入主分支，先不要推送。"),
+            terminalContext: gitBranchTerminalContext,
+            requiredTerms: ["master", "主分支", "不要推送"],
+            rejectedTerms: ["main"],
+            referenceTranscript: "将本地 master 分支合入主分支，先不要推送。",
+            requiresExactMatch: true,
+            isCritical: true
+        ),
+        VoiceCorrectionBenchmarkSample(
             id: "already-correct",
             recognition: VoiceRecognitionResult(primaryTranscript: "先看看这个问题，暂时不用修改代码。"),
             terminalContext: nil,
             requiredTerms: ["先看看", "暂时不用修改代码"],
             rejectedTerms: ["立即修改"],
             referenceTranscript: "先看看这个问题，暂时不用修改代码。",
-            requiresExactMatch: true
+            requiresExactMatch: true,
+            isCritical: true
         ),
         VoiceCorrectionBenchmarkSample(
             id: "negation-and-condition",
@@ -215,7 +280,8 @@ enum VoiceCorrectionBenchmark {
             requiredTerms: ["不要提交", "不要发布", "除非我确认测试通过"],
             rejectedTerms: [],
             referenceTranscript: "不要提交，也不要发布，除非我确认测试通过。",
-            requiresExactMatch: true
+            requiresExactMatch: true,
+            isCritical: true
         ),
         VoiceCorrectionBenchmarkSample(
             id: "numbers-and-literals",
@@ -224,7 +290,8 @@ enum VoiceCorrectionBenchmark {
             requiredTerms: ["只检查", "git status", "8080", "3.0.57", "/tmp/report.txt", "--verbose"],
             rejectedTerms: ["git reset", "8081", "3.0.58", "/tmp/other.txt"],
             referenceTranscript: "只检查 `git status`，端口是8080，版本是3.0.57，文件是 /tmp/report.txt，保留 --verbose 参数。",
-            requiresExactMatch: true
+            requiresExactMatch: true,
+            isCritical: true
         ),
         VoiceCorrectionBenchmarkSample(
             id: "unrelated-context",
@@ -233,7 +300,8 @@ enum VoiceCorrectionBenchmark {
             requiredTerms: ["明天", "检查一下录音质量"],
             rejectedTerms: ["已发布", "CtrlX"],
             referenceTranscript: "明天帮我检查一下录音质量。",
-            requiresExactMatch: true
+            requiresExactMatch: true,
+            isCritical: true
         ),
         VoiceCorrectionBenchmarkSample(
             id: "long-utterance-completeness",
@@ -242,7 +310,8 @@ enum VoiceCorrectionBenchmark {
             requiredTerms: ["第一步", "第二步", "第三步", "最后", "不要提交也不要发布"],
             rejectedTerms: [],
             referenceTranscript: longUtterance,
-            requiresExactMatch: true
+            requiresExactMatch: true,
+            isCritical: true
         ),
     ]
 
@@ -304,10 +373,9 @@ enum VoiceCorrectionBenchmark {
         from availableModelIDs: [String],
         selectedModelID: String
     ) -> [String] {
-        let preferredFamilies: [String]
-        switch provider {
+        let preferredFamilies: [String] = switch provider {
         case .volcengineArk:
-            preferredFamilies = ["doubao-seed-2-0", "deepseek-v4"]
+            ["doubao-seed-2-0", "deepseek-v4"]
         }
 
         var candidates = availableModelIDs.filter { modelID in
@@ -346,24 +414,30 @@ enum VoiceCorrectionBenchmark {
         var requiredTermHits = 0
         var rejectedTermHits = 0
         var elapsedSeconds: TimeInterval = 0
+        var failedCriticalSampleIDs: [String] = []
 
         for sample in samples {
+            try Task.checkCancellation()
             let start = Date()
             let candidate = try await client.correct(
                 recognition: sample.recognition,
-                terminalContext: sample.terminalContext,
+                terminalContext: sample.terminalContext.map { .init(terminalText: $0) },
                 contextualTerms: VoiceInputVocabulary.terms,
                 localeIdentifier: "zh-Hans-CN",
                 selection: selection,
                 apiKey: apiKey
             )
             elapsedSeconds += Date().timeIntervalSince(start)
+            try Task.checkCancellation()
             // A rejected correction is not a model success merely because the
             // production fallback would safely preserve an already-correct draft.
             let sampleScore = score(candidate, for: sample)
             scoreValue += sampleScore.value
             requiredTermHits += sampleScore.requiredTermHits
             rejectedTermHits += sampleScore.rejectedTermHits
+            if sample.isCritical && sampleScore.value != sample.requiredTerms.count * 10 {
+                failedCriticalSampleIDs.append(sample.id)
+            }
         }
 
         return VoiceCorrectionModelTestResult(
@@ -373,7 +447,8 @@ enum VoiceCorrectionBenchmark {
             requiredTermHits: requiredTermHits,
             rejectedTermHits: rejectedTermHits,
             elapsedSeconds: elapsedSeconds,
-            sampleCount: samples.count
+            sampleCount: samples.count,
+            failedCriticalSampleIDs: failedCriticalSampleIDs
         )
     }
 
@@ -381,7 +456,12 @@ enum VoiceCorrectionBenchmark {
         _ results: [VoiceCorrectionModelTestResult]
     ) -> [VoiceCorrectionModelTestResult] {
         results.sorted {
-            if $0.score != $1.score { return $0.score > $1.score }
+            if $0.isEligible != $1.isEligible {
+                return $0.isEligible
+            }
+            if $0.score != $1.score {
+                return $0.score > $1.score
+            }
             if $0.rejectedTermHits != $1.rejectedTermHits {
                 return $0.rejectedTermHits < $1.rejectedTermHits
             }

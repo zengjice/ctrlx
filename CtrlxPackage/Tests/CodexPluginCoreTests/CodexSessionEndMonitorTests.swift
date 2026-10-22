@@ -1,6 +1,6 @@
 import CtrlxNetworking
-import Foundation
 import CtrlxPluginProtocol
+import Foundation
 import Testing
 @testable import CodexPluginCore
 
@@ -11,6 +11,38 @@ import Testing
 @Suite("CodexSessionEndMonitor")
 struct CodexSessionEndMonitorTests {
     private let fileManager = FileManager.default
+
+    @Test("Default core factories reconcile only their own plugin state directory")
+    func independentCoreStateDirectories() async throws {
+        let root = fileManager.temporaryDirectory.appendingPathComponent("ctrlx-correlation-scope-\(UUID())")
+        defer { try? fileManager.removeItem(at: root) }
+        let hosts = [MockPluginHost(), MockPluginHost()]
+        let cores = [CodexPluginCore(), CodexPluginCore()]
+        let directories = [root.appendingPathComponent("one"), root.appendingPathComponent("two")]
+        for index in cores.indices {
+            try await cores[index].initialize(PluginEnv(
+                pluginRoot: root, stateDir: directories[index], appVersion: "test",
+                settings: Data(), marketplaceSource: root
+            ), host: hosts[index])
+            let payload = """
+            {"hook_event_name":"SessionStart","session_id":"conversation-\(index)","cwd":"/tmp"}
+            """
+            _ = await cores[index].handleIngress(.init(pluginID: "codex", context: ["TMUX_PANE": "%1"], payload: Data(payload.utf8)))
+            await hosts[index].setAgentPanes(["%1"])
+            await cores[index].pollSessionEnds()
+        }
+        let stores = directories.map { CodexSessionCorrelation.live(stateDirectory: $0) }
+        #expect(stores[0].record(forPane: "%1")?.sessionID == "conversation-0")
+        #expect(stores[1].record(forPane: "%1")?.sessionID == "conversation-1")
+        await hosts[0].setAgentPanes([])
+        await cores[0].pollSessionEnds()
+        #expect(stores[0].record(forPane: "%1") == nil)
+        #expect(stores[1].record(forPane: "%1")?.sessionID == "conversation-1")
+        #expect(await hosts[1].emittedEvents.isEmpty)
+        for core in cores {
+            await core.shutdown()
+        }
+    }
 
     /// Builds an initialized core sharing a correlation store with the test (same
     /// root) so the test can record sessions and observe the core's removals.
@@ -135,7 +167,7 @@ struct CodexSessionEndMonitorTests {
         let events = await host.emittedEvents
         #expect(events.count == 1)
         #expect(events.first?.appActions == [
-            .sessionEnded(sessionID: "%1", closePaneEligible: closePaneOnSessionEnd)
+            .sessionEnded(sessionID: "%1", closePaneEligible: closePaneOnSessionEnd),
         ])
         #expect(store.allPanes().isEmpty)
         await core.shutdown()

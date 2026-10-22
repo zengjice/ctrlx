@@ -41,10 +41,18 @@ public struct KeyboardModifiers: OptionSet, Sendable {
 extension KeyboardModifiers: CustomStringConvertible {
     public var description: String {
         var parts: [String] = []
-        if contains(.command) { parts.append("command") }
-        if contains(.shift) { parts.append("shift") }
-        if contains(.option) { parts.append("option") }
-        if contains(.control) { parts.append("control") }
+        if contains(.command) {
+            parts.append("command")
+        }
+        if contains(.shift) {
+            parts.append("shift")
+        }
+        if contains(.option) {
+            parts.append("option")
+        }
+        if contains(.control) {
+            parts.append("control")
+        }
         return parts.isEmpty ? "[]" : parts.joined(separator: "+")
     }
 }
@@ -61,6 +69,8 @@ public enum Key: Sendable, Equatable {
     case space
     case downArrow
     case upArrow
+    case leftArrow
+    case rightArrow
     case character(Character)
 }
 
@@ -276,11 +286,13 @@ public enum TestStep: Sendable {
     /// - `macPressKey(.return)` — confirm the default action
     /// - `macPressKey(.tab)` — cycle focus
     /// - `macPressKey(.character("a"), modifiers: .command)` — Cmd+A select all
-    /// - `macPressKey(.character("]"), modifiers: [.command, .shift])` — app shortcut
+    /// - `macPressKey(.rightArrow, modifiers: [.command, .option])` — app shortcut
     case macPressKey(Key, modifiers: KeyboardModifiers = [], instance: Int = 0)
     /// CGEvent left-click on an element (bypasses AXPress, uses real mouse click).
     /// Use for selecting items in SwiftUI List/OutlineGroup.
     case macCGClick(titled: String, instance: Int = 0)
+    /// Move the pointer over an element after verifying the isolated app has focus.
+    case macHoverElement(query: ElementQuery, instance: Int = 0)
     /// CGEvent left-click on an element matching the query (bypasses AXPress,
     /// uses real mouse click). Use when targeting elements by accessibility
     /// identifier — e.g., individual terminal panes — instead of fragile
@@ -379,6 +391,8 @@ public enum TestStep: Sendable {
     case macWaitForElementQueryToDisappear(ElementQuery, timeout: TimeInterval = 10, instance: Int = 0)
     /// Open the Panes window via the status item menu
     case macOpenPanesWindow(instance: Int = 0)
+    /// Verify the quicklook sections and open Dashboard through the status menu.
+    case macOpenDashboardWindow(instance: Int = 0)
     /// Move the macOS app window to a screen position
     case macMoveWindow(x: Int, y: Int, instance: Int = 0)
     /// Resize the macOS app window
@@ -391,6 +405,9 @@ public enum TestStep: Sendable {
     case macSetSidebarFields(_ fields: [String], instance: Int = 0)
     /// Focus a text field by title so subsequent typing goes into it
     case macFocusElement(titled: String, instance: Int = 0)
+    /// Replace the focused native text field through Accessibility, without the
+    /// user's input method or system clipboard participating in the fixture.
+    case macSetFocusedText(String, instance: Int = 0)
     /// Type text into the macOS app (via AppleScript keystroke).
     /// Set `charDelay` > 0 to type character-by-character with delays (for remote terminals).
     case macType(text: String, pressReturn: Bool = false, charDelay: TimeInterval = 0, instance: Int = 0)

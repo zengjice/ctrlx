@@ -68,6 +68,8 @@ public extension TestStep {
             return .macOS(instance: instance)
         case let .macCGClick(_, instance):
             return .macOS(instance: instance)
+        case let .macHoverElement(_, instance):
+            return .macOS(instance: instance)
         case let .macCGClickElement(_, _, _, instance, _):
             return .macOS(instance: instance)
         case let .macRightClick(_, instance):
@@ -108,7 +110,8 @@ public extension TestStep {
             return .macOS(instance: instance)
         case let .macWaitForElementQueryToDisappear(_, _, instance):
             return .macOS(instance: instance)
-        case let .macOpenPanesWindow(instance):
+        case let .macOpenPanesWindow(instance),
+             let .macOpenDashboardWindow(instance):
             return .macOS(instance: instance)
         case let .macMoveWindow(_, _, instance):
             return .macOS(instance: instance)
@@ -119,6 +122,8 @@ public extension TestStep {
         case let .macSetSidebarFields(_, instance):
             return .macOS(instance: instance)
         case let .macFocusElement(_, instance):
+            return .macOS(instance: instance)
+        case let .macSetFocusedText(_, instance):
             return .macOS(instance: instance)
         case let .macType(_, _, _, instance):
             return .macOS(instance: instance)

@@ -27,6 +27,8 @@ struct WorkbenchSplitFocusTests {
         tabs.rightSide = [.window("@2")]
         tabs.splitRatio = 0.85
         view.tabs = tabs
+        let store = WorkbenchTabStore()
+        view.onInteraction = { store.userDidSelectTab(hostID: "pair", session: "project") }
         window.contentView = view
         defer { view.stop()
             window.close()
@@ -40,15 +42,18 @@ struct WorkbenchSplitFocusTests {
         #expect(tabs.isRightPaneFocused)
         try click(20, number: 0)
         #expect(tabs.isRightPaneFocused)
+        #expect(store.tabSelectionRevision(hostID: "pair", session: "project") == 1)
         try click(200, number: window.windowNumber)
         #expect(!tabs.isRightPaneFocused)
         view.isHidden = true
         try click(850, number: window.windowNumber)
         #expect(!tabs.isRightPaneFocused)
+        #expect(store.tabSelectionRevision(hostID: "pair", session: "project") == 2)
         view.isHidden = false
         tabs.rightSide = []
         try click(850, number: window.windowNumber)
         #expect(!tabs.isRightPaneFocused)
+        #expect(store.tabSelectionRevision(hostID: "pair", session: "project") == 3)
         #expect(view.hitTest(NSPoint(x: 30, y: 30)) == nil)
     }
 }

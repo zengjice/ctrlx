@@ -1,4 +1,5 @@
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Testing
 @testable import CtrlxCommon
@@ -17,6 +18,42 @@ struct RemoteSimulatorSessionTests {
             try await Task.sleep(for: .milliseconds(5))
         }
         throw CancellationError()
+    }
+
+    @Test
+    func lateCopyAfterLeavingDoesNotOverwriteLocalClipboard() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clipboard = ClipboardClient.fileBacked(path: root.appendingPathComponent("clipboard").path)
+        clipboard.setString("keep local")
+        try await withDependencies { $0[ClipboardClient.self] = clipboard } operation: {
+            let tab = tab(), lease = UUID()
+            var copy: CheckedContinuation<RemoteSimulatorControlResponse, any Error>?
+            let session = RemoteSimulatorSession(tab: tab, control: { request in
+                switch request.operation {
+                case .takeControl: return .init(controlID: lease, generation: 1)
+                case .copy: return try await withCheckedThrowingContinuation { copy = $0 }
+                default: return .init(controlID: nil, generation: 2)
+                }
+            }, send: { request in
+                .init(tab: tab, frame: .init(jpeg: Data([1]), width: 320, height: 640), controlID: request.controlID, generation: 1)
+            })
+            let watch = Task { await session.watch() }
+            defer { session.stop()
+                watch.cancel()
+            }
+            try await wait { session.preview != nil }
+            await session.takeControl()
+            #expect(session.controlID == lease)
+            session.copy()
+            try await wait { copy != nil }
+            session.stop()
+            copy?.resume(returning: .init(controlID: lease, generation: 1, clipboard: .init(text: "remote")))
+            await watch.value
+            try await Task.sleep(for: .milliseconds(20))
+            #expect(clipboard.getString() == "keep local")
+        }
     }
 
     @Test
@@ -96,7 +133,7 @@ struct RemoteSimulatorSessionTests {
     }
 
     @Test
-    func annotationRequestsAFreshFullSizeFrameWithoutPublishingIt() async throws {
+    func annotationFreezesDisplayedBytesWithoutRequestingANewFrame() async throws {
         let tab = tab()
         var dimensions: [Int] = []
         let session = RemoteSimulatorSession(tab: tab) { request in
@@ -105,12 +142,14 @@ struct RemoteSimulatorSessionTests {
         }
         let watch = Task { await session.watch() }
         try await wait { session.frame != nil }
-        session.stop()
+        let displayed = try #require(session.preview)
+        // The next network frame has arrived, but the view still displays the first.
+        try await wait { dimensions.count == 2 }
+        #expect(session.frame?.jpeg == Data([2]))
+        #expect(try session.annotationScreenshot(from: displayed) == Data([1]))
         watch.cancel()
         await watch.value
-
-        #expect(try await session.annotationScreenshot() == Data([2]))
-        #expect(dimensions == [1_024, RemoteSimulatorFrame.maximumDimension])
+        #expect(dimensions == [1_024, 1_024])
         #expect(session.frame == nil)
         try await Task.sleep(for: .milliseconds(220))
         #expect(dimensions.count == 2)
@@ -121,11 +160,11 @@ struct RemoteSimulatorSessionTests {
         }
         try await wait { session.frame != nil }
         #expect(session.frame?.jpeg == Data([3]))
-        #expect(dimensions == [1_024, RemoteSimulatorFrame.maximumDimension, 1_024])
+        #expect(dimensions == [1_024, 1_024, 1_024])
     }
 
     @Test(arguments: ["tab", "session", "window", "pane", "empty", "oversized"])
-    func annotationRejectsChangedSourcesAndInvalidFrames(_ change: String) async {
+    func annotationRejectsChangedSourcesAndInvalidFrames(_ change: String) async throws {
         let tab = tab()
         let other = RemoteSimulatorTab(
             id: change == "tab" ? UUID() : tab.id,
@@ -134,14 +173,33 @@ struct RemoteSimulatorSessionTests {
             sourcePaneID: change == "pane" ? "%other" : tab.sourcePaneID,
             title: tab.title, runtime: tab.runtime, isPrimary: tab.isPrimary
         )
+        var requests = 0
         let session = RemoteSimulatorSession(tab: tab) { _ in
-            .init(tab: other, frame: .init(
-                jpeg: change == "empty" ? Data() : Data([1]),
-                width: change == "oversized" ? RemoteSimulatorFrame.maximumDimension + 1 : 320, height: 640
-            ))
+            requests += 1
+            return .init(tab: tab, frame: .init(jpeg: Data([1]), width: 320, height: 640))
         }
-        await #expect(throws: ViewerRelayClientError.self) { try await session.annotationScreenshot() }
-        #expect(session.frame == nil)
+        let watch = Task { await session.watch() }
+        defer { session.stop()
+            watch.cancel()
+        }
+        try await wait { session.preview != nil }
+        let invalid = RemoteSimulatorResponse(tab: other, frame: .init(
+            jpeg: change == "empty" ? Data() : Data([1]),
+            width: change == "oversized" ? RemoteSimulatorFrame.maximumDimension + 1 : 320, height: 640
+        ))
+        #expect(throws: ViewerRelayClientError.self) { try session.annotationScreenshot(from: invalid) }
+        #expect(session.preview?.tab == tab && requests == 1)
+    }
+
+    @Test
+    func annotationRequiresALivePreviewAndNeverFetchesAFallback() throws {
+        let tab = tab()
+        let session = RemoteSimulatorSession(tab: tab) { _ in
+            Issue.record("Annotation must not fetch a replacement frame")
+            throw CancellationError()
+        }
+        let displayed = RemoteSimulatorResponse(tab: tab, frame: .init(jpeg: Data([1]), width: 320, height: 640))
+        #expect(throws: ViewerRelayClientError.self) { try session.annotationScreenshot(from: displayed) }
     }
 
     @Test
@@ -163,61 +221,63 @@ struct RemoteSimulatorSessionTests {
             watch.cancel()
         }
         try await wait { session.frame != nil }
+        let oldPreview = try #require(session.preview)
         current = moved
         try await wait { previews >= 2 }
         #expect(session.frame == frame && session.error == nil)
-        session.stop()
+        #expect(session.preview?.tab == moved)
+        #expect(throws: ViewerRelayClientError.self) { try session.annotationScreenshot(from: oldPreview) }
+        let displayed = try #require(session.preview)
+        #expect(try session.annotationScreenshot(from: displayed) == frame.jpeg)
         watch.cancel()
         await watch.value
 
-        // The image bytes did not change; the new route must still become current.
-        for _ in 0..<2 {
-            do {
-                #expect(try await session.annotationScreenshot() == frame.jpeg)
-            } catch {
-                Issue.record("Capture after the completed window move failed: \(error)")
-            }
+        // Cancelling annotation resumes the same image with the current route.
+        let resumed = Task { await session.watch() }
+        defer { session.stop()
+            resumed.cancel()
         }
+        try await wait { session.preview != nil }
+        let next = try #require(session.preview)
+        #expect(next.tab == moved && next.frame == frame)
+        #expect(try session.annotationScreenshot(from: next) == frame.jpeg)
+        #expect(previews == 3)
     }
 
     @Test
-    func captureKeepsItsStartingRouteEvenIfPollingDiscoversAMove() async throws {
-        let original = tab()
-        let moved = RemoteSimulatorTab(
-            id: original.id, sessionName: original.sessionName, windowID: "@2", sourcePaneID: original.sourcePaneID,
-            title: original.title, runtime: original.runtime, isPrimary: original.isPrimary
-        )
+    func annotationDoesNotWaitForPendingPreviewAndResumeRestoresTheSameFrame() async throws {
+        let tab = tab()
         let frame = RemoteSimulatorFrame(jpeg: Data([1]), width: 320, height: 640)
-        var current = original
-        var previews = 0
+        var requests = 0
         var reply: CheckedContinuation<RemoteSimulatorResponse, any Error>?
-        let session = RemoteSimulatorSession(tab: original) { request in
-            if request.frameMaxDimension == RemoteSimulatorFrame.maximumDimension {
+        let session = RemoteSimulatorSession(tab: tab) { request in
+            #expect(request.frameMaxDimension == 1_024)
+            requests += 1
+            if requests == 2 {
                 return try await withCheckedThrowingContinuation { reply = $0 }
             }
-            previews += 1
-            return .init(tab: current, frame: frame)
+            return .init(tab: tab, frame: frame)
         }
         let watch = Task { await session.watch() }
         defer { session.stop()
             watch.cancel()
         }
         try await wait { session.frame != nil }
-        let capture = Task { try await session.annotationScreenshot() }
+        let displayed = try #require(session.preview)
         try await wait { reply != nil }
-        current = moved
-        try await wait { previews >= 2 }
-        session.stop()
-        watch.cancel()
+        // Capture completes synchronously while the network request remains blocked.
+        let screenshot = try session.annotationScreenshot(from: displayed)
+        #expect(screenshot == frame.jpeg && requests == 2 && session.preview == nil)
+        reply?.resume(returning: .init(tab: tab, frame: .init(jpeg: Data([2]), width: 640, height: 320)))
         await watch.value
-        reply?.resume(returning: .init(tab: moved, frame: frame))
-        await #expect(throws: ViewerRelayClientError.self) { try await capture.value }
-
-        reply = nil
-        let retry = Task { try await session.annotationScreenshot() }
-        try await wait { reply != nil }
-        reply?.resume(returning: .init(tab: moved, frame: frame))
-        #expect(try await retry.value == frame.jpeg)
+        #expect(session.preview == nil && screenshot == Data([1]) && requests == 2)
+        #expect(throws: ViewerRelayClientError.self) { try session.annotationScreenshot(from: displayed) }
+        let resumed = Task { await session.watch() }
+        defer { session.stop()
+            resumed.cancel()
+        }
+        try await wait { session.frame != nil }
+        #expect(session.frame == frame && requests == 3)
     }
 
     @Test
@@ -229,11 +289,8 @@ struct RemoteSimulatorSessionTests {
         )
         let frame = RemoteSimulatorFrame(jpeg: Data([1]), width: 320, height: 640)
         var replies: [CheckedContinuation<RemoteSimulatorResponse, any Error>] = []
-        let session = RemoteSimulatorSession(tab: original) { request in
-            if request.frameMaxDimension == RemoteSimulatorFrame.maximumDimension {
-                return .init(tab: moved, frame: frame)
-            }
-            return try await withCheckedThrowingContinuation { replies.append($0) }
+        let session = RemoteSimulatorSession(tab: original) { _ in
+            try await withCheckedThrowingContinuation { replies.append($0) }
         }
         let oldWatch = Task { await session.watch() }
         try await wait { replies.count == 1 }
@@ -248,51 +305,8 @@ struct RemoteSimulatorSessionTests {
         // The old request deliberately ignores cancellation, as a late network reply can.
         replies[0].resume(returning: .init(tab: original, frame: frame))
         await oldWatch.value
-        #expect(try await session.annotationScreenshot() == frame.jpeg)
-    }
-
-    @Test
-    func cancelledAnnotationRejectsALateResponse() async throws {
-        let tab = tab()
-        var reply: CheckedContinuation<RemoteSimulatorResponse, any Error>?
-        let session = RemoteSimulatorSession(tab: tab) { _ in
-            try await withCheckedThrowingContinuation { reply = $0 }
-        }
-        let capture = Task { try await session.annotationScreenshot() }
-        try await wait { reply != nil }
-        capture.cancel()
-        reply?.resume(returning: .init(tab: tab, frame: .init(jpeg: Data([1]), width: 320, height: 640)))
-        await #expect(throws: CancellationError.self) { try await capture.value }
-        #expect(session.frame == nil)
-    }
-
-    @Test
-    func annotationDoesNotReviveAnOldPollAndExitRestoresAnUnchangedFrame() async throws {
-        let tab = tab()
-        let frame = RemoteSimulatorFrame(jpeg: Data([1]), width: 320, height: 640)
-        var replies: [CheckedContinuation<RemoteSimulatorResponse, any Error>] = []
-        let session = RemoteSimulatorSession(tab: tab) { _ in
-            try await withCheckedThrowingContinuation { replies.append($0) }
-        }
-        let oldWatch = Task { await session.watch() }
-        try await wait { replies.count == 1 }
-        session.stop()
-        oldWatch.cancel()
-        let capture = Task { try await session.annotationScreenshot() }
-        try await wait { replies.count == 2 }
-        replies[1].resume(returning: .init(tab: tab, frame: frame))
-        #expect(try await capture.value == frame.jpeg)
-        replies[0].resume(returning: .init(tab: tab, frame: frame))
-        await oldWatch.value
-        #expect(session.frame == nil)
-
-        let resumed = Task { await session.watch() }
-        defer { session.stop()
-            resumed.cancel()
-        }
-        try await wait { replies.count == 3 }
-        replies[2].resume(returning: .init(tab: tab, frame: frame))
-        try await wait { session.frame != nil }
-        #expect(session.frame == frame)
+        let displayed = try #require(session.preview)
+        #expect(displayed.tab == moved)
+        #expect(try session.annotationScreenshot(from: displayed) == frame.jpeg)
     }
 }

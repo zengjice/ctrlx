@@ -142,6 +142,26 @@
             #expect(manager.sharedTerminalLayouts.isEmpty)
         }
 
+        @Test("Closing the left tab publishes the first remaining tab and keeps the split")
+        func closesLeftWindow() {
+            let manager = makeManager()
+            let panes = [
+                pane(id: "%1", windowId: "@1", windowIndex: 0),
+                pane(id: "%2", windowId: "@2", windowIndex: 1),
+                pane(id: "%3", windowId: "@3", windowIndex: 2, isWindowActive: true),
+                pane(id: "%4", windowId: "@4", windowIndex: 3),
+            ]
+            manager.updatePaneStates(from: panes)
+            manager.setSharedTerminalLayout(sessionName: "coding", leftWindowId: "@1", rightWindowIds: ["@4"], selectedRightWindowId: "@4", splitRatio: 0.6)
+            manager.updatePaneStates(from: Array(panes.dropFirst()))
+            #expect(manager.sharedTerminalLayouts["coding"] == SharedTerminalLayout(
+                leftWindowId: "@2", rightWindowIds: ["@4"], selectedRightWindowId: "@4", splitRatio: 0.6, revision: 2
+            ))
+            manager.updatePaneStates(from: [panes[3]])
+            #expect(manager.sharedTerminalLayouts["coding"]?.leftWindowId == "@4")
+            #expect(manager.sharedTerminalLayouts["coding"]?.rightWindowIds.isEmpty == true)
+        }
+
         @Test("Cold start initializes saved background splits and explicit unsplit sessions")
         func initializesEveryLiveSession() async {
             let savedBackgroundLayout = SavedFolderLayout(

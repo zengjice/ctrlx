@@ -1,6 +1,56 @@
 # Agent iOS 设计（当前支持 iOS Simulator）
 
-当前源码的对外入口为 `ctrlx ios`，配套技能为 `ctrlx:agent-ios`（`plugin/ctrlx/skills/agent-ios/`）。运行与控制仍由 Host Mac 上的 iOS Simulator 提供；配对 Mac / iOS Viewer 已加入只读画面查看的源码实现，真机及 Android 支持留待后续。内部 `Simulator*` 类型、`simulator.action` 协议和设备存储目录继续沿用。旧 CLI 名称不保留别名，调用脚本与 Skill 应随新版本一同更新；下文历史证据中的 `ctrlx simulator` / `agent-simulator` 保留当时名称，不代表本次改名已经过同样的设备验收。
+当前源码的对外入口为 `ctrlx ios`，配套技能为 `ctrlx:agent-ios`（`plugin/ctrlx/skills/agent-ios/`）。运行与控制仍由 Host Mac 上的 iOS Simulator 提供；配对 Mac / iOS Viewer 支持画面查看，以及显式接管后的触摸和剪贴板操作，真机及 Android 支持留待后续。内部 `Simulator*` 类型、`simulator.action` 协议和设备存储目录继续沿用。旧 CLI 名称不保留别名，调用脚本与 Skill 应随新版本一同更新；下文历史证据中的 `ctrlx simulator` / `agent-simulator` 保留当时名称，不代表本次改名已经过同样的设备验收。
+
+## Viewer 剪贴板与接管
+
+更新后的 Host 用 `supportsWorkspaceClipboard` 为配对 Mac / iOS Viewer 开启 Take Control、
+Copy、Paste；旧 Host 保持只读。触摸基于实际显示帧的设备 epoch / geometryVersion，
+坐标映射到指定设备。Mac 支持拖动选区和 ⌘C / ⌘V；iOS 支持点击、长按、拖动和工具栏按钮。
+控制权绑定 Viewer、标签和 surface ID，20 秒失效，前台预览续期；Host 人工输入、
+Viewer 断开或离开标签会释放控制。Agent 在 Viewer 控制期间不能重新 claim。
+
+复制先仅读取设备剪贴板 revision，再发 Cmd+C；轮询在同一次快照中确认 revision 改变后，
+才提取并检查新内容的 384 KiB 限制，避免旧的大剪贴板阻断复制或被误当成选中内容返回。
+若在模拟器内使用了原生 Copy 菜单（如 Safari 图片），使用复制按钮菜单中的
+Get Simulator Clipboard 显式取回设备剪贴板；长按复制按钮可打开此菜单。
+复制、读取剪贴板和粘贴的成功提示与浏览器共用底部浮层，不占布局高度，也不拦截点击或触控。
+连续操作或后续触摸清空提示时，Viewer 画布尺寸、位置和模拟器画面比例保持不变。
+粘贴将不超过 384 KiB 的文本 / PNG / JPEG 写入指定设备，在统一的 5 秒时限内确认目标内容
+可见后，再在身份仍有效时发 Cmd+V。旧快照只触发重新读取，不重复写入；超时或断连明确失败。
+复制和粘贴同时限制剪贴板 JSON 为 576 KiB（包括 Base64 与斜杠转义），为原生请求及加密
+Relay 消息预留空间。图片超过编码预算时由发送端重新编码或缩小，原始字节满足限制并不代表可直接传输。
+通过 CoreSimulator 的 SimPasteboardInterface 与临时命名 pasteboard 做一次传输，不启用
+自动同步，不使用 Host 全局 pasteboard。系统粘贴许可和目标 App 的图片支持仍由 iOS 决定；
+不支持此接口的 Xcode 明确报错，不退回覆盖 Host 剪贴板的路径。
+
+## Agent 工具选择入口
+
+`plugin/ctrlx/skills/agent-ios/SKILL.md` 是默认工具选择说明的唯一来源，首句明确本地
+CtrlX Codex / Claude Code 会话的实时 iOS Simulator 界面查看、操作、截图与复现优先使用 `ctrlx ios`。
+用户明确指定的工具、设备或测试框架保持优先；真机、Mac 界面、纯编译以及仅分析已提供
+图片不因此启动模拟器。完整操作步骤移至同技能的 `references/workflow.md`，按需读取。
+
+两种插件的现有 `SessionStart` hook 在 tmux 内成功转发生命周期事件后，将这个简短入口
+与 `file-links` 及 `agent-browser` 的简短正文一起写入一次 `additionalContext`；覆盖 startup / resume / clear /
+compact / fork，无需先隐式选中技能，也不在启动 hook 中执行 CLI 或启动设备。输出附带
+已安装技能的实际路径，用于解析相对参考链接。各技能独立读取，缺失、不可读、格式损坏
+或超过 5000 字节只跳过自身，不影响其余上下文及原事件。
+
+Codex 新会话用 `ctrlx ios run -- codex`，原生 Claude Code 在 CtrlX 本地终端直接运行
+`claude`；`run` 仍只接受 Codex。Host 同时识别原生 `claude` 和
+`claude/versions/<数字.数字.数字>` 路径，保留最近 agent、同用户和进程实例校验；
+版本目录内的 helper 不视为 Claude。来源标签解析失败的提示区分通用本地终端要求与
+Codex 的专用启动方式，不引导 Claude 启动嵌套 Codex。
+
+更新 App 后仍需更新已缓存的 agent 插件，并在启用 / 信任 hooks 的会话触发
+`SessionStart`，只修改仓库文件不会更新运行中的 agent。版本以各插件 manifest 为准。
+`python3 scripts/tests/test_agent_skills.py` 验证打包镜像、实际 hook 输出、五类启动来源、
+独立失败和生命周期转发；这些检查不证明模型一定遵从。真实选择验收应在不点名技能的
+新会话、恢复和压缩后请求模拟器截图 / UI 复现，并检查纯编译、真机及明确指定其它工具
+的任务保持原工作流。
+
+## 当前验收与交付记录
 
 当前验收以 **2026-10-12 用户最新更新** 为准：本期仅覆盖**内置屏 120 Hz**，外置屏 60 Hz 推迟。默认同步与可选低延迟模式的源帧至对应原生呈现均要求 **p95 ≤100 ms**，帧率 ≥50 FPS；点击至可见响应 **p95 ≤150 ms**，暖恢复 ≤250 ms。用户明确要求“不用重试再验证，直接复用已有证据”，因此本次仅按新门槛复核既有结果，不再启动性能测试、补采区间或扩展设备数；新增能力另做定向功能验证。历史失败记录保持原样，新结论与当时门槛分开保存。本机 P0 / P1 与跨机兼容、公开分发分别验收。
 
@@ -30,7 +80,7 @@
 | 触摸 | `tap`、`swipe`、`long-press`、`drag`、`pinch` | 单触点点击、滑动、长按、拖动及显式起始边缘手势；`pinch` 同时发送两个触点，按中心和比例缩放。使用模拟器逻辑点，旋转后重新观察 |
 | 键盘与文本 | `key`、`button`、`paste` | HID 按键及修饰键组合，Home / 锁屏 / 音量键，Unicode 剪贴板粘贴和指定目标的 iOS 菜单粘贴；人工输入采用 iOS 硬件键盘输入源 |
 | 原生显示 | `show`、`show --split`、`rotate`、`display-mode` | 内嵌 Metal 画面、左右分栏、方向切换、默认同步 / 可选低延迟显示。低延迟模式可能撕裂；选择标签不保证 Mac App 自动取得前台 |
-| Viewer 查看 | Mac / iOS Viewer 的 Host 模拟器标签 | 共享 Host 设备的只读画面；选择独立，隐藏 / 后台 / 断线停止取帧，无远程输入和设备关闭操作 |
+| Viewer 查看与接管 | Mac / iOS Viewer 的 Host 模拟器标签 | 共享 Host 画面，支持显式接管后的触摸及文本 / 图片剪贴板；选择独立，隐藏 / 后台 / 断线停止取帧并释放控制；iOS More / Tabs 支持显式 Close Tab，需 Host 宣告关闭能力 |
 | 截图标注 | Mac Host / Mac Viewer / iOS Viewer 标签内的 Annotate Screenshot | 原地冻结截图，框选 / 箭头 / 画笔后添加至同会话 Agent 输入；不发送回车、不抢模拟器控制权 |
 | 环境 | `location`、`appearance`、`privacy`、`push` | 固定定位及清除定位模拟、深浅色、列举权限的 grant / revoke / reset、向指定 App 注入模拟推送；关闭时不自动恢复这些配置 |
 | 资源与服务配置 | `config`、`resources`、`metrics`，`open --profile` / `--requires` | 默认双开，数量可配置为 1...32；检查内存压力和内存 / 磁盘保留量。报告进程 footprint / CPU，支持 standard / balanced 和功能依赖保留；配置上限不等于实测容量 |
@@ -52,11 +102,20 @@
 
 ### Pane 复用与远程查看的实现约定
 
+三类 Host 标签遵守同一个边界：按来源 Pane 区分人工 / Agent 默认资源，普通打开复用、
+显式多开不替换默认资源，查看 / 标注不改变归属。iOS 当前终端标题下方的 Open iOS 可打开该窗口
+已有设备；没有时，通过 `OpenPaneSimulator` 在 Host 创建标准配置的默认设备。
+人工打开和 Agent `open` 共用 pane 的默认设备与在途启动任务，不额外创建副本。
+浏览器保留人工与 Agent 两组，Files 目前只有人工组（点击 Agent 输出路径也属于人工操作）。
+
 `AgentSimulatorService` 在 Host 进程内以来源 pane ID 索引默认活动设备，
 并登记该 pane 正在进行的默认启动任务。并发 `open` 合并；先判断复用，再检查新增
 设备容量。显式 runtime / type / profile / UDID 不符或缺少声明的 required features
 时明确报冲突，不更改已有设备。`--new` 跳过默认映射，额外设备不替换主设备。
-关闭默认设备清理映射；owner 仍按 UID / PID / start time 校验，不通过 pane 共享写权限。
+关闭默认设备清理映射；Agent owner 仍按 UID / PID / start time 校验。
+人工创建的设备没有 Agent owner / writer；同一持久 pane 的 Agent 显式 `open` 才可采用它，
+仍需 `claim` 才能取得写权限。Viewer 打开已有 Agent 设备不改变 owner / writer。
+人工设备在来源 pane 消失或身份改变时关闭，隐藏空闲回收沿用现有规则。
 
 工作区 unregister 只 detach，register 重新采用同一个设备与稳定渲染对象；未挂载时
 不订阅本地连续帧。设备可在没有本地工作区窗口时由来源 agent 打开。tmux pane 的
@@ -76,16 +135,29 @@ MainView 整体迁移原会话的标签集合、选择与分栏状态，避免�
 
 网络模型位于 `CtrlxNetworking/Models/RemoteSimulator.swift`：session 快照新增可选
 `supportsSimulatorViewing` / `simulatorTabs`，`BrowseSimulator` 只请求单帧。
-`withPairId` 保留这两个字段，Viewer 状态依附原有每 Host 连接与工作区。发送前检查
+`withPairId` 保留这些字段，Viewer 状态依附原有每 Host 连接与工作区。发送前检查
 能力标志；每次请求检查 session / tab / 活动 owner，完成后重查关闭及路由变化。
 不把浏览器命令或 agent 的本地身份凭据暴露给 Viewer。
+
+创建能力另以可选 `supportsPaneSimulator` 标识；旧 Host 不支持创建时入口置灰。
+`OpenPaneSimulator` 绑定发送时的 Host / tmux server / 持久 pane 身份，Host 在启动前及
+启动完成后重新解析来源；来源变化则回收尚未发布的设备。更新的路由快照优先于旧的
+异步查询结果。启动使用独立请求队列，不占终端键盘接收循环；重复请求合并且沿用设备
+容量、内存和磁盘限制。iOS 收到结果后再次校验身份，离开/取消等待不会跳回旧标签。
+取消等待不撤销其他 Viewer 共用的 Host 启动。创建入口不增加远程输入或关闭权限。
+
+显式关闭另以 `supportsSimulatorClosing` 标识，新 Viewer 不向旧 Host 发送
+`CloseSimulator`。命令携带不可复用的 tab UUID 和 session，Host 验证当前归属及
+活动 owner 后复用设备关闭流程，等待录屏收尾及关机；不借用浏览器操作或关闭来源
+终端。命令走独立请求队列，不阻塞键盘接收。iOS 的 More 和 Tabs 行菜单均显示
+Close Tab；目录移除通知与关闭回复先后无关，切换到其他标签后不会被旧回复拉回。
 
 `ConnectedViewer` 将模拟器请求放进既有 preview 队列，与浏览器合计每连接最多四个
 并发请求；终端输出拥塞时暂停新取帧。模拟器服务全局最多四个请求，同设备同尺寸的
 在途编码合并，不同尺寸等待已有编码结束。每个可见 Viewer surface 仅一个在途帧，
 回复后间隔 180 ms；解码在并发执行上下文进行，过期选择 / 隐藏 surface 的返回不展示。
 Mac 复用 session 标签栏与分栏；iOS 在 Tabs 中列出 iOS Simulators on Host。
-远程标签提供查看和本地分栏，不提供关闭 Host 设备的按钮。
+Mac 远程标签提供查看和本地分栏；iOS 增加上述显式关闭入口。
 
 原生 helper 的 `preview` 复用已有独立截图缓冲区、方向处理和 ImageIO，直接输出
 JPEG，不经 PNG 落盘或录屏。按 Viewer 实际画布缩放、不放大源图、最长边最多 2560，
@@ -102,12 +174,17 @@ Host 的原生渲染视图。支持红色框选、箭头、画笔、撤销、清
 笔迹使用图片归一化坐标，窗口缩放 / 分栏不改变落点。冻结的是本次截图，设备与其他
 Viewer 继续运行；设备随后旋转也不会改变正在标注的画布。
 
-Host 与 Viewer 都复用 `BrowseSimulator` 的有界 `preview`，请求最长边 2560 的新截图，
-无新端口、Relay 消息或磁盘 PNG。截图期间关闭设备、取消操作或来源 pane / window / session
-变化时拒绝过期结果；解码失败不进入可发送的画布。Viewer 从有效预览同步当前归属，
-每次捕获开始时单独固定路由快照，而非始终与首次打开的窗口比较；已完成的同会话窗口迁移
-不要求重建 Viewer，过期轮询不能回写旧归属。Viewer 标注期间暂停自身轮询，取消或
-完成后重新取帧，旧在途请求不能覆盖新画面。Mac Host 只隔离当前视图的鼠标、按键及 Home，
+Mac Host 继续复用 `BrowseSimulator` 的有界 `preview`，请求最长边 2560 的新截图；
+捕获期间关闭设备、取消或来源 pane / window / session 变化时拒绝过期结果。
+Mac / iOS Viewer 则在点击时固定**已成功解码并显示**的预览原始字节、路由及接收 Agent，
+先固定再停止轮询，不重新向 Host 请求高清截图，也不等待已在途的预览请求。
+已收到但尚未显示的新帧不能替换截图；标注中不升级分辨率或替换画面。图片质量沿用
+点击时的预览尺寸，复用标注组件仅需本地解码，无额外网络往返、编码或磁盘 PNG。
+首帧未显示、断线或图片无效时不可开始；已知路由变化但新画面尚未显示时明确拒绝。
+Viewer 从有效预览同步当前归属，已完成的同会话窗口迁移不要求重建 Viewer。
+标注期间暂停自身轮询，取消或完成后重新取帧，即使图片字节未变也恢复显示；旧在途
+请求及迟到的解码结果不能覆盖冻结画面。无新端口或 Relay 消息。
+Mac Host 只隔离当前视图的鼠标、按键及 Home，
 释放已有人工输入与键盘焦点，不发 `claim`、不撤销 Agent 的 writer，也不暂停原生渲染。
 
 捕获开始时固定来源 pane 中已识别的图片接收 Agent 身份；没有该目标则要求显式选择
@@ -126,7 +203,7 @@ Host 与 Viewer 都复用 `BrowseSimulator` 的有界 `preview`，请求最长�
 |---|---|
 | 任意多点手势、双指旋转或平移 | 当前双指接口仅提供基础 `pinch`，不暴露任意触点轨迹 |
 | Mac 输入法 marked-text 组合及候选窗 | 已验证 iOS 硬件键盘输入源中的拼音；显式粘贴可以输入 Unicode，但不验证逐字符输入或组合过程 |
-| 模拟器远程控制及视频流 | 已提供 Viewer 只读 JPEG 预览；未提供远程输入、创建 / 关闭设备、音频或高帧率视频传输 |
+| 模拟器远程设备关闭及视频流 | 已提供 Viewer JPEG 预览、显式触摸接管和剪贴板；未提供远程设备关闭、音频或高帧率视频传输 |
 | 真机控制 | 当前接口面向 iOS Simulator，不控制物理 iPhone |
 | 设备显式克隆 | 已提供复用、擦除和删除，尚未提供复制一台设备作为另一份并行测试环境 |
 | Runtime 下载 / 安装 | `inventory` 只列举已安装资源，Xcode 和 runtime 由外部工作流准备 |
@@ -139,7 +216,7 @@ Host 与 Viewer 都复用 `BrowseSimulator` 的有界 `preview`，请求最长�
 - 真人鼠标拖动尚未完成实测验收；agent `drag` 的结果及输入队列回归不能替代真人路径的效果证据。
 - `show` 可以选择和分栏标签，但自动取得 Mac 前台未获得可靠验证，不作保证。
 - 当前资格限本机、iOS 27、内置 120 Hz、两台设备；外置 60 Hz、混合 1× / 2× 显示、四台及以上联合性能、其他 Mac / Xcode / runtime 均不由现有结论保证。
-- 本期交付目标为 Codex，Claude 支持推迟；跨机兼容、公开分发和公证另行验收。源码测试通过与签名包已包含修复是不同状态，当前剩余交付工作见文首及收尾清单。
+- 既有原生验收覆盖 Codex；当前入口已扩展至 Claude Code，启动上下文与原生调用者识别有定向测试，真实 Claude 会话 / 设备操作仍需独立验收。跨机兼容、公开分发和公证另行验收。源码测试通过与签名包已包含修复是不同状态，当前剩余交付工作见文首及收尾清单。
 - UIKit / SwiftUI / WKWebView 的常用 fixture 已验证，不扩展为任意 App、所有控件或所有系统弹层均通过。未验收不等于已确认不可用。
 
 ### 支持操作中的原生与语义限制

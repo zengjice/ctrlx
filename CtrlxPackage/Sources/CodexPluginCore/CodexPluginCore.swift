@@ -1,9 +1,9 @@
 import ClaudeCodePluginCore
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
-import CtrlxPluginProtocol
 
 /// The OpenAI Codex CLI agent, behind the agent-blind `PluginCore` contract.
 /// An in-process actor constructed from the compile-time registry.
@@ -16,16 +16,18 @@ import CtrlxPluginProtocol
 /// `docs/plugins/codex.md`.
 ///
 /// Defensive by mandate (spec §13): never trap on hostile on-disk data.
-public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
+public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPluginMaintenance, AgentAccountReporting {
     public static let pluginID = "codex"
 
     private var host: (any PluginHost)?
     private var settings = CodexSettings()
 
     private let scanner = CodexScanner()
-    private let correlation: CodexSessionCorrelation
+    private var correlation: CodexSessionCorrelation
+    private let correlationWasInjected: Bool
     private let configReader = CodexConfigReader()
     private let postureReader = CodexRolloutPostureReader()
+    private let accountReporter = CodexAccountReporter()
 
     @Dependency(ProcessRunner.self) private var processRunner
 
@@ -78,17 +80,26 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
 
     public init() {
         self.correlation = .live()
+        self.correlationWasInjected = false
     }
 
     /// Test seam: inject the pane↔session correlation store so a test can point
     /// it at a temp directory instead of the real `~/.ctrlx/codex-sessions/`.
     init(correlation: CodexSessionCorrelation) {
         self.correlation = correlation
+        self.correlationWasInjected = true
     }
 
     // MARK: - Lifecycle
 
+    public func dashboardAccounts() async -> [DashboardAccount] {
+        await accountReporter.accounts(command: command, roots: codexHomeRoots())
+    }
+
     public func initialize(_ env: PluginEnv, host: any PluginHost) async throws {
+        if !correlationWasInjected {
+            correlation = .live(stateDirectory: env.stateDir)
+        }
         self.host = host
         // `env.settings` is the authoritative initial settings value (spec §11).
         settings = CodexSettings.decode(from: env.settings)
@@ -311,7 +322,9 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
         sessionID: String,
         transcriptPath: String?
     ) async -> CodexApprovalsReviewer {
-        if let cached = reviewerPostures[sessionID] { return cached }
+        if let cached = reviewerPostures[sessionID] {
+            return cached
+        }
         return await refreshedPosture(sessionID: sessionID, transcriptPath: transcriptPath)
     }
 
@@ -388,7 +401,9 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
         root: URL,
         transcriptPath: String
     ) -> CodexApprovalsReviewer {
-        if let known = reviewerSnapshots[sessionID] { return known }
+        if let known = reviewerSnapshots[sessionID] {
+            return known
+        }
         let reconstructed = reconstructedSnapshot(root: root, transcriptPath: transcriptPath)
         reviewerSnapshots[sessionID] = reconstructed
         return reconstructed
@@ -443,6 +458,70 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
         return AgentForkLaunch(command: LaunchCommand(
             command: settings.commandPath,
             args: ["fork", sessionID, "-C", projectPath] + terminalTelemetryArguments(),
+            env: ["CODEX_HOME": root]
+        ))
+    }
+
+    /// Verified with scripts/verify-workspace-agent-resume.py (idle/interrupted/approval).
+    private static let verifiedResumeVersion = "codex-cli 0.162.1"
+
+    public func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation? = nil) async throws -> AgentResumeDescriptor {
+        guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Codex conversation ID.") }
+        @Dependency(AgentForkHistoryClient.self) var history
+        let roots: [String]
+        if let invocation {
+            roots = [invocation.configurationRoots["CODEX_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path]
+        } else {
+            roots = codexHomeRoots().map(\.path)
+        }
+        let root = try await history.root(sessionID, roots, .codex)
+        let arguments = try Self.resumeArguments(invocation?.arguments ?? [])
+        return AgentResumeDescriptor(
+            pluginID: Self.pluginID,
+            sessionID: sessionID,
+            projectPath: projectPath,
+            configurationRoot: root,
+            usesDefaultConfiguration: false,
+            executable: invocation?.executable,
+            cliVersion: invocation?.version,
+            arguments: arguments,
+            automaticResumeUnavailableReason: invocation?.version == Self.verifiedResumeVersion ? nil : (invocation.map { "Automatic resume has not been verified for Codex \($0.version ?? "unknown version")." }
+                ?? "The original process invocation was not recorded.")
+        )
+    }
+
+    private static func resumeArguments(_ arguments: [String]) throws -> [String] {
+        try AgentResumeArguments.capture(
+            arguments,
+            values: ["--model", "--profile", "--sandbox", "--ask-for-approval", "--add-dir", "--local-provider"],
+            flags: ["--oss", "--search", "--no-alt-screen", "--no-daemon", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--approve-for-me"],
+            ignoredValues: ["--cd", "--image"],
+            ignoredFlags: ["--last", "--all", "--include-non-interactive", "--worktree"],
+            aliases: ["-c": "--config", "-m": "--model", "-p": "--profile", "-s": "--sandbox", "-a": "--ask-for-approval", "-C": "--cd", "-i": "--image"],
+            configKeys: ["model", "model_provider", "model_reasoning_effort", "model_reasoning_summary", "service_tier", "approval_policy", "sandbox_mode"]
+        )
+    }
+
+    public func commandForResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch {
+        guard
+            descriptor.pluginID == Self.pluginID, UUID(uuidString: descriptor.sessionID) != nil,
+            descriptor.configurationRoot.hasPrefix("/"), descriptor.projectPath.hasPrefix("/") else {
+            throw AgentForkError("Invalid Codex recovery identity.")
+        }
+        @Dependency(AgentForkHistoryClient.self) var history
+        // Only the recorded root is eligible. A changed settings list must not
+        // silently resume another account's copy of the same conversation.
+        let root = try await history.root(descriptor.sessionID, [descriptor.configurationRoot], .codex)
+        guard try Self.resumeArguments(descriptor.arguments) == descriptor.arguments else { throw AgentForkError("Invalid Codex recovery options.") }
+        var arguments = descriptor.arguments
+        // A recovered TUI owns its process lifetime; no shared daemon keeps an
+        // interrupted launch running after its pane disappears.
+        if descriptor.cliVersion == Self.verifiedResumeVersion, !arguments.contains("--no-daemon") {
+            arguments.append("--no-daemon")
+        }
+        return AgentForkLaunch(command: LaunchCommand(
+            command: descriptor.executable ?? settings.commandPath,
+            args: ["resume", descriptor.sessionID, "-C", descriptor.projectPath] + arguments + terminalTelemetryArguments(),
             env: ["CODEX_HOME": root]
         ))
     }
@@ -528,7 +607,9 @@ public actor CodexPluginCore: AgentSessionForking, AgentPluginMaintenance {
             sessionEndMonitor = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(CodexPluginCore.sessionEndPollSeconds))
-                    if Task.isCancelled { return }
+                    if Task.isCancelled {
+                        return
+                    }
                     await self?.pollSessionEnds()
                 }
             }

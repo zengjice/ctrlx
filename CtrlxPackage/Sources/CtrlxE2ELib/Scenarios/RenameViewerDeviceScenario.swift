@@ -17,6 +17,10 @@ public enum RenameViewerDeviceScenario {
         //    FreshPairingScenario above runs `uninstallIOSApp` first, so the
         //    field starts empty — no select-all-then-overwrite is needed.
         TestStep.iosTap(.label("Settings"))
+        TestStep.iosWaitForElement(.identifier("connection-settings-link"), timeout: 5)
+        // Let the Settings sheet settle before following its first navigation link.
+        TestStep.wait(seconds: 1)
+        TestStep.iosTap(.identifier("connection-settings-link"))
         TestStep.iosWaitForElement(.label("Device Name"), timeout: 5)
         // The Section header is queryable as soon as the sheet starts
         // animating in, but the embedded TextField doesn't reliably accept

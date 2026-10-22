@@ -1,0 +1,327 @@
+Subject: Preserve Chrome extension trusted header callbacks through CEF
+Base: chromiumembedded/cef 1ce985cb23056548b9cc51483bbef4faf68b1cd3
+Chromium: 152.0.7977.134
+
+Candidate source patch. Not yet compiled or runtime-validated; the pinned
+prebuilt SDK does not include it. See docs/browser-extensions-design.md,
+"Cross-origin header compatibility", for reproduction and acceptance gates.
+
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+@@ -495,11 +495,10 @@
+             .InitWithNewPipeAndPassReceiver();
+   }
+ 
+-  // TODO(chrome): Is it necessary to proxy |header_client| callbacks?
+   ChromeContentBrowserClient::WillCreateURLLoaderFactory(
+       browser_context, frame, render_process_id, type, request_initiator,
+       isolation_info, navigation_id, ukm_source_id, factory_builder,
+-      /*header_client=*/nullptr, bypass_redirect_checks, disable_secure_dns,
++      header_client, bypass_redirect_checks, disable_secure_dns,
+       handler_override, navigation_response_task_runner);
+ 
+   DCHECK(intercepting_factory->overriding_factory);
+--- a/libcef/browser/net_service/proxy_url_loader_factory.h
++++ b/libcef/browser/net_service/proxy_url_loader_factory.h
+@@ -211,6 +211,8 @@
+           target_factory_remote,
+       mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
+           header_client_receiver,
++      mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>
++          target_header_client,
+       std::unique_ptr<InterceptedRequestHandler> request_handler);
+ 
+   static void CreateOnIOThread(
+@@ -219,6 +221,8 @@
+           target_factory_remote,
+       mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
+           header_client_receiver,
++      mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>
++          target_header_client,
+       ContextId context_id,
+       std::unique_ptr<InterceptedRequestHandler> request_handler);
+ 
+@@ -232,6 +236,9 @@
+   mojo::Receiver<network::mojom::TrustedURLLoaderHeaderClient>
+       url_loader_header_client_receiver_{this};
+ 
++  mojo::Remote<network::mojom::TrustedURLLoaderHeaderClient>
++      target_header_client_;
++
+   std::unique_ptr<InterceptedRequestHandler> request_handler_;
+ 
+   bool destroyed_ = false;
+--- a/libcef/browser/net_service/proxy_url_loader_factory.cc
++++ b/libcef/browser/net_service/proxy_url_loader_factory.cc
+@@ -15,6 +15,7 @@
+ #include "base/no_destructor.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
++#include "base/values.h"
+ #include "cef/libcef/browser/context.h"
+ #include "cef/libcef/browser/origin_whitelist_impl.h"
+ #include "cef/libcef/browser/thread_util.h"
+@@ -27,6 +28,7 @@
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/referrer.h"
+ #include "mojo/public/cpp/base/big_buffer.h"
++#include "mojo/public/cpp/bindings/callback_helpers.h"
+ #include "mojo/public/cpp/bindings/receiver.h"
+ #include "net/http/http_status_code.h"
+ #include "net/url_request/redirect_util.h"
+@@ -307,6 +309,26 @@
+   int32_t id() const { return id_; }
+ 
+  private:
++  void ContinueBeforeSendHeaders(
++      const net::HttpRequestHeaders& original_headers,
++      OnBeforeSendHeadersCallback callback,
++      int result,
++      const std::optional<net::HttpRequestHeaders>& headers,
++      std::optional<base::DictValue> extended_net_log_events);
++  void ContinueHeadersReceived(
++      const std::string& original_headers,
++      OnHeadersReceivedCallback callback,
++      int result,
++      const std::optional<std::string>& headers,
++      const std::optional<GURL>& redirect_url);
++  void FinishHeadersReceived(
++      std::optional<std::string> extension_headers,
++      const std::optional<GURL>& extension_redirect_url,
++      OnHeadersReceivedCallback callback,
++      int result,
++      const std::optional<std::string>& headers,
++      const std::optional<GURL>& redirect_url);
++
+   // Helpers for determining the request handler.
+   void BeforeRequestReceived(const GURL& original_url,
+                              bool intercept_request,
+@@ -408,6 +430,7 @@
+ 
+   bool current_request_uses_header_client_ = false;
+   OnHeadersReceivedCallback on_headers_received_callback_;
++  mojo::Remote<network::mojom::TrustedHeaderClient> target_header_client_;
+   mojo::Receiver<network::mojom::TrustedHeaderClient> header_client_receiver_{
+       this};
+ 
+@@ -502,9 +525,8 @@
+     target_loader_.reset();
+   }
+ 
+-  if (header_client_receiver_.is_bound()) {
+-    std::ignore = header_client_receiver_.Unbind();
+-  }
++  header_client_receiver_.reset();
++  target_header_client_.reset();
+ 
+   current_request_uses_header_client_ =
+       factory_->url_loader_header_client_receiver_.is_bound();
+@@ -591,8 +613,15 @@
+     mojo::PendingReceiver<network::mojom::TrustedHeaderClient> receiver) {
+   DCHECK(current_request_uses_header_client_);
+ 
+-  // Only called if we're using the default loader.
++  // Redirects may create another network loader for the same request.
++  header_client_receiver_.reset();
++  target_header_client_.reset();
+   header_client_receiver_.Bind(std::move(receiver));
++  if ((options_ & network::mojom::kURLLoadOptionUseHeaderClient) &&
++      factory_->target_header_client_) {
++    factory_->target_header_client_->OnLoaderCreated(
++        id_, target_header_client_.BindNewPipeAndPassReceiver());
++  }
+ }
+ 
+ bool InterceptedRequest::InputStreamFailed() {
+@@ -618,8 +647,32 @@
+     return;
+   }
+ 
+-  request_.headers = headers;
+-  std::move(callback).Run(net::OK, std::nullopt, std::nullopt);
++  if (target_header_client_) {
++    target_header_client_->OnBeforeSendHeaders(
++        request_url, headers,
++        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
++            base::BindOnce(&InterceptedRequest::ContinueBeforeSendHeaders,
++                           weak_factory_.GetWeakPtr(), headers,
++                           std::move(callback)),
++            net::ERR_ABORTED, std::nullopt, std::nullopt));
++    return;
++  }
++  ContinueBeforeSendHeaders(headers, std::move(callback), net::OK,
++                            std::nullopt, std::nullopt);
++}
++
++void InterceptedRequest::ContinueBeforeSendHeaders(
++    const net::HttpRequestHeaders& original_headers,
++    OnBeforeSendHeadersCallback callback,
++    int result,
++    const std::optional<net::HttpRequestHeaders>& headers,
++    std::optional<base::DictValue> extended_net_log_events) {
++  if (result == net::OK) {
++    // Redirects restart the loader with request_. Keep trusted extension edits
++    // out of its CORS-checked headers; they are applied again for the next hop.
++    request_.headers = original_headers;
++  }
++  std::move(callback).Run(result, headers, std::move(extended_net_log_events));
+ 
+   // Resume handling of client messages after continuing from an async callback.
+   if (proxied_client_receiver_.is_bound()) {
+@@ -637,8 +690,36 @@
+     return;
+   }
+ 
+-  current_headers_ = base::MakeRefCounted<net::HttpResponseHeaders>(headers);
+-  on_headers_received_callback_ = std::move(callback);
++  if (target_header_client_) {
++    target_header_client_->OnHeadersReceived(
++        headers, remote_endpoint, ssl_info,
++        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
++            base::BindOnce(&InterceptedRequest::ContinueHeadersReceived,
++                           weak_factory_.GetWeakPtr(), headers,
++                           std::move(callback)),
++            net::ERR_ABORTED, std::nullopt, std::nullopt));
++    return;
++  }
++  ContinueHeadersReceived(headers, std::move(callback), net::OK,
++                          std::nullopt, std::nullopt);
++}
++
++void InterceptedRequest::ContinueHeadersReceived(
++    const std::string& original_headers,
++    OnHeadersReceivedCallback callback,
++    int result,
++    const std::optional<std::string>& headers,
++    const std::optional<GURL>& redirect_url) {
++  if (result != net::OK) {
++    std::move(callback).Run(result, headers, redirect_url);
++    return;
++  }
++  // CEF handlers must see the extension's final headers, including Set-Cookie.
++  current_headers_ = base::MakeRefCounted<net::HttpResponseHeaders>(
++      headers.value_or(original_headers));
++  on_headers_received_callback_ = base::BindOnce(
++      &InterceptedRequest::FinishHeadersReceived, weak_factory_.GetWeakPtr(),
++      headers, redirect_url, std::move(callback));
+ 
+   std::optional<net::RedirectInfo> redirect_info;
+   std::string location;
+@@ -652,6 +733,22 @@
+       redirect_info,
+       base::BindOnce(&InterceptedRequest::ContinueToHandleOverrideHeaders,
+                      weak_factory_.GetWeakPtr()));
++}
++
++void InterceptedRequest::FinishHeadersReceived(
++    std::optional<std::string> extension_headers,
++    const std::optional<GURL>& extension_redirect_url,
++    OnHeadersReceivedCallback callback,
++    int result,
++    const std::optional<std::string>& headers,
++    const std::optional<GURL>& redirect_url) {
++  // A no-op CEF handler must not erase an extension's response modification.
++  const auto final_redirect_url =
++      redirect_url && !redirect_url->is_empty() ? redirect_url
++                                              : extension_redirect_url;
++  header_client_redirect_url_ = final_redirect_url.value_or(GURL());
++  std::move(callback).Run(result, headers ? headers : extension_headers,
++                         final_redirect_url);
+ }
+ 
+ // URLLoaderClient methods.
+@@ -917,9 +1014,11 @@
+   current_request_uses_header_client_ = true;
+ 
+   DCHECK(!stream_loader_);
++  mojo::PendingRemote<network::mojom::TrustedHeaderClient> header_client;
++  OnLoaderCreated(header_client.InitWithNewPipeAndPassReceiver());
+   stream_loader_ = std::make_unique<StreamReaderURLLoader>(
+       id_, request_, proxied_client_receiver_.BindNewPipeAndPassRemote(),
+-      header_client_receiver_.BindNewPipeAndPassRemote(), traffic_annotation_,
++      std::move(header_client), traffic_annotation_,
+       std::move(current_cached_metadata_),
+       std::make_unique<InterceptDelegate>(std::move(response),
+                                           weak_factory_.GetWeakPtr()));
+@@ -1377,6 +1476,8 @@
+     mojo::PendingRemote<network::mojom::URLLoaderFactory> target_factory_remote,
+     mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
+         header_client_receiver,
++    mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>
++        target_header_client,
+     std::unique_ptr<InterceptedRequestHandler> request_handler)
+     : request_handler_(std::move(request_handler)), weak_factory_(this) {
+   CEF_REQUIRE_IOT();
+@@ -1394,6 +1495,9 @@
+ 
+   if (header_client_receiver) {
+     url_loader_header_client_receiver_.Bind(std::move(header_client_receiver));
++  }
++  if (target_header_client) {
++    target_header_client_.Bind(std::move(target_header_client));
+   }
+ }
+ 
+@@ -1407,12 +1511,15 @@
+     mojo::PendingRemote<network::mojom::URLLoaderFactory> target_factory,
+     mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
+         header_client_receiver,
++    mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>
++        target_header_client,
+     ContextId context_id,
+     std::unique_ptr<InterceptedRequestHandler> request_handler) {
+   CEF_REQUIRE_IOT();
+   auto proxy = base::WrapUnique(new ProxyURLLoaderFactory(
+       std::move(factory_receiver), std::move(target_factory),
+-      std::move(header_client_receiver), std::move(request_handler)));
++      std::move(header_client_receiver), std::move(target_header_client),
++      std::move(request_handler)));
+ 
+   // Set disconnect callback to remove proxy from map when disconnected.
+   proxy->SetDisconnectCallback(base::BindOnce(
+@@ -1451,7 +1558,12 @@
+ 
+   mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
+       header_client_receiver;
++  mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>
++      target_header_client;
+   if (header_client) {
++    // Chain Chrome's extension header client instead of dropping it. Its
++    // trusted callbacks run after the network service's CORS request checks.
++    target_header_client = std::move(*header_client);
+     header_client_receiver = header_client->InitWithNewPipeAndPassReceiver();
+   }
+ 
+@@ -1463,7 +1575,8 @@
+                 base::BindOnce(&ProxyURLLoaderFactory::CreateOnIOThread,
+                                std::move(factory_receiver),
+                                std::move(target_factory_remote),
+-                               std::move(header_client_receiver), context_id,
++                               std::move(header_client_receiver),
++                               std::move(target_header_client), context_id,
+                                std::move(request_handler)));
+ }
+ 
+@@ -1527,6 +1640,8 @@
+                 mojo::PendingRemote<network::mojom::URLLoaderFactory>(),
+                 mojo::PendingReceiver<
+                     network::mojom::TrustedURLLoaderHeaderClient>(),
++                mojo::PendingRemote<
++                    network::mojom::TrustedURLLoaderHeaderClient>(),
+                 std::move(request_handler)));
+ 
+             proxy->SetDisconnectCallback(base::BindOnce(
+@@ -1596,7 +1711,12 @@
+     const network::ResourceRequest& request,
+     mojo::PendingReceiver<network::mojom::TrustedHeaderClient> receiver) {
+   CEF_REQUIRE_IOT();
+-  new CorsPreflightRequest(std::move(receiver));
++  if (target_header_client_) {
++    target_header_client_->OnLoaderForCorsPreflightCreated(
++        request, std::move(receiver));
++  } else {
++    new CorsPreflightRequest(std::move(receiver));
++  }
+ }
+ 
+ void ProxyURLLoaderFactory::OnTargetFactoryError() {

@@ -8,6 +8,65 @@ dated acceptance paragraphs retain their original test scope, not a fresh run.
 
 ## macOS Services
 
+### AppKit layout diagnostics
+
+Mac **Settings → General → Diagnostics → Debug Mode** also controls ongoing
+browser-recording diagnostics. It defaults off per device, restores on launch,
+and changes take effect immediately, including recordings already in progress.
+The switch does not start Chromium. While enabled, recording start/prepare/first
+frame/stop/finalize/completion and renderer termination are logged. Active
+recordings (including finalization) add one progress sample every five seconds.
+Samples contain phase age, frame/byte/error/skip counts, page visibility, Host
+process resident/footprint bytes, build/OS identity and cached window/tab-layout
+counts and selections. This samples Host memory, not the sum of Chromium helper
+processes; a main-thread stall also stalls sampling.
+
+`BrowserDiagnosticStore` writes each small JSONL entry synchronously, without a
+background flush queue, to `~/Library/Logs/CtrlX/Browser/`. Three rotating files
+are limited to 2 MiB each (directory 0700, files 0600). Turning Debug Mode off
+stops collection, retains evidence and does not affect recording. A write failure
+stops collection until toggled again and reports one error in the system log.
+E2E uses only `<state-root>/browser-diagnostics/` and requires an explicit root.
+No URLs, headers, credentials, output paths, page/terminal text or window titles
+are collected. Periodic samples never request layout or walk the view tree.
+
+For an intermittent recording crash, enable this switch on the **recording
+Host**, reproduce, then collect the entire `Browser/` directory together with
+the matching macOS `.ips` crash report and approximate crash time. These are
+pre-crash breadcrumbs, not a crash fix or a substitute for the crash stack.
+`BrowserDiagnosticsTests` covers setting persistence/live toggling, failure
+handling, rotation, private permissions, isolation and content-free snapshots.
+The isolated signed Debug-app test `AgentBrowser/tests/recording_diagnostics.py`
+uses the live settings binding, checks background capture and bounded sample
+cadence, verifies capture continues after diagnostics are disabled, and confirms
+logs remain readable after abruptly killing only its disposable Host. Run it
+through the managed artifact wrapper with a `prepare_upstream_probe.sh` fixture,
+passing `<fixture>/CtrlX.app <fixture>/agent-browser <fixture>/codex`.
+
+`AppKitDiagnostics` synchronously records the first toolbar/window-layout
+exception reported through the native `CXBrowserApplication` per launch. The
+bridge always forwards the exception to AppKit afterward, including when
+diagnostics fail; this is evidence collection, not recovery or a layout fix.
+It runs independently of the optional debug UI setting.
+
+Reports live in `~/Library/Logs/CtrlX/AppKit/` (directory 0700, JSON files 0600),
+retaining at most five reports. E2E launches require `--ctrlx-state-root` and
+write only to its `appkit-diagnostics/` child. Snapshots include build/OS identity,
+stack frames, window role, sanitized connection state, stable toolbar item IDs,
+cached geometry and constraints. Native view addresses can be matched to AppKit's
+`NSToolbarItemViewer` loop warning. Collection never requests layout, fitting or
+intrinsic sizes, and excludes exception reasons/userInfo, window titles, labels,
+terminal content, drafts and URLs.
+
+`AppKitDiagnosticsTests` covers capture, context updates, no relayout/content
+collection, synchronous failure handling, retention and E2E storage isolation.
+The isolated signed-app probe `CtrlxPackage/AgentBrowser/tests/appkit_diagnostics.py`
+verifies capture before AppKit terminates and superclass forwarding when the
+diagnostics delegate throws. It injects a synthetic exception, not the original
+intermittent constraint loop. Prepare an app with `prepare_upstream_probe.sh`,
+then run it through `scripts/clean-build.py use-artifact --path <fixture> --
+python3 CtrlxPackage/AgentBrowser/tests/appkit_diagnostics.py <fixture>/CtrlX.app`.
+
 ### FileBrowserClient / HostFileBrowser
 
 Dependency-injected Host filesystem operations for Mac Host, Mac Viewer and iOS
@@ -77,8 +136,19 @@ The current recognizer accepts `shift` (case-insensitive) or `⇧`, followed by
 `⇧← to answer`, `Shift + Left to answer`, and `⇧ + ← to answer`.
 Only the complete nearby footer is joined across wrapped rows; modifier/arrow
 order is not arbitrary, and other keys or additional modifiers are rejected.
+The known `⚠ weekly limit: N% left · /status` and
+`⚠ weekly limit: only N% left` warnings may follow the answer hint before the
+composer, including word wrapping within the same eight preceding live rows.
+Only a complete weekly-limit suffix is accepted; unknown warnings, incomplete
+suffixes and intervening output still fail closed. Warning changes are
+presentation-only and cannot re-arm a dismissed question.
 Braille animation is ignored only around known footer/empty-composer structure,
 not inside a user's draft. Source: `CtrlxCommon/Models/CodexQuestionPrompt.swift`.
+Mac/iOS native readers resolve terminal-owned graphemes, convert unwritten NUL cells
+to spaces and skip the trailing cells of wide glyphs. This preserves word gaps
+and actual draft text without changing the terminal buffer; tmux's textual Host
+recheck still uses the same strict parser. The native reader lives in
+`CtrlxCommon/Utilities/CodexQuestionPrompt+Terminal.swift`.
 Age is presentation-only: ticks neither restart the 350 ms stability check nor
 re-arm a dismissed queue. Other shortcuts, arbitrary suffixes, incomplete hints
 and drafts still fail closed. Mac/iOS-side
@@ -87,9 +157,16 @@ native wrapper checks a stable screen after 350 ms; only the key window's focuse
 visible terminal at the live bottom is eligible (no editor overlay, text selection,
 mouse drag or marked IME text). Typing postpones the check. It neither changes
 focus nor sends Enter/answers, and does not change the agent's working state.
+Mac and iOS inspect completed terminal frames: synchronized output in progress
+preserves an existing stability deadline. If that deadline expires mid-frame,
+the native frame-completion event resumes the check, revalidating the live prompt
+and input eligibility before sending. Parsing an output chunk also defers checks
+until the whole chunk and any viewport restoration finish. Continuous status
+redraws therefore cannot keep restarting the wait. Cancellation or a new question
+identity discards a check waiting for frame completion.
 
 Local panes call `TmuxService.expandCodexQuestions`; viewers enqueue the additive
-`ExpandCodexQuestions(expectedCount:)` intent behind existing keyboard input.
+`ExpandCodexQuestions(expectedCount:expectedQuestionID:)` intent behind existing keyboard input.
 The intent requires an explicit `codexQuestionsHandled` acknowledgement. The Host
 reports true after tmux accepts the opener, when another viewer already handled
 that count, or after accepting a reduced/empty queue baseline; it reports false
@@ -101,14 +178,27 @@ the live screen before claiming the opener. Non-shell commands and missing/faile
 process snapshots fail closed. Duplicate counts do not repeat the process scan.
 The Host commits a growing count only after sending the opener successfully;
 clients commit their count only after a positive acknowledgement. Host-wide
-queue-count deduplication prevents duplicate automatic opens from multiple viewers,
-tab remounts and Escape/redraws. Queue reductions
+queue-count deduplication within each question identity prevents duplicate automatic
+opens from multiple viewers, tab remounts and Escape/redraws. The Codex question hook
+supplies a session-qualified `tool_use_id` through `NotificationSpec.questionID`.
+The Host publishes it as optional `PaneState.codexQuestionID`; this field advertises
+identity-check support for that pane. A new identity resets both Host and native
+client deduplication, so two consecutive single-question calls do not require a
+visible empty queue between them. Repeated snapshots of the same identity do not
+reset it. Intents carry the observed identity; the Host rejects stale identities,
+including changes during an awaited screen check or key send, and clients ignore
+acknowledgements from an older identity. Notifications still leave agent lifecycle
+and response forms unchanged. Queue reductions
 do not auto-open; a verified empty normal composer resets the baseline. Closed
-panes discard their state. There is no polling timer or history/rollout scan.
+panes discard their state. Pane refreshes preserve question IDs received or changed
+while awaiting tmux, together with their handled counts; the next refresh reconciles
+them even if the pane list is unchanged. There is no polling timer or history/rollout scan.
 
 This is intentionally a conservative TUI convenience, not an App Server question
-API: unknown/localized layouts, custom empty placeholders and equal-count question
-replacements without an observed queue reduction stay manual. A missed/failed
+API: unknown/localized layouts and custom empty placeholders stay manual. Without
+question hooks or when paired with an older Host that omits the identity, the
+count-only fallback still needs an observed queue reduction for equal-count
+replacements. A missed/failed
 attempt can retry on a later native output/focus/eligibility event, without a
 polling loop. A successful attempt remains deduplicated after Escape/redraw.
 Existing Shift+Left remains usable. For remote auto-expansion, update the
@@ -121,12 +211,18 @@ alone is not enough, because the Host independently parses the footer. For examp
 Host 3.0.40 rejects both the compact shortcut and elapsed suffix. Relay deployment
 is unnecessary; the new response and capability fields are optional and travel
 inside the existing encrypted payload. The `CodexQuestions` OSLog category records
-Host refusal reasons and acknowledgement failures without question/draft content.
+Host refusal/send results, client eligibility (focus, selection, scrollback and
+composer recognition), deduplication and acknowledgement results without
+question/draft content or hook IDs. Native eligibility diagnostics are emitted only
+when their reason changes. Recognition failures distinguish an invalid cursor row,
+a cursor away from the input start, an unknown/nonempty composer and an unknown
+footer. iOS also records cursor coordinates and grid dimensions, never row text.
 
 On iOS, `TerminalCodexQuestionExpansion` runs outside SwiftUI observable state.
 The selected pane's native wrapper reads at most nine live rows, after parsing
 terminal output, and checks again after 350 ms. Unrelated output does not extend
-the deadline; a changed/partial footer does. It requires the input proxy's focus,
+the deadline; a changed or unrecognized footer in a completed frame does. It
+requires the input proxy's focus,
 an active scene, a ready stream, both native viewports at the bottom, no copy/menu,
 IME, cursor-navigation operation, drag or mouse-scroll momentum, and no blocking
 response form/quick-action overlay. Typing, stream reset, resize, focus loss and
@@ -135,7 +231,7 @@ to force eligibility. Counts enter the same `KeystrokeDebouncer` FIFO as text an
 mouse input, with a two-second acknowledgement timeout. Pending acknowledgements
 suppress duplicate enqueues; queue cancellation reports failure to the scheduler.
 Host-wide dedup also covers an iPhone and Mac viewing the same pane.
-Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionExpansionTests`,
+Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionPromptUsageWarningTests`, `CodexQuestionTerminalTests`, `CodexQuestionExpansionTests`,
 `CodexQuestionShellWrapperTests`, `TerminalCodexQuestionExpansionTests` and
 `KeystrokeDebouncerTests`; wire compatibility is covered by
 `CodexQuestionAcknowledgementTests` and the isolated encrypted relay fixture in
@@ -143,6 +239,11 @@ Tests: `CodexQuestionPromptElapsedTests`, `CodexQuestionExpansionTests`,
 footer passed manual acceptance on iPhone Air with the updated Host (2026-09-30).
 The complete UIKit focus/scroll/menu matrix still needs on-device acceptance;
 the scheduler and Host guards run in unit tests.
+The 2026-10-19 blank-cell change passed 75 focused tests and an iOS Simulator
+build, including real SwiftTerm buffer fixtures with Unicode drafts. The recurring
+3.0.81 (14) iPhone failure was traced to local recognition, but its actual parser
+inputs were not captured before the device became unavailable. This change has
+not yet passed physical-device acceptance for that reproduction.
 
 ### Editor Override (Ctrl-G)
 
@@ -171,6 +272,123 @@ Key files: `EditorOverride.swift` (pure helpers + `EditorOverrideMode`/`VisualPr
 **Limitations:** the injected line is visible in scrollback; a nested shell (`exec zsh`) re-sources rc with no re-injection; changing the setting doesn't affect already-running agents; the override also affects `git commit`/`crontab` in those panes; typing within the first ~second of a pane opening (or an rc ending in `exec`) can interleave with / swallow the injected line. All are accepted trade-offs for users who explicitly opted in.
 
 `baseEnvironmentVars` (injected via tmux `-e`, so they reach both app-launched and manually-typed `claude`) sets the Claude rendering/update flags **and** the OTEL export vars that point Claude Code at the Mac-local `OTLPReceiver` (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_*` → `http://127.0.0.1:<OTLPReceiver.advertisedPort>`; issue #597). No content gates are enabled. The endpoint port is `OTLPReceiver.advertisedPort` — the port the receiver **actually bound** (its preferred port, or a fallback candidate when that was taken), published before any pane can be created, so the bind and the advertisement can't drift. When the receiver failed to bind every candidate, the OTEL block is skipped entirely (no dead endpoints). The property is computed per creation, not cached, so it always reads the settled bind.
+
+### Prompt editor request lifetime
+
+`EditorSessionManager` creates a new UUID for each live `ctrlx edit` request.
+Mac Viewer submit/cancel commands include that UUID as optional
+`expectedSessionID`; the Host checks it against the currently active editor
+before writing or cancelling, without suspending between validation and the
+operation. A replaced or completed request returns failure. Old commands without
+the field remain decodable and keep their legacy active-pane targeting.
+
+The Viewer also retains the terminal binding from the displayed editor, so a
+known Host/tmux incarnation change rejects a delayed outgoing action. Only a
+successful Host response clears the submitted text, and later edits survive that
+response. Restored workspace drafts are text only and never recreate editor
+requests or submit callbacks.
+
+The local API captures the original pane identity before reading its temporary
+file. Publication and submit require that same physical pane. Discovery retires
+an editor whose pane disappears or changes before broadcasting replacement
+metadata, returns an error to the waiting CLI, and retains its text against the
+original persistent UUID. It never assigns that draft to a recycled pane number.
+A live pane moved to another window/session keeps its editor.
+
+The Host registers the editor completion continuation before publishing its
+state, allowing a fast Viewer response while the broadcast awaits transport.
+File-write failure leaves the request, continuation and edits available for
+retry; it must not be reported as successful submission.
+
+### Closing terminals across workspace reconstruction
+
+Mac and iOS close actions retain the target identity from before the running-
+process query and confirmation dialog. On capable Hosts, process queries and
+close commands carry that original identity. A session check follows the physical
+session, independently of its current children; a window check follows the physical
+window. Replacement targets produce an error and require a fresh user action.
+Older Hosts keep the existing optional-field compatibility path.
+
+Ordinary tmux discovery assigns missing session/window/pane UUIDs independently
+of recovery snapshots. Turning recovery off or failing to read a journal does
+not leave new live terminals without an identity. Discovery and recovery capture
+only fill empty metadata on the originally observed tmux server, then reread its
+actual values; concurrent captures cannot overwrite each other's UUIDs. Identity
+assignment runs in batches of at most 16 guarded commands so large workspaces
+stay below tmux's command-message limit. A failed batch leaves existing UUIDs
+intact; the next discovery/capture fills only still-missing identities. Local
+close actions wait for this metadata rather than creating an unbound confirmation.
+
+`TmuxService` validates the expected identity before entering the recovery close
+transaction, then tmux checks the captured server/object identity in the same
+command queue as `kill-*`. The close and journal update remain serialized, so a
+checkpoint cannot recreate an explicitly deleted item. This does not authorize
+replay of other queued operations; outstanding recovery acceptance is tracked in
+[Stage 4](v3.0.76/STAGE4_TODO.md).
+
+Window-name editors similarly retain the window binding from when editing
+began. Discovery can update the tab underneath an open editor without retargeting
+its Save action. Mac local, Mac Viewer and iOS use the physical window ID;
+capable Viewer commands carry the original identity, and tmux checks the server
+and window UUID in the same queue as `rename-window`. A replaced pane inside the
+same window does not invalidate a window rename. Rejection is shown to the user;
+older Hosts retain the optional-identity path.
+
+Session-name editors capture the original session action on Mac and iOS, including
+the Viewer's binding before any queued task. The Host checks the actual tmux server
+and session UUID in the same queue as `rename-session`, after checking name
+availability. Replacing a child window or pane does not retire a session editor.
+Private layout migration requires matching persistent identities when available;
+recycled pane numbers alone cannot establish that a reconstructed session was
+renamed. Identity-free snapshots retain the existing legacy rename detection.
+
+Session descriptions, colors, emoji and manual state changes use the same
+session binding. Description/emoji editors retain their original callbacks;
+the iOS More sheet keeps them through dismissal and the subsequent editor.
+Persistent metadata checks the server/session before listing window overrides,
+clearing each override and writing the session option. The Host acknowledges
+only after persistence succeeds, and cached rows update only if they still
+belong to that session. Manual state remains transient and checks the current
+session identity before changing its cached panes. Failures reach the client
+instead of being reported as successful saves.
+
+New-window requests retain the originating session binding from the Mac/iOS
+button or Agent dialog through launch preparation and the tmux mutation. Pending
+selection must still refer to that session when the reply/snapshot arrives.
+iOS retains this binding until the created tab's delayed automatic Fit is consumed.
+`new-session` and `new-window` return their physical server incarnation and pane
+ID in the creation command itself; later naming and startup input are conditional
+on that original server/pane. Discovery may assign persistent UUIDs afterward.
+This also avoids assuming that the first window and pane indexes are zero.
+New-session replies additionally carry the captured server incarnation and Host
+state-root identity in optional `createdPaneScope`. Local selection checks the
+created server; Mac/iOS Viewers wait for a matching live catalog before adopting
+the pane number. iOS carries the resolved session binding into delayed Fit.
+Older Hosts retain the previous numeric-ID behavior; a capable Host with missing
+creation identity does not silently fall back to it.
+
+Local CLI mutations resolve their target once and retain its workspace identity
+through subsequent awaits. Layout application keeps the original session and
+each created pane through metadata, options, splits, delayed input and focus;
+it checks the session before and after each host-shell hook. It stops after a
+target change without replaying remaining commands on reconstructed objects.
+Already-running user hooks are ordinary shell processes, not cancellable
+transactions. Bootstrap windows use their actual creation result and indexes.
+
+Window reorder and shared-layout requests also carry the original session
+binding. Reorder checks it while listing windows, applying each swap and rolling
+back a partial failure; a replacement session is never the rollback destination.
+UI continuations recheck identity before migrating selection/tab state. Shared
+layout debounce resolves the final layout after SwiftUI settles while retaining
+the originating session. The Host validates tmux identity and any newer cached
+identity before accepting the canonical layout. Existing window-set validation
+and optional-field compatibility remain in force.
+
+The discovery callback synchronizes `MirrorWindowManager` before publishing its
+snapshot. It cannot rely on a later UI observer or the periodic caller to do so:
+a broadcast sent first would retain an old identity indefinitely during otherwise
+quiet polling. This synchronization performs no additional tmux query and keeps
+Viewer snapshot construction read-only.
 
 ### TmuxControlClient (`CtrlxServerFeature/Services/TmuxControlClient.swift`)
 
@@ -212,7 +430,7 @@ Multiple panes in the same session share one control connection. Snapshots and l
 `actor` managing a scan-only FIFO copy from tmux `pipe-pane` for a single pane. One reader lives for the pane's full lifetime and never feeds terminal content.
 
 **Features:**
-- Creates per-pane FIFO (`/tmp/ctrlx-pipe-<id>.fifo`)
+- Creates a private per-reader FIFO (`$TMPDIR/ctrlx-pipe-<id>-<reader-uuid>.fifo`); cleanup only removes that reader's own file
 - Starts `pipe-pane -O "cat > fifo"` via control mode command
 - Reads raw PTY bytes only to parse OSC 9/777/9;4/0/2/52 side effects
 - AsyncStream + single consumer task for strict FIFO ordering
@@ -230,6 +448,7 @@ Multiple panes in the same session share one control connection. Snapshots and l
 **Per-pane lifecycle:**
 - New pane discovered → `startReader` creates a `PipePaneReader`, attaches the manager as delegate, calls `startPipePane()` (scan-only mode)
 - Pane disappears → `tearDownReader` calls `stopPipePane`, unregisters dimensions, drops the entry
+- Pane refresh (every ten seconds) → check live tmux `pane_pipe` and reader health; restart a failed scanner without replacing terminal subscriptions or Viewer leases. This also recovers when macOS omits the FIFO EOF callback.
 
 **Data Flow:**
 ```
@@ -299,6 +518,18 @@ tmux ──pipe-pane──→ FIFO ──→ PipePaneReader ──OSC side effec
   projects, input, process discovery and plugin logs.
 - `CtrlxServerFeature/Plugins/AgentResponseSubmissionGuard.swift`: validates
   current request identity before delivering responses.
+- `CtrlxServerFeature/Plugins/PluginResponseContext.swift`: retains the original
+  physical pane, plugin, conversation and form request through response delivery.
+  Native core calls inherit the context; sidecars retain it through their ordered
+  response notifications. Each text/key sink revalidates it, and tmux checks the
+  actual server/pane identity in the same queue as the write. Live pane moves
+  remain valid; reconstructed terminals and retracted requests do not.
+
+Structured Viewer responses use the existing workspace-input capability to carry
+an optional expected pane identity. Old Hosts retain their compatibility path.
+iOS notification actions wait for the first usable pane snapshot as well as the
+encrypted connection before submitting. Submission still acknowledges transport,
+not native Agent consumption; persisted drafts are not cleared on that basis.
 
 `AppCoordinator.setupPluginRuntime()` wires these services. Shared state uses
 `AgentSession.pluginID` / `AgentState`; agent-specific payload parsing and
@@ -324,6 +555,7 @@ end-to-end flow.
   - **Codex** `codex.sse_event` (`event.kind = response.completed`) → tokens + `model`. OpenAI's `cached_token_count` is nested *inside* `input_token_count` (unlike Claude's disjoint buckets), so it's mapped to the cache-read field and excluded from the headline. **`input_token_count`/`cached_token_count` are cumulative** — `response.completed` fires once per model call (several per turn with tool use), each re-reporting the whole growing context — so the accumulator adds only the positive **delta** per session (output is per-call and summed as-is); summing raw per-event input would multiply-count the same context (~1.5× over on a 3-tool turn, confirmed live on Codex 0.140). Codex emits no cost.
   - **Codex** `codex.turn_ttft` → the turn's time-to-first-token `duration_ms` (`SessionTelemetry.recordTurnLatency`, which back-fills the just-completed token turn's sparkline point; the headline is authoritative, the back-fill best-effort). Tokens and latency arrive on *separate* events. Both `codex.sse_event` and `codex.turn_ttft` carry `conversation.id`; `codex.api_request` does **not** (it's the `/models` capability check, and turn calls run over websocket), so it can't be joined. Codex metrics also omit `conversation.id` (openai/codex#15905), so the `codex.turn.*` metrics can't be joined to a pane and are ignored.
 - The permission-mode chip is seeded from the **hook channel** for both agents. For Claude it has a second source — OTEL `permission_mode_changed` (which only fires on a *change*) — so `UserPromptSubmit`/`PreToolUse`/`PostToolUse`/`Stop` also carry `permission_mode`, which the translator puts on the `PluginEvent` and `MirrorWindowManager.applyState` stamps onto the pane (a `nil` never clobbers a known mode). Codex reports a Claude-compatible `permission_mode` on the same events (`CodexTranslator` passes it through); it has no OTEL mode-change signal, so the hook channel is its sole source.
+- Mac and iOS permission-mode chips show only the mode's icon, retaining its tint and the filled red warning for bypass. The mode name remains available to accessibility and Mac hover help. This shared presentation covers session lists, terminal status bars and session details for both Codex and Claude Code.
 - **Injection differs by agent.** Claude reads `OTEL_*` env vars, injected via `TmuxService.baseEnvironmentVars` (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_*`). Codex does *not* read `OTEL_*` — OTEL is configured only through its `config.toml` schema, and `otel` is denylisted from project-local config — so app-launched Codex panes instead get `-c otel.…` runtime overrides (`CodexOtelConfig.launchOverrides`, gated on the per-agent `export_telemetry` setting), which point `otel.exporter` at `http://127.0.0.1:<port>/v1/logs` (`protocol = "json"`), set `otel.metrics_exporter = "none"`, and leave `log_user_prompt = false`. The runtime-override layer is exempt from the `otel` denylist, and nothing is written to the user's global `~/.codex/config.toml` (so a launch can't corrupt the user's own config). No content gates are enabled for either agent, so no prompt/tool/body content leaves the process.
 - `AppCoordinator` wires the receiver's callbacks: telemetry → `MirrorWindowManager.applyTelemetry` (joined to a pane by `claudeSessionID`, then a throttled ~1/sec viewer push); milestones → one notification each via the existing `handlePluginNotification` path; mode changes → `MirrorWindowManager.applyPermissionMode`. The accumulated state is evicted on session end. See `MirrorWindowManager` and `PaneState.telemetry` / `.permissionMode`.
 
@@ -343,6 +575,72 @@ Two **aggregate** consumers built on the same OTEL stream, surfacing data that o
 - **End-of-session recap** — `SessionRecap` (`CtrlxNetworking`) is a snapshot of the session's accumulated telemetry (tokens, cost, commits, active time, tools, lines). `AppCoordinator` stamps it onto `PaneState.recap` when a turn finishes (`doneWorking`) — cleared when a new turn starts (`working`) or the session ends — and pushes a one-shot recap notification on `sessionEnd` (`finalizeEndedSession`, reusing `NotificationSpec` → `handlePluginNotification`). The recap card renders in iOS `SessionInfoView`; the Mac surfaces it via the desktop-notification push. Shared formatting (`recapDetailLine`) lives in `CtrlxCommon`.
 - **iOS reply-after-stop summary persistence (issue #707)** — the agent's last-message summary shown in the iOS reply box (`StopResponseView`) rides the transient `AgentState.doneWorking(summary:)`, which viewing the session flips to `.idle` (`markHandled`), so navigating away and back used to lose it. `SessionStore.lastTurnSummaryByPane` caches it per pane with the **same lifecycle as `PaneState.recap`** (set on `doneWorking`, cleared on `working`/session-end) so it survives the handled-flip and re-entry; `SessionDetailService.replyForm` falls back to that cache, then to `recap.summary` for a fresh reconnect where the cache is empty. Telemetry-independent, so it works even when no recap was stamped. (The expanded summary also scrolls within a capped height so a long message isn't cropped.)
 - **Cost/usage overview** — `UsageAggregationStore` (`CtrlxServerFeature/Telemetry/UsageAggregationStore.swift`) is an `actor` persisting per-`(project, day)` totals as JSON under `~/.ctrlx/state/usage-aggregates.json` (so they survive session end **and** app restart). It folds each telemetry snapshot into the bucket as a *delta* against a persisted per-session baseline — cumulative OTEL counters are attributed to the day they occur, with no double-counting across a restart. `overview(asOf:)` builds the wire `UsageOverview` (today totals, a top-N per-project ranking, a per-day trend). It rides the existing `SessionStateMessage` as an optional field (`usageOverview`, `decodeIfPresent`-friendly like `agentProjects`), is shown atop the iOS session list and Mac sidebar as a collapsed one-line "Today" cell (`UsageOverviewView` in `CtrlxCommon` — a disclosure chevron expands it in place to the Projects/Recent-days details, transient state, always starts collapsed), and powers the Mac menu-bar "today" total.
+
+### Dashboard
+
+`HostDashboardService` owns demand-driven resource and account caches. Local Mac
+windows call `AppCoordinator.dashboardSnapshot()`; paired Viewers use encrypted
+`ReadDashboard` commands only after `supportsDashboard == true`. These commands
+use the bounded file-request queue so resource sampling does not block keyboard
+input, and do not rebroadcast `SessionStateMessage`.
+
+- `DashboardResourceSampler` shares a 5-second CPU/memory sample and a 60-second
+  disk refresh. Disk I/O runs independently, with at most one refresh in flight;
+  snapshots return the previous disk observation while it runs, so an unresponsive
+  volume cannot hold CPU/memory, account responses or file-request slots. Failed
+  refreshes are also throttled. CPU is a whole-machine 0–100% delta; the first
+  sample after a long idle period establishes a new baseline. Disk identities deduplicate work paths
+  on the same volume. Failures are reported per resource.
+- Plugins may implement `AgentAccountReporting`. Codex uses read-only app-server
+  account/rate-limit RPCs. Its stdin pipe suppresses SIGPIPE so a child closing
+  input produces a catchable write error rather than terminating the Host.
+  Child exit is observed asynchronously, with the same 20-second deadline covering
+  RPCs and exit cleanup; no synchronous `waitUntilExit()` runs on the actor executor.
+  Claude Code uses the standard claude.ai profile/usage
+  endpoints only when its local credential is readable; API-key login and custom
+  credential endpoints are unsupported. Credentials never enter the wire model,
+  and existing statusline configuration is untouched. Queries are shared across
+  Viewers, limited to once per minute per plugin, and never start a model turn.
+  Each plugin has its own in-flight query, so a stalled source cannot stop other
+  providers refreshing. A source still running after a minute is marked failed
+  while retaining its previous quota and observation time; it keeps one in-flight
+  call rather than accumulating retries. Stopping or removing a source cancels
+  its task and discards late results. Codex timeouts explicitly identify the failure.
+- `DashboardStore` is shared by the Dashboard and quota monitor in each client,
+  and retains a small local snapshot cache. Mac monitors every 30 seconds while
+  running; iOS monitors only while foregrounded and immediately restarts its read
+  when a paired Host becomes connected and advertises Dashboard support. A restarted
+  monitor waits for an older in-flight refresh to drain, then resolves the latest
+  endpoints instead of dropping its first read or retaining old connection state.
+  At monitor startup, an empty account list, waiting accounts or available quota samples at least a minute
+  old are re-read every 5 seconds for at most one minute; ready, failed or unsupported
+  results return to the 30-second cadence. These reads reuse the Host cache.
+  An open Dashboard refreshes
+  resources every 5 seconds. Host account queries remain limited to once per minute. `DashboardOverview` deduplicates Host state UUIDs and verified
+  provider/account/workspace/pool identities, preserving source observation times.
+  Shared quotas are never summed. Today’s observed usage uses each Host’s date;
+  legacy usage without reliable date context remains visible in Host details.
+- `DashboardView` is shared by the reusable Mac window and iOS Sessions status
+  sheet. Selecting a Host only changes the Dashboard; opening a session is an
+  explicit navigation action.
+
+- The Mac status menu puts waiting panes first (including their Host), followed by
+  per-account quota summaries and a Dashboard action. Other sessions remain under
+  All Sessions. A summary names the limiting quota window and keeps Host sources;
+  stale observations are labelled and never light the low-quota indicator.
+- `DashboardQuotaAlertTracker` shares the same account grouping on Mac and iOS.
+  It alerts when a window crosses to 10% remaining, once per observed quota cycle;
+  first observations, new accounts and already-low reset cycles are silent.
+  Unverified identities and failed, offline, expired, older-than-five-minute or conflicting readings cannot
+  trigger alerts. Sample ages are normalized from the Host clock; quota reset deadlines retain
+  the provider’s absolute timestamp, matching the Dashboard.
+  One local notification combines windows crossing together for an account.
+  The Dashboard's Low quota alerts switch is local to each client; notifications
+  respect existing OS authorization, and taps open the Dashboard. No new Relay
+  push or iOS background sampling is introduced.
+
+See [Dashboard design and validation](dashboard-design.md) for scope, data-source
+conditions, merge rules, and current acceptance evidence.
 
 ### ConnectedViewerManager (`CtrlxServerFeature/Services/ConnectedViewerManager.swift`)
 
@@ -415,9 +713,67 @@ Actor executing commands from paired Mac/iOS Viewers.
 
 ### Plugin installation and settings
 
+Mac **Agent Setup** installs the Codex / Claude Code CLI itself. This is separate
+from installing the CtrlX integration inside either agent. `AgentCLIInstallations`
+checks once after Host startup without blocking workspace restoration. A single
+setup window is offered only when the main workbench becomes active and a CLI is
+missing; closing it defers this launch, and its startup reminder toggle persists.
+Settings → Agents → Agent Setup always provides a manual entry point.
+
+Detection honors configured commands, the login-shell PATH, and known native
+locations, and runs a bounded `--version` probe. Working npm/Homebrew installs
+count as installed. Broken commands and invalid custom paths are shown as errors,
+not invitations to overwrite an installation. Installation requires clicking
+**Install Selected**, runs sequentially in one app-owned job, and uses the
+[official Codex standalone installer](https://learn.chatgpt.com/docs/codex/cli)
+or [Claude Code native installer](https://code.claude.com/docs/en/setup).
+Codex runs with `CODEX_NON_INTERACTIVE=1`; CtrlX neither installs npm nor invokes
+package-manager removal. Installers download their own native architecture and
+manage their own package verification and updates.
+
+Recognized Homebrew and official native installations also offer **Update** and
+**Repair Launch**. These are explicit actions, never startup side effects. Homebrew
+updates its existing cask (including Claude Code's `claude-code` versus
+`claude-code@latest`) with automatic cleanup disabled. Native Codex reuses the
+official installer with its original installation directory and `CODEX_HOME`;
+native Claude Code uses `claude update`, preserving its configured release channel.
+Custom wrappers, npm layouts, and direct immutable version paths remain usable
+but must be updated using their original installer. Updating or repairing preserves
+working commands, so shell aliases/functions survive. If a previously broken
+default command becomes runnable only through a known fallback outside PATH,
+the successful operation also applies the normal guarded path repair and refreshes
+plugin settings immediately; no additional **Check Again** is needed.
+
+Installation and updates verify the resulting official Developer ID signatures
+before clearing download quarantine, then probe the CLI version. Repair Launch
+performs the same signature/quarantine checks without downloading an update and
+is available even when the version probe fails. Codex validates its main binary,
+code-mode host, and bundled ripgrep against OpenAI's team and executable IDs;
+Claude Code validates its binary against Anthropic's team and ID. All signatures
+must pass before any attribute is removed. Only those verified files and Codex's
+known package directories are touched, never arbitrary package contents or other
+versions. A changed launcher, escaped helper symlink, incomplete package, or
+failed signature stops the operation. This does not disable Gatekeeper globally,
+change signing, or automate Keychain, privacy, or administrator permission prompts.
+
+`AgentCLIProcess` streams bounded logs from private temporary files, supplies no
+interactive stdin, and stops its owned process group on cancellation or timeout.
+Closing the setup window continues the job; quitting CtrlX cancels it. Logs are
+kept in memory for this launch and can be copied. Cancellation is not rollback:
+the remaining installation is rechecked. Install, update and repair share the
+same serial job, cancellation and activity log. Each successful install verifies the
+native launcher and writes its absolute path to the plugin settings, preserving
+other fields and refusing to replace a command changed during installation.
+Existing launchers found only in known fallback locations outside the cached GUI
+PATH are adopted in the same way. Commands already resolved through PATH remain
+unchanged, preserving shell aliases and functions when launching sessions. New
+sessions and plugin checks work without restarting CtrlX. **Open**
+starts a normal local agent session for first-run sign-in. CLI installation does
+not silently install its CtrlX plugin, log into accounts, or modify remote Hosts.
+
 `PluginCore.install(configRoot:)`, `uninstall` and `installStatus` are the
 shared contract in `CtrlxPluginProtocol/PluginCore.swift`. Built-in cores own
-their CLI installation implementations: `ClaudeCodeCLIInstaller.swift` and
+their CLI-driven plugin installation implementations: `ClaudeCodeCLIInstaller.swift` and
 `CodexCLIInstaller.swift` in their respective core modules. Config roots are
 scoped by the plugin, not hard-coded into shared settings UI.
 
@@ -430,6 +786,11 @@ configured roots asynchronously. Known older installed versions produce a
 dismissible banner linking to that agent's settings. The check runs once per
 launch; unknown versions and query failures are not classified as up to date.
 No remote Host or Agent process is changed by checking.
+
+Shared skill changes must bump both Agent-side plugin manifest versions so
+existing installations can discover the update. Rebuilding the app includes the
+new resources for both agents, but same-version edits alone do not trigger an
+update notice or replace the agents' installed caches.
 
 Settings shows each configuration folder's installed and bundled versions,
 Check, Install/Reinstall, and Uninstall. Operations are serialized per folder
@@ -528,6 +889,11 @@ subsequent reconciliations need no further file-descriptor inspection. A native
 event arriving during recovery always takes precedence. Writes are serialized per pane and
 do not block live status/notification delivery.
 
+Workspace checkpoints cache only successfully verified resume descriptors for
+the same source and process incarnation. A failed native-history lookup remains
+visible in the saved pane and is retried on later checkpoints, because the
+history file may be written after the Agent's initial lifecycle notification.
+
 On iOS, open the window-title menu → **Fork → In Current Directory / In New
 Worktree…**. The selected pane is the default source when there are multiple
 recognized Agents. Mac and iOS share `AgentForkPanel`, including worktree review,
@@ -537,8 +903,13 @@ or touches local Git. Creation is serialized with New Terminal/New Agent. The
 returned pane is selected when state arrives, unless the user has manually
 changed windows or left the screen while creation was pending.
 
-`AgentForkService` rechecks the captured pane/window/session/Agent UUID/cwd on
-the Host before launching in a new window of the same tmux session. It uses
+`AgentForkService` rechecks the captured pane/window/session/Agent UUID/cwd and
+workspace incarnation through preparation, checkout and cached retries. Sources
+without the optional workspace identity still decode; the Host captures its
+current identity before asynchronous work. Actual creation guards both source
+pane and parent session in the tmux command queue. Mac/iOS retain the original
+Viewer binding and reject replaced sessions before adopting the returned pane
+or issuing delayed Fit. It launches in a new window of the same tmux session using
 `codex fork <UUID> -C <cwd>` or `claude --resume <UUID> --fork-session`, preserving
 the source's config root and existing telemetry shell integration. Configuration
 overrides are applied to the Agent invocation after login startup files, scoped
@@ -763,6 +1134,13 @@ a remote clear updates `SessionStore` and sends the existing `MarkHandled`
 command to its host. Dock totals and task markers continue to derive from these
 same stores. Regression coverage: `VisiblePaneAttentionTests`.
 
+Queued `MarkHandled` and Yolo toggles retain the pane identity observed by the
+caller. Capable Viewers reject a retired binding before transport, and the Host
+checks the supplied identity before clearing attention or enabling auto-approval.
+iOS detail services retain their original binding through teardown; an old service
+cannot clear a replacement pane's local attention state. Live moves of the same
+physical pane remain valid, and older peers keep the optional-identity path.
+
 ### SleepPreventionService (`CtrlxServerFeature/Managers/SleepPreventionManager.swift`)
 
 `@DependencyClient` wrapping the `LiveSleepPreventionManager` actor for IOKit
@@ -870,6 +1248,68 @@ last-known layout. See `docs/folder-layout-persistence-plan.md`.
   `persistChangedLayouts()`. `LayoutSnapshotMapper` translates the live
   `SessionFileTabsState` ⇄ the `SavedFolderLayout` snapshot.
 
+### Worktree merge status
+
+The Mac Host's existing five-second pane validation also reads Git worktree
+metadata. `WorktreeStatusReader` groups live terminal and visible local Git-tab
+directories by their canonical common Git directory, enumerates all existing
+worktrees (including those without sessions), and compares their captured HEADs
+with each repository's unique **local** `main` or `master` branch. Exactly one
+must exist: both present is ambiguous even when their tips match; neither present
+is unavailable. Remote-tracking refs and similarly prefixed names are not bases.
+Counts use commit ancestry (`rev-list --count <base>..HEAD`),
+not upstream tracking, dirty files, or squash/cherry-pick patch equivalence.
+Successful counts are cached by repository/base commit/HEAD; a change to the base refreshes
+all affected comparisons. There is no fetch, merge or filesystem mutation.
+Detached HEAD, missing/ambiguous/unborn bases and read/comparison errors are unavailable
+states, never a zero count. Prunable/missing and bare worktree entries are omitted.
+Discovery covers repositories referenced by live panes or visible local Git tabs;
+this is not a disk scan or a persistent catalog of repositories whose sessions
+and Git tabs have all closed.
+
+`PaneState.gitWorktreePath` joins a pane to the Host's canonical worktree path.
+For absorbed submodules and `--separate-git-dir` repositories, Git may list the
+primary worktree by its metadata directory. The Host matches an observed checkout
+whose own Git directory equals the common directory, or lets Git resolve a
+submodule's `core.worktree`. A separate Git directory without that reverse pointer
+cannot locate an unobserved primary checkout; only that entry becomes unavailable,
+and linked worktrees retain their branches and counts. The common Git directory
+remains the repository key.
+`SessionStateMessage.worktreeRepositories` carries one optional repository list
+per snapshot, including each repository's optional `baseBranch`. Older Host
+snapshots omit the base name and their successful counts refer to main.
+Counts against master use an additive `pendingBaseCommitCount` wire field;
+the original `pendingCommitCount` key remains main-only. Older Viewers therefore
+show master comparisons as unavailable instead of labeling them as main.
+A changed count or base triggers a Viewer push even when the terminal's
+branch name did not change. These fields are additive; old snapshots omit them,
+old Viewers ignore them, and no new command or Relay change is required.
+`SessionStore` scopes this metadata by Host pair ID and clears it on downgrade
+or disconnect. Viewers never inspect those paths on their own filesystem.
+
+Mac local/Viewer sidebars and the iOS session list show a compact status button
+at the trailing edge of each session: an orange branch for pending commits, a
+secondary checkmark when all selected worktrees are in their own local base,
+or a dash when comparison is unavailable. Sessions without Git metadata omit
+the button. Mac hovering shows the status/count without increasing row height;
+iOS keeps a 44-point tap target within the session row. These buttons are
+independent of configured sidebar fields and notification state.
+A session's terminal panes select worktrees by their current directory, including
+ordinary repositories' primary checkouts. Non-Git paths contribute no status;
+sessions with only those paths omit the icon. Several panes in one worktree count
+it once. Different worktrees and repositories compare independently. Any pending
+worktree takes icon priority, with a tooltip note if other comparisons are
+unavailable; without pending commits, any unavailable comparison takes priority
+over the merged checkmark. The detail list names each repository's base.
+Session status buttons list only worktrees referenced by terminal panes across
+that session's tabs, with each worktree shown once. The Host section's Worktrees
+entry shows the complete repository list and remains available when everything
+is merged. The local Mac Git page's Worktrees entry shows its complete associated
+repository. Mac uses a popover and iOS a sheet; their contents follow
+incoming snapshots. A missing comparison shows its reason instead of claiming
+that the branch is merged. “No commits pending merge” is not a clean-worktree or
+safe-to-delete assertion.
+
 ## Shared Viewer services (Mac and iOS)
 
 ### ViewerConnectionManager / ViewerConnection (`CtrlxCommon/Services/`)
@@ -941,6 +1381,46 @@ command, currentPath, width, height, isActive
 - **Coding agents:** owned by plugin settings/registry, not per-agent fields in AppSettings
 - **Prompt editor (Ctrl-G):** editorOverrideMode (`ask` / `overrideInCtrlxSessions` / `useMyEditor`) — see [Editor Override](#editor-override-ctrl-g)
 
+Mac **Settings → General → Terminal → Theme** includes **Codex Light**. Its
+white terminal (`#FFFFFF` / `#0D0D0D`), near-white sidebar/tab bar (`#FCFCFC`),
+gray secondary text (`#626262`) and blue accent (`#0169CC`) share the existing
+theme setting across local, remote and detached workspaces. Sidebar selection
+uses neutral gray when selected-session highlighting is enabled.
+Mac tabs in light themes use a solid accent underline for selection; Codex Light
+also uses a neutral gray selected-tab background (`#EDEDED`). The shared tab
+decoration covers terminal, Files, Git, browser and simulator tabs in local,
+remote and detached workspaces, including both sides of a split.
+
+The palette is based on the bundled Codex Light theme in ChatGPT for Mac
+26.820.60940 (7119). ANSI red/green/yellow/blue/magenta follow its syntax colors;
+cyan is adapted for white backgrounds. Bright chromatic ANSI slots retain dark,
+readable colors, while white slots keep their conventional background/reverse
+video meaning. SwiftTerm rendering, rich-text copy and new-shell OSC 10/11
+declarations use the same palette. Agent-emitted RGB colors are preserved except
+for the display-only Codex theme adaptation described below. Switching
+CtrlX themes does not rewrite Agent configuration (for example, Codex's `/theme`).
+
+iOS **Settings → Terminal → Terminal Theme** uses the same palettes, including
+Codex Light. The choice is stored on that device, independently of app appearance
+and the Host's theme, and defaults to Default Dark. Changing it updates existing
+terminal text, ANSI colors, cursor, canvas and scroll-view backgrounds without
+reconnecting or clearing the terminal.
+
+Both Mac (local, remote and detached) and iOS use the shared
+`CodexTerminalColorAdaptation` for Codex tabs. A display-only SwiftTerm mapping
+lightens dark explicit backgrounds on light themes and dims bright explicit
+backgrounds on dark themes. Low-contrast foreground colors move toward black or
+white respectively while preserving hue; readable colors remain unchanged.
+This covers Codex composer,
+history and diff blocks whose colors were chosen from the Host's startup palette.
+Reverse-video cells preserve their resolved foreground/background pair, including
+default inverted colors, so adapting only one side cannot destroy ANSI/RGB
+emphasis. Underlines follow the same inverse-video policy.
+Raw bytes, buffer attributes, Agent configuration and other Viewers are unchanged.
+Changing themes or receiving Codex metadata updates already painted content.
+Leaving Codex restores the original explicit colors; other terminal/Agent tabs
+preserve their explicit colors.
+
 ### PairedViewer / PairedHost
 
 `PairedViewer` in `CtrlxServerFeature/Models/Settings.swift` describes a peer
@@ -949,6 +1429,15 @@ describes a Host this client views. Keep role, pair identity and key metadata
 distinct; both peers may be Macs.
 
 ## Push Notifications
+
+Agent alerts use the same presentation on Mac Host, Mac Viewer and iOS: the
+title is `session · tab`, the native subtitle carries the event status (`Session
+Idle` becomes `Finished`), and the body carries the event details without a
+repeated project prefix. Main and detached windows share this path. The Host
+formats the context before local delivery, encrypted live messages and APNs;
+Mac/iOS live receivers preserve the subtitle and can add context for older Hosts
+when pane metadata is available. Missing metadata preserves the original copy.
+Locally generated CLI notifications and terminal OSC copy keep their existing semantics.
 
 Codex `PreToolUse` events for `request_user_input` and `request_user_input_async`
 produce a question notification on the Host, independently of terminal visibility
@@ -967,6 +1456,14 @@ Background APNs and tap-to-open routing are retained. Codex tool-hook questions
 offer tap-to-open rather than fabricated answer buttons; actual structured forms
 retain their existing answer actions. Update the Host for new question detection
 and iOS for foreground alerts; Relay changes are unnecessary.
+
+On Mac, notification taps resolve `(hostId, paneId)` against current pane metadata
+and this Mac's window ownership. A detached terminal selects its tab and restores
+and activates its owning native window; a terminal in the main window uses the
+Sessions window. Moving a tab or closing its detached window before opening an
+older notification therefore follows the current owner. Activation retries target
+only that native window, do not reselect/refit the tab, and are cancelled by a newer
+notification navigation. The notification payload does not store window ownership.
 
 See [push notifications](push-notifications-plan.md) for design/history and
 actionable replies, and [self-hosting](self-hosting.md) for current configuration.

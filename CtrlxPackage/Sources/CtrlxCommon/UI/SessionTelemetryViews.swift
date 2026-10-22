@@ -29,7 +29,7 @@ public func shortModelName(_ model: String) -> String {
 
 // MARK: - Permission Mode
 
-/// Visual presentation for a Claude permission mode chip. Returns `nil` only for
+/// Visual presentation for an agent permission mode chip. Returns `nil` only for
 /// an *unknown* mode (`nil`/empty — e.g. before any hook has reported one), so a
 /// session with a known mode always shows a chip. `default` renders a calm,
 /// neutral chip; the supervision-relevant modes get louder treatment, and
@@ -84,7 +84,7 @@ public struct PermissionModePresentation {
     }
 }
 
-/// A small capsule chip indicating the session's permission mode. Renders
+/// A compact icon indicating the session's permission mode. Renders
 /// nothing only when the mode is unknown (unset/`nil`).
 public struct PermissionModeChip: View {
     private let presentation: PermissionModePresentation?
@@ -95,29 +95,21 @@ public struct PermissionModeChip: View {
 
     public var body: some View {
         if let presentation {
-            // Hand-rolled instead of `Label`: a fixed-size, scaled-to-fit icon
-            // box keeps every chip the same height regardless of the symbol's
-            // glyph bounds (e.g. `wand.and.stars` is taller than `shield`, which
-            // otherwise made the louder modes' chips visibly taller), and a tight
-            // explicit `HStack` spacing pulls the icon closer to the label than
-            // `Label`'s default gap.
-            HStack(spacing: 3) {
-                presentation.symbol.image
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 10, height: 10)
-                Text(presentation.label)
-            }
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .foregroundStyle(presentation.isElevated ? Color.white : presentation.tint)
-            .background(
-                presentation.tint.opacity(presentation.isElevated ? 1 : 0.18),
-                in: Capsule()
-            )
-            .accessibilityIdentifier("permission-mode-chip")
-            .accessibilityLabel("Permission mode \(presentation.label)")
+            presentation.symbol.image
+                .resizable()
+                .scaledToFit()
+                .frame(width: 12, height: 12)
+                .font(.caption2.weight(.semibold))
+                .padding(4)
+                .foregroundStyle(presentation.isElevated ? Color.white : presentation.tint)
+                .background(
+                    presentation.tint.opacity(presentation.isElevated ? 1 : 0.18),
+                    in: Capsule()
+                )
+                .help("Permission mode \(presentation.label)")
+                .accessibilityElement(children: .ignore)
+                .accessibilityIdentifier("permission-mode-chip")
+                .accessibilityLabel("Permission mode \(presentation.label)")
         }
     }
 }

@@ -19,6 +19,8 @@
         /// The env passed at `initialize`, retained so a post-crash restart can
         /// re-handshake the fresh child with the same environment.
         private var lastEnv: PluginEnv?
+        private var pendingResponses: Set<String> = []
+        private var responseContexts: [String: PluginResponseContext] = [:]
 
         // MARK: - Optional-capability callbacks
 
@@ -96,6 +98,15 @@
         }
 
         public func deliverResponse(sessionID: String, requestID: String, _ response: AgentResponse) async {
+            guard let transport, pendingResponses.insert(sessionID).inserted else {
+                logger.warning("Response delivery unavailable or already pending for \(sessionID)")
+                return
+            }
+            responseContexts[sessionID] = PluginResponseContext.current
+            defer {
+                pendingResponses.remove(sessionID)
+                responseContexts.removeValue(forKey: sessionID)
+            }
             struct Params: Encodable {
                 let sessionID: String
                 let requestID: String
@@ -110,7 +121,21 @@
                 logger.error("deliverResponse: failed to encode params for session \(sessionID): \(error) — dropping response")
                 return
             }
-            _ = try? await transport?.request(SidecarRPC.deliverResponse, params)
+            do {
+                _ = try await transport.request(SidecarRPC.deliverResponse, params)
+            } catch {
+                logger.warning("Response delivery failed for \(sessionID): \(error)")
+                if let failure = error as? TransportError, case .timeout = failure {
+                    // Late send_* notifications cannot inherit a later response's
+                    // destination. Retire the timed-out ordered stream.
+                    await transport.close()
+                    if self.transport === transport {
+                        self.transport = nil
+                        await supervisor.stop()
+                        logger.error("Sidecar stopped after response timeout; re-enable the plugin to reconnect")
+                    }
+                }
+            }
         }
 
         public func refreshProjects() async {
@@ -162,7 +187,7 @@
         // MARK: - SidecarTransportDelegate (inbound notifications and requests)
 
         public func handleNotification(_ method: String, _ params: JSONValue?) async {
-            guard let host else { return }
+            guard let host, !Task.isCancelled else { return }
             switch method {
             case HostRPC.setProjects:
                 if
@@ -179,14 +204,18 @@
                     let obj = params?.objectValue,
                     let sessionID = obj["sessionID"]?.stringValue,
                     let text = obj["text"]?.stringValue {
-                    await host.sendText(sessionID: sessionID, text)
+                    await PluginResponseContext.$current.withValue(responseContexts[sessionID]) {
+                        await host.sendText(sessionID: sessionID, text)
+                    }
                 }
             case HostRPC.sendKeys:
                 if
                     let obj = params?.objectValue,
                     let sessionID = obj["sessionID"]?.stringValue,
                     let keys = try? obj["keys"]?.decode([PluginTmuxKey].self) {
-                    await host.sendKeys(sessionID: sessionID, keys)
+                    await PluginResponseContext.$current.withValue(responseContexts[sessionID]) {
+                        await host.sendKeys(sessionID: sessionID, keys)
+                    }
                 }
             case HostRPC.log:
                 if let line = try? params?.decode(LogLine.self) {

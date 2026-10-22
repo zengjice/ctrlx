@@ -6,6 +6,8 @@
         @State private var model = VoiceCorrectionSettingsModel()
         @Environment(\.scenePhase) private var scenePhase
         @State private var isAPIKeyVisible = false
+        @State private var benchmarkRequest: UUID?
+        @State private var isEvaluating = false
 
         public init(settings: VoiceCorrectionSettings) {
             self.settings = settings
@@ -13,12 +15,27 @@
 
         public var body: some View {
             Section {
+                Picker("Dictation Language", selection: $settings.language) {
+                    ForEach(VoiceInputLanguage.allCases) { language in
+                        Text(language.label).tag(language)
+                    }
+                }
+                .disabled(model.isBusy || isEvaluating)
+
+                #if os(iOS)
+                    correctionStatus
+                #endif
+
                 Picker("Provider", selection: $settings.provider) {
                     ForEach(VoiceCorrectionProvider.allCases) { provider in
                         Text(provider.displayName).tag(provider)
                     }
                 }
-                .disabled(model.isBusy)
+                .disabled(model.isBusy || isEvaluating)
+
+                #if os(macOS)
+                    correctionStatus
+                #endif
 
                 HStack {
                     Group {
@@ -48,7 +65,7 @@
                     }
                     .buttonStyle(.borderless)
                 }
-                .disabled(model.isBusy)
+                .disabled(model.isBusy || isEvaluating)
 
                 Button {
                     isAPIKeyVisible = false
@@ -67,6 +84,7 @@
                 }
                 .disabled(
                     model.isBusy
+                        || isEvaluating
                         || model.apiKeyDraft
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                         .isEmpty
@@ -83,61 +101,12 @@
                             Text(modelID).tag(modelID)
                         }
                     }
-                    .disabled(model.isBusy)
+                    .disabled(model.isBusy || isEvaluating)
                 }
 
-                Button {
-                    Task {
-                        await model.testModels(settings: settings)
-                    }
-                } label: {
-                    if model.isTesting {
-                        HStack {
-                            ProgressView()
-                            Text(model.testProgressText)
-                        }
-                    } else {
-                        Label("Test Provider Models", symbol: .gaugeWithDotsNeedle50percent)
-                    }
-                }
-                .disabled(model.isBusy || !model.hasStoredAPIKey)
-
-                if !model.testResults.isEmpty {
-                    ForEach(model.testResults) { result in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(result.modelID)
-                                .font(.caption.monospaced())
-                                .textSelection(.enabled)
-                            HStack {
-                                Text("Score \(result.score)/\(result.maximumScore)")
-                                Spacer()
-                                Text(
-                                    "\(result.averageElapsedSeconds, format: .number.precision(.fractionLength(2))) s/sample"
-                                )
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Stepper(
-                        "Keep Top \(model.topModelCount) Models",
-                        value: $model.topModelCount,
-                        in: 1...model.testResults.count
-                    )
-
-                    Button("Save Top \(model.topModelCount) Models") {
-                        model.saveTopModels(settings: settings)
-                    }
-                    .disabled(model.isBusy)
-                }
-
-                if model.hasTestedModels {
-                    Button("Restore Recommended Models") {
-                        model.restoreRecommendedModels(settings: settings)
-                    }
-                    .disabled(model.isBusy)
-                }
+                #if os(macOS)
+                    modelTestingControls
+                #endif
 
                 if model.hasStoredAPIKey {
                     Button("Remove API Key", role: .destructive) {
@@ -146,7 +115,7 @@
                             await model.removeAPIKey(settings: settings)
                         }
                     }
-                    .disabled(model.isBusy)
+                    .disabled(model.isBusy || isEvaluating)
                 }
 
                 if let errorMessage = model.errorMessage {
@@ -159,20 +128,44 @@
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                #if os(iOS)
+                    Text("API keys stay in this device’s Keychain. Provider correction sends transcript candidates and recent terminal context directly to the provider; microphone audio is not uploaded.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    DisclosureGroup("Model Testing") {
+                        Text("Test compatible models with bundled text transcripts. This uses API credits and measures text correction, not speech recognition. Only models passing every critical check can be saved. You can restore the recommendations at any time.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        modelTestingControls
+                    }
+                    .accessibilityIdentifier("voice-model-testing-disclosure")
+                #endif
             } header: {
                 Text("Voice Correction")
             } footer: {
-                Text(
-                    "Each provider starts with five built-in recommended models. Testing fetches "
-                        + "the current provider's compatible models and sends the bundled voice samples "
-                        + "for correction, which uses API credits. Save any Top N result as that provider's "
-                        + "model list, or restore the recommendations at any time. API keys stay in this device’s Keychain. "
-                        + "When configured, transcript candidates and recent terminal context are sent directly "
-                        + "to the selected provider for correction; microphone audio is not uploaded."
-                )
+                #if os(macOS)
+                    Text(
+                        "Each provider starts with five built-in recommended models. Testing fetches "
+                            + "the current provider's compatible models and sends bundled text transcripts "
+                            + "for correction, which uses API credits. These scores measure text correction. "
+                            + "Only models passing every critical check can be saved. You can restore the recommendations at any time. API keys stay in this device’s Keychain. "
+                            + "When configured, transcript candidates and recent terminal context are sent directly "
+                            + "to the selected provider for correction; microphone audio is not uploaded."
+                    )
+                #endif
             }
-            .task(id: settings.provider) {
-                await model.prepare(settings: settings)
+            .task(id: scenePhase == .active ? settings.provider.rawValue + settings.language.rawValue : nil) {
+                if scenePhase == .active {
+                    await model.prepare(settings: settings)
+                }
+            }
+            .task(id: benchmarkRequest) {
+                guard let request = benchmarkRequest else { return }
+                await model.testModels(settings: settings)
+                if benchmarkRequest == request {
+                    benchmarkRequest = nil
+                }
             }
             .onChange(of: settings.provider) {
                 isAPIKeyVisible = false
@@ -180,10 +173,96 @@
             .onChange(of: scenePhase) {
                 if scenePhase != .active {
                     isAPIKeyVisible = false
+                    benchmarkRequest = nil
                 }
             }
             .onDisappear {
                 isAPIKeyVisible = false
+                benchmarkRequest = nil
+            }
+            if #available(iOS 26.0, macOS 26.0, *) {
+                VoiceRecordingEvaluationSection(settings: settings, isModelTesting: model.isBusy, isEvaluating: $isEvaluating)
+            }
+        }
+
+        @ViewBuilder
+        private var correctionStatus: some View {
+            LabeledContent("Provider Correction") {
+                Text(model.credentialStatus.label)
+                    .foregroundStyle(model.hasStoredAPIKey ? Color.secondary : .orange)
+            }
+            LabeledContent("On-Device Correction") {
+                Text(model.onDeviceAvailability?.label ?? "Checking…")
+                    .foregroundStyle(model.onDeviceAvailability?.isAvailable == true ? Color.secondary : .orange)
+            }
+            if model.credentialStatus == .missing, model.onDeviceAvailability?.isAvailable == false {
+                Text("Only speech transcription is available. Save an API key to enable context-aware correction.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("voice-correction-unavailable")
+            }
+        }
+
+        @ViewBuilder
+        private var modelTestingControls: some View {
+            Button {
+                benchmarkRequest = UUID()
+            } label: {
+                if model.isTesting {
+                    HStack {
+                        ProgressView()
+                        Text(model.testProgressText)
+                    }
+                } else {
+                    Label("Test Provider Models", symbol: .gaugeWithDotsNeedle50percent)
+                }
+            }
+            .disabled(model.isBusy || isEvaluating || !model.hasStoredAPIKey)
+
+            if model.isTesting {
+                Button("Cancel Model Test", role: .cancel) { benchmarkRequest = nil }
+            }
+
+            if !model.testResults.isEmpty {
+                ForEach(model.testResults) { result in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(result.modelID)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                        HStack {
+                            Text("Score \(result.score)/\(result.maximumScore)")
+                            Spacer()
+                            Text(
+                                "\(result.averageElapsedSeconds, format: .number.precision(.fractionLength(2))) s/sample"
+                            )
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        if !result.isEligible {
+                            Text("Not eligible: \(result.failedCriticalSampleIDs.joined(separator: ", "))")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+
+                Stepper(
+                    "Keep Top \(model.topModelCount) Models",
+                    value: $model.topModelCount,
+                    in: 1...max(1, model.eligibleResults.count)
+                )
+
+                Button("Save Top \(model.topModelCount) Models") {
+                    model.saveTopModels(settings: settings)
+                }
+                .disabled(model.isBusy || isEvaluating || model.eligibleResults.isEmpty)
+            }
+
+            if model.hasTestedModels {
+                Button("Restore Recommended Models") {
+                    model.restoreRecommendedModels(settings: settings)
+                }
+                .disabled(model.isBusy || isEvaluating)
             }
         }
     }

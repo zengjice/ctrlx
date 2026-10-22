@@ -188,7 +188,7 @@ enum MacOSAccessibility {
     /// status text — the press "succeeds" against static text and the menu
     /// never gets clicked. Returns false when no open menu contains a match.
     @discardableResult
-    static func pressMenuItem(appPID: pid_t, titled: String) -> Bool {
+    static func pressMenuItem(appPID: pid_t, titled: String, allowMouseFallback: Bool = true) -> Bool {
         let unscoped = findAllRawElements(appPID: appPID, matching: .anyTextMatches(titled))
         let matches = unscoped.filter(hasMenuAncestor)
         guard !matches.isEmpty else {
@@ -209,10 +209,30 @@ enum MacOSAccessibility {
             return true
         }
 
+        guard allowMouseFallback else { return false }
         logger.info("pressMenuItem: AXPress failed for '\(titled)', falling back to CGEvent click")
         if let center = matches.lazy.compactMap({ centerOfElement($0) }).first {
             clickAtPoint(center)
             return true
+        }
+        return false
+    }
+
+    /// Requests the matched control's native context menu without global mouse input.
+    /// The caller must observe the menu: modal tracking can time out the AX reply
+    /// even when the menu opened successfully.
+    static func requestContextMenu(appPID: pid_t, titled: String) -> Bool {
+        let matches = findAllRawElements(appPID: appPID, matching: .anyTextMatches(titled))
+        let (buttons, others) = partitionByRole(matches)
+        for element in buttons + others {
+            var actions: CFArray?
+            guard
+                AXUIElementCopyActionNames(element, &actions) == .success,
+                (actions as? [String])?.contains(kAXShowMenuAction) == true else { continue }
+            AXUIElementSetMessagingTimeout(element, 0.5)
+            let result = AXUIElementPerformAction(element, kAXShowMenuAction as CFString)
+            logger.info("Requested AXShowMenu for '\(titled)' (PID \(appPID), result \(result.rawValue))")
+            return result == .success || result == .cannotComplete
         }
         return false
     }
@@ -470,6 +490,21 @@ enum MacOSAccessibility {
         return true
     }
 
+    static func hover(appPID: pid_t, matching query: ElementQuery) -> Bool {
+        guard
+            focusedAppPID() == appPID,
+            let frame = findAllRawElements(appPID: appPID, matching: query).lazy.compactMap({ frameOfElement($0) }).first,
+            let event = CGEvent(
+                mouseEventSource: nil,
+                mouseType: .mouseMoved,
+                mouseCursorPosition: CGPoint(x: frame.midX, y: frame.midY),
+                mouseButton: .left
+            )
+        else { return false }
+        event.post(tap: .cghidEventTap)
+        return true
+    }
+
     /// CGEvent left-click on an element matching by "titled" text.
     @discardableResult
     static func cgClick(appPID: pid_t, titled: String) -> Bool {
@@ -520,6 +555,8 @@ enum MacOSAccessibility {
         case .space: return 49
         case .downArrow: return 125
         case .upArrow: return 126
+        case .leftArrow: return 123
+        case .rightArrow: return 124
         case let .character(character): return virtualKeyCode(forCharacter: character)
         }
     }
@@ -600,10 +637,14 @@ enum MacOSAccessibility {
     static func mainResizableWindow(appPID: pid_t) -> (title: String, element: AXUIElement)? {
         let all = windows(appPID: appPID)
         let standard = all.filter { subroleOf($0.element) == kAXStandardWindowSubrole as String }
-        if let first = standard.first { return first }
+        if let first = standard.first {
+            return first
+        }
         // Fallback: windows with no subrole at all (some SwiftUI windows omit it).
         let noSubrole = all.filter { subroleOf($0.element).isEmpty }
-        if let first = noSubrole.first { return first }
+        if let first = noSubrole.first {
+            return first
+        }
         return all.first
     }
 
@@ -692,6 +733,20 @@ enum MacOSAccessibility {
 
     // MARK: - Private: Root Elements
 
+    /// Read the focused process directly; System Events can resolve a same-named
+    /// application's object specifier to a different running instance.
+    static func focusedAppPID() -> pid_t? {
+        var value: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as CFString, &value
+            ) == .success,
+            let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(value as! AXUIElement, &pid) == .success else { return nil }
+        return pid
+    }
+
     /// Collect all root-level AXUIElements for the app, combining both
     /// `kAXChildren` and `kAXWindows` to cover popovers, sheets, and dialogs.
     private static func allRootElements(appPID: pid_t) -> [AXUIElement] {
@@ -753,7 +808,9 @@ enum MacOSAccessibility {
         for _ in 0..<5 {
             guard let el = current else { return false }
             let result = AXUIElementPerformAction(el, kAXPressAction as CFString)
-            if result == .success { return true }
+            if result == .success {
+                return true
+            }
             current = parent(of: el)
         }
         return false

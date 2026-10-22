@@ -4,9 +4,9 @@
     import CtrlxCommon
     import CtrlxEncryption
     import CtrlxNetworking
+    import CtrlxPluginProtocol
     import Dependencies
     import Foundation
-    import CtrlxPluginProtocol
     import Logging
 
     /// A pending selection set by the menu bar to be consumed by MainView.
@@ -48,6 +48,25 @@
 
         public let agentBrowser: AgentBrowserService
         public let agentSimulator = AgentSimulatorService()
+        private let hostDashboard = HostDashboardService()
+        public let dashboardStore = DashboardStore()
+
+        public func dashboardEndpoints() -> [DashboardEndpoint] {
+            [DashboardEndpoint(
+                host: DashboardHost(id: "local", name: "This Mac", isLocal: true, isConnected: true, isSupported: true),
+                read: { try await self.dashboardSnapshot() }
+            )] + settings.pairedHosts.map {
+                .remote($0, manager: viewerConnectionManager, usage: remoteSessionStore?.usageOverview(for: $0.id))
+            }
+        }
+
+        let hostFileTabs = HostFileTabService()
+        var workspaceRecovery: WorkspaceRecoveryController?
+        let recoveredWorkspaceDrafts = WorkspaceRecoveryDrafts()
+        let viewerWorkspaceRecovery = WorkspaceViewerRecovery()
+        var workspaceRecoveryReady = false
+        var workspaceAgentDiscoveryComplete = false
+        @ObservationIgnored var recoveryAgentDescriptors: [UUID: (source: AgentForkSource, runtimeID: String, descriptor: AgentResumeDescriptor)] = [:]
 
         /// Pane state and session tracking manager
         public let windowManager: MirrorWindowManager
@@ -136,19 +155,24 @@
                     windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
                     await refreshAgentCommandIdentity()
                 },
-                launch: { [weak self] sessionName, windowName, prepared in
+                launch: { [weak self] source, windowName, prepared in
                     guard let self else { throw AgentForkError("Host is shutting down.") }
                     let paneID = try await tmuxService.newWindow(
-                        sessionName: sessionName, workingDirectory: prepared.workingDirectory,
+                        sessionName: source.sessionName, workingDirectory: prepared.workingDirectory,
                         windowName: windowName,
-                        runCommand: try prepared.forkRunCommand(shell: tmuxService.loginShellPath),
-                        extraEnvironment: prepared.extraEnvironment, forceLoginShell: true
+                        runCommand: prepared.forkRunCommand(shell: tmuxService.loginShellPath),
+                        extraEnvironment: prepared.extraEnvironment, forceLoginShell: true,
+                        expectedWorkspacePane: source.workspaceIdentity, expectedSourcePaneID: source.paneID
                     )
                     for attempt in 0..<PaneSurfaceRetry.attempts {
                         let panes = await tmuxService.refreshPanes()
                         windowManager.updatePaneStates(from: panes)
-                        if panes.contains(where: { $0.paneId == paneID }) { break }
-                        if attempt < PaneSurfaceRetry.attempts - 1 { try await Task.sleep(for: PaneSurfaceRetry.delay) }
+                        if panes.contains(where: { $0.paneId == paneID }) {
+                            break
+                        }
+                        if attempt < PaneSurfaceRetry.attempts - 1 {
+                            try await Task.sleep(for: PaneSurfaceRetry.delay)
+                        }
                     }
                     await connectedViewerManager?.pushSessionStateToAll()
                     return paneID
@@ -156,12 +180,12 @@
             )
         }
 
-        func prepareAgentFork(_ source: AgentForkSource) async throws -> AgentForkPreparation {
-            try await agentForkService.prepare(source)
+        func prepareAgentFork(_ source: AgentForkSource, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> AgentForkPreparation {
+            try await agentForkService.prepare(source, expectedWorkspacePane: expectedWorkspacePane)
         }
 
-        func forkAgentSession(_ request: ForkAgentSession) async throws -> String {
-            try await agentForkService.fork(request)
+        func forkAgentSession(_ request: ForkAgentSession, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> String {
+            try await agentForkService.fork(request, expectedWorkspacePane: expectedWorkspacePane)
         }
 
         /// Bumped whenever the *set* of registered plugins changes (install /
@@ -183,6 +207,8 @@
 
         var agentSettingsSelection: String?
         private(set) var agentPluginInstallations: AgentPluginInstallations?
+        private(set) var agentCLIInstallations: AgentCLIInstallations?
+        var pendingAgentCLILaunch: String?
         @ObservationIgnored private var agentPluginCheckTask: Task<Void, Never>?
 
         /// The single agent-blind event dispatcher; its sinks are wired to the
@@ -255,6 +281,7 @@
         private var wakeObserverTask: Task<Void, Never>?
         @ObservationIgnored
         private var e2eReconnectObserverTask: Task<Void, Never>?
+        @ObservationIgnored private var paneActivationTask: Task<Void, Never>?
 
         /// 30-minute trial-expiry monitoring loop (Task 14): refreshes
         /// `licenseManager.status` and fires any pending 48h/24h alerts.
@@ -361,6 +388,7 @@
                 paneStreamManager: paneStreamManager,
                 editorSessionManager: editorManager
             )
+            windowManager.defersWorkspaceLayoutInitialization = true
 
             // CRITICAL: Load E2EEService synchronously from Keychain BEFORE any view rendering.
             // This prevents createPairingManager() from generating temporary keys.
@@ -371,6 +399,7 @@
 
             // Disable macOS automatic window restoration to prevent duplicate windows on launch
             preferences.setBool(false, "NSQuitAlwaysKeepsWindows")
+            AppKitDiagnostics.shared.bind(to: settings)
         }
 
         // MARK: - Public API
@@ -421,6 +450,11 @@
             agentBrowser.resolveSourcePane = { [tmuxService] sessionName, paneID in
                 try await tmuxService.browserSourcePane(sessionName: sessionName, paneID: paneID)
             }
+            hostFileTabs.resolvePane = agentBrowser.resolveSourcePane
+            agentSimulator.resolveSourcePane = agentBrowser.resolveSourcePane
+            hostFileTabs.projectDirectory = { [weak windowManager] paneID in
+                windowManager?.paneStates[paneID]?.agentSession?.detectedProjectPath
+            }
             agentBrowser.configure { [tmuxService] pid in
                 try await tmuxService.agentBrowserPane(processID: pid)
             }
@@ -436,9 +470,6 @@
             // is a one-shot.
             @Dependency(EditorClient.self) var editorClient
             await settings.seedEditorsIfEmpty(using: editorClient)
-
-            // Clean up any stale pipe-pane FIFOs from previous crashes
-            PipePaneReader.cleanupStaleFifos()
 
             // Sweep any leftover `ctrlx-drop-*` directories from prior
             // sessions. Each remote drop drops a per-UUID subdir under
@@ -458,7 +489,9 @@
             await initializeServices()
             await setupPluginRuntime()
             await setupAPIServer()
+            await setupWorkspaceRecovery()
             await setupConnectedViewerManager()
+            workspaceAgentDiscoveryComplete = true
             // Start update triggers only now: setupConnectedViewerManager's
             // initial refreshPanes/detectAgentPanes pass has populated the pane
             // states that hasActiveSessions consults, so the launch-time check
@@ -466,6 +499,7 @@
             // session.
             pluginUpdateManager?.start()
             startAgentPluginVersionCheck()
+            startAgentCLICheck()
             await setupViewerConnectionManager()
             await autoConnectIfConfigured()
 
@@ -524,7 +558,12 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
+            paneActivationTask?.cancel()
+            paneActivationTask = nil
+            await workspaceRecovery?.stop()
+            await hostDashboard.stop()
             agentPluginCheckTask?.cancel()
+            await agentCLIInstallations?.stop()
             agentPluginCheckTask = nil
             await apiSocketServer.stop()
             // Simulator commands must not consume the quit deadline before independent cleanup runs.
@@ -715,10 +754,12 @@
                     // permission is auto-approvable on a yolo pane, kept the session
                     // working, and suppressed the notification. Deliver the approval
                     // to the owning core.
-                    await self?.pluginRegistry?.core(pluginID)?.deliverResponse(
+                    await self?.deliverPluginResponse(
+                        pluginID: pluginID,
                         sessionID: sessionID,
                         requestID: requestID,
-                        .permission(decision: .allow, appliedSuggestionID: nil)
+                        response: .permission(decision: .allow, appliedSuggestionID: nil),
+                        requiresOpenForm: false
                     )
                 },
                 onAppAction: { [weak self] action in
@@ -977,11 +1018,11 @@
                 onSetProjects: { [weak self] pluginID, projects in
                     await self?.handlePluginSetProjects(pluginID: pluginID, projects: projects)
                 },
-                onSendText: { [weak self] _, sessionID, text in
-                    await self?.handlePluginSendText(sessionID: sessionID, text: text)
+                onSendText: { [weak self] pluginID, sessionID, text in
+                    await self?.handlePluginSendText(pluginID: pluginID, sessionID: sessionID, text: text)
                 },
-                onSendKeys: { [weak self] _, sessionID, keys in
-                    await self?.handlePluginSendKeys(sessionID: sessionID, keys: keys)
+                onSendKeys: { [weak self] pluginID, sessionID, keys in
+                    await self?.handlePluginSendKeys(pluginID: pluginID, sessionID: sessionID, keys: keys)
                 },
                 onAgentPanes: { [weak self] pluginID in
                     await self?.handlePluginAgentPanes(pluginID: pluginID)
@@ -996,9 +1037,10 @@
         /// trusts, scoped to the calling plugin so it stays agent-blind.
         private func handlePluginAgentPanes(pluginID: String) async -> [String]? {
             guard let names = pluginRegistry?.processNamesByPlugin[pluginID] else { return nil }
-            guard let detected = await tmuxService.detectAgentPanesIfAvailable(
-                processNamesByPlugin: [pluginID: names]
-            ) else { return nil }
+            guard
+                let detected = await tmuxService.detectAgentPanesIfAvailable(
+                    processNamesByPlugin: [pluginID: names]
+                ) else { return nil }
             return Array(detected.keys)
         }
 
@@ -1299,7 +1341,9 @@
                 // Drop a single trailing empty element from the final newline so a
                 // 3-line file reports 3 lines, not 4.
                 var split = content.components(separatedBy: "\n")
-                if split.last == "" { split.removeLast() }
+                if split.last == "" {
+                    split.removeLast()
+                }
                 allLines = split
             } else {
                 allLines = []
@@ -1564,9 +1608,31 @@
         /// Ensure a plugin's core is enabled, then query its install status for
         /// the given config root (nil = default location).
         public func pluginInstallStatus(id: String, configRoot: String?) async -> PluginInstallStatus {
-            if isE2ETest { return e2eInstallStatus[e2eInstallKey(id, configRoot)] ?? .notInstalled }
+            if isE2ETest {
+                return e2eInstallStatus[e2eInstallKey(id, configRoot)] ?? .notInstalled
+            }
             guard let core = await enabledCore(id) else { return .agentUnavailable }
             return await core.installStatus(configRoot: configRoot)
+        }
+
+        private func startAgentCLICheck() {
+            guard !isE2ETest, agentCLIInstallations == nil else { return }
+            let installations = AgentCLIInstallations(
+                command: { [weak self] agent in
+                    let data = self?.pluginSettingsData(id: agent.id) ?? Data()
+                    return AgentCLICommandSettings.command(in: data, agent: agent)
+                },
+                useInstalledCommand: { [weak self] agent, path, expectedCommand in
+                    guard let self else { throw CancellationError() }
+                    let data = pluginSettingsData(id: agent.id)
+                    let updated = try AgentCLICommandSettings.adopting(path, expectedCommand: expectedCommand, agent: agent, data: data)
+                    if let error = await setPluginSettings(id: agent.id, updated) {
+                        throw AgentCLIError(message: error)
+                    }
+                }
+            )
+            agentCLIInstallations = installations
+            installations.start()
         }
 
         private func startAgentPluginVersionCheck() {
@@ -1625,7 +1691,9 @@
         /// connected viewers as a side effect of the enabled-set change.
         private func enabledCore(_ id: String) async -> (any PluginCore)? {
             guard let registry = pluginRegistry else { return nil }
-            if let core = registry.core(id) { return core }
+            if let core = registry.core(id) {
+                return core
+            }
             _ = await enablePluginViaCLI(id)
             return registry.core(id)
         }
@@ -1707,8 +1775,8 @@
             await connectedViewerManager?.broadcastBadgeUpdate(badge: badge)
         }
 
-        /// NotificationSink → show a Mac desktop notification using the
-        /// core-baked title/body, and forward it to paired iOS viewers via the
+        /// NotificationSink → format the pane context and event copy once for
+        /// Mac desktop notifications and paired viewers via the
         /// encrypted-push path (falls back to APNs when a viewer is offline).
         /// When `formState` carries an open permission/question form, an
         /// action-button context is baked into the push so iOS can answer
@@ -1722,6 +1790,13 @@
             pluginID: String? = nil,
             formState: AgentState? = nil
         ) async {
+            if
+                pluginID == "codex", notification.isQuestion == true,
+                let paneId, paneId.hasPrefix("%"), let questionID = notification.questionID,
+                tmuxService.recordCodexQuestion(paneID: paneId, questionID: questionID) {
+                windowManager.recordCodexQuestion(paneID: paneId, questionID: questionID)
+                await connectedViewerManager?.pushSessionStateToAll()
+            }
             let isQuestion: Bool = if case .awaitingReplies = formState {
                 true
             } else {
@@ -1738,23 +1813,19 @@
                 )
             }
             let paneState = paneId.flatMap { windowManager.paneStates[$0] }
-            let pushPresentation = AgentNotificationPresentation(
+            let presentation = AgentNotificationPresentation(
                 title: notification.title,
                 body: notification.body,
                 paneState: paneState
             )
-            let macNotification = TerminalStreamMessage.TerminalNotification(
-                title: isQuestion ? pushPresentation.title : notification.title,
-                body: isQuestion ? [pushPresentation.subtitle, pushPresentation.body].compactMap { $0 }.joined(separator: "\n") : notification.body
-            )
             // Stamp the real pane id so tapping the banner navigates to the
             // originating session; fall back to "system" only when the event
             // carries no pane (e.g. a ctrlx-cli notify with no target).
-            terminalNotificationService.showNotification(paneId ?? "system", macNotification, nil)
+            terminalNotificationService.showNotification(paneId ?? "system", presentation, nil)
             await connectedViewerManager?.sendCustomPushNotificationToAll(
-                title: pushPresentation.title,
-                subtitle: pushPresentation.subtitle,
-                body: pushPresentation.body,
+                title: presentation.title,
+                subtitle: presentation.subtitle,
+                body: presentation.body,
                 paneId: paneId,
                 action: action,
                 isQuestion: isQuestion ? true : nil
@@ -1930,6 +2001,26 @@
             return overview.isEmpty ? nil : overview
         }
 
+        public func dashboardSnapshot() async throws -> DashboardSnapshot {
+            guard let hostID = workspaceRecovery?.snapshot?.hostID else {
+                throw ViewerRelayClientError.commandFailed("Host workspace identity is not ready.")
+            }
+            let sources = (pluginRegistry?.active ?? [:]).sorted { $0.key < $1.key }.map { id, core in
+                HostDashboardService.Source(
+                    id: id, name: pluginRegistry?.manifest(id)?.displayName ?? id,
+                    reporter: core as? any AgentAccountReporting
+                )
+            }
+            let usage = await usageStore?.overview(asOf: Date())
+            let working = Set(windowManager.paneStates.values.compactMap { pane in
+                pane.agentSession?.isWorking == true ? pane.agentSession?.paneId : nil
+            }).count
+            return await hostDashboard.snapshot(
+                hostID: hostID, paths: tmuxService.panes.map(\.currentPath), sources: sources,
+                usage: usage, workingAgentCount: working
+            )
+        }
+
         /// On session end (issue #598): fold the pane's final telemetry into the
         /// durable usage store, push a one-shot end-of-session recap, then evict the
         /// session's live state from both the store baselines and the OTLP receiver
@@ -2019,6 +2110,7 @@
                 markdownOpenSuggestionStore.userSubmittedPrompt(sessionName: sessionName)
 
             case let .sessionEnded(sessionID, closePaneEligible):
+                let workspacePane = windowManager.paneStates[sessionID]?.workspaceIdentity
                 // `sessionID` carries the pane id in the plugin path. A session end
                 // (any reason) resets the pane's session-scoped Mac state so a fresh
                 // session doesn't inherit it.
@@ -2035,6 +2127,9 @@
                 // from the store and the OTLP receiver (issue #597) — all before
                 // `endAgentSession` clears the pane's join key and telemetry.
                 await finalizeEndedSession(paneId: sessionID)
+                if let workspacePane, !workspacePane.isSamePane(as: windowManager.paneStates[sessionID]?.workspaceIdentity) {
+                    return
+                }
                 // Remove the agent session so the pane reverts from the idle moon
                 // glyph to a plain terminal (the legacy `claudeSession = nil` on
                 // SessionEnd). The status path set working=false earlier in this
@@ -2053,7 +2148,7 @@
                 await broadcastBadgeDecreaseIfNeeded()
                 // Close the pane when the core signals eligibility (the core folds
                 // in both the clean-exit check and the per-agent pref).
-                guard closePaneEligible else { return }
+                guard closePaneEligible, let workspacePane else { return }
                 // The SessionEnd hook fires while the agent is still mid-exit, so
                 // killing the pane now would truncate its final output. Mirror the
                 // legacy `closePaneWhenClaudeExits`: poll until the agent process
@@ -2066,7 +2161,7 @@
                         let panes = await tmuxService.detectAgentPanes(processNamesByPlugin: processNames)
                         if panes[sessionID] == nil {
                             try? await Task.sleep(for: .seconds(1))
-                            try? await tmuxService.killPane(sessionID)
+                            try? await tmuxService.killPane(sessionID, expectedWorkspacePane: workspacePane)
                             return
                         }
                     }
@@ -2076,38 +2171,58 @@
 
         // MARK: - Plugin Runtime Host Send Sinks
 
-        /// Resolve a plugin `sessionID` to a tmux pane target. The plugin path
-        /// carries the pane id as the session id; if it doesn't name a tracked
-        /// pane we still pass it through so a freshly-created pane works.
-        private func resolvePluginPaneTarget(_ sessionID: String) -> String {
-            if windowManager.paneStates[sessionID] != nil { return sessionID }
-            if let pane = tmuxService.panes.first(where: { $0.paneId == sessionID }) {
-                return pane.paneId
+        private func deliverPluginResponse(
+            pluginID: String,
+            sessionID: String,
+            requestID: String,
+            response: AgentResponse,
+            expectedWorkspacePane: WorkspacePaneIdentity? = nil,
+            requiresOpenForm: Bool = true
+        ) async {
+            guard let core = pluginRegistry?.core(pluginID), let pane = windowManager.paneStates[sessionID] else { return }
+            let blocking: Bool = switch response {
+            case .prompt,
+                 .replyAfterStop: false
+            default: requiresOpenForm
             }
-            return sessionID
+            do {
+                let context = try PluginResponseContext(pluginID: pluginID, pane: pane, requestID: blocking ? requestID : nil, expectedWorkspacePane: expectedWorkspacePane)
+                await PluginResponseContext.$current.withValue(context) {
+                    await core.deliverResponse(sessionID: sessionID, requestID: requestID, response)
+                }
+            } catch {
+                logger.info("Dropping retired Agent response: \(error)")
+            }
+        }
+
+        private func pluginInputIdentity(pluginID: String, sessionID: String) throws -> WorkspacePaneIdentity? {
+            guard let pane = windowManager.paneStates[sessionID] else { throw PluginResponseContext.Failure.changed }
+            let context = try PluginResponseContext.current ?? PluginResponseContext(pluginID: pluginID, pane: pane, requestID: nil)
+            try context.validate(pluginID: pluginID, paneID: sessionID, pane: pane)
+            return context.workspaceIdentity
         }
 
         /// SendTextSink → write verbatim text to the pane backing the session.
-        private func handlePluginSendText(sessionID: String, text: String) async {
+        private func handlePluginSendText(pluginID: String, sessionID: String, text: String) async {
             guard !text.isEmpty else { return }
-            let target = resolvePluginPaneTarget(sessionID)
             do {
-                try await tmuxService.sendKeys(target, keys: text, literal: true)
+                let identity = try pluginInputIdentity(pluginID: pluginID, sessionID: sessionID)
+                try await tmuxService.sendKeys(sessionID, keys: text, literal: true, expectedWorkspacePane: identity)
             } catch {
-                logger.warning("Plugin sendText failed for \(target): \(error)")
+                logger.warning("Plugin sendText failed for \(sessionID): \(error)")
             }
         }
 
         /// SendKeysSink → send a key sequence to the pane backing the session.
         /// Reuses the shared `TmuxKey` vocabulary (`PluginTmuxKey` is its alias)
         /// and the batching `send-keys` path (`TmuxService.sendKeystrokes`).
-        private func handlePluginSendKeys(sessionID: String, keys: [PluginTmuxKey]) async {
+        private func handlePluginSendKeys(pluginID: String, sessionID: String, keys: [PluginTmuxKey]) async {
             guard !keys.isEmpty else { return }
-            let target = resolvePluginPaneTarget(sessionID)
             do {
-                try await tmuxService.sendKeystrokes(target, keys: keys)
+                let identity = try pluginInputIdentity(pluginID: pluginID, sessionID: sessionID)
+                try await tmuxService.sendKeystrokes(sessionID, keys: keys, expectedWorkspacePane: identity)
             } catch {
-                logger.warning("Plugin sendKeys failed for \(target): \(error)")
+                logger.warning("Plugin sendKeys failed for \(sessionID): \(error)")
             }
         }
 
@@ -2167,32 +2282,36 @@
         /// target. Window/pane targeting is intentionally unsupported — the
         /// CLI flags only expose `--session`, and `paneId` (when present) is
         /// just used to look up the calling pane's session.
-        fileprivate static func resolveSessionTarget(
+        static func resolveSessionTarget(
             sessionId: String?,
             paneId: String?,
             tmux: TmuxService,
-            method: String
-        ) async throws -> String {
+            method: String,
+            allowUnattached: Bool = false
+        ) async throws -> (info: PaneInfo, identity: WorkspacePaneIdentity) {
             if let sessionId {
-                guard await tmux.sessionExists(named: sessionId) else {
-                    throw APIError.notFound("Session not found: \(sessionId)")
-                }
-                return sessionId
+                return try await tmux.captureWorkspacePane(target: TmuxService.sessionTarget(sessionId))
+            }
+            if let paneId {
+                return try await tmux.captureWorkspacePane(target: paneId)
             }
             let panes = await tmux.refreshPanes()
-            if
-                let paneId,
-                let pane = panes.first(where: { $0.paneId == paneId }) {
-                return pane.sessionName
+            let attached = await tmux.attachedSessionNames
+            guard let pane = panes.first(where: { attached.contains($0.sessionName) }) ?? (allowUnattached ? panes.first : nil) else {
+                throw APIError.notFound("No resolvable session target for \(method)")
             }
-            let attached = await MainActor.run { tmux.attachedSessionNames }
-            if
-                let activeSession = panes.first(where: {
-                    attached.contains($0.sessionName)
-                })?.sessionName {
-                return activeSession
+            return try await tmux.captureWorkspacePane(target: pane.paneId, expectedServerID: pane.tmuxServerID)
+        }
+
+        static func resolvePaneTarget(_ paneId: String?, tmux: TmuxService) async throws -> (info: PaneInfo, identity: WorkspacePaneIdentity) {
+            if let paneId {
+                return try await tmux.captureWorkspacePane(target: paneId)
             }
-            throw APIError.notFound("No resolvable session target for \(method)")
+            let panes = await tmux.refreshPanes()
+            guard let pane = panes.first(where: { $0.isActive && $0.isWindowActive }) else {
+                throw APIError.notFound("No matching pane found")
+            }
+            return try await tmux.captureWorkspacePane(target: pane.paneId, expectedServerID: pane.tmuxServerID)
         }
 
         /// Starts the API socket server, wires router callbacks, and configures env vars.
@@ -2208,6 +2327,12 @@
             let tmux = tmuxService
             let winManager = windowManager
             let editorManager = editorSessionManager
+            editorManager.currentPaneIdentity = { [weak tmux] paneID in
+                tmux?.panes.first(where: { $0.paneId == paneID })?.workspaceIdentity
+            }
+            editorManager.onSessionInvalidated = { [weak self] editor, text in
+                self?.recoveredWorkspaceDrafts.retainInvalidatedEditor(editor, text: text)
+            }
             let notificationService = terminalNotificationService
             let router = LiveAPIRequestRouter(
                 onSessionList: { [tmux] in
@@ -2249,19 +2374,19 @@
                         )
                     }
                     let workingDirectory = path ?? FileManager.default.homeDirectoryForCurrentUser.path
-                    let (sessionName, _) = try await tmux.createSession(
+                    let created = try await tmux.createSession(
                         baseName: baseName,
                         width: 200,
                         height: 50,
                         workingDirectory: workingDirectory
                     )
-                    await MainActor.run {
-                        if let title {
-                            winManager.setSessionDescription(title, for: sessionName)
-                        }
-                        if let color {
-                            winManager.setSessionColor(color, for: sessionName)
-                        }
+                    let sessionName = created.sessionName
+                    let target = try await tmux.captureWorkspacePane(target: created.paneId, expectedServerID: created.serverID)
+                    if let title {
+                        try await winManager.setSessionDescription(title, for: sessionName, expectedWorkspacePane: target.identity)
+                    }
+                    if let color {
+                        try await winManager.setSessionColor(color, for: sessionName, expectedWorkspacePane: target.identity)
                     }
                     return LiveAPIRequestRouter.SessionCreateResult(
                         info: APISessionInfo(
@@ -2283,14 +2408,15 @@
                     // current window; `:!` would fail with "can't find
                     // window: !" on sessions without prior window-switch
                     // history.
-                    try await tmux.selectWindow("=\(sessionId):")
+                    let target = try await tmux.captureWorkspacePane(target: TmuxService.sessionTarget(sessionId))
+                    try await tmux.selectSession(sessionId, expectedWorkspacePane: target.identity)
                     // Drive the app's sidebar/detail selection so the UI
                     // actually switches to the requested session. `select-window`
                     // alone only moves tmux's active window *within* a session;
                     // MainView's follow-active-window logic is scoped to the
                     // already-selected session and never crosses to a different
                     // one, so without this the app stays on the old session.
-                    await self?.revealLocalSession(sessionId)
+                    await self?.revealLocalSession(sessionId, identity: target.identity)
                 },
                 onSessionCurrent: { [tmux] in
                     await MainActor.run {
@@ -2325,13 +2451,12 @@
                     }
                     let panes = await tmux.refreshPanes()
                     return await MainActor.run { () -> Int in
-                        // Reconcile pane metadata so setCLISessionState finds tracked
-                        // entries (sessionName etc.) for hook-driven sibling clearing.
-                        winManager.updatePaneStates(from: panes)
+                        // Reconcile the current snapshot, never an older result held across an actor hop.
+                        winManager.updatePaneStates(from: tmux.panes)
 
                         let targets: [String]
-                        if let paneId, panes.contains(where: { $0.paneId == paneId }) {
-                            targets = [paneId]
+                        if let paneId {
+                            targets = panes.contains(where: { $0.paneId == paneId }) ? [paneId] : []
                         } else if let sessionId {
                             let matching = panes.filter { $0.sessionName == sessionId }
                             targets = matching.map(\.paneId)
@@ -2340,8 +2465,13 @@
                             targets = active.map { [$0.paneId] } ?? []
                         }
                         var applied = 0
-                        for target in targets where winManager.setCLISessionState(override, for: target) {
-                            applied += 1
+                        for target in targets {
+                            guard
+                                let original = panes.first(where: { $0.paneId == target })?.workspaceIdentity,
+                                tmux.panes.first(where: { $0.paneId == target })?.workspaceIdentity == original else { continue }
+                            if winManager.setCLISessionState(override, for: target) {
+                                applied += 1
+                            }
                         }
                         if applied > 0 {
                             Task {
@@ -2363,9 +2493,7 @@
                         tmux: tmux,
                         method: "session.set_title"
                     )
-                    await MainActor.run {
-                        winManager.setSessionDescription(title, for: resolvedSession)
-                    }
+                    try await winManager.setSessionDescription(title, for: resolvedSession.info.sessionName, expectedWorkspacePane: resolvedSession.identity)
                 },
                 onSessionSetColor: { [tmux, winManager] color, sessionId, paneId in
                     let resolvedSession = try await Self.resolveSessionTarget(
@@ -2374,9 +2502,7 @@
                         tmux: tmux,
                         method: "session.set_color"
                     )
-                    await MainActor.run {
-                        winManager.setSessionColor(color, for: resolvedSession)
-                    }
+                    try await winManager.setSessionColor(color, for: resolvedSession.info.sessionName, expectedWorkspacePane: resolvedSession.identity)
                 },
                 onSessionSetEmoji: { [tmux, winManager] emoji, sessionId, paneId in
                     let resolvedSession = try await Self.resolveSessionTarget(
@@ -2385,9 +2511,7 @@
                         tmux: tmux,
                         method: "session.set_emoji"
                     )
-                    await MainActor.run {
-                        winManager.setSessionEmoji(emoji, for: resolvedSession)
-                    }
+                    try await winManager.setSessionEmoji(emoji, for: resolvedSession.info.sessionName, expectedWorkspacePane: resolvedSession.identity)
                 },
                 onWindowList: { [tmux] sessionId, paneId in
                     let panes = await tmux.refreshPanes()
@@ -2411,27 +2535,19 @@
                     }
                 },
                 onWindowCreate: { [tmux] sessionId, path, paneId, name in
-                    let targetSession: String = await MainActor.run {
-                        if let sessionId { return sessionId }
-                        let panes = tmux.panes
-                        if let paneId, let match = panes.first(where: { $0.paneId == paneId }) {
-                            return match.sessionName
-                        }
-                        let attached = tmux.attachedSessionNames
-                        return panes.first(where: {
-                            attached.contains($0.sessionName)
-                        })?.sessionName ?? panes.first?.sessionName ?? "main"
-                    }
+                    let target = try await Self.resolveSessionTarget(sessionId: sessionId, paneId: paneId, tmux: tmux, method: "window.create", allowUnattached: true)
                     let workingDirectory = path ?? FileManager.default.homeDirectoryForCurrentUser.path
                     let newPaneId = try await tmux.newWindow(
-                        sessionName: targetSession,
+                        sessionName: target.info.sessionName,
                         workingDirectory: workingDirectory,
-                        windowName: name
+                        windowName: name,
+                        expectedWorkspacePane: target.identity
                     )
-                    let panes = await tmux.refreshPanes()
-                    guard let newPane = panes.first(where: { $0.paneId == newPaneId }) else {
-                        throw APIError.notFound("New window pane not found")
+                    let created = try await tmux.captureWorkspacePane(target: newPaneId, expectedServerID: target.identity.serverID)
+                    guard created.identity.sessionID == target.identity.sessionID else {
+                        throw APIError.notFound("The new window changed before it could be returned")
                     }
+                    let newPane = created.info
                     return APIWindowInfo(
                         id: newPane.windowId,
                         index: newPane.windowIndex,
@@ -2442,7 +2558,8 @@
                     ).toJSONValue()
                 },
                 onWindowSelect: { [tmux] windowId in
-                    try await tmux.selectWindow(windowId)
+                    let target = try await tmux.captureWorkspacePane(target: windowId)
+                    try await tmux.selectWindow(windowId, expectedWorkspacePane: target.identity)
                 },
                 onWindowClose: { [tmux] windowId in
                     try await tmux.killWindow(windowId)
@@ -2452,7 +2569,8 @@
                     guard !trimmed.isEmpty else {
                         throw APIError.invalidParams("name cannot be empty")
                     }
-                    try await tmux.renameWindow(target: windowId, name: trimmed)
+                    let target = try await tmux.captureWorkspacePane(target: windowId)
+                    try await tmux.renameWindow(target: windowId, name: trimmed, expectedWorkspacePane: target.identity)
                 },
                 onPaneList: { [tmux, winManager] windowId, paneId in
                     let panes = await tmux.refreshPanes()
@@ -2482,15 +2600,14 @@
                 },
                 onPaneSplit: { [tmux, winManager] paneId, direction, path, shellCommand in
                     let horizontal = direction == "right" || direction == "horizontal"
-                    let target: String = await MainActor.run {
-                        paneId ?? tmux.panes.first(where: { $0.isActive && $0.isWindowActive })?.paneId ?? "%0"
-                    }
+                    let target = try await Self.resolvePaneTarget(paneId, tmux: tmux)
                     let workingDirectory = path ?? FileManager.default.homeDirectoryForCurrentUser.path
                     let newPaneId = try await tmux.splitPane(
-                        target,
+                        target.info.paneId,
                         horizontal: horizontal,
                         workingDirectory: workingDirectory,
-                        shellCommand: shellCommand
+                        shellCommand: shellCommand,
+                        expectedWorkspacePane: target.identity
                     )
                     // `refreshPanes()` early-returns the stale cached list when a
                     // periodic refresh is already in flight, so the freshly-split
@@ -2499,9 +2616,14 @@
                     // returned its id — so retry the refresh until it shows up.
                     var newPane: PaneInfo?
                     for attempt in 0..<PaneSurfaceRetry.attempts {
+                        newPane = nil
                         let panes = await tmux.refreshPanes()
-                        await MainActor.run { _ = winManager.updatePaneStates(from: panes) }
-                        if let found = panes.first(where: { $0.paneId == newPaneId }) {
+                        await MainActor.run { _ = winManager.updatePaneStates(from: tmux.panes) }
+                        if
+                            let found = panes.first(where: { $0.paneId == newPaneId }),
+                            found.tmuxServerID == target.identity.serverID,
+                            found.workspaceIdentity?.sessionID == target.identity.sessionID,
+                            found.workspaceIdentity?.windowID == target.identity.windowID {
                             // Keep the latest snapshot even if it's still settling,
                             // so we return the pane rather than throwing if the cwd
                             // never resolves.
@@ -2537,7 +2659,8 @@
                     ).toJSONValue()
                 },
                 onPaneSelect: { [tmux] paneId in
-                    try await tmux.selectPane(paneId)
+                    let target = try await Self.resolvePaneTarget(paneId, tmux: tmux)
+                    try await tmux.selectPane(target.info.paneId, expectedWorkspacePane: target.identity)
                 },
                 onPaneCapture: { [tmux] paneId, scrollback in
                     let target: String = await MainActor.run {
@@ -2546,63 +2669,51 @@
                     return try await tmux.capturePaneText(target, scrollback: scrollback)
                 },
                 onPaneSetLayout: { [tmux] target, layout in
-                    try await tmux.selectLayout(target: target, layout: layout)
+                    let captured = try await tmux.captureWorkspacePane(target: target)
+                    try await tmux.selectLayout(target: target, layout: layout, expectedWorkspacePane: captured.identity)
                 },
                 onPaneSetProgress: { [tmux, winManager, weak self] state, paneId in
                     // Resolve the target pane: use the explicit ID, otherwise
                     // fall back to the globally active pane. The CLI fills
                     // `pane_id` from `$TMUX_PANE` when no `--pane` flag is
                     // given, so most calls already arrive with an explicit ID.
+                    let target = try await Self.resolvePaneTarget(paneId, tmux: tmux)
                     let panes = await tmux.refreshPanes()
-                    let target: String? = await MainActor.run {
-                        if
-                            let paneId,
-                            panes.contains(where: { $0.paneId == paneId }) {
-                            return paneId
-                        }
-                        return panes.first(where: { $0.isActive && $0.isWindowActive })?.paneId
-                    }
-                    guard let target else {
-                        throw APIError.notFound("No matching pane found")
-                    }
                     // `applyProgressUpdate` is the same path `OSC 9;4` updates
                     // travel through, so a CLI override and an OSC sequence
                     // both write to `PaneState.progress` and last-write-wins.
                     let resolved: TerminalProgressState = state ?? .removed
-                    await MainActor.run {
+                    try await MainActor.run {
+                        guard
+                            panes.first(where: { $0.paneId == target.info.paneId })?.workspaceIdentity == target.identity,
+                            tmux.panes.first(where: { $0.paneId == target.info.paneId })?.workspaceIdentity == target.identity else {
+                            throw APIError.notFound("The terminal changed before progress could be applied")
+                        }
                         // Reconcile pane state first so a freshly-created pane
                         // (not yet in `paneStates`) survives the early-exit
                         // guard inside `setPaneProgress`.
-                        winManager.updatePaneStates(from: panes)
-                        self?.applyProgressUpdate(paneId: target, state: resolved)
+                        winManager.updatePaneStates(from: tmux.panes)
+                        self?.applyProgressUpdate(paneId: target.info.paneId, state: resolved)
                     }
                 },
                 onSendText: { [tmux] text, paneId, appendEnter in
-                    let target: String = await MainActor.run {
-                        paneId ?? tmux.panes.first(where: { $0.isActive && $0.isWindowActive })?.paneId ?? "%0"
-                    }
-                    // Skip the literal write when there's nothing to type so that
-                    // `send "" --enter` (just hit Enter) doesn't spawn an extra
-                    // tmux subprocess for a no-op.
+                    let target = try await Self.resolvePaneTarget(paneId, tmux: tmux)
                     if !text.isEmpty {
-                        try await tmux.sendKeys(target, keys: text, literal: true)
+                        try await tmux.sendKeys(target.info.paneId, keys: text, literal: true, expectedWorkspacePane: target.identity)
                     }
                     if appendEnter {
-                        // Send Enter as a keyname (not literal) so tmux generates
-                        // a real Enter keypress for the running shell/program.
-                        try await tmux.sendKeys(target, keys: "Enter")
+                        try await tmux.sendKeys(target.info.paneId, keys: "Enter", expectedWorkspacePane: target.identity)
                     }
                 },
                 onSendKey: { [tmux] key, paneId in
-                    let target: String = await MainActor.run {
-                        paneId ?? tmux.panes.first(where: { $0.isActive && $0.isWindowActive })?.paneId ?? "%0"
-                    }
-                    try await tmux.sendKeys(target, keys: key)
+                    let target = try await Self.resolvePaneTarget(paneId, tmux: tmux)
+                    try await tmux.sendKeys(target.info.paneId, keys: key, expectedWorkspacePane: target.identity)
                 },
                 onNotify: { [weak self, notificationService] title, body, paneId, push in
-                    let notification = TerminalStreamMessage.TerminalNotification(
+                    let notification = AgentNotificationPresentation(
                         title: title,
-                        body: body
+                        body: body,
+                        paneState: nil
                     )
                     let targetPane = paneId ?? "system"
                     notificationService.showNotification(targetPane, notification, nil)
@@ -2619,8 +2730,10 @@
                         )
                     }
                 },
-                onEditorOpen: { [editorManager] paneId, filePath in
-                    await editorManager.handleAPIEditRequest(paneId: paneId, filePath: filePath)
+                onEditorOpen: { [tmux, editorManager] paneId, filePath in
+                    let target = try await Self.resolvePaneTarget(paneId, tmux: tmux)
+                    _ = await tmux.refreshPanes()
+                    try await editorManager.handleAPIEditRequest(paneId: target.info.paneId, filePath: filePath, expectedWorkspacePane: target.identity)
                 },
                 onIdentify: { [tmux, winManager] paneId in
                     let panes = await tmux.refreshPanes()
@@ -2693,13 +2806,14 @@
                         let quoted = launchArgs.map(\.posixSingleQuoted).joined(separator: " ")
                         runCommand = "\(commandPath.posixSingleQuoted) \(quoted)"
                     }
-                    let (sessionName, _) = try await tmux.createSession(
+                    let created = try await tmux.createSession(
                         baseName: url.lastPathComponent,
                         width: 200,
                         height: 50,
                         workingDirectory: url.path,
                         runCommand: runCommand
                     )
+                    let sessionName = created.sessionName
                     return APISessionInfo(
                         id: sessionName,
                         name: sessionName,
@@ -2708,11 +2822,13 @@
                     ).toJSONValue()
                 },
                 onSetEnvironment: { [tmux] sessionId, vars in
+                    let target = try await tmux.captureWorkspacePane(target: TmuxService.sessionTarget(sessionId))
                     for (name, value) in vars {
                         try await tmux.setSessionEnvironment(
                             sessionName: sessionId,
                             name: name,
-                            value: value
+                            value: value,
+                            expectedWorkspacePane: target.identity
                         )
                     }
                 },
@@ -2725,17 +2841,13 @@
                     let parsed = try parser.parse(config)
                     let driver = LayoutDriver(
                         tmuxAccessor: { tmux },
-                        descriptionApplier: { description, sessionName in
-                            await MainActor.run {
-                                winManager.setSessionDescription(description, for: sessionName)
-                            }
+                        descriptionApplier: { description, sessionName, identity in
+                            try await winManager.setSessionDescription(description, for: sessionName, expectedWorkspacePane: identity)
                         },
-                        colorApplier: { color, sessionName in
-                            await MainActor.run {
-                                winManager.setSessionColor(color, for: sessionName)
-                            }
+                        colorApplier: { color, sessionName, identity in
+                            try await winManager.setSessionColor(color, for: sessionName, expectedWorkspacePane: identity)
                         },
-                        progressApplier: { [weak self] progress, paneId in
+                        progressApplier: { [weak self] progress, paneId, identity in
                             // Reconcile pane state first so newly-created
                             // panes are tracked before `setPaneProgress` runs.
                             // `applyProgressUpdate` then drives the same
@@ -2743,8 +2855,13 @@
                             // reader uses, so initial-progress in YAML lands
                             // identically to a runtime CLI call.
                             let panes = await tmux.refreshPanes()
-                            await MainActor.run {
-                                winManager.updatePaneStates(from: panes)
+                            try await MainActor.run {
+                                guard
+                                    panes.first(where: { $0.paneId == paneId })?.workspaceIdentity == identity,
+                                    tmux.panes.first(where: { $0.paneId == paneId })?.workspaceIdentity == identity else {
+                                    throw TmuxError.commandFailed(message: "The layout pane changed. Apply the layout again.")
+                                }
+                                winManager.updatePaneStates(from: tmux.panes)
                                 self?.applyProgressUpdate(
                                     paneId: paneId,
                                     state: progress ?? .removed
@@ -2929,15 +3046,18 @@
 
             // Set the router as the request handler on the socket server
             await apiSocketServer.setRequestHandler { [agentSimulator] request in
-                if request.method == "simulator.action" { return await agentSimulator.handle(request) }
+                if request.method == "simulator.action" {
+                    return await agentSimulator.handle(request)
+                }
                 return await router.handleRequest(request)
             }
 
             // Start the socket server (use separate path in E2E to avoid conflicts)
             let isE2E = CommandLine.arguments.contains("--e2e-test")
             var socketPath = NSTemporaryDirectory() + (isE2E ? "ctrlx-e2e.sock" : "ctrlx.sock")
-            if isE2E, let index = CommandLine.arguments.firstIndex(of: "--e2e-api-socket"),
-               index + 1 < CommandLine.arguments.count {
+            if
+                isE2E, let index = CommandLine.arguments.firstIndex(of: "--e2e-api-socket"),
+                index + 1 < CommandLine.arguments.count {
                 socketPath = CommandLine.arguments[index + 1]
             }
             do {
@@ -3044,11 +3164,12 @@
             connectionManager.onAgentResponseSubmission = { [weak self] submission in
                 let openFormRequestID = self?.windowManager
                     .paneStates[submission.sessionId]?.agentSession?.state.openForm?.requestID
-                guard AgentResponseSubmissionGuard.shouldDeliver(
-                    response: submission.response,
-                    openFormRequestID: openFormRequestID,
-                    submittedRequestID: submission.requestId
-                ) else {
+                guard
+                    AgentResponseSubmissionGuard.shouldDeliver(
+                        response: submission.response,
+                        openFormRequestID: openFormRequestID,
+                        submittedRequestID: submission.requestId
+                    ) else {
                     self?.logger.info(
                         "Dropping stale agent response submission",
                         metadata: [
@@ -3058,10 +3179,12 @@
                     )
                     return
                 }
-                await self?.pluginRegistry?.core(submission.pluginId)?.deliverResponse(
+                await self?.deliverPluginResponse(
+                    pluginID: submission.pluginId,
                     sessionID: submission.sessionId,
                     requestID: submission.requestId,
-                    submission.response
+                    response: submission.response,
+                    expectedWorkspacePane: submission.expectedWorkspacePane
                 )
             }
             connectionManager.presentationsProvider = { [weak self] in
@@ -3103,18 +3226,26 @@
             agentBrowser.onTabsChanged = { [weak connectionManager] in
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
+            hostFileTabs.onChange = { [weak connectionManager] in
+                Task { await connectionManager?.pushSessionStateToAll() }
+            }
             agentSimulator.onTabsChanged = { [weak connectionManager] in
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
             connectionManager.onViewerUnavailable = { [weak terminalStreamService, weak self] viewerId in
                 self?.agentBrowser.disconnectBrowserViewer(viewerId)
+                self?.agentSimulator.disconnectSimulatorViewer(viewerId)
                 await terminalStreamService?.stopStreams(for: viewerId)
             }
 
             // Wire terminal notification display (fires for any monitored pane, regardless of streaming)
             let notificationService = terminalNotificationService
             paneStreamManager.onNotification = { paneId, notification in
-                notificationService.showNotification(paneId, notification, nil)
+                notificationService.showNotification(paneId, AgentNotificationPresentation(
+                    title: notification.title ?? "Terminal",
+                    body: notification.body,
+                    paneState: nil
+                ), nil)
             }
 
             // Wire title changes from background notification readers to window manager
@@ -3131,6 +3262,7 @@
             // Start notification-only readers for all discovered panes
             let initialPanes = await tmuxService.refreshPanes()
             agentBrowser.updateBrowserRoutes(initialPanes)
+            hostFileTabs.updateRoutes(initialPanes)
             agentSimulator.updateSimulatorRoutes(initialPanes)
             windowManager.updatePaneStates(from: initialPanes)
             await windowManager.refreshGitBranches()
@@ -3155,6 +3287,7 @@
                 Task {
                     let panes = await tmuxForCleanup.refreshPanes()
                     self?.agentBrowser.updateBrowserRoutes(panes)
+                    self?.hostFileTabs.updateRoutes(panes)
                     self?.agentSimulator.updateSimulatorRoutes(panes)
                     winManager.updatePaneStates(from: panes)
                     await terminalStreaming.stopStreamsForClosedPanes(currentPanes: panes)
@@ -3164,9 +3297,9 @@
             }
 
             // Create command executor
-            let executor = TmuxCommandExecutor(tmuxService: tmuxService) { [weak paneStreamManager] paneId, data in
+            let executor = TmuxCommandExecutor(tmuxService: tmuxService) { [weak paneStreamManager] paneId, data, expectedWorkspacePane in
                 guard let paneStreamManager else { return false }
-                return try await paneStreamManager.sendRawBytesIfConnected(paneId: paneId, data: data)
+                return try await paneStreamManager.sendRawBytesIfConnected(paneId: paneId, data: data, expectedWorkspacePane: expectedWorkspacePane)
             }
             commandExecutor = executor
 
@@ -3175,13 +3308,40 @@
             let tmux = tmuxService
             let editorManager = editorSessionManager
             connectionManager.onCommand = { [weak self, executor, streamService, tmux, winManager, editorManager, paneStreaming, weak connectionManager] viewerId, command in
+                if case .readDashboard = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        return try await CommandResponseMessage(commandId: command.id, success: true, dashboard: self.dashboardSnapshot())
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
+                if case let .controlSimulator(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        let result = try await self.agentSimulator.controlSimulator(spec, viewerID: viewerId)
+                        return CommandResponseMessage(commandId: command.id, success: true, simulatorControl: result)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .browseSimulator(spec) = command.command {
                     guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
                         return .failure(for: command.id, error: "Session no longer exists.")
                     }
                     do {
-                        let result = try await self.agentSimulator.handleSimulator(spec)
+                        let result = try await self.agentSimulator.handleSimulator(spec, viewerID: viewerId)
                         return CommandResponseMessage(commandId: command.id, success: true, simulator: result)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
+                if case let .closeSimulator(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        try await self.agentSimulator.closeSimulator(spec)
+                        return .success(for: command.id)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
+                if case let .openPaneSimulator(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        let tab = try await self.agentSimulator.openPaneSimulator(spec, expectedWorkspacePane: command.expectedWorkspacePane)
+                        return CommandResponseMessage(commandId: command.id, success: true, simulatorTab: tab)
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .browseBrowser(spec) = command.command {
@@ -3207,7 +3367,12 @@
                 }
                 if case let .browseFiles(spec) = command.command {
                     do {
-                        let source = FileBrowserSource.local(paneID: command.paneId, tmux: tmux, windows: winManager)
+                        if case let .tabs(operation) = spec.operation {
+                            guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                            let response = try await self.hostFileTabs.handle(operation, paneID: command.paneId, expectedWorkspacePane: command.expectedWorkspacePane)
+                            return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
+                        }
+                        let source = FileBrowserSource.local(paneID: command.paneId, tmux: tmux, windows: winManager, expectedWorkspacePane: command.expectedWorkspacePane)
                         let response = try await source.request(spec.operation)
                         return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
                     } catch {
@@ -3236,31 +3401,10 @@
                 // Viewers submit logical window IDs; the Host validates them,
                 // assigns the revision and republishes the canonical snapshot.
                 if case let .setSharedTerminalLayout(spec) = command.command {
-                    let liveWindowIds = Set(tmux.windows.lazy
-                        .filter { $0.sessionName == spec.sessionName }
-                        .map(\.stableId))
-                    guard liveWindowIds.contains(spec.leftWindowId) else {
-                        return .failure(for: command.id, error: "Left window no longer exists")
-                    }
-                    guard
-                        Set(spec.rightWindowIds).count == spec.rightWindowIds.count,
-                        spec.rightWindowIds.allSatisfy(liveWindowIds.contains),
-                        !spec.rightWindowIds.contains(spec.leftWindowId),
-                        spec.selectedRightWindowId.map(spec.rightWindowIds.contains) ?? spec.rightWindowIds.isEmpty
-                    else {
-                        return .failure(for: command.id, error: "Right-side windows are invalid")
-                    }
-
-                    if winManager.setSharedTerminalLayout(
-                        sessionName: spec.sessionName,
-                        leftWindowId: spec.leftWindowId,
-                        rightWindowIds: spec.rightWindowIds,
-                        selectedRightWindowId: spec.selectedRightWindowId,
-                        splitRatio: spec.splitRatio
-                    ) {
-                        await connectionManager?.pushSessionStateToAll()
-                    }
-                    return .success(for: command.id)
+                    return await Self.handleSharedTerminalLayout(
+                        command: command, spec: spec, tmuxService: tmux,
+                        windowManager: winManager, connectionManager: connectionManager
+                    )
                 }
 
                 // A Viewer may resize only through its explicit toolbar action.
@@ -3293,6 +3437,7 @@
                             spec: spec,
                             preparation: preparation,
                             defaultCommand: self?.pluginRegistry?.manifest(spec.pluginID)?.processNames.first,
+                            hostID: self?.workspaceRecovery?.snapshot?.hostID,
                             tmuxService: tmux
                         )
                     } catch {
@@ -3302,7 +3447,9 @@
 
                 // Handle yolo mode toggle
                 if case let .setYoloMode(spec) = command.command {
-                    winManager.setYoloMode(enabled: spec.enabled, for: command.paneId)
+                    guard winManager.setYoloMode(enabled: spec.enabled, for: command.paneId, expectedWorkspacePane: command.expectedWorkspacePane) else {
+                        return .failure(for: command.id, error: "The terminal changed. Select the restored terminal and try again.")
+                    }
                     // #315: enabling yolo immediately approves a permission form that
                     // was already open (it arrived before yolo was on). The pending
                     // approval is read from the session's `state` — an
@@ -3314,18 +3461,26 @@
                         let session = winManager.paneStates[command.paneId]?.agentSession,
                         case let .awaitingPermission(permission, requestID) = session.state,
                         permission.isAutoApprovable {
-                        await self?.pluginRegistry?.core(session.pluginID)?.deliverResponse(
+                        let originalPane = winManager.paneStates[command.paneId]
+                        await self?.deliverPluginResponse(
+                            pluginID: session.pluginID,
                             sessionID: command.paneId,
                             requestID: requestID,
-                            .permission(decision: .allow, appliedSuggestionID: nil)
+                            response: .permission(decision: .allow, appliedSuggestionID: nil),
+                            expectedWorkspacePane: command.expectedWorkspacePane
                         )
-                        winManager.applyState(
-                            pluginID: session.pluginID,
-                            sessionID: winManager.paneStates[command.paneId]?.claudeSessionID ?? command.paneId,
-                            state: .working,
-                            tmuxPane: command.paneId,
-                            projectPath: nil
-                        )
+                        if
+                            let originalPane,
+                            let context = try? PluginResponseContext(pluginID: session.pluginID, pane: originalPane, requestID: requestID),
+                            (try? context.validate(pluginID: session.pluginID, paneID: command.paneId, pane: winManager.paneStates[command.paneId])) != nil {
+                            winManager.applyState(
+                                pluginID: session.pluginID,
+                                sessionID: originalPane.claudeSessionID ?? command.paneId,
+                                state: .working,
+                                tmuxPane: command.paneId,
+                                projectPath: nil
+                            )
+                        }
                     }
                     await connectionManager?.pushSessionStateToAll()
                     // Auto-approving an open permission above clears its attention
@@ -3339,7 +3494,9 @@
                 // Handle mark session as handled
                 if case .markHandled = command.command {
                     let wasNeeding = winManager.paneStates[command.paneId]?.agentSession?.needsAttention == true
-                    winManager.markSessionHandled(paneId: command.paneId)
+                    guard winManager.markSessionHandled(paneId: command.paneId, expectedWorkspacePane: command.expectedWorkspacePane) else {
+                        return .failure(for: command.id, error: "The terminal changed. Select the restored terminal and try again.")
+                    }
                     if wasNeeding {
                         await connectionManager?.pushSessionStateToAll()
                         // Route through the shared high-water mark so this clear
@@ -3356,9 +3513,10 @@
                 // cache before publishing the replacement name to viewers.
                 if case let .renameTmuxSession(spec) = command.command {
                     do {
-                        try await tmux.renameSession(from: spec.sessionName, to: spec.newName)
+                        try await tmux.renameSession(from: spec.sessionName, to: spec.newName, expectedWorkspacePane: command.expectedWorkspacePane)
                         let allPanes = await tmux.refreshPanes()
                         self?.agentBrowser.updateBrowserRoutes(allPanes)
+                        self?.hostFileTabs.updateRoutes(allPanes)
                         self?.agentSimulator.updateSimulatorRoutes(allPanes)
                         winManager.updatePaneStates(from: allPanes)
                         await paneStreaming.updateMonitoring(panes: allPanes)
@@ -3372,29 +3530,43 @@
                 // Handle session description (applied to every pane in the session)
                 // pushSessionStateToAll() runs via onSessionMetadataChanged, not here.
                 if case let .setSessionDescription(spec) = command.command {
-                    winManager.setSessionDescription(spec.description, for: spec.sessionName)
-                    return .success(for: command.id)
+                    do {
+                        try await winManager.setSessionDescription(spec.description, for: spec.sessionName, expectedWorkspacePane: command.expectedWorkspacePane)
+                        return .success(for: command.id)
+                    } catch {
+                        return .failure(for: command.id, error: error.localizedDescription)
+                    }
                 }
 
                 // Handle session color (applied to every pane in the session).
                 // pushSessionStateToAll() runs via onSessionMetadataChanged, not here.
                 if case let .setSessionColor(spec) = command.command {
-                    winManager.setSessionColor(spec.color, for: spec.sessionName)
-                    return .success(for: command.id)
+                    do {
+                        try await winManager.setSessionColor(spec.color, for: spec.sessionName, expectedWorkspacePane: command.expectedWorkspacePane)
+                        return .success(for: command.id)
+                    } catch {
+                        return .failure(for: command.id, error: error.localizedDescription)
+                    }
                 }
 
                 // Handle session emoji (applied to every pane in the session).
                 // pushSessionStateToAll() runs via onSessionMetadataChanged, not here.
                 if case let .setSessionEmoji(spec) = command.command {
-                    winManager.setSessionEmoji(spec.emoji, for: spec.sessionName)
-                    return .success(for: command.id)
+                    do {
+                        try await winManager.setSessionEmoji(spec.emoji, for: spec.sessionName, expectedWorkspacePane: command.expectedWorkspacePane)
+                        return .success(for: command.id)
+                    } catch {
+                        return .failure(for: command.id, error: error.localizedDescription)
+                    }
                 }
 
                 // Handle manual session-state override (applied to every pane in
                 // the session, cleared by later plugin activity — issue #695).
                 // pushSessionStateToAll() runs via onSessionMetadataChanged, not here.
                 if case let .setSessionState(spec) = command.command {
-                    winManager.setCLISessionState(spec.state, forSession: spec.sessionName)
+                    guard winManager.setCLISessionState(spec.state, forSession: spec.sessionName, expectedWorkspacePane: command.expectedWorkspacePane) else {
+                        return .failure(for: command.id, error: "The session changed. Select the restored session and try again.")
+                    }
                     // A pin that lowers the pending count (pin-to-Idle, unpin)
                     // has no notification — carry the iOS badge down with it.
                     if let badge = winManager.pendingCountDecrease() {
@@ -3407,7 +3579,7 @@
                 // so every viewer sees the new stable-id order.
                 if case let .moveTmuxWindows(spec) = command.command {
                     do {
-                        try await tmux.moveWindows(in: spec.sessionName, to: spec.windowIds)
+                        try await tmux.moveWindows(in: spec.sessionName, to: spec.windowIds, expectedWorkspacePane: command.expectedWorkspacePane)
                         let allPanes = await tmux.refreshPanes()
                         winManager.updatePaneStates(from: allPanes)
                         await connectionManager?.pushSessionStateToAll()
@@ -3425,7 +3597,7 @@
                         return .failure(for: command.id, error: "Window name must not be empty")
                     }
                     do {
-                        try await tmux.renameWindow(target: spec.windowId, name: trimmed)
+                        try await tmux.renameWindow(target: spec.windowId, name: trimmed, expectedWorkspacePane: command.expectedWorkspacePane)
                         let allPanes = await tmux.refreshPanes()
                         winManager.updatePaneStates(from: allPanes)
                         await connectionManager?.pushSessionStateToAll()
@@ -3472,13 +3644,13 @@
                 if case let .prepareAgentFork(spec) = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host is shutting down.") }
                     do {
-                        let preparation = try await prepareAgentFork(spec.source)
+                        let preparation = try await prepareAgentFork(spec.source, expectedWorkspacePane: command.expectedWorkspacePane)
                         return CommandResponseMessage(commandId: command.id, success: true, forkPreparation: preparation)
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .forkAgentSession(spec) = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host is shutting down.") }
-                    do { return .success(for: command.id, paneId: try await forkAgentSession(spec)) }
+                    do { return try .success(for: command.id, paneId: await forkAgentSession(spec, expectedWorkspacePane: command.expectedWorkspacePane)) }
                     catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .createTmuxWindow(spec) = command.command {
@@ -3525,14 +3697,18 @@
 
                 // Handle remote editor submit
                 if case let .submitEditorContent(spec) = command.command {
-                    editorManager.handleRemoteSubmit(paneId: command.paneId, content: spec.content)
-                    return .success(for: command.id)
+                    do {
+                        try editorManager.handleRemoteSubmit(paneId: command.paneId, content: spec.content, expectedSessionID: spec.expectedSessionID)
+                        return .success(for: command.id)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
 
                 // Handle remote editor cancel
-                if case .cancelEditorSession = command.command {
-                    editorManager.handleRemoteCancel(paneId: command.paneId)
-                    return .success(for: command.id)
+                if case let .cancelEditorSession(spec) = command.command {
+                    do {
+                        try editorManager.handleRemoteCancel(paneId: command.paneId, expectedSessionID: spec.expectedSessionID)
+                        return .success(for: command.id)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
 
                 // Handle remote file drop or image paste: save each file into
@@ -3575,6 +3751,8 @@
                 // empty, so an older viewer sees no field at all (graceful skew).
                 let usageOverview = await self?.currentUsageOverview()
                 let sharedTerminalLayouts = await windowManager.sharedTerminalLayouts
+                let recoveryHostID = await self?.workspaceRecovery?.snapshot?.hostID
+                let workspaceIdentity = HostSessionStateSnapshot.workspaceIdentity(hostID: recoveryHostID, panes: paneStates)
 
                 // Open response forms ride `AgentSession.state` in `paneStates`, so a
                 // viewer connecting after a form opened still renders it from the
@@ -3590,6 +3768,7 @@
                     // this host's sessions with the host's mode.
                     sidebarSortMode: await self?.settings.sidebarSortMode.rawValue,
                     sharedTerminalLayouts: sharedTerminalLayouts,
+                    worktreeRepositories: await windowManager.worktreeRepositories,
                     supportsDirectoryBrowsing: true,
                     supportsDirectoryCreation: true,
                     supportsSessionWorktrees: true,
@@ -3602,12 +3781,21 @@
                     supportsFileDownloads: true,
                     supportsFileUploads: true,
                     supportsRepositoryFileLinks: true,
+                    supportsWorkspaceClipboard: true,
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
+                    supportsBrowserExtensions: await self?.agentBrowser.supportsBrowserExtensions,
                     supportsPaneBrowser: await self?.agentBrowser.supportsBrowserSharing,
                     supportsAgentImageInput: true,
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs,
                     supportsSimulatorViewing: await self?.agentSimulator.supportsSimulatorViewing,
-                    simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs
+                    supportsPaneSimulator: await self?.agentSimulator.supportsSimulatorViewing,
+                    supportsSimulatorClosing: await self?.agentSimulator.supportsSimulatorViewing,
+                    supportsDashboard: true,
+                    simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs,
+                    supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs,
+                    workspaceIdentity: workspaceIdentity,
+                    supportsWorkspaceInputIdentity: recoveryHostID != nil,
+                    supportsTerminalStreamIdentity: true
                 )
             }
 
@@ -3636,7 +3824,7 @@
                 self.settings.removePairing(id: pairId)
             }
 
-            Self.wirePaneRefresh(tmuxService: tmuxService, agentSimulator: agentSimulator) { [weak connectionManager] in
+            Self.wirePaneRefresh(tmuxService: tmuxService, windowManager: windowManager, agentSimulator: agentSimulator, files: hostFileTabs, browser: agentBrowser, editors: editorSessionManager) { [weak connectionManager] in
                 await connectionManager?.pushSessionStateToAll()
             }
 
@@ -3675,13 +3863,23 @@
 
         static func wirePaneRefresh(
             tmuxService: TmuxService,
+            windowManager: MirrorWindowManager,
             agentSimulator: AgentSimulatorService,
+            files: HostFileTabService? = nil,
+            browser: AgentBrowserService? = nil,
+            editors: EditorSessionManager? = nil,
             pushSessionState: @escaping @MainActor @Sendable () async -> Void
         ) {
-            tmuxService.setPanesChangedHandler { @MainActor [weak tmuxService, weak agentSimulator] in
+            tmuxService.setPanesChangedHandler { @MainActor [weak tmuxService, weak windowManager, weak agentSimulator, weak files, weak browser, weak editors] in
                 // External renames may only reach periodic discovery, without a layout event.
                 if let tmuxService {
+                    // Publish from this discovery result, not a UI observer or
+                    // periodic caller that may resume after the broadcast.
+                    editors?.reconcilePaneIdentities()
+                    windowManager?.updatePaneStates(from: tmuxService.panes)
                     agentSimulator?.updateSimulatorRoutes(tmuxService.panes)
+                    files?.updateRoutes(tmuxService.panes)
+                    browser?.updateBrowserRoutes(tmuxService.panes)
                 }
                 await pushSessionState()
             }
@@ -3736,10 +3934,9 @@
         }
 
         /// Wires the notification tap handler on the delegate directly.
-        /// Always opens the panes view with the tapped session selected —
-        /// a local pane, or a remote host's session when the banner carried a
-        /// `hostId` (viewer-mode agent notification).
+        /// Reveals the owning native window for local and remote panes.
         private func setupNotificationTapHandler() {
+            ForegroundNotificationDelegate.install()
             ForegroundNotificationDelegate.shared.onTapped = { [weak self] paneId, hostId in
                 guard let self else { return }
                 if let hostId {
@@ -3779,31 +3976,35 @@
                         ? .seconds(6 * 3_600)
                         : .seconds(1_800)
                     try? await Task.sleep(for: interval)
-                    if self == nil { break }
+                    if self == nil {
+                        break
+                    }
                 }
             }
         }
 
-        /// Brings the panes window forward with `paneId` selected and the app
-        /// activated. Shared by the notification-tap handler and the CLI
-        /// `select-session` command so both surface a local session the same way.
+        /// Shared by notification taps and the CLI `select-session` command.
         private func revealLocalPane(_ paneId: String) {
-            NSApp.setActivationPolicy(.regular)
-            pendingMenuBarSelection = .local(paneId: paneId)
-            NotificationCenter.default.post(name: .openPanesWindow, object: nil)
-            Self.forceActivate()
+            revealPane(.local(paneId: paneId))
         }
 
-        /// Brings the panes window forward with a *remote* host's session
-        /// selected. Used by the notification-tap handler when the tapped banner
-        /// came from a connected remote host (viewer mode). Falls back to the raw
-        /// id for the display name if the host is no longer paired.
+        /// Remote notifications resolve panes within their originating Host.
         private func revealRemotePane(hostId: String, paneId: String) {
-            NSApp.setActivationPolicy(.regular)
             let hostName = settings.getHostPairing(id: hostId)?.displayName ?? hostId
-            pendingMenuBarSelection = .remote(hostId: hostId, hostName: hostName, paneId: paneId)
-            NotificationCenter.default.post(name: .openPanesWindow, object: nil)
-            Self.forceActivate()
+            revealPane(.remote(hostId: hostId, hostName: hostName, paneId: paneId))
+        }
+
+        private func revealPane(_ selection: PendingMenuBarSelection) {
+            paneActivationTask?.cancel()
+            pendingMenuBarSelection = nil
+            NSApp.setActivationPolicy(.regular)
+            let workspaceID = detachedWindows.reveal(
+                selection, localPanes: tmuxService.panes, remoteSessions: remoteSessionStore
+            ) {
+                pendingMenuBarSelection = selection
+                NotificationCenter.default.post(name: .openPanesWindow, object: nil)
+            }
+            forceActivate(workspaceID: workspaceID)
         }
 
         /// Reveals a local tmux session by resolving its active window's active
@@ -3811,23 +4012,28 @@
         /// tracked (e.g. it was closed between the request and now). Used by the
         /// CLI `select-session` command, which targets a session by name.
         @MainActor
-        private func revealLocalSession(_ sessionName: String) {
+        private func revealLocalSession(_ sessionName: String, identity: WorkspacePaneIdentity) {
             guard
                 let pane = tmuxService.sessions
                     .first(where: { $0.sessionName == sessionName })?
-                    .activeWindow?.activePane else { return }
+                    .activeWindow?.activePane,
+                pane.workspaceIdentity?.serverID == identity.serverID,
+                pane.workspaceIdentity?.sessionID == identity.sessionID else { return }
             revealLocalPane(pane.paneId)
         }
 
         /// Force-activates the app from a non-interactive context (e.g., notification tap).
         /// Retries activation multiple times to overcome macOS focus-stealing prevention.
-        private static func forceActivate() {
-            Task { @MainActor in
+        private func forceActivate(workspaceID: UUID?) {
+            paneActivationTask = Task { @MainActor [weak self] in
                 for delay in [100, 300, 500] {
-                    try? await Task.sleep(for: .milliseconds(delay))
-                    NSApp.activate(ignoringOtherApps: true)
-                    for window in NSApp.windows where window.isVisible && window.level == .normal {
-                        window.orderFrontRegardless()
+                    do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
+                    guard !Task.isCancelled, let self else { return }
+                    if let workspaceID, detachedWindows.workspaces[workspaceID] == nil {
+                        return
+                    }
+                    detachedWindows.focusNativeWindow(workspaceID: workspaceID) {
+                        NSApp.activate(ignoringOtherApps: true)
                     }
                 }
             }
@@ -3836,6 +4042,7 @@
         deinit {
             wakeObserverTask?.cancel()
             e2eReconnectObserverTask?.cancel()
+            paneActivationTask?.cancel()
             licenseMonitorTask?.cancel()
         }
 
@@ -3853,7 +4060,8 @@
                     paneId: paneId,
                     target: paneTarget,
                     viewerId: viewerId,
-                    leaseId: spec.leaseId
+                    leaseId: spec.leaseId,
+                    expectedWorkspacePane: command.expectedWorkspacePane
                 )
 
                 return .success(for: command.id)
@@ -3867,6 +4075,7 @@
             spec: CreateTmuxSession,
             preparation: SessionLaunchPreparation,
             defaultCommand: String?,
+            hostID: UUID?,
             tmuxService: TmuxService
         ) async -> CommandResponseMessage {
             do {
@@ -3896,7 +4105,7 @@
                 let firstWindowName = spec.worktree?.name ?? (spec.workingDirectory != nil
                     ? (launch?.command ?? defaultCommand ?? spec.pluginID)
                     : "terminal 1")
-                let (_, paneId) = try await tmuxService.createSession(
+                let created = try await tmuxService.createSession(
                     baseName: spec.sessionName,
                     width: spec.width,
                     height: spec.height,
@@ -3908,10 +4117,64 @@
 
                 try? await Task.sleep(for: .milliseconds(500))
 
-                return .success(for: command.id, paneId: paneId)
+                return CommandResponseMessage(
+                    commandId: command.id,
+                    success: true,
+                    paneId: created.paneId,
+                    createdPaneScope: hostID.map { .init(hostID: $0, serverID: created.serverID) }
+                )
             } catch {
                 return .failure(for: command.id, error: preparation.failureDescription(error))
             }
+        }
+
+        static func handleSharedTerminalLayout(
+            command: CommandMessage,
+            spec: SetSharedTerminalLayout,
+            tmuxService: TmuxService,
+            windowManager: MirrorWindowManager,
+            connectionManager: ConnectedViewerManager?
+        ) async -> CommandResponseMessage {
+            if let identity = command.expectedWorkspacePane {
+                do {
+                    let target = TmuxService.sessionTarget(spec.sessionName)
+                    _ = try await tmuxService.runWorkspaceCommand(
+                        [["display-message", "-p", "-t", target, "#{session_id}"]],
+                        target: target, identity: identity, scope: .session
+                    )
+                    if
+                        let cached = tmuxService.panes.first(where: { $0.sessionName == spec.sessionName })?.workspaceIdentity,
+                        !cached.isSameSession(as: identity) {
+                        throw WorkspaceRecoveryError("The session changed while updating its layout. Try again.")
+                    }
+                } catch { return .failure(for: command.id, error: error.localizedDescription) }
+            }
+            let liveWindowIds = Set(tmuxService.windows.lazy
+                .filter { $0.sessionName == spec.sessionName }
+                .map(\.stableId))
+            guard liveWindowIds.contains(spec.leftWindowId) else {
+                return .failure(for: command.id, error: "Left window no longer exists")
+            }
+            guard
+                Set(spec.rightWindowIds).count == spec.rightWindowIds.count,
+                spec.rightWindowIds.allSatisfy(liveWindowIds.contains),
+                !spec.rightWindowIds.contains(spec.leftWindowId),
+                spec.selectedRightWindowId.map(spec.rightWindowIds.contains) ?? spec.rightWindowIds.isEmpty
+            else {
+                return .failure(for: command.id, error: "Right-side windows are invalid")
+            }
+
+            if
+                windowManager.setSharedTerminalLayout(
+                    sessionName: spec.sessionName,
+                    leftWindowId: spec.leftWindowId,
+                    rightWindowIds: spec.rightWindowIds,
+                    selectedRightWindowId: spec.selectedRightWindowId,
+                    splitRatio: spec.splitRatio
+                ) {
+                await connectionManager?.pushSessionStateToAll()
+            }
+            return .success(for: command.id)
         }
 
         private static func handleCreateWindow(
@@ -3923,7 +4186,7 @@
             connectionManager: ConnectedViewerManager?
         ) async -> CommandResponseMessage {
             do {
-                let paneId = try await TmuxWindowCreation.create(spec, core: core, tmux: tmuxService)
+                let paneId = try await TmuxWindowCreation.create(spec, core: core, tmux: tmuxService, expectedWorkspacePane: command.expectedWorkspacePane)
 
                 // `refreshPanes()` early-returns the stale cached list when a
                 // periodic refresh is already in flight, so the freshly-created
@@ -3956,18 +4219,30 @@
             spec: CheckRunningProcesses,
             tmuxService: TmuxService
         ) async -> CommandResponseMessage {
-            let processes: [TmuxService.RunningProcess]
-            switch spec.target {
-            case let .window(windowId):
-                processes = await tmuxService.runningProcesses(inWindow: windowId)
-            case let .session(sessionName):
-                processes = await tmuxService.runningProcesses(inSession: sessionName)
+            do {
+                let processes: [TmuxService.RunningProcess]
+                let kind: WorkspaceRecoveryCloseRequest.Kind
+                let target: String
+                switch spec.target {
+                case let .window(windowId):
+                    processes = await tmuxService.runningProcesses(inWindow: windowId)
+                    kind = .window
+                    target = windowId
+                case let .session(sessionName):
+                    processes = await tmuxService.runningProcesses(inSession: sessionName)
+                    kind = .session
+                    target = TmuxService.sessionTarget(sessionName)
+                }
+                if let identity = command.expectedWorkspacePane {
+                    _ = try await tmuxService.workspaceCloseRequest(kind, target: target, expected: identity)
+                }
+                let processInfos = processes.map {
+                    RunningProcessInfo(paneIndex: $0.paneIndex, name: $0.name, isForeground: $0.isForeground)
+                }
+                return .success(for: command.id, runningProcesses: processInfos)
+            } catch {
+                return .failure(for: command.id, error: error.localizedDescription)
             }
-
-            let processInfos = processes.map {
-                RunningProcessInfo(paneIndex: $0.paneIndex, name: $0.name, isForeground: $0.isForeground)
-            }
-            return .success(for: command.id, runningProcesses: processInfos)
         }
 
         private static func handleKillWindow(
@@ -3979,7 +4254,7 @@
         ) async -> CommandResponseMessage {
             do {
                 // killWindow internally refreshes panes
-                try await tmuxService.killWindow(spec.windowId)
+                try await tmuxService.killWindow(spec.windowId, expectedWorkspacePane: command.expectedWorkspacePane)
                 windowManager.updatePaneStates(from: tmuxService.panes)
                 await connectionManager?.pushSessionStateToAll()
                 return .success(for: command.id)
@@ -3997,7 +4272,7 @@
         ) async -> CommandResponseMessage {
             do {
                 // killSession internally refreshes panes
-                try await tmuxService.killSession(spec.sessionName)
+                try await tmuxService.killSession(spec.sessionName, expectedWorkspacePane: command.expectedWorkspacePane)
                 windowManager.updatePaneStates(from: tmuxService.panes)
                 await connectionManager?.pushSessionStateToAll()
                 return .success(for: command.id)
@@ -4037,11 +4312,12 @@
             let spec = SendDroppedFiles(files: [.init(name: "browser-annotation.\(image.format.fileExtension)", data: image.data)], expectedAgent: target)
             let result = await Self.handleSendDroppedFiles(
                 command: .init(paneId: target.paneID, command: spec.commandType), spec: spec,
-                tmuxService: tmuxService, currentPane: { [windowManager] in windowManager.paneStates[$0] })
+                tmuxService: tmuxService, currentPane: { [windowManager] in windowManager.paneStates[$0] }
+            )
             guard result.success else { throw AgentImageError.message(result.error ?? "Could not add the screenshot.") }
         }
 
-        private static func handleSendDroppedFiles(
+        static func handleSendDroppedFiles(
             command: CommandMessage,
             spec: SendDroppedFiles,
             tmuxService: TmuxService,
@@ -4087,10 +4363,17 @@
             guard panes.contains(where: { $0.paneId == command.paneId }) else {
                 return .failure(for: command.id, error: "Pane \(command.paneId) not found")
             }
+            if
+                let expected = command.expectedWorkspacePane,
+                !expected.isSamePane(as: panes.first(where: { $0.paneId == command.paneId })?.workspaceIdentity) {
+                return .failure(for: command.id, error: "The terminal changed before the files arrived. Select the restored terminal and try again.")
+            }
 
-            if let target = spec.expectedAgent,
-               !panes.contains(where: { $0.paneId == target.paneID && $0.sessionName == target.sessionName
-                   && ($0.tmuxWindowId ?? "\($0.sessionName):\($0.windowIndex)") == target.windowID }) {
+            if
+                let target = spec.expectedAgent,
+                !panes.contains(where: { $0.paneId == target.paneID && $0.sessionName == target.sessionName
+                        && ($0.tmuxWindowId ?? "\($0.sessionName):\($0.windowIndex)") == target.windowID
+                }) {
                 return .failure(for: command.id, error: "The Agent pane moved. Choose the recipient again.")
             }
 
@@ -4155,7 +4438,8 @@
                 try await tmuxService.loadAndPasteBuffer(
                     target: command.paneId,
                     content: spec.expectedAgent == nil ? content : " \(content) ",
-                    bufferName: "ctrlx-drop-\(UUID().uuidString.prefix(8))"
+                    bufferName: "ctrlx-drop-\(UUID().uuidString.prefix(8))",
+                    expectedWorkspacePane: command.expectedWorkspacePane
                 )
                 return .success(for: command.id)
             } catch {
@@ -4221,11 +4505,17 @@
                 // Wire session state updates from remote hosts.
                 // After applying the update, prune any remote-editor edits whose
                 // sessions the host has ended — otherwise those entries leak until quit.
-                manager.onSessionState = { [weak store, weak remoteEditorContentStore] state in
+                manager.onSessionState = { [weak self, weak store, weak remoteEditorContentStore] state in
+                    if let self {
+                        self.recoveredWorkspaceDrafts.updateRemote(state, editors: self.remoteEditorContentStore)
+                        self.viewerWorkspaceRecovery.update(state, windows: self.detachedWindows)
+                    }
                     store?.handleStateUpdate(state)
-                    guard let remoteEditorContentStore, let panes = store?.panes else { return }
-                    let activeIds = Set(panes.compactMap { $0.editorSession?.sessionId })
-                    remoteEditorContentStore.retainOnly(activeSessionIds: activeIds)
+                    guard let remoteEditorContentStore else { return }
+                    let activeIds = Set(state.paneStates.values.compactMap { pane in
+                        pane.editorSession.map { RemoteEditorContentStore.Key(hostID: state.pairId, sessionID: $0.sessionId) }
+                    })
+                    remoteEditorContentStore.retainOnly(activeSessionIds: activeIds, hostID: state.pairId)
                 }
 
                 // Materialize pre-baked notifications pushed by remote hosts over
@@ -4234,15 +4524,20 @@
                 // about remote agent activity (needs-permission, done, questions…)
                 // without watching the viewer window. `pairId` is the host's key, so
                 // tapping the banner reveals the originating remote session.
-                manager.onAgentNotification = { [weak self] notification in
+                manager.onAgentNotification = { [weak self, weak store] notification in
                     guard let self else { return }
-                    let macNotification = TerminalStreamMessage.TerminalNotification(
+                    let paneState = notification.sessionId.flatMap {
+                        store?.paneStates[PaneKey(pairId: notification.pairId, paneId: $0)]
+                    }
+                    let presentation = AgentNotificationPresentation(
                         title: notification.title,
-                        body: notification.body
+                        subtitle: notification.subtitle,
+                        body: notification.body,
+                        paneState: paneState
                     )
                     self.terminalNotificationService.showNotification(
                         notification.sessionId ?? "system",
-                        macNotification,
+                        presentation,
                         notification.pairId
                     )
                 }
@@ -4264,14 +4559,22 @@
                 }
 
                 // Clear sessions when a remote host disconnects
-                manager.onHostDisconnected = { [weak store] hostId in
+                manager.onHostDisconnected = { [weak self, weak store] hostId in
+                    if let self {
+                        self.viewerWorkspaceRecovery.suspend(hostId, windows: self.detachedWindows)
+                        self.recoveredWorkspaceDrafts.suspendRemote(hostId, editors: self.remoteEditorContentStore)
+                    }
                     store?.clearSessions(for: hostId)
                 }
 
                 // A viewer-side transport interruption has the same UI effect
                 // on macOS, but remains a distinct lifecycle signal so iOS can
                 // keep a finite Agent monitor alive while it reconnects.
-                manager.onTransportInterrupted = { [weak store] hostId in
+                manager.onTransportInterrupted = { [weak self, weak store] hostId in
+                    if let self {
+                        self.viewerWorkspaceRecovery.suspend(hostId, windows: self.detachedWindows)
+                        self.recoveredWorkspaceDrafts.suspendRemote(hostId, editors: self.remoteEditorContentStore)
+                    }
                     store?.clearSessions(for: hostId)
                 }
 

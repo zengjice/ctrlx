@@ -53,7 +53,7 @@ public enum GitTabFileActionsScenario {
 
         // ── Phase 1: Activate the Git tab — Changes view ─────────
         TestStep.log("Phase 1: Activate the Git tab and wait for the mock Changes view")
-        TestStep.macClickButton(titled: "Git")
+        TestStep.macClickMenuItem(menuButtonTitle: "New Tab", itemTitle: "Open Git")
         TestStep.macWaitForElement(titled: "aurora-cli", timeout: 10)
         TestStep.macWaitForElement(titled: "package.json", timeout: 5)
         TestStep.macScreenshot(label: "mac-git-changes-ready")
@@ -102,6 +102,16 @@ public enum GitTabFileActionsScenario {
         TestStep.macWaitForElement(titled: "aurora-cli", timeout: 5)
         TestStep.macWaitForElement(titled: "package.json", timeout: 5)
         TestStep.macScreenshot(label: "mac-git-restored-after-close")
+
+        TestStep.log("Phase 4: Closing a file does not reopen a Git tab the user closed")
+        TestStep.macContextMenuClick(elementTitle: "package.json", menuItem: "Open in New Tab")
+        TestStep.macWaitForElement(titled: "File tab: package.json", timeout: 5)
+        TestStep.macHoverElement(query: .identifier("git-tab"))
+        TestStep.macClickButton(titled: "Close Git tab")
+        TestStep.macWaitForElementQueryToDisappear(.identifier("git-tab"), timeout: 5)
+        TestStep.macClickButton(titled: "Close file tab: package.json")
+        TestStep.macWaitForElementQueryToDisappear(.identifier("git-tab"), timeout: 5)
+        TestStep.macWaitForElement(titled: "repoactions:0", timeout: 5)
 
         // Tear down.
         Shortcut.tmuxRunCommand(target: "repoactions:0.0", command: "exit")

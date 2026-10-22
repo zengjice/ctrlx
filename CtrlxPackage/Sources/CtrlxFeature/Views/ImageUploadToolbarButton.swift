@@ -6,7 +6,7 @@
     import SwiftUI
     import UniformTypeIdentifiers
 
-    /// Collects images from native iOS sources and forwards the confirmed batch
+    /// Collects images from native iOS sources and forwards the prepared batch
     /// to the remote tmux pane through the existing encrypted file-drop command.
     struct ImageUploadToolbarButton: View {
         fileprivate static let maximumImages = 5
@@ -14,10 +14,12 @@
         let paneId: String?
         let relayClient: ViewerRelayClient
         @Binding var clipboardPaste: TerminalImagePasteRequest?
+        @Environment(IOSSettings.self) private var settings
 
         @Dependency(ClipboardClient.self) private var clipboard
 
         @State private var targetPaneId: String?
+        @State private var targetBinding = ViewerWorkspaceInputBinding.unavailable
         @State private var selectedPhotos: [PhotosPickerItem] = []
         @State private var isPhotoPickerPresented = false
         @State private var isFileImporterPresented = false
@@ -48,15 +50,22 @@
                     Label("Paste Image", symbol: .docOnClipboard)
                 }
             } label: {
-                if operationID != nil {
-                    ProgressView()
-                        .accessibilityLabel("Preparing Images")
-                } else {
-                    Label("Send Images", symbol: .photoBadgePlus)
+                Group {
+                    if operationID != nil {
+                        ProgressView()
+                            .accessibilityLabel(draftImages.isEmpty ? "Preparing Images" : "Sending Images")
+                    } else {
+                        Label("Attachments", symbol: .plus).labelStyle(.iconOnly)
+                    }
                 }
+                .terminalInputControlStyle()
+                .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
             .disabled(!canStartInput)
-            .accessibilityIdentifier("terminal-send-image")
+            .opacity(canStartInput ? 1 : 0.4)
+            .accessibilityLabel("Attachments")
+            .accessibilityIdentifier("terminal-attachment-control")
             .photosPicker(
                 isPresented: $isPhotoPickerPresented,
                 selection: $selectedPhotos,
@@ -108,9 +117,19 @@
                 prepareClipboardImage(request.image)
             }
             .onDisappear(perform: handleDisappear)
+            .onChange(of: paneId) { _, paneID in
+                if let paneID, let targetPaneId, targetPaneId != paneID {
+                    cancelOperation()
+                    isPreviewPresented = false
+                }
+            }
             .alert("Image Input Failed", isPresented: .init(
                 get: { sourceErrorMessage != nil },
-                set: { if !$0 { sourceErrorMessage = nil } }
+                set: {
+                    if !$0 {
+                        sourceErrorMessage = nil
+                    }
+                }
             )) {
                 Button("OK") { sourceErrorMessage = nil }
             } message: {
@@ -162,6 +181,7 @@
         private func captureTargetPane() -> Bool {
             guard relayClient.isHostConnected, let paneId else { return false }
             targetPaneId = paneId
+            targetBinding = relayClient.workspaceInputState.binding(paneID: paneId)
             sourceErrorMessage = nil
             uploadErrorMessage = nil
             return true
@@ -222,7 +242,9 @@
                         try urls.map { url in
                             let hasAccess = url.startAccessingSecurityScopedResource()
                             defer {
-                                if hasAccess { url.stopAccessingSecurityScopedResource() }
+                                if hasAccess {
+                                    url.stopAccessingSecurityScopedResource()
+                                }
                             }
                             let data = try Data(contentsOf: url)
                             return ImageUploadSource(
@@ -286,62 +308,83 @@
                     image: image
                 )
             }
-            isPreviewPresented = true
+            if settings.confirmImageUploads {
+                isPreviewPresented = true
+            } else {
+                await uploadDraft(operationID: operationID)
+            }
         }
 
         private func sendDraft() {
             guard
                 operationID == nil,
                 relayClient.isHostConnected,
-                let targetPaneId,
+                targetPaneId != nil,
                 !draftImages.isEmpty
             else {
-                uploadErrorMessage = ImageUploadError.disconnected.localizedDescription
+                presentUploadError(ImageUploadError.disconnected)
                 return
             }
             guard let currentOperationID = beginOperation() else { return }
 
-            let pendingImages = draftImages
-
             operationTask = Task { @MainActor in
-                for (index, item) in pendingImages.enumerated() {
-                    if index > 0 {
-                        let separatorResult = await relayClient.sendCommand(
-                            SendRawInput(data: Data(" ".utf8)),
-                            paneId: targetPaneId,
-                            timeout: 30
-                        )
-                        guard self.operationID == currentOperationID else { return }
-                        if case let .failure(error) = separatorResult {
-                            draftImages = Array(pendingImages.dropFirst(index))
-                            uploadErrorMessage = error.localizedDescription
-                            finishOperation(currentOperationID)
-                            return
-                        }
-                    }
+                await uploadDraft(operationID: currentOperationID)
+                finishOperation(currentOperationID)
+            }
+        }
 
-                    let file = DroppedFile(
-                        name: "image-\(index + 1).\(item.image.format.fileExtension)",
-                        data: item.image.data
-                    )
-                    let result = await relayClient.sendCommand(
-                        SendDroppedFiles(files: [file]),
+        private func uploadDraft(operationID: UUID) async {
+            guard self.operationID == operationID, !Task.isCancelled else { return }
+            guard relayClient.isHostConnected, let targetPaneId else {
+                presentUploadError(ImageUploadError.disconnected)
+                return
+            }
+            let binding = targetBinding
+            let pendingImages = draftImages
+            for (index, item) in pendingImages.enumerated() {
+                guard self.operationID == operationID, !Task.isCancelled else { return }
+                if index > 0 {
+                    let separatorResult = await relayClient.sendCommand(
+                        SendRawInput(data: Data(" ".utf8)),
                         paneId: targetPaneId,
-                        timeout: 30
+                        timeout: 30,
+                        inputBinding: binding
                     )
-
-                    guard self.operationID == currentOperationID else { return }
-                    if case let .failure(error) = result {
+                    guard self.operationID == operationID, !Task.isCancelled else { return }
+                    if case let .failure(error) = separatorResult {
                         draftImages = Array(pendingImages.dropFirst(index))
-                        uploadErrorMessage = error.localizedDescription
-                        finishOperation(currentOperationID)
+                        presentUploadError(error)
                         return
                     }
                 }
 
-                finishOperation(currentOperationID)
-                isPreviewPresented = false
+                let file = DroppedFile(
+                    name: "image-\(index + 1).\(item.image.format.fileExtension)",
+                    data: item.image.data
+                )
+                let result = await relayClient.sendCommand(
+                    SendDroppedFiles(files: [file]),
+                    paneId: targetPaneId,
+                    timeout: 30,
+                    inputBinding: binding
+                )
+                guard self.operationID == operationID, !Task.isCancelled else { return }
+                if case let .failure(error) = result {
+                    draftImages = Array(pendingImages.dropFirst(index))
+                    presentUploadError(error)
+                    return
+                }
             }
+
+            draftImages = []
+            self.targetPaneId = nil
+            targetBinding = .unavailable
+            isPreviewPresented = false
+        }
+
+        private func presentUploadError(_ error: Error) {
+            uploadErrorMessage = error.localizedDescription
+            isPreviewPresented = true
         }
 
         private func beginOperation() -> UUID? {
@@ -367,6 +410,7 @@
             guard operationID == nil else { return }
             draftImages = []
             targetPaneId = nil
+            targetBinding = .unavailable
             uploadErrorMessage = nil
         }
 
@@ -387,6 +431,7 @@
             operationID = nil
             draftImages = []
             targetPaneId = nil
+            targetBinding = .unavailable
         }
     }
 

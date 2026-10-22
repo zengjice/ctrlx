@@ -16,6 +16,10 @@
         let commands = Mutex<[String]>([])
         let requests = Mutex<[[String: JSONValue]]>([])
         let hold = Mutex(false)
+        let holdClipboard = Mutex(false)
+        let failCancel = Mutex(false)
+        let readClipboard = Mutex<(@Sendable ([String: JSONValue]) throws -> [String: JSONValue])?>(nil)
+        let clipboardReplies = Mutex<[CXSimulatorDataReply]>([])
         let replies = Mutex<[CXSimulatorDataReply]>([])
         override func invalidate() { }
         override func request(_ data: Data, reply: @escaping CXSimulatorDataReply) {
@@ -25,6 +29,17 @@
             if let request {
                 requests.withLock { $0.append(request) }
             }
+            if command == "cancel", failCancel.withLock({ $0 }) {
+                reply(nil, NSError(domain: "ClipboardTests", code: 1))
+            } else if command == "clipboard-write", holdClipboard.withLock({ $0 }) {
+                clipboardReplies.withLock { $0.append(reply) }
+            } else if command == "clipboard-read", let request, let read = readClipboard.withLock({ $0 }) {
+                do {
+                    try reply(JSONEncoder().encode(read(request)), nil)
+                } catch {
+                    reply(nil, error)
+                }
+            } else
             if command == "preview" {
                 if hold.withLock({ $0 }) {
                     replies.withLock { $0.append(reply) }
@@ -53,6 +68,7 @@
         let calls = Mutex<[[String]]>([])
         let holdBoot = Mutex(false)
         let alive = Mutex(true)
+        let agentUnavailable = Mutex(false)
     }
 
     @Suite("Simulator pane reuse and remote viewing", .serialized) @MainActor
@@ -122,6 +138,9 @@
                 system.write = { _, _ in }
                 system.remove = { _ in }
                 system.inspect = { pid in
+                    if pid != getpid(), probe.agentUnavailable.withLock({ $0 }) {
+                        throw SimulatorFailure("No agent process")
+                    }
                     guard probe.alive.withLock({ $0 }) else { throw SimulatorFailure("Owner exited") }
                     return SimulatorProcess(
                         owner: SimulatorOwner(pid: pid, uid: getuid(), startSeconds: 100, startMicros: 1),
@@ -194,7 +213,7 @@
                 }
             }
 
-            static func pane(session: String, window: Int, stableID: String? = nil, paneID: String = "%1") -> PaneInfo {
+            static func pane(session: String, window: Int, stableID: String? = nil, paneID: String = "%1", identity: WorkspacePaneIdentity? = nil) -> PaneInfo {
                 PaneInfo(
                     paneId: paneID,
                     target: "\(session):\(window).0",
@@ -206,7 +225,8 @@
                     currentPath: "/fixture",
                     width: 80,
                     height: 24,
-                    isActive: true
+                    isActive: true,
+                    workspaceIdentity: identity
                 )
             }
 
@@ -230,6 +250,267 @@
                 try await Task.sleep(for: .milliseconds(5))
             }
             throw SimulatorFailure("Timed out waiting for test fixture")
+        }
+
+        private func humanFixture() throws -> (Fixture, WorkspacePaneIdentity, OpenPaneSimulator) {
+            let fixture = try Fixture()
+            let identity = WorkspacePaneIdentity(serverID: "server:1", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            fixture.pane = Fixture.pane(session: "work", window: 0, identity: identity)
+            fixture.service.updateSimulatorRoutes([fixture.pane])
+            fixture.service.resolveSourcePane = { [unowned fixture] session, paneID in
+                guard session == fixture.pane.sessionName, paneID == fixture.pane.paneId else {
+                    throw SimulatorFailure("Source pane missing")
+                }
+                return fixture.pane
+            }
+            return (fixture, identity, OpenPaneSimulator(sessionName: "work", sourcePaneID: "%1"))
+        }
+
+        @Test
+        func remoteCloseValidatesTabAndSessionThenShutsDownOnlyThatDevice() async throws {
+            let (fixture, identity, open) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            let state = try #require(fixture.created.first)
+            let extra = await fixture.action("open", ["new": .bool(true)])
+            #expect(extra.error == nil)
+            let other = try #require(fixture.created.last)
+            #expect(other.id != tab.id)
+            for request in [CloseSimulator(sessionName: "other", tabID: tab.id), .init(sessionName: "work", tabID: UUID())] {
+                await #expect(throws: SimulatorFailure.self) {
+                    try await fixture.service.closeSimulator(request)
+                }
+            }
+            #expect(!state.isClosed && !other.isClosed)
+            try await fixture.service.closeSimulator(.init(sessionName: "work", tabID: tab.id))
+            #expect(state.isClosed && !other.isClosed)
+            #expect(!fixture.service.sharedSimulatorTabs.contains { $0.id == tab.id })
+            #expect(fixture.probe.calls.withLock { $0.contains { $0.suffix(2) == ["shutdown", state.handle.udid] } })
+            let replacement = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            #expect(replacement.id != tab.id)
+            await #expect(throws: SimulatorFailure.self) {
+                try await fixture.service.closeSimulator(.init(sessionName: "work", tabID: tab.id))
+            }
+            #expect(fixture.service.sharedSimulatorTabs.contains { $0.id == replacement.id })
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func failedTakeoverDoesNotKeepViewerLease() async throws {
+            let (fixture, identity, open) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            let state = try #require(fixture.created.first)
+            fixture.connection.failCancel.withLock { $0 = true }
+            await #expect(throws: (any Error).self) {
+                try await fixture.service.controlSimulator(.init(
+                    sessionName: "work", tabID: tab.id, surfaceID: UUID(),
+                    controlID: nil, generation: nil, operation: .takeControl
+                ), viewerID: "viewer")
+            }
+            #expect(state.remoteControl == nil)
+            fixture.connection.failCancel.withLock { $0 = false }
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func clipboardControlIsBoundToViewerAndSurfaceAndHostTakeoverCancelsPaste() async throws {
+            let (fixture, identity, open) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            let state = try #require(fixture.created.first)
+            let surface = UUID()
+            let acquired = try await fixture.service.controlSimulator(.init(
+                sessionName: "work",
+                tabID: tab.id,
+                surfaceID: surface,
+                controlID: nil,
+                generation: nil,
+                operation: .takeControl
+            ), viewerID: "viewer-A")
+            let lease = try #require(acquired.controlID)
+            func paste(surfaceID: UUID = surface) -> ControlSimulator {
+                .init(
+                    sessionName: "work",
+                    tabID: tab.id,
+                    surfaceID: surfaceID,
+                    controlID: lease,
+                    generation: acquired.generation,
+                    operation: .paste(.init(text: "intended paste"))
+                )
+            }
+            await #expect(throws: (any Error).self) { try await fixture.service.controlSimulator(paste(), viewerID: "viewer-B") }
+            await #expect(throws: (any Error).self) { try await fixture.service.controlSimulator(paste(surfaceID: UUID()), viewerID: "viewer-A") }
+            #expect(!fixture.connection.commands.withLock { $0.contains("clipboard-write") })
+            fixture.connection.holdClipboard.withLock { $0 = true }
+            let task = Task { try await fixture.service.controlSimulator(paste(), viewerID: "viewer-A") }
+            try await wait { fixture.connection.clipboardReplies.withLock { !$0.isEmpty } }
+            fixture.service.manualHome(state)
+            #expect(state.remoteControl == nil)
+            for reply in fixture.connection.clipboardReplies.withLock({ $0 }) {
+                reply(Data("{}".utf8), nil)
+            }
+            await #expect(throws: (any Error).self) { try await task.value }
+            #expect(!fixture.connection.requests.withLock { $0.contains { $0["command"]?.stringValue == "key" && $0["usage"]?.intValue == 25 } }, "A stale paste must never inject Cmd+V")
+            await fixture.service.shutdown()
+        }
+
+        @Test(arguments: [false, true])
+        func copyIgnoresLargeOldClipboardButChecksNewContent(oversizedSelection: Bool) async throws {
+            let (fixture, identity, open) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(open, expectedWorkspacePane: identity)
+            let state = try #require(fixture.created.first)
+            let surface = UUID()
+            let acquired = try await fixture.service.controlSimulator(.init(
+                sessionName: "work", tabID: tab.id, surfaceID: surface,
+                controlID: nil, generation: nil, operation: .takeControl,
+            ), viewerID: "viewer")
+            let reads = Mutex(0)
+            let selected = oversizedSelection ? Data(repeating: 120, count: 400 * 1_024) : Data("selected 中文".utf8)
+            fixture.connection.readClipboard.withLock {
+                $0 = { request in
+                    let attempt = reads.withLock { $0 += 1
+                        return $0
+                    }
+                    // The first two polls after Cmd+C still see the oversized old snapshot.
+                    let revision = attempt <= 3 ? "old" : "new"
+                    if request["revisionOnly"]?.boolValue == true || request["afterRevision"]?.stringValue == revision {
+                        return ["revision": .string(revision)]
+                    }
+                    let data = revision == "old" ? Data(repeating: 120, count: 400 * 1_024) : selected
+                    guard data.count <= WorkspaceClipboardContent.maximumBytes else {
+                        throw NSError(domain: "ClipboardTests", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: "Simulator clipboard exceeds 384 KiB",
+                        ])
+                    }
+                    return ["revision": .string(revision), "content": .object([
+                        "kind": .string("text"), "data": .string(data.base64EncodedString()),
+                    ])]
+                }
+            }
+            let request = ControlSimulator(
+                sessionName: "work", tabID: tab.id, surfaceID: surface,
+                controlID: acquired.controlID, generation: acquired.generation, operation: .copy,
+            )
+            if oversizedSelection {
+                await #expect(throws: (any Error).self) {
+                    try await fixture.service.controlSimulator(request, viewerID: "viewer")
+                }
+                #expect(state.remoteControl == nil)
+            } else {
+                let response = try await fixture.service.controlSimulator(request, viewerID: "viewer")
+                #expect(response.clipboard?.data == selected && response.clipboard?.kind == .text)
+                #expect(state.remoteControl?.id == acquired.controlID)
+            }
+            let sent = fixture.connection.requests.withLock { $0 }
+            let clipboardReads = sent.filter { $0["command"]?.stringValue == "clipboard-read" }
+            #expect(clipboardReads.count == 4)
+            #expect(clipboardReads.first?["revisionOnly"]?.boolValue == true)
+            #expect(clipboardReads.dropFirst().allSatisfy { $0["afterRevision"]?.stringValue == "old" })
+            #expect(sent.contains { $0["command"]?.stringValue == "key" && $0["usage"]?.intValue == 6 && $0["down"]?.boolValue == true })
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func viewerCreatesWithoutAgentAndRepeatedOpensReuse() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            fixture.probe.agentUnavailable.withLock { $0 = true }
+            let first = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            let second = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            #expect(first.id == second.id && fixture.boots == 1)
+            let state = try #require(fixture.created.first)
+            #expect(state.owner == nil && state.writer == nil)
+            let preview = try await fixture.service.handleSimulator(BrowseSimulator(sessionName: "work", tabID: first.id))
+            #expect(preview.tab.id == first.id && preview.frame.isValid)
+            fixture.service.updateSimulatorRoutes([])
+            #expect(state.isClosed && fixture.service.sharedSimulatorTabs.isEmpty)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func simultaneousViewerOpensShareOneBoot() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            fixture.probe.holdBoot.withLock { $0 = true }
+            let first = Task { try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity) }
+            try await wait { fixture.boots == 1 }
+            let second = Task { try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity) }
+            await Task.yield()
+            fixture.probe.holdBoot.withLock { $0 = false }
+            let a = try await first.value, b = try await second.value
+            #expect(a.id == b.id && fixture.boots == 1)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func viewerReusesAgentDeviceWithoutTakingOwnership() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            let owner = state.owner
+            let tab = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            #expect(tab.id == state.id && state.owner == owner && state.writer == owner && fixture.boots == 1)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func agentAdoptsHumanDefaultOnlyThroughExplicitOpen() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            let tab = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            #expect(!(await fixture.action("status", ["device": .string(tab.id.uuidString)])).ok)
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            #expect(state.owner?.pid == 10 && state.writer == nil && fixture.boots == 1)
+            #expect(!(await fixture.action("open", peer: 20)).ok)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func viewerRejectsMissingOrReplacedIdentityBeforeBoot() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            await #expect(throws: (any Error).self) {
+                try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: nil)
+            }
+            fixture.pane = Fixture.pane(
+                session: "work",
+                window: 0,
+                identity: .init(serverID: "replacement", sessionID: identity.sessionID, windowID: identity.windowID, paneID: identity.paneID)
+            )
+            await #expect(throws: (any Error).self) {
+                try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            }
+            #expect(fixture.boots == 0 && fixture.created.isEmpty)
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func paneReplacedDuringBootClosesUnpublishedDevice() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            fixture.probe.holdBoot.withLock { $0 = true }
+            let open = Task { try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity) }
+            try await wait { fixture.boots == 1 }
+            fixture.pane = Fixture.pane(
+                session: "work",
+                window: 0,
+                identity: .init(serverID: "replacement", sessionID: identity.sessionID, windowID: identity.windowID, paneID: UUID())
+            )
+            fixture.service.updateSimulatorRoutes([fixture.pane])
+            fixture.probe.holdBoot.withLock { $0 = false }
+            await #expect(throws: (any Error).self) { try await open.value }
+            #expect(fixture.created.isEmpty && fixture.service.sharedSimulatorTabs.isEmpty)
+            #expect(fixture.probe.calls.withLock { $0.contains { $0.contains("shutdown") } })
+            await fixture.service.shutdown()
+        }
+
+        @Test
+        func newerRouteSnapshotRejectsStaleSourceQuery() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            let original = fixture.pane
+            fixture.service.resolveSourcePane = { [unowned fixture] _, _ in
+                fixture.service.updateSimulatorRoutes([])
+                return original
+            }
+            await #expect(throws: (any Error).self) {
+                try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            }
+            #expect(fixture.boots == 0)
+            await fixture.service.shutdown()
         }
 
         @Test
@@ -335,6 +616,7 @@
                 do {
                     _ = try await run(["new-session", "-d", "-s", "work", "/bin/sleep 60"])
                     fixture.pane = try #require(await tmux.refreshPanes().first)
+                    let initialQueries = queries.withLock { $0 }
                     #expect((await fixture.action("open")).ok)
                     #expect((await fixture.action("open", ["new": .bool(true)])).ok)
                     let state = try #require(fixture.created.first)
@@ -344,13 +626,27 @@
                     tabs.rightSide = [.browser(state.id)]
                     tabs.selectedRight = .browser(state.id)
                     let broadcasts = Mutex<[[RemoteSimulatorTab]]>([])
-                    AppCoordinator.wirePaneRefresh(tmuxService: tmux, agentSimulator: fixture.service) {
+                    let windowManager = withDependencies {
+                        $0[PreferencesService.self] = .inMemory()
+                        $0[LoginItemService.self] = .previewValue
+                    } operation: {
+                        MirrorWindowManager(
+                            settings: AppSettings(), tmuxService: tmux,
+                            paneStreamManager: PaneStreamManager(tmuxService: tmux, controlClientManager: TmuxControlClientManager()),
+                            editorSessionManager: EditorSessionManager()
+                        )
+                    }
+                    windowManager.updatePaneStates(from: tmux.panes)
+                    let publishedPanes = Mutex<[[String: PaneState]]>([])
+                    AppCoordinator.wirePaneRefresh(tmuxService: tmux, windowManager: windowManager, agentSimulator: fixture.service) {
+                        publishedPanes.withLock { $0.append(windowManager.paneStates) }
                         broadcasts.withLock { $0.append(fixture.service.sharedSimulatorTabs) }
                     }
                     let oldPane = fixture.pane
                     fixture.pane = Fixture.pane(
                         session: "renamed", window: oldPane.windowIndex,
-                        stableID: oldPane.tmuxWindowId, paneID: oldPane.paneId
+                        stableID: oldPane.tmuxWindowId, paneID: oldPane.paneId,
+                        identity: oldPane.workspaceIdentity
                     )
                     let rename = try #require(SessionRenameMapping.detect(from: [oldPane], to: [fixture.pane]).first)
                     if migrateBeforeRefresh {
@@ -370,6 +666,7 @@
                     #expect(published.count == 1)
                     #expect(published.first?.count == 2)
                     #expect(published.first?.allSatisfy { $0.sessionName == "renamed" } == true)
+                    #expect(publishedPanes.withLock { $0.first?.values.allSatisfy { $0.sessionName == "renamed" } } == true)
                     #expect(fixture.sessionTabs["renamed"] === tabs && fixture.sessionTabs["work"] == nil)
                     #expect(tabs.openBrowserTabs.map(\.id) == [state.id, extra.id])
                     #expect(tabs.selectedBrowserTabId == extra.id)
@@ -381,8 +678,16 @@
                         try await fixture.service.handleSimulator(.init(sessionName: "work", tabID: state.id))
                     }
                     _ = await tmux.refreshPanes()
-                    #expect(queries.withLock { $0 } == 3)
+                    #expect(queries.withLock { $0 } == initialQueries + 2)
                     #expect(broadcasts.withLock { $0.count } == 1)
+
+                    // Even an identity-only change must reach the Viewer before
+                    // a new editor captures its target; the visible name is unchanged.
+                    let replacementID = UUID()
+                    _ = try await run(["set-option", "-t", "renamed", WorkspaceTmuxRecovery.sessionKey, replacementID.uuidString])
+                    _ = await tmux.refreshPanes()
+                    try await wait { publishedPanes.withLock { $0.count == 2 } }
+                    #expect(publishedPanes.withLock { $0.last?.values.first?.workspaceIdentity?.sessionID } == replacementID)
                 } catch {
                     await fixture.service.shutdown()
                     _ = try? await run(["kill-server"])

@@ -12,6 +12,190 @@ No production targets, WKWebView implementation, Relay, iOS app, Codex settings,
 native-messaging manifests, default browser, or existing Chrome profiles change.
 There is no MCP server, TCP debugging endpoint, or extension spoofing.
 
+## Browser extension characterization (2026-10-16)
+
+The new `ExtensionProbe.mm` is a separate executable compiled into a disposable
+copy of the signed probe App. It does not replace the older probe or production
+CtrlX. It implements the compatibility gate in the
+[browser extension design](../../docs/browser-extensions-design.md), using the
+small local `extension-fixture/` extension, not the official ChatGPT extension.
+
+```bash
+python3 scripts/local_build.py run -- bash scripts/cef-browser-probe.sh build
+bash experiments/cef-browser-probe/prepare_extensions_probe.sh
+# Execute the exact use-artifact command printed by preparation.
+```
+
+The runner starts a private loopback fixture on an ephemeral port and a new
+profile below this worktree's `.build-local/diagnostics/`. It loads only the
+test extension, uses the established mock-keychain mode, and bounds the process
+with a timeout. It closes all of its own windows, then checks native shutdown.
+`report.json`, `native.log` and `popup.png` stay with that run's profile. Reusing
+the App still creates a fresh profile; the runner does not clear another run.
+
+The test first focuses an Alloy page while a Chrome-style extension manager is
+open, then closes the manager and repeats, then tests a Chrome-style page. It
+checks actual request headers at the fixture server, content-script messaging,
+tab enumeration and current-tab queries, and a real action popup. The popup
+itself reports its tab queries; these are not inferred from a background worker.
+An exact popup target is then captured through a private flattened CDP session.
+There is no TCP debugging listener or production Agent-gateway permission change.
+
+Observed on the pinned CEF: scripts and DNR work in both styles; Alloy pages are
+absent from extension tab queries, and `action.openPopup` reports no active browser
+window. The Chrome-style control correctly identifies its page and opens/captures
+the popup. The PNG was visually checked. A successful runner means **observation
+completed**, not that all compatibility checks passed; consult its separate
+`compatibility` fields. ENV-Plugin, store installation, CRX verification, updates,
+remote input and multi-client lifecycle are outside this fixture's evidence.
+
+Append `--native-drag` to the printed runner command to install during execution
+through a private native pasteboard and the manager's unpacked-install API,
+without the startup `--load-extension` switch. Append `--production-admin` instead
+to compile/exercise the actual `BrowserExtensions.inc` implementation for install,
+disable, enable, reload, list and uninstall around the same page/popup checks. These modes
+still use only this test fixture and a new private profile.
+
+`--options-mode tab|embedded|legacy|none` adds direct Settings acceptance:
+current options availability, native opening from the declared mode, repeated-open
+reuse (including loading), storage in the private extension profile, and capture
+through the product `ExtensionSurface`. `none` checks rejection without a settings
+page. Screenshots are saved as `options.jpg` in the run's evidence directory.
+Run modes sequentially. `--options-mode env --env-extension <verified-directory>`
+opens the unmodified ENV-Plugin options page in another private profile and verifies
+reuse and native capture; it does not modify the extension manifest or user settings.
+These native probes do not establish physical-device or cross-machine UI acceptance.
+
+`--dynamic-install` retains a negative characterization: the Chrome directory
+picker does not call CEF's `CefDialogHandler`, so the bounded probe fails. A
+successful CEF file-picker callback must not be assumed for product imports.
+
+Swift ZIP/CRX validation is separate:
+
+```bash
+./scripts/unit-tests.sh -- --filter 'BrowserExtensionPackageTests|BrowserExtensionStoreTests|BrowserExtensionWebStoreTests|AgentBrowserDevToolsTests'
+# Optional: set CTRLX_EXTENSION_ENV_SAMPLE to a local ENV CRX3 sample to run
+# suppliedENVSample as well. No third-party package is stored in Git.
+# Optional: CTRLX_EXTENSION_DOWNLOAD_TEST=1 also downloads ENV-Plugin from
+# Google's update service and verifies the CRX3 identity. It does not install it.
+```
+
+For real ENV acceptance, first export a new runtime directory through the actual
+Swift CRX validator. Both environment-variable paths must be absolute: the unit
+test script changes into `CtrlxPackage`. An existing export directory is refused.
+
+```bash
+CTRLX_EXTENSION_ENV_SAMPLE="$PWD/.build-local/diagnostics/browser-extension-source/env-plugin.crx" \
+CTRLX_EXTENSION_ENV_RUNTIME_DESTINATION="$PWD/.build-local/diagnostics/browser-extension-source/env-runtime-new" \
+  ./scripts/unit-tests.sh -- --filter BrowserExtensionPackageTests.suppliedENVSample
+```
+
+Append these arguments to the **printed use-artifact runner command**:
+
+```text
+--env-extension .build-local/diagnostics/browser-extension-source/env-runtime-new
+--env-scenario experiments/cef-browser-probe/env-request-header.js
+--env-restart-scenario experiments/cef-browser-probe/env-restart.js
+```
+
+The first phase installs ENV in the disposable profile, opens its real action
+popup and verifies the current tab. The scenario creates a request-header rule
+through that popup and checks active/paused/resumed requests at the local server.
+Its private input binding sends CDP input only to that exact test popup; it is
+never available through the product Agent gateway. The optional restart phase
+fully shuts down CEF, starts a new process using the same **test-created** profile,
+and checks runtime installation, saved configuration and actual requests without
+reinstalling or writing configuration. Failed checks stay failed in `report.json`;
+opening a popup does not count as a rule-effect pass.
+
+For cross-origin request-header acceptance, append `--cors` to either the
+`--production-admin` fixture run or the ENV run with `env-request-header.js`
+(without restart, debugger or native-input modes). The real ENV scenario then
+configures `x-maas-env: ark-chat-dev` through its popup. The fixture uses
+`127.0.0.1` and `localhost` as distinct origins, served by the same private
+loopback server. It checks actual received headers on GET, JSON POST, script
+and redirect requests (same-origin to cross-origin and multiple hops),
+response-header modification for the minimal extension,
+and rejection of missing-origin permission and page-added forbidden headers
+(including `x-maas-env` when added by page JavaScript itself).
+`report.json` includes server-side `networkEvents` and strict `compatibility.cors`
+checks. A CORS failure makes the command exit nonzero even when installation,
+same-origin injection and orderly shutdown succeed.
+
+The currently pinned prebuilt CEF **fails** this gate. The candidate source
+patch and its uncompleted native-build acceptance are documented under
+[Cross-origin header compatibility](../../docs/browser-extensions-design.md#cross-origin-header-compatibility).
+Rebuilding only the probe executable does not apply a CEF source patch.
+
+The candidate patch also has a small check that needs only the three matching
+upstream CEF source files and the existing SDK headers, without a Chromium build:
+
+```bash
+python3 experiments/cef-browser-probe/test_header_client_patch.py \
+  --cef-source /path/to/unpatched/cef \
+  --cef-sdk /path/to/pinned/cef_sdk
+```
+
+It applies the patch in a temporary copy, checks declaration/definition agreement
+and callback bindings with CEF's `OnceCallback`/`BindOnce`, then compiles and runs
+the extracted request/response finishing functions with small network/callback
+stand-ins. Cases cover successive redirects, preserving page-added headers,
+errors, and optional redirect/response overrides. This checks the continuations;
+it does not compile the full CEF file or replace the native `--cors` gate.
+
+To exercise the product's generated key for unsigned ZIPs and immutable update
+directories, export fixtures through the real store:
+
+```bash
+CTRLX_EXTENSION_FIXTURE_EXPORT="$PWD/.build-local/diagnostics/browser-extension-source/zip-update-new" \
+  ./scripts/unit-tests.sh -- --filter BrowserExtensionStoreTests.exportNativeUpdateFixture
+```
+
+Then append `--fixture-packages` followed by the exported `fixture-packages.json`
+path to a freshly prepared probe's printed runner command. This checks the exact
+ID from Swift, version 1 → 2 → 1 → 2 across separate directories, page effects,
+popup and confirmed uninstall. Explicitly restoring an older package tests the
+native mechanism; it does not establish the Swift service's automatic failure
+recovery. The probe confirms only its own fixture's exact native uninstall
+dialog, never an arbitrary extension or another application's window.
+
+For native-window transport characterization, append `--native-window-capture`
+to an ENV scenario run. It captures only the source Chrome window belonging to
+this process, including its native child popup, through ScreenCaptureKit's
+`currentProcess` content. It does not request desktop capture. Append
+`--native-window-input` instead to also click ENV's pause button through that
+exact native window tree and check the actual HTTP header effect. It also checks
+Unicode text insertion, Select All/Delete and rejection of a different source
+window. The field must receive focus before native text insertion. Select All is sent as
+an editing command to that same responder, rather than an application menu
+shortcut. This mode
+requires `--env-scenario` and runs separately from restart acceptance.
+
+The mode also runs the product `ExtensionSurface.inc` against the same real
+popup: bounded JPEG capture, native click, Unicode/editing input, wrong lease,
+stale geometry, revoked input and rejection of Host clipboard shortcuts. It
+temporarily makes the fixture's unrelated window key, then checks that input
+restores the explicitly clicked owned window. These product-path assertions
+must report `product-native-surface`; the helper-only checks are insufficient.
+
+`product-surface-geometry` adds owned AppKit fixtures: a child window extends
+outside its root, a sampled screenshot pixel must match that child's mapped
+position, native input must reach its field, and a nested scroll view must move.
+`inactiveBeforeInput` records whether the desktop actually left the probe inactive
+after its deactivation request. A false value does not validate background focus.
+
+Run `--native-manager-input` without ENV to capture the fixture's native removal
+confirmation and click it through only the manager window's owned tree. Runtime
+inventory must confirm removal before success. The popup and manager checks both
+pass on the pinned SDK; they do not establish remote leases, typed wire commands,
+all keyboard/scroll/drag combinations, or Mac Viewer/iOS product acceptance.
+
+Use `--env-debugger` with the ENV header scenario for a separate debugger
+coexistence check. The probe attaches through the real extension permission,
+opens and waits for a visible, loaded native DevTools window, and verifies both
+extension debugger access and CEF page control retain the exact source URL.
+This does not test all ENV Data Mock or native messaging workflows.
+
 ## Local CLI / internal CDP (2026-09-22)
 
 Implemented in `AutomationBridge.mm` and `browser_cli.py`. CEF's
@@ -295,3 +479,15 @@ claim that the official extension supports CEF.**
 The build script pins the actual archive and SHA-256; upstream documentation can
 change independently. The downloaded SDK's `cef_types_mac.h` and
 `cef_life_span_handler.h` define the embedded runtime and window-close contract.
+
+The `--options-mode` suite also exercises the product extension manager's store
+routing: a real `target="_blank"` click and same-tab navigation both invoke the
+store opener, leave the manager on its trusted URL, and create no native popup.
+The same production routing code also verifies physical Host takeover, immediate
+local navigation, rejected queued/stale Viewer callbacks, and remote input that
+must retain its grant. It repeats with an explicitly released grant and an
+actually expired 20-second grant, checking the manager's independent source
+binding and excluding unrelated Host windows and injected Viewer input. The
+Host/Viewer handoff, source-pane checks, legacy Viewer
+polling/reacquisition and expired-grant behavior are covered by
+`BrowserExtensionControlTests` and `RemoteBrowserExtensionSessionTests`.

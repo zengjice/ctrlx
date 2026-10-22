@@ -7,11 +7,32 @@
     @Observable
     @MainActor
     final class VoiceCorrectionSettingsModel {
+        enum CredentialStatus: Equatable {
+            case checking
+            case missing
+            case saved
+            case unreadable
+
+            var label: String {
+                switch self {
+                case .checking: "Checking API key…"
+                case .missing: "Not configured — save an API key on this device"
+                case .saved: "Configured — API key saved, access not verified"
+                case .unreadable: "Unavailable — could not read API key"
+                }
+            }
+        }
+
         var apiKeyDraft = ""
         var topModelCount = 5
         private(set) var models: [String] = []
         private(set) var testResults: [VoiceCorrectionModelTestResult] = []
-        private(set) var hasStoredAPIKey = false
+        private(set) var credentialStatus: CredentialStatus = .checking
+        private(set) var onDeviceAvailability: VoiceCorrectionAvailability?
+        var hasStoredAPIKey: Bool {
+            credentialStatus == .saved
+        }
+
         private(set) var hasTestedModels = false
         private(set) var isLoading = false
         private(set) var isTesting = false
@@ -22,6 +43,8 @@
 
         @ObservationIgnored
         @Dependency(SecretsService.self) private var secrets
+        @ObservationIgnored
+        @Dependency(VoiceCorrectionAvailabilityClient.self) private var availability
 
         @ObservationIgnored private let client: VoiceCorrectionProviderClient
 
@@ -29,6 +52,10 @@
 
         var isBusy: Bool {
             isLoading || isTesting
+        }
+
+        var eligibleResults: [VoiceCorrectionModelTestResult] {
+            testResults.filter(\.isEligible)
         }
 
         var testProgressText: String {
@@ -42,11 +69,12 @@
 
         func prepare(settings: VoiceCorrectionSettings) async {
             guard !isBusy else { return }
+            onDeviceAvailability = availability.onDevice(settings.language.localeIdentifier)
             let provider = settings.provider
             let providerChanged = preparedProvider != provider
             if providerChanged {
                 apiKeyDraft = ""
-                hasStoredAPIKey = false
+                credentialStatus = .checking
                 clearMessages()
                 testResults = []
                 testedModelCount = 0
@@ -60,13 +88,17 @@
             do {
                 let savedKey = try await secrets.loadSecret(account)
                 guard !Task.isCancelled, settings.provider == provider else { return }
-                hasStoredAPIKey = savedKey != nil
+                if credentialStatus == .unreadable {
+                    errorMessage = nil
+                }
+                credentialStatus = savedKey?.isEmpty == false ? .saved : .missing
                 if providerChanged, apiKeyDraft.isEmpty {
                     apiKeyDraft = savedKey ?? ""
                 }
                 preparedProvider = provider
             } catch {
                 guard !Task.isCancelled, settings.provider == provider else { return }
+                credentialStatus = .unreadable
                 errorMessage = error.localizedDescription
             }
         }
@@ -90,7 +122,7 @@
 
                 try await secrets.storeSecret(keyDraft, account)
                 apiKeyDraft = keyDraft
-                hasStoredAPIKey = true
+                credentialStatus = .saved
                 applySavedOrRecommendedModels(settings: settings)
                 statusMessage = "API key saved."
             } catch {
@@ -105,21 +137,28 @@
             testedModelCount = 0
             totalModelCount = 0
             testResults = []
-            defer { isTesting = false }
+            defer {
+                isTesting = false
+                if Task.isCancelled {
+                    statusMessage = "Model test cancelled."
+                }
+            }
 
             let provider = settings.provider
             let account = VoiceCorrectionCredentials.apiKeyAccount(for: provider)
             do {
                 guard let apiKey = try await secrets.loadSecret(account), !apiKey.isEmpty else {
-                    hasStoredAPIKey = false
+                    credentialStatus = .missing
                     errorMessage = "Save an API key before testing models."
                     return
                 }
 
+                try Task.checkCancellation()
                 let availableModelIDs = try await client.fetchModels(
                     provider: provider,
                     apiKey: apiKey
                 )
+                try Task.checkCancellation()
                 let candidateModelIDs = VoiceCorrectionBenchmark.candidateModelIDs(
                     for: provider,
                     from: availableModelIDs,
@@ -145,9 +184,13 @@
                             apiKey: apiKey,
                             client: client
                         )
+                        try Task.checkCancellation()
                         completedResults.append(result)
                         testResults = VoiceCorrectionBenchmark.ranked(completedResults)
                     } catch {
+                        if Task.isCancelled {
+                            return
+                        }
                         failedModelCount += 1
                     }
                     testedModelCount += 1
@@ -157,20 +200,21 @@
                     errorMessage = "Every model test failed. Check the API key and try again."
                     return
                 }
-                topModelCount = min(provider.recommendedModelIDs.count, testResults.count)
+                topModelCount = max(1, min(provider.recommendedModelIDs.count, eligibleResults.count))
                 statusMessage = failedModelCount == 0
-                    ? "Tested \(testResults.count) models. Choose how many winners to keep."
+                    ? "Tested \(testResults.count) models; \(eligibleResults.count) passed every critical check."
                     : "Tested \(totalModelCount) models; \(failedModelCount) failed."
             } catch {
+                guard !Task.isCancelled else { return }
                 errorMessage = error.localizedDescription
             }
         }
 
         func saveTopModels(settings: VoiceCorrectionSettings) {
             clearMessages()
-            guard !testResults.isEmpty else { return }
-            let count = min(max(1, topModelCount), testResults.count)
-            let modelIDs = testResults.prefix(count).map(\.modelID)
+            guard !isBusy, !eligibleResults.isEmpty else { return }
+            let count = min(max(1, topModelCount), eligibleResults.count)
+            let modelIDs = eligibleResults.prefix(count).map(\.modelID)
             settings.saveTestedModelIDs(
                 modelIDs,
                 for: settings.provider
@@ -200,7 +244,7 @@
             do {
                 try await secrets.deleteSecret(account)
                 apiKeyDraft = ""
-                hasStoredAPIKey = false
+                credentialStatus = .missing
                 statusMessage = "API key removed."
             } catch {
                 errorMessage = error.localizedDescription

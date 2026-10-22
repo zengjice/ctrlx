@@ -3,6 +3,11 @@
 CtrlX releases bind each binary to an immutable source commit.
 
 1. Update `Config/Shared-Base.xcconfig`, version docs and `MODIFICATIONS.md`.
+   Increment `CURRENT_PROJECT_VERSION` for each newly distributed build, even
+   when `MARKETING_VERSION` changes; do not reset it to 1. Keep the app and
+   notification extension on the same build number. iOS uses this build string
+   to recognize updates during synchronization; see Apple's
+   [version and build guidance](https://help.apple.com/xcode/mac/current/en.lproj/devba7f53ad4.html).
 2. Run all boundary checks, Swift tests, website build and Mac/iOS build checks.
 3. Commit from the selected worktree and create `v<version>` at that exact commit.
 4. Copy `.env.example` to the selected root environment file and configure the
@@ -71,6 +76,16 @@ response with the local artifact. `--full-download-verify` instead keeps a compl
 local verification copy, removed by successful publication receipt cleanup.
 The installer retains its download hash, app signature/source checks, graceful
 app exit and installation rollback. Downloads and redirects require HTTPS.
+The local template skips installation when the installed App matches the release's
+bundle ID, version, build, build stamp and source revision and passes executable
+and signature checks. This leaves the running App and its settings alone. Use
+`--force` to reinstall that build. Normal output shows download progress on a
+terminal and short verification/install/completion messages; `--verbose` also
+shows tool output. Detailed logs are kept in `~/Library/Logs/CtrlX/Installer/`;
+failures print a bounded log excerpt and its path. Pass flags to the downloaded
+script with `bash -s -- --force --verbose`, or through a local `ctrlx-install`
+wrapper that forwards `"$@"`. Template changes reach `macos/mac.sh` through the
+next normal Mac publication; editing the local template does not update COS.
 
 Installer promotion uses a COS lock object created with overwrite forbidden.
 While holding it, the publisher rechecks the previous installer, saves an immutable
