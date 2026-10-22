@@ -348,6 +348,8 @@ final class BrowserTabState {
 /// bar, navigation controls, and the embedded `WKWebView`.
 struct BrowserTabContentView: View {
     @Bindable var state: BrowserTabState
+    @Environment(\.browserAnnotationContext) private var annotationContext
+    @State private var captureRequest: UUID?
     @State private var isAnnotating = false
     /// Called when the loaded page's title changes so the parent can update
     /// the tab label without owning a reference to the live web view.
@@ -380,7 +382,7 @@ struct BrowserTabContentView: View {
             }, onEditingChanged: { editing in
                 isAnnotating = editing
                 if editing { state.webView.window?.makeFirstResponder(nil) }
-            }) {
+            }, captureRequest: captureRequest) {
               ZStack {
                 BrowserWebViewRepresentable(webView: state.webView)
                 if let error = state.navigationError {
@@ -484,6 +486,16 @@ struct BrowserTabContentView: View {
                 onSubmit: { state.loadFromURLField() }
             )
             .frame(minWidth: 0, maxWidth: .infinity)
+
+            if annotationContext != nil {
+                Button { captureRequest = UUID() } label: {
+                    Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .disabled(annotationContext?.isAvailable != true)
+                .help("Mark this page and add it to an Agent input")
+                .accessibilityIdentifier("browser-annotate")
+            }
         }
         .padding(.trailing, 8)
         .padding(.leading, 16)

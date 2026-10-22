@@ -83,7 +83,6 @@ public struct RemoteSimulatorView: View {
                     }
                 },
                 captureRequest: annotation?.id,
-                showsCaptureButton: false,
                 identifierPrefix: "simulator",
             ) {
                 GeometryReader { geometry in

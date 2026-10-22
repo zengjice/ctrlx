@@ -316,6 +316,24 @@
         }
 
         @Test
+        func hostAnnotationScreenshotRemainsAvailableDuringViewerControl() async throws {
+            let (service, runtime, tab) = try await fixture()
+            let state = try #require(service.tabs[tab.id.uuidString])
+            let lease = try #require(try await service.handleBrowser(
+                .init(sessionName: "test", tabID: tab.id, surfaceID: UUID(), operation: .takeControl),
+                viewerID: "viewer"
+            ).controlID)
+            #expect(state.isRemotelyControlled)
+
+            let screenshot = try await service.annotationScreenshot(state)
+            #expect(screenshot == Data([1, 2, 3]))
+            #expect(runtime.requests.last?["action"] as? String == "frame")
+            #expect(runtime.requests.last?["maximumDimension"] as? Int == 2_560)
+            #expect(service.remoteControls[state.id]?.id == lease)
+            await service.shutdown()
+        }
+
+        @Test
         func validationBeforeNativeBoundary() throws {
             #expect(throws: (any Error).self) { try AgentBrowserService.nativePayload(.text(String(repeating: "文", count: 6_000))) }
             #expect(throws: (any Error).self) { try AgentBrowserService.nativePayload(.fit(width: 0, height: 10)) }

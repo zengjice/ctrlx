@@ -137,7 +137,6 @@ public struct BrowserAnnotationSurface<Content: View>: View {
     let capture: @MainActor () async throws -> Data
     let onEditingChanged: (Bool) -> Void
     let captureRequest: UUID?
-    let showsCaptureButton: Bool
     let identifierPrefix: String
     let content: Content
     @State private var image: CGImage?
@@ -159,14 +158,12 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                 capture: @escaping @MainActor () async throws -> Data,
                 onEditingChanged: @escaping (Bool) -> Void = { _ in },
                 captureRequest: UUID? = nil,
-                showsCaptureButton: Bool = true,
                 identifierPrefix: String = "browser",
                 @ViewBuilder content: () -> Content) {
         self.preferredTarget = preferredTarget; self.capture = capture
         self.requiresRecipientSelection = requiresRecipientSelection
         self.onEditingChanged = onEditingChanged; self.content = content()
         self.captureRequest = captureRequest
-        self.showsCaptureButton = showsCaptureButton
         self.identifierPrefix = identifierPrefix
     }
 
@@ -190,11 +187,6 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                     VStack(alignment: .trailing, spacing: 6) {
                         if image != nil {
                             tools(context).disabled(operation != nil)
-                        } else if showsCaptureButton {
-                            Button(action: beginCapture) { Label("Annotate Screenshot", symbol: .pencilLine) }
-                            .disabled(!context.isAvailable || operation != nil)
-                            .help(context.isAvailable ? "Mark this page and add it to an Agent input" : "Connect and update the Host to add screenshots")
-                            .accessibilityIdentifier("\(identifierPrefix)-annotate")
                         }
                         if let error {
                             Text(error).font(.caption).frame(maxWidth: 320).padding(8)

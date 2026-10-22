@@ -417,7 +417,7 @@ private struct FileBrowserFilePreview: View {
                     onEditingChanged: { editing in
                         isAnnotating = editing
                         onEditingChanged(editing)
-                    }, captureRequest: captureRequest, showsCaptureButton: false, identifierPrefix: "file") {
+                    }, captureRequest: captureRequest, identifierPrefix: "file") {
                     VStack(spacing: 0) { fileContent(path) }
                         // Reconnection resets downloads/players, not the frozen annotation.
                         .id(key)

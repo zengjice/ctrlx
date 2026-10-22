@@ -53,7 +53,6 @@
                         state.view.setInputSuppressed(editing)
                     },
                     captureRequest: captureRequest,
-                    showsCaptureButton: false,
                     identifierPrefix: "simulator"
                 ) {
                     EmbeddedSimulatorView(view: state.view)

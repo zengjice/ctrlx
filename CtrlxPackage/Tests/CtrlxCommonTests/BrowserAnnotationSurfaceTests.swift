@@ -29,8 +29,7 @@
                             state.request = nil
                         }
                     },
-                    captureRequest: state.request,
-                    showsCaptureButton: false
+                    captureRequest: state.request
                 ) {
                     Color.clear
                 }

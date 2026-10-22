@@ -13,6 +13,7 @@ public struct RemoteBrowserView: View {
     @State private var viewport = CGSize.zero
     @State private var keyboardRequested = false
     @State private var isAnnotating = false
+    @State private var captureRequest: UUID?
     private struct ExtensionRequest: Identifiable {
         let id = UUID()
         let storeID: String?
@@ -23,6 +24,7 @@ public struct RemoteBrowserView: View {
     @FocusState private var editingAddress: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.browserAnnotationContext) private var annotationContext
     private let client: ViewerRelayClient
 
     public init(tab: RemoteBrowserTab, client: ViewerRelayClient, onOpenBrowser: @escaping (RemoteBrowserTab) -> Void) {
@@ -84,6 +86,14 @@ public struct RemoteBrowserView: View {
                     }
                     .disabled(session.isTakingControl || !client.isHostConnected || session.frame == nil)
                 }
+                if session.tab.isExtensionWindow != true {
+                    Button { captureRequest = UUID() } label: {
+                        Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
+                    }
+                    .disabled(annotationContext?.isAvailable != true)
+                    .help("Mark this page and add it to an Agent input")
+                    .accessibilityIdentifier("remote-browser-annotate")
+                }
             }.disabled(isAnnotating).padding(.horizontal, 8).padding(.bottom, 8)
             if client.hostSupportsBrowserExtensions, let id = BrowserExtensionStoreURL.extensionID(from: session.tab.url) {
                 HStack {
@@ -111,7 +121,7 @@ public struct RemoteBrowserView: View {
                                          isAnnotating = editing
                                          if editing { keyboardRequested = false; editingAddress = false
                                              session.releaseControl() }
-                                     }) {
+                                     }, captureRequest: captureRequest) {
                 RemoteBrowserCanvas(image: image, frame: displayedFrame,
                                     acceptsInput: session.controlID != nil && !editingAddress && !isAnnotating,
                                     keyboardRequested: keyboardRequested,

@@ -8,7 +8,9 @@ import SwiftUI
 @MainActor
 struct AgentBrowserTabContentView: View {
     let state: AgentBrowserTabState
+    @Environment(\.browserAnnotationContext) private var annotationContext
     @State private var address = ""
+    @State private var captureRequest: UUID?
     @State private var isAnnotating = false
     @State private var extensionError: String?
     private struct ExtensionRequest: Identifiable {
@@ -70,6 +72,14 @@ struct AgentBrowserTabContentView: View {
                     .help("Open Developer Tools for this Chromium tab")
                     .accessibilityIdentifier("agent-browser-developer-tools")
                     .disabled(state.isClosed || state.isRemotelyControlled)
+                if !state.isExtensionWindow {
+                    Button { captureRequest = UUID() } label: {
+                        Label("Annotate Screenshot", symbol: .pencilLine)
+                    }
+                    .help("Mark a screenshot and add it to an Agent input")
+                    .accessibilityIdentifier("agent-browser-annotate")
+                    .disabled(state.isClosed || annotationContext?.isAvailable != true)
+                }
             }
             .labelStyle(.iconOnly)
             .disabled(isAnnotating)
@@ -96,7 +106,8 @@ struct AgentBrowserTabContentView: View {
                         if editing {
                             state.view.window?.makeFirstResponder(nil)
                         }
-                    }
+                    },
+                    captureRequest: captureRequest
                 ) {
                     EmbeddedAgentBrowserView(state: state)
                         .overlay {
