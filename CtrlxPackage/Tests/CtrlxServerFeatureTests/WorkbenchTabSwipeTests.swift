@@ -126,6 +126,34 @@ struct WorkbenchTabSwipeRoutingTests {
         #expect(fixture.send(dy: 20, phase: .began) != nil)
         #expect(fixture.send(phase: .ended) != nil)
     }
+
+    @Test("Browser, file and simulator content keep swipes inside their pane")
+    func interactiveContent() {
+        let fixture = SwipeFixture()
+        defer { fixture.close() }
+
+        fixture.tabs.selectedFileTabId = UUID()
+        #expect(fixture.send(x: 120, dx: -80, phase: .began) != nil)
+        #expect(fixture.send(x: 120, phase: .ended) != nil)
+        #expect(fixture.switches.isEmpty)
+
+        fixture.tabs.selectedFileTabId = nil
+        #expect(fixture.send(x: 120, dx: -80, phase: .began) == nil)
+        _ = fixture.send(x: 120, phase: .ended)
+        #expect(fixture.switches.count == 1)
+
+        fixture.tabs.selectedBrowserTabId = UUID()
+        #expect(fixture.send(x: 120, dx: -80, phase: .began) != nil)
+        #expect(fixture.send(x: 120, phase: .ended) != nil)
+        #expect(fixture.switches.count == 1)
+
+        let browser = UUID()
+        fixture.tabs.rightSide.insert(.browser(browser))
+        fixture.tabs.selectedRight = .browser(browser)
+        #expect(fixture.send(x: 880, dx: -80, phase: .began) != nil)
+        #expect(fixture.send(x: 880, phase: .ended) != nil)
+        #expect(fixture.switches.count == 1)
+    }
 }
 
 @MainActor
@@ -144,6 +172,7 @@ final private class SwipeFixture {
         tabs.rightSide = [.window("@2")]
         tabs.splitRatio = 0.85
         view.tabs = tabs
+        view.allowsSwipe = { [weak tabs] onRight in tabs?.allowsTabSwipe(onRight: onRight) ?? true }
         view.onSwipe = { [weak self] direction, onRight in self?.switches.append((direction, onRight)) }
     }
 

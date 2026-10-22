@@ -1661,7 +1661,12 @@ public struct MainView: View {
                 )
                 .background {
                     if let remoteTabs {
-                        WorkbenchTabSwipe(tabs: remoteTabs, isEnabled: !isPresentingSessionPicker, onSwipe: selectSwipedTab)
+                        WorkbenchTabSwipe(
+                            tabs: remoteTabs,
+                            isEnabled: !isPresentingSessionPicker,
+                            allowsSwipe: { remoteTabs.allowsTabSwipe(onRight: $0) },
+                            onSwipe: selectSwipedTab
+                        )
                     }
                 }
             }
@@ -1875,7 +1880,12 @@ public struct MainView: View {
                 )
                 .background {
                     if let sessionTabs {
-                        WorkbenchTabSwipe(tabs: sessionTabs, isEnabled: !isPresentingSessionPicker, onSwipe: selectSwipedTab)
+                        WorkbenchTabSwipe(
+                            tabs: sessionTabs,
+                            isEnabled: !isPresentingSessionPicker,
+                            allowsSwipe: { sessionTabs.allowsTabSwipe(onRight: $0, leftFileBrowserActive: isFileBrowserActive) },
+                            onSwipe: selectSwipedTab
+                        )
                     }
                 }
             }

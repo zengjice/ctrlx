@@ -55,10 +55,12 @@ struct WorkbenchTabSwipeGesture {
 }
 
 /// Observes only the content area's trackpad scrolls, leaving the tab strip,
-/// sidebar and modified scrolls to their existing handlers.
+/// sidebar and modified scrolls to their existing handlers. Interactive content
+/// panes can opt out so horizontal scrolling stays inside the pane.
 struct WorkbenchTabSwipe: NSViewRepresentable {
     let tabs: SessionFileTabsState
     let isEnabled: Bool
+    let allowsSwipe: @MainActor (_ onRight: Bool) -> Bool
     let onSwipe: @MainActor (_ direction: Int, _ onRight: Bool) -> Void
 
     func makeNSView(context: Context) -> WorkbenchTabSwipeView {
@@ -68,6 +70,7 @@ struct WorkbenchTabSwipe: NSViewRepresentable {
     func updateNSView(_ view: WorkbenchTabSwipeView, context: Context) {
         view.tabs = tabs
         view.isEnabled = isEnabled
+        view.allowsSwipe = allowsSwipe
         view.onSwipe = onSwipe
     }
 
@@ -76,10 +79,29 @@ struct WorkbenchTabSwipe: NSViewRepresentable {
     }
 }
 
+extension SessionFileTabsState {
+    func allowsTabSwipe(onRight: Bool, leftFileBrowserActive: Bool = false) -> Bool {
+        if onRight {
+            switch selectedRight {
+            case .fileExplorer,
+                 .file,
+                 .browser:
+                return false
+            case .window,
+                 .git,
+                 nil:
+                return true
+            }
+        }
+        return !leftFileBrowserActive && selectedFileTabId == nil && selectedBrowserTabId == nil
+    }
+}
+
 @MainActor
 final class WorkbenchTabSwipeView: NSView {
     weak var tabs: SessionFileTabsState?
     var onSwipe: (@MainActor (_ direction: Int, _ onRight: Bool) -> Void)?
+    var allowsSwipe: (@MainActor (_ onRight: Bool) -> Bool)?
     var isEnabled = true {
         didSet {
             if !isEnabled {
@@ -125,6 +147,10 @@ final class WorkbenchTabSwipeView: NSView {
                 return event
             }
             startsOnRight = tabs?.isSplit == true && point.x > bounds.width * (tabs?.splitRatio ?? 0.5)
+            guard allowsSwipe?(startsOnRight) ?? true else {
+                gesture.reset()
+                return event
+            }
         }
         // Keep physical left/right consistent when natural scrolling is off.
         let deltaX = event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX

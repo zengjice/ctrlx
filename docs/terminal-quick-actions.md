@@ -32,16 +32,18 @@ bound. Extended actions use the same Command-Option modifiers as navigation.
 Rich-text and control-sequence copy remain menu actions without default shortcuts.
 Shortcuts are fixed; Settings does not provide a shortcut editor.
 
-Mac content areas also support two-finger trackpad swipes: move fingers left for
-the previous (left-hand) tab and right for the next (right-hand) tab, regardless
-of the macOS natural-scrolling preference. Each completed horizontal gesture
-switches at most one tab, using the same navigation groups and boundary behavior
-as Command-Option-Left / Right.
-In a split, it targets the side where the gesture began. Local, remote Viewer
-and detached workspaces share this behavior. Vertical scrolling and the tab
-strip's own overflow scrolling remain unchanged. Hold Option while scrolling
-to use the content's existing horizontal scrolling or browser navigation instead.
-Short or cancelled swipes and momentum do not switch tabs.
+Mac terminal and Git content areas also support two-finger trackpad swipes: move
+fingers left for the previous (left-hand) tab and right for the next (right-hand)
+tab, regardless of the macOS natural-scrolling preference. Each completed
+horizontal gesture switches at most one tab, using the same navigation groups and
+boundary behavior as Command-Option-Left / Right.
+In a split, it targets the side where the gesture began, provided that side
+supports tab switching. Browser, Files and Simulator content areas keep
+horizontal gestures for their embedded content and do not switch workspace tabs.
+Local, remote Viewer and detached workspaces share this behavior. Vertical
+scrolling and the tab strip's own overflow scrolling remain unchanged. Hold
+Option while scrolling to use the content's existing horizontal scrolling
+instead. Short or cancelled swipes and momentum do not switch tabs.
 
 Closing the selected terminal tab on Mac or iOS selects the first remaining
 terminal tab in that strip, ahead of any interleaved Files or browser tabs.
