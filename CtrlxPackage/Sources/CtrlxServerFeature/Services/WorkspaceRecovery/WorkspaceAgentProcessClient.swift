@@ -63,7 +63,13 @@ private actor WorkspaceAgentProcessReader {
         guard AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID else {
             throw WorkspaceRecoveryError("The Agent process changed while its startup configuration was being recorded.")
         }
-        return AgentResumeInvocation(executable: executable, arguments: Array(parsed.arguments.dropFirst()), configurationRoots: parsed.configurationRoots, version: cliVersion)
+        return AgentResumeInvocation(
+            executable: executable,
+            arguments: Array(parsed.arguments.dropFirst()),
+            configurationRoots: parsed.configurationRoots,
+            providerID: parsed.providerID,
+            version: cliVersion
+        )
     }
 }
 
@@ -71,6 +77,7 @@ enum WorkspaceAgentProcessArguments {
     struct Parsed: Equatable {
         var arguments: [String]
         var configurationRoots: [String: String]
+        var providerID: String?
     }
 
     static func parse(_ data: Data) throws -> Parsed {
@@ -97,6 +104,7 @@ enum WorkspaceAgentProcessArguments {
             try arguments.append(string())
         }
         var roots: [String: String] = [:]
+        var providerID: String?
         var hasEnvironment = false
         while offset < bytes.count {
             if bytes[offset] == 0 {
@@ -107,8 +115,15 @@ enum WorkspaceAgentProcessArguments {
             guard let equal = entry.firstIndex(of: "=") else { continue }
             hasEnvironment = true
             let name = String(entry[..<equal])
-            guard name == "CODEX_HOME" || name == "CLAUDE_CONFIG_DIR" else { continue }
             let value = String(entry[entry.index(after: equal)...])
+            if name == AgentProviderEnvironment.markerKey {
+                guard !value.isEmpty, value.utf8.count <= 128, providerID == nil || providerID == value else {
+                    throw WorkspaceRecoveryError("The Agent Provider identity is not unambiguous.")
+                }
+                providerID = value
+                continue
+            }
+            guard name == "CODEX_HOME" || name == "CLAUDE_CONFIG_DIR" else { continue }
             guard value.hasPrefix("/"), roots[name] == nil || roots[name] == value else {
                 throw WorkspaceRecoveryError("The Agent configuration directory is not an unambiguous absolute path.")
             }
@@ -117,6 +132,6 @@ enum WorkspaceAgentProcessArguments {
         // macOS may return only argv for protected processes. That is not
         // evidence that CODEX_HOME / CLAUDE_CONFIG_DIR was unset.
         guard hasEnvironment else { throw WorkspaceRecoveryError("The Agent process environment is unavailable; its configuration directory cannot be verified.") }
-        return Parsed(arguments: arguments, configurationRoots: roots)
+        return Parsed(arguments: arguments, configurationRoots: roots, providerID: providerID)
     }
 }

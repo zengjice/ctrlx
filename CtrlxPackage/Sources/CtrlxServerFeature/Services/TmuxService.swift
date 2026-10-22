@@ -97,9 +97,10 @@ enum PaneSurfaceRetry {
         guard attempts > 0 else { return nil }
 
         for attempt in 0..<attempts {
-            if let window = windows().first(where: { window in
-                window.panes.contains(where: { $0.paneId == paneId && (serverID == nil || $0.tmuxServerID == serverID) })
-            }) {
+            if
+                let window = windows().first(where: { window in
+                    window.panes.contains(where: { $0.paneId == paneId && (serverID == nil || $0.tmuxServerID == serverID) })
+                }) {
                 return window
             }
             guard attempt < attempts - 1 else { break }
@@ -193,7 +194,9 @@ final public class TmuxService {
         }
         if let pw = getpwuid(geteuid())?.pointee, let cstr = pw.pw_shell {
             let resolved = String(cString: cstr)
-            if !resolved.isEmpty { return resolved }
+            if !resolved.isEmpty {
+                return resolved
+            }
         }
         return "/bin/sh"
     }()
@@ -303,6 +306,15 @@ final public class TmuxService {
         Self.userShellPath
     }
 
+    func agentLaunch(_ preparation: SessionLaunchPreparation) throws -> SessionLaunchPreparation.AgentLaunch? {
+        try preparation.agentLaunch(shell: loginShellPath, tmuxExecutable: tmuxPath)
+    }
+
+    static func recoveryProcess(loginShell: String, invocation: String, prefix: String?) -> [String] {
+        let line = prefix.map { "\($0); \(invocation)" } ?? invocation
+        return [loginShell, "-l", "-i", "-c", line + " && exec " + loginShell.posixSingleQuoted + " -l"]
+    }
+
     /// The `$VISUAL` value CtrlX wants agents to see: the bundled CLI invoked
     /// with `edit`. Nil when the CLI isn't in the bundle.
     private var ctrlxVisualValue: String? {
@@ -348,17 +360,29 @@ final public class TmuxService {
         @Dependency(WorkspaceRecoverySystem.self) var system
         guard system.directoryExists(pane.directory) else { throw WorkspaceRecoveryError("The original working directory is unavailable: \(pane.directory)") }
         let process: [String]
+        var launchPayload: String?
         if let command {
-            let prepared = SessionLaunchPreparation(workingDirectory: pane.directory, fork: command)
-            guard let invocation = try prepared.forkRunCommand(shell: loginShellPath) else { throw WorkspaceRecoveryError("The Agent did not provide a resume command.") }
-            let line = overrideCommandPrefix().map { "\($0); \(invocation)" } ?? invocation
-            process = [loginShellPath, "-l", "-i", "-c", line + " && exec " + loginShellPath.posixSingleQuoted + " -l"]
+            let preparation = SessionLaunchPreparation(workingDirectory: pane.directory, fork: command)
+            guard let launch = try agentLaunch(preparation) else { throw WorkspaceRecoveryError("The Agent did not provide a resume command.") }
+            launchPayload = launch.payload
+            process = Self.recoveryProcess(
+                loginShell: loginShellPath,
+                invocation: launch.command,
+                prefix: overrideCommandPrefix()
+            )
         } else {
             process = ["/bin/sh", "-c", await recoveryShell().command]
         }
-        let arguments = WorkspaceAgentTerminal.launchArguments(runtimeID: runtimeID, pane: pane, record: record, process: process, environment: terminalEnvironmentVars)
-        let result = try await runTmuxCommand(arguments)
-        try WorkspaceAgentTerminal.verifyLaunch(result, record: record)
+        let environment = terminalEnvironmentVars
+        do {
+            try await setLaunchPayload(launchPayload, paneID: runtimeID)
+            let arguments = WorkspaceAgentTerminal.launchArguments(runtimeID: runtimeID, pane: pane, record: record, process: process, environment: environment)
+            let result = try await runTmuxCommand(arguments)
+            try WorkspaceAgentTerminal.verifyLaunch(result, record: record)
+        } catch {
+            await clearLaunchPayload(paneID: runtimeID)
+            throw error
+        }
     }
 
     @ObservationIgnored var workspaceCloseHandler: WorkspaceRecoveryCloseHandler?
@@ -818,8 +842,9 @@ final public class TmuxService {
         do {
             let generation = agentProcessSnapshotGeneration
             let captured = try await (refreshSnapshot ? captureAgentProcessSnapshot() : agentProcessSnapshot())
-            guard generation == agentProcessSnapshotGeneration, !Task.isCancelled,
-                  let snapshot = cacheLatestAgentProcessSnapshot(captured)
+            guard
+                generation == agentProcessSnapshotGeneration, !Task.isCancelled,
+                let snapshot = cacheLatestAgentProcessSnapshot(captured)
             else { return nil }
             let paneInfo = snapshot.paneInfo
             guard !paneInfo.isEmpty else { return [:] }
@@ -990,7 +1015,8 @@ final public class TmuxService {
                 sessionName: session, windowIndex: windowIndex,
                 tmuxWindowId: fields[10].isEmpty ? nil : String(fields[10]), paneIndex: paneIndex,
                 command: String(fields[5]), currentPath: String(fields[6]), width: width, height: height,
-                isActive: fields[9] == "1", workspaceIdentity: identity)
+                isActive: fields[9] == "1", workspaceIdentity: identity
+            )
             current.append((pane, String(shellPID)))
         }
         let ids: Set<String>
@@ -1108,9 +1134,15 @@ final public class TmuxService {
         let parts = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
         guard parts.count == 3 else { return .off }
 
-        if parts[0] == "1" { return .any }
-        if parts[1] == "1" { return .button }
-        if parts[2] == "1" { return .standard }
+        if parts[0] == "1" {
+            return .any
+        }
+        if parts[1] == "1" {
+            return .button
+        }
+        if parts[2] == "1" {
+            return .standard
+        }
         return .off
     }
 
@@ -2359,7 +2391,9 @@ final public class TmuxService {
             "-b", bufferName,
             "-t", target,
         ]
-        if preserveLineFeeds { pasteArguments.append("-r") }
+        if preserveLineFeeds {
+            pasteArguments.append("-r")
+        }
         if let expectedWorkspacePane {
             return try await sendWorkspaceInput([loadArguments, pasteArguments], target: target, identity: expectedWorkspacePane)
         }
@@ -2405,8 +2439,9 @@ final public class TmuxService {
             "display-message", "-p", "-t", target, "#{window_id}\t#{window_layout}",
         ]], target: target, identity: expectedWorkspacePane, scope: .window)
         let fields = snapshot.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\t")
-        guard fields.count == 2, let layout = TmuxLayoutParser.parse(fields[1]),
-              let fitted = TmuxWindowFitLayout.layoutString(layout, width: width, height: height) else {
+        guard
+            fields.count == 2, let layout = TmuxLayoutParser.parse(fields[1]),
+            let fitted = TmuxWindowFitLayout.layoutString(layout, width: width, height: height) else {
             throw TmuxError.commandFailed(message: "Terminal size cannot fit the current pane layout")
         }
         guard layout.width != width || layout.height != height else { return }
@@ -2504,6 +2539,8 @@ final public class TmuxService {
     /// - Parameters:
     ///   - sessionName: The session to create the window in
     ///   - workingDirectory: Optional working directory for the new window
+    ///   - launchPayload: Base64 Agent script delivered through tmux stdin and
+    ///     consumed by the target pane before the Agent starts.
     ///   - forceLoginShell: Use the Host login shell even if the session has custom shell defaults.
     /// - Returns: The pane ID of the new window's first pane
     public func newWindow(
@@ -2513,6 +2550,7 @@ final public class TmuxService {
         windowIndex: Int? = nil,
         runCommand: String? = nil,
         extraEnvironment: [String] = [],
+        launchPayload: String? = nil,
         forceLoginShell: Bool = false,
         expectedWorkspacePane: WorkspacePaneIdentity? = nil,
         expectedSourcePaneID: String? = nil
@@ -2581,8 +2619,10 @@ final public class TmuxService {
         // Launch only in the newly returned pane, using the same login-shell,
         // telemetry and editor-override path as project/session creation.
         do {
+            try await setLaunchPayload(launchPayload, paneID: created.paneID)
             try await runInitialCommand(runCommand, in: created)
         } catch {
+            await clearLaunchPayload(paneID: created.paneID)
             throw TmuxError.commandFailed(message: "Window created (\(paneId)), but agent launch failed: \(error.localizedDescription). Check that tab before retrying.")
         }
 
@@ -3212,7 +3252,9 @@ final public class TmuxService {
                 for pid in descendants {
                     if let name = tree.processName(for: pid), !Self.knownShells.contains(name) {
                         // Skip the foreground process — already counted above
-                        if !isShell && name == entry.command { continue }
+                        if !isShell && name == entry.command {
+                            continue
+                        }
                         running.append(RunningProcess(
                             paneIndex: entry.paneIndex,
                             name: name,
@@ -3292,6 +3334,8 @@ final public class TmuxService {
     ///   - height: Terminal height in rows
     ///   - extraEnvironment: Additional `KEY=VALUE` strings to set on the session
     ///     via `-e`, on top of `terminalEnvironmentVars`.
+    ///   - launchPayload: Base64 Agent script delivered through tmux stdin and
+    ///     consumed by the target pane before the Agent starts.
     ///   - firstWindowName: Name for the first window. The explicit name also
     ///     disables tmux's automatic-rename so the tab doesn't track the
     ///     running command.
@@ -3303,6 +3347,7 @@ final public class TmuxService {
         workingDirectory: String? = nil,
         runCommand: String? = nil,
         extraEnvironment: [String] = [],
+        launchPayload: String? = nil,
         firstWindowName: String = "terminal 1"
     ) async throws -> CreatedSession {
         // Get existing session names
@@ -3371,7 +3416,13 @@ final public class TmuxService {
         let created = try TmuxCreatedPane(output: result.stdoutString)
         let paneId = created.paneID
 
-        try await runInitialCommand(runCommand, in: created)
+        do {
+            try await setLaunchPayload(launchPayload, paneID: created.paneID)
+            try await runInitialCommand(runCommand, in: created)
+        } catch {
+            await clearLaunchPayload(paneID: created.paneID)
+            throw error
+        }
 
         // Refresh panes to include the new session
         await refreshPanes()
@@ -3627,5 +3678,31 @@ final public class TmuxService {
             environment: ["TMUX": "", "TMUX_PANE": ""],
             timeout: nil
         )
+    }
+
+    /// Installs the per-pane Agent script through tmux's stdin so its contents
+    /// never appear in a tmux client's process arguments or another pane.
+    private func setLaunchPayload(_ payload: String?, paneID: String) async throws {
+        guard let payload else { return }
+        let command = ["set-option", "-p", "-t", paneID, SessionLaunchPreparation.launchPayloadOption, payload]
+            .map(\.posixSingleQuoted).joined(separator: " ")
+        var arguments = ["source-file", "-"]
+        if let socketPath {
+            arguments = ["-S", socketPath] + arguments
+        }
+        let result = try await processRunner.runWithInput(
+            executable: tmuxPath,
+            arguments: arguments,
+            environment: ["TMUX": "", "TMUX_PANE": ""],
+            timeout: nil,
+            input: Data((command + "\n").utf8)
+        )
+        guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
+    }
+
+    private func clearLaunchPayload(paneID: String) async {
+        _ = try? await runTmuxCommand([
+            "set-option", "-pu", "-t", paneID, SessionLaunchPreparation.launchPayloadOption,
+        ])
     }
 }

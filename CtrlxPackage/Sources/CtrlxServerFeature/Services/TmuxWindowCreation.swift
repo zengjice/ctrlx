@@ -13,7 +13,8 @@ enum TmuxWindowCreation {
             path: request.workingDirectory,
             pluginID: pluginID,
             requireAgentLaunch: true,
-            core: core
+            core: core,
+            providerID: request.providerID
         )
     }
 
@@ -22,12 +23,13 @@ enum TmuxWindowCreation {
         let identity = expectedWorkspacePane ?? tmux.panes.first { $0.sessionName == request.sessionName }?.workspaceIdentity
         let prepared = try await prepare(request, core: core)
         let name = prepared.launch.map { URL(fileURLWithPath: $0.command).lastPathComponent }
+        let agentLaunch = try tmux.agentLaunch(prepared)
         return try await tmux.newWindow(
             sessionName: request.sessionName,
             workingDirectory: prepared.workingDirectory,
             windowName: name,
-            runCommand: prepared.runCommand,
-            extraEnvironment: prepared.extraEnvironment,
+            runCommand: agentLaunch?.command,
+            launchPayload: agentLaunch?.payload,
             expectedWorkspacePane: identity
         )
     }

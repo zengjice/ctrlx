@@ -16,6 +16,45 @@ populates.
 | `auto_run` | Bool | `true` | gates `commandForLaunch` |
 | `log_level` | enum | `info` | log sink verbosity |
 | `additional_config_folders` | [String] | `[]` | extra `.claude` roots to scan |
+| `providers` | array | `[]` | custom Anthropic-compatible API Providers |
+| `default_provider_id` | String? | `null` | new-session Provider; `null` follows the CLI |
+
+## API Providers
+
+Configure Providers in **Settings → Agents → Claude Code → Providers**. The
+built-in `anthropic` Provider is the normal Claude Code login/configuration.
+Custom Providers are Anthropic-compatible endpoints with `id`, `name`,
+`base_url`, `model` and either `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` as
+the credential kind. The secret is stored in Keychain under
+`agent-provider.claude-code.<provider-id>` and is never synchronized.
+
+- `default_provider_id = null` keeps the CLI's current configuration. An
+  explicit `anthropic` selection clears inherited `ANTHROPIC_BASE_URL`,
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_MODEL`, then runs
+  the normal official login flow.
+- A custom launch sets `ANTHROPIC_BASE_URL`, the selected API-key/token variable,
+  `ANTHROPIC_MODEL` and the Provider marker for the Agent launch. The complete
+  shell script is installed through tmux's stdin into a pane-scoped user option,
+  never session environment, process arguments or command text. After login rc
+  files run, a short fixed-size shell entry removes that pane option, decodes
+  the script and runs it in a subshell. Credentials therefore cannot be
+  truncated during slow shell startup, inherited by another window, or left in
+  the persistent login shell after Ctrl-C or Agent exit. Workspace recovery uses
+  the same per-pane payload path. The other Anthropic credential variable is
+  cleared after rc so a token Provider cannot accidentally inherit a key, or the
+  reverse. Provider overrides require zsh, bash, sh, dash or ksh; other login
+  shells fail explicitly rather than launching with the wrong Provider.
+- Fork/Resume preserve the source `CLAUDE_CONFIG_DIR`, including clearing it
+  when the source used the default `~/.claude` location. Provider credentials
+  are re-created in the new shell scope rather than inherited from the source
+  process.
+- The Fork panel's **Current CLI configuration** target applies no Provider
+  override. Choose a built-in or custom entry to force that Provider.
+- Recovery records `CTRLX_AGENT_PROVIDER_ID`, rebuilds the environment from the
+  current profile and Keychain value, and fails explicitly if that Provider was
+  removed or its credential is missing.
+- Older Hosts omit Provider choices from plugin presentations; older Viewers
+  omit the optional command fields. Both retain their previous behavior.
 
 ## Project discovery
 Scans `~/.claude.json` + `~/.claude/projects/` (+ `additional_config_folders`),

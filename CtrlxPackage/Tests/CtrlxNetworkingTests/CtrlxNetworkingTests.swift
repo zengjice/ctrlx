@@ -237,7 +237,7 @@ struct TmuxKeyCsiParsingTests {
 
     // MARK: - Modified arrow keys (parameterized CSI)
 
-    @Test("Modified arrows retain every Shift/Alt/Control combination", arguments: ["A", "B", "C", "D"], 2 ... 8)
+    @Test("Modified arrows retain every Shift/Alt/Control combination", arguments: ["A", "B", "C", "D"], 2...8)
     func parsesModifiedArrowKeys(direction: String, modifier: Int) throws {
         let sequence = "\u{1B}[1;\(modifier)\(direction)"
         let keys = TmuxKey.from(bytes: Data(sequence.utf8))
@@ -681,16 +681,18 @@ struct CreateTmuxSessionTests {
         #expect(decoded.workingDirectory == nil)
         #expect(decoded.configDir == nil)
         #expect(decoded.pluginID == "claude-code")
+        #expect(decoded.providerID == nil)
     }
 
-    @Test("Round-trip preserves Codex pluginID")
+    @Test("Round-trip preserves Codex pluginID and Provider")
     func roundTripPreservesCodexPluginID() throws {
         let original = CreateTmuxSession(
             sessionName: "codex-work",
             width: 120,
             height: 40,
             workingDirectory: "/Users/test/codex-work",
-            pluginID: "codex"
+            pluginID: "codex",
+            providerID: "custom"
         )
 
         let data = try JSONEncoder().encode(original)
@@ -698,6 +700,7 @@ struct CreateTmuxSessionTests {
 
         #expect(decoded == original)
         #expect(decoded.pluginID == "codex")
+        #expect(decoded.providerID == "custom")
     }
 
     @Test("Defaults pluginID to Codex when omitted on init")

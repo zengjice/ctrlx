@@ -18,13 +18,13 @@ struct AgentForkConfigurationTests {
         var calls = 0
         let config = AgentForkConfiguration(sources: [source], usingWorktree: true, prepare: { source in
             MainActor.preconditionIsolated()
-            await Task.detached {}.value
+            await Task.detached { }.value
             MainActor.preconditionIsolated()
             calls += 1
             return .init(source: source, worktree: nil)
         }, fork: { _ in
             MainActor.preconditionIsolated()
-            await Task.detached {}.value
+            await Task.detached { }.value
             MainActor.preconditionIsolated()
             calls += 1
         })
@@ -76,13 +76,15 @@ struct AgentForkConfigurationTests {
     func currentDirectoryName(agent: String) throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1, agent: agent)))
         let config = configuration(sources: [source], usingWorktree: false)
-        let request = try config.forkRequest(source: source, preparation: nil, name: "  我的 Fork  ", allowUncommittedChanges: false)
+        let request = try config.forkRequest(
+            source: source, preparation: nil, name: "  我的 Fork  ", allowUncommittedChanges: false, targetProviderID: nil
+        )
         #expect(request.windowName == "我的 Fork")
         #expect(request.worktree == nil)
         #expect(request.source.pluginID == agent)
         for name in ["", "  ", "line\nbreak"] {
             #expect(throws: AgentForkError.self) {
-                try config.forkRequest(source: source, preparation: nil, name: name, allowUncommittedChanges: false)
+                try config.forkRequest(source: source, preparation: nil, name: name, allowUncommittedChanges: false, targetProviderID: nil)
             }
         }
     }
@@ -94,12 +96,16 @@ struct AgentForkConfigurationTests {
         let preparation = AgentForkPreparation(source: source, worktree: .init(
             repositoryRoot: "/Host/repo", primaryRoot: "/Host/repo", head: "source-head", relativeDirectory: "", hasUncommittedChanges: false
         ))
-        let first = try config.forkRequest(source: source, preparation: preparation, name: "  feature  ", allowUncommittedChanges: false)
+        let first = try config.forkRequest(
+            source: source, preparation: preparation, name: "  feature  ", allowUncommittedChanges: false, targetProviderID: nil
+        )
         #expect(first.windowName == "feature")
         #expect(first.worktree?.name == "feature")
         #expect(first.source.pluginID == agent)
-        #expect(preparation.worktree?.directory(name: try #require(first.windowName)) == "/Host/repo/.worktrees/feature")
-        let corrected = try config.forkRequest(source: source, preparation: preparation, name: "feature-2", allowUncommittedChanges: false)
+        #expect(try preparation.worktree?.directory(name: #require(first.windowName)) == "/Host/repo/.worktrees/feature")
+        let corrected = try config.forkRequest(
+            source: source, preparation: preparation, name: "feature-2", allowUncommittedChanges: false, targetProviderID: nil
+        )
         #expect(corrected.requestID != first.requestID)
         #expect(corrected.windowName == corrected.worktree?.name)
     }

@@ -1,6 +1,6 @@
 import ClaudeCodePluginCore
-import Foundation
 import CtrlxPluginProtocol
+import Foundation
 import Testing
 
 @Suite("ClaudeCodeSettings")
@@ -74,5 +74,55 @@ struct ClaudeCodeSettingsTests {
         let original = ClaudeCodeSettings(detectFalseStops: false)
         let data = try JSONEncoder().encode(original)
         #expect(ClaudeCodeSettings.decode(from: data) == original)
+    }
+
+    @Test("Provider profiles decode from snake_case and older settings keep the CLI default")
+    func providers() throws {
+        let json = Data("""
+        {
+          "providers": [{
+            "id": "custom",
+            "name": "Custom Anthropic",
+            "base_url": "https://api.example.com/v1",
+            "model": "claude-custom",
+            "auth_kind": "auth_token",
+            "environment_key": "ANTHROPIC_AUTH_TOKEN"
+          }],
+          "default_provider_id": "custom"
+        }
+        """.utf8)
+        let settings = try JSONDecoder().decode(ClaudeCodeSettings.self, from: json)
+        #expect(settings.providers == [ClaudeProviderProfile(
+            id: "custom",
+            name: "Custom Anthropic",
+            baseURL: "https://api.example.com/v1",
+            model: "claude-custom",
+            authKind: .authToken,
+            environmentKey: "ANTHROPIC_AUTH_TOKEN"
+        )])
+        #expect(settings.providerOptions.map(\.id) == ["anthropic", "custom"])
+        #expect(settings.resolvedDefaultProviderID == "custom")
+
+        let legacy = try JSONDecoder().decode(ClaudeCodeSettings.self, from: Data(#"{"auto_run":true}"#.utf8))
+        #expect(legacy.providers.isEmpty && legacy.defaultProviderID == nil)
+        #expect(legacy.providerOptions.map(\.id) == ["anthropic"])
+
+        var invalid = settings
+        invalid.defaultProviderID = "removed"
+        #expect(invalid.resolvedDefaultProviderID == nil)
+    }
+
+    @Test("Claude auth kinds map to their SDK environment variables")
+    func providerValidation() {
+        #expect(ClaudeProviderAuthKind.apiKey.environmentKey == "ANTHROPIC_API_KEY")
+        #expect(ClaudeProviderAuthKind.authToken.environmentKey == "ANTHROPIC_AUTH_TOKEN")
+        #expect(ClaudeCodeSettings.isValidProviderID("custom_1"))
+        for id in ["", "anthropic", "-custom", "has space", "a/b", String(repeating: "a", count: 65)] {
+            #expect(!ClaudeCodeSettings.isValidProviderID(id))
+        }
+        #expect(ClaudeCodeSettings.isValidEnvironmentKey("ANTHROPIC_API_KEY"))
+        for key in ["", "1KEY", "HAS-DASH", "PATH", "HOME", "CLAUDE_CONFIG_DIR", "CTRLX_AGENT_PROVIDER_ID"] {
+            #expect(!ClaudeCodeSettings.isValidEnvironmentKey(key))
+        }
     }
 }

@@ -107,7 +107,9 @@ public enum TmuxKey: Codable, Sendable, Equatable {
     /// Whether this key requires tmux literal mode (sends text as-is without interpretation).
     /// Only applies to `.text` - other cases like `.delay` are handled specially by the executor.
     public var requiresLiteralMode: Bool {
-        if case .text = self { return true }
+        if case .text = self {
+            return true
+        }
         return false
     }
 }
@@ -131,7 +133,7 @@ public extension TmuxKey {
         var index = data.startIndex
         var textBuffer = ""
 
-        /// Flush accumulated text to results
+        // Flush accumulated text to results
         func flushText() {
             if !textBuffer.isEmpty {
                 result.append(.text(textBuffer))
@@ -268,7 +270,9 @@ private extension TmuxKey {
             if b >= 0x30, b <= 0x39 { // '0'-'9'
                 currentParam = currentParam &* 10 &+ Int(b - 0x30)
                 // Cap at max Unicode codepoint to prevent wrapping on adversarial input
-                if currentParam > 0x10FFFF { return nil }
+                if currentParam > 0x10FFFF {
+                    return nil
+                }
                 hasDigit = true
                 j += 1
             } else if b == 0x3B { // ';'
@@ -284,9 +288,10 @@ private extension TmuxKey {
                 // Modified arrows have no named TmuxKey case. Preserve their
                 // CSI bytes using the existing literal transport; collapsing
                 // them to .left/.up/etc. loses Shift/Alt/Control before tmux.
-                if (0x41 ... 0x44).contains(b), params.count == 2,
-                   params[0] == 1, (2 ... 8).contains(params[1]) {
-                    let sequence = String(decoding: data[escIndex ..< nextIndex], as: UTF8.self)
+                if
+                    (0x41...0x44).contains(b), params.count == 2,
+                    params[0] == 1, (2...8).contains(params[1]) {
+                    let sequence = String(decoding: data[escIndex..<nextIndex], as: UTF8.self)
                     return CsiParseResult(keys: [.text(sequence)], nextIndex: nextIndex)
                 }
                 return mapCsiFinalByte(params: params, finalByte: b, nextIndex: nextIndex)
@@ -449,7 +454,9 @@ public struct ExpandCodexQuestions: CommandSpec, Equatable {
         self.expectedQuestionID = expectedQuestionID
     }
 
-    public var commandType: CommandType { .expandCodexQuestions(self) }
+    public var commandType: CommandType {
+        .expandCodexQuestions(self)
+    }
 }
 
 /// Cancel the current operation (Ctrl+C). Returns success/failure.
@@ -591,6 +598,10 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
     /// Requires supportsSessionWorktrees; older Hosts would ignore this field.
     public let worktree: ForkAgentSession.Worktree?
 
+    /// Optional Provider selected on the Host. Older Hosts ignore it, so
+    /// Viewers only send it when the matching presentation advertised choices.
+    public let providerID: String?
+
     public init(
         sessionName: String,
         width: Int,
@@ -599,7 +610,8 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         configDir: String? = nil,
         pluginID: String = AgentLaunchDefaults.pluginID,
         requireAgentLaunch: Bool = false,
-        worktree: ForkAgentSession.Worktree? = nil
+        worktree: ForkAgentSession.Worktree? = nil,
+        providerID: String? = nil
     ) {
         self.sessionName = sessionName
         self.width = width
@@ -609,6 +621,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         self.pluginID = pluginID
         self.requireAgentLaunch = requireAgentLaunch
         self.worktree = worktree
+        self.providerID = providerID
     }
 
     public var commandType: CommandType {
@@ -628,6 +641,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         case pluginID
         case requireAgentLaunch
         case worktree
+        case providerID
     }
 
     public init(from decoder: Decoder) throws {
@@ -640,6 +654,7 @@ public struct CreateTmuxSession: CommandSpec, Equatable {
         self.pluginID = try container.decodeIfPresent(String.self, forKey: .pluginID) ?? "claude-code"
         self.requireAgentLaunch = try container.decodeIfPresent(Bool.self, forKey: .requireAgentLaunch) ?? false
         self.worktree = try container.decodeIfPresent(ForkAgentSession.Worktree.self, forKey: .worktree)
+        self.providerID = try container.decodeIfPresent(String.self, forKey: .providerID)
     }
 }
 
@@ -964,10 +979,19 @@ public struct CreateTmuxWindow: CommandSpec, Equatable {
     /// this to a Host that has not advertised supportsAgentWindowLaunch.
     public let pluginID: String?
 
-    public init(sessionName: String, workingDirectory: String? = nil, pluginID: String? = nil) {
+    /// Optional Provider selected on the Host. `nil` uses the Host default.
+    public let providerID: String?
+
+    public init(
+        sessionName: String,
+        workingDirectory: String? = nil,
+        pluginID: String? = nil,
+        providerID: String? = nil
+    ) {
         self.sessionName = sessionName
         self.workingDirectory = workingDirectory
         self.pluginID = pluginID
+        self.providerID = providerID
     }
 
     public var commandType: CommandType {
@@ -1077,7 +1101,9 @@ public struct PasteTerminalText: CommandSpec, Equatable {
         self.text = text
     }
 
-    public var commandType: CommandType { .pasteTerminalText(self) }
+    public var commandType: CommandType {
+        .pasteTerminalText(self)
+    }
 }
 
 /// Commands that can be sent from viewer to host, with their associated data.

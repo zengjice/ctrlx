@@ -1,5 +1,6 @@
 import ClaudeCodePluginCore
 import CtrlxCommon
+import CtrlxEncryption
 import CtrlxNetworking
 import CtrlxPluginProtocol
 import Dependencies
@@ -16,7 +17,7 @@ import Foundation
 /// `docs/plugins/codex.md`.
 ///
 /// Defensive by mandate (spec §13): never trap on hostile on-disk data.
-public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPluginMaintenance, AgentAccountReporting {
+public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, AgentSessionResuming, AgentPluginMaintenance, AgentAccountReporting {
     public static let pluginID = "codex"
 
     private var host: (any PluginHost)?
@@ -30,6 +31,7 @@ public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPl
     private let accountReporter = CodexAccountReporter()
 
     @Dependency(ProcessRunner.self) private var processRunner
+    @Dependency(SecretsService.self) private var secrets
 
     private var marketplaceSource = URL(fileURLWithPath: "/")
     private var command = "codex"
@@ -447,18 +449,40 @@ public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPl
     // MARK: - Auto-launch
 
     public func commandForLaunch(projectPath _: String) async -> LaunchCommand? {
+        try? await commandForLaunch(projectPath: "", providerID: nil)
+    }
+
+    public func providerOptions() async -> [AgentProviderOption] {
+        settings.providerOptions
+    }
+
+    public func commandForLaunch(projectPath _: String, providerID: String?) async throws -> LaunchCommand? {
         guard settings.autoRun else { return nil }
-        return LaunchCommand(command: settings.commandPath, args: terminalTelemetryArguments())
+        let provider = try await providerConfiguration(providerID ?? settings.defaultProviderID)
+        return LaunchCommand(
+            command: settings.commandPath,
+            args: provider.arguments + terminalTelemetryArguments(),
+            env: provider.environment
+        )
     }
 
     public func commandForFork(sessionID: String, projectPath: String) async throws -> AgentForkLaunch {
+        try await commandForFork(sessionID: sessionID, projectPath: projectPath, targetProviderID: nil)
+    }
+
+    public func commandForFork(sessionID: String, projectPath: String, targetProviderID: String?) async throws -> AgentForkLaunch {
         guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Codex conversation ID.") }
         @Dependency(AgentForkHistoryClient.self) var history
         let root = try await history.root(sessionID, codexHomeRoots().map(\.path), .codex)
+        let provider = try await providerConfiguration(targetProviderID)
+        var environment = provider.environment
+        // The fork must read history from the source root; Provider overrides
+        // only change how the copied conversation talks to its model endpoint.
+        environment["CODEX_HOME"] = root
         return AgentForkLaunch(command: LaunchCommand(
             command: settings.commandPath,
-            args: ["fork", sessionID, "-C", projectPath] + terminalTelemetryArguments(),
-            env: ["CODEX_HOME": root]
+            args: ["fork", sessionID, "-C", projectPath] + provider.arguments + terminalTelemetryArguments(),
+            env: environment
         ))
     }
 
@@ -475,7 +499,10 @@ public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPl
             roots = codexHomeRoots().map(\.path)
         }
         let root = try await history.root(sessionID, roots, .codex)
-        let arguments = try Self.resumeArguments(invocation?.arguments ?? [])
+        let arguments = try Self.resumeArguments(
+            invocation?.arguments ?? [],
+            allowsProviderOverrides: invocation?.providerID != nil
+        )
         return AgentResumeDescriptor(
             pluginID: Self.pluginID,
             sessionID: sessionID,
@@ -485,20 +512,23 @@ public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPl
             executable: invocation?.executable,
             cliVersion: invocation?.version,
             arguments: arguments,
-            automaticResumeUnavailableReason: invocation?.version == Self.verifiedResumeVersion ? nil : (invocation.map { "Automatic resume has not been verified for Codex \($0.version ?? "unknown version")." }
-                ?? "The original process invocation was not recorded.")
+            automaticResumeUnavailableReason: invocation?.version == Self.verifiedResumeVersion ? nil : (invocation.map { "Automatic resume has not been verified for Codex \($0.version ?? "unknown version")." })
+                ?? "The original process invocation was not recorded.",
+            providerID: invocation?.providerID
         )
     }
 
-    private static func resumeArguments(_ arguments: [String]) throws -> [String] {
-        try AgentResumeArguments.capture(
+    private static func resumeArguments(_ arguments: [String], allowsProviderOverrides: Bool = false) throws -> [String] {
+        let arguments = allowsProviderOverrides ? removingProviderOverrides(arguments) : arguments
+        return try AgentResumeArguments.capture(
             arguments,
             values: ["--model", "--profile", "--sandbox", "--ask-for-approval", "--add-dir", "--local-provider"],
             flags: ["--oss", "--search", "--no-alt-screen", "--no-daemon", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--approve-for-me"],
             ignoredValues: ["--cd", "--image"],
             ignoredFlags: ["--last", "--all", "--include-non-interactive", "--worktree"],
             aliases: ["-c": "--config", "-m": "--model", "-p": "--profile", "-s": "--sandbox", "-a": "--ask-for-approval", "-C": "--cd", "-i": "--image"],
-            configKeys: ["model", "model_provider", "model_reasoning_effort", "model_reasoning_summary", "service_tier", "approval_policy", "sandbox_mode"]
+            configKeys: ["model", "model_provider", "model_reasoning_effort", "model_reasoning_summary", "service_tier", "approval_policy", "sandbox_mode"],
+            ignoredConfigPrefixes: allowsProviderOverrides ? ["model_providers."] : []
         )
     }
 
@@ -512,8 +542,11 @@ public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPl
         // Only the recorded root is eligible. A changed settings list must not
         // silently resume another account's copy of the same conversation.
         let root = try await history.root(descriptor.sessionID, [descriptor.configurationRoot], .codex)
-        guard try Self.resumeArguments(descriptor.arguments) == descriptor.arguments else { throw AgentForkError("Invalid Codex recovery options.") }
-        var arguments = descriptor.arguments
+        guard try Self.resumeArguments(descriptor.arguments, allowsProviderOverrides: descriptor.providerID != nil) == descriptor.arguments else {
+            throw AgentForkError("Invalid Codex recovery options.")
+        }
+        let provider = try await providerConfiguration(descriptor.providerID)
+        var arguments = descriptor.providerID == nil ? descriptor.arguments : Self.removingProviderOverrides(descriptor.arguments)
         // A recovered TUI owns its process lifetime; no shared daemon keeps an
         // interrupted launch running after its pane disappears.
         if descriptor.cliVersion == Self.verifiedResumeVersion, !arguments.contains("--no-daemon") {
@@ -521,9 +554,129 @@ public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPl
         }
         return AgentForkLaunch(command: LaunchCommand(
             command: descriptor.executable ?? settings.commandPath,
-            args: ["resume", descriptor.sessionID, "-C", descriptor.projectPath] + arguments + terminalTelemetryArguments(),
-            env: ["CODEX_HOME": root]
+            args: ["resume", descriptor.sessionID, "-C", descriptor.projectPath] + arguments + provider.arguments + terminalTelemetryArguments(),
+            env: provider.environment.merging(["CODEX_HOME": root]) { _, root in root }
         ))
+    }
+
+    // MARK: - Provider launch configuration
+
+    private func providerConfiguration(_ requestedID: String?) async throws -> CodexProviderLaunch {
+        guard let providerID = requestedID else { return CodexProviderLaunch(arguments: [], environment: [:]) }
+        guard settings.providerOptions.contains(where: { $0.id == providerID }) else {
+            throw AgentProviderError("The selected Codex Provider no longer exists in Settings → Agents → Codex.")
+        }
+        if providerID == CodexSettings.builtInProviderID {
+            return CodexProviderLaunch(
+                arguments: ["-c", #"model_provider="openai""#],
+                environment: [AgentProviderEnvironment.markerKey: providerID]
+            )
+        }
+        guard let profile = settings.providers.first(where: { $0.id == providerID }) else {
+            throw AgentProviderError("The selected Codex Provider no longer exists in Settings → Agents → Codex.")
+        }
+        guard
+            CodexSettings.isValidProviderID(profile.id),
+            CodexSettings.isValidEnvironmentKey(profile.environmentKey),
+            !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let url = URL(string: profile.baseURL), url.scheme == "http" || url.scheme == "https", url.host != nil,
+            !profile.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw AgentProviderError("The selected Codex Provider has invalid settings. Edit it in Settings → Agents → Codex → Providers.")
+        }
+        let account = AgentProviderKeychainAccount.account(pluginID: Self.pluginID, providerID: profile.id)
+        let apiKey: String?
+        do {
+            apiKey = try await secrets.loadSecret(account)
+        } catch {
+            throw AgentProviderError("The API key for Codex Provider '\(profile.name)' could not be read from Keychain.")
+        }
+        guard let apiKey, !apiKey.isEmpty else {
+            throw AgentProviderError("Add an API key for Codex Provider '\(profile.name)' in Settings → Agents → Codex → Providers.")
+        }
+        let prefix = "model_providers.\(profile.id)"
+        let arguments = [
+            "-c", "model_provider=\(Self.tomlString(profile.id))",
+            "-c", "\(prefix).name=\(Self.tomlString(profile.name))",
+            "-c", "\(prefix).base_url=\(Self.tomlString(profile.baseURL))",
+            "-c", "\(prefix).env_key=\(Self.tomlString(profile.environmentKey))",
+            "-c", #"\#(prefix).wire_api="responses""#,
+            "-c", "\(prefix).requires_openai_auth=false",
+            "--model", profile.model,
+        ]
+        return CodexProviderLaunch(
+            arguments: arguments,
+            environment: [
+                profile.environmentKey: apiKey,
+                AgentProviderEnvironment.markerKey: profile.id,
+            ]
+        )
+    }
+
+    private static func tomlString(_ value: String) -> String {
+        var escaped = ""
+        for scalar in value.unicodeScalars {
+            switch scalar.value {
+            case 0x22: escaped += "\\\""
+            case 0x5C: escaped += "\\\\"
+            case 0x0A: escaped += "\\n"
+            case 0x0D: escaped += "\\r"
+            case 0x09: escaped += "\\t"
+            case 0x00..<0x20,
+                 0x7F: escaped += String(format: "\\u%04X", scalar.value)
+            default: escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return "\"\(escaped)\""
+    }
+
+    private static func removingProviderOverrides(_ arguments: [String]) -> [String] {
+        var result: [String] = []
+        var index = 0
+        while index < arguments.count {
+            let value = arguments[index]
+            if value == "--model" || value == "-m" {
+                index += min(2, arguments.count - index)
+                continue
+            }
+            if value.hasPrefix("--model=") || value.hasPrefix("-m=") {
+                index += 1
+                continue
+            }
+            if value == "--config" || value == "-c" {
+                guard index + 1 < arguments.count else {
+                    result.append(value)
+                    index += 1
+                    continue
+                }
+                let override = arguments[index + 1]
+                if isProviderOverride(override) {
+                    index += 2
+                    continue
+                }
+                result += [value, override]
+                index += 2
+                continue
+            }
+            if let override = inlineConfigValue(value), isProviderOverride(override) {
+                index += 1
+                continue
+            }
+            result.append(value)
+            index += 1
+        }
+        return result
+    }
+
+    private static func inlineConfigValue(_ value: String) -> String? {
+        for prefix in ["--config=", "-c="] where value.hasPrefix(prefix) {
+            return String(value.dropFirst(prefix.count))
+        }
+        return nil
+    }
+
+    private static func isProviderOverride(_ value: String) -> Bool {
+        value.hasPrefix("model_provider=") || value.hasPrefix("model_providers.")
     }
 
     /// Manual launches opt into the same telemetry as UI launches, independently
@@ -717,4 +870,9 @@ public actor CodexPluginCore: AgentSessionForking, AgentSessionResuming, AgentPl
         guard level >= settings.logLevel else { return }
         await host?.log(LogLine(level: level, message: message))
     }
+}
+
+private struct CodexProviderLaunch {
+    let arguments: [String]
+    let environment: [String: String]
 }

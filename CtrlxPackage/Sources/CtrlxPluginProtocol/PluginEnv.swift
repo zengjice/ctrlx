@@ -57,11 +57,35 @@ public struct LaunchCommand: Sendable, Codable {
     public let command: String
     public let args: [String]
     public let env: [String: String]
+    /// Variables cleared for this invocation only. Used when selecting a
+    /// built-in Provider must override credentials inherited from the Host.
+    public let unsetEnvironment: [String]
 
-    public init(command: String, args: [String] = [], env: [String: String] = [:]) {
+    public init(
+        command: String,
+        args: [String] = [],
+        env: [String: String] = [:],
+        unsetEnvironment: [String] = []
+    ) {
         self.command = command
         self.args = args
         self.env = env
+        self.unsetEnvironment = unsetEnvironment
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case args
+        case env
+        case unsetEnvironment
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.command = try container.decode(String.self, forKey: .command)
+        self.args = try container.decodeIfPresent([String].self, forKey: .args) ?? []
+        self.env = try container.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
+        self.unsetEnvironment = try container.decodeIfPresent([String].self, forKey: .unsetEnvironment) ?? []
     }
 }
 

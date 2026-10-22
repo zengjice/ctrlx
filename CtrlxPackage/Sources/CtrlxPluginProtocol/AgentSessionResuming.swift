@@ -11,12 +11,20 @@ public struct AgentResumeInvocation: Sendable {
     public let executable: String
     public let arguments: [String]
     public let configurationRoots: [String: String]
+    public let providerID: String?
     public let version: String?
 
-    public init(executable: String, arguments: [String], configurationRoots: [String: String] = [:], version: String? = nil) {
+    public init(
+        executable: String,
+        arguments: [String],
+        configurationRoots: [String: String] = [:],
+        providerID: String? = nil,
+        version: String? = nil
+    ) {
         self.executable = executable
         self.arguments = arguments
         self.configurationRoots = configurationRoots
+        self.providerID = providerID
         self.version = version
     }
 }
@@ -32,10 +40,14 @@ public struct AgentResumeDescriptor: Codable, Equatable, Sendable {
     public let cliVersion: String?
     public let arguments: [String]
     public let automaticResumeUnavailableReason: String?
+    /// Non-sensitive Provider identity recorded by the launch environment.
+    public let providerID: String?
 
     public init(
         pluginID: String, sessionID: String, projectPath: String, configurationRoot: String, usesDefaultConfiguration: Bool,
-        executable: String? = nil, cliVersion: String? = nil, arguments: [String] = [], automaticResumeUnavailableReason: String? = "The original process invocation was not recorded."
+        executable: String? = nil, cliVersion: String? = nil, arguments: [String] = [],
+        automaticResumeUnavailableReason: String? = "The original process invocation was not recorded.",
+        providerID: String? = nil
     ) {
         self.pluginID = pluginID
         self.sessionID = sessionID
@@ -46,6 +58,7 @@ public struct AgentResumeDescriptor: Codable, Equatable, Sendable {
         self.executable = executable
         self.arguments = arguments
         self.automaticResumeUnavailableReason = automaticResumeUnavailableReason
+        self.providerID = providerID
     }
 }
 
@@ -55,7 +68,7 @@ public enum AgentResumeArguments {
     public static func capture(
         _ arguments: [String], values: Set<String>, flags: Set<String>,
         ignoredValues: Set<String>, ignoredFlags: Set<String>, aliases: [String: String] = [:],
-        configKeys: Set<String> = []
+        configKeys: Set<String> = [], ignoredConfigPrefixes: Set<String> = []
     ) throws -> [String] {
         var result: [String] = []
         var index = 0
@@ -87,7 +100,7 @@ public enum AgentResumeArguments {
             if key == "--config" {
                 let override = try value()
                 let name = override.split(separator: "=", maxSplits: 1).first.map(String.init) ?? ""
-                if name.hasPrefix("otel.") {
+                if name.hasPrefix("otel.") || ignoredConfigPrefixes.contains(where: name.hasPrefix) {
                     continue
                 }
                 guard configKeys.contains(name), override.contains("=") else {

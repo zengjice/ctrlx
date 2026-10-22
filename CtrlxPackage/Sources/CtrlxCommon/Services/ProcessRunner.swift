@@ -87,6 +87,18 @@ public struct ProcessRunner: Sendable {
     ) async throws -> ProcessResult = { _, _, _, _ in
         throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Cancellable process execution is not configured")
     }
+
+    /// Runs a command with the supplied bytes on stdin. Used to hand secrets to
+    /// a local helper without placing them in its process arguments.
+    public var runWithInput: @Sendable (
+        _ executable: String,
+        _ arguments: [String],
+        _ environment: [String: String]?,
+        _ timeout: TimeInterval?,
+        _ input: Data
+    ) async throws -> ProcessResult = { _, _, _, _, _ in
+        throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Process input is not configured")
+    }
 }
 
 public extension ProcessRunner {
@@ -94,9 +106,12 @@ public extension ProcessRunner {
         run: @Sendable @escaping (String, [String], [String: String]?, TimeInterval?) async throws -> ProcessResult,
         runBounded: @Sendable @escaping (String, [String], [String: String]?, TimeInterval?, Int) async throws -> ProcessResult = { _, _, _, _, _ in
             throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Bounded process execution is not configured")
+        },
+        runWithInput: @Sendable @escaping (String, [String], [String: String]?, TimeInterval?, Data) async throws -> ProcessResult = { _, _, _, _, _ in
+            throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Process input is not configured")
         }
     ) {
-        self.init(run: run, runBounded: runBounded, runCancellable: run)
+        self.init(run: run, runBounded: runBounded, runCancellable: run, runWithInput: runWithInput)
     }
 }
 
@@ -107,7 +122,9 @@ public extension ProcessRunner {
     /// available, else the inherited PATH with common install dirs prepended
     /// (so the most common CLIs still resolve if shell resolution failed).
     static func effectivePath(resolved: String?, inherited: String?) -> String {
-        if let resolved, !resolved.isEmpty { return resolved }
+        if let resolved, !resolved.isEmpty {
+            return resolved
+        }
         let commonDirs = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
@@ -165,6 +182,9 @@ extension ProcessRunner: DependencyKey {
                 },
                 runCancellable: { executable, arguments, environment, timeout in
                     try await execute(executable, arguments, environment, timeout, maximumBytes: nil, cancelOnTaskCancellation: true)
+                },
+                runWithInput: { executable, arguments, environment, timeout, input in
+                    try await execute(executable, arguments, environment, timeout, maximumBytes: nil, input: input)
                 }
             )
         #else
@@ -185,9 +205,12 @@ extension ProcessRunner: DependencyKey {
     #if os(macOS)
         private static func execute(
             _ executable: String, _ arguments: [String], _ environment: [String: String]?,
-            _ timeout: TimeInterval?, maximumBytes: Int?, cancelOnTaskCancellation: Bool = false
+            _ timeout: TimeInterval?, maximumBytes: Int?, cancelOnTaskCancellation: Bool = false,
+            input: Data? = nil
         ) async throws -> ProcessResult {
-            if cancelOnTaskCancellation { try Task.checkCancellation() }
+            if cancelOnTaskCancellation {
+                try Task.checkCancellation()
+            }
             // Verify executable exists
             guard FileManager.default.isExecutableFile(atPath: executable) else {
                 throw ProcessRunnerError.executableNotFound(path: executable)
@@ -216,6 +239,10 @@ extension ProcessRunner: DependencyKey {
             let stderrPipe = Pipe()
             process.standardOutput = stdoutPipe
             process.standardError = stderrPipe
+            let inputPipe = input.map { _ in Pipe() }
+            if let inputPipe {
+                process.standardInput = inputPipe
+            }
 
             // Launch before entering the continuation so that ObjC exceptions
             // from NSTask (e.g. invalid launch path, already-launched task) are
@@ -231,6 +258,16 @@ extension ProcessRunner: DependencyKey {
             }
 
             try process.run()
+
+            if let input, let inputPipe {
+                do {
+                    try inputPipe.fileHandleForWriting.write(contentsOf: input)
+                    try inputPipe.fileHandleForWriting.close()
+                } catch {
+                    process.terminate()
+                    throw error
+                }
+            }
 
             // Set up timeout if specified.
             // Reads `\.continuousClock` from the surrounding dependency context
@@ -299,7 +336,9 @@ extension ProcessRunner: DependencyKey {
                     process.terminate()
                 }
             }
-            if cancelOnTaskCancellation { try Task.checkCancellation() }
+            if cancelOnTaskCancellation {
+                try Task.checkCancellation()
+            }
             return result
         }
     #endif
@@ -318,7 +357,9 @@ extension ProcessRunner: DependencyKey {
         private var stdoutTruncated = false
         private var stderrTruncated = false
 
-        init(maximumBytes: Int?) { self.maximumBytes = maximumBytes }
+        init(maximumBytes: Int?) {
+            self.maximumBytes = maximumBytes
+        }
 
         var outputTruncated: Bool {
             stdoutLock.withLock { stdoutTruncated } || stderrLock.withLock { stderrTruncated }
@@ -356,7 +397,7 @@ extension ProcessRunner: DependencyKey {
                 return
             }
             repeat {
-                let chunk = toEnd ? handle.readData(ofLength: 64 * 1024) : handle.availableData
+                let chunk = toEnd ? handle.readData(ofLength: 64 * 1_024) : handle.availableData
                 guard !chunk.isEmpty else { return }
                 output.append(chunk)
                 if output.count > maximumBytes {

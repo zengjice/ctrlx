@@ -33,6 +33,22 @@ argument-aware Agent commands, Agent-side CtrlX plugin update/reinstall UX, and
 file-browser playback cache cleanup. Implemented behavior and deferred acceptance
 are tracked separately; release contents are recorded in [MODIFICATIONS.md](../MODIFICATIONS.md).
 
+## Active validation plans
+
+[Android automation research and validation](android-artemis-validation-plan.md)
+consolidates the October 14–17 AVD / ARTEMIS, camera, network, Google Play and
+Podman/redroid experiments, with an October 18 summary. Start with its
+[result matrix](android-artemis-validation-plan.md#当前结论总览),
+[next-step recommendations](android-artemis-validation-plan.md#后续建议与验收边界)
+and [evidence index](android-artemis-validation-plan.md#关键证据索引).
+Basic controls pass; full Meituan login and both autonomous cart runs remain
+unverified. The Google APIs AVD and redroid returned raw error `121118`; the
+exact rejection rule is unknown. The redroid and Google Play environments were
+removed, reclaiming about 9.6 GiB; the original Google APIs AVD, its data and
+diagnostic evidence remain. Cloud-phone comparisons and a CtrlX Android backend
+are proposals, not completed work. Earlier framework research is in
+[the simulator research](ios-simulator-research.md#补充调研google-artemis).
+
 Workspace recovery in 3.0.76 follows [工作现场恢复设计](workspace-recovery-design.md):
 session/window/pane reconstruction, detached-window layouts, Agent resume, drafts,
 Host/Viewer responsibilities and acceptance criteria. [Implementation progress](v3.0.76/IMPLEMENTATION_PLAN.md)

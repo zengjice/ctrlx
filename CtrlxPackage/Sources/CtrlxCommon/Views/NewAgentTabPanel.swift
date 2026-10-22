@@ -44,21 +44,33 @@ public struct NewAgentTabConfiguration: Identifiable {
         }
     }
 
-    func request(agentID: String, directory: String) throws -> CreateTmuxWindow {
-        if let unavailableReason { throw LaunchError(unavailableReason) }
+    func request(agentID: String, directory: String, providerID: String?) throws -> CreateTmuxWindow {
+        if let unavailableReason {
+            throw LaunchError(unavailableReason)
+        }
         guard agents.contains(where: { $0.id == agentID }) else {
             throw LaunchError("This agent is no longer available on the selected Host.")
         }
         guard SessionDirectoryPath.isValid(directory) else {
             throw LaunchError("Choose an absolute directory or ~/… on the Host.")
         }
-        return CreateTmuxWindow(sessionName: id.sessionName, workingDirectory: directory, pluginID: agentID)
+        return CreateTmuxWindow(
+            sessionName: id.sessionName,
+            workingDirectory: directory,
+            pluginID: agentID,
+            providerID: providerID
+        )
     }
 
     public struct LaunchError: LocalizedError {
         let message: String
-        public init(_ message: String) { self.message = message }
-        public var errorDescription: String? { message }
+        public init(_ message: String) {
+            self.message = message
+        }
+
+        public var errorDescription: String? {
+            message
+        }
     }
 }
 
@@ -98,13 +110,15 @@ public struct NewAgentTabPanel: View {
                             directorySource: configuration.directorySource,
                             isDisabled: launchingAgentID != nil || configuration.unavailableReason != nil,
                             isLaunching: launchingAgentID == agent.id,
-                            onStart: { directory in start(agentID: agent.id, directory: directory) }
+                            onStart: { directory, providerID in
+                                start(agentID: agent.id, directory: directory, providerID: providerID)
+                            }
                         )
                     }
                 }
             }
             #if os(macOS)
-                .frame(maxHeight: 500)
+            .frame(maxHeight: 500)
             #endif
             if let errorMessage {
                 Text(errorMessage).font(.callout).foregroundStyle(.red)
@@ -115,18 +129,18 @@ public struct NewAgentTabPanel: View {
         #if os(macOS)
             .frame(width: 420)
         #endif
-        .interactiveDismissDisabled(launchingAgentID != nil)
-        .accessibilityIdentifier("new-agent-tab-panel")
+            .interactiveDismissDisabled(launchingAgentID != nil)
+            .accessibilityIdentifier("new-agent-tab-panel")
     }
 
-    private func start(agentID: String, directory: String) {
+    private func start(agentID: String, directory: String, providerID: String?) {
         guard launchingAgentID == nil else { return }
         launchingAgentID = agentID
         errorMessage = nil
         Task {
             defer { launchingAgentID = nil }
             do {
-                let request = try configuration.request(agentID: agentID, directory: directory)
+                let request = try configuration.request(agentID: agentID, directory: directory, providerID: providerID)
                 try await configuration.start(request)
                 dismiss()
             } catch {
@@ -144,13 +158,20 @@ private struct AgentTabLaunchCard: View {
     let directorySource: SessionDirectorySource
     let isDisabled: Bool
     let isLaunching: Bool
-    let onStart: (String) -> Void
+    let onStart: (String, String?) -> Void
     @State private var directory: String
+    @State private var providerID: String?
     @State private var showsDirectories = false
     @State private var isCreatingDirectory = false
 
-    init(agent: SessionLaunchAgent, initialDirectory: String, directorySource: SessionDirectorySource,
-         isDisabled: Bool, isLaunching: Bool, onStart: @escaping (String) -> Void) {
+    init(
+        agent: SessionLaunchAgent,
+        initialDirectory: String,
+        directorySource: SessionDirectorySource,
+        isDisabled: Bool,
+        isLaunching: Bool,
+        onStart: @escaping (String, String?) -> Void
+    ) {
         self.agent = agent
         self.directorySource = directorySource
         self.isDisabled = isDisabled
@@ -158,6 +179,7 @@ private struct AgentTabLaunchCard: View {
         self.onStart = onStart
         // Seed a user-owned draft once, not a binding to a moving terminal cwd.
         _directory = State(initialValue: initialDirectory)
+        _providerID = State(initialValue: nil)
     }
 
     var body: some View {
@@ -166,11 +188,21 @@ private struct AgentTabLaunchCard: View {
             TextField("Directory on Host", text: $directory)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
-                #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                #endif
+            #if os(iOS)
+                .textInputAutocapitalization(.never)
+            #endif
                 .accessibilityLabel("\(agent.name) directory on Host")
                 .accessibilityIdentifier("new-agent-directory-\(agent.id)")
+            if !agent.providers.isEmpty {
+                Picker("Provider", selection: $providerID) {
+                    Text(agent.defaultProviderLabel).tag(String?.none)
+                    ForEach(agent.providers) { provider in
+                        Text(provider.name).tag(Optional(provider.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("new-agent-provider-\(agent.id)")
+            }
             DisclosureGroup("Choose Directory…", isExpanded: $showsDirectories) {
                 if showsDirectories {
                     SessionDirectoryBrowser(path: $directory, source: directorySource, isCreatingDirectory: $isCreatingDirectory)
@@ -179,14 +211,16 @@ private struct AgentTabLaunchCard: View {
             }
             HStack {
                 Spacer()
-                if isLaunching { ProgressView().controlSize(.small) }
+                if isLaunching {
+                    ProgressView().controlSize(.small)
+                }
                 Button("Start \(agent.name)") {
                     guard !isCreatingDirectory else { return }
-                    onStart(directory)
+                    onStart(directory, providerID)
                 }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!SessionDirectoryPath.isValid(directory))
-                    .accessibilityIdentifier("new-agent-start-\(agent.id)")
+                .buttonStyle(.borderedProminent)
+                .disabled(!SessionDirectoryPath.isValid(directory))
+                .accessibilityIdentifier("new-agent-start-\(agent.id)")
             }
         }
         .padding(12)

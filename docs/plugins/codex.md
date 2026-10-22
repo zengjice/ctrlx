@@ -15,6 +15,49 @@ Code core; only the agent-specific differences are called out here. See
 | `auto_run` | Bool | `true` |
 | `log_level` | enum | `info` |
 | `export_telemetry` | Bool | `true` |
+| `providers` | array | `[]` |
+| `default_provider_id` | String? | `null` |
+
+## API Providers
+
+Configure Providers in **Settings → Agents → Codex → Providers**. The built-in
+`openai` Provider is the normal Codex login/configuration. A custom Provider
+stores only `id`, `name`, `base_url`, `model` and `environment_key` in
+`settings.json`; its credential is a Keychain item named
+`agent-provider.codex.<provider-id>`. Credentials are never sent to Viewers or
+written to recovery snapshots.
+
+- `default_provider_id = null` keeps the CLI's current configuration for new
+  sessions. An explicit `openai` selection forces the official login even when
+  the user's Codex config names another Provider.
+- A custom launch passes `model_provider`, `model_providers.<id>.*`,
+  `wire_api="responses"`, `requires_openai_auth=false` and `--model` as runtime
+  overrides. The complete shell script is installed through tmux's stdin into a
+  pane-scoped user option, never session environment, process arguments, command
+  text, settings, Viewer messages or recovery snapshots. After login rc files
+  run, a short fixed-size shell entry removes that pane option, decodes the
+  script and runs it in a subshell. Credentials therefore cannot be truncated
+  during slow shell startup, inherited by another window, or left in the
+  persistent login shell after Ctrl-C or Agent exit. Workspace recovery uses the
+  same per-pane payload path. Provider overrides require zsh, bash, sh, dash or
+  ksh; other login shells fail explicitly.
+- Forking preserves the source conversation's `CODEX_HOME`; only the copied
+  conversation's Provider overrides change. This allows an official-login
+  conversation to fork into a custom Provider (and the reverse) without moving
+  or copying its rollout history.
+- The Fork panel's **Current CLI configuration** target applies no Provider
+  override. Choose a built-in or custom entry to force that Provider.
+- Recovery records the non-sensitive Provider ID from
+  `CTRLX_AGENT_PROVIDER_ID`, re-reads the current profile and Keychain value,
+  and rebuilds the Provider arguments. Missing or deleted Providers fail with
+  an actionable Settings error instead of silently falling back to official
+  login.
+- A manual launch that embeds `-c model_providers.*` definitions in its argv
+  cannot be persisted safely or reconstructed from Settings. Automatic recovery
+  therefore fails with a manual-resume message instead of keeping a dangling
+  `model_provider` reference or silently selecting a same-named user config.
+- Older Hosts omit Provider choices from plugin presentations; older Viewers
+  omit the optional command fields. Both continue to launch the previous way.
 
 ## Manual launch in a CtrlX terminal
 

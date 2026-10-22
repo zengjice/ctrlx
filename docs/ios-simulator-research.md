@@ -158,6 +158,8 @@ DeviceKit iOS 本身运行于 XCUITest 并提供 JSON-RPC 服务，也不能因�
 
 本节调研日期为 2026-10-11，固定提交为 `351ca8422f7b5b54e80a9c1ce03a222e02415b6b`。核对官方 README、MCP / SDK 文档、驱动工厂、Android 控制、设备锁与依赖声明；没有安装依赖、运行启动脚本或执行性能测试。
 
+**后续实测索引（2026-10-18 整理）：** 10 月 14–17 日已另外部署 Android AVD 与 ARTEMIS，完成基础控制、摄像头、Google Play 发布镜像及 Podman / redroid 对照。美团完整登录和自主加购仍未通过；原 AVD 与 redroid 均读取到错误 `121118`，具体拒绝规则未知。当前只保留原 Google APIs AVD，其他对照环境已清理。过程、云手机调研、证据和后续建议统一见 [Android 自动化调研与验证记录](android-artemis-validation-plan.md)；本节“未安装”的描述仅指 10 月 11 日源码调研阶段，不能覆盖后续记录。这些 Android 结果不改变本节对 iOS 后端的判断。
+
 ### 定位与底层：Android 的自主执行框架
 
 ARTEMIS 接收自然语言目标，自行观察、决策和执行，并提供任务状态、诊断与回放。典型链路是 Codex 等调用方 → MCP / HTTP 任务入口 → Flash 或 Pro 执行循环 → 控制器 / 设备驱动 → Android。它与 AXe / WDA 的职责层次不同：前者主要承接整项任务，后两者提供供调用方组合的控制操作。[MCP 工具及异步任务接口](https://github.com/google/artemis/blob/351ca8422f7b5b54e80a9c1ce03a222e02415b6b/mcp_server/README.md)

@@ -2,16 +2,18 @@ import ClaudeCodePluginCore
 import CodexPluginCore
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
-import CtrlxPluginProtocol
 import Testing
 @testable import CtrlxServerFeature
 
 private struct ForkGitFixture {
     let container: URL
     let root: URL
-    var source: String { root.appendingPathComponent("src folder").path }
+    var source: String {
+        root.appendingPathComponent("src folder").path
+    }
 
     static func make() async throws -> Self {
         let files = FileManager.default
@@ -35,7 +37,10 @@ private struct ForkGitFixture {
         let result = try await ProcessRunner.liveValue.runOrThrow(executable: "/usr/bin/git", arguments: ["-C", directory ?? root.path] + arguments)
         return result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    func cleanUp() throws { try FileManager.default.removeItem(at: container) }
+
+    func cleanUp() throws {
+        try FileManager.default.removeItem(at: container)
+    }
 }
 
 @MainActor
@@ -81,7 +86,7 @@ struct AgentForkWorktreeTests {
             try await withDependencies {
                 $0[AgentForkWorktreeClient.self] = .init(
                     inspect: { try await manager.inspect($0) },
-                    create: { try await manager.create($0, request: $1) },
+                    create: { try await manager.create($0, request: $1) }
                 )
             } operation: {
                 let plan = try await SessionLaunchPreparation.inspectWorktree(path: fixture.source)
@@ -89,7 +94,7 @@ struct AgentForkWorktreeTests {
                 let prepared = try await SessionLaunchPreparation.prepare(path: fixture.source, pluginID: "custom-agent", requireAgentLaunch: true, core: core, worktree: request)
                 let destination = plan.directory(name: "fresh-session") + "/src folder"
                 #expect(prepared.workingDirectory == destination)
-                #expect(prepared.runCommand == "custom-agent '--start'")
+                #expect(try prepared.agentLaunch(shell: "/bin/zsh", tmuxExecutable: "/fixture/tmux")?.command == "custom-agent '--start'")
                 #expect(await core.paths == [fixture.source, destination])
                 #expect(try await fixture.git(["branch", "--show-current"], at: destination) == "fresh-session")
                 #expect(try await fixture.git(["rev-parse", "HEAD"], at: destination) == plan.head)
@@ -188,7 +193,7 @@ struct AgentForkWorktreeTests {
             let source = linked.appendingPathComponent("src folder").path
             let plan = try await manager.inspect(source)
             #expect(plan.primaryRoot == fixture.root.path)
-            #expect(plan.head != (try await fixture.git(["rev-parse", "HEAD"])))
+            #expect(try plan.head != (await fixture.git(["rev-parse", "HEAD"])))
             let cwd = try await manager.create(source, request: .init(name: "child", expectedHead: plan.head))
             #expect(cwd == fixture.root.path + "/.worktrees/child/src folder")
             #expect(try String(contentsOfFile: cwd + "/file.txt", encoding: .utf8) == "linked")
@@ -306,11 +311,11 @@ struct AgentForkWorktreeTests {
             let core: any AgentSessionForking
             if pluginID == "codex" {
                 let codex = CodexPluginCore()
-                _ = await codex.applySettings(try JSONEncoder().encode(CodexSettings(commandPath: executable.path, autoRun: false, exportTelemetry: false)))
+                _ = try await codex.applySettings(JSONEncoder().encode(CodexSettings(commandPath: executable.path, autoRun: false, exportTelemetry: false)))
                 core = codex
             } else {
                 let claude = ClaudeCodePluginCore()
-                _ = await claude.applySettings(try JSONEncoder().encode(ClaudeCodeSettings(commandPath: executable.path, autoRun: false)))
+                _ = try await claude.applySettings(JSONEncoder().encode(ClaudeCodeSettings(commandPath: executable.path, autoRun: false)))
                 core = claude
             }
             do {
@@ -348,12 +353,14 @@ struct AgentForkWorktreeTests {
                         source: { $0 == source.paneID ? source : nil }, core: { _ in core },
                         refresh: { _ = await tmux.refreshPanes() },
                         launch: { source, name, prepared in
-                            try await tmux.newWindow(
+                            let agentLaunch = try tmux.agentLaunch(prepared)
+                            return try await tmux.newWindow(
                                 sessionName: source.sessionName,
                                 workingDirectory: prepared.workingDirectory,
                                 windowName: name,
-                                runCommand: prepared.forkRunCommand(shell: tmux.loginShellPath),
-                                extraEnvironment: prepared.extraEnvironment + ["FORK_TEST_AGENT=\(pluginID)"],
+                                runCommand: agentLaunch?.command,
+                                extraEnvironment: ["FORK_TEST_AGENT=\(pluginID)"],
+                                launchPayload: agentLaunch?.payload,
                                 forceLoginShell: true,
                                 expectedWorkspacePane: source.workspaceIdentity,
                                 expectedSourcePaneID: source.paneID
@@ -370,7 +377,9 @@ struct AgentForkWorktreeTests {
                     var screen = ""
                     for _ in 0..<30 {
                         screen = try await tmux.capturePaneText(paneID)
-                        if screen.contains("FORK_CONFIG[") { break }
+                        if screen.contains("FORK_CONFIG[") {
+                            break
+                        }
                         try await Task.sleep(for: .milliseconds(100))
                     }
                     #expect(screen.contains("FORK_CWD[\(expectedDirectory)]"))
@@ -398,7 +407,9 @@ struct AgentForkWorktreeTests {
                     #expect(sent.isSuccess)
                     for _ in 0..<30 {
                         screen = try await tmux.capturePaneText(paneID)
-                        if screen.contains("NORMAL_CONFIG["), screen.contains(expectedParent) { break }
+                        if screen.contains("NORMAL_CONFIG["), screen.contains(expectedParent) {
+                            break
+                        }
                         try await Task.sleep(for: .milliseconds(100))
                     }
                     #expect(screen.contains("NORMAL_CONFIG[\(pluginID == "codex" ? normalCodexRoot : normalClaudeRoot)]"))
@@ -415,7 +426,9 @@ struct AgentForkWorktreeTests {
                     for _ in 0..<30 {
                         let result = try await runner.run(tmuxPath, ["-S", socket, "display-message", "-p", "-t", ordinaryPane, "#{pane_current_command}"], nil, nil)
                         ordinaryCommand = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if ordinaryCommand == "tcsh" { break }
+                        if ordinaryCommand == "tcsh" {
+                            break
+                        }
                         try await Task.sleep(for: .milliseconds(100))
                     }
                     #expect(ordinaryCommand == "tcsh")

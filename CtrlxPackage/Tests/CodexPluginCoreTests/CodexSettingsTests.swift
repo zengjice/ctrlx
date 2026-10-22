@@ -1,6 +1,6 @@
 import CodexPluginCore
-import Foundation
 import CtrlxPluginProtocol
+import Foundation
 import Testing
 
 struct CodexSettingsTests {
@@ -82,5 +82,51 @@ struct CodexSettingsTests {
         )
         let data = try JSONEncoder().encode(original)
         #expect(CodexSettings.decode(from: data) == original)
+    }
+
+    @Test("Provider profiles decode from snake_case and older settings keep the CLI default")
+    func providers() throws {
+        let json = Data("""
+        {
+          "providers": [{
+            "id": "custom",
+            "name": "Custom API",
+            "base_url": "https://api.example.com/v1",
+            "model": "custom-model",
+            "environment_key": "CUSTOM_API_KEY"
+          }],
+          "default_provider_id": "custom"
+        }
+        """.utf8)
+        let settings = try JSONDecoder().decode(CodexSettings.self, from: json)
+        #expect(settings.providers == [CodexProviderProfile(
+            id: "custom",
+            name: "Custom API",
+            baseURL: "https://api.example.com/v1",
+            model: "custom-model",
+            environmentKey: "CUSTOM_API_KEY"
+        )])
+        #expect(settings.providerOptions.map(\.id) == ["openai", "custom"])
+        #expect(settings.resolvedDefaultProviderID == "custom")
+
+        let legacy = try JSONDecoder().decode(CodexSettings.self, from: Data(#"{"auto_run":true}"#.utf8))
+        #expect(legacy.providers.isEmpty && legacy.defaultProviderID == nil)
+        #expect(legacy.providerOptions.map(\.id) == ["openai"])
+
+        var invalid = settings
+        invalid.defaultProviderID = "removed"
+        #expect(invalid.resolvedDefaultProviderID == nil)
+    }
+
+    @Test("Provider IDs and credential environment keys reject unsafe values")
+    func providerValidation() {
+        #expect(CodexSettings.isValidProviderID("custom_1"))
+        for id in ["", "openai", "-custom", "has space", "a/b", String(repeating: "a", count: 65)] {
+            #expect(!CodexSettings.isValidProviderID(id))
+        }
+        #expect(CodexSettings.isValidEnvironmentKey("CUSTOM_API_KEY"))
+        for key in ["", "1KEY", "HAS-DASH", "PATH", "HOME", "CODEX_HOME", "CTRLX_AGENT_PROVIDER_ID"] {
+            #expect(!CodexSettings.isValidEnvironmentKey(key))
+        }
     }
 }

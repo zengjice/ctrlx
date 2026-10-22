@@ -3,6 +3,7 @@
     import ClaudeCodePluginCore
     import CodexPluginCore
     import CtrlxCommon
+    import CtrlxEncryption
     import CtrlxNetworking
     import CtrlxPluginProtocol
     import Dependencies
@@ -259,6 +260,9 @@
         @State private var logLevel: LogLevel = .info
         @State private var closePaneOnSessionEnd = false
         @State private var additionalConfigFolders: [String] = []
+        @State private var providers: [AgentProviderDraft] = []
+        @State private var defaultProviderID: String?
+        @State private var providerEditor: AgentProviderEditorPresentation?
         // Codex-only: point Codex's OTLP export at the loopback receiver (#602).
         @State private var exportTelemetry = true
         // Claude-only: verify Stop hooks with Apple Intelligence (#644).
@@ -273,6 +277,7 @@
         @State private var detectFalseStopsAvailability: StopFinalityAvailability = .available
 
         @Dependency(StopFinalityClassifier.self) private var stopFinalityClassifier
+        @Dependency(SecretsService.self) private var secrets
 
         /// Whether the agent binary was not found
         @State private var agentUnavailable = false
@@ -449,6 +454,11 @@
                 }
 
                 // Config folders
+                if pluginID == CodexPluginCore.pluginID || pluginID == ClaudeCodePluginCore.pluginID {
+                    providerSettingsSection
+                }
+
+                // Config folders
                 Section {
                     // Default root row (not removable)
                     configFolderRow(path: defaultConfigRoot, removable: false)
@@ -511,9 +521,111 @@
                     agentUnavailable = false
                 }
             }
+            .sheet(item: $providerEditor) { presentation in
+                AgentProviderEditorSheet(
+                    presentation: presentation,
+                    onSave: { draft in saveProvider(draft) }
+                )
+            }
         }
 
         // MARK: - Computed helpers
+
+        private var providerSettingsSection: some View {
+            Section {
+                Picker("Default Provider", selection: $defaultProviderID) {
+                    Text("Current CLI configuration").tag(String?.none)
+                    Text(builtInProviderName).tag(Optional(builtInProviderID))
+                    ForEach(providers) { provider in
+                        Text(provider.name.isEmpty ? provider.providerID : provider.name)
+                            .tag(Optional(provider.providerID))
+                    }
+                }
+                .onChange(of: defaultProviderID) { persist() }
+                .accessibilityIdentifier("agentDefaultProvider-\(pluginID)")
+
+                LabeledContent("Built in", value: builtInProviderName)
+
+                ForEach(providers) { provider in
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(provider.name.isEmpty ? provider.providerID : provider.name)
+                            Text("\(provider.providerID) · \(provider.baseURL)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        Button("Edit") {
+                            providerEditor = AgentProviderEditorPresentation(
+                                pluginID: pluginID,
+                                original: provider,
+                                reservedProviderIDs: Set(providers.map(\.providerID))
+                            )
+                        }
+                        .buttonStyle(.borderless)
+                        Button(role: .destructive) {
+                            deleteProvider(provider)
+                        } label: {
+                            Symbols.minusCircleFill.image
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Delete \(provider.name)")
+                    }
+                }
+
+                Button("Add Provider…") {
+                    providerEditor = AgentProviderEditorPresentation(
+                        pluginID: pluginID,
+                        original: nil,
+                        reservedProviderIDs: Set(providers.map(\.providerID))
+                    )
+                }
+                .accessibilityIdentifier("agentAddProvider-\(pluginID)")
+            } header: {
+                Text("Providers")
+            } footer: {
+                Text("Provider settings stay on this Host. API keys are stored in Keychain and never included in settings, synchronized state, or recovery snapshots.")
+                    .font(.caption)
+            }
+        }
+
+        private var builtInProviderID: String {
+            pluginID == CodexPluginCore.pluginID
+                ? CodexSettings.builtInProviderID
+                : ClaudeCodeSettings.builtInProviderID
+        }
+
+        private var builtInProviderName: String {
+            pluginID == CodexPluginCore.pluginID
+                ? CodexSettings.builtInProvider.name
+                : ClaudeCodeSettings.builtInProvider.name
+        }
+
+        private func saveProvider(_ draft: AgentProviderDraft) {
+            if let originalID = draft.originalID, let index = providers.firstIndex(where: { $0.providerID == originalID }) {
+                providers[index] = draft
+            } else {
+                var saved = draft
+                saved.originalID = draft.providerID
+                providers.append(saved)
+            }
+            persist()
+        }
+
+        private func deleteProvider(_ provider: AgentProviderDraft) {
+            providers.removeAll { $0.providerID == provider.providerID }
+            if defaultProviderID == provider.providerID {
+                defaultProviderID = nil
+            }
+            let account = AgentProviderKeychainAccount.account(pluginID: pluginID, providerID: provider.providerID)
+            Task {
+                do { try await secrets.deleteSecret(account) }
+                catch { writeError = "The Provider credential could not be removed from Keychain: \(error.localizedDescription)" }
+            }
+            persist()
+        }
 
         @ViewBuilder
         private func configFolderRow(path: String, removable: Bool) -> some View {
@@ -621,6 +733,8 @@
                 additionalConfigFolders = s.additionalConfigFolders
                 exportTelemetry = true
                 detectFalseStops = s.detectFalseStops
+                providers = s.providers.map { AgentProviderDraft(profile: $0, pluginID: pluginID) }
+                defaultProviderID = s.resolvedDefaultProviderID
                 detectFalseStopsAvailability = stopFinalityClassifier.availability()
             case "codex":
                 let s = CodexSettings.decode(from: data)
@@ -631,6 +745,8 @@
                 additionalConfigFolders = s.additionalConfigFolders
                 exportTelemetry = s.exportTelemetry
                 detectFalseStops = true
+                providers = s.providers.map { AgentProviderDraft(profile: $0, pluginID: pluginID) }
+                defaultProviderID = s.resolvedDefaultProviderID
             default:
                 // Any non-bundled sidecar: generic settings that persist + reach
                 // the sidecar via apply_settings.
@@ -642,6 +758,8 @@
                 additionalConfigFolders = s.additionalConfigFolders
                 exportTelemetry = true
                 detectFalseStops = true
+                providers = []
+                defaultProviderID = nil
             }
 
             // Check agent availability for the default root
@@ -684,7 +802,9 @@
                     logLevel: logLevel,
                     additionalConfigFolders: additionalConfigFolders,
                     closePaneOnSessionEnd: closePaneOnSessionEnd,
-                    detectFalseStops: detectFalseStops
+                    detectFalseStops: detectFalseStops,
+                    providers: providers.map { $0.claudeProfile() },
+                    defaultProviderID: defaultProviderID
                 )
                 return (try? encoder.encode(s)) ?? Data()
             case "codex":
@@ -694,7 +814,9 @@
                     logLevel: logLevel,
                     closePaneOnSessionEnd: closePaneOnSessionEnd,
                     additionalConfigFolders: additionalConfigFolders,
-                    exportTelemetry: exportTelemetry
+                    exportTelemetry: exportTelemetry,
+                    providers: providers.map { $0.codexProfile() },
+                    defaultProviderID: defaultProviderID
                 )
                 return (try? encoder.encode(s)) ?? Data()
             default:
@@ -742,6 +864,268 @@
             guard !additionalConfigFolders.contains(path) else { return }
             additionalConfigFolders.append(path)
             persist()
+        }
+    }
+
+    // MARK: - Provider editing
+
+    private struct AgentProviderDraft: Identifiable, Equatable {
+        var originalID: String?
+        var providerID: String
+        var name: String
+        var baseURL: String
+        var model: String
+        var environmentKey: String
+        var authKind: ClaudeProviderAuthKind
+
+        var id: String {
+            originalID ?? providerID
+        }
+
+        init(pluginID: String) {
+            self.originalID = nil
+            self.providerID = ""
+            self.name = ""
+            self.baseURL = ""
+            self.model = ""
+            if pluginID == CodexPluginCore.pluginID {
+                self.environmentKey = "OPENAI_API_KEY"
+                self.authKind = .apiKey
+            } else {
+                self.environmentKey = ClaudeProviderAuthKind.authToken.environmentKey
+                self.authKind = .authToken
+            }
+        }
+
+        init(profile: CodexProviderProfile, pluginID _: String) {
+            self.originalID = profile.id
+            self.providerID = profile.id
+            self.name = profile.name
+            self.baseURL = profile.baseURL
+            self.model = profile.model
+            self.environmentKey = profile.environmentKey
+            self.authKind = .apiKey
+        }
+
+        init(profile: ClaudeProviderProfile, pluginID _: String) {
+            self.originalID = profile.id
+            self.providerID = profile.id
+            self.name = profile.name
+            self.baseURL = profile.baseURL
+            self.model = profile.model
+            self.environmentKey = profile.environmentKey
+            self.authKind = profile.authKind
+        }
+
+        func codexProfile() -> CodexProviderProfile {
+            CodexProviderProfile(
+                id: providerID,
+                name: name,
+                baseURL: baseURL,
+                model: model,
+                environmentKey: environmentKey
+            )
+        }
+
+        func claudeProfile() -> ClaudeProviderProfile {
+            ClaudeProviderProfile(
+                id: providerID,
+                name: name,
+                baseURL: baseURL,
+                model: model,
+                authKind: authKind,
+                environmentKey: authKind.environmentKey
+            )
+        }
+    }
+
+    private struct AgentProviderEditorPresentation: Identifiable {
+        let id = UUID()
+        let pluginID: String
+        let original: AgentProviderDraft?
+        let reservedProviderIDs: Set<String>
+    }
+
+    private struct AgentProviderEditorSheet: View {
+        let presentation: AgentProviderEditorPresentation
+        let onSave: (AgentProviderDraft) -> Void
+
+        @Environment(\.dismiss) private var dismiss
+        @Dependency(SecretsService.self) private var secrets
+
+        @State private var draft: AgentProviderDraft
+        @State private var apiKey = ""
+        @State private var hasStoredKey = false
+        @State private var isLoadingKey = false
+        @State private var isSaving = false
+        @State private var errorMessage: String?
+
+        init(presentation: AgentProviderEditorPresentation, onSave: @escaping (AgentProviderDraft) -> Void) {
+            self.presentation = presentation
+            self.onSave = onSave
+            _draft = State(initialValue: presentation.original ?? AgentProviderDraft(pluginID: presentation.pluginID))
+        }
+
+        private var isNew: Bool {
+            presentation.original == nil
+        }
+
+        private var isClaude: Bool {
+            presentation.pluginID == ClaudeCodePluginCore.pluginID
+        }
+
+        var body: some View {
+            Form {
+                Section("Provider") {
+                    TextField("Provider ID", text: $draft.providerID)
+                        .disabled(!isNew)
+                        .accessibilityIdentifier("agentProviderID")
+                    Text(isNew
+                        ? "Letters, numbers, '-' or '_'. The ID cannot change after saving."
+                        : "Provider IDs are immutable so running sessions and recovery keep the same identity.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("Name", text: $draft.name)
+                        .accessibilityIdentifier("agentProviderName")
+                }
+
+                Section("Connection") {
+                    TextField("Base URL", text: $draft.baseURL, prompt: Text("https://api.example.com"))
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("agentProviderBaseURL")
+                    TextField("Model", text: $draft.model)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("agentProviderModel")
+                }
+
+                Section("Authentication") {
+                    if isClaude {
+                        Picker("Credential", selection: $draft.authKind) {
+                            Text("API key (x-api-key)").tag(ClaudeProviderAuthKind.apiKey)
+                            Text("Auth token (Bearer)").tag(ClaudeProviderAuthKind.authToken)
+                        }
+                        .onChange(of: draft.authKind) { draft.environmentKey = draft.authKind.environmentKey }
+                        LabeledContent("Environment variable", value: draft.authKind.environmentKey)
+                    } else {
+                        TextField("Environment variable", text: $draft.environmentKey)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("agentProviderEnvironmentKey")
+                    }
+                    SecureField(
+                        hasStoredKey && isNew == false ? "API key (leave blank to keep stored key)" : "API key",
+                        text: $apiKey
+                    )
+                    .accessibilityIdentifier("agentProviderAPIKey")
+                    if hasStoredKey {
+                        Text("A key is stored in Keychain. Enter a new value only to replace it.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("Stored in Keychain on this Host; never written to settings or sent to Viewers.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
+                    }
+                }
+
+                Section {
+                    HStack {
+                        Spacer()
+                        Button("Cancel", role: .cancel) { dismiss() }
+                            .disabled(isSaving)
+                        Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isSaving || isLoadingKey)
+                            .keyboardShortcut(.defaultAction)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .frame(width: 520, height: 560)
+            .task {
+                guard let original = presentation.original else { return }
+                isLoadingKey = true
+                defer { isLoadingKey = false }
+                let account = AgentProviderKeychainAccount.account(
+                    pluginID: presentation.pluginID,
+                    providerID: original.providerID
+                )
+                do {
+                    hasStoredKey = try await secrets.loadSecret(account)?.isEmpty == false
+                } catch {
+                    errorMessage = "The stored API key could not be read from Keychain."
+                }
+            }
+        }
+
+        private func save() async {
+            guard !isSaving else { return }
+            errorMessage = nil
+            let providerID = draft.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let baseURL = draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = draft.model.trimmingCharacters(in: .whitespacesAndNewlines)
+            let environmentKey = isClaude
+                ? draft.authKind.environmentKey
+                : draft.environmentKey.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard isClaude ? ClaudeCodeSettings.isValidProviderID(providerID) : CodexSettings.isValidProviderID(providerID) else {
+                errorMessage = "Use a unique Provider ID with letters, numbers, '-' or '_'. Built-in Provider IDs are reserved."
+                return
+            }
+            guard !isNew || !presentation.reservedProviderIDs.contains(providerID) else {
+                errorMessage = "A Provider with this ID already exists."
+                return
+            }
+            guard !name.isEmpty else {
+                errorMessage = "Enter a Provider name."
+                return
+            }
+            guard
+                let url = URL(string: baseURL), url.scheme == "http" || url.scheme == "https", url.host != nil
+            else {
+                errorMessage = "Enter an absolute http:// or https:// Base URL."
+                return
+            }
+            guard !model.isEmpty else {
+                errorMessage = "Enter the model name used by this Provider."
+                return
+            }
+            let environmentKeyIsValid = isClaude
+                ? ClaudeCodeSettings.isValidEnvironmentKey(environmentKey)
+                : CodexSettings.isValidEnvironmentKey(environmentKey)
+            guard environmentKeyIsValid else {
+                errorMessage = "Enter a valid environment variable name."
+                return
+            }
+            guard !apiKey.isEmpty || hasStoredKey else {
+                errorMessage = "Enter the API key for this Provider."
+                return
+            }
+
+            isSaving = true
+            defer { isSaving = false }
+            let account = AgentProviderKeychainAccount.account(
+                pluginID: presentation.pluginID,
+                providerID: providerID
+            )
+            do {
+                if !apiKey.isEmpty {
+                    try await secrets.storeSecret(apiKey, account)
+                }
+            } catch {
+                errorMessage = "The API key could not be stored in Keychain: \(error.localizedDescription)"
+                return
+            }
+
+            draft.providerID = providerID
+            draft.name = name
+            draft.baseURL = baseURL
+            draft.model = model
+            draft.environmentKey = environmentKey
+            onSave(draft)
+            dismiss()
         }
     }
 

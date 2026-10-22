@@ -12,6 +12,7 @@ public struct DirectorySessionForm: View {
 
     @State private var path = "~/"
     @State private var selectedAgentID: String?
+    @State private var selectedProviderID: String?
     @State private var isCreatingDirectory = false
     @State private var usingWorktree = false
     @State private var worktreeName = "work-\(UUID().uuidString.prefix(8).lowercased())"
@@ -37,6 +38,10 @@ public struct DirectorySessionForm: View {
         AgentLaunchDefaults.selectedID(availableIDs: agents.map(\.id), selection: selectedAgentID)
     }
 
+    private var selectedAgent: SessionLaunchAgent? {
+        agents.first { $0.id == agentID }
+    }
+
     private var canStart: Bool {
         !isCreating && !isCreatingDirectory && SessionDirectoryPath.isValid(path)
             && agents.contains(where: { $0.id == agentID })
@@ -49,7 +54,7 @@ public struct DirectorySessionForm: View {
             path: path,
             enabled: usingWorktree,
             unavailableReason: directorySource.worktreeUnavailableReason,
-            retry: worktreeRetry,
+            retry: worktreeRetry
         )
     }
 
@@ -60,16 +65,16 @@ public struct DirectorySessionForm: View {
             Text("Choose a folder on the Host, or type a path to find it. Opening a folder does not start a session.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                #if os(macOS)
-                    .lineLimit(nil)
-                    .fixedSize(horizontal: false, vertical: true)
-                #endif
+            #if os(macOS)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+            #endif
             TextField("Directory on Host", text: $path, prompt: Text("~/Projects/my-project"))
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
-                #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                #endif
+            #if os(iOS)
+                .textInputAutocapitalization(.never)
+            #endif
                 .focused($isPathFocused)
                 .onSubmit { isPathFocused = false }
                 .accessibilityIdentifier("new-session-directory")
@@ -91,6 +96,18 @@ public struct DirectorySessionForm: View {
                 }
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("new-session-agent")
+                .onChange(of: agentID) { selectedProviderID = nil }
+
+                if let agent = selectedAgent, !agent.providers.isEmpty {
+                    Picker("Provider", selection: $selectedProviderID) {
+                        Text(agent.defaultProviderLabel).tag(String?.none)
+                        ForEach(agent.providers) { provider in
+                            Text(provider.name).tag(Optional(provider.id))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("new-session-provider")
+                }
             }
 
             if !path.isEmpty && !SessionDirectoryPath.isValid(path) {
@@ -112,7 +129,9 @@ public struct DirectorySessionForm: View {
                     .buttonStyle(.borderless)
                     .disabled(isCreating)
                 Spacer()
-                if isCreating { ProgressView().controlSize(.small) }
+                if isCreating {
+                    ProgressView().controlSize(.small)
+                }
                 Button(usingWorktree ? "Start in New Worktree" : "Start in This Directory", action: start)
                     .buttonStyle(.borderedProminent)
                     .disabled(!canStart)
@@ -139,7 +158,7 @@ public struct DirectorySessionForm: View {
                     plan: plan,
                     name: worktreeName,
                     allowUncommittedChanges: $worktreeState.allowUncommittedChanges,
-                    acknowledgementIdentifier: "new-session-allow-uncommitted-changes",
+                    acknowledgementIdentifier: "new-session-allow-uncommitted-changes"
                 )
             } else if worktreeState.isLoading {
                 ProgressView("Checking directory…").controlSize(.small)
@@ -171,6 +190,11 @@ public struct DirectorySessionForm: View {
         guard canStart, let agentID else { return }
         let worktree = usingWorktree ? try? worktreeState.request(for: worktreeQuery, name: worktreeName) : nil
         guard !usingWorktree || worktree != nil else { return }
-        onStart(.directory(path: path, pluginID: agentID, worktree: worktree))
+        onStart(.directory(
+            path: path,
+            pluginID: agentID,
+            worktree: worktree,
+            providerID: selectedProviderID
+        ))
     }
 }
