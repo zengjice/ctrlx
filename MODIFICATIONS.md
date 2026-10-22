@@ -7,6 +7,28 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.90 — Linked tab actions on iOS
+
+- Add resource-specific iOS More and Tabs menus, keeping linked browser,
+  file and simulator actions associated with their source terminal pane.
+- Allow explicit closing of Host simulator tabs from iOS when the Host
+  advertises support. Validate the current tab/session/owner, finish recording
+  and device shutdown, and preserve later tab selections when replies arrive.
+- Clarify terminal close labels and preserve final-terminal session confirmation.
+- Release validation: the bounded serial Swift regression passed with 3,676
+  tests reported across 522 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. The first run stalled waiting for a
+  socket-test reader to exit; the unchanged full retry passed, including that test.
+- Both boundary checks, the website build and 89 publisher/COS/installer tests
+  passed. SwiftFormat retains 288 existing findings on unchanged lines in six
+  files, matching the source review. All 31 reviewed file hashes match.
+- The earlier isolated UI attempt stopped before feature steps when Host
+  settings failed to open; it is not passing UI evidence. Physical-iPhone and
+  paired Viewer feature acceptance were not rerun during release validation.
+- Signed Mac and iOS device-SDK Release builds passed. Mac distribution uses
+  build 23 through COS, with signature, source metadata and complete
+  public-download integrity checks before installer promotion.
+
 ## 3.0.89 — Browser extension access and iOS question input
 
 - Open extension settings directly and route Chrome Web Store links into
