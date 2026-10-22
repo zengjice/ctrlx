@@ -353,6 +353,7 @@ var targets: [Target] = [
             .ctrlxPluginProtocol,
             .ctrlxNetworking,
             .ctrlxCommon,
+            .ctrlxEncryption,
             .dependencies,
             .dependenciesMacros,
         ]
@@ -363,6 +364,7 @@ var targets: [Target] = [
             .ctrlxPluginProtocol,
             .ctrlxNetworking,
             .ctrlxCommon,
+            .ctrlxEncryption,
             // Shares the migrated Claude hook-parsing types (HookAction/HookEvent
             // /*Body/ClaudeCodeTool/AnyCodable + AskUserQuestion keystroke helper);
             // Codex hook payloads parse through the same enum (spec §16).
@@ -521,6 +523,7 @@ var targets: [Target] = [
         dependencies: [
             .claudeCodePluginCore,
             .ctrlxPluginProtocol,
+            .ctrlxEncryption,
             .dependenciesTestSupport,
         ]
     ),
@@ -546,6 +549,7 @@ var targets: [Target] = [
             .codexPluginCore,
             .claudeCodePluginCore,
             .ctrlxPluginProtocol,
+            .ctrlxEncryption,
             .dependenciesTestSupport,
         ]
     ),

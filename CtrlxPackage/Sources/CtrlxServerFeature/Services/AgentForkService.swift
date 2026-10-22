@@ -29,7 +29,13 @@ final class AgentForkService {
         await refresh()
         let captured = try validatedSource(expected, identity: expectedWorkspacePane)
         let agent = try validate(captured)
-        _ = try await agent.commandForFork(sessionID: captured.sessionID, projectPath: captured.workingDirectory)
+        _ = try await forkCommand(agent, sessionID: captured.sessionID, projectPath: captured.workingDirectory, targetProviderID: nil)
+        let providers: [AgentProviderOption]
+        if let selecting = agent as? any AgentProviderSelecting {
+            providers = await selecting.providerOptions()
+        } else {
+            providers = []
+        }
         _ = try validate(captured)
         @Dependency(AgentForkWorktreeClient.self) var worktrees
         let plan: AgentForkWorktree?
@@ -44,7 +50,12 @@ final class AgentForkService {
             unavailableReason = error.localizedDescription
         }
         _ = try validate(captured)
-        return AgentForkPreparation(source: expected, worktree: plan, worktreeUnavailableReason: unavailableReason)
+        return AgentForkPreparation(
+            source: expected,
+            worktree: plan,
+            worktreeUnavailableReason: unavailableReason,
+            providers: providers
+        )
     }
 
     func fork(_ request: ForkAgentSession, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> String {
@@ -71,7 +82,12 @@ final class AgentForkService {
         let agent = try validate(source)
         @Dependency(SessionDirectoryClient.self) var directories
         let sourceDirectory = try await directories.resolve(source.workingDirectory)
-        let command = try await agent.commandForFork(sessionID: source.sessionID, projectPath: sourceDirectory)
+        let command = try await forkCommand(
+            agent,
+            sessionID: source.sessionID,
+            projectPath: sourceDirectory,
+            targetProviderID: request.targetProviderID
+        )
         _ = try validate(source)
         var directory = sourceDirectory
         if let worktree = request.worktree {
@@ -82,7 +98,12 @@ final class AgentForkService {
             await refresh()
             _ = try validate(source)
             // Only the new pane receives this command. Source state and keys are untouched.
-            let forkCommand = request.worktree == nil ? command : try await agent.commandForFork(sessionID: source.sessionID, projectPath: directory)
+            let forkCommand = request.worktree == nil ? command : try await forkCommand(
+                agent,
+                sessionID: source.sessionID,
+                projectPath: directory,
+                targetProviderID: request.targetProviderID
+            )
             _ = try validate(source)
             let windowName = request.windowName ?? request.worktree?.name ?? (forkCommand.command.command as NSString).lastPathComponent.appending(" fork")
             return try await launch(source, windowName, SessionLaunchPreparation(workingDirectory: directory, fork: forkCommand))
@@ -95,6 +116,25 @@ final class AgentForkService {
         _ = try validatedSource(expected)
         guard let agent = core(expected.pluginID) else { throw AgentForkError("This Agent is unavailable or does not support native Fork.") }
         return agent
+    }
+
+    private func forkCommand(
+        _ agent: any AgentSessionForking,
+        sessionID: String,
+        projectPath: String,
+        targetProviderID: String?
+    ) async throws -> AgentForkLaunch {
+        if let selecting = agent as? any AgentProviderForking {
+            return try await selecting.commandForFork(
+                sessionID: sessionID,
+                projectPath: projectPath,
+                targetProviderID: targetProviderID
+            )
+        }
+        guard targetProviderID == nil else {
+            throw AgentProviderError("This Agent does not support Forking into a different Provider.")
+        }
+        return try await agent.commandForFork(sessionID: sessionID, projectPath: projectPath)
     }
 
     private func validatedSource(_ expected: AgentForkSource, identity: WorkspacePaneIdentity? = nil) throws -> AgentForkSource {

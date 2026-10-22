@@ -408,7 +408,8 @@
                 configDir: project?.configDir,
                 pluginID: project?.pluginID ?? AgentLaunchDefaults.pluginID,
                 requireAgentLaunch: request.requiresAgentLaunch,
-                worktree: request.worktree
+                worktree: request.worktree,
+                providerID: request.providerID
             )
 
             // paneId is not used for session creation, pass empty string

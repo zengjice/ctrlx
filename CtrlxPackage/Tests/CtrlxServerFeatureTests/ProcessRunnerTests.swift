@@ -1,6 +1,6 @@
-import CtrlxCommon
 import Clocks
 import ConcurrencyExtras
+import CtrlxCommon
 import Dependencies
 import Foundation
 import Testing
@@ -56,6 +56,15 @@ struct ProcessRunnerTests {
         let result = try await runner.run("/bin/echo", ["hello"], nil, nil)
         #expect(result.isSuccess)
         #expect(result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == "hello")
+    }
+
+    @Test("runWithInput delivers stdin and closes it")
+    func runWithInput() async throws {
+        let result = try await ProcessRunner.liveValue.runWithInput(
+            "/bin/cat", [], nil, nil, Data("stdin fixture".utf8)
+        )
+        #expect(result.isSuccess)
+        #expect(result.stdoutString == "stdin fixture")
     }
 
     /// Polls until the runner's timeout task has registered a sleeper on `clock`.

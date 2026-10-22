@@ -6,11 +6,16 @@ import Testing
 struct SessionLaunchRequestTests {
     @Test("A custom launch needs no project history and preserves the Host path")
     func customDirectory() {
-        let request = SessionLaunchRequest.directory(path: "~/Projects/new project", pluginID: "codex")
+        let request = SessionLaunchRequest.directory(
+            path: "~/Projects/new project",
+            pluginID: "codex",
+            providerID: "custom"
+        )
         #expect(request.requiresAgentLaunch)
         #expect(request.project?.path == "~/Projects/new project")
         #expect(request.project?.name == "new project")
         #expect(request.project?.pluginID == "codex")
+        #expect(request.providerID == "custom")
     }
 
     @Test("A new worktree names the session and preserves its Host source and agent")
@@ -85,5 +90,25 @@ struct SessionLaunchAgentTests {
         #expect(store.launchAgents(for: "office") == [
             .init(id: "claude-code", name: "Claude Code"), .init(id: "codex", name: "Codex"),
         ])
+    }
+
+    @Test("Provider choices and defaults stay scoped to their Host presentation")
+    func providers() {
+        let store = SessionStore()
+        let providers = [AgentProviderOption(id: "openai", name: "OpenAI"), .init(id: "custom", name: "Custom")]
+        store.handlePluginPresentations(.init(pairId: "office", presentations: [
+            PluginPresentation(
+                id: "codex", version: "1", displayName: "Codex", shortName: "Codex", color: "#ffffff",
+                providers: providers, defaultProviderID: "custom"
+            ),
+        ]))
+        #expect(store.launchAgents(for: "office") == [
+            .init(id: "codex", name: "Codex", providers: providers, defaultProviderID: "custom"),
+        ])
+        #expect(store.launchAgents(for: "office").first?.defaultProviderLabel == "Default: Custom")
+
+        store.handlePluginPresentations(.init(pairId: "legacy", presentations: [presentation("codex", name: "Codex")]))
+        #expect(store.launchAgents(for: "legacy").first?.providers.isEmpty == true)
+        #expect(store.launchAgents(for: "legacy").first?.defaultProviderLabel == "Current CLI configuration")
     }
 }

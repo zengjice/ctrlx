@@ -89,11 +89,18 @@ public struct AgentForkPreparation: Codable, Sendable, Equatable {
     public let source: AgentForkSource
     public let worktree: AgentForkWorktree?
     public let worktreeUnavailableReason: String?
+    public let providers: [AgentProviderOption]?
 
-    public init(source: AgentForkSource, worktree: AgentForkWorktree?, worktreeUnavailableReason: String? = nil) {
+    public init(
+        source: AgentForkSource,
+        worktree: AgentForkWorktree?,
+        worktreeUnavailableReason: String? = nil,
+        providers: [AgentProviderOption]? = nil
+    ) {
         self.source = source
         self.worktree = worktree
         self.worktreeUnavailableReason = worktreeUnavailableReason
+        self.providers = providers
     }
 }
 
@@ -128,11 +135,20 @@ public struct ForkAgentSession: CommandSpec, Equatable {
     /// Optional so requests from clients without the naming panel still decode.
     public let windowName: String?
     public let worktree: Worktree?
-    public init(requestID: UUID = UUID(), source: AgentForkSource, windowName: String? = nil, worktree: Worktree? = nil) {
+    /// Optional target Provider. `nil` uses the current CLI configuration.
+    public let targetProviderID: String?
+    public init(
+        requestID: UUID = UUID(),
+        source: AgentForkSource,
+        windowName: String? = nil,
+        worktree: Worktree? = nil,
+        targetProviderID: String? = nil
+    ) {
         self.requestID = requestID
         self.source = source
         self.windowName = windowName
         self.worktree = worktree
+        self.targetProviderID = targetProviderID
     }
 
     public func validateName() throws {

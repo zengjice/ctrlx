@@ -83,7 +83,12 @@ struct AgentForkTests {
             agentSession: .init(paneId: "%9", pluginID: "claude-code"),
             claudeSessionID: UUID().uuidString
         )))
-        let request = ForkAgentSession(source: source, windowName: "feature", worktree: .init(name: "feature", expectedHead: "abc", allowUncommittedChanges: true))
+        let request = ForkAgentSession(
+            source: source,
+            windowName: "feature",
+            worktree: .init(name: "feature", expectedHead: "abc", allowUncommittedChanges: true),
+            targetProviderID: "custom"
+        )
         let command = CommandMessage(paneId: "", command: request.commandType)
         let decoded = try JSONDecoder().decode(CommandMessage.self, from: JSONEncoder().encode(command))
         #expect(decoded.command == command.command)
@@ -108,6 +113,7 @@ struct AgentForkTests {
             let data = try JSONEncoder().encode(request)
             let dictionary = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
             #expect(dictionary["windowName"] == nil)
+            #expect(dictionary["targetProviderID"] == nil)
             let legacy = try JSONDecoder().decode(ForkAgentSession.self, from: data)
             #expect(legacy == request)
             try legacy.validateName()
@@ -129,5 +135,21 @@ struct AgentForkTests {
         for name in ["", "..", ".hidden", "../other", "a/b", "--force", "a b", "a\n", "HEAD", "a..b", "a.", "a.lock", String(repeating: "x", count: 81)] {
             #expect(!AgentForkWorktree.isValidName(name))
         }
+    }
+
+    @Test("Legacy presentations omit Provider choices; new choices round-trip without credentials")
+    func providerPresentationWire() throws {
+        let legacy = try JSONDecoder().decode(PluginPresentation.self, from: Data("""
+        {"id":"codex","version":"1","displayName":"Codex","shortName":"Codex","color":"#3B82F6"}
+        """.utf8))
+        #expect(legacy.providers == nil && legacy.defaultProviderID == nil)
+
+        let providers = [AgentProviderOption(id: "openai", name: "OpenAI"), .init(id: "custom", name: "Custom")]
+        let current = legacy.withProviders(providers, defaultProviderID: "custom")
+        let decoded = try JSONDecoder().decode(PluginPresentation.self, from: JSONEncoder().encode(current))
+        #expect(decoded == current)
+        #expect(decoded.providers == providers)
+        let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(current)) as? [String: Any])
+        #expect(json["providers"] != nil && !json.keys.contains { $0.lowercased().contains("key") })
     }
 }

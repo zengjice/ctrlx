@@ -454,7 +454,12 @@ public struct MainView: View {
             detachedWorkspace == nil, appearsActive, creatingSelection == nil,
             let pluginID = coordinator.pendingAgentCLILaunch else { return }
         coordinator.pendingAgentCLILaunch = nil
-        createNewSession(request: .directory(path: FileManager.default.homeDirectoryForCurrentUser.path, pluginID: pluginID))
+        createNewSession(request: .directory(
+            path: FileManager.default.homeDirectoryForCurrentUser.path,
+            pluginID: pluginID,
+            worktree: nil,
+            providerID: nil
+        ))
     }
 
     @ViewBuilder private var workspaceLifecycle: some View {
@@ -6320,10 +6325,7 @@ public struct MainView: View {
     }
 
     private var localLaunchAgents: [SessionLaunchAgent] {
-        guard let registry = coordinator.pluginRegistry else { return [] }
-        return registry.active.keys.compactMap { id in
-            registry.manifest(id).map { SessionLaunchAgent(id: id, name: $0.displayName) }
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        coordinator.localAgentLaunchAgents()
     }
 
     private func agentTabConfiguration(
@@ -6928,21 +6930,20 @@ public struct MainView: View {
                         forPluginID: project.pluginID,
                         projectPath: project.path,
                         requireAgentLaunch: request.requiresAgentLaunch,
-                        worktree: request.worktree
+                        worktree: request.worktree,
+                        providerID: request.providerID
                     )
                 } else {
                     SessionLaunchPreparation(workingDirectory: nil, launch: nil)
                 }
                 preparation = launch
-                let runCommand = launch.runCommand
+                let agentLaunch = try tmuxService.agentLaunch(launch)
                 let workingDirectory = launch.workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path()
 
                 var extraEnvironment: [String] = []
                 if let configDir = project?.configDir {
                     extraEnvironment.append("CLAUDE_CONFIG_DIR=\(configDir)")
                 }
-                extraEnvironment.append(contentsOf: launch.extraEnvironment)
-
                 // Calculate optimal dimensions based on available space
                 let dimensions = calculateOptimalTerminalDimensions()
 
@@ -6959,8 +6960,9 @@ public struct MainView: View {
                     width: dimensions.columns,
                     height: dimensions.rows,
                     workingDirectory: workingDirectory,
-                    runCommand: runCommand,
+                    runCommand: agentLaunch?.command,
                     extraEnvironment: extraEnvironment,
+                    launchPayload: agentLaunch?.payload,
                     firstWindowName: request.worktree?.name ?? firstWindowName
                 )
 
@@ -7093,7 +7095,8 @@ public struct MainView: View {
             configDir: project?.configDir,
             pluginID: project?.pluginID ?? AgentLaunchDefaults.pluginID,
             requireAgentLaunch: request.requiresAgentLaunch,
-            worktree: request.worktree
+            worktree: request.worktree,
+            providerID: request.providerID
         )
 
         guard let manager = coordinator.viewerConnectionManager else {

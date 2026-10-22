@@ -1,6 +1,7 @@
 #if os(macOS)
     import AppKit
     import ClaudeCodePluginCore
+    import CodexPluginCore
     import CtrlxCommon
     import CtrlxEncryption
     import CtrlxNetworking
@@ -157,11 +158,13 @@
                 },
                 launch: { [weak self] source, windowName, prepared in
                     guard let self else { throw AgentForkError("Host is shutting down.") }
+                    let agentLaunch = try tmuxService.agentLaunch(prepared)
                     let paneID = try await tmuxService.newWindow(
                         sessionName: source.sessionName, workingDirectory: prepared.workingDirectory,
                         windowName: windowName,
-                        runCommand: prepared.forkRunCommand(shell: tmuxService.loginShellPath),
-                        extraEnvironment: prepared.extraEnvironment, forceLoginShell: true,
+                        runCommand: agentLaunch?.command,
+                        launchPayload: agentLaunch?.payload,
+                        forceLoginShell: true,
                         expectedWorkspacePane: source.workspaceIdentity, expectedSourcePaneID: source.paneID
                     )
                     for attempt in 0..<PaneSurfaceRetry.attempts {
@@ -194,6 +197,9 @@
         /// the registered-plugin set (the Agents picker) read this via
         /// `agentPluginList()` so they refresh when it changes.
         public private(set) var pluginCatalogRevision = 0
+        /// Bumped after settings.json is written so local Provider pickers
+        /// re-read the Host-owned settings instead of showing stale choices.
+        public private(set) var pluginSettingsRevision = 0
 
         /// The id of the most recently installed plugin, so the Agents picker can
         /// auto-select it. Set on a successful install; cleared to `nil` on remove
@@ -1123,7 +1129,7 @@
             // The enabled-plugin set changed; re-push the complete presentation
             // set to all connected viewers (spec §7.2/§7.3) and refresh the
             // OTLP namespace table (issue #617).
-            await connectedViewerManager?.pushPluginPresentationsToAll(registry.presentations())
+            await connectedViewerManager?.pushPluginPresentationsToAll(pluginPresentations())
             await refreshOTLPPluginNamespaces()
             return registry.isEnabled(id)
         }
@@ -1142,7 +1148,7 @@
             // The enabled-plugin set changed; re-push the complete presentation
             // set to all connected viewers (spec §7.2/§7.3), then push session
             // state so viewers see the now-removed projects immediately.
-            await connectedViewerManager?.pushPluginPresentationsToAll(registry.presentations())
+            await connectedViewerManager?.pushPluginPresentationsToAll(pluginPresentations())
             await connectedViewerManager?.pushSessionStateToAll()
             // A disabled plugin's OTLP records must stop classifying (issue #617).
             await refreshOTLPPluginNamespaces()
@@ -1488,6 +1494,24 @@
                 .map { AgentPluginEntry(id: $0, name: registry.manifest($0)?.displayName ?? $0) }
         }
 
+        /// Launch choices for this Mac. Provider metadata comes from the same
+        /// settings the remote presentation uses, so local and Viewer pickers
+        /// cannot drift.
+        public func localAgentLaunchAgents() -> [SessionLaunchAgent] {
+            _ = pluginSettingsRevision
+            guard let registry = pluginRegistry else { return [] }
+            return registry.active.keys.compactMap { id in
+                guard let manifest = registry.manifest(id) else { return nil }
+                let providers = agentProviderPresentation(id: id)
+                return SessionLaunchAgent(
+                    id: id,
+                    name: manifest.displayName,
+                    providers: providers.options,
+                    defaultProviderID: providers.defaultProviderID
+                )
+            }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        }
+
         /// Returns `true` when `id` was registered via the factory table (i.e. ships
         /// with the app). URL-installed and folder-dropped plugins return `false`.
         public func isBundledPlugin(id: String) -> Bool {
@@ -1529,7 +1553,36 @@
             }
             // SettingsResult.error surfacing is deferred to the settings UI (P2-T5).
             _ = await pluginRegistry?.core(id)?.applySettings(data)
+            pluginSettingsRevision += 1
+            // Provider choices/defaults travel in plugin presentations. Republish
+            // them so already-connected Viewers update without reconnecting.
+            await connectedViewerManager?.pushPluginPresentationsToAll(pluginPresentations())
             return nil
+        }
+
+        private func pluginPresentations() -> [PluginPresentation] {
+            guard let registry = pluginRegistry else { return [] }
+            return registry.presentations().map { presentation in
+                let providers = agentProviderPresentation(id: presentation.id)
+                guard !providers.options.isEmpty else { return presentation }
+                return presentation.withProviders(
+                    providers.options,
+                    defaultProviderID: providers.defaultProviderID
+                )
+            }
+        }
+
+        private func agentProviderPresentation(id: String) -> (options: [AgentProviderOption], defaultProviderID: String?) {
+            switch id {
+            case CodexPluginCore.pluginID:
+                let settings = CodexSettings.decode(from: pluginSettingsData(id: id))
+                return (settings.providerOptions, settings.resolvedDefaultProviderID)
+            case ClaudeCodePluginCore.pluginID:
+                let settings = ClaudeCodeSettings.decode(from: pluginSettingsData(id: id))
+                return (settings.providerOptions, settings.resolvedDefaultProviderID)
+            default:
+                return ([], nil)
+            }
         }
 
         /// Deterministic install-status overrides for `--e2e-test`, keyed by
@@ -2253,14 +2306,16 @@
             forPluginID pluginID: String,
             projectPath: String,
             requireAgentLaunch: Bool = false,
-            worktree: ForkAgentSession.Worktree? = nil
+            worktree: ForkAgentSession.Worktree? = nil,
+            providerID: String? = nil
         ) async throws -> SessionLaunchPreparation {
             try await SessionLaunchPreparation.prepare(
                 path: projectPath,
                 pluginID: pluginID,
                 requireAgentLaunch: requireAgentLaunch,
                 core: pluginRegistry?.core(pluginID),
-                worktree: worktree
+                worktree: worktree,
+                providerID: providerID
             )
         }
 
@@ -2793,25 +2848,36 @@
                     else {
                         throw APIError.notFound("Path does not exist or is not a directory: \(path)")
                     }
-                    // Resolve the launch command from the owning plugin core
-                    // (`commandForLaunch`); fall back to the pluginID as the
-                    // command when no core/launch command is available.
-                    let launch = await self?.pluginRegistry?.core(pluginID)?.commandForLaunch(projectPath: url.path)
+                    // Resolve the launch command from the owning plugin core;
+                    // fall back to the pluginID when no core/launch command is
+                    // available. Native cores with Providers must use the
+                    // throwing selection API so a missing default Provider is
+                    // reported instead of silently launching an unconfigured CLI.
+                    let core = await self?.pluginRegistry?.core(pluginID)
+                    let launch: LaunchCommand?
+                    if let selecting = core as? any AgentProviderSelecting {
+                        launch = try await selecting.commandForLaunch(projectPath: url.path, providerID: nil)
+                    } else {
+                        launch = await core?.commandForLaunch(projectPath: url.path)
+                    }
                     let commandPath = launch?.command ?? pluginID
                     let launchArgs = args.isEmpty ? (launch?.args ?? []) : args
-                    let runCommand: String
-                    if launchArgs.isEmpty {
-                        runCommand = commandPath.posixSingleQuoted
-                    } else {
-                        let quoted = launchArgs.map(\.posixSingleQuoted).joined(separator: " ")
-                        runCommand = "\(commandPath.posixSingleQuoted) \(quoted)"
-                    }
+                    let command = LaunchCommand(
+                        command: commandPath,
+                        args: launchArgs,
+                        env: launch?.env ?? [:],
+                        unsetEnvironment: launch?.unsetEnvironment ?? []
+                    )
+                    let preparation = SessionLaunchPreparation(workingDirectory: url.path, launch: command)
+                    let agentLaunch = try await MainActor.run { try tmux.agentLaunch(preparation) }
+                    let runCommand = agentLaunch?.command ?? commandPath.posixSingleQuoted
                     let created = try await tmux.createSession(
                         baseName: url.lastPathComponent,
                         width: 200,
                         height: 50,
                         workingDirectory: url.path,
-                        runCommand: runCommand
+                        runCommand: runCommand,
+                        launchPayload: agentLaunch?.payload
                     )
                     let sessionName = created.sessionName
                     return APISessionInfo(
@@ -3188,7 +3254,7 @@
                 )
             }
             connectionManager.presentationsProvider = { [weak self] in
-                self?.pluginRegistry?.presentations() ?? []
+                self?.pluginPresentations() ?? []
             }
 
             // Refresh the license status when the relay reports the host's
@@ -3430,7 +3496,8 @@
                             pluginID: spec.pluginID,
                             requireAgentLaunch: spec.requireAgentLaunch,
                             core: self?.pluginRegistry?.core(spec.pluginID),
-                            worktree: spec.worktree
+                            worktree: spec.worktree,
+                            providerID: spec.providerID
                         )
                         return await Self.handleCreateSession(
                             command: command,
@@ -4082,21 +4149,17 @@
                 // The owning plugin core resolved `launch` (gated on its auto-run
                 // setting); a nil launch means "open in a bare shell".
                 let launch = preparation.launch
-                let runCommand = preparation.runCommand
+                let agentLaunch = try tmuxService.agentLaunch(preparation)
 
                 let workingDirectory = preparation.workingDirectory
                     ?? FileManager.default.homeDirectoryForCurrentUser.path()
 
-                // Pass through any config-dir + plugin-provided env the launch
-                // command carries (e.g. CLAUDE_CONFIG_DIR for a non-default folder).
+                // The config directory is not secret; launch environment values
+                // take the stdin path below so they never enter tmux argv.
                 var extraEnvironment: [String] = []
                 if let configDir = spec.configDir {
                     extraEnvironment.append("CLAUDE_CONFIG_DIR=\(configDir)")
                 }
-                for (key, value) in launch?.env ?? [:] {
-                    extraEnvironment.append("\(key)=\(value)")
-                }
-
                 // A non-nil `spec.workingDirectory` means this was a
                 // project or explicit directory request. Name the first window after the
                 // launch command so the tab matches what's running; when
@@ -4110,8 +4173,9 @@
                     width: spec.width,
                     height: spec.height,
                     workingDirectory: workingDirectory,
-                    runCommand: runCommand,
+                    runCommand: agentLaunch?.command,
                     extraEnvironment: extraEnvironment,
+                    launchPayload: agentLaunch?.payload,
                     firstWindowName: firstWindowName
                 )
 

@@ -1,4 +1,5 @@
 import CtrlxCommon
+import CtrlxEncryption
 import CtrlxNetworking
 import CtrlxPluginProtocol
 import Dependencies
@@ -16,7 +17,7 @@ import Foundation
 /// (`~/.claude.json`, transcripts) and hook payloads, so it must never trap —
 /// `do/try/catch` around every decode, no force-unwraps, skip-and-log malformed
 /// entries.
-public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, AgentPluginMaintenance, AgentAccountReporting {
+public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking, AgentSessionResuming, AgentPluginMaintenance, AgentAccountReporting {
     public static let pluginID = "claude-code"
 
     private var host: (any PluginHost)?
@@ -26,6 +27,7 @@ public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, Ag
     private let accountReporter = ClaudeAccountReporter()
 
     @Dependency(ProcessRunner.self) private var processRunner
+    @Dependency(SecretsService.self) private var secrets
     @Dependency(StopFinalityClassifier.self) private var stopFinalityClassifier
 
     private var marketplaceSource = URL(fileURLWithPath: "/")
@@ -246,25 +248,47 @@ public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, Ag
     // MARK: - Auto-launch
 
     public func commandForLaunch(projectPath _: String) async -> LaunchCommand? {
+        try? await commandForLaunch(projectPath: "", providerID: nil)
+    }
+
+    public func providerOptions() async -> [AgentProviderOption] {
+        settings.providerOptions
+    }
+
+    public func commandForLaunch(projectPath _: String, providerID: String?) async throws -> LaunchCommand? {
         guard settings.autoRun else { return nil }
-        return LaunchCommand(command: settings.commandPath)
+        let provider = try await providerConfiguration(providerID ?? settings.defaultProviderID)
+        return LaunchCommand(
+            command: settings.commandPath,
+            env: provider.environment,
+            unsetEnvironment: provider.unsetEnvironment
+        )
     }
 
     public func commandForFork(sessionID: String, projectPath _: String) async throws -> AgentForkLaunch {
+        try await commandForFork(sessionID: sessionID, projectPath: "", targetProviderID: nil)
+    }
+
+    public func commandForFork(sessionID: String, projectPath _: String, targetProviderID: String?) async throws -> AgentForkLaunch {
         guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Claude Code conversation ID.") }
         @Dependency(AgentForkHistoryClient.self) var history
         let defaultRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path
         let roots = [defaultRoot] + [ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]].compactMap { $0 } + settings.additionalConfigFolders
         let root = try await history.root(sessionID, roots, .claude)
         let usesDefaultRoot = root == URL(fileURLWithPath: defaultRoot).resolvingSymlinksInPath().path
+        let provider = try await providerConfiguration(targetProviderID)
+        var environment = provider.environment
+        if !usesDefaultRoot {
+            environment["CLAUDE_CONFIG_DIR"] = root
+        }
         return AgentForkLaunch(
             command: LaunchCommand(
                 command: settings.commandPath,
                 args: ["--resume", sessionID, "--fork-session"],
-                // Setting even the default root changes where Claude stores .claude.json.
-                env: usesDefaultRoot ? [:] : ["CLAUDE_CONFIG_DIR": root]
+                env: environment
             ),
-            unsetEnvironment: usesDefaultRoot ? ["CLAUDE_CONFIG_DIR"] : []
+            // Setting even the default root changes where Claude stores .claude.json.
+            unsetEnvironment: Self.unique(provider.unsetEnvironment + (usesDefaultRoot ? ["CLAUDE_CONFIG_DIR"] : []))
         )
     }
 
@@ -288,8 +312,9 @@ public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, Ag
             executable: invocation?.executable,
             cliVersion: invocation?.version,
             arguments: arguments,
-            automaticResumeUnavailableReason: invocation?.version == Self.verifiedResumeVersion ? nil : (invocation.map { "Automatic resume has not been verified for Claude Code \($0.version ?? "unknown version")." }
-                ?? "The original process invocation was not recorded.")
+            automaticResumeUnavailableReason: invocation?.version == Self.verifiedResumeVersion ? nil : (invocation.map { "Automatic resume has not been verified for Claude Code \($0.version ?? "unknown version")." })
+                ?? "The original process invocation was not recorded.",
+            providerID: invocation?.providerID
         )
     }
 
@@ -317,14 +342,80 @@ public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, Ag
             throw AgentForkError("The recorded default Claude configuration directory has changed.")
         }
         guard try Self.resumeArguments(descriptor.arguments) == descriptor.arguments else { throw AgentForkError("Invalid Claude Code recovery options.") }
+        let provider = try await providerConfiguration(descriptor.providerID)
+        var environment = provider.environment
+        if !descriptor.usesDefaultConfiguration {
+            environment["CLAUDE_CONFIG_DIR"] = root
+        }
         return AgentForkLaunch(
             command: LaunchCommand(
                 command: descriptor.executable ?? settings.commandPath,
                 args: ["--resume", descriptor.sessionID] + descriptor.arguments,
-                env: descriptor.usesDefaultConfiguration ? [:] : ["CLAUDE_CONFIG_DIR": root]
+                env: environment
             ),
-            unsetEnvironment: descriptor.usesDefaultConfiguration ? ["CLAUDE_CONFIG_DIR"] : []
+            unsetEnvironment: Self.unique(provider.unsetEnvironment + (descriptor.usesDefaultConfiguration ? ["CLAUDE_CONFIG_DIR"] : []))
         )
+    }
+
+    // MARK: - Provider launch configuration
+
+    private func providerConfiguration(_ requestedID: String?) async throws -> ClaudeProviderLaunch {
+        guard let providerID = requestedID else {
+            return ClaudeProviderLaunch(environment: [:], unsetEnvironment: [])
+        }
+        guard settings.providerOptions.contains(where: { $0.id == providerID }) else {
+            throw AgentProviderError("The selected Claude Code Provider no longer exists in Settings → Agents → Claude Code.")
+        }
+        if providerID == ClaudeCodeSettings.builtInProviderID {
+            return ClaudeProviderLaunch(
+                environment: [AgentProviderEnvironment.markerKey: providerID],
+                unsetEnvironment: Self.providerEnvironmentKeys
+            )
+        }
+        guard let profile = settings.providers.first(where: { $0.id == providerID }) else {
+            throw AgentProviderError("The selected Claude Code Provider no longer exists in Settings → Agents → Claude Code.")
+        }
+        guard
+            ClaudeCodeSettings.isValidProviderID(profile.id),
+            ClaudeCodeSettings.isValidEnvironmentKey(profile.environmentKey),
+            profile.environmentKey == profile.authKind.environmentKey,
+            !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let url = URL(string: profile.baseURL), url.scheme == "http" || url.scheme == "https", url.host != nil,
+            !profile.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw AgentProviderError("The selected Claude Code Provider has invalid settings. Edit it in Settings → Agents → Claude Code → Providers.")
+        }
+        let account = AgentProviderKeychainAccount.account(pluginID: Self.pluginID, providerID: profile.id)
+        let apiKey: String?
+        do {
+            apiKey = try await secrets.loadSecret(account)
+        } catch {
+            throw AgentProviderError("The API key for Claude Code Provider '\(profile.name)' could not be read from Keychain.")
+        }
+        guard let apiKey, !apiKey.isEmpty else {
+            throw AgentProviderError("Add an API key for Claude Code Provider '\(profile.name)' in Settings → Agents → Claude Code → Providers.")
+        }
+        return ClaudeProviderLaunch(
+            environment: [
+                "ANTHROPIC_BASE_URL": profile.baseURL,
+                profile.environmentKey: apiKey,
+                "ANTHROPIC_MODEL": profile.model,
+                AgentProviderEnvironment.markerKey: profile.id,
+            ],
+            unsetEnvironment: Self.providerEnvironmentKeys
+        )
+    }
+
+    private static let providerEnvironmentKeys = [
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_MODEL",
+    ]
+
+    private static func unique(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }
     }
 
     // MARK: - CLI-based plugin install
@@ -391,4 +482,9 @@ public actor ClaudeCodePluginCore: AgentSessionForking, AgentSessionResuming, Ag
         guard level >= settings.logLevel else { return }
         await host?.log(LogLine(level: level, message: message))
     }
+}
+
+private struct ClaudeProviderLaunch {
+    let environment: [String: String]
+    let unsetEnvironment: [String]
 }

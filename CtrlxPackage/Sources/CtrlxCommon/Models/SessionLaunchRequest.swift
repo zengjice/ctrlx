@@ -6,7 +6,12 @@ import Foundation
 public enum SessionLaunchRequest: Sendable, Equatable {
     case terminal
     case project(AgentProject)
-    case directory(path: String, pluginID: String, worktree: ForkAgentSession.Worktree? = nil)
+    case directory(
+        path: String,
+        pluginID: String,
+        worktree: ForkAgentSession.Worktree? = nil,
+        providerID: String? = nil
+    )
 
     public var project: AgentProject? {
         switch self {
@@ -14,7 +19,7 @@ public enum SessionLaunchRequest: Sendable, Equatable {
             nil
         case let .project(project):
             project
-        case let .directory(path, pluginID, worktree):
+        case let .directory(path, pluginID, worktree, _):
             AgentProject(
                 name: worktree?.name ?? Self.directoryName(path),
                 path: path,
@@ -24,13 +29,22 @@ public enum SessionLaunchRequest: Sendable, Equatable {
     }
 
     public var requiresAgentLaunch: Bool {
-        if case .directory = self { return true }
+        if case .directory = self {
+            return true
+        }
         return false
     }
 
     public var worktree: ForkAgentSession.Worktree? {
-        if case let .directory(_, _, worktree) = self {
+        if case let .directory(_, _, worktree, _) = self {
             return worktree
+        }
+        return nil
+    }
+
+    public var providerID: String? {
+        if case let .directory(_, _, _, providerID) = self {
+            return providerID
         }
         return nil
     }
@@ -44,10 +58,25 @@ public enum SessionLaunchRequest: Sendable, Equatable {
 public struct SessionLaunchAgent: Identifiable, Sendable, Equatable {
     public let id: String
     public let name: String
+    public let providers: [AgentProviderOption]
+    public let defaultProviderID: String?
 
-    public init(id: String, name: String) {
+    public init(
+        id: String,
+        name: String,
+        providers: [AgentProviderOption] = [],
+        defaultProviderID: String? = nil
+    ) {
         self.id = id
         self.name = name
+        self.providers = providers
+        self.defaultProviderID = defaultProviderID
+    }
+
+    public var defaultProviderLabel: String {
+        guard let defaultProviderID else { return "Current CLI configuration" }
+        let name = providers.first { $0.id == defaultProviderID }?.name ?? defaultProviderID
+        return "Default: \(name)"
     }
 }
 

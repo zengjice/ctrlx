@@ -31,9 +31,16 @@ struct NewAgentTabTests {
         let office = configuration(host: "office", agents: [.init(id: "codex", name: "Codex")])
         let home = configuration(host: "home", agents: [.init(id: "claude", name: "Claude Code")])
         #expect(office.id != home.id)
-        let request = try office.request(agentID: "codex", directory: "~/Projects/one 'two'")
-        #expect(request == CreateTmuxWindow(sessionName: "work", workingDirectory: "~/Projects/one 'two'", pluginID: "codex"))
-        #expect(throws: NewAgentTabConfiguration.LaunchError.self) { try home.request(agentID: "codex", directory: "/repo") }
+        let request = try office.request(agentID: "codex", directory: "~/Projects/one 'two'", providerID: "custom")
+        #expect(request == CreateTmuxWindow(
+            sessionName: "work",
+            workingDirectory: "~/Projects/one 'two'",
+            pluginID: "codex",
+            providerID: "custom"
+        ))
+        #expect(throws: NewAgentTabConfiguration.LaunchError.self) {
+            try home.request(agentID: "codex", directory: "/repo", providerID: nil)
+        }
     }
 
     @Test("Offline/old hosts, missing agents and malformed paths never become shell requests")
@@ -41,12 +48,12 @@ struct NewAgentTabTests {
         let agents = [SessionLaunchAgent(id: "codex", name: "Codex")]
         for reason in ["Host offline", "Update Host"] {
             #expect(throws: NewAgentTabConfiguration.LaunchError.self) {
-                try configuration(agents: agents, reason: reason).request(agentID: "codex", directory: "/repo")
+                try configuration(agents: agents, reason: reason).request(agentID: "codex", directory: "/repo", providerID: nil)
             }
         }
         for path in ["", "relative/path", "/repo\nother"] {
             #expect(throws: NewAgentTabConfiguration.LaunchError.self) {
-                try configuration(agents: agents).request(agentID: "codex", directory: path)
+                try configuration(agents: agents).request(agentID: "codex", directory: path, providerID: nil)
             }
         }
     }

@@ -1,5 +1,30 @@
-import Foundation
+import CtrlxNetworking
 import CtrlxPluginProtocol
+import Foundation
+
+public struct CodexProviderProfile: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public var name: String
+    public var baseURL: String
+    public var model: String
+    public var environmentKey: String
+
+    public init(id: String, name: String, baseURL: String, model: String, environmentKey: String) {
+        self.id = id
+        self.name = name
+        self.baseURL = baseURL
+        self.model = model
+        self.environmentKey = environmentKey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case baseURL = "base_url"
+        case model
+        case environmentKey = "environment_key"
+    }
+}
 
 /// Typed, Codable settings for the Codex plugin core. Persisted to
 /// `~/.ctrlx/state/plugins/codex/settings.json` with snake_case keys (spec §11).
@@ -24,6 +49,17 @@ public struct CodexSettings: Codable, Sendable, Equatable {
     /// (`log_user_prompt = false`). Opt-out for users who manage their own
     /// `[otel]` config or want zero telemetry from CtrlX-launched panes.
     public var exportTelemetry: Bool
+    /// Custom API Providers. The official `openai` Provider is built in and
+    /// follows the user's normal Codex login/configuration.
+    public var providers: [CodexProviderProfile]
+    /// Default for new sessions. `nil` follows Codex's current configuration.
+    public var defaultProviderID: String?
+
+    public static let builtInProviderID = "openai"
+    public static let builtInProvider = AgentProviderOption(
+        id: builtInProviderID,
+        name: "OpenAI (official login)"
+    )
 
     public init(
         commandPath: String = "codex",
@@ -31,7 +67,9 @@ public struct CodexSettings: Codable, Sendable, Equatable {
         logLevel: LogLevel = .info,
         closePaneOnSessionEnd: Bool = false,
         additionalConfigFolders: [String] = [],
-        exportTelemetry: Bool = true
+        exportTelemetry: Bool = true,
+        providers: [CodexProviderProfile] = [],
+        defaultProviderID: String? = nil
     ) {
         self.commandPath = commandPath
         self.autoRun = autoRun
@@ -39,6 +77,8 @@ public struct CodexSettings: Codable, Sendable, Equatable {
         self.closePaneOnSessionEnd = closePaneOnSessionEnd
         self.additionalConfigFolders = additionalConfigFolders
         self.exportTelemetry = exportTelemetry
+        self.providers = providers
+        self.defaultProviderID = defaultProviderID
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -48,6 +88,8 @@ public struct CodexSettings: Codable, Sendable, Equatable {
         case closePaneOnSessionEnd = "close_pane_on_session_end"
         case additionalConfigFolders = "additional_config_folders"
         case exportTelemetry = "export_telemetry"
+        case providers
+        case defaultProviderID = "default_provider_id"
     }
 
     public init(from decoder: Decoder) throws {
@@ -60,6 +102,29 @@ public struct CodexSettings: Codable, Sendable, Equatable {
         self.additionalConfigFolders = try container
             .decodeIfPresent([String].self, forKey: .additionalConfigFolders) ?? []
         self.exportTelemetry = try container.decodeIfPresent(Bool.self, forKey: .exportTelemetry) ?? true
+        self.providers = try container.decodeIfPresent([CodexProviderProfile].self, forKey: .providers) ?? []
+        self.defaultProviderID = try container.decodeIfPresent(String.self, forKey: .defaultProviderID)
+    }
+
+    public var providerOptions: [AgentProviderOption] {
+        var seen = Set<String>()
+        return ([Self.builtInProvider] + providers.map { AgentProviderOption(id: $0.id, name: $0.name) })
+            .filter { seen.insert($0.id).inserted }
+    }
+
+    public var resolvedDefaultProviderID: String? {
+        guard let defaultProviderID, providerOptions.contains(where: { $0.id == defaultProviderID }) else { return nil }
+        return defaultProviderID
+    }
+
+    public static func isValidProviderID(_ id: String) -> Bool {
+        id != builtInProviderID
+            && id.range(of: #"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"#, options: .regularExpression) != nil
+    }
+
+    public static func isValidEnvironmentKey(_ key: String) -> Bool {
+        !key.hasPrefix("CTRLX_") && key != "CODEX_HOME" && key != "PATH" && key != "HOME"
+            && key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil
     }
 
     /// Decode from raw `settings.json` bytes, falling back to defaults when the

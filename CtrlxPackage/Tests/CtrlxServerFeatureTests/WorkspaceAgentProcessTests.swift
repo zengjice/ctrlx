@@ -1,4 +1,5 @@
 import CtrlxCommon
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
 import Testing
@@ -66,10 +67,17 @@ struct WorkspaceAgentProcessTests {
     @Test("Kernel argv decoding preserves empty arguments but only admits configuration roots from env")
     func decode() throws {
         let argv = ["/tools/agent", "--model", "large", "", "private prompt"]
-        let data = arguments(argv, environment: ["API_KEY=private-token", "CODEX_HOME=/private/codex", "CLAUDE_CONFIG_DIR=/private/claude", "PATH=/bin"])
+        let data = arguments(argv, environment: [
+            "API_KEY=private-token",
+            "CODEX_HOME=/private/codex",
+            "CLAUDE_CONFIG_DIR=/private/claude",
+            "\(AgentProviderEnvironment.markerKey)=custom",
+            "PATH=/bin",
+        ])
         let parsed = try WorkspaceAgentProcessArguments.parse(data)
         #expect(parsed.arguments == argv)
         #expect(parsed.configurationRoots == ["CODEX_HOME": "/private/codex", "CLAUDE_CONFIG_DIR": "/private/claude"])
+        #expect(parsed.providerID == "custom")
     }
 
     @Test("Relative, conflicting or truncated process evidence is rejected")
@@ -77,6 +85,7 @@ struct WorkspaceAgentProcessTests {
         #expect(throws: WorkspaceRecoveryError.self) { try WorkspaceAgentProcessArguments.parse(arguments(["agent"], environment: [])) }
         #expect(throws: WorkspaceRecoveryError.self) { try WorkspaceAgentProcessArguments.parse(arguments(["agent"], environment: ["CODEX_HOME=relative"])) }
         #expect(throws: WorkspaceRecoveryError.self) { try WorkspaceAgentProcessArguments.parse(arguments(["agent"], environment: ["CODEX_HOME=/one", "CODEX_HOME=/two"])) }
+        #expect(throws: WorkspaceRecoveryError.self) { try WorkspaceAgentProcessArguments.parse(arguments(["agent"], environment: ["\(AgentProviderEnvironment.markerKey)=one", "\(AgentProviderEnvironment.markerKey)=two"])) }
         #expect(throws: WorkspaceRecoveryError.self) { try WorkspaceAgentProcessArguments.parse(Data([1, 0, 0, 0, 65])) }
         #expect(throws: WorkspaceRecoveryError.self) { try WorkspaceAgentProcessArguments.parse(Data([255, 255, 255, 255])) }
     }

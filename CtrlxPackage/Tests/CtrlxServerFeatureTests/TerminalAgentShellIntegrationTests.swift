@@ -1,9 +1,9 @@
 import ConcurrencyExtras
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
-import CtrlxPluginProtocol
 import Testing
 @testable import CtrlxServerFeature
 
@@ -87,13 +87,17 @@ struct TerminalAgentShellIntegrationTests {
         let prepared = SessionLaunchPreparation(workingDirectory: fixture.root.path, fork: AgentForkLaunch(
             command: LaunchCommand(command: "codex", args: ["fork", "exact-session"], env: ["CODEX_HOME": root, "CODEX_FIXTURE_EXIT": "37"])
         ))
-        let line = try #require(try prepared.forkRunCommand(shell: "/bin/zsh"))
+        let tmux = try FakeTmuxLaunchEnvironment()
+        defer { tmux.cleanup() }
+        let launch = try #require(try prepared.agentLaunch(shell: "/bin/zsh", tmuxExecutable: tmux.executable.path))
+        try tmux.install(launch)
+        #expect(!launch.command.contains(root))
         let result = try await fixture.run(defaults: defaults, command: """
         __ctrlx_install_codex_telemetry
-        \(line)
+        \(launch.command)
         print -r -- "FORK_EXIT=$?"
         print -r -- "AFTER_ROOT=$CODEX_HOME"
-        """)
+        """, environment: ["TMUX": "fixture,1,0", "TMUX_PANE": FakeTmuxLaunchEnvironment.pane])
         #expect(result.isSuccess)
         #expect(result.stdoutString.contains("CONFIG_ROOT[\(root)]"))
         #expect(result.stdoutString.contains("<fork>\n<exact-session>"))
@@ -101,6 +105,56 @@ struct TerminalAgentShellIntegrationTests {
         #expect(result.stdoutString.contains("AFTER_ROOT=/wrong root"))
         #expect(result.stdoutString.components(separatedBy: "54321").count == (rc.isEmpty ? 2 : 1))
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("SHOULD_NOT_EXIST").path))
+        #expect(!tmux.containsPayload())
+    }
+
+    @Test("Ordinary launch reapplies Provider environment after rc and removes it from the running shell")
+    func ordinaryProviderEnvironment() async throws {
+        let fixture = try Fixture(extraRC: """
+        export ANTHROPIC_API_KEY='wrong-key'
+        export ANTHROPIC_AUTH_TOKEN='wrong-token'
+        export ANTHROPIC_BASE_URL='https://wrong.example.com'
+        export ANTHROPIC_MODEL='wrong-model'
+        export CTRLX_AGENT_PROVIDER_ID='wrong-provider'
+        """)
+        defer { fixture.cleanup() }
+        let prepared = SessionLaunchPreparation(workingDirectory: fixture.root.path, launch: LaunchCommand(
+            command: "codex",
+            args: ["--version"],
+            env: [
+                "ANTHROPIC_API_KEY": "selected-key",
+                "ANTHROPIC_BASE_URL": "https://selected.example.com",
+                "ANTHROPIC_MODEL": "selected-model",
+                "CTRLX_AGENT_PROVIDER_ID": "selected-provider",
+            ],
+            unsetEnvironment: ["ANTHROPIC_AUTH_TOKEN"]
+        ))
+        let tmux = try FakeTmuxLaunchEnvironment()
+        defer { tmux.cleanup() }
+        let launch = try #require(try prepared.agentLaunch(shell: "/bin/zsh", tmuxExecutable: tmux.executable.path))
+        try tmux.install(launch)
+        #expect(!launch.command.contains("selected-key"))
+        let result = try await fixture.run(defaults: nil, command: """
+        \(launch.command)
+        print -r -- "AGENT_EXIT=$?"
+        print -r -- "AFTER_KEY=$ANTHROPIC_API_KEY"
+        print -r -- "AFTER_TOKEN=$ANTHROPIC_AUTH_TOKEN"
+        print -r -- "AFTER_URL=$ANTHROPIC_BASE_URL"
+        print -r -- "AFTER_MODEL=$ANTHROPIC_MODEL"
+        print -r -- "AFTER_PROVIDER=$CTRLX_AGENT_PROVIDER_ID"
+        """, environment: ["TMUX": "fixture,1,0", "TMUX_PANE": FakeTmuxLaunchEnvironment.pane])
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.contains("AGENT_KEY[selected-key]"))
+        #expect(result.stdoutString.contains("AGENT_TOKEN_SET[]"))
+        #expect(result.stdoutString.contains("AGENT_URL[https://selected.example.com]"))
+        #expect(result.stdoutString.contains("AGENT_MODEL[selected-model]"))
+        #expect(result.stdoutString.contains("AGENT_PROVIDER[selected-provider]"))
+        #expect(result.stdoutString.contains("AFTER_KEY=wrong-key"))
+        #expect(result.stdoutString.contains("AFTER_TOKEN=wrong-token"))
+        #expect(result.stdoutString.contains("AFTER_URL=https://wrong.example.com"))
+        #expect(result.stdoutString.contains("AFTER_MODEL=wrong-model"))
+        #expect(result.stdoutString.contains("AFTER_PROVIDER=wrong-provider"))
+        #expect(!tmux.containsPayload())
     }
 
     @Test("Default Claude Fork unsets inherited config only for the Agent")
@@ -114,14 +168,35 @@ struct TerminalAgentShellIntegrationTests {
             command: LaunchCommand(command: "claude", args: ["--resume", "exact-session", "--fork-session"]),
             unsetEnvironment: ["CLAUDE_CONFIG_DIR"]
         ))
-        let line = try #require(try prepared.forkRunCommand(shell: "/bin/zsh"))
+        let tmux = try FakeTmuxLaunchEnvironment()
+        defer { tmux.cleanup() }
+        let launch = try #require(try prepared.agentLaunch(shell: "/bin/zsh", tmuxExecutable: tmux.executable.path))
+        try tmux.install(launch)
         let result = try await fixture.run(defaults: defaults, command: """
-        \(line)
+        \(launch.command)
         print -r -- "AFTER_CLAUDE_ROOT=$CLAUDE_CONFIG_DIR"
-        """)
+        """, environment: ["TMUX": "fixture,1,0", "TMUX_PANE": FakeTmuxLaunchEnvironment.pane])
         #expect(result.isSuccess)
         #expect(result.stdoutString.contains("CLAUDE_CONFIG_SET=0"))
         #expect(result.stdoutString.contains("AFTER_CLAUDE_ROOT=/wrong claude root"))
+    }
+
+    @Test("Recovery keeps the Agent payload out of process arguments")
+    @MainActor
+    func recoveryEnvironment() throws {
+        let secret = "fixture-secret-value"
+        let prepared = SessionLaunchPreparation(workingDirectory: "/repo", fork: AgentForkLaunch(
+            command: LaunchCommand(command: "codex", env: ["CODEX_API_KEY": secret])
+        ))
+        let launch = try #require(try prepared.agentLaunch(shell: "/bin/zsh", tmuxExecutable: "/fixture/tmux"))
+        let process = TmuxService.recoveryProcess(
+            loginShell: "/bin/zsh",
+            invocation: launch.command,
+            prefix: nil
+        )
+        #expect(!process.joined(separator: " ").contains(secret))
+        #expect(!process.joined(separator: " ").contains(launch.payload ?? ""))
+        #expect(process.joined(separator: " ").contains("show-options -pv"))
     }
 
     @Test("Prompt text after -- is not parsed as config")
@@ -229,7 +304,9 @@ struct TerminalAgentShellIntegrationTests {
                     try await tmux.newWindow(sessionName: original.sessionName, workingDirectory: fixture.root.path)
                 }
                 for _ in 0..<30 {
-                    if try await tmux.capturePaneText(pane).contains("TEST_READY>") { break }
+                    if try await tmux.capturePaneText(pane).contains("TEST_READY>") {
+                        break
+                    }
                     try await Task.sleep(for: .milliseconds(100))
                 }
                 // Send only to our temporary fixture pane after its first prompt.
@@ -237,7 +314,9 @@ struct TerminalAgentShellIntegrationTests {
                 var screen = ""
                 for _ in 0..<30 {
                     screen = try await tmux.capturePaneText(pane)
-                    if screen.contains("<--last>") { break }
+                    if screen.contains("<--last>") {
+                        break
+                    }
                     try await Task.sleep(for: .milliseconds(100))
                 }
                 #expect(screen.contains("<\(defaults[1])>"))
@@ -310,6 +389,7 @@ struct TerminalAgentShellIntegrationTests {
     @MainActor
     func forkShellWiring(telemetry: String) async throws {
         let calls = LockIsolated<[[String]]>([])
+        let inputs = LockIsolated<[String]>([])
         try await withDependencies {
             $0[TerminalAgentShellFiles.self].prepare = { _ in
                 if telemetry == "unavailable" {
@@ -321,29 +401,43 @@ struct TerminalAgentShellIntegrationTests {
                 calls.withValue { $0.append(args) }
                 return Self.tmuxResult(for: args)
             }
+            $0[ProcessRunner.self].runWithInput = { _, args, _, _, input in
+                calls.withValue { $0.append(args) }
+                inputs.withValue { $0.append(String(decoding: input, as: UTF8.self)) }
+                return Self.tmuxResult(for: args)
+            }
         } operation: {
             let tmux = TmuxService(tmuxPath: "/fixture/tmux")
             tmux.terminalCodexArguments = { telemetry == "disabled" ? [] : defaults }
             let prepared = SessionLaunchPreparation(workingDirectory: "/repo", fork: AgentForkLaunch(
                 command: LaunchCommand(command: "codex", args: ["fork", "exact-session"], env: ["CODEX_HOME": "/fork root"])
             ))
+            let agentLaunch = try #require(try tmux.agentLaunch(prepared))
             _ = try await tmux.newWindow(
-                sessionName: "fixture", windowName: "fork", runCommand: prepared.forkRunCommand(shell: tmux.loginShellPath),
-                extraEnvironment: prepared.extraEnvironment, forceLoginShell: true
+                sessionName: "fixture", windowName: "fork", runCommand: agentLaunch.command,
+                launchPayload: agentLaunch.payload,
+                forceLoginShell: true
             )
             let creation = try #require(calls.value.first { $0.contains("new-window") })
-            #expect(Array(creation.suffix(3).prefix(2)) == ["/bin/sh", "-c"])
-            let startup = try #require(creation.last)
+            let shellIndex = try #require(creation.firstIndex(of: "/bin/sh"))
+            #expect(Array(creation[shellIndex...].prefix(2)) == ["/bin/sh", "-c"])
+            let startup = creation[shellIndex + 2]
             #expect(startup.contains("exec \(tmux.loginShellPath.posixSingleQuoted) -l"))
             #expect(startup.contains("TERM_PROGRAM=iTerm.app"))
             #expect(startup.contains("CTRLX_SHELL_ORIGINAL_ZDOTDIR") == (telemetry == "enabled"))
             #expect(!creation.contains { $0.hasPrefix("CODEX_HOME=") })
+            #expect(!creation.contains("/fork root"))
+            #expect(inputs.value.count == 1)
+            #expect(inputs.value[0].contains("set-option"))
+            #expect(inputs.value[0].contains(agentLaunch.payload ?? "missing payload"))
+            #expect(!inputs.value[0].contains("/fork root"))
             let input = try #require(calls.value.first { $0.contains { $0.hasPrefix("'send-keys' ") } })
             #expect(input.contains("if-shell"))
             #expect(input.contains("#{==:#{pid}:#{start_time},123:456}"))
             #expect(input.contains("%42"))
-            let command = "( export 'CODEX_HOME=/fork root' && codex 'fork' 'exact-session' )"
-            #expect(input.contains { $0.contains(command.posixSingleQuoted) })
+            #expect(input.contains { $0.contains("show-options -pv") })
+            #expect(input.contains { $0.contains("set-option -pu") })
+            #expect(!input.contains { $0.contains("/fork root") })
         }
     }
 
@@ -371,10 +465,10 @@ struct TerminalAgentShellIntegrationTests {
             let files = FileManager.default
             // Darwin's sockaddr_un has a 104-byte path limit, including the
             // long per-user temporary prefix. Leave room for tmux.sock.
-            root = files.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cx-sh-\(UUID().uuidString.prefix(8))")
-            dotfiles = root.appendingPathComponent("user 'dot files'")
+            self.root = files.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("cx-sh-\(UUID().uuidString.prefix(8))")
+            self.dotfiles = root.appendingPathComponent("user 'dot files'")
             let bin = root.appendingPathComponent("bin")
-            executable = bin.appendingPathComponent("codex")
+            self.executable = bin.appendingPathComponent("codex")
             try files.createDirectory(at: dotfiles, withIntermediateDirectories: true)
             try files.createDirectory(at: bin, withIntermediateDirectories: true)
             for (name, marker) in [(".zshenv", "env"), (".zprofile", "profile"), (".zshrc", "rc"), (".zlogin", "login")] {
@@ -393,13 +487,30 @@ struct TerminalAgentShellIntegrationTests {
                 }
                 try Data(script.utf8).write(to: dotfiles.appendingPathComponent(name))
             }
-            try Data("#!/bin/sh\nprintf 'CONFIG_ROOT[%s]\\n' \"$CODEX_HOME\"\nprintf '<%s>\\n' \"$@\"\nexit \"${CODEX_FIXTURE_EXIT:-0}\"\n".utf8).write(to: executable)
+            try Data("""
+            #!/bin/sh
+            printf 'CONFIG_ROOT[%s]\\n' "$CODEX_HOME"
+            printf 'AGENT_KEY[%s]\\n' "${ANTHROPIC_API_KEY-}"
+            printf 'AGENT_TOKEN_SET[%s]\\n' "${ANTHROPIC_AUTH_TOKEN:+set}"
+            printf 'AGENT_URL[%s]\\n' "${ANTHROPIC_BASE_URL-}"
+            printf 'AGENT_MODEL[%s]\\n' "${ANTHROPIC_MODEL-}"
+            printf 'AGENT_PROVIDER[%s]\\n' "${CTRLX_AGENT_PROVIDER_ID-}"
+            printf '<%s>\\n' "$@"
+            exit "${CODEX_FIXTURE_EXIT:-0}"
+            """.utf8).write(to: executable)
             try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         }
 
-        func cleanup() { try? FileManager.default.removeItem(at: root) }
+        func cleanup() {
+            try? FileManager.default.removeItem(at: root)
+        }
 
-        func run(defaults: [String]?, command: String, interactive: Bool = true) async throws -> ProcessResult {
+        func run(
+            defaults: [String]?,
+            command: String,
+            interactive: Bool = true,
+            environment: [String: String] = [:]
+        ) async throws -> ProcessResult {
             let prefix: String
             if let defaults {
                 let directory = try await TerminalAgentShellFileStore(root: root.appendingPathComponent("generated")).prepare(defaults)
@@ -407,9 +518,12 @@ struct TerminalAgentShellIntegrationTests {
             } else {
                 prefix = ""
             }
+            var environment = environment
+            environment["ZDOTDIR"] = dotfiles.path
+            environment["RC_ORDER"] = ""
             return try await ProcessRunner.liveValue.run(
                 "/bin/sh", ["-c", "cd \(root.path.posixSingleQuoted) && \(prefix)exec /bin/zsh \(interactive ? "-ilc" : "-lc") \(command.posixSingleQuoted)"],
-                ["ZDOTDIR": dotfiles.path, "RC_ORDER": ""], nil
+                environment, nil
             )
         }
     }

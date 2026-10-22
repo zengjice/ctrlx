@@ -1,4 +1,5 @@
 import CtrlxCommon
+import CtrlxEncryption
 import CtrlxNetworking
 import CtrlxPluginProtocol
 import Dependencies
@@ -124,6 +125,139 @@ struct ClaudeCodePluginCoreTests {
             settings: settings,
             marketplaceSource: URL(fileURLWithPath: "/")
         )
+    }
+
+    @Test("Forking to a custom Claude Provider preserves the source config root and injects Keychain credentials")
+    func customProviderFork() async throws {
+        let id = UUID().uuidString
+        let profile = ClaudeProviderProfile(
+            id: "custom",
+            name: "Custom Anthropic",
+            baseURL: "https://api.example.com/v1",
+            model: "claude-custom",
+            authKind: .authToken,
+            environmentKey: ClaudeProviderAuthKind.authToken.environmentKey
+        )
+        let settings = try JSONEncoder().encode(ClaudeCodeSettings(providers: [profile]))
+        let secrets = SecretsService.inMemory()
+        try await secrets.storeSecret(
+            "fixture-key",
+            AgentProviderKeychainAccount.account(pluginID: ClaudeCodePluginCore.pluginID, providerID: profile.id)
+        )
+
+        try await withDependencies {
+            $0[SecretsService.self] = secrets
+            $0[AgentForkHistoryClient.self].root = { _, _, layout in
+                #expect(layout == .claude)
+                return "/source/claude"
+            }
+        } operation: {
+            let core = ClaudeCodePluginCore()
+            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+
+            let fork = try await core.commandForFork(sessionID: id, projectPath: "/repo", targetProviderID: profile.id)
+            #expect(fork.command.command == "claude")
+            #expect(fork.command.args == ["--resume", id, "--fork-session"])
+            #expect(fork.command.env == [
+                "ANTHROPIC_BASE_URL": "https://api.example.com/v1",
+                "ANTHROPIC_AUTH_TOKEN": "fixture-key",
+                "ANTHROPIC_MODEL": "claude-custom",
+                AgentProviderEnvironment.markerKey: profile.id,
+                "CLAUDE_CONFIG_DIR": "/source/claude",
+            ])
+            #expect(Set(fork.unsetEnvironment) == Set([
+                "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_MODEL",
+            ]))
+        }
+    }
+
+    @Test("Choosing the official Claude Provider clears inherited API Provider overrides")
+    func officialProviderLaunch() async throws {
+        let settings = try JSONEncoder().encode(ClaudeCodeSettings(defaultProviderID: ClaudeCodeSettings.builtInProviderID))
+        let core = ClaudeCodePluginCore()
+        try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+
+        let launch = try #require(try await core.commandForLaunch(projectPath: "/repo", providerID: nil))
+        #expect(launch.env == [AgentProviderEnvironment.markerKey: ClaudeCodeSettings.builtInProviderID])
+        #expect(Set(launch.unsetEnvironment) == Set([
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_MODEL",
+        ]))
+    }
+
+    @Test("Claude custom Provider launch and Fork reject missing or unknown Providers")
+    func providerValidation() async throws {
+        let profile = ClaudeProviderProfile(
+            id: "custom",
+            name: "Custom Anthropic",
+            baseURL: "https://api.example.com/v1",
+            model: "claude-custom",
+            authKind: .apiKey,
+            environmentKey: ClaudeProviderAuthKind.apiKey.environmentKey
+        )
+        let settings = try JSONEncoder().encode(ClaudeCodeSettings(providers: [profile]))
+
+        try await withDependencies {
+            $0[SecretsService.self] = .inMemory()
+            $0[AgentForkHistoryClient.self].root = { _, _, _ in "/source/claude" }
+        } operation: {
+            let core = ClaudeCodePluginCore()
+            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+            await #expect(throws: AgentProviderError.self) {
+                try await core.commandForLaunch(projectPath: "/repo", providerID: "removed")
+            }
+            await #expect(throws: AgentProviderError.self) {
+                try await core.commandForFork(sessionID: UUID().uuidString, projectPath: "/repo", targetProviderID: profile.id)
+            }
+        }
+    }
+
+    @Test("Claude recovery records and rebuilds a custom Provider identity")
+    func customProviderRecovery() async throws {
+        let id = UUID().uuidString
+        let profile = ClaudeProviderProfile(
+            id: "custom",
+            name: "Custom Anthropic",
+            baseURL: "https://api.example.com/v1",
+            model: "claude-custom",
+            authKind: .apiKey,
+            environmentKey: ClaudeProviderAuthKind.apiKey.environmentKey
+        )
+        let settings = try JSONEncoder().encode(ClaudeCodeSettings(providers: [profile]))
+        let secrets = SecretsService.inMemory()
+        try await secrets.storeSecret(
+            "fixture-key",
+            AgentProviderKeychainAccount.account(pluginID: ClaudeCodePluginCore.pluginID, providerID: profile.id)
+        )
+
+        try await withDependencies {
+            $0[SecretsService.self] = secrets
+            $0[AgentForkHistoryClient.self].root = { _, _, _ in "/source/claude" }
+        } operation: {
+            let core = ClaudeCodePluginCore()
+            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+            let descriptor = try await core.recoveryDescriptor(
+                sessionID: id,
+                projectPath: "/repo",
+                invocation: .init(
+                    executable: "/tools/claude",
+                    arguments: [],
+                    configurationRoots: ["CLAUDE_CONFIG_DIR": "/source/claude"],
+                    providerID: profile.id
+                )
+            )
+            #expect(descriptor.providerID == profile.id)
+            let resumed = try await core.commandForResume(descriptor)
+            #expect(resumed.command.env["ANTHROPIC_API_KEY"] == "fixture-key")
+            #expect(resumed.command.env["ANTHROPIC_BASE_URL"] == "https://api.example.com/v1")
+            #expect(resumed.command.env["ANTHROPIC_MODEL"] == "claude-custom")
+            #expect(resumed.command.env["CLAUDE_CONFIG_DIR"] == "/source/claude")
+        }
     }
 
     @Test("pluginID is claude-code")

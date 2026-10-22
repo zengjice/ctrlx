@@ -18,6 +18,12 @@ public struct PluginPresentation: Codable, Sendable, Equatable, Identifiable {
     public let color: String
     /// Base64-encoded PNG icon bytes, if the plugin ships one.
     public let iconB64: String?
+    /// Optional Provider choices. Older Hosts omit this field, so Viewers must
+    /// keep their launch UI unchanged instead of sending an unsupported ID.
+    public let providers: [AgentProviderOption]?
+    /// The Host's configured Provider for new sessions. `nil` follows the
+    /// agent's current CLI configuration.
+    public let defaultProviderID: String?
 
     public init(
         id: String,
@@ -25,7 +31,9 @@ public struct PluginPresentation: Codable, Sendable, Equatable, Identifiable {
         displayName: String,
         shortName: String,
         color: String,
-        iconB64: String? = nil
+        iconB64: String? = nil,
+        providers: [AgentProviderOption]? = nil,
+        defaultProviderID: String? = nil
     ) {
         self.id = id
         self.version = version
@@ -33,5 +41,21 @@ public struct PluginPresentation: Codable, Sendable, Equatable, Identifiable {
         self.shortName = shortName
         self.color = color
         self.iconB64 = iconB64
+        self.providers = providers
+        self.defaultProviderID = defaultProviderID
+    }
+
+    /// Copies the manifest-owned presentation while attaching Host settings.
+    public func withProviders(_ providers: [AgentProviderOption], defaultProviderID: String?) -> Self {
+        Self(
+            id: id,
+            version: version,
+            displayName: displayName,
+            shortName: shortName,
+            color: color,
+            iconB64: iconB64,
+            providers: providers,
+            defaultProviderID: defaultProviderID
+        )
     }
 }

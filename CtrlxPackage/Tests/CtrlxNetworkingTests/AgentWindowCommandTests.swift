@@ -5,7 +5,12 @@ import Testing
 struct AgentWindowCommandTests {
     @Test("Agent window requests preserve target/path/plugin without shipping executable commands")
     func roundTrip() throws {
-        let request = CreateTmuxWindow(sessionName: "work space", workingDirectory: "~/Projects/a 'repo'", pluginID: "custom-agent")
+        let request = CreateTmuxWindow(
+            sessionName: "work space",
+            workingDirectory: "~/Projects/a 'repo'",
+            pluginID: "custom-agent",
+            providerID: "custom"
+        )
         let message = CommandMessage(paneId: "", command: request.commandType)
         let decoded = try JSONDecoder().decode(CommandMessage.self, from: JSONEncoder().encode(message))
         #expect(decoded.command == request.commandType)
@@ -18,6 +23,7 @@ struct AgentWindowCommandTests {
         let json = #"{"sessionName":"work","workingDirectory":"/repo"}"#
         let request = try JSONDecoder().decode(CreateTmuxWindow.self, from: Data(json.utf8))
         #expect(request.pluginID == nil)
+        #expect(request.providerID == nil)
         #expect(request == CreateTmuxWindow(sessionName: "work", workingDirectory: "/repo"))
     }
 

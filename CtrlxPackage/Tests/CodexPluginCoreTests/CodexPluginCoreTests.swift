@@ -1,4 +1,5 @@
 import CtrlxCommon
+import CtrlxEncryption
 import CtrlxNetworking
 import CtrlxPluginProtocol
 import Dependencies
@@ -124,6 +125,183 @@ struct CodexPluginCoreTests {
         let correlationRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("ctrlx-cx-core-corr-\(UUID().uuidString)")
         return CodexPluginCore(correlation: CodexSessionCorrelation(root: correlationRoot))
+    }
+
+    @Test("Forking from the official account into a custom Provider keeps the source CODEX_HOME")
+    func customProviderFork() async throws {
+        let id = UUID().uuidString
+        let profile = CodexProviderProfile(
+            id: "custom",
+            name: "Custom API",
+            baseURL: "https://api.example.com/v1",
+            model: "custom-model",
+            environmentKey: "CUSTOM_API_KEY"
+        )
+        let settings = try JSONEncoder().encode(CodexSettings(exportTelemetry: false, providers: [profile]))
+        let secrets = SecretsService.inMemory()
+        try await secrets.storeSecret(
+            "fixture-key",
+            AgentProviderKeychainAccount.account(pluginID: CodexPluginCore.pluginID, providerID: profile.id)
+        )
+
+        try await withDependencies {
+            $0[SecretsService.self] = secrets
+            $0[AgentForkHistoryClient.self].root = { _, _, layout in
+                #expect(layout == .codex)
+                return "/source/official-codex"
+            }
+        } operation: {
+            let core = makeCore()
+            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+
+            let fork = try await core.commandForFork(sessionID: id, projectPath: "/repo", targetProviderID: profile.id)
+            #expect(fork.command.command == "codex")
+            #expect(fork.command.env["CODEX_HOME"] == "/source/official-codex")
+            #expect(fork.command.env["CUSTOM_API_KEY"] == "fixture-key")
+            #expect(fork.command.env[AgentProviderEnvironment.markerKey] == profile.id)
+            #expect(fork.command.args == [
+                "fork", id, "-C", "/repo",
+                "-c", #"model_provider="custom""#,
+                "-c", #"model_providers.custom.name="Custom API""#,
+                "-c", #"model_providers.custom.base_url="https://api.example.com/v1""#,
+                "-c", #"model_providers.custom.env_key="CUSTOM_API_KEY""#,
+                "-c", #"model_providers.custom.wire_api="responses""#,
+                "-c", "model_providers.custom.requires_openai_auth=false",
+                "--model", "custom-model",
+            ])
+        }
+    }
+
+    @Test("Official and custom Provider launches use the configured default and Keychain")
+    func providerLaunch() async throws {
+        let profile = CodexProviderProfile(
+            id: "custom",
+            name: "Custom API",
+            baseURL: "https://api.example.com/v1",
+            model: "custom-model",
+            environmentKey: "CUSTOM_API_KEY"
+        )
+        let settings = try JSONEncoder().encode(
+            CodexSettings(exportTelemetry: false, providers: [profile], defaultProviderID: profile.id)
+        )
+        let secrets = SecretsService.inMemory()
+        try await secrets.storeSecret(
+            "fixture-key",
+            AgentProviderKeychainAccount.account(pluginID: CodexPluginCore.pluginID, providerID: profile.id)
+        )
+
+        try await withDependencies {
+            $0[SecretsService.self] = secrets
+        } operation: {
+            let core = makeCore()
+            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+
+            let custom = try #require(try await core.commandForLaunch(projectPath: "/repo", providerID: nil))
+            #expect(custom.env == [
+                "CUSTOM_API_KEY": "fixture-key",
+                AgentProviderEnvironment.markerKey: profile.id,
+            ])
+            #expect(custom.args.contains(#"model_provider="custom""#))
+
+            let official = try #require(try await core.commandForLaunch(projectPath: "/repo", providerID: CodexSettings.builtInProviderID))
+            #expect(official.args == ["-c", #"model_provider="openai""#])
+            #expect(official.env == [AgentProviderEnvironment.markerKey: CodexSettings.builtInProviderID])
+        }
+    }
+
+    @Test("Provider launch rejects unknown Providers and missing Keychain credentials")
+    func providerValidation() async throws {
+        let profile = CodexProviderProfile(
+            id: "custom",
+            name: "Custom API",
+            baseURL: "https://api.example.com/v1",
+            model: "custom-model",
+            environmentKey: "CUSTOM_API_KEY"
+        )
+        let settings = try JSONEncoder().encode(CodexSettings(providers: [profile]))
+
+        try await withDependencies {
+            $0[SecretsService.self] = .inMemory()
+        } operation: {
+            let core = makeCore()
+            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+            await #expect(throws: AgentProviderError.self) {
+                try await core.commandForLaunch(projectPath: "/repo", providerID: "removed")
+            }
+            await #expect(throws: AgentProviderError.self) {
+                try await core.commandForLaunch(projectPath: "/repo", providerID: profile.id)
+            }
+        }
+    }
+
+    @Test("Recovery rebuilds a custom Provider from the recorded identity and removes stale runtime overrides")
+    func customProviderRecovery() async throws {
+        let id = UUID().uuidString
+        let profile = CodexProviderProfile(
+            id: "custom",
+            name: "Custom API",
+            baseURL: "https://api.example.com/v1",
+            model: "custom-model",
+            environmentKey: "CUSTOM_API_KEY"
+        )
+        let settings = try JSONEncoder().encode(CodexSettings(exportTelemetry: false, providers: [profile]))
+        let secrets = SecretsService.inMemory()
+        try await secrets.storeSecret(
+            "fixture-key",
+            AgentProviderKeychainAccount.account(pluginID: CodexPluginCore.pluginID, providerID: profile.id)
+        )
+
+        try await withDependencies {
+            $0[SecretsService.self] = secrets
+            $0[AgentForkHistoryClient.self].root = { _, _, _ in "/source/codex" }
+        } operation: {
+            let core = makeCore()
+            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+            let descriptor = try await core.recoveryDescriptor(
+                sessionID: id,
+                projectPath: "/repo",
+                invocation: .init(
+                    executable: "/tools/codex",
+                    arguments: ["-c", #"model_provider="old""#, "-c", #"model_providers.old.base_url="https://old.example.com""#, "--model", "old-model"],
+                    configurationRoots: ["CODEX_HOME": "/source/codex"],
+                    providerID: profile.id
+                )
+            )
+            #expect(descriptor.providerID == profile.id)
+            #expect(descriptor.arguments.isEmpty)
+            let resumed = try await core.commandForResume(descriptor)
+            #expect(resumed.command.env["CODEX_HOME"] == "/source/codex")
+            #expect(resumed.command.env["CUSTOM_API_KEY"] == "fixture-key")
+            #expect(resumed.command.args.contains(#"model_provider="custom""#))
+            #expect(!resumed.command.args.contains(#"model_provider="old""#))
+            #expect(!resumed.command.args.contains("old-model"))
+            #expect(resumed.command.args.contains("custom-model"))
+        }
+    }
+
+    @Test("Manual inline Provider definitions require manual recovery")
+    func manualProviderOverridesRejectRecovery() async throws {
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { _, _, _ in "/source/codex" }
+        } operation: {
+            let core = makeCore()
+            try await core.initialize(makeEnv(), host: MockPluginHost())
+            let arguments = [
+                "-c", #"model_provider="missing""#,
+                "-c", #"model_providers.missing.base_url="https://api.example.com/v1""#,
+            ]
+            await #expect(throws: AgentResumeConfigurationError.self) {
+                try await core.recoveryDescriptor(
+                    sessionID: UUID().uuidString,
+                    projectPath: "/repo",
+                    invocation: .init(
+                        executable: "/tools/codex",
+                        arguments: arguments,
+                        configurationRoots: ["CODEX_HOME": "/source/codex"]
+                    )
+                )
+            }
+        }
     }
 
     @Test("pluginID is codex")

@@ -460,7 +460,14 @@ final public class SessionStore {
             uniquingKeysWith: { _, last in last }
         )
         launchAgentsByHost[message.pairId] = presentationsByPluginID.values
-            .map { SessionLaunchAgent(id: $0.id, name: $0.displayName) }
+            .map {
+                SessionLaunchAgent(
+                    id: $0.id,
+                    name: $0.displayName,
+                    providers: $0.providers ?? [],
+                    defaultProviderID: $0.defaultProviderID
+                )
+            }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 

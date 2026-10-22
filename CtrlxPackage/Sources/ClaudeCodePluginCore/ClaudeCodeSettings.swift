@@ -1,5 +1,52 @@
-import Foundation
+import CtrlxNetworking
 import CtrlxPluginProtocol
+import Foundation
+
+public enum ClaudeProviderAuthKind: String, Codable, Sendable, CaseIterable {
+    case apiKey = "api_key"
+    case authToken = "auth_token"
+
+    public var environmentKey: String {
+        switch self {
+        case .apiKey: "ANTHROPIC_API_KEY"
+        case .authToken: "ANTHROPIC_AUTH_TOKEN"
+        }
+    }
+}
+
+public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public var name: String
+    public var baseURL: String
+    public var model: String
+    public var authKind: ClaudeProviderAuthKind
+    public var environmentKey: String
+
+    public init(
+        id: String,
+        name: String,
+        baseURL: String,
+        model: String,
+        authKind: ClaudeProviderAuthKind,
+        environmentKey: String
+    ) {
+        self.id = id
+        self.name = name
+        self.baseURL = baseURL
+        self.model = model
+        self.authKind = authKind
+        self.environmentKey = environmentKey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case baseURL = "base_url"
+        case model
+        case authKind = "auth_kind"
+        case environmentKey = "environment_key"
+    }
+}
 
 /// Typed, Codable settings for the Claude Code plugin core. Persisted to
 /// `~/.ctrlx/state/plugins/claude-code/settings.json` with snake_case keys
@@ -25,6 +72,17 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
     /// to honoring the Stop wherever Apple Intelligence is unavailable, so it
     /// is safe to leave on by default.
     public var detectFalseStops: Bool
+    /// Custom Anthropic-compatible API Providers. The official `anthropic`
+    /// Provider follows the CLI's normal login/configuration.
+    public var providers: [ClaudeProviderProfile]
+    /// Default for new sessions. `nil` follows Claude's current configuration.
+    public var defaultProviderID: String?
+
+    public static let builtInProviderID = "anthropic"
+    public static let builtInProvider = AgentProviderOption(
+        id: builtInProviderID,
+        name: "Anthropic (official login)"
+    )
 
     public init(
         commandPath: String = "claude",
@@ -32,7 +90,9 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
         logLevel: LogLevel = .info,
         additionalConfigFolders: [String] = [],
         closePaneOnSessionEnd: Bool = false,
-        detectFalseStops: Bool = true
+        detectFalseStops: Bool = true,
+        providers: [ClaudeProviderProfile] = [],
+        defaultProviderID: String? = nil
     ) {
         self.commandPath = commandPath
         self.autoRun = autoRun
@@ -40,6 +100,8 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
         self.additionalConfigFolders = additionalConfigFolders
         self.closePaneOnSessionEnd = closePaneOnSessionEnd
         self.detectFalseStops = detectFalseStops
+        self.providers = providers
+        self.defaultProviderID = defaultProviderID
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -49,6 +111,8 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
         case additionalConfigFolders = "additional_config_folders"
         case closePaneOnSessionEnd = "close_pane_on_session_end"
         case detectFalseStops = "detect_false_stops"
+        case providers
+        case defaultProviderID = "default_provider_id"
     }
 
     public init(from decoder: Decoder) throws {
@@ -62,6 +126,29 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
             .decodeIfPresent(Bool.self, forKey: .closePaneOnSessionEnd) ?? false
         self.detectFalseStops = try container
             .decodeIfPresent(Bool.self, forKey: .detectFalseStops) ?? true
+        self.providers = try container.decodeIfPresent([ClaudeProviderProfile].self, forKey: .providers) ?? []
+        self.defaultProviderID = try container.decodeIfPresent(String.self, forKey: .defaultProviderID)
+    }
+
+    public var providerOptions: [AgentProviderOption] {
+        var seen = Set<String>()
+        return ([Self.builtInProvider] + providers.map { AgentProviderOption(id: $0.id, name: $0.name) })
+            .filter { seen.insert($0.id).inserted }
+    }
+
+    public var resolvedDefaultProviderID: String? {
+        guard let defaultProviderID, providerOptions.contains(where: { $0.id == defaultProviderID }) else { return nil }
+        return defaultProviderID
+    }
+
+    public static func isValidProviderID(_ id: String) -> Bool {
+        id != builtInProviderID
+            && id.range(of: #"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"#, options: .regularExpression) != nil
+    }
+
+    public static func isValidEnvironmentKey(_ key: String) -> Bool {
+        !key.hasPrefix("CTRLX_") && key != "CLAUDE_CONFIG_DIR" && key != "PATH" && key != "HOME"
+            && key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil
     }
 
     /// Decode from raw `settings.json` bytes, falling back to defaults when the
