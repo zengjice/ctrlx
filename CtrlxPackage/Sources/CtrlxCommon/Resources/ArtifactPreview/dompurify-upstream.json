@@ -1,0 +1,8 @@
+{
+  "name": "dompurify",
+  "version": "3.4.17",
+  "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.17.tgz",
+  "tarball_integrity": "sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==",
+  "bundle_sha256": "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31",
+  "note": "Unmodified upstream browser bundle."
+}

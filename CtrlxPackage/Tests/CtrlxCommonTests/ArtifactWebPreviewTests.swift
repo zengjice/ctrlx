@@ -24,7 +24,7 @@
                 "stateDiagram-v2\n [*] --> Loading\n Loading --> Ready",
             ] {
                 for dark in [false, true] {
-                    renderer.load(content: source, mermaid: true, dark: dark)
+                    renderer.load(content: source, kind: .mermaid, dark: dark)
                     try await wait(renderer)
                     #expect(renderer.error == nil, "\(source): \(renderer.error ?? "")")
                     let png = try #require(renderer.png)
@@ -53,7 +53,7 @@
                 }
             }
             let preview = TerminalArtifactPreview(link: .init(path: "diagram.mmd", paneID: "%1", hostID: "isolated-host"), context: context, source: source, path: info.path)
-            let hosting = NSHostingView(rootView: TerminalArtifactPreviewSheet(preview: preview) { Issue.record("Unexpected Open in Files") }.preferredColorScheme(.light))
+            let hosting = NSHostingView(rootView: TerminalArtifactPreviewSheet(preview: preview) { _ in Issue.record("Unexpected Open in Files") }.preferredColorScheme(.light))
             let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 800, height: 600), styleMask: .borderless, backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = hosting
@@ -97,10 +97,10 @@
             defer { renderer.stop()
                 window.close()
             }
-            renderer.load(content: "This is not Mermaid", mermaid: true, dark: false)
+            renderer.load(content: "This is not Mermaid", kind: .mermaid, dark: false)
             try await wait(renderer)
             #expect(renderer.error != nil && renderer.png == nil)
-            renderer.load(content: "graph TD; A-->B", mermaid: true, dark: false)
+            renderer.load(content: "graph TD; A-->B", kind: .mermaid, dark: false)
             try await wait(renderer)
             #expect(renderer.isReady && renderer.error == nil)
         }
@@ -112,13 +112,13 @@
             defer { renderer.stop()
                 window.close()
             }
-            renderer.load(content: "graph TD\n A[\"</script><script>window.injected=true</script>\"] --> B[Safe]", mermaid: true, dark: false)
+            renderer.load(content: "graph TD\n A[\"</script><script>window.injected=true</script>\"] --> B[Safe]", kind: .mermaid, dark: false)
             try await wait(renderer)
             #expect(renderer.isReady, "\(renderer.error ?? "")")
             let injected = try await renderer.webView.evaluateJavaScript("window.injected === true") as? Bool
             #expect(injected == false)
             let png = try #require(renderer.png)
-            try renderer.load(content: ArtifactPreviewImage.png(from: png).base64EncodedString(), mermaid: false, dark: true)
+            try renderer.load(content: ArtifactPreviewImage.png(from: png).base64EncodedString(), kind: .image, dark: true)
             try await wait(renderer)
             #expect(renderer.isReady && renderer.png != nil)
             renderer.webView.setMagnification(2, centeredAt: .zero)
@@ -132,6 +132,146 @@
                 try await Task.sleep(for: .milliseconds(25))
             }
             try #require(renderer.isReady || renderer.error != nil, "Renderer did not complete")
+        }
+
+        @Test
+        func markdownRendersTextDiagramsImagesAndKeepsFailedDiagramSource() async throws {
+            let renderer = ArtifactWebRenderer()
+            let window = mount(renderer)
+            defer { renderer.stop()
+                window.close()
+            }
+            renderer.load(content: "graph LR; A-->B", kind: .mermaid, dark: false)
+            try await wait(renderer)
+            let image = try #require(renderer.png)
+            let source = """
+            # 完整阅读
+            **Bold** and [section](#完整阅读).
+
+            | 项目 | 状态 |
+            | --- | --- |
+            | Markdown | Ready |
+
+            - [x] Task
+
+            ![本地图](images/test.png)
+            ![矢量图](images/test.svg)
+            ![缺失图](missing.png)
+
+            ```mermaid
+            flowchart LR
+              A[正文] --> B[图表]
+            ```
+
+            ```mermaid
+            not a diagram
+            ```
+
+            ```swift
+            print("hello")
+            ```
+            """
+            for dark in [false, true] {
+                renderer.load(content: source, kind: .markdown, dark: dark, imageLoader: { reference in
+                    if reference == "images/test.svg" {
+                        return Data("""
+                        <svg xmlns="http://www.w3.org/2000/svg" width="200" height="50">
+                          <script>window.injected=true</script>
+                          <foreignObject><div>Unsafe</div></foreignObject>
+                          <use href="https://example.com/external.svg#icon"/>
+                          <rect width="200" height="50" fill="teal"/>
+                          <text x="10" y="30" fill="white">SVG 图片</text>
+                        </svg>
+                        """.utf8)
+                    }
+                    guard reference == "images/test.png" else { throw FileBrowserError.message("Image missing") }
+                    return image
+                })
+                try await wait(renderer)
+                let deadline = ContinuousClock.now + .seconds(10)
+                while ContinuousClock.now < deadline {
+                    if try (await renderer.webView.evaluateJavaScript("document.querySelector('.markdown-image img[src]') !== null && document.body.textContent.includes('Image missing')")) as? Bool == true {
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(25))
+                }
+                let state = try await renderer.webView.evaluateJavaScript("""
+                ({ heading: document.querySelector('h1').textContent,
+                   table: !!document.querySelector('table'),
+                   diagram: !!document.querySelector('.markdown-diagram svg'),
+                   source: document.body.textContent.includes('not a diagram'),
+                   code: !!document.querySelector('code.language-swift'),
+                   image: !!document.querySelector('img[src^="data:image/png"]'),
+                   svg: !!document.querySelector('img[src^="data:image/svg+xml"]'),
+                   safeSVG: !/script|foreignObject|https:/.test(atob(document.querySelector('img[src^="data:image/svg+xml"]').src.split(',')[1])),
+                   failure: document.body.textContent.includes('Image missing'),
+                   task: document.querySelector('input[type="checkbox"]').disabled,
+                   dark: document.body.classList.contains('dark') })
+                """) as? [String: Any]
+                #expect(state?["heading"] as? String == "完整阅读")
+                for key in ["table", "diagram", "source", "code", "image", "svg", "safeSVG", "failure", "task"] {
+                    #expect(state?[key] as? Bool == true, "\(key)")
+                }
+                #expect(state?["dark"] as? Bool == dark)
+                #expect(renderer.png == nil)
+                let snapshot = try await renderer.webView.takeSnapshot(configuration: nil)
+                let tiff = try #require(snapshot.tiffRepresentation)
+                try saveEvidence(#require(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])), name: dark ? "markdown-dark.png" : "markdown-light.png")
+            }
+        }
+
+        @Test
+        func markdownSanitizesHTMLAndNeverFetchesImagesFromWebKit() async throws {
+            let renderer = ArtifactWebRenderer()
+            let window = mount(renderer)
+            defer { renderer.stop()
+                window.close()
+            }
+            renderer.load(content: """
+            # Safe
+            <script>window.injected=true</script>
+            <iframe src="https://example.com"></iframe>
+            <img src="https://example.com/image.png" onerror="window.injected=true" srcset="https://example.com/other.png 2x">
+            ![Remote](https://example.com/remote.png)
+            [Danger](javascript:alert(1))
+            [File](../README.md)
+            [Web](https://example.com)
+            <style>body { display:none }</style>
+            """, kind: .markdown, dark: false)
+            try await wait(renderer)
+            let state = try await renderer.webView.evaluateJavaScript("""
+            ({ script: window.injected === true,
+               unsafe: !!document.querySelector('#content script, #content iframe, #content style, img[onerror], img[srcset]'),
+               remote: !!document.querySelector('img[src^="https:"], a[href^="javascript:"]'),
+               links: Array.from(document.querySelectorAll('a[href]')).every(a => a.getAttribute('href').startsWith('ctrlx-preview://link?')) })
+            """) as? [String: Bool]
+            #expect(state?["script"] == false && state?["unsafe"] == false && state?["remote"] == false)
+            #expect(state?["links"] == true)
+        }
+
+        @Test
+        func markdownIsReadableDuringImageLoadingAndRejectsLateResults() async throws {
+            let renderer = ArtifactWebRenderer()
+            let window = mount(renderer)
+            defer { renderer.stop()
+                window.close()
+            }
+            var pending: CheckedContinuation<Data, Never>?
+            let source = "# Old document\n" + (0..<30).map { "![Image](\($0).png)" }.joined(separator: "\n")
+            renderer.load(content: source, kind: .markdown, dark: false, imageLoader: { _ in
+                await withCheckedContinuation { pending = $0 }
+            })
+            try await wait(renderer)
+            #expect(pending != nil)
+            #expect(try await renderer.webView.evaluateJavaScript("document.querySelector('h1').textContent") as? String == "Old document")
+            #expect(try await renderer.webView.evaluateJavaScript("Array.from(document.querySelectorAll('.markdown-error')).filter(e => e.textContent.includes('at most 24')).length") as? Int == 6)
+            renderer.load(content: "# New document", kind: .markdown, dark: true)
+            pending?.resume(returning: Data())
+            pending = nil
+            try await wait(renderer)
+            #expect(renderer.error == nil)
+            #expect(try await renderer.webView.evaluateJavaScript("document.querySelector('h1').textContent") as? String == "New document")
+            #expect(try await renderer.webView.evaluateJavaScript("document.querySelector('img') === null") as? Bool == true)
         }
 
         private func mount(_ renderer: ArtifactWebRenderer) -> NSWindow {

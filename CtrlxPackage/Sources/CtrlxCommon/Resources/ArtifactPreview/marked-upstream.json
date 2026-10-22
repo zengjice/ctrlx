@@ -1,0 +1,8 @@
+{
+  "name": "marked",
+  "version": "18.1.1",
+  "source": "https://registry.npmjs.org/marked/-/marked-18.1.1.tgz",
+  "tarball_integrity": "sha512-zEGgrtUG8crk+TrMacJSVABU4DYDDkS8uqgU3ohrn/2fW9C2AEfUrO3m6IhpIpQpl7YcVpiXXC9cSMWDANT3dg==",
+  "bundle_sha256": "b82b9334406d8bdd16b6236c08de1cb65b2a859873ca9503d9cc0b292ca3c12a",
+  "note": "Unmodified upstream browser bundle."
+}

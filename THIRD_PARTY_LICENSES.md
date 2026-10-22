@@ -42,11 +42,14 @@ Apache-2.0 or MIT; the pinned set is in
 | Project | License |
 |---|---|
 | [Mermaid 12.2.0](https://github.com/mermaid-js/mermaid) | MIT; bundled dependency notices |
+| [Marked 18.1.1](https://github.com/markedjs/marked) | MIT |
+| [DOMPurify 3.4.17](https://github.com/cure53/DOMPurify) | Apache-2.0 OR MPL-2.0 |
 
-The unmodified browser bundle and Mermaid's full license are included in
-`CtrlxCommon/Resources/ArtifactPreview`. `upstream.json` records the exact npm
-archive integrity and JavaScript SHA-256; upstream dependency notices remain
-in the bundle. The renderer is loaded locally, with no runtime CDN dependency.
+The unmodified browser bundles and full licenses are included in
+`CtrlxCommon/Resources/ArtifactPreview`. `upstream.json`, `marked-upstream.json`
+and `dompurify-upstream.json` record the exact npm archive integrity and JavaScript
+SHA-256; upstream dependency notices remain in the bundles. The renderer is
+loaded locally, with no runtime CDN dependency.
 
 ## Agent Browser (macOS development runtime)
 

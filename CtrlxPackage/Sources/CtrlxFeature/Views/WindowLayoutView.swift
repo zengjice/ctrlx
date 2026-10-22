@@ -563,8 +563,8 @@
                         restorePreviewKeyboard()
                     }
                 }) { preview in
-                    TerminalArtifactPreviewSheet(preview: preview) {
-                        previewFilesLink = preview.filesLink
+                    TerminalArtifactPreviewSheet(preview: preview) { request in
+                        previewFilesLink = request
                         artifactPreview = nil
                     }
                     .preferredColorScheme(settings.appearanceMode.colorScheme)

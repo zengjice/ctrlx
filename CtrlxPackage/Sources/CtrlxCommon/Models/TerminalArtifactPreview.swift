@@ -23,8 +23,16 @@ public struct TerminalArtifactPreview: Identifiable {
 
     public static func supports(path: String?) -> Bool {
         guard let path else { return false }
-        return isMermaid(path: path) || ["png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp"]
+        return isMermaid(path: path) || isMarkdown(path: path) || isImage(path: path)
+    }
+
+    public static func isImage(path: String) -> Bool {
+        ["png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp"]
             .contains((path as NSString).pathExtension.lowercased())
+    }
+
+    public static func isMarkdown(path: String) -> Bool {
+        ["md", "markdown"].contains((path as NSString).pathExtension.lowercased())
     }
 
     public static func isMermaid(path: String) -> Bool {
@@ -53,6 +61,49 @@ public struct TerminalArtifactPreview: Identifiable {
                 throw FileBrowserError.message("Mermaid previews require a UTF-8 file no larger than 64 KiB.")
             }
         }
+        if Self.isMarkdown(path: path) {
+            guard
+                data.count <= FileBrowserLimits.maximumTextBytes,
+                let text = String(data: data, encoding: .utf8), !text.contains("\0") else {
+                throw FileBrowserError.message("Markdown previews require a UTF-8 file no larger than 512 KiB.")
+            }
+        }
         return data
+    }
+
+    /// Resolve document-relative URLs lexically; the Host then checks the real worktree boundary.
+    public func documentLink(_ reference: String) throws -> TerminalFileLinkRequest {
+        // Preserve existing escapes when a Markdown URL mixes Unicode and percent encoding.
+        guard
+            let encoded = reference.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed.union(CharacterSet(charactersIn: "%#"))),
+            let url = URLComponents(string: encoded), url.scheme == nil, url.host == nil,
+            !url.path.isEmpty, !url.path.hasPrefix("/"), !url.path.contains("\\") else {
+            throw FileBrowserError.message("Only files inside this repository can be previewed.")
+        }
+        var parts = link.path.split(separator: "/").dropLast().map(String.init)
+        for part in url.path.split(separator: "/") {
+            if part == "." {
+                continue
+            }
+            if part == ".." {
+                guard !parts.isEmpty else { throw FileBrowserError.message("The link leaves this repository.") }
+                parts.removeLast()
+            } else {
+                parts.append(String(part))
+            }
+        }
+        let path = parts.isEmpty ? "." : parts.joined(separator: "/")
+        guard RepositoryFileLink.isValid(path: path) else { throw FileBrowserError.message("Invalid repository-relative link.") }
+        return .init(path: path, paneID: link.paneID, hostID: link.hostID)
+    }
+
+    public func loadDocumentImage(_ reference: String) async throws -> Data {
+        let imageLink = try documentLink(reference)
+        guard Self.isImage(path: imageLink.path) || (imageLink.path as NSString).pathExtension.lowercased() == "svg" else {
+            throw FileBrowserError.message("This image format is not supported.")
+        }
+        let destination = try await TerminalFileDestination.resolve(path: imageLink.path, context: context, source: source)
+        guard let path = destination.file else { throw FileBrowserError.message("The image link points to a folder.") }
+        return try await Self(link: imageLink, context: context, source: source, path: path).load()
     }
 }

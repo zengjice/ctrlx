@@ -8,6 +8,7 @@
 
     @MainActor @Observable
     final class ArtifactWebRenderer: NSObject, WKNavigationDelegate {
+        enum ContentKind: String { case image, mermaid, markdown }
         private(set) var isReady = false
         private(set) var error: String?
         private(set) var png: Data?
@@ -16,7 +17,9 @@
         @ObservationIgnored private var renderTask: Task<Void, Never>?
         @ObservationIgnored private var timeoutTask: Task<Void, Never>?
         @ObservationIgnored private var generation = UUID()
-        @ObservationIgnored private var payload: (content: String, mermaid: Bool, dark: Bool)?
+        @ObservationIgnored private var payload: (content: String, kind: ContentKind, dark: Bool)?
+        @ObservationIgnored private var imageLoader: (@MainActor (String) async throws -> Data)?
+        @ObservationIgnored private var openLink: (@MainActor (String) -> Void)?
 
         override init() {
             let configuration = WKWebViewConfiguration()
@@ -36,12 +39,20 @@
             #endif
         }
 
-        func load(content: String, mermaid: Bool, dark: Bool) {
+        func load(
+            content: String,
+            kind: ContentKind,
+            dark: Bool,
+            imageLoader: (@MainActor (String) async throws -> Data)? = nil,
+            openLink: (@MainActor (String) -> Void)? = nil
+        ) {
             stop()
             isReady = false
             error = nil
             png = nil
-            payload = (content, mermaid, dark)
+            payload = (content, kind, dark)
+            self.imageLoader = imageLoader
+            self.openLink = openLink
             #if os(macOS)
                 webView.underPageBackgroundColor = dark ? NSColor(white: 0.118, alpha: 1) : .white
             #else
@@ -58,7 +69,7 @@
                 do { try await Task.sleep(for: .seconds(20)) } catch { return }
                 guard let self, self.generation == token, !self.isReady else { return }
                 self.stop()
-                self.error = "The preview took too long to render. Try a smaller diagram."
+                self.error = "The preview took too long to render. Try a smaller file."
             }
         }
 
@@ -106,18 +117,53 @@
             renderTask = Task { [weak self] in
                 do {
                     let result = try await webView.callAsyncJavaScript(
-                        "return await window.renderPreview(content, isMermaid, dark);",
-                        arguments: ["content": payload.content, "isMermaid": payload.mermaid, "dark": payload.dark],
+                        "return await window.renderPreview(content, kind, dark);",
+                        arguments: ["content": payload.content, "kind": payload.kind.rawValue, "dark": payload.dark],
                         in: nil, contentWorld: .page
                     )
                     try Task.checkCancellation()
                     guard let self, self.generation == token else { return }
-                    guard let base64 = result as? String, let png = Data(base64Encoded: base64) else {
-                        throw FileBrowserError.message("The renderer returned no image.")
+                    if payload.kind == .markdown {
+                        guard let references = result as? [String], references.count <= 24 else {
+                            throw FileBrowserError.message("The renderer returned invalid image references.")
+                        }
+                        self.isReady = true
+                        self.timeoutTask?.cancel()
+                        for reference in references {
+                            var image: Data?
+                            var svg = ""
+                            var failure: String?
+                            do {
+                                guard let loader = self.imageLoader else { throw FileBrowserError.message("Image loading is unavailable.") }
+                                let bytes = try await loader(reference)
+                                if ((URLComponents(string: reference)?.path ?? "") as NSString).pathExtension.lowercased() == "svg" {
+                                    guard bytes.count <= 512 * 1_024, let text = String(data: bytes, encoding: .utf8), !text.contains("\0") else {
+                                        throw FileBrowserError.message("SVG images must be UTF-8 and no larger than 512 KiB.")
+                                    }
+                                    svg = text
+                                } else {
+                                    image = try await Task.detached(priority: .userInitiated) {
+                                        try ArtifactPreviewImage.png(from: bytes, maximumPixelSize: 1_600)
+                                    }.value
+                                }
+                            } catch is CancellationError { return }
+                            catch { failure = error.localizedDescription }
+                            try Task.checkCancellation()
+                            guard self.generation == token else { return }
+                            _ = try await webView.callAsyncJavaScript(
+                                "await window.setMarkdownImage(reference, base64, svg, error);",
+                                arguments: ["reference": reference, "base64": image?.base64EncodedString() ?? "", "svg": svg, "error": failure ?? ""],
+                                in: nil, contentWorld: .page
+                            )
+                        }
+                    } else {
+                        guard let base64 = result as? String, let png = Data(base64Encoded: base64) else {
+                            throw FileBrowserError.message("The renderer returned no image.")
+                        }
+                        self.png = png
+                        self.isReady = true
+                        self.timeoutTask?.cancel()
                     }
-                    self.png = png
-                    self.isReady = true
-                    self.timeoutTask?.cancel()
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { return }
                     self.error = error.localizedDescription
@@ -127,6 +173,13 @@
         }
 
         func webView(_: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
+            if
+                action.navigationType == .linkActivated, payload?.kind == .markdown,
+                let url = action.request.url, url.scheme == "ctrlx-preview", url.host == "link",
+                let target = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "target" })?.value {
+                openLink?(target)
+                return .cancel
+            }
             let index = Bundle.module.url(forResource: "index", withExtension: "html", subdirectory: "ArtifactPreview")
             return action.request.url == index && action.navigationType == .other ? .allow : .cancel
         }
@@ -144,13 +197,13 @@
     }
 
     enum ArtifactPreviewImage {
-        nonisolated static func png(from data: Data) throws -> Data {
+        nonisolated static func png(from data: Data, maximumPixelSize: Int = 4_096) throws -> Data {
             guard
                 let source = CGImageSourceCreateWithData(data as CFData, nil),
                 let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                     kCGImageSourceCreateThumbnailFromImageAlways: true,
                     kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 4_096,
+                    kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
                 ] as CFDictionary) else { throw FileBrowserError.message("This image cannot be decoded.") }
             let output = NSMutableData()
             guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else {
@@ -173,6 +226,10 @@
         }
     #else
         extension ArtifactWebRenderer: UIGestureRecognizerDelegate {
+            func gestureRecognizerShouldBegin(_: UIGestureRecognizer) -> Bool {
+                payload?.kind != .markdown
+            }
+
             func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
                 // WebKit's child tap recognizers must not consume the preview's double tap.
                 other is UITapGestureRecognizer

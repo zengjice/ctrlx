@@ -176,8 +176,8 @@ transport. Actual multi-device tab switching still requires paired-client accept
 
 ### Explicit terminal file links
 
-Image (`png`, `jpg`, `jpeg`, `gif`, `heic`, `webp`, `tiff`, `bmp`) and Mermaid
-(`mmd`, `mermaid`) references open a client-local preview sheet on Mac Host,
+Image (`png`, `jpg`, `jpeg`, `gif`, `heic`, `webp`, `tiff`, `bmp`), Mermaid
+(`mmd`, `mermaid`) and Markdown (`md`, `markdown`) references open a client-local preview sheet on Mac Host,
 Mac Viewer and iOS. No Files catalog entry is created and terminal selection,
 layout and viewport are preserved. Mac supports pinch zoom and Escape; iOS
 supports pinch/double-tap zoom, full-screen viewing and swipe-to-dismiss.
@@ -194,11 +194,32 @@ and 500 edges, and times out unsuccessful rendering. Invalid diagrams retain
 their source view. The pinned upstream bundle, hash and license are under
 `CtrlxCommon/Resources/ArtifactPreview`; upstream dependency notices are retained.
 
+Markdown uses bundled Marked and DOMPurify in the same isolated viewer. It supports
+headings, lists, tables, task lists, code blocks, inline Mermaid and repository
+images. UTF-8 source is limited to 512 KiB. Preview/Source, Copy Source, Share Markdown
+and Open in Files are available; sharing exports the original Markdown, not a
+self-contained archive. Raw HTML is shown as text. Up to 16 Mermaid blocks use the
+same per-diagram limits; a failed block retains its source. Up to 24 unique image
+references load after document rendering. Each image uses captured Host/pane context,
+bounded revision-checked reads and a static thumbnail of at most 1600 pixels;
+UTF-8 SVG up to 512 KiB is sanitized and displayed as an isolated image. Missing or
+unsupported images show an inline error without hiding the document.
+
+Document-relative image and file paths are resolved against the Markdown file's
+repository location, including `../` only within that repository. The Host still
+validates symlinks, pane identity and worktree boundaries. Absolute paths, web/data
+image URLs and Viewer-local files are not loaded. Relative file links follow the
+existing repository-link routing; heading links scroll inside the preview, and
+explicit HTTP(S) link clicks use the platform URL handler. No embedded document
+content can initiate network access. Markdown supports pinch zoom and text selection;
+the custom image/diagram double-tap zoom is disabled for Markdown.
+
 Preview reads reuse the existing bounded, revision-checked file pipeline and
 revalidate the repository context after transfer. Host/pane context is captured
 at the click; late or invalid reads cannot publish a different source's image.
-The file-link skill asks agents to save complete Mermaid source and reference
-it explicitly. Terminal-only code blocks and arbitrary web image URLs are not
+The file-link skill asks agents to save complete Mermaid source or Markdown with
+fenced diagrams and repository-relative images, then reference it explicitly.
+Terminal-only code blocks and arbitrary web image URLs are not
 auto-detected. Existing file commands suffice; the Relay protocol is unchanged.
 
 Mac Host, Mac Viewer and iOS recognize the literal marker

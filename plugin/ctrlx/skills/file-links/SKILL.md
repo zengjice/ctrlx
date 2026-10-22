@@ -29,7 +29,7 @@ instead of a bare path or Markdown file link; do not add unrelated references.
 No CLI call or terminal escape is needed. The Host validates on click. This is an
 output convention, not a registered URI standard or a link pinned to a past worktree.
 
-## Images and Mermaid diagrams
+## Images, Mermaid diagrams and Markdown
 
 When an image or diagram helps answer the user's request, save the deliverable
 inside the current worktree and include its explicit repository reference in
@@ -45,3 +45,13 @@ browser tabs or switch their workspace just to display the artifact. Older
 clients continue opening the file in Files. Plain Mermaid code printed only in
 the terminal is not automatically rendered. Keep diagrams within 64 KiB and
 500 edges; images use the existing 8 MiB preview limit.
+
+For a document that combines prose, diagrams and images, save UTF-8 `.md` or
+`.markdown` and reference that file. Its preview renders Markdown, fenced
+`mermaid` blocks and repository images together on Mac and iOS. Use image paths
+relative to the Markdown file, such as `images/overview.png`; `../` is supported
+only within the repository. Web image URLs and raw HTML are not rendered.
+Keep the document within 512 KiB, with at most 16 diagrams and 24 unique images.
+PNG/JPEG and the existing image formats are supported; SVG must be UTF-8 and
+within 512 KiB. Each diagram retains the limits above. Do not create a separate
+`.mmd` solely to duplicate a diagram already embedded in the document.

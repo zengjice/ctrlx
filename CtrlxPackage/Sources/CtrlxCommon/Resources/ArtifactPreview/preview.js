@@ -1,9 +1,13 @@
 "use strict";
 
-window.renderPreview = async function (content, isMermaid, dark) {
+window.renderPreview = async function (content, kind, dark) {
   const container = document.getElementById("content");
   container.replaceChildren();
-  if (!isMermaid) {
+  container.setAttribute("role", kind === "markdown" ? "article" : "img");
+  container.setAttribute("aria-label", kind === "markdown" ? "Markdown preview" : "Artifact preview");
+  document.body.className = kind === "markdown" ? "markdown" + (dark ? " dark" : "") : "";
+  if (kind === "markdown") return window.renderMarkdown(content, dark);
+  if (kind === "image") {
     const image = new Image();
     image.alt = "Image preview";
     image.src = "data:image/png;base64," + content;
@@ -12,17 +16,7 @@ window.renderPreview = async function (content, isMermaid, dark) {
     return content;
   }
 
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: "strict",
-    theme: dark ? "dark" : "default",
-    htmlLabels: false,
-    flowchart: { htmlLabels: false },
-    maxTextSize: 65536,
-    maxEdges: 500,
-    suppressErrorRendering: true,
-    secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "maxEdges", "htmlLabels", "flowchart", "theme", "suppressErrorRendering"]
-  });
+  window.configureMermaid(dark);
   const rendered = await mermaid.render("artifactDiagram", content);
   container.innerHTML = rendered.svg;
   const svg = container.querySelector("svg");
@@ -50,4 +44,18 @@ window.renderPreview = async function (content, isMermaid, dark) {
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL("image/png").split(",")[1];
+};
+
+window.configureMermaid = function (dark) {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "strict",
+    theme: dark ? "dark" : "default",
+    htmlLabels: false,
+    flowchart: { htmlLabels: false },
+    maxTextSize: 65536,
+    maxEdges: 500,
+    suppressErrorRendering: true,
+    secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "maxEdges", "htmlLabels", "flowchart", "theme", "suppressErrorRendering"]
+  });
 };

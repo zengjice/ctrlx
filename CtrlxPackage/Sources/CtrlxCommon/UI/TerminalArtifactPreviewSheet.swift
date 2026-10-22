@@ -7,22 +7,25 @@
     @MainActor
     public struct TerminalArtifactPreviewSheet: View {
         private let preview: TerminalArtifactPreview
-        private let onOpenFiles: () -> Void
+        private let onOpenFiles: (TerminalFileLinkRequest) -> Void
         private let isFullscreen: Bool
         @Environment(\.dismiss) private var dismiss
         @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.openURL) private var openURL
         @Dependency(ClipboardClient.self) private var clipboard
         @State private var data: Data?
         @State private var error: String?
         @State private var showsSource = false
         @State private var showsFullscreen = false
         @State private var renderer = ArtifactWebRenderer()
+        @State private var pendingDocumentLink: String?
+        @State private var linkError: String?
 
-        public init(preview: TerminalArtifactPreview, onOpenFiles: @escaping () -> Void) {
+        public init(preview: TerminalArtifactPreview, onOpenFiles: @escaping (TerminalFileLinkRequest) -> Void) {
             self.init(preview: preview, initialData: nil, isFullscreen: false, onOpenFiles: onOpenFiles)
         }
 
-        private init(preview: TerminalArtifactPreview, initialData: Data?, isFullscreen: Bool, onOpenFiles: @escaping () -> Void) {
+        private init(preview: TerminalArtifactPreview, initialData: Data?, isFullscreen: Bool, onOpenFiles: @escaping (TerminalFileLinkRequest) -> Void) {
             self.preview = preview
             self.onOpenFiles = onOpenFiles
             self.isFullscreen = isFullscreen
@@ -33,6 +36,10 @@
             TerminalArtifactPreview.isMermaid(path: preview.path)
         }
 
+        private var isMarkdown: Bool {
+            TerminalArtifactPreview.isMarkdown(path: preview.path)
+        }
+
         private var title: String {
             (preview.path as NSString).lastPathComponent
         }
@@ -40,9 +47,9 @@
         public var body: some View {
             NavigationStack {
                 VStack(spacing: 0) {
-                    if isMermaid {
+                    if isMermaid || isMarkdown {
                         Picker("Display", selection: $showsSource) {
-                            Text("Diagram").tag(false)
+                            Text(isMarkdown ? "Preview" : "Diagram").tag(false)
                             Text("Source").tag(true)
                         }
                         .pickerStyle(.segmented)
@@ -66,7 +73,7 @@
                             VStack(spacing: 12) {
                                 Label("Preview Unavailable", symbol: .exclamationmarkTriangle).font(.headline)
                                 Text(error).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                                if isMermaid, data != nil {
+                                if isMermaid || isMarkdown, data != nil {
                                     Button("View Source") { showsSource = true }
                                 }
                             }.padding(24)
@@ -95,13 +102,15 @@
                                             .disabled(data == nil)
                                     }
                                 #endif
-                                Button {
-                                    if let png = renderer.png {
-                                        clipboard.setImage(.init(data: png, format: .png))
-                                    }
-                                } label: { Label("Copy Image", symbol: .docOnDoc) }
-                                    .disabled(renderer.png == nil)
-                                if isMermaid {
+                                if !isMarkdown {
+                                    Button {
+                                        if let png = renderer.png {
+                                            clipboard.setImage(.init(data: png, format: .png))
+                                        }
+                                    } label: { Label("Copy Image", symbol: .docOnDoc) }
+                                        .disabled(renderer.png == nil)
+                                }
+                                if isMermaid || isMarkdown {
                                     Button("Copy Source") {
                                         if let data {
                                             clipboard.setString(String(decoding: data, as: UTF8.self))
@@ -116,8 +125,13 @@
                                         Label("Share Image", symbol: .squareAndArrowUp)
                                     }
                                 }
+                                if isMarkdown, let data {
+                                    ShareLink(item: MarkdownExport(data: data, name: title), preview: SharePreview(title)) {
+                                        Label("Share Markdown", symbol: .squareAndArrowUp)
+                                    }
+                                }
                                 Divider()
-                                Button(action: onOpenFiles) { Label("Open in Files", symbol: .folder) }
+                                Button { onOpenFiles(preview.filesLink) } label: { Label("Open in Files", symbol: .folder) }
                             } label: { Label("More", symbol: .ellipsisCircle) }
                         }
                     }
@@ -132,6 +146,14 @@
             }
             #endif
             .task(id: colorScheme) { await load() }
+            .task(id: pendingDocumentLink) { await openDocumentLink() }
+            .alert("Cannot Open Link", isPresented: Binding(get: { linkError != nil }, set: {
+                if !$0 {
+                    linkError = nil
+                }
+            })) {
+                Button("OK", role: .cancel) { linkError = nil }
+            } message: { Text(linkError ?? "") }
             .onDisappear { renderer.stop() }
         }
 
@@ -143,7 +165,7 @@
                 }
                 guard let data else { return }
                 let content: String
-                if isMermaid {
+                if isMermaid || isMarkdown {
                     content = String(decoding: data, as: UTF8.self)
                 } else {
                     content = try await Task.detached(priority: .userInitiated) {
@@ -151,11 +173,41 @@
                     }.value
                 }
                 try Task.checkCancellation()
-                renderer.load(content: content, mermaid: isMermaid, dark: colorScheme == .dark)
+                renderer.load(
+                    content: content,
+                    kind: isMarkdown ? .markdown : isMermaid ? .mermaid : .image,
+                    dark: colorScheme == .dark,
+                    imageLoader: preview.loadDocumentImage,
+                    openLink: { pendingDocumentLink = $0 }
+                )
             } catch is CancellationError { }
             catch {
                 if !Task.isCancelled {
                     self.error = error.localizedDescription
+                }
+            }
+        }
+
+        private func openDocumentLink() async {
+            guard let reference = pendingDocumentLink else { return }
+            defer {
+                if pendingDocumentLink == reference {
+                    pendingDocumentLink = nil
+                }
+            }
+            if let url = URL(string: reference), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
+                openURL(url)
+                return
+            }
+            do {
+                let request = try preview.documentLink(reference)
+                _ = try await TerminalFileDestination.resolve(path: request.path, context: preview.context, source: preview.source)
+                try Task.checkCancellation()
+                onOpenFiles(request)
+            } catch is CancellationError { }
+            catch {
+                if !Task.isCancelled {
+                    linkError = error.localizedDescription
                 }
             }
         }
@@ -166,6 +218,15 @@
         let name: String
         static var transferRepresentation: some TransferRepresentation {
             DataRepresentation(exportedContentType: .png) { $0.data }.suggestedFileName { $0.name }
+        }
+    }
+
+    private struct MarkdownExport: Transferable {
+        let data: Data
+        let name: String
+        static var transferRepresentation: some TransferRepresentation {
+            DataRepresentation(exportedContentType: UTType(filenameExtension: "md", conformingTo: .plainText) ?? .plainText) { $0.data }
+                .suggestedFileName { $0.name }
         }
     }
 #endif
