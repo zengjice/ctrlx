@@ -7,6 +7,30 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.91 — Artifact previews and patched CEF support
+
+- Preview Markdown, image and Mermaid terminal-file links in a shared
+  Host/Viewer artifact sheet. Keep preview routing bound to the originating
+  pane, sanitize rendered Markdown with bundled assets, and restore iOS terminal
+  keyboard state after chained previews.
+- Refresh iOS dashboard quota state promptly after reconnecting.
+- Allow the Agent Browser build to use a matching full-source CEF runtime from
+  ignored local configuration. Validate SDK layout, version, commit and framework
+  provenance, and clear stale CMake output when the runtime changes.
+- Release validation: the bounded serial Swift regression passed with 3,703
+  tests across 526 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. An initial PTY run was stopped after
+  an interactive-zsh fixture paused under terminal job control; the unchanged
+  no-PTY rerun passed.
+- Both boundary checks, the 14-page website build, 63 publisher/COS/installer
+  tests and SwiftFormat checks over all 15 changed Swift files passed.
+- Signed iOS device-SDK Release and Mac distribution builds passed. Mac
+  distribution uses build 24 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+- CEF local startup and Baidu public-entry evidence was not rerun for this
+  package. ENV/Volcengine site acceptance and physical-iPhone or paired-Viewer
+  UI acceptance remain pending.
+
 ## 3.0.90 — Linked tab actions on iOS
 
 - Add resource-specific iOS More and Tabs menus, keeping linked browser,
