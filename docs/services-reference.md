@@ -823,10 +823,11 @@ installing its event bridge into an agent are distinct operations. See
 ### Start an agent window in an existing session (Mac and iOS)
 
 Mac session tab strips (local and Viewer) also expose **+ → New Agent…**.
-iOS exposes **New Agent…** in the title's window-switcher menu, alongside
-**New Terminal** (formerly "New Window"). Both use `CtrlxCommon.NewAgentTabPanel`;
-Mac presents a popover, iOS an adaptive-width sheet without a nested navigation
-container. The iOS path inherits its selected pane's cwd, not a stale Host focus.
+iOS exposes **New Agent…** and **New Terminal** (formerly "New Window") directly
+in the terminal action row and in the title's window-switcher menu. Both use
+`CtrlxCommon.NewAgentTabPanel`; Mac presents a popover, iOS an adaptive-width
+sheet without a nested navigation container. The iOS path inherits its selected
+pane's cwd, not a stale Host focus.
 Each enabled Host agent has its own card, editable directory and Start button;
 there is no agent picker or separate hard-coded list. Codex is placed first
 when available. The directory starts from the last focused terminal in this

@@ -16,21 +16,23 @@ Mac / iOS Viewer 的 Copy Path、Copy Text、Copy Image 写入当前 Viewer 的�
 Mac Host, Mac Viewer and iOS share `WorkspaceFileBrowserView`.
 Right-click a terminal window tab on Mac Host/Viewer and choose **Open Files**.
 On iOS, the current terminal has a compact icon row below its title:
-**Open Files**, **Open Browser on Host**, **Open iOS Simulator**, **Fork** and
-**Fit Terminal to Screen**. The title opens the **Tabs** list; terminal rows
-contain only the name and selection mark and retain long-press reordering.
-Switch to a terminal before using its actions. The top-right **More** menu
-combines terminal copy/session controls and per-pane **Touch Mode** with rename, close and the open/Fork
-actions, including **Open Another Files Tab**. Fit retains its existing Host-wide
-resize behavior; moving the control does not change the resize command.
+**New Agent…**, **New Terminal**, **Open Files**, **Open Browser on Host**,
+**Open iOS Simulator**, **Fork** and **Fit Terminal to Screen**. The title opens
+the **Tabs** list; terminal rows contain only the name and selection mark and
+retain long-press reordering. The icon row scrolls horizontally when its actions
+do not fit the available width. Switch to a terminal before using its actions.
+The top-right **More** menu combines terminal copy/session controls and per-pane
+**Touch Mode** with rename, close and the open/Fork actions, including **Open
+Another Files Tab**. Fit retains its existing Host-wide resize behavior; moving
+the control does not change the resize command.
 The simulator shortcut opens an existing simulator belonging to the current
 window, offers a picker when there are several, and creates the source pane's
 default device on the Host when none exists. Creation requires the Host's
 `supportsPaneSimulator` capability; older Hosts can still expose existing
 devices. The Viewer shows opening progress and can stop waiting without closing
 the shared Host device.
-New Terminal / Agent remain separate creation actions at the
-bottom of the iOS list; the Mac `+` menu does not create Files.
+New Terminal / Agent are available directly in the iOS icon row and remain at
+the bottom of the Tabs list; the Mac `+` menu does not create Files.
 Each session can keep multiple independent Files tabs alongside terminals and
 web browsers. On Mac, these are ordinary reorderable, closable, splittable tabs.
 Normal **Open Files** and terminal file links reuse the source pane's human

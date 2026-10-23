@@ -29,6 +29,8 @@
                 .disabled(!isConnected)
                 Divider()
             }
+            newAgentButton(window)
+            newTerminalButton(window)
             openFilesButton(window)
             if includesWindowManagement {
                 Button { choose(.window(stableID: window.stableId, operation: .openAnotherFiles)) } label: {
@@ -39,6 +41,22 @@
             openBrowserButton(window)
             openSimulatorButton(window)
             forkMenu(window)
+        }
+
+        private func newAgentButton(_ window: TmuxWindow) -> some View {
+            Button { choose(.newAgent) } label: {
+                Label("New Agent…", symbol: .sparkles)
+            }
+            .disabled(!isConnected || isCreatingWindow)
+            .accessibilityIdentifier("window-new-agent-\(window.stableId)")
+        }
+
+        private func newTerminalButton(_ window: TmuxWindow) -> some View {
+            Button { choose(.newTerminal) } label: {
+                Label("New Terminal", symbol: .terminal)
+            }
+            .disabled(!isConnected || isCreatingWindow)
+            .accessibilityIdentifier("window-new-terminal-\(window.stableId)")
         }
 
         private func openFilesButton(_ window: TmuxWindow) -> some View {

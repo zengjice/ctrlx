@@ -1053,7 +1053,22 @@
         }
 
         private func windowShortcutBar(_ window: TmuxWindow) -> some View {
-            HStack(spacing: 16) {
+            ViewThatFits(in: .horizontal) {
+                windowShortcutButtons(window)
+                ScrollView(.horizontal) {
+                    windowShortcutButtons(window)
+                        .padding(.horizontal, 4)
+                }
+                .scrollIndicators(.visible)
+                .frame(height: 44)
+            }
+            .buttonStyle(.borderless)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+        }
+
+        private func windowShortcutButtons(_ window: TmuxWindow) -> some View {
+            HStack(spacing: 8) {
                 Group {
                     windowActions(window)
                     Button(action: resizeWindowToFit) {
@@ -1067,9 +1082,6 @@
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
-            .frame(maxWidth: .infinity)
-            .background(.bar)
         }
 
         private func windowActions(_ window: TmuxWindow, includesWindowManagement: Bool = false) -> some View {
