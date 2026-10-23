@@ -90,8 +90,6 @@
         /// Whether to show the session info popover
         @State private var showSessionInfo = false
 
-        /// Guards against double-splits from rapid taps
-        @State private var isSplitting = false
         @State private var isResizing = false
         @State private var viewportGrids: [String: TerminalViewportSizing.Grid] = [:]
         @State private var automaticTabFit = TerminalTabFit()
@@ -1835,8 +1833,6 @@
                 }
 
                 Spacer()
-
-                tmuxControls
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -1927,50 +1923,6 @@
                     commandError = "Failed to resize: \(error.localizedDescription)"
                 }
             }
-        }
-
-        private var tmuxControls: some View {
-            HStack(spacing: 12) {
-                // Send tmux prefix key (Ctrl+B)
-                Button {
-                    guard let activePaneId else { return }
-                    enqueueToolbarKeys([.ctrl("b")], paneId: activePaneId)
-                } label: {
-                    Label("Tmux Prefix", symbol: .terminal)
-                }
-
-                // Split pane horizontally (left-right)
-                Button {
-                    guard let activePaneId, !isSplitting else { return }
-                    cancelCreationFollowUp()
-                    automaticTabFit.cancel()
-                    isSplitting = true
-                    let binding = relayClient.workspaceInputState.binding(paneID: activePaneId)
-                    Task {
-                        await sendCommand(.splitTmuxPane(direction: .horizontal), paneId: activePaneId, inputBinding: binding)
-                        isSplitting = false
-                    }
-                } label: {
-                    Label("Split Horizontal", symbol: .rectangleSplit2x1Fill)
-                }
-
-                // Split pane vertically (top-bottom)
-                Button {
-                    guard let activePaneId, !isSplitting else { return }
-                    cancelCreationFollowUp()
-                    automaticTabFit.cancel()
-                    isSplitting = true
-                    let binding = relayClient.workspaceInputState.binding(paneID: activePaneId)
-                    Task {
-                        await sendCommand(.splitTmuxPane(direction: .vertical), paneId: activePaneId, inputBinding: binding)
-                        isSplitting = false
-                    }
-                } label: {
-                    Label("Split Vertical", symbol: .rectangleSplit1x2Fill)
-                }
-            }
-            .labelStyle(.iconOnly)
-            .disabled(!relayClient.isHostConnected || activePaneId == nil)
         }
 
         // MARK: - Active Pane Service
