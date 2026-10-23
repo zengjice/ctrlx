@@ -26,6 +26,101 @@
         }
     }
 
+    struct AgentCLIUpdateBanner: View {
+        @Environment(AppCoordinator.self) private var coordinator
+        @Environment(AppSettings.self) private var settings
+        @Environment(\.openSettings) private var openSettings
+
+        var body: some View {
+            if let installations = coordinator.agentCLIInstallations, let update = installations.updates.first {
+                HStack {
+                    Label(
+                        "A newer \(update.agent.name) CLI is available: v\(update.latestVersion) (installed v\(update.installedVersion)).",
+                        symbol: .infoCircle
+                    )
+                    Spacer()
+                    Button("Review in Settings…") {
+                        coordinator.agentSettingsSelection = update.agent.id
+                        settings.selectedSettingsTab = .agents
+                        openSettings()
+                        installations.dismiss(update)
+                    }
+                    Button("Dismiss") { installations.dismiss(update) }
+                }
+                .font(.callout)
+                .padding(10)
+                .background(.bar)
+                .accessibilityIdentifier("agentCLIUpdateBanner")
+            }
+        }
+    }
+
+    struct AgentCLIUpdateSection: View {
+        let agent: InstallableAgentCLI
+        @Environment(AppCoordinator.self) private var coordinator
+
+        var body: some View {
+            if let installations = coordinator.agentCLIInstallations {
+                let entry = installations.entries[agent] ?? .init()
+                Section("CLI Update") {
+                    LabeledContent("Installed", value: installedVersion(entry))
+                    LabeledContent("Latest", value: entry.latestVersion ?? "Not checked")
+
+                    HStack(spacing: 8) {
+                        Button("Check Now") { installations.refresh(agent) }
+                            .disabled(installations.isBusy)
+                            .accessibilityIdentifier("agentCLICheckUpdate-\(agent.id)")
+
+                        if installations.isBusy {
+                            ProgressView().controlSize(.small)
+                        }
+
+                        Spacer()
+
+                        if entry.updateAvailable {
+                            Button("Update") { installations.maintain(agent, action: .update) }
+                                .disabled(installations.isBusy || entry.managedInstallation == nil)
+                                .accessibilityIdentifier("agentCLIUpdate-\(agent.id)")
+                        } else if entry.latestVersion != nil, entry.installedVersion != nil {
+                            Label("Up to date", symbol: .checkmarkCircle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if let checked = entry.latestCheckedAt {
+                            Text("Checked \(checked, format: .relative(presentation: .named))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if entry.updateAvailable, entry.managedInstallation == nil {
+                        Text("Manage this update with the installation's original installer.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(entry.updateErrorMessages, id: \.self) { error in
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+
+        private func installedVersion(_ entry: AgentCLIInstallation) -> String {
+            if let version = entry.installedVersion {
+                return version
+            }
+            switch entry.availability {
+            case .missing: return "Not installed"
+            case .unavailable: return "Unavailable"
+            default: return "Checking…"
+            }
+        }
+    }
+
     struct AgentCLIInstallationContent: View {
         @Bindable var installations: AgentCLIInstallations
         let close: () -> Void
@@ -131,6 +226,11 @@
                 if let installation = entry.managedInstallation {
                     HStack {
                         Text(installation.source.label).font(.caption).foregroundStyle(.secondary)
+                        if let latest = entry.latestVersion {
+                            Text(entry.updateAvailable ? "Latest v\(latest) available" : "Latest v\(latest)")
+                                .font(.caption)
+                                .foregroundStyle(entry.updateAvailable ? .orange : .secondary)
+                        }
                         Spacer()
                         Button("Update") {
                             installations.maintain(agent, action: .update)

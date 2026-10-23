@@ -37,6 +37,7 @@
         var additionalFolders: [String: [String]] = [:]
         var log: [String] = []
         var notifications: [String] = []
+        var agentCLIChecks = 0
 
         /// When true, `installBridge`/`checkUpdates` suspend on an unstructured
         /// gate instead of returning immediately, so a test can observe what
@@ -112,7 +113,8 @@
                     additionalConfigFolders: { self.additionalFolders[$0] ?? [] },
                     displayName: { $0.capitalized },
                     currentAppVersion: { "2.0.0" },
-                    notify: { self.notifications.append($0) }
+                    notify: { self.notifications.append($0) },
+                    checkAgentCLIUpdates: { self.agentCLIChecks += 1 }
                 ),
                 automaticTriggersEnabled: automaticTriggers
             )
@@ -614,6 +616,7 @@
                     await Task.yield()
                     await manager.waitForPendingRuns()
                     #expect(checksRun(harness) == 2)
+                    #expect(harness.agentCLIChecks == 1)
                     manager.stop()
                 }
             }

@@ -38,6 +38,9 @@
                     if settings.isPaired {
                         MainView()
                             .environment(connectionManager)
+                            .safeAreaInset(edge: .top, spacing: 0) {
+                                DashboardQuotaRecoveryBanner(store: dashboardStore)
+                            }
                     } else if let e2ee = connectionManager.pairingService {
                         NavigationStack {
                             PairingView { pairedHost in

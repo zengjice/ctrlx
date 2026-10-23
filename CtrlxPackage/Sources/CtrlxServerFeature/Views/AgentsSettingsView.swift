@@ -48,6 +48,34 @@
                     .accessibilityIdentifier("pluginRestartBanner")
                 }
 
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Agent update reminders")
+                        Text("Dismissed plugin and CLI notices reappear after")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Picker(
+                        "Dismissed update reminders reappear after",
+                        selection: Binding(
+                            get: { coordinator.agentUpdateReminderInterval },
+                            set: { coordinator.agentUpdateReminderInterval = $0 }
+                        )
+                    ) {
+                        ForEach(AgentUpdateReminderInterval.allCases) { interval in
+                            Text(interval.title).tag(interval)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 110)
+                    .accessibilityIdentifier("agentUpdateReminderInterval")
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 10)
+
+                Divider()
+
                 let agents = coordinator.agentPluginList()
 
                 // Segmented picker at the top
@@ -321,6 +349,10 @@
                             browseForCommand()
                         }
                     }
+                }
+
+                if let agent = InstallableAgentCLI(rawValue: pluginID) {
+                    AgentCLIUpdateSection(agent: agent)
                 }
 
                 // Behaviour

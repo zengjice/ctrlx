@@ -1,5 +1,6 @@
 #if os(macOS)
     import CtrlxCommon
+    import CtrlxNetworking
     import Dependencies
     import DependenciesMacros
     import Foundation
@@ -29,8 +30,31 @@
             self == .codex ? "/bin/sh" : "/bin/bash"
         }
 
+        var latestVersionURL: URL? {
+            switch self {
+            case .codex:
+                URL(string: "https://registry.npmjs.org/@openai%2Fcodex/latest")
+            case .claudeCode:
+                URL(string: "https://registry.npmjs.org/@anthropic-ai%2Fclaude-code/latest")
+            }
+        }
+
         func nativePath(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
             home.appendingPathComponent(".local/bin/\(command)").path
+        }
+    }
+
+    enum AgentCLIVersion {
+        static func number(in value: String) -> String? {
+            value.range(of: #"\d+(?:\.\d+)+"#, options: .regularExpression).map { String(value[$0]) }
+        }
+
+        static func isNewer(_ candidate: String, than installed: String) -> Bool {
+            guard
+                let candidate = number(in: candidate),
+                let installed = number(in: installed)
+            else { return false }
+            return VersionCompatibility.compare(candidate, installed) == .orderedDescending
         }
     }
 
@@ -65,6 +89,9 @@
         var install: @Sendable (InstallableAgentCLI, _ event: @Sendable (AgentCLIInstallEvent) async -> Void) async throws -> Void
         var managedInstallation: @Sendable (InstallableAgentCLI, _ command: String) async -> AgentCLIManagedInstallation? = { _, _ in nil }
         var maintain: @Sendable (AgentCLIMaintenanceAction, AgentCLIManagedInstallation, _ event: @Sendable (AgentCLIInstallEvent) async -> Void) async throws -> Void
+        var latestVersion: @Sendable (InstallableAgentCLI) async throws -> String = { _ in
+            throw AgentCLIError(message: "Update checks are not configured.")
+        }
     }
 
     extension AgentCLIClient: DependencyKey {
@@ -90,8 +117,34 @@
                 },
                 maintain: { action, installation, event in
                     try await AgentCLIMaintenance.perform(action, installation: installation, event: event)
+                },
+                latestVersion: { agent in
+                    try await latestVersion(for: agent)
                 }
             )
+        }
+
+        static func latestVersion(for agent: InstallableAgentCLI) async throws -> String {
+            guard let url = agent.latestVersionURL else {
+                throw AgentCLIError(message: "The release source for \(agent.name) is invalid.")
+            }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 15
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let response = response as? HTTPURLResponse, response.statusCode == 200 else {
+                throw AgentCLIError(message: "The \(agent.name) release source did not respond successfully.")
+            }
+            guard data.count <= 64 * 1_024 else {
+                throw AgentCLIError(message: "The \(agent.name) release response is unexpectedly large.")
+            }
+            struct Release: Decodable { let version: String }
+            let release = try JSONDecoder().decode(Release.self, from: data)
+            guard let version = AgentCLIVersion.number(in: release.version) else {
+                throw AgentCLIError(message: "The \(agent.name) release source returned an invalid version.")
+            }
+            return version
         }
 
         /// An explicitly configured command is authoritative. A broken command is not a missing installation.

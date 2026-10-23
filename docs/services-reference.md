@@ -737,6 +737,17 @@ updates its existing cask (including Claude Code's `claude-code` versus
 `claude-code@latest`) with automatic cleanup disabled. Native Codex reuses the
 official installer with its original installation directory and `CODEX_HOME`;
 native Claude Code uses `claude update`, preserving its configured release channel.
+Startup and manual checks also compare the installed CLI with the current stable
+release published in the official npm package metadata. The check is also repeated
+on the existing 24-hour plugin-update maintenance loop instead of adding a second
+timer. A newer version produces a workbench banner and a **CLI Update** section on
+that agent's Settings page. Plugin and CLI version banners use the same reusable
+reminder implementation, but keep independent dismissal state and persistence.
+Dismissal is keyed by target and offered version. Settings → Agents controls how
+long a dismissed notice stays hidden (1 hour, 6 hours, 1 day, 3 days or 7 days;
+default 1 day). Expiry restores the banner without another update check, while a
+newer version is surfaced immediately. Dismissing a banner does not install or
+run anything.
 Custom wrappers, npm layouts, and direct immutable version paths remain usable
 but must be updated using their original installer. Updating or repairing preserves
 working commands, so shell aliases/functions survive. If a previously broken

@@ -7,10 +7,44 @@
     struct AgentCLIInstallation {
         var availability: AgentCLIAvailability?
         var managedInstallation: AgentCLIManagedInstallation?
+        var latestVersion: String?
+        var latestCheckedAt: Date?
+        var updateCheckError: String?
         var phase: String?
         var startedAt: Date?
         var error: String?
         var log = ""
+
+        var installedVersion: String? {
+            guard case let .available(_, version, _) = availability else { return nil }
+            return AgentCLIVersion.number(in: version)
+        }
+
+        var updateAvailable: Bool {
+            guard
+                let installedVersion,
+                let latestVersion
+            else { return false }
+            return AgentCLIVersion.isNewer(latestVersion, than: installedVersion)
+        }
+
+        var updateErrorMessages: [String] {
+            [error, updateCheckError].compactMap { $0 }.reduce(into: []) { messages, message in
+                if !messages.contains(message) {
+                    messages.append(message)
+                }
+            }
+        }
+    }
+
+    struct AgentCLIUpdate: Identifiable, Equatable, Sendable {
+        let agent: InstallableAgentCLI
+        let installedVersion: String
+        let latestVersion: String
+
+        var id: String {
+            "\(agent.id):\(latestVersion)"
+        }
     }
 
     enum AgentCLICommandSettings {
@@ -48,13 +82,16 @@
         @ObservationIgnored @Dependency(PreferencesService.self) private var preferences
         @ObservationIgnored private var operation: Task<Void, Never>?
         @ObservationIgnored private var startupChecked = false
+        @ObservationIgnored private let reminders: AgentUpdateReminderStore
         private let command: (InstallableAgentCLI) -> String
         private let useInstalledCommand: (InstallableAgentCLI, String, String) async throws -> Void
 
         init(
+            reminders: AgentUpdateReminderStore,
             command: @escaping (InstallableAgentCLI) -> String,
             useInstalledCommand: @escaping (InstallableAgentCLI, String, String) async throws -> Void
         ) {
+            self.reminders = reminders
             self.command = command
             self.useInstalledCommand = useInstalledCommand
             @Dependency(PreferencesService.self) var preferences
@@ -63,6 +100,19 @@
 
         var missing: [InstallableAgentCLI] {
             InstallableAgentCLI.allCases.filter { entries[$0]?.availability == .missing }
+        }
+
+        var updates: [AgentCLIUpdate] {
+            InstallableAgentCLI.allCases.compactMap { agent in
+                guard
+                    let entry = entries[agent],
+                    let installedVersion = entry.installedVersion,
+                    let latestVersion = entry.latestVersion,
+                    AgentCLIVersion.isNewer(latestVersion, than: installedVersion),
+                    reminders.shouldShow(.cli(agentID: agent.id, version: latestVersion))
+                else { return nil }
+                return AgentCLIUpdate(agent: agent, installedVersion: installedVersion, latestVersion: latestVersion)
+            }
         }
 
         func start() {
@@ -97,6 +147,23 @@
                     startupPromptPending = remindAtStartup && !missing.isEmpty
                 }
             }
+        }
+
+        func refresh(_ agent: InstallableAgentCLI) {
+            guard !isBusy else { return }
+            isBusy = true
+            operation = Task {
+                defer {
+                    isBusy = false
+                    operation = nil
+                }
+                await check(agent)
+            }
+        }
+
+        func dismiss(_ update: AgentCLIUpdate) {
+            guard entries[update.agent]?.latestVersion == update.latestVersion else { return }
+            reminders.dismiss(.cli(agentID: update.agent.id, version: update.latestVersion))
         }
 
         func install(_ selected: Set<InstallableAgentCLI>) {
@@ -203,10 +270,30 @@
             }
             entries[agent, default: .init()].availability = result
             entries[agent]?.managedInstallation = managedInstallation
+            if case .available = result {
+                await checkLatestVersion(agent)
+            } else {
+                entries[agent]?.latestVersion = nil
+                entries[agent]?.latestCheckedAt = nil
+                entries[agent]?.updateCheckError = nil
+            }
             do {
                 try await repairCommandPathIfNeeded(result, for: agent, expectedCommand: expectedCommand)
             } catch {
                 entries[agent]?.error = error.localizedDescription
+            }
+        }
+
+        private func checkLatestVersion(_ agent: InstallableAgentCLI) async {
+            do {
+                let latest = try await client.latestVersion(agent)
+                guard !Task.isCancelled else { return }
+                entries[agent]?.latestVersion = latest
+                entries[agent]?.latestCheckedAt = Date()
+                entries[agent]?.updateCheckError = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                entries[agent]?.updateCheckError = error.localizedDescription
             }
         }
 

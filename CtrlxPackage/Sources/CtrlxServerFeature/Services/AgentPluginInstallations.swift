@@ -42,27 +42,44 @@
     @Observable @MainActor
     final class AgentPluginInstallations {
         private(set) var installations: [AgentPluginLocation: AgentPluginInstallation] = [:]
-        private var dismissedUpdates: Set<AgentPluginLocation> = []
         @ObservationIgnored private var startupChecked = false
+        @ObservationIgnored private let reminders: AgentUpdateReminderStore
         @ObservationIgnored private let core: (String) async -> (any AgentPluginMaintenance)?
 
-        init(core: @escaping (String) async -> (any AgentPluginMaintenance)?) {
+        init(
+            reminders: AgentUpdateReminderStore,
+            core: @escaping (String) async -> (any AgentPluginMaintenance)?
+        ) {
+            self.reminders = reminders
             self.core = core
         }
 
         var updates: [AgentPluginLocation] {
-            installations.keys.filter { installations[$0]?.updateAvailable == true && !dismissedUpdates.contains($0) }
-                .sorted { ($0.pluginID, $0.configRoot ?? "") < ($1.pluginID, $1.configRoot ?? "") }
+            installations.keys.filter { location in
+                guard
+                    installations[location]?.updateAvailable == true,
+                    let version = installations[location]?.bundledVersion
+                else { return false }
+                return reminders.shouldShow(
+                    .plugin(pluginID: location.pluginID, configRoot: location.configRoot, version: version)
+                )
+            }
+            .sorted { ($0.pluginID, $0.configRoot ?? "") < ($1.pluginID, $1.configRoot ?? "") }
         }
 
         func dismiss(_ location: AgentPluginLocation) {
-            dismissedUpdates.insert(location)
+            guard
+                installations[location]?.updateAvailable == true,
+                let version = installations[location]?.bundledVersion
+            else { return }
+            reminders.dismiss(
+                .plugin(pluginID: location.pluginID, configRoot: location.configRoot, version: version)
+            )
         }
 
         func forget(_ location: AgentPluginLocation) {
             guard installations[location]?.isBusy != true else { return }
             installations.removeValue(forKey: location)
-            dismissedUpdates.remove(location)
         }
 
         func checkAtStartup(_ locations: [AgentPluginLocation]) async {

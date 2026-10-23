@@ -82,7 +82,7 @@
         @Test("Startup checks all configured roots once and dismisses notices per root")
         func startup() async {
             let core = Core()
-            let service = AgentPluginInstallations { _ in core }
+            let service = AgentPluginInstallations(reminders: .inMemory(channel: .plugin)) { _ in core }
             let locations = [AgentPluginLocation(pluginID: "codex", configRoot: nil), .init(pluginID: "codex", configRoot: "/second")]
             await service.checkAtStartup(locations + locations)
             await service.checkAtStartup(locations)
@@ -97,7 +97,7 @@
         func versions(pluginID: String) async {
             let core = Core()
             let location = AgentPluginLocation(pluginID: pluginID, configRoot: nil)
-            let service = AgentPluginInstallations { _ in core }
+            let service = AgentPluginInstallations(reminders: .inMemory(channel: .plugin)) { _ in core }
             for status: PluginInstallStatus in [.notInstalled, .agentUnavailable, .checkFailed(message: "offline"), .installed(version: nil), .installed(version: "unknown"), .installed(version: "1.1.0"), .installed(version: "2.0.0")] {
                 await core.configure(status)
                 await service.refresh(location)
@@ -110,7 +110,7 @@
         func retry() async {
             let core = Core()
             let location = AgentPluginLocation(pluginID: "claude-code", configRoot: nil)
-            let service = AgentPluginInstallations { _ in core }
+            let service = AgentPluginInstallations(reminders: .inMemory(channel: .plugin)) { _ in core }
             await core.configure(.installed(version: "1.0.0"), fail: true)
             await service.reinstall(location)
             #expect(service.installations[location]?.status == .notInstalled)
@@ -127,7 +127,7 @@
         func serialization() async {
             let core = Core()
             let location = AgentPluginLocation(pluginID: "codex", configRoot: nil)
-            let service = AgentPluginInstallations { _ in core }
+            let service = AgentPluginInstallations(reminders: .inMemory(channel: .plugin)) { _ in core }
             await core.configure(.installed(version: "1.0.0"), blocked: true)
             let refresh = Task { await service.refresh(location) }
             var iterator = core.checkStarted.stream.makeAsyncIterator()
@@ -156,7 +156,7 @@
         func independentTargets() async {
             let codex = Core()
             let claude = Core()
-            let service = AgentPluginInstallations { id in id == "codex" ? codex : claude }
+            let service = AgentPluginInstallations(reminders: .inMemory(channel: .plugin)) { id in id == "codex" ? codex : claude }
             let codexDefault = AgentPluginLocation(pluginID: "codex", configRoot: "/isolated/shared")
             let codexOther = AgentPluginLocation(pluginID: "codex", configRoot: "/isolated/other")
             let claudeDefault = AgentPluginLocation(pluginID: "claude-code", configRoot: "/isolated/shared")

@@ -212,10 +212,20 @@
         public private(set) var pluginUpdateManager: PluginUpdateManager?
 
         var agentSettingsSelection: String?
+        let agentPluginUpdateReminders = AgentUpdateReminderStore(channel: .plugin)
+        let agentCLIUpdateReminders = AgentUpdateReminderStore(channel: .cli)
         private(set) var agentPluginInstallations: AgentPluginInstallations?
         private(set) var agentCLIInstallations: AgentCLIInstallations?
         var pendingAgentCLILaunch: String?
         @ObservationIgnored private var agentPluginCheckTask: Task<Void, Never>?
+
+        var agentUpdateReminderInterval: AgentUpdateReminderInterval {
+            get { agentPluginUpdateReminders.interval }
+            set {
+                agentPluginUpdateReminders.interval = newValue
+                agentCLIUpdateReminders.interval = newValue
+            }
+        }
 
         /// The single agent-blind event dispatcher; its sinks are wired to the
         /// local adapter methods (status/notification/app-action) below.
@@ -937,6 +947,9 @@
                     notify: { body in
                         @Dependency(PluginUpdateNotificationService.self) var notificationService
                         notificationService.showUpdateNotification(body)
+                    },
+                    checkAgentCLIUpdates: { [weak self] in
+                        self?.agentCLIInstallations?.refresh()
                     }
                 ),
                 automaticTriggersEnabled: !isE2ETest
@@ -1671,6 +1684,7 @@
         private func startAgentCLICheck() {
             guard !isE2ETest, agentCLIInstallations == nil else { return }
             let installations = AgentCLIInstallations(
+                reminders: agentCLIUpdateReminders,
                 command: { [weak self] agent in
                     let data = self?.pluginSettingsData(id: agent.id) ?? Data()
                     return AgentCLICommandSettings.command(in: data, agent: agent)
@@ -1690,7 +1704,7 @@
 
         private func startAgentPluginVersionCheck() {
             guard !isE2ETest, agentPluginInstallations == nil, let registry = pluginRegistry else { return }
-            let installations = AgentPluginInstallations { [weak self] id in
+            let installations = AgentPluginInstallations(reminders: agentPluginUpdateReminders) { [weak self] id in
                 await self?.enabledCore(id) as? any AgentPluginMaintenance
             }
             agentPluginInstallations = installations

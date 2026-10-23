@@ -80,6 +80,9 @@
             public var displayName: @MainActor (String) -> String
             public var currentAppVersion: @MainActor () -> String
             public var notify: @MainActor (String) -> Void
+            /// Daily CLI update check, coalesced onto this manager's existing
+            /// 24-hour maintenance loop rather than a second timer.
+            public var checkAgentCLIUpdates: @MainActor () async -> Void
 
             public init(
                 loadRegistry: @escaping @MainActor () -> PluginRegistryFile,
@@ -97,7 +100,8 @@
                 additionalConfigFolders: @escaping @MainActor (String) -> [String],
                 displayName: @escaping @MainActor (String) -> String,
                 currentAppVersion: @escaping @MainActor () -> String,
-                notify: @escaping @MainActor (String) -> Void
+                notify: @escaping @MainActor (String) -> Void,
+                checkAgentCLIUpdates: @escaping @MainActor () async -> Void = { }
             ) {
                 self.loadRegistry = loadRegistry
                 self.saveRegistry = saveRegistry
@@ -114,6 +118,7 @@
                 self.displayName = displayName
                 self.currentAppVersion = currentAppVersion
                 self.notify = notify
+                self.checkAgentCLIUpdates = checkAgentCLIUpdates
             }
         }
 
@@ -441,6 +446,7 @@
                     if Task.isCancelled { return }
                     self?.scheduleRun { [weak self] in
                         await self?.runAutomaticCheck()
+                        await self?.callbacks.checkAgentCLIUpdates()
                     }
                 }
             }

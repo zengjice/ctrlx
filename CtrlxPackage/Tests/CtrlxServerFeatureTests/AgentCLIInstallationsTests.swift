@@ -16,6 +16,7 @@
             var requiresPathRepairAfterMaintenance = false
             var targets: [InstallableAgentCLI: AgentCLIManagedInstallation] = [:]
             var maintained: [AgentCLIMaintenanceAction] = []
+            var latestVersions: [InstallableAgentCLI: String] = [:]
             let started = AsyncStream<Void>.makeStream()
 
             func inspect(_ agent: InstallableAgentCLI) -> AgentCLIAvailability {
@@ -32,6 +33,14 @@
 
             func setTarget(_ target: AgentCLIManagedInstallation) {
                 targets[target.agent] = target
+            }
+
+            func setLatest(_ version: String, for agent: InstallableAgentCLI) {
+                latestVersions[agent] = version
+            }
+
+            func latestVersion(_ agent: InstallableAgentCLI) -> String {
+                latestVersions[agent] ?? "0.0.0"
             }
 
             func target(_ agent: InstallableAgentCLI) -> AgentCLIManagedInstallation? {
@@ -70,17 +79,26 @@
             }
         }
 
-        private func make(_ fixture: Fixture, preferences: PreferencesService = .inMemory()) -> AgentCLIInstallations {
+        private func make(
+            _ fixture: Fixture,
+            preferences: PreferencesService = .inMemory(),
+            now: @escaping () -> Date = { Date() }
+        ) -> AgentCLIInstallations {
             withDependencies {
                 $0[PreferencesService.self] = preferences
                 $0[AgentCLIClient.self] = .init(
                     inspect: { agent, _ in await fixture.inspect(agent) },
                     install: { agent, event in try await fixture.install(agent, event: event) },
                     managedInstallation: { agent, _ in await fixture.target(agent) },
-                    maintain: { action, target, event in try await fixture.maintain(action, target: target, event: event) }
+                    maintain: { action, target, event in try await fixture.maintain(action, target: target, event: event) },
+                    latestVersion: { agent in await fixture.latestVersion(agent) }
                 )
             } operation: {
-                AgentCLIInstallations(command: { $0.command }, useInstalledCommand: { _, path, _ in await fixture.adopt(path) })
+                AgentCLIInstallations(
+                    reminders: AgentUpdateReminderStore(channel: .cli, preferences: preferences, now: now),
+                    command: { $0.command },
+                    useInstalledCommand: { _, path, _ in await fixture.adopt(path) }
+                )
             }
         }
 
@@ -128,6 +146,57 @@
             #expect(state.missing.isEmpty)
             #expect(!state.startupPromptPending)
             #expect(await fixture.installed.isEmpty)
+        }
+
+        @Test("Version checks hide a dismissed update until expiry, then surface a newer release")
+        func updateNotification() async throws {
+            let fixture = Fixture()
+            await fixture.set(.available(path: "/existing/codex", version: "codex-cli 1.0.0"), for: .codex)
+            await fixture.setLatest("1.1.0", for: .codex)
+            let start = Date(timeIntervalSinceReferenceDate: 5_000_000)
+            var now = start
+            let state = make(fixture, now: { now })
+            state.start()
+            await state.waitForOperation()
+
+            let update = try #require(state.updates.first)
+            #expect(update.agent == .codex)
+            #expect(update.installedVersion == "1.0.0")
+            #expect(update.latestVersion == "1.1.0")
+
+            state.dismiss(update)
+            #expect(state.updates.isEmpty)
+
+            now = start.addingTimeInterval(TimeInterval(AgentUpdateReminderInterval.oneDay.rawValue))
+            #expect(state.updates.first?.latestVersion == "1.1.0")
+
+            await fixture.setLatest("1.2.0", for: .codex)
+            state.refresh(.codex)
+            await state.waitForOperation()
+            #expect(state.updates.first?.latestVersion == "1.2.0")
+        }
+
+        @Test("CLI output and release versions use their numeric version only")
+        func parsesVersions() {
+            #expect(AgentCLIVersion.number(in: "codex-cli 0.163.0") == "0.163.0")
+            #expect(AgentCLIVersion.number(in: "2.1.308 (Claude Code)") == "2.1.308")
+            #expect(AgentCLIVersion.isNewer("2.1.309", than: "2.1.308"))
+            #expect(!AgentCLIVersion.isNewer("2.1.308", than: "2.1.308"))
+            #expect(!AgentCLIVersion.isNewer("1.0.0", than: "2.1.308"))
+        }
+
+        @Test("Settings surface operation failures and version-check errors")
+        func updateErrors() {
+            var entry = AgentCLIInstallation()
+            entry.error = "Official signature verification failed."
+            entry.updateCheckError = "Could not read npm release metadata."
+            #expect(entry.updateErrorMessages == [
+                "Official signature verification failed.",
+                "Could not read npm release metadata.",
+            ])
+
+            entry.updateCheckError = entry.error
+            #expect(entry.updateErrorMessages == ["Official signature verification failed."])
         }
 
         @Test("Startup and manual checks preserve bare commands already resolved through PATH", arguments: InstallableAgentCLI.allCases)

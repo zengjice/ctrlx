@@ -31,9 +31,13 @@
                     await event(.phase("Verifying official signatures"))
                     await event(.output("Checking agent signatures…\n"))
                     try await Task.sleep(for: .seconds(60))
-                })
+                }, latestVersion: { _ in "0.0.0" })
             } operation: {
-                AgentCLIInstallations(command: { $0.command }, useInstalledCommand: { _, _, _ in Issue.record("Layout must never modify settings") })
+                AgentCLIInstallations(
+                    reminders: .inMemory(channel: .cli),
+                    command: { $0.command },
+                    useInstalledCommand: { _, _, _ in Issue.record("Layout must never modify settings") }
+                )
             }
             state.start()
             await state.waitForOperation()

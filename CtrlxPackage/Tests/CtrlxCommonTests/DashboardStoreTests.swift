@@ -58,6 +58,167 @@ struct DashboardStoreTests {
     }
 
     @Test
+    func quotaRecoveryNoticePersistsUntilReadOrAccountRemoval() async throws {
+        let preferences = PreferencesService.inMemory()
+        try await withDependencies {
+            $0[PreferencesService.self] = preferences
+        } operation: {
+            let store = DashboardStore()
+            let hostID = UUID()
+            @MainActor
+            func endpoint(used: Double, hasAccount: Bool = true) -> DashboardEndpoint {
+                .init(host: .init(id: "local", name: "This Mac", isConnected: true, isSupported: true)) {
+                    let now = Date()
+                    return .init(hostID: hostID, generatedAt: now, timeZoneIdentifier: "UTC", accounts: hasAccount ? [
+                        .init(
+                            id: "default",
+                            pluginID: "codex",
+                            providerName: "Codex",
+                            label: "Personal",
+                            configurationLabel: "Default",
+                            identity: .init(providerID: "codex", accountID: "person", workspaceID: "personal", poolID: "codex"),
+                            authentication: .signedIn,
+                            availability: .available,
+                            quotaObservedAt: now,
+                            windows: [.init(id: "week", title: "7 days", usedPercent: used)]
+                        ),
+                    ] : [])
+                }
+            }
+
+            await store.refresh([endpoint(used: 95)])
+            #expect(store.quotaRecoveryNotices.isEmpty)
+            await store.refresh([endpoint(used: 10)])
+            let notice = try #require(store.quotaRecoveryNotices.first)
+            #expect(notice.account == "Codex · Personal")
+            #expect(notice.detail.contains("90% remaining"))
+
+            await store.refresh([endpoint(used: 20)])
+            #expect(store.quotaRecoveryNotices.count == 1)
+
+            let restored = DashboardStore()
+            #expect(restored.quotaRecoveryNotices == store.quotaRecoveryNotices)
+            restored.markQuotaRecoveryRead(notice.id)
+            #expect(restored.quotaRecoveryNotices.isEmpty)
+            #expect(DashboardStore().quotaRecoveryNotices.isEmpty)
+
+            await store.refresh([endpoint(used: 20, hasAccount: false)])
+            #expect(store.quotaRecoveryNotices.isEmpty)
+        }
+    }
+
+    @Test
+    func quotaRecoveryNoticeSurvivesHostRestartWhileAccountIdentityLoads() async throws {
+        let preferences = PreferencesService.inMemory()
+        try await withDependencies {
+            $0[PreferencesService.self] = preferences
+        } operation: {
+            let hostID = UUID()
+            @MainActor
+            func endpoint(used: Double, availability: DashboardAccount.Availability, hasIdentity: Bool) -> DashboardEndpoint {
+                .init(host: .init(id: "local", name: "This Mac", isConnected: true, isSupported: true)) {
+                    let now = Date()
+                    return .init(hostID: hostID, generatedAt: now, timeZoneIdentifier: "UTC", accounts: [
+                        .init(
+                            id: "default",
+                            pluginID: "codex",
+                            providerName: "Codex",
+                            label: "Personal",
+                            configurationLabel: "Default",
+                            identity: hasIdentity
+                                ? .init(providerID: "codex", accountID: "person", workspaceID: "personal", poolID: "codex")
+                                : nil,
+                            authentication: hasIdentity ? .signedIn : .unknown,
+                            availability: availability,
+                            quotaObservedAt: hasIdentity ? now : nil,
+                            windows: hasIdentity ? [.init(id: "week", title: "7 days", usedPercent: used)] : []
+                        ),
+                    ])
+                }
+            }
+
+            let first = DashboardStore()
+            await first.refresh([endpoint(used: 95, availability: .available, hasIdentity: true)])
+            await first.refresh([endpoint(used: 10, availability: .available, hasIdentity: true)])
+            let notice = try #require(first.quotaRecoveryNotices.first)
+
+            let restarted = DashboardStore()
+            await restarted.refresh([endpoint(used: 10, availability: .waiting, hasIdentity: false)])
+            #expect(restarted.quotaRecoveryNotices == [notice])
+
+            await restarted.refresh([endpoint(used: 10, availability: .available, hasIdentity: true)])
+            #expect(restarted.quotaRecoveryNotices == [notice])
+        }
+    }
+
+    @Test
+    func quotaRecoveryNoticeSurvivesDisconnectWhileAccountIdentityLoads() async throws {
+        let preferences = PreferencesService.inMemory()
+        try await withDependencies {
+            $0[PreferencesService.self] = preferences
+        } operation: {
+            let hostID = UUID()
+            @MainActor
+            func accountEndpoint(_ availability: DashboardAccount.Availability, hasIdentity: Bool) -> DashboardEndpoint {
+                .init(host: .init(id: "local", name: "This Mac", isConnected: true, isSupported: true)) {
+                    let now = Date()
+                    return .init(hostID: hostID, generatedAt: now, timeZoneIdentifier: "UTC", accounts: [
+                        .init(
+                            id: "default",
+                            pluginID: "codex",
+                            providerName: "Codex",
+                            label: "Personal",
+                            configurationLabel: "Default",
+                            identity: hasIdentity
+                                ? .init(providerID: "codex", accountID: "person", workspaceID: "personal", poolID: "codex")
+                                : nil,
+                            authentication: hasIdentity ? .signedIn : .unknown,
+                            availability: availability,
+                            quotaObservedAt: hasIdentity ? now : nil,
+                            windows: hasIdentity ? [.init(id: "week", title: "7 days", usedPercent: 10)] : []
+                        ),
+                    ])
+                }
+            }
+
+            let first = DashboardStore()
+            await first.refresh([
+                .init(host: .init(id: "local", name: "This Mac", isConnected: true, isSupported: true)) {
+                    let now = Date()
+                    return .init(hostID: hostID, generatedAt: now, timeZoneIdentifier: "UTC", accounts: [
+                        .init(
+                            id: "default",
+                            pluginID: "codex",
+                            providerName: "Codex",
+                            label: "Personal",
+                            configurationLabel: "Default",
+                            identity: .init(providerID: "codex", accountID: "person", workspaceID: "personal", poolID: "codex"),
+                            authentication: .signedIn,
+                            availability: .available,
+                            quotaObservedAt: now,
+                            windows: [.init(id: "week", title: "7 days", usedPercent: 95)]
+                        ),
+                    ])
+                },
+            ])
+            await first.refresh([accountEndpoint(.available, hasIdentity: true)])
+            let notice = try #require(first.quotaRecoveryNotices.first)
+
+            let restarted = DashboardStore()
+            await restarted.refresh([accountEndpoint(.waiting, hasIdentity: false)])
+            #expect(restarted.quotaRecoveryNotices == [notice])
+
+            await restarted.refresh([
+                .init(host: .init(id: "local", name: "This Mac")) { throw CancellationError() },
+            ])
+            #expect(restarted.quotaRecoveryNotices == [notice])
+
+            await restarted.refresh([accountEndpoint(.available, hasIdentity: true)])
+            #expect(restarted.quotaRecoveryNotices == [notice])
+        }
+    }
+
+    @Test
     func unsupportedAndOfflineHostsAreNeverQueried() async {
         await withDependencies { $0[PreferencesService.self] = .inMemory() } operation: {
             let store = DashboardStore()

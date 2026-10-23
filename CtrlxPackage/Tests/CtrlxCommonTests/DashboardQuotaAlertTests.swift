@@ -126,4 +126,25 @@ struct DashboardQuotaAlertTests {
         #expect(summary.remaining == 5)
         #expect(summary.window == "7 days")
     }
+
+    @Test
+    func recoveryRequiresALowBaselineAndIsEmittedOnce() {
+        var tracker = DashboardQuotaAlertTracker()
+        #expect(tracker.updateDetailed(hosts: [host(10)], at: start).recoveries.isEmpty)
+        #expect(tracker.updateDetailed(hosts: [host(95, time: 60)], at: start.addingTimeInterval(60)).recoveries.isEmpty)
+
+        let recovered = tracker.updateDetailed(hosts: [host(10, time: 120)], at: start.addingTimeInterval(120))
+        #expect(recovered.recoveries.count == 1)
+        #expect(recovered.recoveries.first?.windows.first?.contains("90% remaining") == true)
+        #expect(tracker.updateDetailed(hosts: [host(20, time: 180)], at: start.addingTimeInterval(180)).recoveries.isEmpty)
+    }
+
+    @Test
+    func unavailableRecoveryObservationDoesNotCreateANotice() {
+        var tracker = DashboardQuotaAlertTracker()
+        _ = tracker.updateDetailed(hosts: [host(95)], at: start)
+        var offline = host(10, time: 60)
+        offline.isConnected = false
+        #expect(tracker.updateDetailed(hosts: [offline], at: start.addingTimeInterval(60)).recoveries.isEmpty)
+    }
 }

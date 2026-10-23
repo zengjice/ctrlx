@@ -55,7 +55,7 @@ public struct DashboardView: View {
                         Text(error).font(.caption).foregroundStyle(.secondary)
                     }
                 } footer: {
-                    Text("Alerts at 10% remaining. On iPhone, checks only while the app is open.")
+                    Text("Alerts at 10% remaining. Recovered-quota notices stay until marked read. On iPhone, checks only while the app is open.")
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Section("Hosts") {

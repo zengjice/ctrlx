@@ -60,6 +60,41 @@ public struct DashboardQuotaAlert: Sendable, Equatable {
     }
 }
 
+public struct DashboardQuotaRecoveryNotice: Identifiable, Codable, Sendable, Equatable {
+    public let accountID: String
+    public let account: String
+    public let windows: [String]
+    public let hosts: String
+    public let recoveredAt: Date
+
+    public var id: String { accountID }
+
+    public var detail: String {
+        "\(windows.joined(separator: "; ")) · \(hosts)"
+    }
+}
+
+public struct DashboardQuotaTrackingResult: Sendable, Equatable {
+    public let alerts: [DashboardQuotaAlert]
+    public let recoveries: [DashboardQuotaRecoveryNotice]
+
+    public init(alerts: [DashboardQuotaAlert], recoveries: [DashboardQuotaRecoveryNotice]) {
+        self.alerts = alerts
+        self.recoveries = recoveries
+    }
+}
+
+extension DashboardAccountGroup.ID {
+    var quotaRecoveryID: String {
+        switch self {
+        case let .verified(identity):
+            "verified:\(identity.providerID):\(identity.accountID):\(identity.workspaceID):\(identity.poolID)"
+        case let .source(hostID, sourceID):
+            "source:\(hostID):\(sourceID)"
+        }
+    }
+}
+
 /// One baseline per account and quota window, shared by every surface in a client.
 public struct DashboardQuotaAlertTracker {
     private struct Key: Hashable {
@@ -71,6 +106,7 @@ public struct DashboardQuotaAlertTracker {
         let remaining: Double
         let reset: Date?
         let observed: Date
+        let limitReached: Bool
         var warned: Bool
     }
 
@@ -79,8 +115,13 @@ public struct DashboardQuotaAlertTracker {
     public init() { }
 
     public mutating func update(hosts: [DashboardHost], at now: Date) -> [DashboardQuotaAlert] {
+        updateDetailed(hosts: hosts, at: now).alerts
+    }
+
+    public mutating func updateDetailed(hosts: [DashboardHost], at now: Date) -> DashboardQuotaTrackingResult {
         var retained: Set<Key> = []
         var alerts: [DashboardQuotaAlert] = []
+        var recoveries: [DashboardQuotaRecoveryNotice] = []
         for group in DashboardOverview.accounts(in: hosts) {
             if let source = group.selection?.source, source.account.authentication != .signedOut {
                 for window in source.account.windows {
@@ -89,6 +130,8 @@ public struct DashboardQuotaAlertTracker {
             }
             guard let source = group.currentQuotaSource(at: now), let interval = source.interval else { continue }
             var crossed: [String] = []
+            var recovered: [String] = []
+            let limitReached = source.account.limitReached == true
             for window in source.account.windows {
                 guard let remaining = window.remainingPercent(at: now) else { continue }
                 let key = Key(account: group.id, window: window.id)
@@ -98,6 +141,12 @@ public struct DashboardQuotaAlertTracker {
                 let advanced = old?.reset.map { reset in
                     now >= reset && window.resetsAt.map { $0 > reset } == true
                 } ?? false
+                if
+                    let old, !limitReached, remaining > 10,
+                    old.remaining <= 10 || old.limitReached
+                {
+                    recovered.append("\(window.title): \(remaining.formatted(.number.precision(.fractionLength(0))))% remaining")
+                }
                 var warned = advanced ? false : (old?.warned ?? (remaining <= 10))
                 if
                     let old, now.timeIntervalSince(old.observed) <= 300,
@@ -109,7 +158,13 @@ public struct DashboardQuotaAlertTracker {
                 if advanced, remaining <= 10 {
                     warned = true
                 }
-                previous[key] = Observation(remaining: remaining, reset: window.resetsAt, observed: interval.upperBound, warned: warned)
+                previous[key] = Observation(
+                    remaining: remaining,
+                    reset: window.resetsAt,
+                    observed: interval.upperBound,
+                    limitReached: limitReached,
+                    warned: warned
+                )
             }
             if !crossed.isEmpty {
                 alerts.append(.init(
@@ -118,8 +173,17 @@ public struct DashboardQuotaAlertTracker {
                     hosts: Set(group.sources.map(\.host.name)).sorted().joined(separator: ", ")
                 ))
             }
+            if !recovered.isEmpty {
+                recoveries.append(.init(
+                    accountID: group.id.quotaRecoveryID,
+                    account: "\(source.account.providerName) · \(source.account.label)",
+                    windows: recovered,
+                    hosts: Set(group.sources.map(\.host.name)).sorted().joined(separator: ", "),
+                    recoveredAt: interval.upperBound
+                ))
+            }
         }
         previous = previous.filter { retained.contains($0.key) }
-        return alerts
+        return DashboardQuotaTrackingResult(alerts: alerts, recoveries: recoveries)
     }
 }
