@@ -6,16 +6,18 @@ public struct AgentForkConfiguration: Identifiable {
     public let id = UUID()
     let sources: [AgentForkSource]
     let usingWorktree: Bool
+    let directorySource: SessionDirectorySource?
     let prepare: @MainActor (AgentForkSource) async throws -> AgentForkPreparation
     let fork: @MainActor (ForkAgentSession) async throws -> Void
 
     public init(
-        sources: [AgentForkSource], usingWorktree: Bool,
+        sources: [AgentForkSource], usingWorktree: Bool, directorySource: SessionDirectorySource? = nil,
         prepare: @escaping @MainActor (AgentForkSource) async throws -> AgentForkPreparation,
         fork: @escaping @MainActor (ForkAgentSession) async throws -> Void
     ) {
         self.sources = sources
         self.usingWorktree = usingWorktree
+        self.directorySource = directorySource
         self.prepare = prepare
         self.fork = fork
     }
@@ -42,16 +44,28 @@ public struct AgentForkConfiguration: Identifiable {
 
     func forkRequest(
         source: AgentForkSource, preparation: AgentForkPreparation?,
-        name: String, allowUncommittedChanges: Bool, targetProviderID: String?
+        name: String, allowUncommittedChanges: Bool, targetProviderID: String?,
+        directory: String? = nil
     ) throws -> ForkAgentSession {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let worktree = try worktreeRequest(
             source: source, preparation: preparation, name: name, allowUncommittedChanges: allowUncommittedChanges
         )
+        let targetDirectory: String?
+        if usingWorktree || directorySource == nil {
+            targetDirectory = nil
+        } else {
+            let directory = directory ?? source.workingDirectory
+            guard SessionDirectoryPath.isValid(directory) else {
+                throw AgentForkError("Enter an absolute Host directory or ~/… without control characters.")
+            }
+            targetDirectory = directory == source.workingDirectory ? nil : directory
+        }
         let request = ForkAgentSession(
             source: source,
             windowName: name,
             worktree: worktree,
+            workingDirectory: targetDirectory,
             targetProviderID: targetProviderID
         )
         try request.validateName()
@@ -102,8 +116,11 @@ public struct AgentForkPanel: View {
     @State private var sourceID: String
     @State private var preparation: AgentForkPreparation?
     @State private var forkName: String
+    @State private var directory: String
     @State private var targetProviderID: String?
     @State private var acceptsCleanWorktree = false
+    @State private var showsDirectoryBrowser = false
+    @State private var isCreatingDirectory = false
     @State private var isLoading = false
     @State private var isLaunching = false
     @State private var errorMessage: String?
@@ -112,6 +129,7 @@ public struct AgentForkPanel: View {
     public init(configuration: AgentForkConfiguration) {
         self.configuration = configuration
         self._sourceID = State(initialValue: configuration.sources.first?.paneID ?? "")
+        self._directory = State(initialValue: configuration.sources.first?.workingDirectory ?? "")
         let agentName = configuration.sources.first?.pluginID == "codex" ? "codex" : "claude"
         self._forkName = State(initialValue: configuration.usingWorktree ? "\(agentName)-\(UUID().uuidString.prefix(8).lowercased())" : "\(agentName) fork")
     }
@@ -120,8 +138,15 @@ public struct AgentForkPanel: View {
         configuration.sources.first { $0.paneID == sourceID }
     }
 
+    private var title: String {
+        if configuration.usingWorktree {
+            return "Fork in New Worktree"
+        }
+        return configuration.directorySource == nil ? "Fork in Current Directory" : "Fork in Directory"
+    }
+
     private var canLaunch: Bool {
-        guard source != nil, !isLoading, !isLaunching else { return false }
+        guard source != nil, !isLoading, !isLaunching, !isCreatingDirectory else { return false }
         do {
             _ = try makeRequest()
             return true
@@ -151,10 +176,13 @@ public struct AgentForkPanel: View {
         .task(id: sourceID) {
             request = nil
             acceptsCleanWorktree = false
+            showsDirectoryBrowser = false
+            isCreatingDirectory = false
             targetProviderID = nil
             preparation = nil
             errorMessage = nil
             guard let source else { return }
+            directory = source.workingDirectory
             isLoading = true
             defer {
                 if sourceID == source.paneID {
@@ -178,13 +206,16 @@ public struct AgentForkPanel: View {
             request = nil
         }
         .onChange(of: acceptsCleanWorktree) { request = nil }
+        .onChange(of: directory) {
+            errorMessage = nil
+            request = nil
+        }
         .onChange(of: targetProviderID) { request = nil }
     }
 
     private var fields: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(configuration.usingWorktree ? "Fork in New Worktree" : "Fork in Current Directory")
-                .font(.headline)
+            Text(title).font(.headline)
             if configuration.sources.count > 1 {
                 Picker("Source Agent", selection: $sourceID) {
                     ForEach(configuration.sources) { source in
@@ -195,7 +226,36 @@ public struct AgentForkPanel: View {
                 .accessibilityIdentifier("agentFork.source")
             }
             if let source {
-                Text(source.workingDirectory).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                if configuration.usingWorktree || configuration.directorySource == nil {
+                    Text(source.workingDirectory).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                } else if let directorySource = configuration.directorySource {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Directory on Host", text: $directory, prompt: Text(source.workingDirectory))
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                        #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                        #endif
+                            .disabled(isLaunching || isCreatingDirectory)
+                            .accessibilityLabel("Fork directory on Host")
+                            .accessibilityIdentifier("agentFork.directory")
+                        if !SessionDirectoryPath.isValid(directory) {
+                            Text("Enter an absolute Host directory or ~/… without control characters.")
+                                .font(.caption).foregroundStyle(.red)
+                        }
+                        DisclosureGroup("Choose Directory…", isExpanded: $showsDirectoryBrowser) {
+                            if showsDirectoryBrowser {
+                                SessionDirectoryBrowser(
+                                    path: $directory, source: directorySource, isCreatingDirectory: $isCreatingDirectory
+                                )
+                                .padding(.top, 8)
+                            }
+                        }
+                        .disabled(isLaunching || isCreatingDirectory)
+                        Text("Defaults to the source directory. The copied conversation opens in this directory on the Host.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Text("Opens a new conversation with the saved history. The original Agent keeps running; no prompt is sent automatically.")
                     .font(.callout)
             }
@@ -261,7 +321,7 @@ public struct AgentForkPanel: View {
             )
             .disabled(isLaunching)
         } else if let reason = preparation?.worktreeUnavailableReason {
-            Text("New worktree is unavailable: \(reason)\nFork in Current Directory is still available.").font(.callout).foregroundStyle(.secondary)
+            Text("New worktree is unavailable: \(reason)\nYou can still fork in an existing directory.").font(.callout).foregroundStyle(.secondary)
         }
     }
 
@@ -270,7 +330,8 @@ public struct AgentForkPanel: View {
         return try configuration.forkRequest(
             source: source, preparation: preparation, name: forkName,
             allowUncommittedChanges: acceptsCleanWorktree,
-            targetProviderID: targetProviderID
+            targetProviderID: targetProviderID,
+            directory: directory
         )
     }
 

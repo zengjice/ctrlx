@@ -70,6 +70,9 @@ public struct SessionStateMessage: Codable, Sendable {
     /// until this capability is explicitly advertised.
     public let supportsAgentWindowLaunch: Bool?
     public let supportsAgentFork: Bool?
+    /// Older Hosts ignore a Fork's target directory, so Viewers only expose it
+    /// after this capability is advertised.
+    public let supportsAgentForkDirectory: Bool?
     /// Clipboard paste is acknowledged and serialized with keyboard input.
     public let supportsTerminalPaste: Bool?
     public let supportsCodexQuestionAcknowledgement: Bool?
@@ -101,6 +104,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsSessionWorktrees: Bool? = nil,
         supportsAgentWindowLaunch: Bool? = nil,
         supportsAgentFork: Bool? = nil,
+        supportsAgentForkDirectory: Bool? = nil,
         supportsTerminalPaste: Bool? = nil,
         supportsCodexQuestionAcknowledgement: Bool? = nil,
         supportsTerminalFit: Bool? = nil,
@@ -146,6 +150,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsRepositoryFileLinks = supportsRepositoryFileLinks
         self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
         self.supportsAgentFork = supportsAgentFork
+        self.supportsAgentForkDirectory = supportsAgentForkDirectory
         self.supportsTerminalPaste = supportsTerminalPaste
         self.supportsCodexQuestionAcknowledgement = supportsCodexQuestionAcknowledgement
         self.supportsTerminalFit = supportsTerminalFit
@@ -181,6 +186,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsSessionWorktrees: supportsSessionWorktrees,
             supportsAgentWindowLaunch: supportsAgentWindowLaunch,
             supportsAgentFork: supportsAgentFork,
+            supportsAgentForkDirectory: supportsAgentForkDirectory,
             supportsTerminalPaste: supportsTerminalPaste,
             supportsCodexQuestionAcknowledgement: supportsCodexQuestionAcknowledgement,
             supportsTerminalFit: supportsTerminalFit,

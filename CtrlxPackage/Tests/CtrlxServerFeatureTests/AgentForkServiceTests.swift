@@ -310,8 +310,45 @@ struct AgentForkServiceTests {
         await #expect(throws: AgentForkError.self) {
             try await service.fork(.init(source: fixture.original, windowName: "other", worktree: .init(name: "new", expectedHead: "abc")))
         }
+        for directory in ["", "relative", "~/line\nbreak"] {
+            await #expect(throws: AgentForkError.self) {
+                try await service.fork(.init(source: fixture.original, workingDirectory: directory))
+            }
+        }
+        await #expect(throws: AgentForkError.self) {
+            try await service.fork(.init(
+                source: fixture.original,
+                worktree: .init(name: "new", expectedHead: "abc"),
+                workingDirectory: "/other"
+            ))
+        }
         #expect(fixture.refreshes == 0)
         #expect(fixture.launches.isEmpty)
+    }
+
+    @Test("Fork resolves and launches in an arbitrary Host directory without creating a worktree")
+    func arbitraryDirectory() async throws {
+        let fixture = try ForkFixture()
+        let service = fixture.service()
+        let requested = "~/Other Project"
+        let resolved = "/Users/example/Other Project"
+        try await withDependencies {
+            $0[SessionDirectoryClient.self].resolve = { path in
+                guard path == requested else { throw AgentForkError("Unexpected directory lookup: \(path)") }
+                return resolved
+            }
+        } operation: {
+            let request = ForkAgentSession(
+                source: fixture.original,
+                windowName: "elsewhere",
+                workingDirectory: requested
+            )
+            #expect(try await service.fork(request) == "%99")
+            let launch = try #require(fixture.launches.first)
+            #expect(launch.name == "elsewhere")
+            #expect(launch.preparation.workingDirectory == resolved)
+            #expect(launch.preparation.launch?.args.suffix(2) == ["-C", resolved])
+        }
     }
 
     @Test("Worktree conflicts create no pane; a corrected name and fresh request can succeed")

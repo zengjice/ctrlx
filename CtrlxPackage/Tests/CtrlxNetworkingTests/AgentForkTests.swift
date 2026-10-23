@@ -94,8 +94,10 @@ struct AgentForkTests {
         #expect(decoded.command == command.command)
         let oldState = try JSONDecoder().decode(SessionStateMessage.self, from: Data(#"{"pairId":"old","paneStates":{},"homeDirectory":"/Host"}"#.utf8))
         #expect(oldState.supportsAgentFork == nil)
-        let state = SessionStateMessage(pairId: "one", paneStates: [:], supportsAgentFork: true)
+        #expect(oldState.supportsAgentForkDirectory == nil)
+        let state = SessionStateMessage(pairId: "one", paneStates: [:], supportsAgentFork: true, supportsAgentForkDirectory: true)
         #expect(state.withPairId("two").supportsAgentFork == true)
+        #expect(state.withPairId("two").supportsAgentForkDirectory == true)
         let oldResponse = try JSONDecoder().decode(CommandResponseMessage.self, from: Data("{\"commandId\":\"\(UUID().uuidString)\",\"success\":true}".utf8))
         #expect(oldResponse.forkPreparation == nil)
         let response = CommandResponseMessage(commandId: command.id, success: true, forkPreparation: .init(source: source, worktree: nil))
@@ -114,6 +116,7 @@ struct AgentForkTests {
             let dictionary = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
             #expect(dictionary["windowName"] == nil)
             #expect(dictionary["targetProviderID"] == nil)
+            #expect(dictionary["workingDirectory"] == nil)
             let legacy = try JSONDecoder().decode(ForkAgentSession.self, from: data)
             #expect(legacy == request)
             try legacy.validateName()
@@ -124,6 +127,31 @@ struct AgentForkTests {
         }
         #expect(throws: AgentForkError.self) {
             try ForkAgentSession(source: source, windowName: "other", worktree: .init(name: "feature", expectedHead: "abc")).validateName()
+        }
+    }
+
+    @Test("Fork can target another Host directory, but never together with a worktree")
+    func workingDirectory() throws {
+        let source = try #require(AgentForkSource(pane: .init(
+            paneId: "%1", sessionName: "office", currentPath: "/repo",
+            agentSession: .init(paneId: "%1", pluginID: "codex"), claudeSessionID: UUID().uuidString
+        )))
+        for directory in ["/other", "/other with spaces", "~", "~/project"] {
+            let request = ForkAgentSession(source: source, windowName: "fork", workingDirectory: directory)
+            try request.validateName()
+            #expect(try JSONDecoder().decode(ForkAgentSession.self, from: JSONEncoder().encode(request)) == request)
+        }
+        for directory in ["", "relative", "../other", "~/line\nbreak"] {
+            #expect(throws: AgentForkError.self) {
+                try ForkAgentSession(source: source, workingDirectory: directory).validateName()
+            }
+        }
+        #expect(throws: AgentForkError.self) {
+            try ForkAgentSession(
+                source: source,
+                worktree: .init(name: "feature", expectedHead: "abc"),
+                workingDirectory: "/other"
+            ).validateName()
         }
     }
 

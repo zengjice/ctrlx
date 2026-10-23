@@ -861,8 +861,13 @@ Claude telemetry environment. No agent command/config is constructed by iOS.
 Right-click a local or Viewer terminal-window tab → **Fork → In Current
 Directory / In New Worktree…**. Codex and Claude Code implement the optional
 `AgentSessionForking` capability; sidecars retain their existing wire contract.
-Both modes open the shared naming panel before creation. The entered name is
-used for the new window; current-directory names may contain spaces or Unicode.
+Both modes open the shared naming panel before creation. The current-directory
+panel pre-fills the source directory and can target another existing directory
+on the same Host, either by typing `/…` or `~/…` or by browsing folders. The
+copied conversation and the new tmux window use that target; Worktree mode
+continues to derive its directory from the source repository and cannot also
+name a target directory. The entered name is used for the new window;
+current-directory names may contain spaces or Unicode.
 Multiple Agent panes require a source choice, defaulting to native focus or the active pane.
 Detection without a native conversation UUID is not enough to enable Fork.
 Unavailable Fork actions show whether the Host is offline/outdated, the native
@@ -898,17 +903,20 @@ history file may be written after the Agent's initial lifecycle notification.
 On iOS, open the window-title menu → **Fork → In Current Directory / In New
 Worktree…**. The selected pane is the default source when there are multiple
 recognized Agents. Mac and iOS share `AgentForkPanel`, including worktree review,
-dirty-file acknowledgement and retrying the same request UUID. The iPhone sends
-the captured source to its specific Host; it never constructs an Agent command
-or touches local Git. Creation is serialized with New Terminal/New Agent. The
-returned pane is selected when state arrives, unless the user has manually
-changed windows or left the screen while creation was pending.
+dirty-file acknowledgement, target-directory browsing and retrying the same
+request UUID. The iPhone sends the captured source to its specific Host; it
+never expands `~`, constructs an Agent command or touches local Git. Creation is
+serialized with New Terminal/New Agent. The returned pane is selected when state
+arrives, unless the user has manually changed windows or left the screen while
+creation was pending.
 
 `AgentForkService` rechecks the captured pane/window/session/Agent UUID/cwd and
 workspace incarnation through preparation, checkout and cached retries. Sources
 without the optional workspace identity still decode; the Host captures its
-current identity before asynchronous work. Actual creation guards both source
-pane and parent session in the tmux command queue. Mac/iOS retain the original
+current identity before asynchronous work. A requested target directory is
+resolved and validated on the Host before the Agent command or tmux window is
+created. Actual creation guards both source pane and parent session in the tmux
+command queue. Mac/iOS retain the original
 Viewer binding and reject replaced sessions before adopting the returned pane
 or issuing delayed Fit. It launches in a new window of the same tmux session using
 `codex fork <UUID> -C <cwd>` or `claude --resume <UUID> --fork-session`, preserving
@@ -943,11 +951,15 @@ Dirty/untracked files require acknowledgement and are never copied; ignored
 files are not copied either. Tab close never removes a worktree. Partial checkout
 or Agent-launch errors report retained paths/panes rather than deleting them.
 
-Viewer commands require `supportsAgentFork == true`. Preparation is read-only;
-the Host creates Git/tmux state. A request UUID deduplicates concurrent/repeated
-delivery (including partial failures; last 128 completed requests per Host
-process). The Host and Viewer (Mac/iOS) need the feature; the opaque Relay needs
-no update.
+Viewer commands require `supportsAgentFork == true`. Arbitrary target directories
+also require `supportsAgentForkDirectory == true`; without it the Viewer keeps
+the source directory because an older Host would ignore the new request field.
+The Viewer checks the directory capability again immediately before sending
+Fork, so a Host reconnect or downgrade while the panel is open cannot bypass it.
+Preparation is read-only; the Host creates Git/tmux state. A request UUID
+deduplicates concurrent/repeated delivery (including partial failures; last 128
+completed requests per Host process). The Host and Viewer (Mac/iOS) need the
+feature; the opaque Relay needs no update.
 
 ### Start a session in an arbitrary directory
 

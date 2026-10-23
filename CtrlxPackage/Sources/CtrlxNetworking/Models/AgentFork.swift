@@ -135,6 +135,9 @@ public struct ForkAgentSession: CommandSpec, Equatable {
     /// Optional so requests from clients without the naming panel still decode.
     public let windowName: String?
     public let worktree: Worktree?
+    /// A different existing directory on the Host. `nil` keeps the source
+    /// directory, or the new worktree when `worktree` is present.
+    public let workingDirectory: String?
     /// Optional target Provider. `nil` uses the current CLI configuration.
     public let targetProviderID: String?
     public init(
@@ -142,12 +145,14 @@ public struct ForkAgentSession: CommandSpec, Equatable {
         source: AgentForkSource,
         windowName: String? = nil,
         worktree: Worktree? = nil,
+        workingDirectory: String? = nil,
         targetProviderID: String? = nil
     ) {
         self.requestID = requestID
         self.source = source
         self.windowName = windowName
         self.worktree = worktree
+        self.workingDirectory = workingDirectory
         self.targetProviderID = targetProviderID
     }
 
@@ -164,6 +169,18 @@ public struct ForkAgentSession: CommandSpec, Equatable {
             }
             guard windowName == nil || windowName == worktree.name else {
                 throw AgentForkError("The window, branch and worktree directory must use the same name.")
+            }
+        }
+        if let workingDirectory {
+            guard worktree == nil else {
+                throw AgentForkError("Choose either a Host directory or a new worktree, not both.")
+            }
+            guard
+                !workingDirectory.isEmpty,
+                !workingDirectory.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+                workingDirectory.hasPrefix("/") || workingDirectory == "~" || workingDirectory.hasPrefix("~/")
+            else {
+                throw AgentForkError("Enter an absolute Host directory or ~/… without control characters.")
             }
         }
     }

@@ -3841,6 +3841,7 @@
                     supportsSessionWorktrees: true,
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
+                    supportsAgentForkDirectory: true,
                     supportsTerminalPaste: true,
                     supportsCodexQuestionAcknowledgement: true,
                     supportsTerminalFit: true,

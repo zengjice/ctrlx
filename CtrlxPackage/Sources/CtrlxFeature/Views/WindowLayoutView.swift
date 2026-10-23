@@ -1095,7 +1095,7 @@
                 canOpenSimulator: relayClient.hostSupportsSimulatorViewing,
                 canCreateSimulator: relayClient.hostSupportsPaneSimulator,
                 isCreatingWindow: isCreatingWindow,
-                forkUnavailableReason: agentForkUnavailableReason,
+                forkUnavailableReason: agentForkUnavailableReason(),
                 includesWindowManagement: includesWindowManagement,
                 choose: performWindowTabAction
             )
@@ -1185,7 +1185,7 @@
                     pendingBrowserLink = .init(paneID: paneID, hostID: hostId)
                 case let .fork(usingWorktree):
                     guard !isCreatingWindow else { return }
-                    if let reason = agentForkUnavailableReason {
+                    if let reason = agentForkUnavailableReason() {
                         commandError = reason
                         return
                     }
@@ -1365,17 +1365,24 @@
             }
         }
 
-        private var agentForkUnavailableReason: String? {
-            sessionStore.agentForkUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected)
+        private func agentForkUnavailableReason(requiresDirectory: Bool = false) -> String? {
+            sessionStore.agentForkUnavailableReason(
+                hostID: hostId, isConnected: relayClient.isHostConnected, requiresDirectory: requiresDirectory
+            )
         }
 
         private func forkConfiguration(window: TmuxWindow, usingWorktree: Bool) -> AgentForkConfiguration {
             let inputState = relayClient.workspaceInputState
+            let directorySource: SessionDirectorySource? = sessionStore.hostsSupportingAgentForkDirectory.contains(hostId) ? .remote(
+                hostID: hostId, connection: connectionManager.connection(for: hostId),
+                supportsBrowsing: sessionStore.hostsSupportingDirectoryBrowsing.contains(hostId),
+                supportsCreation: sessionStore.hostsSupportingDirectoryCreation.contains(hostId)
+            ) : nil
             return AgentForkConfiguration(
                 sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
-                usingWorktree: usingWorktree,
+                usingWorktree: usingWorktree, directorySource: directorySource,
                 prepare: { source in
-                    if let reason = agentForkUnavailableReason {
+                    if let reason = agentForkUnavailableReason() {
                         throw AgentForkError(reason)
                     }
                     let response = try await connectionManager.sendCommand(
@@ -1392,7 +1399,7 @@
 
         private func createAgentFork(_ request: ForkAgentSession, inputState: ViewerWorkspaceInputState) async throws {
             guard !isCreatingWindow else { throw AgentForkError("A window is already being created. Please wait.") }
-            if let reason = agentForkUnavailableReason {
+            if let reason = agentForkUnavailableReason(requiresDirectory: request.workingDirectory != nil) {
                 throw AgentForkError(reason)
             }
             guard request.source.sessionName == sessionName else { throw AgentForkError("Reopen Fork in the source session.") }

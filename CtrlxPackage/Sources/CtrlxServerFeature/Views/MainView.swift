@@ -6398,7 +6398,7 @@ public struct MainView: View {
         )
     }
 
-    private func agentForkUnavailableReason(hostID: String) -> String? {
+    private func agentForkUnavailableReason(hostID: String, requiresDirectory: Bool = false) -> String? {
         let isConnected = coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true
         guard isConnected else {
             return "Host is offline. Reconnect before forking an Agent."
@@ -6406,15 +6406,26 @@ public struct MainView: View {
         guard let store = coordinator.remoteSessionStore else {
             return "Update this Host to fork Agent conversations."
         }
-        return store.agentForkUnavailableReason(hostID: hostID, isConnected: isConnected)
+        return store.agentForkUnavailableReason(hostID: hostID, isConnected: isConnected, requiresDirectory: requiresDirectory)
     }
 
     private func agentForkConfiguration(panes: [PaneState], hostID: String?, usingWorktree: Bool, focusedPaneID: String? = nil) -> AgentForkConfiguration {
         let focused = focusedPaneID ?? terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
         let sources = AgentForkConfiguration.orderedSources(panes: panes, focusedPaneID: focused)
         let inputState = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.workspaceInputState }
+        let store = coordinator.remoteSessionStore
+        let directorySource: SessionDirectorySource? = if let hostID {
+            store?.hostsSupportingAgentForkDirectory.contains(hostID) == true ? .remote(
+                hostID: hostID,
+                connection: coordinator.viewerConnectionManager?.connection(for: hostID),
+                supportsBrowsing: store?.hostsSupportingDirectoryBrowsing.contains(hostID) == true,
+                supportsCreation: store?.hostsSupportingDirectoryCreation.contains(hostID) == true
+            ) : nil
+        } else {
+            localDirectorySource
+        }
         return AgentForkConfiguration(
-            sources: sources, usingWorktree: usingWorktree,
+            sources: sources, usingWorktree: usingWorktree, directorySource: directorySource,
             prepare: { source in
                 if let hostID {
                     if let reason = agentForkUnavailableReason(hostID: hostID) {
@@ -6439,7 +6450,7 @@ public struct MainView: View {
         defer { isCreatingAgentTab = false }
         let paneID: String
         if let hostID {
-            if let reason = agentForkUnavailableReason(hostID: hostID) {
+            if let reason = agentForkUnavailableReason(hostID: hostID, requiresDirectory: request.workingDirectory != nil) {
                 throw AgentForkError(reason)
             }
             guard let connection = coordinator.viewerConnectionManager?.connection(for: hostID) else {

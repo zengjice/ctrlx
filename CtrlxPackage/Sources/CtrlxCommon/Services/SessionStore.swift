@@ -57,6 +57,7 @@ final public class SessionStore {
     public private(set) var hostsSupportingSessionWorktrees: Set<String> = []
     public private(set) var hostsSupportingAgentWindowLaunch: Set<String> = []
     public private(set) var hostsSupportingAgentFork: Set<String> = []
+    public private(set) var hostsSupportingAgentForkDirectory: Set<String> = []
 
     /// Cross-session cost/usage rollup per host (issue #598), from each host's
     /// `SessionStateMessage.usageOverview`. Absent for hosts that don't send one
@@ -309,6 +310,11 @@ final public class SessionStore {
         } else {
             hostsSupportingAgentFork.remove(hostId)
         }
+        if state.supportsAgentForkDirectory == true {
+            hostsSupportingAgentForkDirectory.insert(hostId)
+        } else {
+            hostsSupportingAgentForkDirectory.remove(hostId)
+        }
         if state.supportsAgentWindowLaunch == true {
             hostsSupportingAgentWindowLaunch.insert(hostId)
         } else {
@@ -379,6 +385,7 @@ final public class SessionStore {
         hostsSupportingSessionWorktrees.remove(hostId)
         hostsSupportingAgentWindowLaunch.remove(hostId)
         hostsSupportingAgentFork.remove(hostId)
+        hostsSupportingAgentForkDirectory.remove(hostId)
         usageOverviewByHost.removeValue(forKey: hostId)
         sidebarSortModeByHost.removeValue(forKey: hostId)
         sharedTerminalLayoutsByHost.removeValue(forKey: hostId)
@@ -492,9 +499,12 @@ final public class SessionStore {
         return nil
     }
 
-    public func agentForkUnavailableReason(hostID: String, isConnected: Bool) -> String? {
+    public func agentForkUnavailableReason(hostID: String, isConnected: Bool, requiresDirectory: Bool = false) -> String? {
         guard isConnected else { return "Host is offline. Reconnect before forking an Agent." }
         guard hostsSupportingAgentFork.contains(hostID) else { return "Update this Host to fork Agent conversations." }
+        if requiresDirectory, !hostsSupportingAgentForkDirectory.contains(hostID) {
+            return "Update this Host to fork into another directory."
+        }
         return nil
     }
 

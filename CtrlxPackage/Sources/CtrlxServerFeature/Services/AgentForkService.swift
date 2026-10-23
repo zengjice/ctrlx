@@ -81,17 +81,26 @@ final class AgentForkService {
     private func perform(_ request: ForkAgentSession, source: AgentForkSource) async throws -> String {
         let agent = try validate(source)
         @Dependency(SessionDirectoryClient.self) var directories
-        let sourceDirectory = try await directories.resolve(source.workingDirectory)
+        let sourceDirectory: String?
+        var directory: String
+        if let workingDirectory = request.workingDirectory {
+            sourceDirectory = nil
+            directory = try await directories.resolve(workingDirectory)
+        } else {
+            let resolved = try await directories.resolve(source.workingDirectory)
+            sourceDirectory = resolved
+            directory = resolved
+        }
         let command = try await forkCommand(
             agent,
             sessionID: source.sessionID,
-            projectPath: sourceDirectory,
+            projectPath: directory,
             targetProviderID: request.targetProviderID
         )
         _ = try validate(source)
-        var directory = sourceDirectory
         if let worktree = request.worktree {
             @Dependency(AgentForkWorktreeClient.self) var worktrees
+            guard let sourceDirectory else { throw AgentForkError("The source directory is unavailable.") }
             directory = try await worktrees.create(sourceDirectory, worktree)
         }
         do {

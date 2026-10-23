@@ -39,8 +39,10 @@ struct AgentForkConfigurationTests {
         )
     }
 
-    private func configuration(sources: [AgentForkSource], usingWorktree: Bool) -> AgentForkConfiguration {
-        AgentForkConfiguration(sources: sources, usingWorktree: usingWorktree, prepare: { _ in
+    private func configuration(
+        sources: [AgentForkSource], usingWorktree: Bool, directorySource: SessionDirectorySource? = nil
+    ) -> AgentForkConfiguration {
+        AgentForkConfiguration(sources: sources, usingWorktree: usingWorktree, directorySource: directorySource, prepare: { _ in
             Issue.record("Validating a draft must not send a preparation request")
             throw CancellationError()
         }, fork: { _ in Issue.record("Validating a draft must not create a window") })
@@ -81,12 +83,45 @@ struct AgentForkConfigurationTests {
         )
         #expect(request.windowName == "我的 Fork")
         #expect(request.worktree == nil)
+        #expect(request.workingDirectory == nil)
         #expect(request.source.pluginID == agent)
         for name in ["", "  ", "line\nbreak"] {
             #expect(throws: AgentForkError.self) {
                 try config.forkRequest(source: source, preparation: nil, name: name, allowUncommittedChanges: false, targetProviderID: nil)
             }
         }
+    }
+
+    @Test("Current-directory Fork can target another Host directory only when its capability is available")
+    func arbitraryDirectory() throws {
+        let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
+        let directorySource = SessionDirectorySource(id: "host", list: { _ in throw CancellationError() })
+        let config = configuration(sources: [source], usingWorktree: false, directorySource: directorySource)
+        let request = try config.forkRequest(
+            source: source, preparation: nil, name: "elsewhere", allowUncommittedChanges: false,
+            targetProviderID: nil, directory: "~/Other Project"
+        )
+        #expect(request.workingDirectory == "~/Other Project")
+        #expect(request.worktree == nil)
+        let unchanged = try config.forkRequest(
+            source: source, preparation: nil, name: "current", allowUncommittedChanges: false,
+            targetProviderID: nil, directory: source.workingDirectory
+        )
+        #expect(unchanged.workingDirectory == nil)
+        for directory in ["", "relative", "~/line\nbreak"] {
+            #expect(throws: AgentForkError.self) {
+                try config.forkRequest(
+                    source: source, preparation: nil, name: "elsewhere", allowUncommittedChanges: false,
+                    targetProviderID: nil, directory: directory
+                )
+            }
+        }
+        let legacyHost = configuration(sources: [source], usingWorktree: false)
+        let legacyRequest = try legacyHost.forkRequest(
+            source: source, preparation: nil, name: "legacy", allowUncommittedChanges: false,
+            targetProviderID: nil, directory: "/other"
+        )
+        #expect(legacyRequest.workingDirectory == nil)
     }
 
     @Test("Mac/iOS worktree drafts share one name; correcting a conflict gets a fresh retry identity", arguments: ["codex", "claude-code"])
@@ -97,10 +132,12 @@ struct AgentForkConfigurationTests {
             repositoryRoot: "/Host/repo", primaryRoot: "/Host/repo", head: "source-head", relativeDirectory: "", hasUncommittedChanges: false
         ))
         let first = try config.forkRequest(
-            source: source, preparation: preparation, name: "  feature  ", allowUncommittedChanges: false, targetProviderID: nil
+            source: source, preparation: preparation, name: "  feature  ", allowUncommittedChanges: false,
+            targetProviderID: nil, directory: "/other"
         )
         #expect(first.windowName == "feature")
         #expect(first.worktree?.name == "feature")
+        #expect(first.workingDirectory == nil)
         #expect(first.source.pluginID == agent)
         #expect(try preparation.worktree?.directory(name: #require(first.windowName)) == "/Host/repo/.worktrees/feature")
         let corrected = try config.forkRequest(
@@ -150,6 +187,7 @@ struct AgentForkConfigurationTests {
         let store = SessionStore()
         store.handleStateUpdate(SessionStateMessage(pairId: "office", paneStates: [:], supportsAgentFork: true))
         #expect(store.agentForkUnavailableReason(hostID: "office", isConnected: true) == nil)
+        #expect(store.agentForkUnavailableReason(hostID: "office", isConnected: true, requiresDirectory: true)?.contains("directory") == true)
         #expect(store.agentForkUnavailableReason(hostID: "office", isConnected: false)?.contains("offline") == true)
         #expect(store.agentForkUnavailableReason(hostID: "home", isConnected: true)?.contains("Update") == true)
         store.handleStateUpdate(SessionStateMessage(pairId: "office", paneStates: [:]))
@@ -157,5 +195,13 @@ struct AgentForkConfigurationTests {
         store.handleStateUpdate(SessionStateMessage(pairId: "office", paneStates: [:], supportsAgentFork: true))
         store.clearSessions(for: "office")
         #expect(store.agentForkUnavailableReason(hostID: "office", isConnected: true) != nil)
+        store.handleStateUpdate(SessionStateMessage(
+            pairId: "office", paneStates: [:], supportsAgentFork: true, supportsAgentForkDirectory: true
+        ))
+        #expect(store.hostsSupportingAgentForkDirectory.contains("office"))
+        #expect(store.agentForkUnavailableReason(hostID: "office", isConnected: true, requiresDirectory: true) == nil)
+        store.handleStateUpdate(SessionStateMessage(pairId: "office", paneStates: [:], supportsAgentFork: true))
+        #expect(!store.hostsSupportingAgentForkDirectory.contains("office"))
+        #expect(store.agentForkUnavailableReason(hostID: "office", isConnected: true, requiresDirectory: true)?.contains("Update") == true)
     }
 }
