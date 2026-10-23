@@ -27,6 +27,11 @@ struct IOSPaneLinkedTabs {
         }
     }
 
+    func sourceWindow(for item: PaneLinkedTabID) -> TmuxWindow? {
+        guard let sourcePaneID = sourcePaneID(item) else { return nil }
+        return windows.first { $0.panes.contains { $0.paneId == sourcePaneID } }
+    }
+
     func title(for source: String?) -> String {
         guard let source else { return "Other" }
         guard

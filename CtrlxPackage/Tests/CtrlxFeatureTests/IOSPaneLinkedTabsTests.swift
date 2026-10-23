@@ -38,5 +38,7 @@ struct IOSPaneLinkedTabsTests {
         let group = try #require(layout.groups.first)
         #expect(layout.moving(IndexSet(integer: 0), to: 2, in: group) == [.browser(web.id), .file(file.id), .simulator(sim.id)])
         #expect(layout.sourcePaneID(.simulator(sim.id)) == "%2")
+        #expect(layout.sourceWindow(for: .simulator(sim.id))?.id == windows.first?.id)
+        #expect(layout.sourceWindow(for: .file(UUID())) == nil)
     }
 }

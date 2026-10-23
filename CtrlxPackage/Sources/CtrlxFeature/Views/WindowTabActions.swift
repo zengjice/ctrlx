@@ -15,6 +15,7 @@
         let isCreatingWindow: Bool
         let forkUnavailableReason: String?
         var includesWindowManagement = false
+        var includesFork = true
         let choose: (WindowTabAction) -> Void
 
         var body: some View {
@@ -40,7 +41,9 @@
             }
             openBrowserButton(window)
             openSimulatorButton(window)
-            forkMenu(window)
+            if includesFork {
+                forkMenu(window)
+            }
         }
 
         private func newAgentButton(_ window: TmuxWindow) -> some View {

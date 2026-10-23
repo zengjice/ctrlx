@@ -41,6 +41,21 @@
             let inputBinding: ViewerWorkspaceInputBinding
         }
 
+        private enum WindowShortcutScope {
+            case terminal
+            case linkedTab(sourcePaneID: String)
+
+            var sourcePaneID: String? {
+                guard case let .linkedTab(sourcePaneID) = self else { return nil }
+                return sourcePaneID
+            }
+
+            var includesFork: Bool {
+                guard case .terminal = self else { return false }
+                return true
+            }
+        }
+
         @State private var pendingSimulatorRequest: SimulatorOpenRequest?
         @State private var pendingFilesRequest: FilesOpenRequest?
         @State private var pendingFilesCloseID: UUID?
@@ -233,6 +248,17 @@
             return fileWorkspace.selectedID.map(PaneLinkedTabID.file)
         }
 
+        private var selectedLinkedTabSource: (paneID: String, window: TmuxWindow)? {
+            selectedLinkedTab.flatMap(linkedTabSource)
+        }
+
+        private func linkedTabSource(_ tab: PaneLinkedTabID) -> (paneID: String, window: TmuxWindow)? {
+            guard
+                let paneID = linkedTabs.sourcePaneID(tab),
+                let window = linkedTabs.sourceWindow(for: tab) else { return nil }
+            return (paneID, window)
+        }
+
         private func selectAdjacentLinkedTab(_ source: PaneLinkedTabID, direction: Int) {
             guard !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput else { return }
             switch PaneLinkedTabs.adjacent(to: source, direction: direction, groups: linkedTabs.groups) {
@@ -381,6 +407,8 @@
             .safeAreaInset(edge: .top, spacing: 0) {
                 if terminalIsVisible, let window {
                     windowShortcutBar(window)
+                } else if let source = selectedLinkedTabSource {
+                    windowShortcutBar(source.window, scope: .linkedTab(sourcePaneID: source.paneID))
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -716,9 +744,10 @@
         }
 
         private func restorePreviewKeyboard() {
-            guard let keyboardWasActive = previewKeyboardRestore.consume(
-                terminalIsVisible: terminalIsVisible, activePaneID: activePaneId
-            ) else { return }
+            guard
+                let keyboardWasActive = previewKeyboardRestore.consume(
+                    terminalIsVisible: terminalIsVisible, activePaneID: activePaneId
+                ) else { return }
             isKeyboardActive = keyboardWasActive
         }
 
@@ -1006,19 +1035,16 @@
         }
 
         private func linkedTabMenu(_ tab: PaneLinkedTabID) -> some View {
-            let sourcePaneID = linkedTabs.sourcePaneID(tab)
-            let sourceWindow = sessionWindows.first { $0.panes.contains { $0.paneId == sourcePaneID } }
+            let source = linkedTabSource(tab)
             return Menu {
                 Button {
-                    if
-                        let paneID = linkedTabs.sourcePaneID(tab),
-                        let target = sessionWindows.first(where: { $0.panes.contains { $0.paneId == paneID } }) {
-                        selectTerminalWindow(target, preferredPaneID: paneID)
+                    if let source {
+                        selectTerminalWindow(source.window, preferredPaneID: source.paneID)
                     }
                 } label: {
                     Label("Go to Terminal Tab", symbol: .terminal)
                 }
-                .disabled(sourceWindow == nil)
+                .disabled(source == nil)
                 Divider()
                 Button(role: .destructive) {
                     switch tab {
@@ -1052,11 +1078,11 @@
             }
         }
 
-        private func windowShortcutBar(_ window: TmuxWindow) -> some View {
+        private func windowShortcutBar(_ window: TmuxWindow, scope: WindowShortcutScope = .terminal) -> some View {
             ViewThatFits(in: .horizontal) {
-                windowShortcutButtons(window)
+                windowShortcutButtons(window, scope: scope)
                 ScrollView(.horizontal) {
-                    windowShortcutButtons(window)
+                    windowShortcutButtons(window, scope: scope)
                         .padding(.horizontal, 4)
                 }
                 .scrollIndicators(.visible)
@@ -1067,16 +1093,18 @@
             .background(.bar)
         }
 
-        private func windowShortcutButtons(_ window: TmuxWindow) -> some View {
+        private func windowShortcutButtons(_ window: TmuxWindow, scope: WindowShortcutScope) -> some View {
             HStack(spacing: 8) {
                 Group {
-                    windowActions(window)
-                    Button(action: resizeWindowToFit) {
-                        Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
+                    windowActions(window, scope: scope)
+                    if case .terminal = scope {
+                        Button(action: resizeWindowToFit) {
+                            Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
+                        }
+                        .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
+                        .accessibilityHint("Changes the window size on the Host and all Viewers")
+                        .accessibilityIdentifier("terminal-fit-to-screen")
                     }
-                    .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
-                    .accessibilityHint("Changes the window size on the Host and all Viewers")
-                    .accessibilityIdentifier("terminal-fit-to-screen")
                 }
                 .labelStyle(.iconOnly)
                 .frame(minWidth: 44, minHeight: 44)
@@ -1084,7 +1112,11 @@
             }
         }
 
-        private func windowActions(_ window: TmuxWindow, includesWindowManagement: Bool = false) -> some View {
+        private func windowActions(
+            _ window: TmuxWindow,
+            includesWindowManagement: Bool = false,
+            scope: WindowShortcutScope = .terminal
+        ) -> some View {
             WindowTabActions(
                 window: window,
                 focusedPaneID: activePaneId,
@@ -1097,7 +1129,10 @@
                 isCreatingWindow: isCreatingWindow,
                 forkUnavailableReason: agentForkUnavailableReason(),
                 includesWindowManagement: includesWindowManagement,
-                choose: performWindowTabAction
+                includesFork: scope.includesFork,
+                choose: { action in
+                    performWindowTabAction(action, preferredPaneID: scope.sourcePaneID)
+                }
             )
         }
 
@@ -1129,7 +1164,7 @@
             performWindowTabAction(action)
         }
 
-        private func performWindowTabAction(_ action: WindowTabAction) {
+        private func performWindowTabAction(_ action: WindowTabAction, preferredPaneID: String? = nil) {
             pendingSimulatorRequest = nil
             switch action {
             case let .window(_, operation):
@@ -1148,9 +1183,7 @@
                      .openAnotherFiles:
                     guard
                         relayClient.hostSupportsPaneFiles,
-                        let paneID = FileBrowserTab.sourcePaneID(
-                            in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
-                        ) else {
+                        let paneID = actionPaneID(in: target, preferredPaneID: preferredPaneID) else {
                         commandError = "Files is unavailable for this window. Check the Host and tab limit."
                         return
                     }
@@ -1161,9 +1194,7 @@
                 case .openSimulator:
                     guard
                         relayClient.hostSupportsPaneSimulator,
-                        let paneID = FileBrowserTab.sourcePaneID(
-                            in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
-                        ) else {
+                        let paneID = actionPaneID(in: target, preferredPaneID: preferredPaneID) else {
                         commandError = "Update the Host to open iOS Simulator for this window."
                         return
                     }
@@ -1175,10 +1206,7 @@
                     pendingBrowserLink = nil
                     pendingSimulatorRequest = .init(paneID: paneID, inputBinding: relayClient.workspaceInputState.binding(paneID: paneID))
                 case .openBrowser:
-                    guard
-                        let paneID = FileBrowserTab.sourcePaneID(
-                            in: target.panes.map(\.paneId), focusedPaneID: activePaneId, activePaneID: target.activePane?.paneId
-                        ) else {
+                    guard let paneID = actionPaneID(in: target, preferredPaneID: preferredPaneID) else {
                         commandError = "This window no longer has a source pane."
                         return
                     }
@@ -1271,6 +1299,14 @@
                     }
                 }
             }
+        }
+
+        private func actionPaneID(in window: TmuxWindow, preferredPaneID: String?) -> String? {
+            FileBrowserTab.sourcePaneID(
+                in: window.panes.map(\.paneId),
+                focusedPaneID: preferredPaneID ?? activePaneId,
+                activePaneID: window.activePane?.paneId
+            )
         }
 
         private func reorderWindows(_ ids: [String]) async throws {
