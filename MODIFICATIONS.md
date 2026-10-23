@@ -7,6 +7,38 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.92 — Custom Agent Providers and iOS quick actions
+
+- Add Keychain-backed custom Codex and Claude Code API Providers, with Provider
+  selection, defaults and management UI. Keep credentials out of Viewer messages,
+  settings and recovery snapshots, and allow Fork to preserve a conversation's
+  home while changing its Provider.
+- Deliver Agent launch environments in pane-scoped tmux payloads. Remove the
+  payload after login startup, on interruption and after recovery so credentials
+  cannot appear in process arguments, leak between windows or persist in the
+  interactive shell.
+- Normalize Markdown heading link targets and restore terminal file links that
+  hand off into artifact previews.
+- Move screenshot annotation capture into browser and simulator tab toolbars.
+- Limit horizontal trackpad tab switching to terminal and Git content so browser,
+  Files and Simulator panes retain their own gestures.
+- Add New Agent and New Terminal quick actions to the iOS terminal toolbar.
+- Release validation: the bounded serial Swift regression passed with 3,733
+  tests across 527 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. An initial attempt stopped before
+  tests on a stale SwiftPM artifact path from the renamed worktree; a second run
+  reached 1,200 passes before stale test tmux servers exhausted macOS PTY
+  capacity. After repairing the cache and stopping only test tmux sockets, the
+  unchanged rerun passed.
+- Both boundary checks, the 14-page website build and 89
+  publisher/COS/installer tests passed. SwiftFormat reports 1,927 findings in six
+  previously flagged browser/simulator views versus 1,926 on their `v3.0.91`
+  baseline; the added findings are the inserted lines inheriting the same
+  whole-file parser state, with no standalone new rule issue.
+- Mac distribution is build 25 through COS, using an Apple Development signature
+  without notarization. Publication verifies source metadata, signatures and the
+  complete public download before installer promotion.
+
 ## 3.0.91 — Artifact previews and patched CEF support
 
 - Preview Markdown, image and Mermaid terminal-file links in a shared
