@@ -1,24 +1,26 @@
 import Foundation
 
-/// Explicit, repository-relative output. This is an application convention, not a registered URI scheme.
+/// Explicit, workspace-relative output. The repo marker also supports non-Git Agent directories.
 public enum RepositoryFileLink {
     public static let prefix = "<repo:"
-    public static let maximumLength = 3 * 4096 + 7
+    public static let maximumLength = 3 * 4_096 + 7
 
     public static func marker(path: String) -> String? {
-        guard isValid(path: path),
-              let encoded = path.addingPercentEncoding(withAllowedCharacters: .init(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/")) else { return nil }
+        guard
+            isValid(path: path),
+            let encoded = path.addingPercentEncoding(withAllowedCharacters: .init(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/")) else { return nil }
         return "\(prefix)\(encoded)>"
     }
 
     public static func path(_ marker: String) -> String? {
         guard marker.hasPrefix(prefix), marker.hasSuffix(">"), marker.utf8.count <= maximumLength else { return nil }
         let encoded = marker.dropFirst(prefix.count).dropLast()
-        guard !encoded.isEmpty, encoded.unicodeScalars.allSatisfy({
-            !CharacterSet.whitespacesAndNewlines.contains($0)
-                && !CharacterSet.controlCharacters.contains($0)
-                && (!$0.isASCII || "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/%".unicodeScalars.contains($0))
-        }), var path = String(encoded).removingPercentEncoding else { return nil }
+        guard
+            !encoded.isEmpty, encoded.unicodeScalars.allSatisfy({
+                !CharacterSet.whitespacesAndNewlines.contains($0)
+                    && !CharacterSet.controlCharacters.contains($0)
+                    && (!$0.isASCII || "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/%".unicodeScalars.contains($0))
+            }), var path = String(encoded).removingPercentEncoding else { return nil }
         // Accept directory spelling at the marker boundary; keep decoded Host paths canonical.
         if path.hasSuffix("/") {
             path.removeLast()
@@ -30,9 +32,12 @@ public enum RepositoryFileLink {
 
     /// Validates a decoded path once; percent signs here are literal filename characters.
     public static func isValid(path: String) -> Bool {
-        guard !path.isEmpty, path.utf8.count <= 4096, !path.hasPrefix("~"),
-              !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return false }
-        if path == "." { return true }
+        guard
+            !path.isEmpty, path.utf8.count <= 4_096, !path.hasPrefix("~"),
+            !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return false }
+        if path == "." {
+            return true
+        }
         return path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
             !$0.isEmpty && $0 != "." && $0 != ".."
         }
@@ -52,8 +57,9 @@ public struct RepositoryFileContext: Codable, Sendable, Equatable {
     }
 
     public init?(pane: PaneState) {
-        guard let agent = pane.agentSession, let directory = agent.detectedProjectPath,
-              directory.hasPrefix("/"), !directory.hasPrefix("//") else { return nil }
+        guard
+            let agent = pane.agentSession, let directory = agent.detectedProjectPath,
+            directory.hasPrefix("/"), !directory.hasPrefix("//") else { return nil }
         self.init(pluginID: agent.pluginID, sessionID: pane.claudeSessionID, projectDirectory: directory)
     }
 }

@@ -1,19 +1,28 @@
 ---
 name: file-links
-description: Format verified repository files and folders in user-facing progress updates and final replies as clickable repo references. Not for commands, code, web URLs, or files outside the current worktree.
+description: Format verified workspace files and folders as clickable repo references in replies, including non-Git projects. Not for commands, code, web URLs, or files outside the current workspace.
 ---
 
-# Repository file references
+# Workspace file references
 
-CtrlX opens repository files and folders from explicit references in agent replies.
+CtrlX opens workspace files and folders from explicit references in agent replies.
 When reporting outputs, changes or source locations, format the files/folders you
 already need to mention as inline code: `<repo:outputs/report.pdf>`. Use this
 instead of a bare path or Markdown file link; do not add unrelated references.
 
-- Link only existing items inside the **current agent session's Git worktree**.
-  Reuse evidence from your reads, writes or checks; verify only if unsure.
-  Find the root with `git rev-parse --show-toplevel` only when it is not known.
-  Do not substitute the primary checkout or another machine/container's filesystem.
+- Link existing items inside the **current agent session's workspace** using
+  `repo:` even when the directory is not a Git repository. In Git, the root is
+  the current worktree root; outside Git, it is the Agent session's project/working
+  directory supplied in session context. Do not initialize Git just to make links.
+  Reuse evidence from your reads, writes or checks; verify only if unsure. If the
+  root is unknown, run `git -C <session-directory> rev-parse --show-toplevel`.
+  A "not a git repository" result can also mean unreadable Git metadata. Before
+  using the non-Git base, confirm there is no `.git` marker in the session
+  directory or its ancestors; worktree pointer files count too. Existing metadata
+  or a failed check means report the error, not switch roots. A shell command's
+  later `cd`
+  does not change this base. Do not substitute the primary checkout, parent/home
+  directory, or another machine/container's filesystem.
 - Use a root-relative path, never an absolute path, leading `./` or `..`.
   Root: `<repo:.>`. Folder: `<repo:outputs/final_films>` (one trailing `/` is accepted).
   Keep both angle brackets and the complete marker on one source line; visual
@@ -24,15 +33,15 @@ instead of a bare path or Markdown file link; do not add unrelated references.
   also encode `< > # ? : " ' \\ ( )`. Chinese may remain literal or be encoded.
 - This applies only to user-facing references. Leave paths inside shell commands,
   code and configuration unchanged. Keep web URLs as ordinary web links; do not
-  mark slash commands, examples, deleted/unverified items or files outside this worktree.
+  mark slash commands, examples, deleted/unverified items or files outside this workspace.
 
 No CLI call or terminal escape is needed. The Host validates on click. This is an
-output convention, not a registered URI standard or a link pinned to a past worktree.
+output convention, not a registered URI standard or a link pinned to a past workspace.
 
 ## Images, Mermaid diagrams and Markdown
 
 When an image or diagram helps answer the user's request, save the deliverable
-inside the current worktree and include its explicit repository reference in
+inside the current workspace and include its explicit `repo:` reference in
 the reply. Reuse an existing image file when possible; prefer PNG or JPEG for
 new raster images. Save Mermaid as UTF-8
 `.mmd` or `.mermaid` source, without Markdown fences, then link that file.
@@ -48,9 +57,9 @@ the terminal is not automatically rendered. Keep diagrams within 64 KiB and
 
 For a document that combines prose, diagrams and images, save UTF-8 `.md` or
 `.markdown` and reference that file. Its preview renders Markdown, fenced
-`mermaid` blocks and repository images together on Mac and iOS. Use image paths
+`mermaid` blocks and workspace images together on Mac and iOS. Use image paths
 relative to the Markdown file, such as `images/overview.png`; `../` is supported
-only within the repository. Web image URLs and raw HTML are not rendered.
+only within the workspace root. Web image URLs and raw HTML are not rendered.
 Keep the document within 512 KiB, with at most 16 diagrams and 24 unique images.
 PNG/JPEG and the existing image formats are supported; SVG must be UTF-8 and
 within 512 KiB. Each diagram retains the limits above. Do not create a separate

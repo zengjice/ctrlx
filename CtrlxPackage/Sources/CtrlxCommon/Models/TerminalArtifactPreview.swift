@@ -71,14 +71,14 @@ public struct TerminalArtifactPreview: Identifiable {
         return data
     }
 
-    /// Resolve document-relative URLs lexically; the Host then checks the real worktree boundary.
+    /// Resolve document-relative URLs lexically; the Host then checks the real workspace boundary.
     public func documentLink(_ reference: String) throws -> TerminalFileLinkRequest {
         // Preserve existing escapes when a Markdown URL mixes Unicode and percent encoding.
         guard
             let encoded = reference.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed.union(CharacterSet(charactersIn: "%#"))),
             let url = URLComponents(string: encoded), url.scheme == nil, url.host == nil,
             !url.path.isEmpty, !url.path.hasPrefix("/"), !url.path.contains("\\") else {
-            throw FileBrowserError.message("Only files inside this repository can be previewed.")
+            throw FileBrowserError.message("Only files inside this workspace can be previewed.")
         }
         var parts = link.path.split(separator: "/").dropLast().map(String.init)
         for part in url.path.split(separator: "/") {
@@ -86,14 +86,14 @@ public struct TerminalArtifactPreview: Identifiable {
                 continue
             }
             if part == ".." {
-                guard !parts.isEmpty else { throw FileBrowserError.message("The link leaves this repository.") }
+                guard !parts.isEmpty else { throw FileBrowserError.message("The link leaves this workspace.") }
                 parts.removeLast()
             } else {
                 parts.append(String(part))
             }
         }
         let path = parts.isEmpty ? "." : parts.joined(separator: "/")
-        guard RepositoryFileLink.isValid(path: path) else { throw FileBrowserError.message("Invalid repository-relative link.") }
+        guard RepositoryFileLink.isValid(path: path) else { throw FileBrowserError.message("Invalid workspace-relative link.") }
         return .init(path: path, paneID: link.paneID, hostID: link.hostID)
     }
 

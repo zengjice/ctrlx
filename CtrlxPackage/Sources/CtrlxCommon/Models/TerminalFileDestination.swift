@@ -10,12 +10,14 @@ public struct TerminalFileDestination: Sendable, Equatable {
         self.file = file
     }
 
-    /// The Host resolves against the source agent's Git worktree, never a Viewer filesystem or shell cwd.
+    /// The Host uses the source Agent's worktree root, or its project directory outside Git.
     @MainActor
     public static func resolve(path: String, context: RepositoryFileContext?, source: FileBrowserSource) async throws -> Self {
-        if let reason = source.unavailableReason { throw FileBrowserError.message(reason) }
+        if let reason = source.unavailableReason {
+            throw FileBrowserError.message(reason)
+        }
         guard RepositoryFileLink.isValid(path: path) else {
-            throw FileBrowserError.message("Invalid repository-relative path.")
+            throw FileBrowserError.message("Invalid workspace-relative path.")
         }
         guard let context else {
             throw FileBrowserError.message("The source Agent's project directory is unavailable.")

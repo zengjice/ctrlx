@@ -201,7 +201,7 @@ their source view. The pinned upstream bundle, hash and license are under
 `CtrlxCommon/Resources/ArtifactPreview`; upstream dependency notices are retained.
 
 Markdown uses bundled Marked and DOMPurify in the same isolated viewer. It supports
-headings, lists, tables, task lists, code blocks, inline Mermaid and repository
+headings, lists, tables, task lists, code blocks, inline Mermaid and workspace
 images. UTF-8 source is limited to 512 KiB. Preview/Source, Copy Source, Share Markdown
 and Open in Files are available; sharing exports the original Markdown, not a
 self-contained archive. Raw HTML is shown as text. Up to 16 Mermaid blocks use the
@@ -212,8 +212,8 @@ UTF-8 SVG up to 512 KiB is sanitized and displayed as an isolated image. Missing
 unsupported images show an inline error without hiding the document.
 
 Document-relative image and file paths are resolved against the Markdown file's
-repository location, including `../` only within that repository. The Host still
-validates symlinks, pane identity and worktree boundaries. Absolute paths, web/data
+workspace location, including `../` only within that workspace. The Host still
+validates symlinks, pane identity and workspace boundaries. Absolute paths, web/data
 image URLs and Viewer-local files are not loaded. Relative file links follow the
 existing repository-link routing; heading links scroll inside the preview, and
 explicit HTTP(S) link clicks use the platform URL handler. No embedded document
@@ -236,8 +236,11 @@ Ordinary paths, slash commands, local Markdown targets and `file://`/OSC 8
 file targets are not inferred or opened. Web links retain their own handling.
 Compatibility with previous file-link output is deliberately dropped.
 
-Paths are relative to the **current source agent's Git worktree root**.
-A nested launch directory resolves to its worktree root, not the primary checkout.
+Paths are relative to the **current source Agent's workspace root**. Inside Git,
+this is the worktree root: a nested launch directory resolves to its worktree,
+not the primary checkout. Outside Git, it is the Agent's detected project
+directory, not a later shell command's cwd, its parent or the Host home directory.
+The same `repo:` marker works in both cases; Git initialization is unnecessary.
 `<repo:.>` opens the root. A directory marker such as `<repo:outputs/final_films/>`
 accepts one trailing `/`, removed after percent decoding and before validation;
 the Host receives the same canonical path as `<repo:outputs/final_films>`.
@@ -261,16 +264,23 @@ A click captures the Host, pane and its agent context (plugin ID, conversation I
 when available, and detected project directory). `BrowseFiles.repositoryInfo`
 runs off the keyboard receive loop. The Host checks that context before and after
 resolution, runs `git rev-parse --show-toplevel`, checks existence and canonical
-symlink containment, and returns the existing file-info response. Missing context,
-non-Git projects, missing files and links outside the worktree fail clearly:
+symlink containment, and returns the existing file-info response. Git discovery
+uses `LC_ALL=C`. Exit 128 with the absent-repository discovery diagnostic also
+occurs with unreadable Git metadata, so it is not enough to select the Agent
+project directory. Before that fallback, the Host checks `.git` with `lstat` in
+the canonical project directory and each ancestor. Any marker (including a
+worktree pointer file or dangling symlink), or any lookup error other than
+`ENOENT`, prevents fallback. Git permission/configuration errors, bare repositories
+and timeouts fail rather than silently changing the root.
+Missing context, missing files and links outside the workspace fail clearly:
 there is no shell-cwd fallback or alternate-directory search. Remote clients gate
 the operation on `supportsRepositoryFileLinks`; an older Host is not sent an
 undecodable request. No Relay implementation/deployment change is needed.
 
 The marker intentionally carries no absolute path or repository identity.
 It is not an access grant or proof of provenance. After reusing a pane/session for
-another workspace, old output is interpreted in the **current** agent worktree;
-historical links are not guaranteed to identify the old repository. This is the
+another workspace, old output is interpreted in the **current** Agent workspace;
+historical links are not guaranteed to identify the old directory. This is the
 chosen KISS boundary, rather than a per-output provenance registry.
 
 Click/tap an underlined marker to open Files in the same session. A directory
@@ -323,7 +333,10 @@ Update the Host and each Mac/iOS Viewer, update the installed agent plugin,
 then start a new agent session with plugin hooks enabled/trusted. Updating only
 the App does not refresh a cached agent plugin. Both TUIs should receive an
 inline-code literal marker, never a Markdown link target that the renderer can
-hide or shorten.
+hide or shorten. Non-Git directory support requires the updated Host and plugin
+guidance; Viewers that already understand `repo:` use the existing request without
+a new wire capability. Existing cached plugins and session instructions are not
+rewritten by editing the repository's skill source.
 
 `python3 scripts/tests/test_agent_skills.py` exercises the real hook scripts with
 isolated ingress sockets and the built-plugin skill mirroring step. It checks
@@ -331,12 +344,17 @@ all five SessionStart sources, unchanged ingress frames, canonical body delivery
 silent non-start events and failure paths. These are wiring tests, not proof of
 real-model adherence. For that acceptance, ask each CLI to report an edited file,
 generated output and folder **without naming the skill**, repeat after resume and
-compaction, and include Chinese/spaced names and source line references. Commands,
-web URLs, deleted files and external paths must remain unmarked.
+compaction, and include Git and non-Git directories, Chinese/spaced names and
+source line references. Commands, web URLs, deleted files and external paths
+must remain unmarked.
 
 Tests cover marker recognition, every soft/hard wrap boundary, inertial viewport
 snapshots, single decoding, source-context changes and actual Git worktree/symlink
-resolution. Device tap/render acceptance still requires a real iPhone; macOS unit
+resolution. `RepositoryFileLinkTests` also exercises a non-Git nested directory,
+symlink containment, Markdown/Mermaid/image reads and Git failure propagation.
+Real Git permission fixtures cover unreadable `.git` and `.git/HEAD` with
+different same-named files in the repository root and nested launch directory.
+Device tap/render acceptance still requires a real iPhone; macOS unit
 tests do not run the iOS-only viewport test.
 
 ### Creating folders and adding files

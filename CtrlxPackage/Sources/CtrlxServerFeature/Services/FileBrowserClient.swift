@@ -151,21 +151,50 @@ actor HostFileBrowser {
 
     func repositoryFile(path: String, projectDirectory: String) async throws -> FileBrowserEntry {
         guard RepositoryFileLink.isValid(path: path), projectDirectory.hasPrefix("/") else {
-            throw FileBrowserError.message("Invalid repository-relative path.")
+            throw FileBrowserError.message("Invalid workspace-relative path.")
         }
         @Dependency(ProcessRunner.self) var runner
-        let result = try await runner.run("/usr/bin/git", ["-C", projectDirectory, "rev-parse", "--show-toplevel"], nil, 5)
+        let result = try await runner.run("/usr/bin/git", ["-C", projectDirectory, "rev-parse", "--show-toplevel"], ["LC_ALL": "C"], 5)
         try Task.checkCancellation()
-        let directory = result.stdoutString.trimmingCharacters(in: .newlines)
-        guard result.isSuccess, directory.hasPrefix("/") else {
-            throw FileBrowserError.message("The source Agent's project is not an available Git worktree.")
+        let directory: String
+        if result.isSuccess {
+            directory = result.stdoutString.trimmingCharacters(in: .newlines)
+        } else if
+            result.exitCode == 128,
+            result.stderrString.hasPrefix("fatal: not a git repository (or any"),
+            try !hasGitMarker(atOrAbove: projectDirectory) {
+            // Git uses this diagnostic for unreadable metadata too; only proven absence permits fallback.
+            directory = projectDirectory
+        } else {
+            throw ProcessRunnerError.executionFailed(exitCode: result.exitCode, stderr: result.stderrString)
+        }
+        guard directory.hasPrefix("/") else {
+            throw FileBrowserError.message("The source Agent's workspace root is unavailable.")
         }
         let root = URL(fileURLWithPath: directory).resolvingSymlinksInPath().standardizedFileURL.path
         let target = URL(fileURLWithPath: root).appendingPathComponent(path).resolvingSymlinksInPath().standardizedFileURL.path
         guard target == root || target.hasPrefix(root == "/" ? root : root + "/") else {
-            throw FileBrowserError.message("The file is outside the source Agent's Git worktree.")
+            throw FileBrowserError.message("The file is outside the source Agent's workspace.")
         }
         return try entry(path: target)
+    }
+
+    private func hasGitMarker(atOrAbove directory: String) throws -> Bool {
+        var current = URL(fileURLWithPath: directory).resolvingSymlinksInPath().standardizedFileURL
+        while true {
+            try Task.checkCancellation()
+            let marker = current.appendingPathComponent(".git").path
+            var value = stat()
+            if lstat(marker, &value) == 0 {
+                return true
+            }
+            guard errno == ENOENT else { throw posixError(marker) }
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                return false
+            }
+            current = parent
+        }
     }
 
     func localFileURL(_ info: FileBrowserEntry) throws -> URL {
