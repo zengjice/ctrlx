@@ -23,7 +23,7 @@ struct BrowserExtensionsView: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                     .disabled(busy || prepared != nil)
             }
-            Text("Applies to this Mac's CtrlX browser across all sessions. Use Settings below to configure an extension, or an extension window to access its toolbar button.")
+            Text("Applies to this Mac's CtrlX browser across all sessions. Use Settings below to configure an extension; use the separate extension-window button to access its toolbar actions.")
                 .font(.callout).foregroundStyle(.secondary)
             if let prepared {
                 preview(prepared)

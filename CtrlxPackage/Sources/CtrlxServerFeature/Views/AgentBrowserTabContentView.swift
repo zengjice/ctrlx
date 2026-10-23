@@ -57,14 +57,20 @@ struct AgentBrowserTabContentView: View {
                         .disabled(state.isClosed || state.isRemotelyControlled)
                         .accessibilityIdentifier("browser-install-store-extension")
                     }
-                    Menu {
-                        Button(action: openExtensionWindow) { Label("Open in Extension Window", symbol: .arrowUpRightSquare) }
-                        Button { extensionRequest = ExtensionRequest(storeID: nil)
-                        } label: { Label("Manage Extensions", symbol: .puzzlepiece) }
-                    } label: { Label("Extensions", symbol: .puzzlepiece) }
-                        .help("Extensions for this Host's browser")
-                        .accessibilityIdentifier("agent-browser-extensions")
+                    if !state.isExtensionWindow {
+                        Button(action: openExtensionWindow) {
+                            Label("Open Page as Chrome Window", symbol: .arrowUpRightSquare)
+                        }
+                        .help("Open this page in a Chrome-style window with extension actions")
+                        .accessibilityIdentifier("agent-browser-extension-window")
                         .disabled(state.isClosed || state.isRemotelyControlled)
+                    }
+                    Button { extensionRequest = ExtensionRequest(storeID: nil) } label: {
+                        Label("Manage Extensions", symbol: .puzzlepiece)
+                    }
+                    .help("Install, configure, enable, or remove extensions")
+                    .accessibilityIdentifier("agent-browser-extensions")
+                    .disabled(state.isClosed || state.isRemotelyControlled)
                 }
                 Button {
                     state.service.showDevTools(state)

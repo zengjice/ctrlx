@@ -223,7 +223,7 @@ final public class RemoteBrowserSession {
         }
     }
 
-    public func takeControl() async {
+    public func takeControl(opensExtensionWindow: Bool = false) async {
         guard watching, !isTakingControl, controlID == nil else { return }
         isTakingControl = true
         defer { isTakingControl = false }
@@ -242,7 +242,9 @@ final public class RemoteBrowserSession {
             }
             error = nil
             if managesExtensions, controlID != nil {
-                _ = try await performExtension(tab.isExtensionWindow == true ? .openWindow : .showSurface(.manager))
+                _ = try await performExtension(
+                    tab.isExtensionWindow == true || opensExtensionWindow ? .openWindow : .showSurface(.manager)
+                )
             }
         } catch {
             if epoch == current {

@@ -4,10 +4,16 @@
     import SwiftUI
     import UniformTypeIdentifiers
 
+    enum RemoteBrowserExtensionInitialView {
+        case manager
+        case window
+    }
+
     @MainActor
     struct RemoteBrowserExtensionsView: View {
         let client: ViewerRelayClient
         let initialStoreID: String?
+        let initialView: RemoteBrowserExtensionInitialView
         let onOpenBrowser: (RemoteBrowserTab) -> Void
         @State private var canBrowseStore = false
         @State private var preparedInitialStore = false
@@ -17,7 +23,7 @@
         @State private var storeLink = ""
         @State private var importing = false
         @State private var replacingID: String?
-        @State private var showsWindow = false
+        @State private var showsWindow: Bool
         @State private var keyboard = false
         @State private var image: CGImage?
         @State private var displayedFrame: RemoteBrowserFrame?
@@ -31,11 +37,19 @@
         @Environment(\.displayScale) private var displayScale
         @Dependency(ClipboardClient.self) private var clipboard
 
-        init(tab: RemoteBrowserTab, client: ViewerRelayClient, initialStoreID: String? = nil, onOpenBrowser: @escaping (RemoteBrowserTab) -> Void) {
+        init(
+            tab: RemoteBrowserTab,
+            client: ViewerRelayClient,
+            initialStoreID: String? = nil,
+            initialView: RemoteBrowserExtensionInitialView = .manager,
+            onOpenBrowser: @escaping (RemoteBrowserTab) -> Void
+        ) {
             self.client = client
             self.initialStoreID = initialStoreID
+            self.initialView = initialView
             self.onOpenBrowser = onOpenBrowser
             _session = State(initialValue: RemoteBrowserSession(tab: tab, client: client, managesExtensions: true))
+            _showsWindow = State(initialValue: initialView == .window)
         }
 
         var body: some View {
@@ -45,13 +59,17 @@
                         .font(.caption).foregroundStyle(.secondary).padding(.horizontal)
                     if session.controlID == nil {
                         ContentUnavailableView(
-                            "Manage Host Extensions",
-                            symbol: .puzzlepiece,
-                            description: "Take control to install extensions or use their native windows. Interaction on the Host takes control back."
+                            initialView == .window ? "Open Extension Window" : "Manage Host Extensions",
+                            symbol: initialView == .window ? .arrowUpRightSquare : .puzzlepiece,
+                            description: initialView == .window
+                                ? "Take control to open this page in a Chrome-style window with extension actions. Interaction on the Host takes control back."
+                                : "Take control to install, update, enable, or remove extensions. Interaction on the Host takes control back."
                         )
-                        Button("Take Extension Control") { Task { await session.takeControl() } }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(session.isTakingControl || !client.isHostConnected)
+                        Button(initialView == .window ? "Open Page as Chrome Window" : "Take Extension Control") {
+                            Task { await session.takeControl(opensExtensionWindow: initialView == .window) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(session.isTakingControl || !client.isHostConnected)
                     } else {
                         Picker("View", selection: $showsWindow) {
                             Text("Extensions").tag(false)
@@ -75,7 +93,7 @@
                     }
                 }
                 .padding(.bottom)
-                .navigationTitle("Browser Extensions")
+                .navigationTitle(initialView == .window ? "Extension Window" : "Browser Extensions")
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                     ToolbarItem(placement: .cancellationAction) {
@@ -260,10 +278,14 @@
         private var nativeWindow: some View {
             VStack(spacing: 8) {
                 HStack {
-                    Menu(surfaceTitle) {
-                        Button("Open Extension Window") { show(.page) }
-                        Button("Extension Advanced Management") { show(.manager) }
-                    }.disabled(status != nil)
+                    Button { show(.page) } label: {
+                        Label("Extension Window", symbol: .arrowUpRightSquare).labelStyle(.iconOnly)
+                    }
+                    .help("Show the Chrome-style extension window")
+                    Button { show(.manager) } label: {
+                        Label("Extension Advanced Management", symbol: .puzzlepiece).labelStyle(.iconOnly)
+                    }
+                    .help("Open Chromium's extension management page")
                     Spacer()
                     Button {
                         session.submit(.fit(width: Int(max(480, min(viewport.width, 2_560))), height: Int(max(360, min(viewport.height, 2_560)))))
@@ -277,7 +299,7 @@
                     #if os(iOS)
                         Button { keyboard.toggle() } label: { Label("Keyboard", symbol: .keyboard).labelStyle(.iconOnly) }
                     #endif
-                }.padding(.horizontal)
+                }.disabled(status != nil).padding(.horizontal)
                 RemoteBrowserCanvas(
                     image: image,
                     frame: displayedFrame,
@@ -314,14 +336,6 @@
 
         private func show(_ surface: RemoteBrowserExtensionSurface) {
             run("Opening Host window…") { _ = try await session.performExtension(.showSurface(surface)) }
-        }
-
-        private var surfaceTitle: String {
-            switch session.extensionSurface {
-            case .page: "Extension Window"
-            case .manager: "Extension Advanced Management"
-            case .options: "Extension Settings"
-            }
         }
 
         private func refresh() async throws {

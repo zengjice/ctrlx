@@ -130,6 +130,27 @@ struct RemoteBrowserExtensionSessionTests {
     }
 
     @Test
+    func directWindowEntryAcquiresControlAndOpensNativeWindow() async throws {
+        let host = Host()
+        let session = RemoteBrowserSession(tab: host.anchor, managesExtensions: true, send: host.send)
+        let watch = Task { await session.watch() }
+        defer { watch.cancel()
+            session.stop()
+        }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        await session.takeControl(opensExtensionWindow: true)
+        try await RemoteBrowserSessionTests().wait { session.frame != nil }
+
+        #expect(host.showingPage)
+        #expect(session.extensionSurface == .page)
+        #expect(session.tab.id == host.page.id)
+        #expect(host.requests.contains { $0.operation == .extensions(.openWindow) })
+    }
+
+    @Test
     func openingSettingsDiscardsPreviousWindowFrames() async throws {
         let host = Host()
         let session = RemoteBrowserSession(tab: host.anchor, managesExtensions: true, send: host.send)

@@ -225,12 +225,14 @@ as unsigned. Store downloads are signature-checked and loaded from Host-managed
 directories, with manual **Update → Check Chrome Web Store** rather than Chrome's
 automatic store updates. Native Chromium may require an additional confirmation.
 
-On Mac Host, choose **Open in Extension Window** for pages that need extension
-actions. This opens a separate CtrlX-owned Chrome-style window with its native
-toolbar and extension popups. Existing embedded pages remain available, but
-extensions relying on Chrome's active-tab/window APIs need the extension window.
-Installations and extension settings persist across restarts; open pages remain
-transient.
+On Mac Host, choose the standalone **Open Page as Chrome Window** button for
+pages that need extension actions. Mac Viewer and iOS expose the same separate
+browser-toolbar entry, followed by extension control where required. It opens a
+separate CtrlX-owned Chrome-style window with its native toolbar and extension
+popups. Extension management and extension-window entry points are intentionally
+separate. Existing embedded pages remain available, but extensions relying on
+Chrome's active-tab/window APIs need the extension window. Installations and
+extension settings persist across restarts; open pages remain transient.
 
 **Settings** resolves the extension's current `options_ui` / `options_page`
 declaration on the Host. It opens a reusable native options window, using Chromium's

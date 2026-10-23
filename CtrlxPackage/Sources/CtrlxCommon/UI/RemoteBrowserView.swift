@@ -17,6 +17,7 @@ public struct RemoteBrowserView: View {
     private struct ExtensionRequest: Identifiable {
         let id = UUID()
         let storeID: String?
+        var initialView: RemoteBrowserExtensionInitialView = .manager
     }
 
     @State private var extensionRequest: ExtensionRequest?
@@ -61,10 +62,18 @@ public struct RemoteBrowserView: View {
                 Label("Host · Chromium", symbol: .globe).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if client.hostSupportsBrowserExtensions {
+                    if session.tab.isExtensionWindow != true {
+                        Button {
+                            session.releaseControl()
+                            extensionRequest = ExtensionRequest(storeID: nil, initialView: .window)
+                        } label: { Label("Open Page as Chrome Window", symbol: .arrowUpRightSquare).labelStyle(.iconOnly) }
+                        .accessibilityIdentifier("remote-browser-extension-window")
+                    }
                     Button {
                         session.releaseControl()
                         extensionRequest = ExtensionRequest(storeID: nil)
                     } label: { Label("Browser Extensions", symbol: .puzzlepiece).labelStyle(.iconOnly) }
+                    .accessibilityIdentifier("remote-browser-extensions")
                 }
                 if session.controlID != nil {
                     if session.supportsClipboard {
@@ -169,7 +178,13 @@ public struct RemoteBrowserView: View {
         .onDisappear { session.stop() }
         .accessibilityIdentifier("remote-browser-page")
         .sheet(item: $extensionRequest) { request in
-            RemoteBrowserExtensionsView(tab: session.tab, client: client, initialStoreID: request.storeID, onOpenBrowser: onOpenBrowser)
+            RemoteBrowserExtensionsView(
+                tab: session.tab,
+                client: client,
+                initialStoreID: request.storeID,
+                initialView: request.initialView,
+                onOpenBrowser: onOpenBrowser
+            )
         }
     }
 
