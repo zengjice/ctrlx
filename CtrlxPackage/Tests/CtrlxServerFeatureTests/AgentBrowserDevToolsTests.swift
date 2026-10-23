@@ -268,7 +268,7 @@
                 #expect(source == first.identifier)
                 service.browserTabCreated(child, view: NSView(), route: [
                     "workspace": first.workspaceID.uuidString, "pane": first.paneID,
-                    "presentation": "extensionWindow", "primary": "false",
+                    "presentation": "extensionWindow",
                 ], owner: first.owner, parent: first.identifier)
                 return child
             }
@@ -276,7 +276,7 @@
             #expect(window.parentID == first.id)
             #expect(window.owner == first.owner)
             #expect(window.workspaceID == first.workspaceID)
-            #expect(window.isExtensionWindow && !window.isPrimary)
+            #expect(window.isExtensionWindow)
             #expect(runtime.revealedWindows == [child])
             try await service.showExtensionManager(first)
             service.showBrowserWindow(first)

@@ -43,7 +43,9 @@ can have taken effect: inspect before deciding whether to repeat it.
 
 ## Extended page capabilities
 
-Existing `action` syntax and original-engine behavior are unchanged. For the
+Both engines create a new tab for every `action open`, including the same URL.
+Use `action tabs` and `action navigate --tab` to reuse a page. `--new` remains
+accepted for compatibility. Other `action` syntax and behavior are unchanged. For the
 larger Vercel page catalog, use `command`; it explicitly uses Vercel without
 changing the saved preference:
 
@@ -288,7 +290,7 @@ python3 CtrlxPackage/AgentBrowser/tests/managed_engine.py \
 python3 CtrlxPackage/AgentBrowser/tests/page_capabilities.py \
   '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
   '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex
-python3 CtrlxPackage/AgentBrowser/tests/pane_defaults.py \
+python3 CtrlxPackage/AgentBrowser/tests/tab_opening.py \
   '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
   '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex
 python3 CtrlxPackage/AgentBrowser/tests/expanded_capabilities.py \

@@ -532,7 +532,7 @@ class Bridge final : public CefDevToolsMessageObserver {
       // process I/O, and never substitute the currently focused terminal.
       client.busy = true;
       client.opening = true;
-      callbacks_.open(client.run, ownership_.runs.at(client.run).pid, url.UTF8String, [request[@"new"] boolValue],
+      callbacks_.open(client.run, ownership_.runs.at(client.run).pid, url.UTF8String,
           [self = CefRefPtr<Bridge>(this), id] {
         auto it = self->clients_.find(id);
         return self->listener_ >= 0 && it != self->clients_.end() && it->second.busy &&

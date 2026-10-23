@@ -194,7 +194,7 @@ struct BrowserRunCommand: ParsableCommand {
 struct BrowserActionCommand: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "action", abstract: "tabs | open | read | snapshot (vercel) | click | type | fill | press | scroll | wait | select | check | screenshot | navigate | show | close")
     @Argument var operation: String
-    @Flag(help: "With open, create an additional page instead of reusing this pane's Agent browser") var new = false
+    @Flag(help: "Compatibility flag: open always creates a new page; use navigate --tab to reuse one") var new = false
     @Option(help: "ctrlx (original) or vercel; overrides this agent instance's saved engine") var engine: String?
     @Option var tab: String?
     @Option var url: String?
@@ -240,7 +240,7 @@ struct BrowserActionCommand: ParsableCommand {
             throw ValidationError("check requires --checked true|false.")
         }
         var payload: [String: Any] = ["command": operation]
-        if new {
+        if operation == "open" {
             payload["new"] = true
         }
         if let tab {

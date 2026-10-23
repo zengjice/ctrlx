@@ -37,7 +37,7 @@
             if let control {
                 _ = try await extensionSurfaceRequest(control, payload: ["action": "ping"])
             }
-            let opened = try await openPaneBrowser(sessionName: source.sessionName, paneID: source.paneID, url: destination, new: true)
+            let opened = try await openPaneBrowser(sessionName: source.sessionName, paneID: source.paneID, url: destination)
             do {
                 try Task.checkCancellation()
                 _ = try extensionRuntime(for: source, controlID: controlID)

@@ -40,6 +40,7 @@ for operation in ('identity', 'action tabs'):
 unsupported = run(['browser', 'action', 'Runtime.evaluate'])
 assert unsupported.returncode != 0 and 'Unsupported browser operation' in unsupported.stderr
 for operation, flags in (
+    ('open', ['--url', 'https://example.test']),
     ('open', ['--new', '--url', 'https://example.test']),
     ('fill', ['--selector', '#input', '--text', '']),
     ('press', ['--key', 'Shift+Tab']),

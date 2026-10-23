@@ -10,7 +10,8 @@ NS_ASSUME_NONNULL_BEGIN
 // Synchronous: AppKit may terminate the process immediately after reporting.
 - (void)recordAppKitException:(NSException *)exception;
 @optional
-// Main thread, bounded metadata only; no page content, URLs or request headers.
+// Main thread, bounded metadata only; origins may appear, never full URLs,
+// page content, credentials or request headers.
 - (void)recordBrowserDiagnostic:(NSDictionary<NSString *, id> *)event;
 @end
 
@@ -24,6 +25,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)browserTabSelected:(NSString *)identifier;
 - (void)browserTabClosed:(NSString *)identifier;
 @optional
+- (void)browserTab:(NSString *)identifier networkPermissionChanged:(nullable NSDictionary<NSString *, id> *)permission;
 // Human navigation from the trusted extension manager, scoped to its source tab.
 // A nil token confirms no native control grant remains (including Host takeover).
 - (void)browserTab:(NSString *)identifier openWebStoreURL:(NSString *)url controlToken:(nullable NSString *)controlToken completion:(void (^)(NSString * _Nullable identifier, NSString * _Nullable error))completion;
@@ -49,6 +51,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)beginShutdown;
 - (BOOL)finishShutdown;
 @optional
+- (void)respondToNetworkPermission:(NSString *)permissionID forTab:(NSString *)identifier allow:(BOOL)allow controlToken:(nullable NSString *)controlToken completion:(void (^)(NSString * _Nullable error))completion;
 // Human-only Chrome-style windows share this Host's profile. Older native
 // bundles omit these selectors; callers must report unavailable capability.
 - (void)openExtensionWindowForTab:(NSString *)identifier completion:(void (^)(NSString * _Nullable identifier, NSString * _Nullable error))completion NS_SWIFT_NAME(openExtensionWindow(forTab:completion:));

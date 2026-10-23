@@ -6,6 +6,7 @@
 #include "ExternalApplication.h"
 #include <atomic>
 #include <map>
+#include <set>
 #include "include/cef_app.h"
 #include "include/cef_application_mac.h"
 #include "include/cef_client.h"
@@ -44,7 +45,6 @@ static CXEmbeddedBrowserRuntime *runtime;
 static std::unique_ptr<CefScopedLibraryLoader> library;
 static std::map<int, CefRefPtr<CefBrowser>> browsers;
 static std::map<int, NSString *> identifiers;
-static BrowserPrimaryTabs primaryAgentTabs;
 // DevTools are human-only native windows, never agent-controlled page tabs.
 static std::map<int, CefRefPtr<CefBrowser>> devToolsBrowsers;
 static std::atomic_size_t pendingDevTools{0};
@@ -53,6 +53,12 @@ static CefRefPtr<CefBrowser> browserSettings;
 static std::map<int, int> extensionWindows;
 static void ReleaseExtensionControlFor(NSString *identifier);
 static std::map<int, std::shared_ptr<ExternalApplicationActivation>> externalActivations;
+static NSString *BrowserDiagnosticOrigin(NSString *raw) {
+  NSURLComponents *parts = [NSURLComponents componentsWithString:raw];
+  if (![@[@"https", @"http"] containsObject:parts.scheme.lowercaseString] || !parts.host.length) return @"opaque";
+  parts.user = nil; parts.password = nil; parts.path = @""; parts.query = nil; parts.fragment = nil;
+  return parts.string ?: @"opaque";
+}
 #ifdef CTRLX_UPSTREAM_BROWSER_PROBE
 static NSMutableArray *externalApplicationProbe;
 static NSMutableArray *externalApplicationLoads;
@@ -81,11 +87,16 @@ void AgentBrowserHumanInput(CefRefPtr<CefBrowser> browser, const std::string& co
 static void OpenExternalApplication(CefRefPtr<CefBrowser> browser, const CefString& url) {
   CEF_REQUIRE_UI_THREAD();
   if (!runtime.isReady || !ExternalApplicationURL(@(url.ToString().c_str()))) return;
+  auto diagnose = [&](NSString *result) {
+    RecordBrowserDiagnostic(@{@"event": @"external-application-dispatch", @"browserID": @(browser->GetIdentifier()),
+      @"scheme": [NSURLComponents componentsWithString:@(url.ToString().c_str())].scheme ?: @"", @"result": result});
+  };
   auto found = externalActivations.find(browser->GetIdentifier());
-  if (found == externalActivations.end() || !found->second->Consume()) return;
+  if (found == externalActivations.end() || !found->second->Consume()) { diagnose(@"no-live-human-activation"); return; }
   auto activation = found->second;
   auto source = AgentBrowserTarget(@(activation->source.c_str()));
-  if (!source || !source->IsValid() || AgentBrowserHumanControlToken(source) != activation->control) return;
+  if (!source || !source->IsValid() || AgentBrowserHumanControlToken(source) != activation->control) { diagnose(@"source-or-control-changed"); return; }
+  diagnose(@"dispatched");
 #ifdef CTRLX_UPSTREAM_BROWSER_PROBE
   if (externalApplicationProbe) {
     [externalApplicationProbe addObject:@{@"source": @(activation->source.c_str()), @"url": @(url.ToString().c_str()),
@@ -207,7 +218,9 @@ static bool WebURL(const std::string& raw) {
 }
 
 class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
-    public CefDisplayHandler, public CefLoadHandler, public CefRequestHandler, public CefDownloadHandler, public CefJSDialogHandler {
+    public CefDisplayHandler, public CefLoadHandler, public CefRequestHandler, public CefDownloadHandler, public CefJSDialogHandler,
+    public CefPermissionHandler {
+ #include "NetworkPermission.inc"
  public:
   EmbeddedClient(std::string owner, NSView *container, NSDictionary *route, NSString *parent, bool extensionWindow = false)
       : owner_(std::move(owner)), container_(container), route_(route), parent_(parent), extensionWindow_(extensionWindow) {}
@@ -256,11 +269,11 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   }
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
+    FinishNetworkPermission(CEF_PERMISSION_RESULT_IGNORE);
     AgentBrowserCancelHumanInput(browser);
     ReleaseExtensionControlFor(identifier_);
     CloseDevToolsFor(browser);
     RemoveAgentBrowserTab(browser);
-    primaryAgentTabs.Remove(browser->GetIdentifier());
     browsers.erase(browser->GetIdentifier());
     std::erase_if(extensionWindows, [id = browser->GetIdentifier()](const auto& pair) {
       return pair.first == id || pair.second == id;
@@ -305,6 +318,8 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     }
     if (!frame->IsMain()) return false;
     if (!WebURL(request->GetURL())) return true;
+    FinishNetworkPermission(CEF_PERMISSION_RESULT_IGNORE);
+    networkConsoleCategories_.clear();
     auto activation = externalActivations.find(browser->GetIdentifier());
     if (activation != externalActivations.end() && request->GetURL() != "about:blank")
       activation->second->Navigation(browser->GetIdentifier(), request->GetURL(), redirect);
@@ -334,6 +349,11 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     if (activation != externalActivations.end())
       activation->second->Committed(browser->GetIdentifier(), frame->GetIdentifier(), frame->GetURL());
     AgentBrowserNavigation(browser);
+  }
+  void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode code,
+      const CefString&, const CefString& url) override {
+    RecordBrowserDiagnostic(@{@"event": @"navigation-error", @"browserID": @(browser->GetIdentifier()),
+      @"origin": BrowserDiagnosticOrigin(@(url.ToString().c_str())), @"errorCode": @(code), @"mainFrame": @(frame->IsMain())});
   }
   void Changed(CefRefPtr<CefBrowser> browser) {
     if (!identifier_) return;
@@ -377,6 +397,16 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   IMPLEMENT_REFCOUNTING(EmbeddedClient);
 };
 
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+void ProbeNetworkPermission(CefRefPtr<CefBrowser> source, NSDictionary *request, void (^reply)(NSDictionary *, NSString *)) {
+  auto client = static_cast<EmbeddedClient *>(source->GetHost()->GetClient().get());
+  if ([request[@"action"] isEqual:@"respond"]) {
+    [runtime respondToNetworkPermission:request[@"id"] forTab:identifiers.at(source->GetIdentifier())
+      allow:[request[@"allow"] boolValue] controlToken:request[@"lease"] completion:^(NSString *error) { reply(@{}, error); }];
+  } else reply(client->ProbeNetworkPermission(), nil);
+}
+#endif
+
 class BrowserUITask final : public CefTask {
  public:
   explicit BrowserUITask(std::function<void()> work) : work_(std::move(work)) {}
@@ -411,7 +441,6 @@ static void OpenExtensionWindow(NSString *target, bool remote, void (^reply)(NSS
   if (!WebURL(url) || browsers.size() >= 64) { reply(nil, @"The page cannot open an extension window."); return; }
   NSMutableDictionary *route = [client->Route() mutableCopy];
   route[@"presentation"] = @"extensionWindow";
-  route[@"primary"] = @"false";
   NSView *container = [runtime.delegate browserContainerForRoute:route];
   if (!container) { reply(nil, @"The source workspace was closed."); return; }
   CefWindowInfo info;
@@ -448,7 +477,7 @@ static void CreateRoutedTab(const std::string& owner, NSDictionary *route, const
   done(browser, browser ? nil : @"Chromium could not create the embedded page.");
 }
 
-static void OpenTab(std::string owner, int pid, std::string url, bool newTab,
+static void OpenTab(std::string owner, int pid, std::string url,
     std::function<bool()> current, std::function<void(CefRefPtr<CefBrowser>, NSString*)> done) {
   [runtime.delegate resolveBrowserProcess:pid completion:^(NSDictionary *route, NSString *error) {
     // Process discovery awaits Swift I/O. Resume Chromium creation on CEF's
@@ -459,22 +488,7 @@ static void OpenTab(std::string owner, int pid, std::string url, bool newTab,
     if (!route) { done(nullptr, error ?: @"Source session unavailable. No page was opened."); return; }
     NSString *pane = route[@"pane"];
     if (![pane isKindOfClass:NSString.class] || !pane.length) { done(nullptr, @"Source pane unavailable."); return; }
-    if (!newTab) if (auto existing = primaryAgentTabs.Find(pane.UTF8String, owner); existing && browsers.contains(*existing)) {
-      auto browser = browsers.at(*existing);
-      if (AgentBrowserOwner(browser) != owner || AgentBrowserHumanControlled(browser) || AgentBrowserTabBusy(browser)) {
-        done(nullptr, @"The pane's Agent browser is busy or controlled by a person. No navigation was sent."); return;
-      }
-      CefURLParts currentParts, destinationParts;
-      const bool same = CefParseURL(browser->GetMainFrame()->GetURL(), currentParts) && CefParseURL(url, destinationParts) &&
-          CefString(&currentParts.spec) == CefString(&destinationParts.spec);
-      if (!same) { AgentBrowserCancelHumanInput(browser); browser->GetMainFrame()->LoadURL(url); }
-      done(browser, nil);
-      return;
-    }
-    CreateRoutedTab(owner, route, url, [=](auto browser, NSString *creationError) {
-      if (browser && !newTab) primaryAgentTabs.Set(pane.UTF8String, owner, browser->GetIdentifier());
-      done(browser, creationError);
-    });
+    CreateRoutedTab(owner, route, url, done);
     }));
   }];
 }
@@ -487,6 +501,16 @@ class EmbeddedApp final : public CefApp, public CefBrowserProcessHandler {
     // Match the pinned engine's Chromium launch prerequisites.
     command->AppendSwitchWithValue("enable-features", "WebMCPTesting,DevToolsWebMCPSupport");
     if (mockKeychain_) command->AppendSwitch("use-mock-keychain");
+#ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+    // Only the isolated acceptance binary can model a public-to-loopback fetch.
+    NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
+    NSUInteger index = [arguments indexOfObject:@"--ctrlx-probe-public-port"];
+    if ([arguments containsObject:@"--e2e-test"] && index != NSNotFound && index + 1 < arguments.count) {
+      int port = arguments[index + 1].intValue;
+      if (port > 0 && port <= 65535)
+        command->AppendSwitchWithValue("ip-address-space-overrides", [[NSString stringWithFormat:@"127.0.0.1:%d=public", port] UTF8String]);
+    }
+#endif
   }
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
   CefRefPtr<CefClient> GetDefaultClient() override { return new ExtensionToolClient(); }
@@ -865,6 +889,20 @@ void RecordBrowserDiagnostic(NSDictionary* event) {
   if (!CefPostTask(TID_UI, new BrowserUITask([target, data, reply] {
     RequestRemoteBrowserTab(target, data, reply);
   }))) completion(nil, @"Chromium could not schedule the request.");
+}
+- (void)respondToNetworkPermission:(NSString *)permissionID forTab:(NSString *)identifier allow:(BOOL)allow controlToken:(NSString *)controlToken completion:(void (^)(NSString *))completion {
+  if (!self.started || self.closing) { completion(@"Chromium is not ready."); return; }
+  NSString *target = [identifier copy], *request = [permissionID copy], *control = [controlToken copy];
+  void (^reply)(NSString *) = [completion copy];
+  if (!CefPostTask(TID_UI, new BrowserUITask([target, request, control, allow, reply] {
+    auto browser = AgentBrowserTarget(target);
+    if (!runtime.isReady || !browser || !browser->IsValid() ||
+        AgentBrowserHumanControlToken(browser) != std::string(control.UTF8String ?: "")) {
+      reply(@"Browser control changed. The permission was not granted."); return;
+    }
+    auto client = static_cast<EmbeddedClient *>(browser->GetHost()->GetClient().get());
+    reply(client->RespondToNetworkPermission(request, allow));
+  }))) completion(@"Chromium could not schedule the permission response.");
 }
 - (void)beginShutdown {
   if (extensionSurface) extensionSurface->Revoke();

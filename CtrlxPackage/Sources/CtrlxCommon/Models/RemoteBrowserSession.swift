@@ -292,6 +292,20 @@ final public class RemoteBrowserSession {
         frameError = nil
     }
 
+    public func respondToNetworkPermission(_ id: UUID, allow: Bool) async throws {
+        guard watching, let controlID, !managesExtensions, tab.networkPermission?.id == id else {
+            throw ViewerRelayClientError.commandFailed("Take Control of the page before responding to this permission request.")
+        }
+        let current = epoch
+        let response = try await send(request(.networkPermission(id: id, allow: allow)))
+        guard watching, epoch == current, self.controlID == controlID, response.controlID == controlID else {
+            throw ViewerRelayClientError.commandFailed("Browser control changed.")
+        }
+        if let tab = response.tab {
+            self.tab = tab
+        }
+    }
+
     public func copy() {
         guard supportsClipboard else { error = "Update the Host Mac to copy from this page."
             return

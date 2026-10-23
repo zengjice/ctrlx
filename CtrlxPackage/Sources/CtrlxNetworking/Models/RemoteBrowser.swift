@@ -18,6 +18,8 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
     public let isExtensionWindow: Bool?
     /// Optional display-only result. Launch requests never come from Viewers.
     public let externalApplicationNotice: BrowserExternalApplicationNotice?
+    /// Presence advertises support for responding to this exact pending request.
+    public let networkPermission: BrowserNetworkPermission?
 
     public init(
         id: UUID,
@@ -32,7 +34,8 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
         sourceAgent: AgentImageTarget? = nil,
         sourcePaneID: String? = nil,
         isExtensionWindow: Bool? = nil,
-        externalApplicationNotice: BrowserExternalApplicationNotice? = nil
+        externalApplicationNotice: BrowserExternalApplicationNotice? = nil,
+        networkPermission: BrowserNetworkPermission? = nil
     ) {
         self.id = id
         self.sessionName = sessionName
@@ -47,6 +50,21 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
         self.sourcePaneID = sourcePaneID
         self.isExtensionWindow = isExtensionWindow
         self.externalApplicationNotice = externalApplicationNotice
+        self.networkPermission = networkPermission
+    }
+}
+
+public struct BrowserNetworkPermission: Codable, Sendable, Equatable, Identifiable {
+    public let id: UUID
+    public let origin: String
+    public let localNetwork: Bool
+    public let loopbackNetwork: Bool
+
+    public init(id: UUID, origin: String, localNetwork: Bool, loopbackNetwork: Bool) {
+        self.id = id
+        self.origin = origin
+        self.localNetwork = localNetwork
+        self.loopbackNetwork = loopbackNetwork
     }
 }
 
@@ -119,6 +137,7 @@ public enum RemoteBrowserOperation: Codable, Sendable, Equatable {
     case key(RemoteBrowserKey)
     case pointer(RemoteBrowserPointer)
     case extensions(RemoteBrowserExtensionOperation)
+    case networkPermission(id: UUID, allow: Bool)
 
     public var isClipboardPaste: Bool {
         if case .paste = self {

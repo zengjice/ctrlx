@@ -3,11 +3,11 @@
 Use `ctrlx browser action <operation> --tab <id> ...`. Lifecycle, `read`, `wait`
 and `scroll` keep the CtrlX contract regardless of the selected engine.
 
-`open --url` reuses the source pane's Agent default page, without reloading an
-identical normalized URL. `open --new --url` creates an extra page; it does not
-replace the default. Close the default to let the next ordinary `open` create
-a replacement. Human-controlled or busy pages reject reuse; do not bypass this
-by opening an extra page unless that matches the user's task.
+`open --url` always creates a new owned page, even for the same URL. `open --new`
+remains a compatibility alias. Inspect `tabs` and use `navigate --tab <id> --url`
+to navigate an existing page. Page navigation/actions retain owner and control
+checks; opening another page never releases a human's control of an existing tab.
+Do not retry a timed-out open blindly; inspect `tabs` first.
 
 ## Read and pagination
 

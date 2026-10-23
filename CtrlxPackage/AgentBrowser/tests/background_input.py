@@ -90,9 +90,10 @@ class BackgroundInput(Managed):
             await unchanged(engine + " closes background popup")
             await action("navigate", "--url", self.url + engine)
             await action("wait")
-            reused = (await self.cli_action(0, "action", "open", "--url", self.url + engine))["result"]["id"]
-            assert reused == target
-            await unchanged(engine + " reuses the default page")
+            added = (await self.cli_action(0, "action", "open", "--url", self.url + engine))["result"]["id"]
+            assert added != target
+            await unchanged(engine + " opens another page without selecting it")
+            await self.cli_action(0, "action", "close", "--tab", added)
 
         sibling = (await self.cli_action(0, "action", "open", "--new", "--url", self.url + "sibling"))["result"]["id"]
         await self.cli_action(0, "action", "wait", "--tab", sibling)

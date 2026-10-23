@@ -27,8 +27,11 @@ are limited to 2 MiB each (directory 0700, files 0600). Turning Debug Mode off
 stops collection, retains evidence and does not affect recording. A write failure
 stops collection until toggled again and reports one error in the system log.
 E2E uses only `<state-root>/browser-diagnostics/` and requires an explicit root.
-No URLs, headers, credentials, output paths, page/terminal text or window titles
-are collected. Periodic samples never request layout or walk the view tree.
+No full URLs, headers, credentials, output paths, page/terminal text or window
+titles are collected. Browser network-permission and navigation diagnostics may
+include the site origin (scheme/host/port only), permission decisions and error
+codes; console messages are reduced to categories. See [network permissions](agent-browser.md#local-service-and-network-permissions).
+Periodic samples never request layout or walk the view tree.
 
 For an intermittent recording crash, enable this switch on the **recording
 Host**, reproduce, then collect the entire `Browser/` directory together with

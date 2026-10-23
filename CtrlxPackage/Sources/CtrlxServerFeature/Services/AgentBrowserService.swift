@@ -63,7 +63,6 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     var onTabsChanged: (() -> Void)?
     var imageTargetForPane: (String) -> AgentImageTarget? = { _ in nil }
     var resolveSourcePane: (@MainActor (String, String) async throws -> PaneInfo)?
-    private var openingPaneTabs: [String: Task<AgentBrowserTabState, Error>] = [:]
     private var detachingTabs: Set<String> = []
     private var publishTask: Task<Void, Never>?
     private var routePanes: [PaneInfo] = []
@@ -253,8 +252,8 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }
 
     /// All manual entry points use this Host-owned registry, including local UI.
-    /// Coalesce creation only; each caller retains its own navigation intent.
-    func openPaneBrowser(sessionName: String, paneID: String, url: URL? = nil, new: Bool = false) async throws -> AgentBrowserTabState {
+    /// Each request creates a distinct page; navigation targets an explicit tab.
+    func openPaneBrowser(sessionName: String, paneID: String, url: URL? = nil) async throws -> AgentBrowserTabState {
         guard !closing, let resolveSourcePane else { throw ManualBrowserError.unavailable }
         try await ensureStarted()
         guard
@@ -273,23 +272,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         }
         let pane = try await resolveSourcePane(sessionName, paneID)
         try Task.checkCancellation()
-        let tab: AgentBrowserTabState
-        if new {
-            tab = try await createPaneTab(pane, primary: false)
-        } else if
-            let existing = tabs.values.first(where: {
-                !$0.isClosed && $0.owner.isEmpty && $0.manualTarget?.hostID == nil
-                    && $0.paneID == paneID && $0.parentID == nil && $0.isPrimary
-            }) {
-            tab = existing
-        } else if let opening = openingPaneTabs[paneID] {
-            tab = try await opening.value
-        } else {
-            let opening = Task { try await self.createPaneTab(pane) }
-            openingPaneTabs[paneID] = opening
-            defer { openingPaneTabs.removeValue(forKey: paneID) }
-            tab = try await opening.value
-        }
+        let tab = try await createPaneTab(pane)
         try Task.checkCancellation()
         guard !closing, !tab.isClosed else { throw ManualBrowserError.unavailable }
         let current = try await resolveSourcePane(sessionName, paneID)
@@ -299,7 +282,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         if let destination, URL(string: tab.url).flatMap(BrowserWebURL.normalized) != destination {
             expireBrowserControls()
             guard remoteControls[tab.id] == nil else {
-                throw ManualBrowserError.creation("This pane's browser is controlled by a Viewer. Release control before opening another link.")
+                throw ManualBrowserError.creation("This browser tab is controlled by a Viewer. Release control before navigating it.")
             }
             tab.requestsInitialAddressFocus = false
             runtime.navigateTab(tab.identifier, url: destination.absoluteString)
@@ -467,7 +450,6 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         state.windowID = parent.flatMap { tabs[$0]?.windowID } ?? route["window"]
         state.parentID = parent.flatMap(UUID.init(uuidString:))
         state.isExtensionWindow = route["presentation"] == "extensionWindow"
-        state.isPrimary = parent == nil && route["primary"] != "false"
         // Native Agent pages are created in the background without a selection
         // callback. Only human/extension pages need to consume that callback.
         state.suppressInitialSelection = (owner.isEmpty || state.isExtensionWindow)
@@ -552,11 +534,52 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         }
         do {
             let name = try externalApplication.open(url)
+            AppKitDiagnostics.shared.recordBrowserDiagnostic(["event": "external-application-opened", "tab": identifier, "scheme": url.scheme ?? "", "viewer": controlToken != nil])
             tab.externalApplicationNotice = BrowserExternalApplicationNotice(message: "Opened \(name) on the Host Mac.", isError: false)
         } catch {
+            AppKitDiagnostics.shared.recordBrowserDiagnostic(["event": "external-application-failed", "tab": identifier, "scheme": url.scheme ?? "", "viewer": controlToken != nil])
             tab.externalApplicationNotice = BrowserExternalApplicationNotice(message: error.localizedDescription, isError: true)
         }
         publishBrowserTabs()
+    }
+
+    public func browserTab(_ identifier: String, networkPermissionChanged permission: [String: Any]?) {
+        guard let tab = tabs[identifier], !tab.isClosed else { return }
+        if let permission {
+            guard
+                let rawID = permission["id"] as? String, let id = UUID(uuidString: rawID),
+                let origin = permission["origin"] as? String,
+                let local = permission["localNetwork"] as? Bool,
+                let loopback = permission["loopbackNetwork"] as? Bool else { return }
+            tab.networkPermission = BrowserNetworkPermission(id: id, origin: origin, localNetwork: local, loopbackNetwork: loopback)
+        } else {
+            tab.networkPermission = nil
+        }
+        publishBrowserTabs()
+    }
+
+    func respondToNetworkPermission(_ id: UUID, tab: AgentBrowserTabState, allow: Bool, controlID: UUID? = nil) async throws {
+        guard
+            !closing, !tab.isClosed, tabs[tab.identifier] === tab, tab.networkPermission?.id == id,
+            let runtime, runtime.responds(to: #selector(CXBrowserRuntime.respond(toNetworkPermission:forTab:allow:controlToken:completion:))) else {
+            throw RemoteBrowserError.message("The permission request is no longer available.")
+        }
+        if let controlID {
+            guard let lease = remoteControls[tab.id], lease.id == controlID, lease.expires > .now else {
+                throw RemoteBrowserError.message("Control expired. Take Control again.")
+            }
+        } else if tab.isRemotelyControlled || remoteControls[tab.id] != nil {
+            throw RemoteBrowserError.message("Take Back Control before responding.")
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            runtime.respond?(toNetworkPermission: id.uuidString, forTab: tab.identifier, allow: allow, controlToken: controlID?.uuidString) { error in
+                if let error {
+                    continuation.resume(throwing: RemoteBrowserError.message(error))
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
     }
 
     func navigate(_ tab: AgentBrowserTabState, url: String) {
@@ -681,10 +704,6 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         controlExpiryTask?.cancel()
         controlExpiryTask = nil
         remoteControls.removeAll()
-        for opening in openingPaneTabs.values {
-            opening.cancel()
-        }
-        openingPaneTabs.removeAll()
         guard let runtime else { return }
         runtime.beginShutdown()
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
@@ -700,7 +719,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         manualRoutes.removeAll()
     }
 
-    private func createPaneTab(_ pane: PaneInfo, primary: Bool = true) async throws -> AgentBrowserTabState {
+    private func createPaneTab(_ pane: PaneInfo) async throws -> AgentBrowserTabState {
         guard !closing, let runtime else { throw ManualBrowserError.unavailable }
         let sessionName = pane.sessionName
         let workspaceID = (workspaces.values.first { $0.acceptsPane(pane) }
@@ -713,7 +732,6 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         route["window"] = pane.windowId
         route["manualRoute"] = routeID
         route["remote"] = "true"
-        route["primary"] = primary ? "true" : "false"
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 runtime.openManualTab(route: route, url: "about:blank") { error in
@@ -780,12 +798,12 @@ final class AgentBrowserTabState {
     var sessionName = ""
     var windowID: String?
     var parentID: UUID?
-    var isPrimary = true
     var suppressInitialSelection = false
     var isRemotelyControlled = false
     var isExtensionWindow = false
     var sourceAgent: AgentImageTarget?
     var externalApplicationNotice: BrowserExternalApplicationNotice?
+    var networkPermission: BrowserNetworkPermission?
 
     init(
         id: UUID,

@@ -103,6 +103,9 @@ struct AgentBrowserTabContentView: View {
             .buttonStyle(.borderless)
             .padding(8)
             Divider()
+            BrowserNetworkPermissionBanner(permission: state.networkPermission, canRespond: !state.isRemotelyControlled) { id, allow in
+                try await state.service.respondToNetworkPermission(id, tab: state, allow: allow)
+            }
             if state.isExtensionWindow {
                 VStack(spacing: 12) {
                     Label("Extension Window", symbol: .puzzlepiece)

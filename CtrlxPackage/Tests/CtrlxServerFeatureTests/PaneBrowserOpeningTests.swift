@@ -21,7 +21,7 @@
             var initializationFailure: String?
             var shutdowns = 0
             var holdCreation = false
-            var pending: (() -> Void)?
+            var pending: [() -> Void] = []
 
             func start(with delegate: any CXBrowserHostDelegate, profile: String, state: String) throws { }
             func isReady() -> Bool {
@@ -45,7 +45,7 @@
                     completion(nil)
                 }
                 if holdCreation {
-                    pending = finish
+                    pending.append(finish)
                 } else {
                     finish()
                 }
@@ -149,15 +149,15 @@
         }
 
         @Test
-        func plainTerminalReusesItsOwnPageWithoutResettingIt() async throws {
+        func plainTerminalAlwaysCreatesPagesWithoutChangingExistingOnes() async throws {
             let (service, runtime) = fixture()
             let url = try #require(URL(string: "http://localhost:3000/page"))
             let first = try await service.openPaneBrowser(sessionName: "work", paneID: "%1", url: url)
             let same = try await service.openPaneBrowser(sessionName: "work", paneID: "%1", url: url)
             let reveal = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
             let other = try await service.openPaneBrowser(sessionName: "work", paneID: "%2", url: url)
-            #expect(first === same && same === reveal && other !== first)
-            #expect(runtime.requests.count == 2 && runtime.navigations.count == 2)
+            #expect(Set([first.id, same.id, reveal.id, other.id]).count == 4)
+            #expect(runtime.requests.count == 4 && runtime.navigations.count == 3)
             #expect(first.owner.isEmpty && first.sourceAgent == nil)
             #expect(service.descriptor(first).sourcePaneID == "%1")
             #expect(first.windowID == "work:1")
@@ -166,7 +166,7 @@
         }
 
         @Test
-        func localAndViewerRequestsShareTheHostRegistry() async throws {
+        func localAndViewerRequestsCreateSeparateHostPages() async throws {
             let (service, runtime) = fixture()
             let local = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
             let request = BrowseBrowser(
@@ -176,25 +176,26 @@
                 sourcePaneID: "%1"
             )
             let remote = try await service.handleBrowser(request, viewerID: "phone")
-            #expect(remote.tab?.id == local.id)
+            #expect(remote.tab?.id != local.id)
             #expect(remote.tab?.sourcePaneID == "%1")
-            #expect(runtime.requests.count == 1 && runtime.navigations.count == 1)
+            #expect(runtime.requests.count == 2 && runtime.navigations.count == 1)
             await service.shutdown()
         }
 
         @Test
-        func explicitExtraDoesNotReplaceHumanDefault() async throws {
+        func legacyCreateAndOpenPaneBothCreateNewPages() async throws {
             let (service, runtime) = fixture()
-            let primary = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
-            let extra = try await service.openPaneBrowser(sessionName: "work", paneID: "%1", new: true)
-            #expect(extra.id != primary.id && !extra.isPrimary)
-            #expect(try await service.openPaneBrowser(sessionName: "work", paneID: "%1") === primary)
-            let remote = try await service.handleBrowser(.init(sessionName: "work", surfaceID: UUID(), operation: .create, sourcePaneID: "%1"), viewerID: "phone")
-            #expect(remote.tab?.id != primary.id && remote.tab?.id != extra.id)
-            #expect(runtime.requests.count == 3)
-            service.close(primary)
+            let first = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
+            var ids: Set<UUID> = [first.id]
+            for operation in [RemoteBrowserOperation.create, .openPane(url: nil), .openPane(url: nil)] {
+                let remote = try await service.handleBrowser(.init(sessionName: "work", surfaceID: UUID(), operation: operation, sourcePaneID: "%1"), viewerID: "phone")
+                let id = try #require(remote.tab?.id)
+                #expect(ids.insert(id).inserted)
+            }
+            #expect(runtime.requests.count == 4)
+            service.close(first)
             let replacement = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
-            #expect(replacement.id != extra.id && replacement.id != remote.tab?.id)
+            #expect(!ids.contains(replacement.id))
             await service.shutdown()
         }
 
@@ -203,13 +204,13 @@
             ("HTTP://LOCALHOST:3000", "http://localhost:3000/"),
             ("https://EXAMPLE.com:443", "https://example.com/"),
         ])
-        func cefNormalizedAddressDoesNotReloadOrConflictWithLease(_ address: String, _ cefAddress: String) async throws {
+        func sameURLCreatesNewPagesWithoutReloadingOrStealingExistingLease(_ address: String, _ cefAddress: String) async throws {
             let (service, runtime) = fixture()
             let tab = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
             service.browserTabChanged(tab.identifier, title: "Page", url: cefAddress, loading: false)
             let url = try #require(URL(string: address))
-            #expect(try await service.openPaneBrowser(sessionName: "work", paneID: "%1", url: url) === tab)
-            #expect(runtime.navigations.isEmpty)
+            let second = try await service.openPaneBrowser(sessionName: "work", paneID: "%1", url: url)
+            #expect(second !== tab && second.url == cefAddress)
             service.remoteControls[tab.id] = .init(id: UUID(), viewerID: "other", surfaceID: UUID(), expires: .now.advanced(by: .seconds(20)))
             let result = try await service.handleBrowser(.init(
                 sessionName: "work",
@@ -217,8 +218,9 @@
                 operation: .openPane(url: address),
                 sourcePaneID: "%1"
             ), viewerID: "phone")
-            #expect(result.tab?.id == tab.id)
-            #expect(runtime.navigations.isEmpty && runtime.requests.count == 1)
+            #expect(result.tab?.id != tab.id && result.tab?.id != second.id)
+            #expect(runtime.requests.count == 3 && runtime.navigations.count == 2)
+            #expect(runtime.navigations.allSatisfy { $0.0 != tab.identifier })
             #expect(service.remoteControls[tab.id]?.viewerID == "other")
             await service.shutdown()
         }
@@ -273,18 +275,18 @@
                     tabs.selectedBrowserTabId = tab.id
                 }
             }
-            for _ in 0..<100 where runtime.pending == nil {
+            for _ in 0..<100 where runtime.pending.isEmpty {
                 await Task.yield()
             }
-            try #require(runtime.pending != nil)
+            try #require(!runtime.pending.isEmpty)
             if content == "git" {
                 tabs.selectLeftGit()
             }
             if content == "files" {
                 fileWindows.insert("work:1")
             }
-            runtime.pending?()
-            runtime.pending = nil
+            runtime.pending.removeFirst()()
+
             try await opening.value
             #expect((tabs.selectedBrowserTabId != nil) == (content == "terminal"))
             #expect(runtime.requests.count == 1)
@@ -320,24 +322,28 @@
         }
 
         @Test
-        func simultaneousOpensCreateOnlyOnePage() async throws {
+        func simultaneousOpensCreateIndependentPages() async throws {
             let (service, runtime) = fixture()
             runtime.holdCreation = true
             let first = Task { try await service.openPaneBrowser(sessionName: "work", paneID: "%1") }
             let second = Task { try await service.openPaneBrowser(sessionName: "work", paneID: "%1") }
-            for _ in 0..<100 where runtime.pending == nil {
+            for _ in 0..<100 where runtime.pending.count < 2 {
                 await Task.yield()
             }
-            try #require(runtime.pending != nil)
-            runtime.pending?()
-            runtime.pending = nil
+            try #require(runtime.pending.count == 2)
+            runtime.holdCreation = false
+            for finish in runtime.pending {
+                finish()
+            }
+            runtime.pending.removeAll()
+
             let a = try await first.value, b = try await second.value
-            #expect(a === b && runtime.requests.count == 1)
+            #expect(a !== b && runtime.requests.count == 2)
             await service.shutdown()
         }
 
         @Test
-        func agentPagesAndPopupChildrenAreNotManualReuseCandidates() async throws {
+        func newHumanPagesLeaveAgentsAndPopupChildrenUntouched() async throws {
             let (service, runtime) = fixture()
             let agentID = UUID().uuidString
             service.browserTabCreated(agentID, view: NSView(), route: [
@@ -352,8 +358,8 @@
             service.browserTabCreated(childID, view: NSView(), route: route, owner: "", parent: manual.identifier)
             let child = try #require(service.tabs[childID])
             #expect(child.paneID == "%1" && child.owner.isEmpty && child.parentID == manual.id)
-            let reused = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
-            #expect(reused === manual && reused.identifier != agentID)
+            let added = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
+            #expect(added !== manual && added.identifier != agentID && added.identifier != childID)
             service.close(manual)
             let replacement = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
             #expect(replacement.id != manual.id && replacement.id != child.id)
@@ -362,17 +368,18 @@
         }
 
         @Test
-        func activeLeaseBlocksNavigationButNotViewing() async throws {
+        func openDoesNotNavigateOrReleaseAnotherTabsLease() async throws {
             let (service, runtime) = fixture()
             let tab = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
-            service.remoteControls[tab.id] = .init(id: UUID(), viewerID: "other", surfaceID: UUID(), expires: .now.advanced(by: .seconds(20)))
-            #expect(try await service.openPaneBrowser(sessionName: "work", paneID: "%1") === tab)
+            let lease = UUID()
+            service.remoteControls[tab.id] = .init(id: lease, viewerID: "other", surfaceID: UUID(), expires: .now.advanced(by: .seconds(20)))
+            let blank = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
             let url = try #require(URL(string: "https://example.com/new"))
-            await #expect(throws: (any Error).self) { try await service.openPaneBrowser(sessionName: "work", paneID: "%1", url: url) }
-            #expect(runtime.navigations.isEmpty && runtime.requests.count == 1)
-            service.remoteControls[tab.id]?.expires = .now.advanced(by: .seconds(-1))
-            _ = try await service.openPaneBrowser(sessionName: "work", paneID: "%1", url: url)
-            #expect(runtime.navigations.count == 1)
+            let linked = try await service.openPaneBrowser(sessionName: "work", paneID: "%1", url: url)
+            #expect(Set([tab.id, blank.id, linked.id]).count == 3)
+            #expect(runtime.navigations.count == 1 && runtime.navigations.first?.0 == linked.identifier)
+            #expect(service.remoteControls[tab.id]?.id == lease)
+            #expect(tab.url == "about:blank")
             await service.shutdown()
         }
 
@@ -424,13 +431,13 @@
             let opening = Task {
                 try await service.openPaneBrowser(sessionName: "work", paneID: "%1", url: URL(string: "https://example.com"))
             }
-            for _ in 0..<100 where runtime.pending == nil {
+            for _ in 0..<100 where runtime.pending.isEmpty {
                 await Task.yield()
             }
-            try #require(runtime.pending != nil)
+            try #require(!runtime.pending.isEmpty)
             sourceAvailable.setValue(false)
-            runtime.pending?()
-            runtime.pending = nil
+            runtime.pending.removeFirst()()
+
             await #expect(throws: (any Error).self) { try await opening.value }
             #expect(runtime.navigations.isEmpty)
             await #expect(throws: (any Error).self) { try await service.openPaneBrowser(sessionName: "work", paneID: "%1") }
@@ -451,7 +458,6 @@
             #expect(service.tabs[childID]?.sessionName == "renamed")
             #expect(service.tabs[childID]?.windowID == "renamed:3")
             service.resolveSourcePane = { _, id in Self.pane(id, session: "renamed", index: 3) }
-            #expect(try await service.openPaneBrowser(sessionName: "renamed", paneID: "%1") === parent)
             #expect(runtime.requests.count == 1)
             await service.shutdown()
         }
@@ -470,9 +476,8 @@
             service.register(old)
             service.register(new)
             let first = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
-            service.resolveSourcePane = { _, id in Self.pane(id, session: "destination", index: 3) }
-            let moved = try await service.openPaneBrowser(sessionName: "destination", paneID: "%1")
-            #expect(moved === first && moved.workspaceID == new.id)
+            service.updateBrowserRoutes([Self.pane(session: "destination", index: 3)])
+            #expect(first.workspaceID == new.id)
             #expect(detached == first.id && adopted == first.id)
             #expect(runtime.closed.isEmpty && runtime.requests.count == 1)
             service.unregister(old)
@@ -481,7 +486,7 @@
         }
 
         @Test
-        func closingHostWindowParksPageForReuseAndReopening() async throws {
+        func closingHostWindowParksExistingPageForWindowReopening() async throws {
             let (service, runtime) = fixture()
             let first = AgentBrowserWorkspace()
             first.acceptsSession = { $0 == "work" }
@@ -489,7 +494,6 @@
             let tab = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
             service.unregister(first)
             #expect(runtime.closed.isEmpty)
-            #expect(try await service.openPaneBrowser(sessionName: "work", paneID: "%1") === tab)
             let reopened = AgentBrowserWorkspace()
             reopened.acceptsSession = { $0 == "work" }
             service.register(reopened)
@@ -505,17 +509,18 @@
             let opening = Task {
                 try await service.openPaneBrowser(sessionName: "work", paneID: "%1", url: URL(string: "https://example.com"))
             }
-            for _ in 0..<100 where runtime.pending == nil {
+            for _ in 0..<100 where runtime.pending.isEmpty {
                 await Task.yield()
             }
-            try #require(runtime.pending != nil)
+            try #require(!runtime.pending.isEmpty)
             opening.cancel()
-            runtime.pending?()
-            runtime.pending = nil
+            runtime.pending.removeFirst()()
+
             await #expect(throws: CancellationError.self) { try await opening.value }
-            let reused = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
-            #expect(runtime.requests.count == 1 && runtime.navigations.isEmpty)
-            #expect(reused.paneID == "%1" && reused.url == "about:blank")
+            runtime.holdCreation = false
+            let next = try await service.openPaneBrowser(sessionName: "work", paneID: "%1")
+            #expect(runtime.requests.count == 2 && runtime.navigations.isEmpty)
+            #expect(next.paneID == "%1" && next.url == "about:blank")
             await service.shutdown()
         }
     }

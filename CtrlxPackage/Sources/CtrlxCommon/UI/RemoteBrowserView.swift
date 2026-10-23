@@ -117,6 +117,9 @@ public struct RemoteBrowserView: View {
                 }.disabled(isAnnotating).padding(.horizontal, 8).padding(.bottom, 8)
             }
             Divider()
+            BrowserNetworkPermissionBanner(permission: session.tab.networkPermission, canRespond: session.controlID != nil) { id, allow in
+                try await session.respondToNetworkPermission(id, allow: allow)
+            }
             BrowserAnnotationSurface(preferredTarget: session.tab.sourceAgent,
                                      requiresRecipientSelection: session.tab.isAgentOwned && session.tab.sourceAgent == nil, capture: {
                                          let request = BrowseBrowser(sessionName: session.tab.sessionName, tabID: session.tab.id,

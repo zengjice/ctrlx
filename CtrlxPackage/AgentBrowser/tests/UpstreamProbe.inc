@@ -75,6 +75,11 @@
     if ([command isEqual:@"probe.external-app"]) {
       Reply(id, ProbeExternalApplication(client.browser, request)); return true;
     }
+    if ([command isEqual:@"probe.network-permission"]) {
+      CefRefPtr<Bridge> self = this;
+      ProbeNetworkPermission(client.browser, request, ^(NSDictionary *value, NSString *error) { self->Reply(id, value, error); });
+      return true;
+    }
     if ([command isEqual:@"probe.remote-view"]) {
       NSView* view = (__bridge NSView*)client.browser->GetHost()->GetWindowHandle();
       if ([request[@"action"] isEqual:@"start"]) {

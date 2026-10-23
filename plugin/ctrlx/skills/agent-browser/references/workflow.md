@@ -9,10 +9,11 @@ on that Mac with the agent in a local tmux pane. No special launcher or inherite
 On identification failure, stop; never borrow another pane's context, select the
 focused tab, or ask the user to restart with a wrapper command.
 
-`open` opens/reuses this pane's Agent default tab; `navigate --tab` targets a
-specific owned tab. Use `open --new` to keep an old page, compare in parallel,
-or honor an explicit new-tab request; extras do not replace the default.
-Prefer an open target; use `tabs` when unsure. Keep pages the user still needs.
+`open` always creates a new owned tab and returns its ID, even for the same URL.
+Use `tabs` to find an existing target, then `navigate --tab` to reuse it. Prefer
+an already-open target when it fits the task; do not blindly retry an open after
+a timeout, since it may already have created a page. `--new` is a compatibility
+alias and is not needed. Keep pages the user still needs.
 
 Agent pages and popups open in the background. Reading, clicking, typing and
 navigation do not require selecting the page in the Host UI. Use `action show`
@@ -22,7 +23,7 @@ automation must leave the user's current session and keyboard focus alone.
 ```sh
 ctrlx browser action tabs
 ctrlx browser action open --url http://localhost:3000
-ctrlx browser action open --new --url https://example.com
+ctrlx browser action open --url https://example.com
 ctrlx browser action wait --tab <id>
 ctrlx browser action read --tab <returned-id>
 ctrlx browser action click --tab <id> --selector '<selector from read>'
@@ -31,8 +32,8 @@ ctrlx browser action navigate --tab <id> --url https://example.com
 ctrlx browser action show --tab <id>
 ```
 
-Human and Agent defaults are separate per pane; clicking a terminal URL is a human action.
-Reopening never transfers grants. Each instance sees only its own group. Human
+Human menu/link opens also create new pages bound to their source pane.
+Opening never transfers grants. Each instance sees only its own group. Human
 pages use Host Chromium, not Agent grants; WebKit/system-browser tabs are outside
 this CLI. Groups share logins, not control grants. Never log out or switch
 accounts without the user's intent.

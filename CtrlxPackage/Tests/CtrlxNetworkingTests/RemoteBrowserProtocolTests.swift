@@ -18,6 +18,8 @@ struct RemoteBrowserProtocolTests {
             .forward,
             .reload,
             .close,
+            .networkPermission(id: UUID(), allow: true),
+            .networkPermission(id: UUID(), allow: false),
             .fit(width: 390, height: 700),
             .text("中文\nsecond line"),
             .key(.init("Enter", keyCode: 13)),
@@ -50,6 +52,18 @@ struct RemoteBrowserProtocolTests {
         #expect(updated.supportsPaneBrowser == true)
         #expect(updated.browserTabs == [tab])
         #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab)).sourcePaneID == nil)
+        #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab)).networkPermission == nil)
+    }
+
+    @Test
+    func networkPermissionIsAdditive() throws {
+        let permission = BrowserNetworkPermission(id: UUID(), origin: "https://example.com", localNetwork: false, loopbackNetwork: true)
+        let tab = RemoteBrowserTab(id: UUID(), sessionName: "s", title: "page", url: "https://example.com", isLoading: false, isAgentOwned: false, networkPermission: permission)
+        #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab)) == tab)
+        struct LegacyTab: Decodable { let id: UUID
+            let title: String
+        }
+        #expect(try JSONDecoder().decode(LegacyTab.self, from: JSONEncoder().encode(tab)).id == tab.id)
     }
 
     @Test

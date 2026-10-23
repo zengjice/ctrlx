@@ -48,7 +48,8 @@ extension AgentBrowserService {
             sourceAgent: tab.sourceAgent,
             sourcePaneID: tab.paneID.isEmpty ? nil : tab.paneID,
             isExtensionWindow: tab.isExtensionWindow ? true : nil,
-            externalApplicationNotice: tab.externalApplicationNotice
+            externalApplicationNotice: tab.externalApplicationNotice,
+            networkPermission: tab.networkPermission
         )
     }
 
@@ -111,7 +112,7 @@ extension AgentBrowserService {
                 }
                 url = parsed
             }
-            let tab = try await openPaneBrowser(sessionName: request.sessionName, paneID: paneID, url: url, new: request.operation == .create)
+            let tab = try await openPaneBrowser(sessionName: request.sessionName, paneID: paneID, url: url)
             return RemoteBrowserResponse(tab: descriptor(tab))
         default: break
         }
@@ -122,6 +123,12 @@ extension AgentBrowserService {
             throw RemoteBrowserError.message("This Host browser tab is no longer available in the session.")
         }
         switch request.operation {
+        case let .networkPermission(id, allow):
+            guard let lease = renewBrowserControl(request, viewerID: viewerID) else {
+                throw RemoteBrowserError.message("Control expired. Take Control again.")
+            }
+            try await respondToNetworkPermission(id, tab: tab, allow: allow, controlID: lease.id)
+            return RemoteBrowserResponse(tab: descriptor(tab), controlID: lease.id)
         case let .extensions(operation):
             return try await handleBrowserExtensions(operation, request: request, tab: tab, viewerID: viewerID)
         case .close:

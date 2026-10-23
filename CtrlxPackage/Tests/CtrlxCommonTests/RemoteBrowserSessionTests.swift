@@ -7,6 +7,43 @@ import Testing
 @Suite("Remote browser surface") @MainActor
 struct RemoteBrowserSessionTests {
     @Test
+    func networkPermissionOnlyUsesAdvertisedRequestWithLiveControl() async throws {
+        let id = UUID(), permissionID = UUID(), controlID = UUID()
+        var permission: BrowserNetworkPermission? = .init(id: permissionID, origin: "https://example.com", localNetwork: false, loopbackNetwork: true)
+        var controlled = false
+        var replies = 0
+        func tab() -> RemoteBrowserTab {
+            .init(id: id, sessionName: "s", title: "page", url: "https://example.com", isLoading: false, isAgentOwned: false, networkPermission: permission)
+        }
+        let session = RemoteBrowserSession(tab: tab()) { request in
+            switch request.operation {
+            case .takeControl: controlled = true
+            case .releaseControl: controlled = false
+            case let .networkPermission(id, allow):
+                #expect(id == permissionID && allow)
+                #expect(request.controlID == controlID)
+                replies += 1
+                permission = nil
+            default: break
+            }
+            return .init(tab: tab(), frame: .init(jpeg: Data([1]), width: 300, height: 400, generation: 1), controlID: controlled ? controlID : nil)
+        }
+        await #expect(throws: (any Error).self) { try await session.respondToNetworkPermission(permissionID, allow: true) }
+        let watch = Task { await session.watch() }
+        defer { session.stop()
+            watch.cancel()
+        }
+        try await wait { session.controlID != nil }
+        await #expect(throws: (any Error).self) { try await session.respondToNetworkPermission(UUID(), allow: true) }
+        try await session.respondToNetworkPermission(permissionID, allow: true)
+        #expect(session.tab.networkPermission == nil && replies == 1)
+        await #expect(throws: (any Error).self) { try await session.respondToNetworkPermission(permissionID, allow: true) }
+        session.stop()
+        await #expect(throws: (any Error).self) { try await session.respondToNetworkPermission(permissionID, allow: true) }
+        #expect(replies == 1)
+    }
+
+    @Test
     func clipboardCopyUsesLocalClipboardAndRejectsLateReplies() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -41,6 +78,7 @@ struct RemoteBrowserSessionTests {
             #expect(clipboard.getString() == "new local copy")
         }
     }
+
     @Test
     func reusedPageRefreshesViewerMetadataWithoutWaitingForAnotherSnapshot() {
         let client = ViewerRelayClient()

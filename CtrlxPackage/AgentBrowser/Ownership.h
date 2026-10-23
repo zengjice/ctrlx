@@ -1,7 +1,6 @@
 #pragma once
 #include <cstdint>
 #include <map>
-#include <optional>
 #include <string>
 
 // UI-thread confined. Runtime instance identity is not a pane or layout ID.
@@ -45,18 +44,4 @@ class BrowserOwnership {
     if (it != runs.end()) { it->second.active = false; it->second.secret.clear(); }
     // Keep pages for the human; never inherit grants on a subsequent launch.
   }
-};
-
-// A default slot is pane-bound. A new process may create its own page, never inherit a grant.
-class BrowserPrimaryTabs {
- public:
-  std::optional<int> Find(const std::string& pane, const std::string& owner) const {
-    auto it = pages_.find(pane);
-    if (it == pages_.end() || owner.empty() || it->second.first != owner) return std::nullopt;
-    return it->second.second;
-  }
-  void Set(const std::string& pane, const std::string& owner, int browser) { pages_[pane] = {owner, browser}; }
-  void Remove(int browser) { std::erase_if(pages_, [browser](const auto& entry) { return entry.second.second == browser; }); }
- private:
-  std::map<std::string, std::pair<std::string, int>> pages_;
 };

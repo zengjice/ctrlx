@@ -21,6 +21,13 @@
             var extensionFrameReply: ((Data?, String?) -> Void)?
             var deferExtensionFrame = false
             var onManualCreated: (() -> Void)?
+            var permissionResponses: [(String, String, Bool, String?)] = []
+            func respond(toNetworkPermission id: String, forTab tab: String, allow: Bool, controlToken: String?, completion: @escaping (String?) -> Void) {
+                permissionResponses.append((id, tab, allow, controlToken))
+                delegate?.browserTab?(tab, networkPermissionChanged: nil)
+                completion(nil)
+            }
+
             func start(with delegate: any CXBrowserHostDelegate, profile: String, state: String) throws { }
             func isReady() -> Bool {
                 true
@@ -143,15 +150,56 @@
             #expect(service.supportsBrowserSharing)
             #expect(starts == 0)
             let request = BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .openPane(url: nil), sourcePaneID: "%1")
+            var opened: Set<UUID> = []
             for _ in 0..<2 {
                 let response = try await service.handleBrowser(request, viewerID: "viewer")
                 let tab = try #require(response.tab)
                 #expect(tab.sessionName == "test")
                 #expect(tab.sourcePaneID == "%1")
                 #expect(!tab.isAgentOwned)
+                #expect(opened.insert(tab.id).inserted)
             }
             #expect(starts == 1)
-            #expect(service.sharedBrowserTabs.count == 1)
+            #expect(service.sharedBrowserTabs.count == 2)
+            await service.shutdown()
+        }
+
+        @Test
+        func networkPermissionRequiresCurrentRequestAndController() async throws {
+            let (service, runtime, descriptor) = try await fixture()
+            let tab = try #require(service.tabs[descriptor.id.uuidString])
+            let id = UUID(), surface = UUID()
+            func publish(_ id: UUID) {
+                service.browserTab(tab.identifier, networkPermissionChanged: ["id": id.uuidString, "origin": "https://example.com", "localNetwork": false, "loopbackNetwork": true])
+            }
+            func request(_ operation: RemoteBrowserOperation, control: UUID? = nil, surfaceID: UUID? = nil) -> BrowseBrowser {
+                .init(sessionName: "test", tabID: tab.id, surfaceID: surfaceID ?? surface, controlID: control, operation: operation)
+            }
+            publish(id)
+            #expect(service.descriptor(tab).networkPermission?.id == id)
+            try await service.respondToNetworkPermission(id, tab: tab, allow: true)
+            #expect(runtime.permissionResponses.count == 1)
+            #expect(runtime.permissionResponses[0].3 == nil)
+            #expect(tab.networkPermission == nil)
+            await #expect(throws: (any Error).self) { try await service.respondToNetworkPermission(id, tab: tab, allow: true) }
+
+            publish(id)
+            let control = try #require(try await service.handleBrowser(request(.takeControl), viewerID: "a").controlID)
+            await #expect(throws: (any Error).self) { try await service.respondToNetworkPermission(id, tab: tab, allow: true) }
+            await #expect(throws: (any Error).self) { try await service.handleBrowser(request(.networkPermission(id: id, allow: true), control: control), viewerID: "b") }
+            await #expect(throws: (any Error).self) { try await service.handleBrowser(request(.networkPermission(id: id, allow: true), control: control, surfaceID: UUID()), viewerID: "a") }
+            await #expect(throws: (any Error).self) { try await service.handleBrowser(request(.networkPermission(id: UUID(), allow: true), control: control), viewerID: "a") }
+            let response = try await service.handleBrowser(request(.networkPermission(id: id, allow: false), control: control), viewerID: "a")
+            #expect(response.tab?.networkPermission == nil)
+            #expect(runtime.permissionResponses.count == 2)
+            #expect(runtime.permissionResponses[1].2 == false && runtime.permissionResponses[1].3 == control.uuidString)
+
+            publish(UUID())
+            service.releaseBrowserControl(tab.id)
+            await #expect(throws: (any Error).self) { try await service.handleBrowser(request(.networkPermission(id: id, allow: true), control: control), viewerID: "a") }
+            #expect(runtime.permissionResponses.count == 2)
+            service.browserTab(tab.identifier, networkPermissionChanged: nil)
+            #expect(tab.networkPermission == nil)
             await service.shutdown()
         }
 

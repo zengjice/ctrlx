@@ -30,17 +30,5 @@ int main() {
   assert(!state.Owns("b", "tab-b"));
   BrowserOwnership restarted;
   assert(!restarted.Authenticate("a", a.secret));
-  BrowserPrimaryTabs primary;
-  assert(!primary.Find("%1", "a"));
-  primary.Set("%1", "a", 1);
-  assert(primary.Find("%1", "a") == 1);
-  assert(!primary.Find("%1", "b") && !primary.Find("%1", ""));
-  assert(!primary.Find("%2", "a"));
-  primary.Set("%2", "a", 2);
-  primary.Set("%1", "b", 3); // a new process gets a new default, never the old grant
-  primary.Remove(1); // late close of the previous process's page cannot erase the new slot
-  assert(primary.Find("%1", "b") == 3 && primary.Find("%2", "a") == 2);
-  primary.Remove(3);
-  assert(!primary.Find("%1", "b"));
   std::cout << "ownership: PASS\n";
 }

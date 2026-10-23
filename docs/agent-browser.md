@@ -48,7 +48,7 @@ Apple Silicon only; no standalone browser or browser-wide TCP debugging port is
 involved.
 
 Terminal HTTP(S) links offer **Host Browser** or **This Device's Browser**.
-The first opens the same Host page and shows it on the requesting client; the
+The first creates a new Host page and shows it on the requesting client; the
 second invokes the operating device's default browser, unchanged. Mac global and
 per-domain preferences keep their stored values but “in app” now means Host.
 The existing split-on-link preference is retained. iOS tap and long-press use
@@ -77,18 +77,17 @@ iOS Debug device-SDK build and device-SDK typechecking of the native link-routin
 regression. The UIKit regression was not executed; keyboard, landscape and iPad
 presentation still require physical-device acceptance. No app was installed.
 
-The Host has one reusable **human primary page per pane**, shared by all clients.
-Open Browser reveals it without resetting its URL; opening a link navigates that
-page (an identical URL does not reload; origin case, default ports and an empty
-root path are normalized before comparison). URLs with embedded usernames or
-passwords are rejected explicitly before creating or navigating a page. Simultaneous creation coalesces. Agent
-pages and popup children are not primary-page candidates and remain independently
-owned; children inherit the source pane. Pane membership is validated against
-fresh tmux state before opening/navigating, including linked-session ambiguity.
-Session/window moves update the association. If a Viewer holds the primary page's
-control lease, a different URL is rejected until control is released; opening
-does not steal the lease. Cancelled/obsolete UI requests do not switch selection,
-including a switch from the terminal to Git/Files within the same Mac window.
+Each human **Open Browser** or terminal-link **Host Browser** action creates a
+new page, including repeated opens of the same URL. Mac Host, Mac Viewer and iOS
+Viewer use this same Host behavior. Concurrent requests create separate pages;
+opening never navigates an existing page or takes its Viewer control lease.
+The new page belongs to the source pane, alongside that pane's other linked tabs.
+URLs with embedded usernames or passwords are rejected before page creation.
+Pane membership is validated against fresh tmux state before opening/navigating,
+including linked-session ambiguity; session/window moves update the association.
+Agent pages and popup children retain their own control grants and parent routes.
+Cancelled/obsolete UI requests do not switch selection, including a switch from
+the terminal to Git/Files within the same Mac window.
 
 The former New Browser engine preference is retired. Existing/restored WebKit
 tabs stay device-local and usable, including their popups; they are not converted.
@@ -114,7 +113,7 @@ but Chrome's normal password-save prompt will not appear.
 
 ### Background Agent operation
 
-Agent page creation/reuse, navigation, popups and page actions run without
+Agent page creation, navigation, popups and page actions run without
 selecting a workspace tab, raising the Host window or taking native keyboard
 focus. Both engines send page input to the authorized browser directly; DOM
 focus inside that page is independent of the user's current AppKit responder.
@@ -179,8 +178,40 @@ fixture asserts callback order before releasing delayed HTTP responses.
 Its launch recorder substitutes the OS handoff, so it does not open personal apps
 or establish real Feishu tenant authorization / physical-iPhone acceptance.
 
+### Local service and network permissions
+
+Alloy pages surface CEF's local-network / loopback-network permission requests
+inside the requesting tab. The card names the requesting origin and whether it
+needs apps/services on the Host Mac, LAN devices, or both. Mac Host and current
+Mac/iOS Viewers can allow or deny; Viewers must hold that page's current control
+lease. The optional `RemoteBrowserTab.networkPermission` advertises the pending
+request and response capability. Older Viewers ignore it; use an updated Viewer
+or the Host UI. No Relay change is required.
+
+Only these network permissions use this card. Chrome-style windows retain their
+native permission UI. CEF owns permission persistence and website origin policy;
+CtrlX does not bypass CORS, certificates or macOS permissions. Navigation/closure
+invalidates pending responses, and callbacks recheck the exact request and native
+control token. Agent page commands cannot respond to these native permission cards.
+Opening Feishu and accepting device authorization is separate from permitting the
+webpage to contact its local service. This addresses that possible failure path;
+company-specific Feishu authorization still needs verification on the affected Mac.
+
+Host **Settings → General → Diagnostics → Debug Mode** enables permission request,
+decision/dismissal, external-app handoff and navigation-error breadcrumbs. Relevant
+console errors are reduced to categories (local network, CORS, connection,
+certificate or network access), once per category per navigation. Logs retain
+site origins and error codes, never URL paths/queries/fragments, console text,
+Cookie/header values or authorization tokens. Collect `~/Library/Logs/CtrlX/Browser/`
+after reproducing; turning Debug Mode off stops collection immediately.
+
+`tests/network_permissions.py` exercises real public-to-loopback fetches with a
+test-only address-space override in a signed isolated Debug app/private profile.
+It covers allow/deny, obsolete requests, navigation, native control changes and
+Debug Mode redaction. It does not contact Feishu or change the installed App.
+
 Regression coverage: `PaneBrowserOpeningTests`, `AgentBrowserRoutingTests`,
-`RemoteBrowserProtocolTests` and the connection capability test cover reuse,
+`RemoteBrowserProtocolTests` and the connection capability test cover distinct opens,
 plain panes, source revalidation, ownership/leases, cancellation, parking and
 old-Host gating. `LayoutSnapshotMapperTests` protects WebKit restoration. Native
 `tests/ownership.cc` rejects empty-owner human pages for Agent commands. The new
@@ -322,26 +353,29 @@ or later and triggering `SessionStart` with hooks enabled and trusted. Repositor
 edits alone do not update running agents. Isolated hook tests verify delivery and
 bundle contents; they do not guarantee a model's tool choice.
 
-The shared skill guides default reuse versus explicit extra tabs. See its
+The shared skill describes explicit creation versus targeted navigation. See
 [owned-tab guidance](../plugin/ctrlx/skills/agent-browser/references/workflow.md#owned-tabs).
-`open` reuses the source pane's **Agent primary page**; `open --new` creates an
-extra without replacing it, and `navigate --tab` still targets a specific page.
-Same normalized URLs do not reload. Creation/reuse runs serially on CEF's UI loop;
-capacity limits apply only to creation. Popups and extras never become defaults.
-An expired owner or a different process cannot inherit a page/control grant merely
-by occupying the same pane. Busy or human-controlled pages reject Agent reuse.
-Human menu/link opens still use the distinct human primary page; viewing or
-annotating an Agent page does not create a human copy or change its ownership.
-The typed human `.create` operation explicitly creates an extra; `.openPane`
-remains the normal reusable operation. No global per-window browser is introduced.
-These `open` semantics require bundled guidance from Codex 1.1.8 / Claude Code
-1.3.9 or later; rebuild the Host and update the installed plugin together.
+Every `open` creates a new owned page and returns its ID, even for the same URL.
+`open --new` remains a compatibility alias. Use `tabs` to find an existing page
+and `navigate --tab` to reuse it; other page operations also require a tab ID.
+There is no primary/default-page registry. Native requests without `new`, or
+with legacy `new: false`, also create new pages. The CLI sends `new: true` for
+all opens so it requests the same behavior from older compatible native runtimes.
+Creation runs on CEF's UI loop and retains existing capacity limits and background
+presentation. An expired owner or different process cannot inherit another page's
+control grant merely by occupying the same pane. Viewing or annotating an Agent
+page does not change its ownership. Human `.create` and `.openPane` both create
+new pages; page navigation still uses the explicit `.navigate` operation and lease.
+The Host controls this behavior, so existing Viewers gain new-tab opens after the
+Host update. Update/reinstall the bundled plugin guidance for running agents;
+repository edits alone do not replace their cached skills.
 
-`tests/pane_defaults.py` exercises both engines through the public CLI in an
-isolated signed App, with native fixture owners, private profile/tmux/API sockets
-and mock Keychain. The 2026-10-15 run passed identical-URL DOM preservation,
-explicit extras, default close/recreation and normal Host exit. This is fixture
-acceptance, not real-Codex/Claude or paired Viewer UI acceptance.
+`tests/tab_opening.py` covers both public engines in an isolated signed App:
+new IDs for same-URL/repeated/legacy opens, old-page DOM preservation, targeted
+navigation, owned-tab enumeration, foreign/closed-tab rejection and sibling
+preservation after close. `tests/background_input.py` checks that these opens
+and other Agent actions preserve the user's visible workspace and keyboard focus.
+This is fixture acceptance, not real-Codex/Claude or paired Viewer UI acceptance.
 
 Open CtrlX on the **same Mac** as the terminal agent. Start `codex` or `claude` normally;
 there is no `ctrlx browser run` requirement. On `browser action open`, the CLI
@@ -402,7 +436,7 @@ already mapped by an older process.
 
 Mac Viewer tabs marked **Host** and iOS **Tabs → Browsers on Host** show the same
 Host Chromium pages, including manual, Agent and popup tabs. Open Browser on Host
-opens/reuses an ownerless human primary page bound to its source pane. Existing Viewer-local tabs are
+creates a new human page bound to its source pane. Existing Viewer-local tabs are
 marked **Local** and are not migrated. WebKit remains device-local. Page DOM,
 login state, local network access and localhost resolution all stay on the Host;
 the Viewer does not load a second copy of the URL or receive browser credentials.

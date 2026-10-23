@@ -1,10 +1,10 @@
 # Agent Browser 演进 TODO
 
-记录日期：2026-09-28，更新至 2026-10-21。状态：页面能力扩展已分项实施，Viewer 共享页面及接管、原位截图标注已实现首版；人工入口已统一为 Window 菜单和终端链接，按 pane 复用 Host Chromium。完整真机交互矩阵仍待验收，其余产品功能及外部接入按下列条目跟踪。以逐项效果验收为准；本文件不授权安装扩展、访问外部浏览器或发布。
+记录日期：2026-09-28，更新至 2026-10-23。状态：页面能力扩展已分项实施，Viewer 共享页面及接管、原位截图标注已实现首版；人工入口已统一为 Window 菜单和终端链接，每次打开新建 Host Chromium 标签并绑定来源 pane。完整真机交互矩阵仍待验收，其余产品功能及外部接入按下列条目跟踪。以逐项效果验收为准；本文件不授权安装扩展、访问外部浏览器或发布。
 
 ## 已确认的定位与边界
 
-- 默认定位仍是 **CtrlX 内嵌 Agent Browser**，与用户日常浏览器的 profile 隔离。人工新建统一为来源 pane 的 Host Chromium 主页面；移除独立 New Browser 和引擎设置，保留既有 WebKit 标签，不覆盖 Agent 页面。
+- 默认定位仍是 **CtrlX 内嵌 Agent Browser**，与用户日常浏览器的 profile 隔离。人工与 Agent 打开均新建来源 pane 的 Host Chromium 标签；Agent 通过 `tabs` 查找已有页面，使用 `navigate --tab` 定向导航。移除独立 New Browser 和引擎设置，保留既有 WebKit 标签，不覆盖 Agent 页面。
 - 保留同一 session 内展示、原生 Codex / Claude Code 进程实例与标签归属校验，以及 CtrlX 内部共享持久化登录态。共享 profile 不等于各 Agent 的账号数据隔离。
 - 保留默认 Vercel agent-browser 引擎和可选的原 CtrlX 引擎；继续使用 `ctrlx browser`，不要求特殊 Agent 启动命令。共用 skill 默认引导网页交互走 CtrlX，尊重用户显式选择其它浏览器；失败不静默切换工具。
 - 非扩展方式使用 CDP，并不天然比扩展方式少能力。当前缺口应逐项区分：CLI 未暴露、网关方法/事件过滤、目标/子会话未适配、引擎限制、CEF/Chromium 运行时差异。
