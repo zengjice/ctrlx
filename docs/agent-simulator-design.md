@@ -102,19 +102,23 @@ Codex 的专用启动方式，不引导 Claude 启动嵌套 Codex。
 
 ### Pane 复用与远程查看的实现约定
 
-三类 Host 标签遵守同一个边界：按来源 Pane 区分人工 / Agent 默认资源，普通打开复用、
-显式多开不替换默认资源，查看 / 标注不改变归属。iOS 当前终端标题下方的 Open iOS 可打开该窗口
+三类 Host 标签按来源 Pane 关联；查看 / 标注不改变归属。Simulator 普通打开复用默认设备，
+显式多开不替换默认设备。iOS 当前终端标题下方的 Open iOS 可打开该窗口
 已有设备；没有时，通过 `OpenPaneSimulator` 在 Host 创建标准配置的默认设备。
-人工打开和 Agent `open` 共用 pane 的默认设备与在途启动任务，不额外创建副本。
-浏览器保留人工与 Agent 两组，Files 目前只有人工组（点击 Agent 输出路径也属于人工操作）。
+人工打开可复用该 pane 的人工或 Agent 默认设备，以及对应的在途启动任务。
+Agent `open` 只能复用自己创建的默认设备或启动任务；默认设备由人工或其他 Agent 创建时，
+明确拒绝并提示用 `open --new` 创建独立设备，不转移已有设备的归属。
+浏览器的人工与 Agent 标签也保持权限隔离，但每次 `open` 均新建；Files 目前只有人工组
+（点击 Agent 输出路径也属于人工操作）。
 
 `AgentSimulatorService` 在 Host 进程内以来源 pane ID 索引默认活动设备，
 并登记该 pane 正在进行的默认启动任务。并发 `open` 合并；先判断复用，再检查新增
 设备容量。显式 runtime / type / profile / UDID 不符或缺少声明的 required features
 时明确报冲突，不更改已有设备。`--new` 跳过默认映射，额外设备不替换主设备。
 关闭默认设备清理映射；Agent owner 仍按 UID / PID / start time 校验。
-人工创建的设备没有 Agent owner / writer；同一持久 pane 的 Agent 显式 `open` 才可采用它，
-仍需 `claim` 才能取得写权限。Viewer 打开已有 Agent 设备不改变 owner / writer。
+设备的 owner 在创建时确定，运行期间不转移。人工创建的设备没有 Agent owner / writer；
+同一持久 pane 的 Agent 也不能通过 `open`、`claim` 或已知 device ID 接用。
+Viewer 打开已有 Agent 设备不改变 owner / writer，人工接管仍会撤销 Agent 的写控制权。
 人工设备在来源 pane 消失或身份改变时关闭，隐藏空闲回收沿用现有规则。
 
 工作区 unregister 只 detach，register 重新采用同一个设备与稳定渲染对象；未挂载时

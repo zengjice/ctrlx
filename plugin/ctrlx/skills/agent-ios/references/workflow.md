@@ -20,7 +20,9 @@ Read [capabilities and limits](operations.md#capability-coverage) when assessing
 unsupported tasks, native limitations or validation scope.
 
 Start with `ctrlx ios identity` and `ctrlx ios devices`. `open` reuses this
-pane's default device; `open --new` explicitly adds another. Use `inventory` for
+pane's default device only if your agent owns it; a human-created or another
+agent's default is rejected. Use `open --new` to create your own separate device,
+subject to capacity; `claim` cannot adopt someone else's device. Use `inventory` for
 installed runtime/type IDs. Use the returned CtrlX device ID below:
 
 ```sh

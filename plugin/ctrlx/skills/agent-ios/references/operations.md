@@ -10,7 +10,7 @@ Requires Xcode, an installed iOS runtime and CoreSimulator 1155.4 or newer.
 
 | Area | Supported controls |
 |---|---|
-| Devices | `devices` lists owned tabs. `open` reuses the pane's default; `open --new` adds an independent device. `inventory` lists runtimes/types; `open --udid` selects an exact private guest. `status` inspects; `close` shuts down, keeping data. `storage` lists private guests/bytes; `erase` resets and `delete` removes a specified idle guest. |
+| Devices | `devices` lists owned tabs. `open` reuses the pane's default only if owned by the caller; `open --new` adds an independent device. `inventory` lists runtimes/types; `open --udid` selects an exact private guest. `status` inspects; `close` shuts down, keeping data. `storage` lists private guests/bytes; `erase` resets and `delete` removes a specified idle guest. |
 | Apps | `install`, `uninstall`, `launch`, `terminate`, `open-url`: install/remove apps, start/stop or deliver URLs. Install needs a simulator `.app`; launch waits for Scene activation, not page content; URLs may need confirmation. |
 | Observe | `snapshot`, `wait`, `screenshot`: AX nodes/references, semantic selectors, visible/absent waits and PNG to a new path. |
 | Touch | `tap`, `swipe`, `long-press`, `drag`: single-contact input and system edge gestures. `pinch`: simultaneous two-contact scaling. |
@@ -58,7 +58,8 @@ CtrlX commands from `simctl` capabilities or claim substitutes provide equivalen
 
 ## Pane reuse and Viewer viewing
 
-`open` reuses the source pane's default; `--new` adds a separate owned device.
+`open` reuses only your own pane default; human-created devices stay human-owned.
+`--new` adds a separate owned device.
 Conflicting explicit configuration fails without changing the running guest.
 Closing the workbench detaches display; owner exit or explicit device close still
 shuts down. Mac/iOS Viewers observe the same device through bounded JPEG previews

@@ -450,14 +450,60 @@
         }
 
         @Test
-        func agentAdoptsHumanDefaultOnlyThroughExplicitOpen() async throws {
+        func agentCannotAdoptHumanDefault() async throws {
             let (fixture, identity, request) = try humanFixture()
             let tab = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
-            #expect(!(await fixture.action("status", ["device": .string(tab.id.uuidString)])).ok)
-            #expect((await fixture.action("open")).ok)
             let state = try #require(fixture.created.first)
-            #expect(state.owner?.pid == 10 && state.writer == nil && fixture.boots == 1)
-            #expect(!(await fixture.action("open", peer: 20)).ok)
+            let opened = await fixture.action("open")
+            #expect(!opened.ok)
+            #expect(state.owner == nil && state.writer == nil)
+            for command in ["status", "claim", "close"] {
+                #expect(!(await fixture.action(command, ["device": .string(tab.id.uuidString)])).ok)
+            }
+            #expect(!state.isClosed && fixture.boots == 1)
+            let bypass = await fixture.action("open", ["new": .bool(true), "udid": .string(state.handle.udid)])
+            #expect(!bypass.ok)
+            let own = await fixture.action("open", ["new": .bool(true)])
+            #expect(own.ok && own.result?["device"] != .string(tab.id.uuidString))
+            let ownID = try #require(own.result?["device"])
+            #expect((await fixture.action("status", ["device": ownID])).ok)
+            #expect(!(await fixture.action("claim", ["device": ownID], peer: 20)).ok)
+            let devices = await fixture.action("devices")
+            guard case let .array(entries)? = devices.result?["devices"] else {
+                throw SimulatorFailure("Missing device list")
+            }
+            #expect(entries.count == 1 && entries.first?.objectValue?["device"] == ownID)
+            let reused = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            #expect(reused.id == tab.id && state.owner == nil && state.writer == nil && fixture.boots == 2)
+            let preview = try await fixture.service.handleSimulator(BrowseSimulator(sessionName: "work", tabID: tab.id))
+            #expect(preview.frame.isValid)
+            await fixture.service.shutdown()
+        }
+
+        @Test(arguments: [true, false])
+        func concurrentHumanAndAgentOpenPreservesCreator(humanFirst: Bool) async throws {
+            let (fixture, identity, request) = try humanFixture()
+            fixture.probe.holdBoot.withLock { $0 = true }
+            let human: Task<RemoteSimulatorTab, Error>
+            let agent: Task<JSONRPCResponse, Never>
+            if humanFirst {
+                human = Task { try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity) }
+                try await wait { fixture.boots == 1 }
+                agent = Task { await fixture.action("open") }
+            } else {
+                agent = Task { await fixture.action("open") }
+                try await wait { fixture.boots == 1 }
+                human = Task { try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity) }
+            }
+            await Task.yield()
+            fixture.probe.holdBoot.withLock { $0 = false }
+            let tab = try await human.value
+            let response = await agent.value
+            let state = try #require(fixture.created.first)
+            #expect(response.ok == !humanFirst)
+            #expect((state.owner == nil) == humanFirst)
+            #expect((state.writer == nil) == humanFirst)
+            #expect(tab.id == state.id && fixture.boots == 1)
             await fixture.service.shutdown()
         }
 

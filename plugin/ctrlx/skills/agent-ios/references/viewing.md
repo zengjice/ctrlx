@@ -1,7 +1,10 @@
 # Pane reuse and Viewer viewing
 
-`open` returns this pane's existing default device without restarting its app or
-changing its profile. Simultaneous default opens share one startup. Reuse still
+`open` returns this pane's existing default device only when your agent created
+it, without restarting its app or changing its profile. A human-created or another
+agent's default is rejected, including while it is still starting. Use `open --new`
+to create your own separate device; knowing a device ID does not grant access.
+Simultaneous default opens from the same agent share one startup. Reuse still
 works at the configured device limit. An explicit runtime/type/profile/UDID that
 differs from that default, or required features it lacks, fails: use `open --new`
 for an additional device, or explicitly close the old one first. `--new` devices

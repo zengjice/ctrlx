@@ -618,7 +618,9 @@
             if let id = primaryDevices[pane.paneId], let existing = tabs[id], !existing.isClosed {
                 state = existing
             } else if let pending = pendingOpens[pane.paneId] {
-                guard owner == nil || pending.owner == nil || pending.owner == owner else { throw SimulatorFailure("Another agent is opening this pane's default simulator") }
+                guard owner == nil || pending.owner == owner else {
+                    throw SimulatorFailure("This pane's default simulator is being opened by a human or another agent. Use open --new to create your own device")
+                }
                 state = try await pending.task.value
             } else {
                 let task = Task { @MainActor in
@@ -630,8 +632,8 @@
             }
             try Task.checkCancellation()
             try validate(owner)
-            guard !state.isClosed, !closing, owner == nil || state.owner == nil || state.owner == owner else {
-                throw SimulatorFailure("This pane's simulator is unavailable or belongs to another agent process")
+            guard !state.isClosed, !closing, owner == nil || state.owner == owner else {
+                throw SimulatorFailure("This pane's default simulator is unavailable or was created by a human or another agent. Use open --new to create your own device")
             }
             for (key, actual) in [
                 ("runtime", state.handle.runtime),
@@ -652,15 +654,12 @@
             let current = try await resolve()
             guard
                 current.paneId == state.paneID, !state.isClosed, !closing,
-                owner == nil || state.owner == nil || state.owner == owner,
+                owner == nil || state.owner == owner,
                 state.sourcePane.workspaceIdentity.map({ $0.isSamePane(as: current.workspaceIdentity) }) ?? true else {
                 throw SimulatorFailure("The source pane changed while opening the simulator")
             }
             try validate(owner)
             try validate(state.owner)
-            if state.owner == nil, let owner {
-                state.owner = owner
-            }
             updateRoute(state, pane: current)
             attach(state)
             state.markActivity()
@@ -1855,7 +1854,7 @@
             handle.id
         }
 
-        var owner: SimulatorOwner?
+        let owner: SimulatorOwner?
         var sourcePane: PaneInfo
         var paneID: String { sourcePane.paneId }
         var workspaceID: UUID

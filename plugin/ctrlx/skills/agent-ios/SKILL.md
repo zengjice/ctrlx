@@ -18,7 +18,7 @@ the task's target.
 
 When live Simulator work is needed, read [workflow](references/workflow.md) before
 operating a device. Start with `ctrlx ios identity` and `ctrlx ios devices`, then
-reuse an owned device or use `open` for the pane's default. Requires Xcode and an
+reuse an owned device or use `open` for an Agent-owned pane default. Requires Xcode and an
 installed iOS runtime. Read [capabilities and limits](references/operations.md#capability-coverage)
 before choosing controls outside the basic workflow.
 
