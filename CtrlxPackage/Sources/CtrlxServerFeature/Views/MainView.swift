@@ -1648,6 +1648,7 @@ public struct MainView: View {
                             fallbackPaneID: sourceWindow.activePane?.paneId, new: new
                         )
                     },
+                    linkedTabActions: linkedTabActions(hostID: remote.hostId, sessionName: remote.sessionName),
                     onDetachWindow: { sourceWindow, point in
                         detachTerminal(hostID: remote.hostId, windowID: sourceWindow.stableId, position: point)
                     }
@@ -1863,6 +1864,7 @@ public struct MainView: View {
                                 fallbackPaneID: sourceWindow.activePane?.paneId, new: new
                             )
                         },
+                        linkedTabActions: linkedTabActions(hostID: nil, sessionName: session.sessionName),
                         onDetachWindow: { sourceWindow, point in
                             detachTerminal(hostID: nil, windowID: sourceWindow.stableId, position: point)
                         }
@@ -5013,13 +5015,9 @@ public struct MainView: View {
     private func selectBrowserTab(_ tabId: UUID, sessionName: String, windowId: String) {
         guard let tabs = sessionFileTabsStates[sessionName] else { return }
         tabStore.userDidSelectTab(hostID: nil, session: sessionName)
-        if tabs.rightSide.contains(.browser(tabId)) {
-            tabs.selectedRight = .browser(tabId)
-            return
+        if tabs.selectLinkedBrowserTab(tabId) {
+            fileBrowserActiveWindowIds.remove(windowId)
         }
-        tabs.selectedBrowserTabId = tabId
-        tabs.selectedFileTabId = nil
-        fileBrowserActiveWindowIds.remove(windowId)
     }
 
     /// Commits one optimistic tab reorder to tmux. Stable window ids keep the
@@ -5196,6 +5194,153 @@ public struct MainView: View {
             selectedWindow = originWindow
             Task {
                 try? await tmuxService.selectWindow(originWindow.id, expectedWorkspacePane: originWindow.panes.first?.workspaceIdentity)
+            }
+        }
+    }
+
+    // MARK: - Linked Tab Source Actions
+
+    private func linkedTabActions(hostID: String?, sessionName: String) -> LinkedTabSourceActions {
+        let client = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient }
+        let isConnected = hostID == nil || client?.isHostConnected == true
+        let canPresentSimulator = detachedWorkspace == nil
+
+        return LinkedTabSourceActions(
+            canOpenFiles: isConnected && (hostID == nil || client?.hostSupportsPaneFiles == true),
+            canOpenBrowser: isConnected && (hostID == nil || client?.hostSupportsPaneBrowser == true),
+            canOpenSimulator: canPresentSimulator && isConnected && (hostID == nil || client?.hostSupportsPaneSimulator == true),
+            onOpenFiles: { paneID in
+                openLinkedFiles(paneID: paneID, hostID: hostID, sessionName: sessionName)
+            },
+            onOpenBrowser: { paneID in
+                openPaneBrowser(hostID: hostID, sessionName: sessionName, paneID: paneID)
+            },
+            onOpenSimulator: { paneID in
+                openLinkedSimulator(paneID: paneID, hostID: hostID, sessionName: sessionName)
+            }
+        )
+    }
+
+    private func openLinkedFiles(paneID: String, hostID: String?, sessionName: String) {
+        let windowID: String?
+        if let hostID {
+            windowID = remoteSessionWindows(hostId: hostID, sessionName: sessionName)
+                .first { window in
+                    window.panes.contains { $0.paneId == paneID && $0.sessionName == sessionName }
+                }?.id
+        } else {
+            windowID = tmuxService.windows
+                .first { window in
+                    window.sessionName == sessionName && window.panes.contains { $0.paneId == paneID }
+                }?.id
+        }
+
+        guard let windowID else {
+            attachError = "This tab's source terminal is no longer available."
+            return
+        }
+        openDirectoryTab(
+            sessionName: sessionName,
+            windowID: windowID,
+            hostID: hostID,
+            paneIDs: [paneID],
+            fallbackPaneID: paneID
+        )
+    }
+
+    private func openLinkedSimulator(paneID: String, hostID: String?, sessionName: String) {
+        guard detachedWorkspace == nil else {
+            attachError = "Open iOS Simulator from the main CtrlX window."
+            return
+        }
+        if let hostID {
+            openRemoteLinkedSimulator(paneID: paneID, hostID: hostID, sessionName: sessionName)
+        } else {
+            openLocalLinkedSimulator(paneID: paneID, sessionName: sessionName)
+        }
+    }
+
+    private func openLocalLinkedSimulator(paneID: String, sessionName: String) {
+        guard
+            selectedRemoteSession == nil,
+            let pane = windowManager.paneStates[paneID],
+            pane.sessionName == sessionName,
+            tmuxService.windows.contains(where: {
+                $0.sessionName == sessionName && $0.panes.contains { $0.paneId == paneID }
+            }) else {
+            attachError = "This tab's source terminal is no longer available."
+            return
+        }
+        guard let identity = pane.workspaceIdentity else {
+            attachError = "The source terminal is still being recovered. Try again in a moment."
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                let tab = try await coordinator.agentSimulator.openPaneSimulator(
+                    OpenPaneSimulator(sessionName: sessionName, sourcePaneID: paneID),
+                    expectedWorkspacePane: identity
+                )
+                guard
+                    selectedRemoteSession == nil,
+                    currentLocalSession()?.sessionName == sessionName,
+                    sessionFileTabsStates[sessionName]?.simulatorStates[tab.id] != nil else { return }
+                selectBrowserTab(tab.id, sessionName: sessionName, windowId: pane.windowId)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard selectedRemoteSession == nil, currentLocalSession()?.sessionName == sessionName else { return }
+                attachError = "Cannot open iOS Simulator: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func openRemoteLinkedSimulator(paneID: String, hostID: String, sessionName: String) {
+        guard
+            let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient,
+            client.isHostConnected,
+            client.hostSupportsPaneSimulator else {
+            attachError = "Connect and update the Host Mac to open this pane's iOS Simulator."
+            return
+        }
+        guard
+            let sourceWindow = remoteSessionWindows(hostId: hostID, sessionName: sessionName)
+                .first(where: { $0.panes.contains { $0.paneId == paneID } }) else {
+            attachError = "This tab's source terminal is no longer available."
+            return
+        }
+        let inputBinding = client.workspaceInputState.binding(paneID: paneID)
+        let key = remoteTabsKey(hostId: hostID, sessionName: sessionName)
+        let knownSimulatorIDs = SessionFileTabsState.simulatorIDsBeforeOpening(
+            current: remoteSessionTabsStates[key],
+            hostSimulators: client.simulatorTabs,
+            sessionName: sessionName
+        )
+
+        Task { @MainActor in
+            do {
+                let tab = try await RemoteSimulatorSession.open(
+                    sessionName: sessionName,
+                    sourcePaneID: paneID,
+                    client: client,
+                    inputBinding: inputBinding
+                )
+                guard
+                    selectedRemoteSession?.hostId == hostID,
+                    selectedRemoteSession?.sessionName == sessionName else { return }
+                let tabs = remoteSessionTabsStates[key]
+                let isNewTab = !knownSimulatorIDs.contains(tab.id)
+                syncHostBrowserTabs(hostId: hostID, sessionName: sessionName, client: client)
+                tabs?.placeNewLinkedBrowserTab(tab.id, sourceWindowID: sourceWindow.stableId, isNew: isNewTab)
+                selectRemoteBrowserTab(tab.id, hostId: hostID, sessionName: sessionName)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard
+                    selectedRemoteSession?.hostId == hostID,
+                    selectedRemoteSession?.sessionName == sessionName else { return }
+                attachError = "Cannot open iOS Simulator: \(error.localizedDescription)"
             }
         }
     }
@@ -5547,12 +5692,7 @@ public struct MainView: View {
         let key = remoteTabsKey(hostId: hostId, sessionName: sessionName)
         guard let tabs = remoteSessionTabsStates[key] else { return }
         tabStore.userDidSelectTab(hostID: hostId, session: sessionName)
-        if tabs.rightSide.contains(.browser(tabId)) {
-            tabs.selectedRight = .browser(tabId)
-            return
-        }
-        tabs.selectedBrowserTabId = tabId
-        tabs.selectedFileTabId = nil
+        _ = tabs.selectLinkedBrowserTab(tabId)
     }
 
     /// Caches a remote browser tab's latest page title so the tab strip can

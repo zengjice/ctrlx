@@ -295,17 +295,32 @@ final class SessionFileTabsState {
         sessions[rename.newName] = tabs
     }
 
+    /// Snapshots simulator identities before a Host open request. The Host
+    /// catalog can arrive first and include the new device, so consulting the
+    /// live catalog after the response cannot distinguish a reuse from a new tab.
+    static func simulatorIDsBeforeOpening(
+        current: SessionFileTabsState?,
+        hostSimulators: [RemoteSimulatorTab],
+        sessionName: String
+    ) -> Set<UUID> {
+        var ids = Set<UUID>()
+        if let current {
+            ids.formUnion(current.remoteSimulatorTabs.keys)
+        }
+        ids.formUnion(hostSimulators.lazy.filter { $0.sessionName == sessionName }.map(\.id))
+        return ids
+    }
+
     func attachSimulator(_ state: SimulatorTabState) {
         let pane = state.sourcePane
         var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), displayTitle: state.handle.name, originWindowId: pane.windowId)
         tab.isSimulator = true
-        if !openBrowserTabs.contains(where: { $0.id == state.id }) {
+        let isNewTab = !openBrowserTabs.contains(where: { $0.id == state.id })
+        if isNewTab {
             openBrowserTabs.append(tab)
         }
         simulatorStates[state.id] = state
-        if rightSide.contains(.window(pane.windowId)) {
-            rightSide.insert(.browser(state.id))
-        }
+        placeNewLinkedBrowserTab(state.id, sourceWindowID: pane.windowId, isNew: isNewTab)
     }
 
     /// Files opened as their own tabs via the "Open in New Tab" context menu.
@@ -417,6 +432,33 @@ final class SessionFileTabsState {
         selectedFileTabId = nil
         selectedBrowserTabId = nil
         isGitSelected = false
+        return true
+    }
+
+    /// A newly opened linked browser follows a source terminal already on the
+    /// right. Reused tabs stay where the user put them; relocating one here
+    /// would leave the same tab selected in both panes.
+    func placeNewLinkedBrowserTab(_ id: UUID, sourceWindowID: String, isNew: Bool) {
+        guard isNew, rightSide.contains(.window(sourceWindowID)) else { return }
+        rightSide.insert(.browser(id))
+        if selectedBrowserTabId == id {
+            selectedBrowserTabId = nil
+        }
+    }
+
+    /// Selects a linked browser tab on the side where it currently lives.
+    /// Returns `true` when the selection moved to the left pane.
+    @discardableResult
+    func selectLinkedBrowserTab(_ id: UUID) -> Bool {
+        if rightSide.contains(.browser(id)) {
+            if selectedBrowserTabId == id {
+                selectedBrowserTabId = nil
+            }
+            selectedRight = .browser(id)
+            return false
+        }
+        selectedBrowserTabId = id
+        selectedFileTabId = nil
         return true
     }
 

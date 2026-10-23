@@ -21,14 +21,16 @@ extension View {
         directoryPath: String,
         isDirectory: Bool,
         onOpenFileInNewTab: ((String) -> Void)? = nil,
-        onShowInFileExplorer: ((String) -> Void)? = nil
+        onShowInFileExplorer: ((String) -> Void)? = nil,
+        additionalItems: [ContextMenuItem] = []
     ) -> some View {
         modifier(FileContextMenuModifier(
             fullPath: fullPath,
             directoryPath: directoryPath,
             isDirectory: isDirectory,
             onOpenFileInNewTab: onOpenFileInNewTab,
-            onShowInFileExplorer: onShowInFileExplorer
+            onShowInFileExplorer: onShowInFileExplorer,
+            additionalItems: additionalItems
         ))
     }
 }
@@ -39,6 +41,7 @@ private struct FileContextMenuModifier: ViewModifier {
     let isDirectory: Bool
     let onOpenFileInNewTab: ((String) -> Void)?
     let onShowInFileExplorer: ((String) -> Void)?
+    let additionalItems: [ContextMenuItem]
 
     @Environment(AppSettings.self) private var settings
     @Environment(\.openSettings) private var openSettings
@@ -50,7 +53,7 @@ private struct FileContextMenuModifier: ViewModifier {
         let settings = settings
         let openSettings = openSettings
         return content.stableContextMenu {
-            fileContextMenuItems(
+            var items = fileContextMenuItems(
                 fullPath: fullPath,
                 directoryPath: directoryPath,
                 isDirectory: isDirectory,
@@ -59,6 +62,13 @@ private struct FileContextMenuModifier: ViewModifier {
                 onOpenFileInNewTab: onOpenFileInNewTab,
                 onShowInFileExplorer: onShowInFileExplorer
             )
+            if !additionalItems.isEmpty {
+                if !items.isEmpty {
+                    items.append(.divider)
+                }
+                items.append(contentsOf: additionalItems)
+            }
+            return items
         }
     }
 }

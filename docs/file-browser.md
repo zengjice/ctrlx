@@ -81,6 +81,10 @@ number. iOS uses the same names/colors in its Tabs list, with native long-press
 reordering within each group. Selection still uses the ordinary underline or
 checkmark. Unbound legacy tabs appear under Other; a surviving child whose
 source is gone is labeled Source closed and never falls back to an unrelated pane.
+On Mac Host and Mac Viewer, right-clicking a Files, Browser or Simulator child
+offers **Open Files**, **Open Browser** and **Open iOS Simulator** for that
+child's captured source pane. The actions are disabled when that pane is gone or
+the Host does not advertise the corresponding capability.
 
 Previous/next from a terminal visits only terminal tabs. From a child it visits
 only its group's visible children; either boundary returns to the exact source

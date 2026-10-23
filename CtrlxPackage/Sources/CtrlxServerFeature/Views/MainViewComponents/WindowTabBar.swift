@@ -60,6 +60,7 @@ struct WindowTabBar: View {
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
     let onOpenFiles: (LocalTmuxWindow, Bool) -> Void
+    let linkedTabActions: LinkedTabSourceActions
     var onDetachWindow: ((LocalTmuxWindow, CGPoint?) -> Void)?
 
     @Environment(MirrorWindowManager.self) private var windowManager
@@ -623,7 +624,8 @@ struct WindowTabBar: View {
                 } else {
                     onShowInFileExplorer(path)
                 }
-            }
+            },
+            additionalItems: linkedTabMenuItems(for: payload)
         )
         .onHover { hovering in
             hoveredFileTabId = hovering ? tab.id : nil
@@ -659,6 +661,17 @@ struct WindowTabBar: View {
                 updateDropIndicator(target: isTargeted ? payload : nil, for: .browser)
             }
         )
+        .stableContextMenu {
+            linkedTabMenuItems(for: payload)
+        }
+    }
+
+    private func linkedTabMenuItems(for payload: TabDragPayload) -> [ContextMenuItem] {
+        let sourcePaneID = sessionTabs.sourcePaneID(for: payload)
+        let isSourceAvailable = sourcePaneID.map { paneID in
+            groupPanes.contains { $0.paneId == paneID }
+        } ?? false
+        return linkedTabActions.menuItems(paneID: sourcePaneID, isSourceAvailable: isSourceAvailable)
     }
 
     @ViewBuilder

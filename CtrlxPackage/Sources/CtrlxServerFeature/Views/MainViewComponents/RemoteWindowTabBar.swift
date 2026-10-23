@@ -54,6 +54,7 @@ struct RemoteWindowTabBar: View {
     var onSelectFileTab: ((UUID) -> Void)?
     var onCloseFileTab: ((UUID) -> Void)?
     let onOpenFiles: (TmuxWindow, Bool) -> Void
+    let linkedTabActions: LinkedTabSourceActions
     var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
 
     /// Cached width of the split-mode tab strip. Measured via the background
@@ -308,6 +309,9 @@ struct RemoteWindowTabBar: View {
         } isTargeted: { targeted in
             updateDropIndicator(target: targeted ? payload : nil, for: .file)
         }
+        .stableContextMenu {
+            linkedTabMenuItems(for: payload)
+        }
     }
 
     private func windowTab(_ window: TmuxWindow) -> some View {
@@ -423,6 +427,15 @@ struct RemoteWindowTabBar: View {
                 updateDropIndicator(target: isTargeted ? payload : nil, for: .browser)
             }
         )
+        .stableContextMenu {
+            linkedTabMenuItems(for: payload)
+        }
+    }
+
+    private func linkedTabMenuItems(for payload: TabDragPayload) -> [ContextMenuItem] {
+        guard let sourcePaneID = sessionTabs?.sourcePaneID(for: payload) else { return [] }
+        let isSourceAvailable = groupPanes.contains { $0.paneId == sourcePaneID }
+        return linkedTabActions.menuItems(paneID: sourcePaneID, isSourceAvailable: isSourceAvailable)
     }
 
     // MARK: - Drag and Drop
