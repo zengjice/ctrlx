@@ -7,6 +7,62 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.92 — Custom Agent Providers and iOS quick actions
+
+- Add Keychain-backed custom Codex and Claude Code API Providers, with Provider
+  selection, defaults and management UI. Keep credentials out of Viewer messages,
+  settings and recovery snapshots, and allow Fork to preserve a conversation's
+  home while changing its Provider.
+- Deliver Agent launch environments in pane-scoped tmux payloads. Remove the
+  payload after login startup, on interruption and after recovery so credentials
+  cannot appear in process arguments, leak between windows or persist in the
+  interactive shell.
+- Normalize Markdown heading link targets and restore terminal file links that
+  hand off into artifact previews.
+- Move screenshot annotation capture into browser and simulator tab toolbars.
+- Limit horizontal trackpad tab switching to terminal and Git content so browser,
+  Files and Simulator panes retain their own gestures.
+- Add New Agent and New Terminal quick actions to the iOS terminal toolbar.
+- Release validation: the bounded serial Swift regression passed with 3,733
+  tests across 527 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. An initial attempt stopped before
+  tests on a stale SwiftPM artifact path from the renamed worktree; a second run
+  reached 1,200 passes before stale test tmux servers exhausted macOS PTY
+  capacity. After repairing the cache and stopping only test tmux sockets, the
+  unchanged rerun passed.
+- Both boundary checks, the 14-page website build and 89
+  publisher/COS/installer tests passed. SwiftFormat reports 1,927 findings in six
+  previously flagged browser/simulator views versus 1,926 on their `v3.0.91`
+  baseline; the added findings are the inserted lines inheriting the same
+  whole-file parser state, with no standalone new rule issue.
+- Mac distribution is build 25 through COS, using an Apple Development signature
+  without notarization. Publication verifies source metadata, signatures and the
+  complete public download before installer promotion.
+
+## 3.0.91 — Artifact previews and patched CEF support
+
+- Preview Markdown, image and Mermaid terminal-file links in a shared
+  Host/Viewer artifact sheet. Keep preview routing bound to the originating
+  pane, sanitize rendered Markdown with bundled assets, and restore iOS terminal
+  keyboard state after chained previews.
+- Refresh iOS dashboard quota state promptly after reconnecting.
+- Allow the Agent Browser build to use a matching full-source CEF runtime from
+  ignored local configuration. Validate SDK layout, version, commit and framework
+  provenance, and clear stale CMake output when the runtime changes.
+- Release validation: the bounded serial Swift regression passed with 3,703
+  tests across 526 suites. Nine opt-in probes were skipped and Apple
+  Intelligence evaluations were excluded. An initial PTY run was stopped after
+  an interactive-zsh fixture paused under terminal job control; the unchanged
+  no-PTY rerun passed.
+- Both boundary checks, the 14-page website build, 63 publisher/COS/installer
+  tests and SwiftFormat checks over all 15 changed Swift files passed.
+- Signed iOS device-SDK Release and Mac distribution builds passed. Mac
+  distribution uses build 24 through COS, with signature, source metadata and
+  complete public-download integrity checks before installer promotion.
+- CEF local startup and Baidu public-entry evidence was not rerun for this
+  package. ENV/Volcengine site acceptance and physical-iPhone or paired-Viewer
+  UI acceptance remain pending.
+
 ## 3.0.90 — Linked tab actions on iOS
 
 - Add resource-specific iOS More and Tabs menus, keeping linked browser,
