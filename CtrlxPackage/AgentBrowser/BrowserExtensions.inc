@@ -361,3 +361,26 @@ static CefRefPtr<CefBrowser> EnsureExtensionManager() {
   }
   return browser;
 }
+
+static CefRefPtr<CefBrowser> ShowBrowserSettingsWindow(NSString *url) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!url.length || runtime.closing) return nullptr;
+  auto browser = browserSettings && browserSettings->IsValid() ? browserSettings : nullptr;
+  if (browser) {
+    if (browser->GetMainFrame()->GetURL().ToString() != url.UTF8String)
+      browser->GetMainFrame()->LoadURL(url.UTF8String);
+  } else {
+    CefWindowInfo info;
+    info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    info.bounds = CefRect(0, 0, 1100, 750);
+    browser = CefBrowserHost::CreateBrowserSync(info, new ExtensionToolClient(),
+        url.UTF8String, CefBrowserSettings(), nullptr, nullptr);
+    if (browser) browserSettings = browser;
+  }
+  if (browser) {
+    NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
+    [view.window makeKeyAndOrderFront:nil];
+    browser->GetHost()->SetFocus(true);
+  }
+  return browser;
+}

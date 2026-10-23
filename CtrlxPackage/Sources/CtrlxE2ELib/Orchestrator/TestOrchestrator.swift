@@ -684,7 +684,7 @@ public actor TestOrchestrator {
             logger.info("=== End iOS UI Tree ===")
 
         // macOS App (all cases use `instance` to select which app instance to target)
-        case let .launchMacApp(instance, appVersion, minRequiredPartnerVersion, licenseState):
+        case let .launchMacApp(instance, appVersion, minRequiredPartnerVersion, licenseState, browserMockKeychain):
             let driver = macDriver(for: instance)
             let instanceSocket = tmuxSocketPath(for: instance)
             // Each instance gets its own `--ctrlx-state-root` so the plugin
@@ -747,6 +747,9 @@ public actor TestOrchestrator {
             }
             if let licenseState {
                 arguments += ["--e2e-license-state", licenseState]
+            }
+            if browserMockKeychain {
+                arguments += ["--e2e-browser-mock-keychain"]
             }
             if
                 let sampleDir = Bundle.module.resourcePath.map({ $0 + "/SampleFiles" }),

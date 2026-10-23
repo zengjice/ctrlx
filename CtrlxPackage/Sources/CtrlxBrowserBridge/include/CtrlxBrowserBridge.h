@@ -53,6 +53,9 @@ NS_ASSUME_NONNULL_BEGIN
 // bundles omit these selectors; callers must report unavailable capability.
 - (void)openExtensionWindowForTab:(NSString *)identifier completion:(void (^)(NSString * _Nullable identifier, NSString * _Nullable error))completion NS_SWIFT_NAME(openExtensionWindow(forTab:completion:));
 - (void)showExtensionManagerForTab:(NSString *)identifier completion:(void (^)(NSString * _Nullable error))completion NS_SWIFT_NAME(showExtensionManager(forTab:completion:));
+// Host-local Chrome settings window. Never exposed through the Agent page
+// gateway or the remote extension surface because password data is sensitive.
+- (void)showBrowserSettings:(NSString *)section completion:(void (^)(NSString * _Nullable error))completion NS_SWIFT_NAME(showBrowserSettings(section:completion:));
 - (void)showBrowserWindow:(NSString *)identifier;
 - (void)requestBrowserExtensionsForTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData * _Nullable result, NSString * _Nullable error))completion NS_SWIFT_NAME(requestBrowserExtensions(forTab:request:completion:));
 // Explicit profile/window grant. Ordinary page control cannot call this surface.

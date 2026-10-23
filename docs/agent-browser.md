@@ -97,6 +97,21 @@ Chromium pages remain transient across App restarts. The `vercel` / `ctrlx`
 automation-backend selection is independent. If Chromium is unavailable, report
 an error rather than substituting WebKit or the system browser.
 
+On the Mac Host, the browser toolbar's **Browser Settings** menu opens Chromium's
+general settings or password manager in a reusable Chrome-style native window.
+Both use the same persistent CtrlX profile as embedded pages, so saved logins are
+not copied into a second password store. It does not import or read the system
+Chrome profile, and Google account password sync is not available. The entry is
+Host-only: it is not exposed to Mac/iOS Viewers, the extension-control surface,
+or Agent browser commands, and the native runtime accepts only the fixed
+`general` and `passwords` sections.
+
+The embedded Alloy tabs do not have Chrome's tab-level password bubble. Use
+**Open Page as Chrome Window** for the complete save, update, and credential-pick
+flow; that CtrlX-owned Chrome window shares the same profile and Host Keychain.
+Without that step, embedded pages can still share the persistent website profile,
+but Chrome's normal password-save prompt will not appear.
+
 ### Background Agent operation
 
 Agent page creation/reuse, navigation, popups and page actions run without

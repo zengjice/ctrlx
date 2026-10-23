@@ -28,6 +28,11 @@ struct ManualBrowserTarget: Equatable, Sendable {
     }
 }
 
+enum AgentBrowserSettingsSection: String, Sendable {
+    case general
+    case passwords
+}
+
 /// One Chromium runtime per CtrlX process. Page state outlives SwiftUI tab
 /// representations; authority (agent run) is distinct from UI routing (pane).
 @MainActor
@@ -615,6 +620,23 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
                     continuation.resume()
                 }
             }
+        }
+    }
+
+    func showBrowserSettings(_ section: AgentBrowserSettingsSection) async throws {
+        guard
+            !closing,
+            let runtime,
+            runtime.responds(to: #selector(CXBrowserRuntime.showBrowserSettings(section:completion:))) else {
+            throw ManualBrowserError.creation("Browser settings are unavailable. Update the Host if needed.")
+        }
+        let error: String? = await withCheckedContinuation { continuation in
+            runtime.showBrowserSettings?(section: section.rawValue) { error in
+                continuation.resume(returning: error)
+            }
+        }
+        if let error {
+            throw ManualBrowserError.creation(error)
         }
     }
 

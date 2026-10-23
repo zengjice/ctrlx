@@ -370,6 +370,7 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
         OTELUsageOverviewScenario.scenario,
         MacSessionInfoSheetScenario.scenario,
         BrowserTabFromTerminalLinkScenario.scenario,
+        BrowserSettingsScenario.scenario,
         FileTextSearchScenario.scenario,
         SplitTabScenario.scenario,
         TabReorderScenario.scenario,

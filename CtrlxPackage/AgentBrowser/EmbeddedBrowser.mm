@@ -49,6 +49,7 @@ static BrowserPrimaryTabs primaryAgentTabs;
 static std::map<int, CefRefPtr<CefBrowser>> devToolsBrowsers;
 static std::atomic_size_t pendingDevTools{0};
 static std::map<int, CefRefPtr<CefBrowser>> extensionTools;
+static CefRefPtr<CefBrowser> browserSettings;
 static std::map<int, int> extensionWindows;
 static void ReleaseExtensionControlFor(NSString *identifier);
 static std::map<int, std::shared_ptr<ExternalApplicationActivation>> externalActivations;
@@ -140,6 +141,7 @@ class ExtensionToolClient final : public CefClient, public CefLifeSpanHandler {
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
     extensionTools.erase(browser->GetIdentifier());
+    if (browserSettings == browser) browserSettings = nullptr;
   }
  private:
   IMPLEMENT_REFCOUNTING(ExtensionToolClient);
@@ -713,6 +715,16 @@ void RecordBrowserDiagnostic(NSDictionary* event) {
       RevealWindow(browser);
     }
     reply(browser ? nil : @"Chromium could not open extension management.");
+  }))) reply(@"Chromium is not ready.");
+}
+- (void)showBrowserSettings:(NSString *)section completion:(void (^)(NSString *))completion {
+  NSString *url = [section isEqual:@"passwords"] ? @"chrome://password-manager/passwords" :
+      [section isEqual:@"general"] ? @"chrome://settings/" : nil;
+  void (^reply)(NSString *) = [completion copy];
+  if (!url) { reply(@"Unsupported browser settings section."); return; }
+  if (!self.isReady || !CefPostTask(TID_UI, new BrowserUITask([url, reply] {
+    if (runtime.closing) { reply(@"Chromium is shutting down."); return; }
+    reply(ShowBrowserSettingsWindow(url) ? nil : @"Chromium could not open browser settings.");
   }))) reply(@"Chromium is not ready.");
 }
 - (void)requestBrowserExtensionsForTab:(NSString *)identifier request:(NSData *)request

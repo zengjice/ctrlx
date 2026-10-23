@@ -243,11 +243,14 @@ public enum TestStep: Sendable {
     /// so `LicenseManager.status` is deterministic (issue #392, Task 5) — used
     /// by scenarios proving the toolbar trial-status badge without depending on
     /// the relay's own licensing configuration.
+    /// `browserMockKeychain` maps to `--e2e-browser-mock-keychain`; it is only
+    /// valid together with the isolated `--e2e-test` host launched here.
     case launchMacApp(
         instance: Int = 0,
         appVersion: String? = nil,
         minRequiredPartnerVersion: String? = nil,
-        licenseState: String? = nil
+        licenseState: String? = nil,
+        browserMockKeychain: Bool = false
     )
     /// Terminate the macOS app
     case terminateMacApp(instance: Int = 0)

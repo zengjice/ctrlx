@@ -12,7 +12,7 @@ struct AgentBrowserTabContentView: View {
     @State private var address = ""
     @State private var captureRequest: UUID?
     @State private var isAnnotating = false
-    @State private var extensionError: String?
+    @State private var actionError: String?
     private struct ExtensionRequest: Identifiable {
         let id = UUID()
         let storeID: String?
@@ -50,6 +50,17 @@ struct AgentBrowserTabContentView: View {
                     ProgressView().controlSize(.small)
                 }
                 if state.manualTarget?.hostID == nil {
+                    Menu {
+                        Button("General Settings") { showBrowserSettings(.general) }
+                        Button("Password Manager") { showBrowserSettings(.passwords) }
+                    } label: {
+                        Label("Browser Settings", symbol: .gearshape)
+                    }
+                    .help("Open Chromium settings or the Host password manager")
+                    .accessibilityIdentifier("agent-browser-settings")
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .disabled(state.isClosed)
                     if let id = BrowserExtensionStoreURL.extensionID(from: state.url) {
                         Button("Install on Host") {
                             extensionRequest = ExtensionRequest(storeID: id)
@@ -61,7 +72,7 @@ struct AgentBrowserTabContentView: View {
                         Button(action: openExtensionWindow) {
                             Label("Open Page as Chrome Window", symbol: .arrowUpRightSquare)
                         }
-                        .help("Open this page in a Chrome-style window with extension actions")
+                        .help("Open this page with Chrome's extension, password-save, and autofill UI")
                         .accessibilityIdentifier("agent-browser-extension-window")
                         .disabled(state.isClosed || state.isRemotelyControlled)
                     }
@@ -142,23 +153,30 @@ struct AgentBrowserTabContentView: View {
         }
         .accessibilityIdentifier("agent-browser-tab-content")
         .sheet(item: $extensionRequest) { request in BrowserExtensionsView(tab: state, initialStoreID: request.storeID) }
-        .alert("Browser Extensions", isPresented: Binding(
-            get: { extensionError != nil }, set: {
+        .alert("Browser Error", isPresented: Binding(
+            get: { actionError != nil }, set: {
                 if !$0 {
-                    extensionError = nil
+                    actionError = nil
                 }
             }
         )) {
-            Button("OK", role: .cancel) { extensionError = nil }
+            Button("OK", role: .cancel) { actionError = nil }
         } message: {
-            Text(extensionError ?? "")
+            Text(actionError ?? "")
         }
     }
 
     private func openExtensionWindow() {
         Task {
             do { _ = try await state.service.openExtensionWindow(state) }
-            catch { extensionError = error.localizedDescription }
+            catch { actionError = error.localizedDescription }
+        }
+    }
+
+    private func showBrowserSettings(_ section: AgentBrowserSettingsSection) {
+        Task {
+            do { try await state.service.showBrowserSettings(section) }
+            catch { actionError = error.localizedDescription }
         }
     }
 

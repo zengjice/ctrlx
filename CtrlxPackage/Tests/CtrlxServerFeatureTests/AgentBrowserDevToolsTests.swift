@@ -16,6 +16,8 @@
             var managedSources: [String] = []
             var revealedWindows: [String] = []
             var extensionRequests: [String] = []
+            var settingsSections: [String] = []
+            var browserSettingsError: String?
             var extensionResult = Data(#"{"extensions":[]}"#.utf8)
             var onExtensionRequest: (([String: Any]) throws -> Data)?
             var onOpenExtension: ((String) -> String)?
@@ -51,6 +53,11 @@
             func showExtensionManager(forTab identifier: String, completion: @escaping (String?) -> Void) {
                 managedSources.append(identifier)
                 completion(nil)
+            }
+
+            func showBrowserSettings(section: String, completion: @escaping (String?) -> Void) {
+                settingsSections.append(section)
+                completion(browserSettingsError)
             }
 
             func showBrowserWindow(_ identifier: String) {
@@ -326,6 +333,23 @@
             await service.shutdown()
             await #expect(throws: (any Error).self) { try await service.browserExtensions(for: first) }
             #expect(runtime.extensionRequests == [first.identifier])
+        }
+
+        @Test("Browser settings are Host-local and surface native errors")
+        func browserSettings() async throws {
+            let runtime = Runtime()
+            let service = AgentBrowserService(runtime: runtime)
+            try await service.showBrowserSettings(.general)
+            try await service.showBrowserSettings(.passwords)
+            #expect(runtime.settingsSections == ["general", "passwords"])
+
+            runtime.browserSettingsError = "The password store is unavailable."
+            await #expect(throws: (any Error).self) { try await service.showBrowserSettings(.passwords) }
+            #expect(runtime.settingsSections == ["general", "passwords", "passwords"])
+
+            await service.shutdown()
+            await #expect(throws: (any Error).self) { try await service.showBrowserSettings(.general) }
+            #expect(runtime.settingsSections == ["general", "passwords", "passwords"])
         }
 
         @Test("A terminated extension is not reported as successfully disabled")
