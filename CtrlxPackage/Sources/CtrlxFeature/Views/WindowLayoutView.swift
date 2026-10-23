@@ -716,9 +716,10 @@
         }
 
         private func restorePreviewKeyboard() {
-            guard let keyboardWasActive = previewKeyboardRestore.consume(
-                terminalIsVisible: terminalIsVisible, activePaneID: activePaneId
-            ) else { return }
+            guard
+                let keyboardWasActive = previewKeyboardRestore.consume(
+                    terminalIsVisible: terminalIsVisible, activePaneID: activePaneId
+                ) else { return }
             isKeyboardActive = keyboardWasActive
         }
 
