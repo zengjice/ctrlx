@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.94 — Simulator ownership and iOS toolbar cleanup
+
+- Keep Simulator device ownership immutable. Agents can no longer adopt a
+  human-created default or pending device; they must create their own device with
+  `ctrlx ios open --new`. Human access to Agent-created devices remains available.
+- Remove the obsolete tmux prefix and split-pane shortcut buttons from the iOS
+  terminal bar.
+- Release validation: the full parallel Swift regression completed, with only
+  the expected Apple Intelligence `StopFinalityEvaluations` failure because this
+  Mac reports `deviceNotEligible`. Three contention-sensitive installer and file
+  tests failed in parallel and passed on focused serial rerun after stopping stale
+  test-only tmux servers. Brand and technical boundaries passed, as did the
+  14-page website build, the iOS Simulator compile check and all 63 offline
+  publisher/COS tests.
+- Mac distribution is build 27 through COS, using an Apple Development signature
+  without notarization. Publication verifies source metadata, signatures and the
+  complete public download before installer promotion.
+
 ## 3.0.93 — Linked source actions and browser permissions
 
 - Resolve terminal file links in non-Git workspaces, including root-relative
