@@ -7,6 +7,33 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.93 — Linked source actions and browser permissions
+
+- Resolve terminal file links in non-Git workspaces, including root-relative
+  destinations and artifact previews, while keeping link handling scoped to the
+  originating Host workspace.
+- Add Mac actions that return linked browser, file and simulator tabs to their
+  source terminal, and reuse the iOS window shortcut bar for linked tabs.
+- Require explicit per-tab approval before browser pages use local network
+  services. Make human-created browser tabs explicit and keep Agent control
+  separate from the browser's shared profile.
+- Expose Chrome settings and password-manager entries, and present extension
+  windows as a distinct Host/Viewer surface.
+- Add Agent update reminders and quota-recovery banners in Agents settings and
+  the Dashboard.
+- Allow Agent Fork to use a user-selected arbitrary directory while preserving
+  Provider configuration and conversation ownership.
+- Release validation: the bounded serial Swift regression passed with 3,762
+  tests across 530 suites. Nine opt-in probes were skipped. The
+  `StopFinalityEvaluations` benchmark was excluded because this Mac reports
+  Apple Intelligence `deviceNotEligible`; a parallel trial also exposed two
+  native file tests that passed on focused serial rerun.
+- Brand and technical boundaries passed, as did all 63 offline publisher/COS
+  tests.
+- Mac distribution is build 26 through COS, using an Apple Development signature
+  without notarization. Publication verifies source metadata, signatures and the
+  complete public download before installer promotion.
+
 ## 3.0.92 — Custom Agent Providers and iOS quick actions
 
 - Add Keychain-backed custom Codex and Claude Code API Providers, with Provider
