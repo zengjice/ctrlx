@@ -123,6 +123,8 @@ struct RemoteBrowserSessionTests {
         var inputFailure: (RemoteBrowserOperation, any Error)?
         var failedPageInput = false
         var supportsStalePointerCleanup = false
+        var delayNextRelease = false
+        var heldRelease: CheckedContinuation<Void, Never>?
         let tab: RemoteBrowserTab
         init(agent: Bool, extensionWindow: Bool = false) {
             self.tab = RemoteBrowserTab(
@@ -145,6 +147,10 @@ struct RemoteBrowserSessionTests {
                 owned = true
                 return .init(tab: tab, controlID: control)
             case .releaseControl:
+                if delayNextRelease {
+                    delayNextRelease = false
+                    await withCheckedContinuation { heldRelease = $0 }
+                }
                 if request.controlID == control {
                     owned = false
                 }
@@ -417,6 +423,32 @@ struct RemoteBrowserSessionTests {
         try await wait { session.controlID == nil && host.operations.contains(.releaseControl) }
 
         #expect(session.error != nil)
+    }
+
+    @Test
+    func retakeWaitsForPendingRelease() async throws {
+        let host = Host(agent: false)
+        let session = RemoteBrowserSession(tab: host.tab, send: host.send)
+        let watch = Task { await session.watch() }
+        defer {
+            host.heldRelease?.resume()
+            host.heldRelease = nil
+            session.stop()
+            watch.cancel()
+        }
+        try await wait { session.controlID != nil }
+        host.delayNextRelease = true
+        session.releaseControl()
+        try await wait { host.heldRelease != nil }
+        let retake = Task { await session.takeControl() }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(host.operations.filter { $0 == .takeControl }.count == 1)
+
+        host.heldRelease?.resume()
+        host.heldRelease = nil
+        await retake.value
+        try await wait { session.controlID != nil }
+        #expect(host.operations.filter { $0 == .takeControl }.count == 2)
     }
 
     @Test(arguments: [false, true])

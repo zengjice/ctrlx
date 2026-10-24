@@ -27,6 +27,7 @@ final public class RemoteBrowserSession {
     @ObservationIgnored private var inputs: [(RemoteBrowserOperation, UInt64)] = []
     @ObservationIgnored private var inputTask: Task<Void, Never>?
     @ObservationIgnored private var inputEpoch = UUID()
+    @ObservationIgnored private var pendingRelease: Task<Void, Never>?
     @ObservationIgnored public var frameMaxDimension: Int?
 
     public init(
@@ -241,6 +242,10 @@ final public class RemoteBrowserSession {
         isTakingControl = true
         defer { isTakingControl = false }
         let current = epoch
+        let pending = pendingRelease
+        pendingRelease = nil
+        await pending?.value
+        guard watching, epoch == current, !Task.isCancelled, controlID == nil else { return }
         do {
             let result = try await send(request(.takeControl))
             guard watching, epoch == current, !Task.isCancelled else {
@@ -297,7 +302,7 @@ final public class RemoteBrowserSession {
             operation: scoped(.releaseControl)
         )
         // Best effort on disappearance. Host also releases on disconnect/expiry.
-        Task { [send] in _ = try? await send(message) }
+        pendingRelease = Task { [send] in _ = try? await send(message) }
     }
 
     public func dismissError() {

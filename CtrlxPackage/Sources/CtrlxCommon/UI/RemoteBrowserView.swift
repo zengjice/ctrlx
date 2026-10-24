@@ -12,6 +12,7 @@ public struct RemoteBrowserView: View {
     @State private var displayedFrame: RemoteBrowserFrame?
     @State private var viewport = CGSize.zero
     @State private var keyboardRequested = false
+    @State private var inputFocusRequest: UUID?
     @State private var isAnnotating = false
     @State private var captureRequest: UUID?
     private struct ExtensionRequest: Identifiable {
@@ -82,11 +83,20 @@ public struct RemoteBrowserView: View {
                         Button(action: session.copy) { Label("Copy", symbol: .docOnDoc).labelStyle(.iconOnly) }
                     }
                     Button(action: session.paste) { Label("Paste", symbol: .docOnClipboard).labelStyle(.iconOnly) }
-                    #if os(iOS)
-                    Button { keyboardRequested.toggle() } label: {
+                }
+                #if os(iOS)
+                if session.tab.isExtensionWindow != true {
+                    Button(action: requestKeyboard) {
                         Label("Keyboard", symbol: .keyboard).labelStyle(.iconOnly)
                     }
-                    #endif
+                    .disabled(!client.isHostConnected || session.frame == nil || session.isTakingControl)
+                    .accessibilityHint(session.controlID == nil
+                        ? "Take control and show the keyboard."
+                        : "Show or hide the keyboard.")
+                    .accessibilityIdentifier("remote-browser-keyboard")
+                }
+                #endif
+                if session.controlID != nil {
                     RemoteControlButton(
                         title: session.tab.isAgentOwned ? "Return to Agent" : "Release Control",
                         isControlled: true
@@ -100,7 +110,7 @@ public struct RemoteBrowserView: View {
                         isControlled: false,
                         isDisabled: session.isTakingControl || !client.isHostConnected || session.frame == nil
                     ) {
-                        Task { await session.takeControl() }
+                        takeControl()
                     }
                 }
                 if session.tab.isExtensionWindow != true {
@@ -145,6 +155,7 @@ public struct RemoteBrowserView: View {
                 RemoteBrowserCanvas(image: image, frame: displayedFrame,
                                     acceptsInput: session.controlID != nil && !editingAddress && !isAnnotating,
                                     keyboardRequested: keyboardRequested,
+                                    focusRequest: inputFocusRequest,
                                     onCopy: session.copy,
                                     onPaste: session.paste) { operation in
                     guard !isAnnotating else { return }
@@ -204,6 +215,29 @@ public struct RemoteBrowserView: View {
         address = url.absoluteString
         session.submit(.navigate(address))
         editingAddress = false
+        inputFocusRequest = UUID()
+    }
+
+    private func takeControl() {
+        editingAddress = false
+        Task {
+            await session.takeControl()
+            if session.controlID != nil { inputFocusRequest = UUID() }
+        }
+    }
+
+    private func requestKeyboard() {
+        editingAddress = false
+        if session.controlID != nil {
+            keyboardRequested.toggle()
+            return
+        }
+        guard !session.isTakingControl, client.isHostConnected, session.frame != nil else { return }
+        keyboardRequested = true
+        Task {
+            await session.takeControl()
+            if session.controlID == nil { keyboardRequested = false }
+        }
     }
 
     private func updateFrameResolution() {
@@ -278,6 +312,7 @@ struct RemoteBrowserCanvas: NSViewRepresentable {
     let frame: RemoteBrowserFrame?
     let acceptsInput: Bool
     let keyboardRequested: Bool
+    var focusRequest: UUID? = nil
     var isSimulator = false
     var onCopy: (() -> Void)?
     var onPaste: (() -> Void)?
@@ -287,6 +322,7 @@ struct RemoteBrowserCanvas: NSViewRepresentable {
         view.image = image
         view.pageSize = frame.map { CGSize(width: $0.width, height: $0.height) } ?? .zero
         view.acceptsInput = acceptsInput
+        view.focusRequest = focusRequest
         view.send = send
         view.onCopy = onCopy
         view.onPaste = onPaste
@@ -299,6 +335,13 @@ final class BrowserCanvasNSView: NSView, @preconcurrency NSTextInputClient {
     var image: CGImage?
     var pageSize = CGSize.zero
     var acceptsInput = false
+    var focusRequest: UUID? {
+        didSet {
+            guard focusRequest != oldValue, focusRequest != nil, acceptsInput,
+                  let window, window.firstResponder !== self else { return }
+            window.makeFirstResponder(self)
+        }
+    }
     var send: (RemoteBrowserOperation) -> Void = { _ in }
     var onCopy: (() -> Void)?
     var onPaste: (() -> Void)?
@@ -428,6 +471,7 @@ struct RemoteBrowserCanvas: UIViewRepresentable {
     let frame: RemoteBrowserFrame?
     let acceptsInput: Bool
     let keyboardRequested: Bool
+    var focusRequest: UUID? = nil
     var isSimulator = false
     var onCopy: (() -> Void)?
     var onPaste: (() -> Void)?

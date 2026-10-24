@@ -73,6 +73,33 @@ struct RemoteBrowserCanvasTests {
         #expect((view.trackingAreas.first?.owner as? BrowserCanvasNSView) === view)
     }
 
+    @Test
+    func focusIsOnlyRestoredOnExplicitRequest() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false,
+        )
+        window.isReleasedWhenClosed = false
+        let canvas = BrowserCanvasNSView(frame: window.contentView!.bounds)
+        let address = NSTextField(frame: CGRect(x: 0, y: 0, width: 200, height: 24))
+        window.contentView?.addSubview(canvas)
+        window.contentView?.addSubview(address)
+        #expect(window.makeFirstResponder(address))
+
+        canvas.acceptsInput = true
+        #expect(address.currentEditor() === window.firstResponder)
+        canvas.acceptsInput = false
+        canvas.acceptsInput = true
+        #expect(address.currentEditor() === window.firstResponder)
+
+        canvas.focusRequest = UUID()
+        #expect(window.firstResponder === canvas)
+        window.close()
+    }
+
     @Test func hoverUsesPageCoordinatesAndRespectsControlAndLetterboxing() throws {
         let view = BrowserCanvasNSView(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
         view.pageSize = CGSize(width: 1000, height: 500)
