@@ -42,6 +42,12 @@ public struct TmuxWindow: Identifiable, Sendable {
         panes.contains { $0.agentSession != nil }
     }
 
+    /// Whether any agent in this window is waiting for the user. This is the
+    /// same attention state used by the session status indicators.
+    public var needsAttention: Bool {
+        panes.contains { $0.agentSession?.needsAttention == true }
+    }
+
     /// The custom description for this window.
     ///
     /// Although persisted at session scope (via `@ctrlx-description`),

@@ -173,6 +173,12 @@
                         .labelStyle(.titleAndIcon)
                         .lineLimit(1)
                     Spacer(minLength: 0)
+                    if window.needsAttention {
+                        Symbols.bellBadgeFill.image
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel("Needs attention")
+                            .padding(.leading, 6)
+                    }
                     if selectedWindowID == window.stableId, selectedFileID == nil, selectedBrowserID == nil, selectedSimulatorID == nil {
                         Symbols.checkmark.image
                             .padding(.leading, 6)
