@@ -7,6 +7,22 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.98 — Expanded Fork directory picker
+
+- Open the Other Directory path picker automatically when the shared Mac/iOS
+  Fork panel appears and when its source changes, avoiding an extra click.
+- Keep Current Directory and New Worktree panels collapsed so path browsing is
+  shown only for the destination that uses it.
+- Release validation: 43 focused Fork/window-tab tests and the complete
+  3,779-test serial Swift regression passed. The Apple Intelligence
+  `StopFinality` suite was skipped because this Mac reports `deviceNotEligible`.
+  The changed Swift file passed SwiftFormat, both boundaries passed, and the
+  14-page website build, iOS Simulator compile check, signed Mac Release build
+  and all 63 offline publisher/COS tests succeeded.
+- Mac distribution is build 31 through COS, using an Apple Development signature
+  without notarization. Publication verifies source metadata, signatures and the
+  complete public download before installer promotion.
+
 ## 3.0.97 — Fork destination menu
 
 - Separate **In Current Directory**, **In Other Directory…**, and **In New
