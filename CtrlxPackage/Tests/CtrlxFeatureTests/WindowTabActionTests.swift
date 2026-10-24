@@ -8,17 +8,39 @@ import Testing
 struct WindowTabActionTests {
     private func windows(_ index: Int = 2) -> [TmuxWindow] {
         TmuxWindow.groupPanes([
-            PaneState(paneId: "%1", sessionName: "work", windowIndex: 1, tmuxWindowId: "@1",
-                      currentPath: "/host/A", isActive: true, isWindowActive: true),
-            PaneState(paneId: "%2", sessionName: "work", windowIndex: index, tmuxWindowId: "@2",
-                      currentPath: "/host/B", isActive: true),
-            PaneState(paneId: "%3", sessionName: "work", windowIndex: index, tmuxWindowId: "@2", paneIndex: 1,
-                      currentPath: "/host/C", agentSession: .init(paneId: "%3", pluginID: "codex"), claudeSessionID: UUID().uuidString),
+            PaneState(
+                paneId: "%1",
+                sessionName: "work",
+                windowIndex: 1,
+                tmuxWindowId: "@1",
+                currentPath: "/host/A",
+                isActive: true,
+                isWindowActive: true
+            ),
+            PaneState(
+                paneId: "%2",
+                sessionName: "work",
+                windowIndex: index,
+                tmuxWindowId: "@2",
+                currentPath: "/host/B",
+                isActive: true
+            ),
+            PaneState(
+                paneId: "%3",
+                sessionName: "work",
+                windowIndex: index,
+                tmuxWindowId: "@2",
+                paneIndex: 1,
+                currentPath: "/host/C",
+                agentSession: .init(paneId: "%3", pluginID: "codex"),
+                claudeSessionID: UUID().uuidString
+            ),
         ])
     }
 
     @Test("Window actions keep their stable target after reorder", arguments: [
-        WindowTabAction.WindowOperation.select, .openFiles, .openAnotherFiles, .openBrowser, .openSimulator, .openNewSimulator, .fork(usingWorktree: false), .fork(usingWorktree: true), .rename, .close,
+        WindowTabAction.WindowOperation.select, .openFiles, .openAnotherFiles, .openBrowser, .openSimulator, .openNewSimulator,
+        .fork(destination: .currentDirectory), .fork(destination: .otherDirectory), .fork(destination: .worktree), .rename, .close,
     ])
     func targetAfterReorder(operation: WindowTabAction.WindowOperation) throws {
         let action = WindowTabAction.window(stableID: "@2", operation: operation)

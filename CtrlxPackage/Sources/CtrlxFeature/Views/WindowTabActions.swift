@@ -18,6 +18,7 @@
         let canCreateNewSimulator: Bool
         let isCreatingWindow: Bool
         let forkUnavailableReason: String?
+        let canForkOtherDirectory: Bool
         var includesWindowManagement = false
         var includesFork = true
         let choose: (WindowTabAction) -> Void
@@ -210,9 +211,10 @@
             AgentForkMenu(
                 sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: focusedPaneID),
                 unavailableReason: forkUnavailableReason,
-                sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes)
-            ) { usingWorktree in
-                choose(.window(stableID: window.stableId, operation: .fork(usingWorktree: usingWorktree)))
+                sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes),
+                allowsOtherDirectory: canForkOtherDirectory
+            ) { destination in
+                choose(.window(stableID: window.stableId, operation: .fork(destination: destination)))
             }
             .disabled(!isConnected || isCreatingWindow)
             .accessibilityIdentifier("window-fork-\(window.stableId)")

@@ -873,15 +873,16 @@ Claude telemetry environment. No agent command/config is constructed by iOS.
 ### Fork a native Agent conversation (Mac/iOS)
 
 Right-click a local or Viewer terminal-window tab → **Fork → In Current
-Directory / In New Worktree…**. Codex and Claude Code implement the optional
-`AgentSessionForking` capability; sidecars retain their existing wire contract.
-Both modes open the shared naming panel before creation. The current-directory
-panel pre-fills the source directory and can target another existing directory
-on the same Host, either by typing `/…` or `~/…` or by browsing folders. The
-copied conversation and the new tmux window use that target; Worktree mode
-continues to derive its directory from the source repository and cannot also
-name a target directory. The entered name is used for the new window;
-current-directory names may contain spaces or Unicode.
+Directory / In Other Directory… / In New Worktree…**. Codex and Claude Code
+implement the optional `AgentSessionForking` capability; sidecars retain their
+existing wire contract. All modes open the shared naming panel before creation.
+Current Directory uses the source pane's directory directly. Other Directory
+pre-fills that source directory and can target another existing directory on
+the same Host, either by typing `/…` or `~/…` or by browsing folders; the copied
+conversation and the new tmux window use that target. Worktree mode continues to
+derive its directory from the source repository and cannot also name a target
+directory. The entered name is used for the new window; current-directory names
+may contain spaces or Unicode.
 Multiple Agent panes require a source choice, defaulting to native focus or the active pane.
 Detection without a native conversation UUID is not enough to enable Fork.
 Unavailable Fork actions show whether the Host is offline/outdated, the native
@@ -914,9 +915,10 @@ the same source and process incarnation. A failed native-history lookup remains
 visible in the saved pane and is retried on later checkpoints, because the
 history file may be written after the Agent's initial lifecycle notification.
 
-On iOS, open the window-title menu → **Fork → In Current Directory / In New
-Worktree…**. The selected pane is the default source when there are multiple
-recognized Agents. Mac and iOS share `AgentForkPanel`, including worktree review,
+On iOS, open the window-title menu → **Fork → In Current Directory / In Other
+Directory… / In New Worktree…**. The selected pane is the default source when
+there are multiple recognized Agents. Mac and iOS share `AgentForkPanel`,
+including separate current/other-directory destinations, worktree review,
 dirty-file acknowledgement, target-directory browsing and retrying the same
 request UUID. The iPhone sends the captured source to its specific Host; it
 never expands `~`, constructs an Agent command or touches local Git. Creation is

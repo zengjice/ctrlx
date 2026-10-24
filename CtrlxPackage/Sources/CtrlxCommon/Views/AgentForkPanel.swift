@@ -1,22 +1,28 @@
 import CtrlxNetworking
 import SwiftUI
 
+public enum AgentForkDestination: Sendable, Equatable {
+    case currentDirectory
+    case otherDirectory
+    case worktree
+}
+
 @MainActor
 public struct AgentForkConfiguration: Identifiable {
     public let id = UUID()
     let sources: [AgentForkSource]
-    let usingWorktree: Bool
+    let destination: AgentForkDestination
     let directorySource: SessionDirectorySource?
     let prepare: @MainActor (AgentForkSource) async throws -> AgentForkPreparation
     let fork: @MainActor (ForkAgentSession) async throws -> Void
 
     public init(
-        sources: [AgentForkSource], usingWorktree: Bool, directorySource: SessionDirectorySource? = nil,
+        sources: [AgentForkSource], destination: AgentForkDestination, directorySource: SessionDirectorySource? = nil,
         prepare: @escaping @MainActor (AgentForkSource) async throws -> AgentForkPreparation,
         fork: @escaping @MainActor (ForkAgentSession) async throws -> Void
     ) {
         self.sources = sources
-        self.usingWorktree = usingWorktree
+        self.destination = destination
         self.directorySource = directorySource
         self.prepare = prepare
         self.fork = fork
@@ -35,7 +41,7 @@ public struct AgentForkConfiguration: Identifiable {
         name: String, allowUncommittedChanges: Bool
     ) throws -> ForkAgentSession.Worktree? {
         guard sources.contains(source) else { throw AgentForkError("Choose a source Agent from this window.") }
-        guard usingWorktree else { return nil }
+        guard destination == .worktree else { return nil }
         guard let preparation, preparation.source == source, let plan = preparation.worktree else {
             throw AgentForkError("Check the selected source before creating a worktree.")
         }
@@ -52,9 +58,14 @@ public struct AgentForkConfiguration: Identifiable {
             source: source, preparation: preparation, name: name, allowUncommittedChanges: allowUncommittedChanges
         )
         let targetDirectory: String?
-        if usingWorktree || directorySource == nil {
+        switch destination {
+        case .currentDirectory,
+             .worktree:
             targetDirectory = nil
-        } else {
+        case .otherDirectory:
+            guard directorySource != nil else {
+                throw AgentForkError("Forking into another directory is unavailable on this Host.")
+            }
             let directory = directory ?? source.workingDirectory
             guard SessionDirectoryPath.isValid(directory) else {
                 throw AgentForkError("Enter an absolute Host directory or ~/… without control characters.")
@@ -78,12 +89,17 @@ public struct AgentForkMenu: View {
     let sources: [AgentForkSource]
     let unavailableReason: String?
     let sourceUnavailableReason: String?
-    let choose: (Bool) -> Void
+    let allowsOtherDirectory: Bool
+    let choose: (AgentForkDestination) -> Void
 
-    public init(sources: [AgentForkSource], unavailableReason: String?, sourceUnavailableReason: String? = nil, choose: @escaping (Bool) -> Void) {
+    public init(
+        sources: [AgentForkSource], unavailableReason: String?, sourceUnavailableReason: String? = nil,
+        allowsOtherDirectory: Bool = true, choose: @escaping (AgentForkDestination) -> Void
+    ) {
         self.sources = sources
         self.unavailableReason = unavailableReason
         self.sourceUnavailableReason = sourceUnavailableReason
+        self.allowsOtherDirectory = allowsOtherDirectory
         self.choose = choose
     }
 
@@ -93,10 +109,15 @@ public struct AgentForkMenu: View {
 
     public var body: some View {
         Menu {
-            Button("In Current Directory") { choose(false) }
+            Button("In Current Directory") { choose(.currentDirectory) }
                 .disabled(disabledReason != nil)
-            Button("In New Worktree…") { choose(true) }
+                .accessibilityIdentifier("agentFork.currentDirectory")
+            Button("In Other Directory…") { choose(.otherDirectory) }
+                .disabled(disabledReason != nil || !allowsOtherDirectory)
+                .accessibilityIdentifier("agentFork.otherDirectory")
+            Button("In New Worktree…") { choose(.worktree) }
                 .disabled(disabledReason != nil)
+                .accessibilityIdentifier("agentFork.worktree")
             if let reason = disabledReason {
                 Text(reason)
             }
@@ -131,7 +152,7 @@ public struct AgentForkPanel: View {
         self._sourceID = State(initialValue: configuration.sources.first?.paneID ?? "")
         self._directory = State(initialValue: configuration.sources.first?.workingDirectory ?? "")
         let agentName = configuration.sources.first?.pluginID == "codex" ? "codex" : "claude"
-        self._forkName = State(initialValue: configuration.usingWorktree ? "\(agentName)-\(UUID().uuidString.prefix(8).lowercased())" : "\(agentName) fork")
+        self._forkName = State(initialValue: configuration.destination == .worktree ? "\(agentName)-\(UUID().uuidString.prefix(8).lowercased())" : "\(agentName) fork")
     }
 
     private var source: AgentForkSource? {
@@ -139,10 +160,14 @@ public struct AgentForkPanel: View {
     }
 
     private var title: String {
-        if configuration.usingWorktree {
-            return "Fork in New Worktree"
+        switch configuration.destination {
+        case .currentDirectory:
+            "Fork in Current Directory"
+        case .otherDirectory:
+            "Fork in Other Directory"
+        case .worktree:
+            "Fork in New Worktree"
         }
-        return configuration.directorySource == nil ? "Fork in Current Directory" : "Fork in Directory"
     }
 
     private var canLaunch: Bool {
@@ -226,34 +251,41 @@ public struct AgentForkPanel: View {
                 .accessibilityIdentifier("agentFork.source")
             }
             if let source {
-                if configuration.usingWorktree || configuration.directorySource == nil {
+                switch configuration.destination {
+                case .currentDirectory,
+                     .worktree:
                     Text(source.workingDirectory).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                } else if let directorySource = configuration.directorySource {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Directory on Host", text: $directory, prompt: Text(source.workingDirectory))
-                            .textFieldStyle(.roundedBorder)
-                            .autocorrectionDisabled()
-                        #if os(iOS)
-                            .textInputAutocapitalization(.never)
-                        #endif
-                            .disabled(isLaunching || isCreatingDirectory)
-                            .accessibilityLabel("Fork directory on Host")
-                            .accessibilityIdentifier("agentFork.directory")
-                        if !SessionDirectoryPath.isValid(directory) {
-                            Text("Enter an absolute Host directory or ~/… without control characters.")
-                                .font(.caption).foregroundStyle(.red)
-                        }
-                        DisclosureGroup("Choose Directory…", isExpanded: $showsDirectoryBrowser) {
-                            if showsDirectoryBrowser {
-                                SessionDirectoryBrowser(
-                                    path: $directory, source: directorySource, isCreatingDirectory: $isCreatingDirectory
-                                )
-                                .padding(.top, 8)
+                case .otherDirectory:
+                    if let directorySource = configuration.directorySource {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("Directory on Host", text: $directory, prompt: Text(source.workingDirectory))
+                                .textFieldStyle(.roundedBorder)
+                                .autocorrectionDisabled()
+                            #if os(iOS)
+                                .textInputAutocapitalization(.never)
+                            #endif
+                                .disabled(isLaunching || isCreatingDirectory)
+                                .accessibilityLabel("Fork directory on Host")
+                                .accessibilityIdentifier("agentFork.directory")
+                            if !SessionDirectoryPath.isValid(directory) {
+                                Text("Enter an absolute Host directory or ~/… without control characters.")
+                                    .font(.caption).foregroundStyle(.red)
                             }
+                            DisclosureGroup("Choose Directory…", isExpanded: $showsDirectoryBrowser) {
+                                if showsDirectoryBrowser {
+                                    SessionDirectoryBrowser(
+                                        path: $directory, source: directorySource, isCreatingDirectory: $isCreatingDirectory
+                                    )
+                                    .padding(.top, 8)
+                                }
+                            }
+                            .disabled(isLaunching || isCreatingDirectory)
+                            Text("Defaults to the source directory. The copied conversation opens in this directory on the Host.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
-                        .disabled(isLaunching || isCreatingDirectory)
-                        Text("Defaults to the source directory. The copied conversation opens in this directory on the Host.")
-                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Forking into another directory is unavailable on this Host.")
+                            .font(.callout).foregroundStyle(.red)
                     }
                 }
                 Text("Opens a new conversation with the saved history. The original Agent keeps running; no prompt is sent automatically.")
@@ -274,7 +306,7 @@ public struct AgentForkPanel: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 #if os(iOS)
-                    Text(configuration.usingWorktree ? "Window / Worktree Name" : "Window Name")
+                    Text(configuration.destination == .worktree ? "Window / Worktree Name" : "Window Name")
                         .font(.subheadline.weight(.semibold))
                 #endif
                 TextField("Name", text: $forkName).disabled(isLaunching)
@@ -285,10 +317,10 @@ public struct AgentForkPanel: View {
                 #endif
                     .accessibilityLabel("Fork Name")
                     .accessibilityIdentifier("agentFork.name")
-                Text(configuration.usingWorktree ? "Used for the window, branch and worktree directory." : "Used for the new window.")
+                Text(configuration.destination == .worktree ? "Used for the window, branch and worktree directory." : "Used for the new window.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if configuration.usingWorktree {
+            if configuration.destination == .worktree {
                 worktreeFields
             }
             if isLoading || isLaunching {

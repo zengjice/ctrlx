@@ -16,7 +16,7 @@ struct AgentForkConfigurationTests {
     func callbackIsolation() async throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
         var calls = 0
-        let config = AgentForkConfiguration(sources: [source], usingWorktree: true, prepare: { source in
+        let config = AgentForkConfiguration(sources: [source], destination: .currentDirectory, prepare: { source in
             MainActor.preconditionIsolated()
             await Task.detached { }.value
             MainActor.preconditionIsolated()
@@ -40,9 +40,9 @@ struct AgentForkConfigurationTests {
     }
 
     private func configuration(
-        sources: [AgentForkSource], usingWorktree: Bool, directorySource: SessionDirectorySource? = nil
+        sources: [AgentForkSource], destination: AgentForkDestination, directorySource: SessionDirectorySource? = nil
     ) -> AgentForkConfiguration {
-        AgentForkConfiguration(sources: sources, usingWorktree: usingWorktree, directorySource: directorySource, prepare: { _ in
+        AgentForkConfiguration(sources: sources, destination: destination, directorySource: directorySource, prepare: { _ in
             Issue.record("Validating a draft must not send a preparation request")
             throw CancellationError()
         }, fork: { _ in Issue.record("Validating a draft must not create a window") })
@@ -70,16 +70,17 @@ struct AgentForkConfigurationTests {
     @Test("Current-directory Fork needs no Git preparation or dirty-file approval")
     func currentDirectory() throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
-        let config = configuration(sources: [source], usingWorktree: false)
+        let config = configuration(sources: [source], destination: .currentDirectory)
         #expect(try config.worktreeRequest(source: source, preparation: nil, name: "", allowUncommittedChanges: false) == nil)
     }
 
     @Test("Mac/iOS current-directory Fork uses the entered window name without needing Git", arguments: ["codex", "claude-code"])
     func currentDirectoryName(agent: String) throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1, agent: agent)))
-        let config = configuration(sources: [source], usingWorktree: false)
+        let config = configuration(sources: [source], destination: .currentDirectory)
         let request = try config.forkRequest(
-            source: source, preparation: nil, name: "  我的 Fork  ", allowUncommittedChanges: false, targetProviderID: nil
+            source: source, preparation: nil, name: "  我的 Fork  ", allowUncommittedChanges: false,
+            targetProviderID: nil, directory: "/Other Place"
         )
         #expect(request.windowName == "我的 Fork")
         #expect(request.worktree == nil)
@@ -92,11 +93,11 @@ struct AgentForkConfigurationTests {
         }
     }
 
-    @Test("Current-directory Fork can target another Host directory only when its capability is available")
+    @Test("Other-directory Fork targets another Host directory only when its capability is available")
     func arbitraryDirectory() throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
         let directorySource = SessionDirectorySource(id: "host", list: { _ in throw CancellationError() })
-        let config = configuration(sources: [source], usingWorktree: false, directorySource: directorySource)
+        let config = configuration(sources: [source], destination: .otherDirectory, directorySource: directorySource)
         let request = try config.forkRequest(
             source: source, preparation: nil, name: "elsewhere", allowUncommittedChanges: false,
             targetProviderID: nil, directory: "~/Other Project"
@@ -116,18 +117,19 @@ struct AgentForkConfigurationTests {
                 )
             }
         }
-        let legacyHost = configuration(sources: [source], usingWorktree: false)
-        let legacyRequest = try legacyHost.forkRequest(
-            source: source, preparation: nil, name: "legacy", allowUncommittedChanges: false,
-            targetProviderID: nil, directory: "/other"
-        )
-        #expect(legacyRequest.workingDirectory == nil)
+        let legacyHost = configuration(sources: [source], destination: .otherDirectory)
+        #expect(throws: AgentForkError.self) {
+            try legacyHost.forkRequest(
+                source: source, preparation: nil, name: "legacy", allowUncommittedChanges: false,
+                targetProviderID: nil, directory: "/other"
+            )
+        }
     }
 
     @Test("Mac/iOS worktree drafts share one name; correcting a conflict gets a fresh retry identity", arguments: ["codex", "claude-code"])
     func namedWorktree(agent: String) throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1, agent: agent)))
-        let config = configuration(sources: [source], usingWorktree: true)
+        let config = configuration(sources: [source], destination: .worktree)
         let preparation = AgentForkPreparation(source: source, worktree: .init(
             repositoryRoot: "/Host/repo", primaryRoot: "/Host/repo", head: "source-head", relativeDirectory: "", hasUncommittedChanges: false
         ))
@@ -150,7 +152,7 @@ struct AgentForkConfigurationTests {
     @Test("Worktree review preserves the selected source HEAD and requires dirty-file acknowledgement", arguments: [false, true])
     func worktree(hasChanges: Bool) throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
-        let config = configuration(sources: [source], usingWorktree: true)
+        let config = configuration(sources: [source], destination: .worktree)
         let preparation = AgentForkPreparation(source: source, worktree: .init(
             repositoryRoot: "/Host/repo", primaryRoot: "/Host/repo", head: "source-head", relativeDirectory: "src", hasUncommittedChanges: hasChanges
         ))
@@ -166,7 +168,7 @@ struct AgentForkConfigurationTests {
     func mismatchedPreparation() throws {
         let codex = try #require(AgentForkSource(pane: pane("%1", index: 1)))
         let claude = try #require(AgentForkSource(pane: pane("%2", index: 2, agent: "claude-code")))
-        let config = configuration(sources: [codex, claude], usingWorktree: true)
+        let config = configuration(sources: [codex, claude], destination: .worktree)
         let wrongSource = AgentForkPreparation(source: codex, worktree: .init(
             repositoryRoot: "/Host/repo", primaryRoot: "/Host/repo", head: "codex-head", relativeDirectory: "", hasUncommittedChanges: false
         ))
@@ -178,7 +180,7 @@ struct AgentForkConfigurationTests {
         }
         let differentWindow = try #require(AgentForkSource(pane: pane("%9", index: 9)))
         #expect(throws: AgentForkError.self) {
-            try configuration(sources: [codex], usingWorktree: false).worktreeRequest(source: differentWindow, preparation: nil, name: "", allowUncommittedChanges: false)
+            try configuration(sources: [codex], destination: .currentDirectory).worktreeRequest(source: differentWindow, preparation: nil, name: "", allowUncommittedChanges: false)
         }
     }
 

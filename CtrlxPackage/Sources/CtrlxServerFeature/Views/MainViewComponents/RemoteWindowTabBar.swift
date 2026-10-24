@@ -38,7 +38,8 @@ struct RemoteWindowTabBar: View {
     let onNewWindow: () -> Void
     let agentConfiguration: NewAgentTabConfiguration
     let forkUnavailableReason: String?
-    let onForkWindow: (TmuxWindow, Bool) -> Void
+    let supportsOtherDirectoryFork: Bool
+    let onForkWindow: (TmuxWindow, AgentForkDestination) -> Void
     let onOpenBrowser: (TmuxWindow) -> Void
     let onRenameWindow: (TmuxWindow, String) -> Void
     let onSelectBrowserTab: (UUID) -> Void
@@ -370,6 +371,7 @@ struct RemoteWindowTabBar: View {
                         sources: window.panes.compactMap(AgentForkSource.init(pane:)),
                         unavailableReason: forkUnavailableReason,
                         sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes),
+                        allowsOtherDirectory: supportsOtherDirectoryFork,
                         choose: { onForkWindow(window, $0) }
                     )
                 }

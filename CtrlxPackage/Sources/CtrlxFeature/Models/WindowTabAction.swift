@@ -9,7 +9,7 @@ enum WindowTabAction: Equatable, Sendable {
         case openBrowser
         case openSimulator
         case openNewSimulator
-        case fork(usingWorktree: Bool)
+        case fork(destination: AgentForkDestination)
         case rename
         case close
     }

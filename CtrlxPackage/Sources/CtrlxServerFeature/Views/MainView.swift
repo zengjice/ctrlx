@@ -1575,8 +1575,9 @@ public struct MainView: View {
                         fallbackDirectory: window?.activePane?.currentPath
                     ),
                     forkUnavailableReason: agentForkUnavailableReason(hostID: remote.hostId),
-                    onForkWindow: { sourceWindow, usingWorktree in
-                        pendingAgentFork = agentForkConfiguration(panes: sourceWindow.panes, hostID: remote.hostId, usingWorktree: usingWorktree)
+                    supportsOtherDirectoryFork: coordinator.remoteSessionStore?.hostsSupportingAgentForkDirectory.contains(remote.hostId) == true,
+                    onForkWindow: { sourceWindow, destination in
+                        pendingAgentFork = agentForkConfiguration(panes: sourceWindow.panes, hostID: remote.hostId, destination: destination)
                     },
                     onOpenBrowser: { sourceWindow in
                         openPaneBrowser(
@@ -1736,9 +1737,9 @@ public struct MainView: View {
                             hostID: nil,
                             fallbackDirectory: directoryPath
                         ),
-                        onForkWindow: { sourceWindow, usingWorktree in
+                        onForkWindow: { sourceWindow, destination in
                             let panes = sourceWindow.panes.compactMap { coordinator.windowManager.paneStates[$0.paneId] }
-                            pendingAgentFork = agentForkConfiguration(panes: panes, hostID: nil, usingWorktree: usingWorktree)
+                            pendingAgentFork = agentForkConfiguration(panes: panes, hostID: nil, destination: destination)
                         },
                         onOpenBrowser: { sourceWindow in
                             openPaneBrowser(
@@ -3893,8 +3894,8 @@ public struct MainView: View {
                 paneIDs: source.map { [$0] } ?? [],
                 fallbackPaneID: source
             )
-        case let .fork(paneID, worktree):
-            pendingAgentFork = agentForkConfiguration(panes: panes, hostID: target.hostID, usingWorktree: worktree, focusedPaneID: paneID)
+        case let .fork(paneID, destination):
+            pendingAgentFork = agentForkConfiguration(panes: panes, hostID: target.hostID, destination: destination, focusedPaneID: paneID)
         case let .fileLink(link):
             guard link.hostID == target.hostID, panes.contains(where: { $0.paneId == link.paneID }) else { return }
             await openTerminalFile(link, detachedRequestID: request.id)
@@ -6553,7 +6554,7 @@ public struct MainView: View {
         return store.agentForkUnavailableReason(hostID: hostID, isConnected: isConnected, requiresDirectory: requiresDirectory)
     }
 
-    private func agentForkConfiguration(panes: [PaneState], hostID: String?, usingWorktree: Bool, focusedPaneID: String? = nil) -> AgentForkConfiguration {
+    private func agentForkConfiguration(panes: [PaneState], hostID: String?, destination: AgentForkDestination, focusedPaneID: String? = nil) -> AgentForkConfiguration {
         let focused = focusedPaneID ?? terminalQuickActions.active.flatMap { $0.hostID == hostID ? $0.paneID : nil }
         let sources = AgentForkConfiguration.orderedSources(panes: panes, focusedPaneID: focused)
         let inputState = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.workspaceInputState }
@@ -6569,7 +6570,7 @@ public struct MainView: View {
             localDirectorySource
         }
         return AgentForkConfiguration(
-            sources: sources, usingWorktree: usingWorktree, directorySource: directorySource,
+            sources: sources, destination: destination, directorySource: directorySource,
             prepare: { source in
                 if let hostID {
                     if let reason = agentForkUnavailableReason(hostID: hostID) {

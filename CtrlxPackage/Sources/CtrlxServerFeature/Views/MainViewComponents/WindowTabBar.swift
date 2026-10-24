@@ -30,7 +30,7 @@ struct WindowTabBar: View {
     let onCloseWindow: (LocalTmuxWindow) -> Void
     let onNewWindow: () -> Void
     let agentConfiguration: NewAgentTabConfiguration
-    let onForkWindow: (LocalTmuxWindow, Bool) -> Void
+    let onForkWindow: (LocalTmuxWindow, AgentForkDestination) -> Void
     let onOpenBrowser: (LocalTmuxWindow) -> Void
     let onRenameWindow: (LocalTmuxWindow, String) -> Void
     let onSelectFileBrowser: () -> Void
@@ -525,6 +525,7 @@ struct WindowTabBar: View {
                         sources: window.panes.compactMap { windowManager.paneStates[$0.paneId].flatMap(AgentForkSource.init(pane:)) },
                         unavailableReason: nil,
                         sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }),
+                        allowsOtherDirectory: true,
                         choose: { onForkWindow(window, $0) }
                     )
                 }

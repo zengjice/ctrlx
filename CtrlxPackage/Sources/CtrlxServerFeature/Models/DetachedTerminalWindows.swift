@@ -22,7 +22,7 @@ final class DetachedTerminalWindows {
     enum Action: Equatable {
         case show
         case files(paneID: String?)
-        case fork(paneID: String?, worktree: Bool)
+        case fork(paneID: String?, destination: AgentForkDestination)
         case fileLink(TerminalFileLinkRequest)
         case url(String, paneID: String)
     }

@@ -1145,6 +1145,7 @@
                 canCreateNewSimulator: relayClient.hostSupportsPaneSimulatorCreation,
                 isCreatingWindow: isCreatingWindow,
                 forkUnavailableReason: agentForkUnavailableReason(),
+                canForkOtherDirectory: sessionStore.hostsSupportingAgentForkDirectory.contains(hostId),
                 includesWindowManagement: includesWindowManagement,
                 includesFork: scope.includesFork,
                 choose: { action in
@@ -1237,14 +1238,14 @@
                         return
                     }
                     pendingBrowserLink = .init(paneID: paneID, hostID: hostId)
-                case let .fork(usingWorktree):
+                case let .fork(destination):
                     guard !isCreatingWindow else { return }
                     if let reason = agentForkUnavailableReason() {
                         commandError = reason
                         return
                     }
                     creationSheetIsPresented = true
-                    agentForkConfiguration = forkConfiguration(window: target, usingWorktree: usingWorktree)
+                    agentForkConfiguration = forkConfiguration(window: target, destination: destination)
                 case .rename:
                     renameWindowText = target.windowName
                     renamingWindowBinding = relayClient.workspaceInputState.windowBinding(target: target.stableId)
@@ -1433,7 +1434,7 @@
             )
         }
 
-        private func forkConfiguration(window: TmuxWindow, usingWorktree: Bool) -> AgentForkConfiguration {
+        private func forkConfiguration(window: TmuxWindow, destination: AgentForkDestination) -> AgentForkConfiguration {
             let inputState = relayClient.workspaceInputState
             let directorySource: SessionDirectorySource? = sessionStore.hostsSupportingAgentForkDirectory.contains(hostId) ? .remote(
                 hostID: hostId, connection: connectionManager.connection(for: hostId),
@@ -1442,7 +1443,7 @@
             ) : nil
             return AgentForkConfiguration(
                 sources: AgentForkConfiguration.orderedSources(panes: window.panes, focusedPaneID: activePaneId),
-                usingWorktree: usingWorktree, directorySource: directorySource,
+                destination: destination, directorySource: directorySource,
                 prepare: { source in
                     if let reason = agentForkUnavailableReason() {
                         throw AgentForkError(reason)
