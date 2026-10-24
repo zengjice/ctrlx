@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.97 — Fork destination menu
+
+- Separate **In Current Directory**, **In Other Directory…**, and **In New
+  Worktree…** in the shared Mac/iOS Fork menu. Current-directory Fork no longer
+  asks for a target path.
+- Keep Other Directory's typed and browsed Host path selection, validation and
+  capability gating, while preserving the existing worktree review flow.
+- Carry the selected Fork destination through window-tab actions so remote and
+  linked-tab operations target the intended window.
+- Release validation: 43 focused Fork/window-tab tests and the complete
+  3,779-test serial Swift regression passed. The Apple Intelligence
+  `StopFinality` suite was skipped because this Mac reports `deviceNotEligible`.
+  Changed Swift files passed SwiftFormat, both boundaries passed, and the
+  14-page website build, iOS Simulator compile check, signed Mac Release build
+  and all 63 offline publisher/COS tests succeeded.
+- Mac distribution is build 30 through COS, using an Apple Development signature
+  without notarization. Publication verifies source metadata, signatures and the
+  complete public download before installer promotion.
+
 ## 3.0.96 — Browser control focus handoff
 
 - Keep the iOS Browser keyboard button available after control is released;
