@@ -72,3 +72,77 @@ to choose another agent. Nonempty arguments after `--` replace the plugin's defa
 launch arguments. The [socket API](api-reference.md) accepts the same choice through
 `project.start`'s `plugin_id`. `new-session --path` follows the app's auto-run
 setting instead.
+
+## Agent collaboration
+
+When the current task includes workflow attachments, use the invocation UUID
+supplied with that task. Check `ctrlx workflow attachments --help` first if the
+installed CLI's capabilities are unknown.
+
+```bash
+ctrlx workflow attachments --invocation '<UUID from this task>' --json
+```
+
+The response lists only that invocation's authorized files, including their
+name, media type, SHA-256 and Host-local path. Read each image with your native
+image-reading tool and each UTF-8 text file in full before using it as evidence.
+The text response itself does not contain image pixels or prove that the model
+has inspected them. If your tools cannot read a file, report the limitation and
+ask for an explicit conversion; never claim to have read it or silently omit it.
+Do not enumerate other workflow directories, substitute a previous invocation,
+or use the file references as authorization for unrelated Host files. Audio and
+video require a supported conversion before this reader can return them.
+Converted inputs include optional `conversion` metadata describing the original
+name, checksum and conversion. Read their notes and sampled images together;
+sampled video frames do not establish what happened between samples. A transcript
+is user-reviewed text, and notes explicitly identify excluded audio. Do not claim
+you inspected an original audio/video file merely because it is retained by the
+workflow.
+
+Pausing handoffs does not revoke your current accepted invocation's attachment
+access. You may finish its authorized work and share artifacts while the workflow
+is paused. New tasks remain stopped; ended or expired runs and completed or
+replaced invocations cannot obtain further access.
+
+### Sharing artifacts
+
+To include a file in this task's handoff, save it first and run:
+
+```bash
+ctrlx workflow share --invocation '<UUID from this task>' --file report.md --json
+```
+
+Check `ctrlx workflow share --help` if the installed CLI's capabilities are
+unknown. Run once per required file before your final answer. It snapshots
+PNG/JPEG, UTF-8 text/Markdown, audio or video into workflow storage and returns
+the immutable artifact ID and checksum. Paths mentioned in prose alone are not
+shared. Storage accepts up to 1 GiB per file and 32 artifacts per invocation;
+the target's media and reading limits still apply. Audio/video need explicit
+conversion before the current attachment reader can supply them.
+
+The Host binds the upload to your accepted invocation. Your final verified
+answer carries those same snapshots to each configured downstream Agent.
+If the command fails, report the failure; do not claim delivery. If a finish
+receipt was lost, inspect the workflow record before sharing again: the first
+snapshot may already be saved. Never switch invocation IDs, borrow another
+Agent's identity, or retry using a different pane.
+
+### Requesting completion
+
+Use this only when the current workflow task explicitly grants completion and
+supplies its invocation UUID. Check `ctrlx workflow finish --help` on the installed
+CLI; older releases may not provide the command.
+
+```bash
+ctrlx workflow finish --invocation '<UUID from this task>' --reason 'Review passed'
+```
+
+The Host verifies the calling Agent process, the current invocation and the
+node's finish grant. Knowing a UUID or command does not grant authority. Do not
+reuse an invocation from an earlier round or pass pane/session/window overrides.
+An accepted request stops new handoffs but still requires your final answer:
+write that answer normally after the command succeeds. If the workflow is paused,
+the request and answer are saved while it remains paused until an operator
+continues it. Do not resume the workflow or resend the task yourself. A denied request is not
+workflow completion; report the reason without switching to another Agent's
+identity or forcibly closing its terminal. This command does not kill Agents.

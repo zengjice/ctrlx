@@ -16,6 +16,7 @@ final class WorkspaceRecoveryController {
 
     private(set) var phase = Phase.starting
     private(set) var snapshot: WorkspaceRecoverySnapshot?
+    private(set) var hostID: UUID?
     private(set) var liveState: WorkspaceTmuxState?
     private(set) var failures: [WorkspaceRecoveryFailure] = []
     private(set) var error: String?
@@ -31,6 +32,7 @@ final class WorkspaceRecoveryController {
     @ObservationIgnored private let captureViewer: (WorkspaceRecoverySnapshot) -> WorkspaceRecoverySnapshot
     @ObservationIgnored private let present: (WorkspaceRecoverySnapshot, WorkspaceTmuxState) async throws -> Void
     @ObservationIgnored private let resumeAgents: WorkspaceAgentRecoveryHandler
+    @ObservationIgnored private let resolveHostID: @Sendable (UUID?) async throws -> UUID
     @ObservationIgnored private var bootID: String?
     @ObservationIgnored private var operationInProgress = false
     @ObservationIgnored private var stopping = false
@@ -48,7 +50,8 @@ final class WorkspaceRecoveryController {
         captureExtras: @escaping (WorkspaceRecoverySnapshot) async throws -> WorkspaceRecoverySnapshot,
         present: @escaping (WorkspaceRecoverySnapshot, WorkspaceTmuxState) async throws -> Void,
         resumeAgents: @escaping WorkspaceAgentRecoveryHandler,
-        captureViewer: @escaping (WorkspaceRecoverySnapshot) -> WorkspaceRecoverySnapshot = { $0 }
+        captureViewer: @escaping (WorkspaceRecoverySnapshot) -> WorkspaceRecoverySnapshot = { $0 },
+        resolveHostID: @escaping @Sendable (UUID?) async throws -> UUID = { $0 ?? UUID() }
     ) {
         self.store = store
         self.tmux = tmux
@@ -58,6 +61,7 @@ final class WorkspaceRecoveryController {
         self.captureViewer = captureViewer
         self.present = present
         self.resumeAgents = resumeAgents
+        self.resolveHostID = resolveHostID
     }
 
     func start(periodic: Bool = true) async {
@@ -65,9 +69,13 @@ final class WorkspaceRecoveryController {
         operationInProgress = true
         defer { operationInProgress = false }
         do {
+            snapshot = try await store.load()
+            hostID = try await resolveHostID(snapshot?.hostID)
+            guard snapshot == nil || snapshot?.hostID == hostID else {
+                throw WorkspaceRecoveryError("The saved workspace belongs to a different Host.")
+            }
             let boot = try system.bootID()
             bootID = boot
-            snapshot = try await store.load()
             let live = try await tmux.capture()
             liveState = live
             switch WorkspaceRecoveryPolicy.startup(snapshot: snapshot, live: live, bootID: boot, mode: mode()) {
@@ -350,7 +358,8 @@ final class WorkspaceRecoveryController {
 
     private func save(_ live: WorkspaceTmuxState) async throws {
         guard mode() != .disabled, let bootID else { return }
-        var next = applyingClosures(to: snapshot ?? WorkspaceRecoverySnapshot(hostID: UUID(), bootID: bootID, serverID: live.serverID))
+        guard let hostID else { throw WorkspaceRecoveryError("The persistent Host identity is unavailable.") }
+        var next = applyingClosures(to: snapshot ?? WorkspaceRecoverySnapshot(hostID: hostID, bootID: bootID, serverID: live.serverID))
         let recordedClosures = closedPaneIdentities
         let recordedSessions = closedSessionIdentities
         let recordedWindows = closedWindowIdentities

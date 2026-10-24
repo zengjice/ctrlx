@@ -88,6 +88,8 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsPaneSimulator: Bool?
     public let supportsSimulatorClosing: Bool?
     public let supportsDashboard: Bool?
+    public let agentWorkflowVersion: Int?
+    public let workflowAgentPluginIDs: [String]?
     public let simulatorTabs: [RemoteSimulatorTab]?
 
     public init(
@@ -122,6 +124,8 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsPaneSimulator: Bool? = nil,
         supportsSimulatorClosing: Bool? = nil,
         supportsDashboard: Bool? = nil,
+        agentWorkflowVersion: Int? = nil,
+        workflowAgentPluginIDs: [String]? = nil,
         simulatorTabs: [RemoteSimulatorTab]? = nil,
         supportsPaneFiles: Bool? = nil, fileTabs: [HostFileTab]? = nil,
         workspaceIdentity: WorkspaceIdentityScope? = nil,
@@ -164,6 +168,8 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsPaneSimulator = supportsPaneSimulator
         self.supportsSimulatorClosing = supportsSimulatorClosing
         self.supportsDashboard = supportsDashboard
+        self.agentWorkflowVersion = agentWorkflowVersion
+        self.workflowAgentPluginIDs = workflowAgentPluginIDs
         self.simulatorTabs = simulatorTabs
     }
 
@@ -204,6 +210,8 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsPaneSimulator: supportsPaneSimulator,
             supportsSimulatorClosing: supportsSimulatorClosing,
             supportsDashboard: supportsDashboard,
+            agentWorkflowVersion: agentWorkflowVersion,
+            workflowAgentPluginIDs: workflowAgentPluginIDs,
             simulatorTabs: simulatorTabs,
             supportsPaneFiles: supportsPaneFiles, fileTabs: fileTabs,
             workspaceIdentity: workspaceIdentity,

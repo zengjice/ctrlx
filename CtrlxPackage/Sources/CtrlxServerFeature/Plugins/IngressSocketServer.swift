@@ -1,8 +1,9 @@
 #if os(macOS)
     import CtrlxNetworking
-    import Darwin
-    import Foundation
     import CtrlxPluginProtocol
+    import Darwin
+    import Dependencies
+    import Foundation
     import Logging
 
     /// The one app-owned ingress socket (spec §8). A POSIX `AF_UNIX`/`SOCK_STREAM`
@@ -25,6 +26,12 @@
         private let socketPath: String
         private let coreLookup: CoreLookup
         private let dispatcher: PluginEventDispatcher
+        @Dependency(PluginIngressPeerClient.self) private var peerClient
+
+        private struct ReceivedFrame: Sendable {
+            let frame: IngressFrame
+            let peer: PluginIngressPeer?
+        }
 
         private var serverFd: Int32 = -1
         private var isRunning = false
@@ -40,7 +47,7 @@
         /// concurrent (no head-of-line blocking), but `handleIngress` + `dispatch`
         /// run strictly one frame at a time, in the order frames were read.
         private var consumerTask: Task<Void, Never>?
-        private var frameContinuation: AsyncStream<IngressFrame>.Continuation?
+        private var frameContinuation: AsyncStream<ReceivedFrame>.Continuation?
 
         /// - Parameters:
         ///   - socketPath: where to bind the ingress socket (typically
@@ -133,7 +140,7 @@
             // status updates are applied in arrival order, not racing
             // processing-completion order.
             let (stream, continuation) = AsyncStream.makeStream(
-                of: IngressFrame.self,
+                of: ReceivedFrame.self,
                 bufferingPolicy: .unbounded
             )
             frameContinuation = continuation
@@ -141,13 +148,14 @@
             let dispatcher = dispatcher
             let logger = logger
             consumerTask = Task {
-                for await frame in stream {
+                for await received in stream {
+                    let frame = received.frame
                     guard let core = await lookup(frame.pluginID) else {
                         logger.debug("Dropping ingress frame for unknown/disabled plugin '\(frame.pluginID)'")
                         continue
                     }
                     if let event = await core.handleIngress(frame) {
-                        await dispatcher.dispatch(event)
+                        await dispatcher.dispatch(event, ingressPeer: received.peer)
                     } else {
                         logger.debug("Core '\(frame.pluginID)' dropped ingress frame (returned nil)")
                     }
@@ -250,8 +258,9 @@
                 // frame can't race a later one; frames from different sessions don't
                 // need a relative order. The bridge writes one frame and disconnects.
                 let logger = logger
+                let peerClient = peerClient
                 Task {
-                    await Self.readFrames(clientFd, into: continuation, logger: logger)
+                    await Self.readFrames(clientFd, into: continuation, peerClient: peerClient, logger: logger)
                 }
             }
         }
@@ -263,7 +272,8 @@
         /// the consumer so frames are processed one at a time in arrival order.
         private static func readFrames(
             _ fd: Int32,
-            into continuation: AsyncStream<IngressFrame>.Continuation,
+            into continuation: AsyncStream<ReceivedFrame>.Continuation,
+            peerClient: PluginIngressPeerClient,
             logger: Logger
         ) async {
             defer { close(fd) }
@@ -302,7 +312,17 @@
                     continue
                 }
 
-                continuation.yield(frame)
+                let peer = peerClient.capture(fd)
+                continuation.yield(ReceivedFrame(frame: frame, peer: peer))
+                if frame.context["CTRLX_INGRESS_ACK"] == "1" {
+                    // Receipt only: no application/Agent success is implied.
+                    // The bridge waits here so kernel ancestry remains available
+                    // until captured, even when event processing is queued.
+                    var noSIGPIPE: Int32 = 1
+                    guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSIGPIPE, socklen_t(MemoryLayout.size(ofValue: noSIGPIPE))) == 0 else { break }
+                    var acknowledgement: UInt8 = 1
+                    guard Darwin.write(fd, &acknowledgement, 1) == 1 else { break }
+                }
             }
         }
 

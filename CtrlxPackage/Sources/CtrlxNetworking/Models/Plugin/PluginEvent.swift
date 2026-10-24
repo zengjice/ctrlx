@@ -36,6 +36,14 @@ public struct PluginEvent: Codable, Sendable, Equatable {
     /// `permission_mode_changed` event (which only fires on a change; issue #597).
     public let permissionMode: String?
 
+    /// Native turn evidence consumed locally by the workflow executor. Its
+    /// claimed source is accepted only with a separate kernel peer snapshot.
+    public var workflow: PluginWorkflowEvent?
+
+    /// Capability reported by the actual hook bridge, accepted only after the
+    /// Host verifies its kernel peer. Zero identifies a legacy bridge.
+    public var workflowBridgeVersion: Int?
+
     public init(
         pluginID: String,
         sessionID: String,
@@ -44,7 +52,9 @@ public struct PluginEvent: Codable, Sendable, Equatable {
         appActions: [AppAction] = [],
         tmuxPane: String? = nil,
         projectPath: String? = nil,
-        permissionMode: String? = nil
+        permissionMode: String? = nil,
+        workflow: PluginWorkflowEvent? = nil,
+        workflowBridgeVersion: Int? = nil
     ) {
         self.pluginID = pluginID
         self.sessionID = sessionID
@@ -54,6 +64,8 @@ public struct PluginEvent: Codable, Sendable, Equatable {
         self.tmuxPane = tmuxPane
         self.projectPath = projectPath
         self.permissionMode = permissionMode
+        self.workflow = workflow
+        self.workflowBridgeVersion = workflowBridgeVersion
     }
 }
 

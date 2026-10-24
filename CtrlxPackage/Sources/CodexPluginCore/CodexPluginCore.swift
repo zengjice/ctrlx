@@ -162,13 +162,14 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             guard notifiedQuestionCalls[body.sessionId, default: []].insert(question.callID).inserted else { return nil }
             // A question can be asynchronous. Notify without opening a blocking
             // form, retracting another form, or changing the agent's working state.
-            return PluginEvent(
+            let event = PluginEvent(
                 pluginID: frame.pluginID,
                 sessionID: body.sessionId,
                 notification: question.notification,
                 tmuxPane: tmuxPane,
                 projectPath: frame.context["CODEX_PROJECT_DIR"] ?? body.cwd
             )
+            return PluginWorkflowHook.addingEvidence(to: event, from: frame, nativeTurnKey: "turn_id")
         }
 
         // Maintain the per-session reviewer snapshots: a session start is the
@@ -221,7 +222,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             pendingRequests[form.requestID] = pending
         }
 
-        return output.event
+        return PluginWorkflowHook.addingEvidence(to: output.event, from: frame, nativeTurnKey: "turn_id")
     }
 
     /// Resolve the tmux pane for an event. On a session start with a pane,

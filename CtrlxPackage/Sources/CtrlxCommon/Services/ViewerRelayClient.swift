@@ -122,6 +122,8 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsPaneSimulator = false
     public private(set) var hostSupportsSimulatorClosing = false
     public private(set) var hostSupportsDashboard = false
+    public private(set) var hostAgentWorkflowVersion: Int?
+    public private(set) var hostWorkflowAgentPluginIDs: Set<String> = []
     public private(set) var simulatorTabs: [RemoteSimulatorTab] = []
 
     func rememberOpenedSimulator(_ tab: RemoteSimulatorTab) {
@@ -547,6 +549,8 @@ final public class ViewerRelayClient {
         }
 
         switch command.commandType {
+        case .manageAgentWorkflows where hostAgentWorkflowVersion != AgentWorkflowWire.version:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage Agent workflows."))
         case .readDashboard where !hostSupportsDashboard:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view its Dashboard"))
         case let .sendKeystroke(spec) where spec.acknowledgeCompletion == true && !workspaceInputState.supportsIdentity:
@@ -751,6 +755,8 @@ final public class ViewerRelayClient {
     @discardableResult
     public func send(_ command: CommandType, paneId: String, inputBinding: ViewerWorkspaceInputBinding? = nil) async -> Bool {
         switch command {
+        case let .manageAgentWorkflows(spec):
+            return (try? await sendCommand(spec, paneId: "").get())?.success == true
         case let .readDashboard(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .sendKeystroke(spec):
@@ -1200,6 +1206,8 @@ final public class ViewerRelayClient {
             hostSupportsPaneSimulator = sessionState.supportsPaneSimulator == true
             hostSupportsSimulatorClosing = sessionState.supportsSimulatorClosing == true
             hostSupportsDashboard = sessionState.supportsDashboard == true
+            hostAgentWorkflowVersion = sessionState.agentWorkflowVersion
+            hostWorkflowAgentPluginIDs = Set(sessionState.workflowAgentPluginIDs ?? [])
             simulatorTabs = sessionState.simulatorTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             onSessionState?(sessionState)
@@ -1690,6 +1698,8 @@ final public class ViewerRelayClient {
         hostSupportsPaneSimulator = false
         hostSupportsSimulatorClosing = false
         hostSupportsDashboard = false
+        hostAgentWorkflowVersion = nil
+        hostWorkflowAgentPluginIDs = []
         hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false
     }

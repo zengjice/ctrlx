@@ -85,6 +85,12 @@ public struct MenuBarExtraView: View {
         }
         Button("Dashboard…", action: showDashboard)
             .accessibilityIdentifier("menubar-dashboard")
+        Button("Workflows…") {
+            NSApp.setActivationPolicy(.regular)
+            openWindow(id: "workflows")
+            Self.bringAppToFront()
+        }
+        .accessibilityIdentifier("menubar-workflows")
 
         Divider()
         Menu("All Sessions") {

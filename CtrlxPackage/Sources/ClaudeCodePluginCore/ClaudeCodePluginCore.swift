@@ -141,7 +141,10 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
                         + "(\(pendingWork.joined(separator: ", "))) and the last assistant "
                         + "message doesn't read as final"
                 )
-                return stillWorkingEvent(for: stopBody, frame: frame, summary: message)
+                return PluginWorkflowHook.addingEvidence(
+                    to: stillWorkingEvent(for: stopBody, frame: frame, summary: message),
+                    from: frame, nativeTurnKey: "prompt_id"
+                )
             }
         }
 
@@ -171,7 +174,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
             pendingRequests[form.requestID] = pending
         }
 
-        return output.event
+        return PluginWorkflowHook.addingEvidence(to: output.event, from: frame, nativeTurnKey: "prompt_id")
     }
 
     /// Builds the event for a Stop downgraded to still-working (issue #644):

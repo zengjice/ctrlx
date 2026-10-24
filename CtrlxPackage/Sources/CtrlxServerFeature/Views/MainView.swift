@@ -2625,6 +2625,11 @@ public struct MainView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         if detachedWorkspace == nil {
+            ToolbarItem(id: "ctrlx.toolbar.workflows", placement: .automatic) {
+                Button { openWindow(id: "workflows") } label: { Label("Workflows", symbol: .arrowTriangleBranch) }
+                    .help("Agent Workflows")
+                    .accessibilityIdentifier("workflows-open")
+            }
             ToolbarItem(id: "ctrlx.toolbar.dashboard", placement: .automatic) {
                 Button { openWindow(id: "dashboard") } label: {
                     Label("Dashboard", symbol: .gaugeWithDotsNeedle50percent)

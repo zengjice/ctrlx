@@ -42,6 +42,7 @@ struct CtrlxCLI: AsyncParsableCommand {
             StartProjectCommand.self,
             // Plugins
             PluginCommand.self,
+            WorkflowCommand.self,
             // Layouts
             ApplyCommand.self,
             // Utility
@@ -57,20 +58,15 @@ struct CtrlxCLI: AsyncParsableCommand {
 
 /// Global options shared across all commands.
 struct GlobalOptions: ParsableArguments {
-    @Option(name: .long, help: "Custom socket path")
-    var socket: String?
+    @Option(name: .long, help: "Custom socket path") var socket: String?
 
-    @Flag(name: .long, help: "Output as JSON")
-    var json = false
+    @Flag(name: .long, help: "Output as JSON") var json = false
 
-    @Option(name: .long, help: "Target specific pane")
-    var pane: String?
+    @Option(name: .long, help: "Target specific pane") var pane: String?
 
-    @Option(name: .long, help: "Target specific session")
-    var session: String?
+    @Option(name: .long, help: "Target specific session") var session: String?
 
-    @Option(name: .long, help: "Target specific window")
-    var window: String?
+    @Option(name: .long, help: "Target specific window") var window: String?
 
     /// The pane ID for the calling shell, derived from `$TMUX_PANE`.
     ///
@@ -87,14 +83,16 @@ struct GlobalOptions: ParsableArguments {
 func executeRequest(
     method: String,
     params: [String: JSONValue] = [:],
-    options: GlobalOptions
+    options: GlobalOptions,
+    timeoutSeconds: Int? = nil,
+    responseLimit: Int? = nil
 ) throws -> JSONRPCResponse {
     let request = JSONRPCRequest(
         id: UUID().uuidString,
         method: method,
         params: params
     )
-    let response = try SocketClient.send(request, socketPath: options.socket)
+    let response = try SocketClient.send(request, socketPath: options.socket, timeoutSeconds: timeoutSeconds, responseLimit: responseLimit)
     if !response.ok, let error = response.error {
         // Honor --json on the error path too: scripted callers parsing stdout
         // get the full {"ok":false,"error":{...}} response instead of prose.

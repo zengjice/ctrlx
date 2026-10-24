@@ -8,6 +8,7 @@ extension AppCoordinator {
     func setupWorkspaceRecovery() async {
         @Dependency(WorkspaceRecoveryStore.self) var store
         @Dependency(WorkspaceRecoverySystem.self) var system
+        @Dependency(HostIdentityClient.self) var identity
         let agents = WorkspaceAgentRecovery(
             core: { [weak self] in self?.pluginRegistry?.core($0) as? any AgentSessionResuming },
             mode: { [settings] in settings.workspaceRecoveryMode },
@@ -43,6 +44,9 @@ extension AppCoordinator {
             },
             captureViewer: { [weak self] snapshot in
                 self?.captureViewerWorkspace(snapshot) ?? snapshot
+            },
+            resolveHostID: { _ in
+                try await identity.load()
             }
         )
         workspaceRecovery = recovery

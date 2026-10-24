@@ -1,5 +1,6 @@
 #if os(macOS)
     import CtrlxNetworking
+    import CtrlxPluginProtocol
     import Foundation
     import Testing
     @testable import CtrlxServerFeature
@@ -93,6 +94,27 @@
 
     @Suite("PluginEventDispatcher")
     struct PluginEventDispatcherTests {
+        @Test("workflow evidence requires a separately captured socket peer")
+        func workflowRequiresKernelPeer() async throws {
+            let recorder = DispatchRecorder()
+            let dispatcher = PluginEventDispatcher(onWorkflow: { event, _ in
+                await recorder.recordAction(.dismissFileSuggestions(sessionID: event.sessionID))
+            })
+            let event = PluginEvent(pluginID: "codex", sessionID: "session", workflow: .init(kind: .submitted, nativeTurnID: "turn", transcriptPath: "/tmp/native", text: "Task"))
+            await dispatcher.dispatch(event)
+            #expect(await recorder.actions.isEmpty)
+            let peer = try #require(PluginIngressPeer.capture(peerPID: 12, userID: 501) { pid in
+                .init(processID: pid, parentProcessID: 1, userID: 501, startSeconds: 1, startMicroseconds: 0)
+            })
+            await dispatcher.dispatch(event, ingressPeer: peer)
+            #expect(await recorder.actions == [.dismissFileSuggestions(sessionID: "session")])
+            let bridge = PluginEvent(pluginID: "codex", sessionID: "bootstrap", workflowBridgeVersion: 1)
+            await dispatcher.dispatch(bridge)
+            #expect(await recorder.actions.count == 1)
+            await dispatcher.dispatch(bridge, ingressPeer: peer)
+            #expect(await recorder.actions.last == .dismissFileSuggestions(sessionID: "bootstrap"))
+        }
+
         @Test("a state opinion fires the state sink with bootstrap fields")
         func stateFiresSink() async {
             let recorder = DispatchRecorder()

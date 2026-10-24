@@ -1111,6 +1111,7 @@ public struct PasteTerminalText: CommandSpec, Equatable {
 /// Each case holds its corresponding CommandSpec struct.
 public enum CommandType: Codable, Sendable, Equatable {
     case readDashboard(ReadDashboard)
+    case manageAgentWorkflows(ManageAgentWorkflows)
     /// Send keystrokes to a tmux pane
     case sendKeystroke(SendKeystroke)
     /// Paste one complete clipboard payload without synthesizing Enter keys.
@@ -1423,6 +1424,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let simulatorControl: RemoteSimulatorControlResponse?
     public let simulatorTab: RemoteSimulatorTab?
     public let dashboard: DashboardSnapshot?
+    public let agentWorkflow: AgentWorkflowResponse?
     /// True only after the Host sent the opener or already handled this queue.
     /// Missing on older Hosts; a generic success is not an acknowledgement.
     public let codexQuestionsHandled: Bool?
@@ -1444,6 +1446,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         simulatorControl: RemoteSimulatorControlResponse? = nil,
         simulatorTab: RemoteSimulatorTab? = nil,
         dashboard: DashboardSnapshot? = nil,
+        agentWorkflow: AgentWorkflowResponse? = nil,
         codexQuestionsHandled: Bool? = nil
     ) {
         self.commandId = commandId
@@ -1462,6 +1465,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.simulatorControl = simulatorControl
         self.simulatorTab = simulatorTab
         self.dashboard = dashboard
+        self.agentWorkflow = agentWorkflow
         self.codexQuestionsHandled = codexQuestionsHandled
     }
 

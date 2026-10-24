@@ -68,18 +68,21 @@ extension TmuxService {
         try WorkspaceTerminalInputGuard.validate(output: result.stdoutString)
     }
 
-    func sendWorkspaceInput(_ commands: [[String]], target: String, identity: WorkspacePaneIdentity) async throws {
-        _ = try await runWorkspaceCommand(commands, target: target, identity: identity)
+    func sendWorkspaceInput(_ commands: [[String]], target: String, identity: WorkspacePaneIdentity, editsInput: Bool = true) async throws {
+        let arguments = try WorkspaceTerminalInputGuard.arguments(target: target, identity: identity, commands: commands)
+        let result = try await runHumanTmuxInput(arguments, target: target, editsInput: editsInput)
+        guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
+        try WorkspaceTerminalInputGuard.validate(output: result.stdoutString)
     }
 
-    func runWorkspaceCommand(_ commands: [[String]], target: String, identity: WorkspacePaneIdentity?, scope: WorkspaceTerminalInputGuard.Scope = .pane) async throws -> ProcessResult {
+    func runWorkspaceCommand(_ commands: [[String]], target: String, identity: WorkspacePaneIdentity?, scope: WorkspaceTerminalInputGuard.Scope = .pane, launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil) async throws -> ProcessResult {
         let arguments: [String]
         if let identity {
             arguments = try WorkspaceTerminalInputGuard.arguments(target: target, identity: identity, scope: scope, commands: commands)
         } else {
             arguments = commands.enumerated().flatMap { ($0.offset == 0 ? [] : [";"]) + $0.element }
         }
-        let result = try await runTmuxCommand(arguments)
+        let result = try await runTmuxCommand(arguments, launch: launch)
         guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
         try WorkspaceTerminalInputGuard.validate(output: result.stdoutString)
         return result

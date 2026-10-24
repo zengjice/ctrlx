@@ -802,6 +802,7 @@ final public class ConnectedViewer: Identifiable {
             }
             let isFileRequest: Bool = switch command.command {
             case .readDashboard,
+                 .manageAgentWorkflows,
                  .browseFiles,
                  .createSessionDirectory,
                  .prepareSessionWorktree: true

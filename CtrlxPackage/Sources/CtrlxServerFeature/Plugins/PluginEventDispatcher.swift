@@ -1,5 +1,6 @@
 #if os(macOS)
     import CtrlxNetworking
+    import CtrlxPluginProtocol
     import Foundation
 
     /// The single, agent-blind consumer of every `PluginEvent` (spec §5). A core
@@ -56,6 +57,8 @@
         /// One discrete agent-blind Mac-side trigger (markdown suggestion, pane close…).
         public typealias AppActionSink = @Sendable (_ action: AppAction) async -> Void
 
+        public typealias WorkflowSink = @Sendable (_ event: PluginEvent, _ peer: PluginIngressPeer) async -> Void
+
         /// Whether the pane is in yolo mode (queried Mac-side). Used to decide
         /// whether to auto-approve an auto-approvable permission silently. The core
         /// never learns about yolo — this is purely app state.
@@ -68,6 +71,7 @@
         private let onAutoApprove: AutoApproveSink
         private let onAppAction: AppActionSink
         private let isYoloModeEnabled: AutoApproveCheck
+        private let onWorkflow: WorkflowSink
 
         // MARK: - Initialization
 
@@ -76,20 +80,26 @@
             onNotification: @escaping NotificationSink = { _, _, _, _ in },
             onAutoApprove: @escaping AutoApproveSink = { _, _, _ in },
             onAppAction: @escaping AppActionSink = { _ in },
-            isYoloModeEnabled: @escaping AutoApproveCheck = { _ in false }
+            isYoloModeEnabled: @escaping AutoApproveCheck = { _ in false },
+            onWorkflow: @escaping WorkflowSink = { _, _ in }
         ) {
             self.onState = onState
             self.onNotification = onNotification
             self.onAutoApprove = onAutoApprove
             self.onAppAction = onAppAction
             self.isYoloModeEnabled = isYoloModeEnabled
+            self.onWorkflow = onWorkflow
         }
 
         // MARK: - Dispatch
 
         /// Fan one envelope out to the sinks (spec §5).
-        public func dispatch(_ event: PluginEvent) async {
+        public func dispatch(_ event: PluginEvent, ingressPeer: PluginIngressPeer? = nil) async {
             let paneID = event.tmuxPane ?? event.sessionID
+
+            if event.workflow != nil || event.workflowBridgeVersion != nil, let ingressPeer {
+                await onWorkflow(event, ingressPeer)
+            }
 
             if let state = event.state {
                 // Yolo auto-approve (spec §6): an auto-approvable permission on a

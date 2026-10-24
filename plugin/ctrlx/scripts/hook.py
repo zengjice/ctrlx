@@ -60,7 +60,7 @@ def main():
     except Exception:
         return
 
-    context = {"TMUX_PANE": tmux_pane}
+    context = {"TMUX_PANE": tmux_pane, "CTRLX_INGRESS_ACK": "1", "CTRLX_WORKFLOW_VERSION": "1"}
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
     if project_dir:
         context["CLAUDE_PROJECT_DIR"] = project_dir
@@ -75,6 +75,10 @@ def main():
             sock.settimeout(5)
             sock.connect(SOCKET_PATH)
             sock.sendall(frame)
+            # Keep this process alive until the Host captures socket ancestry.
+            # Older Hosts close on EOF without a reply.
+            sock.shutdown(socket.SHUT_WR)
+            sock.recv(1)
     except Exception:
         return  # CtrlX not running / socket gone — drop silently.
 

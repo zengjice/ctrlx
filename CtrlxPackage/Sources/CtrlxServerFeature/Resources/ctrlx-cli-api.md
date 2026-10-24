@@ -56,6 +56,95 @@ ctrlx list-sessions --json | jq '.result.sessions[].name'
 
 ## Commands
 
+### Agent Workflows
+
+`workflow attachments` returns the files authorized for the current accepted
+Agent invocation:
+
+```bash
+ctrlx workflow attachments --invocation '<UUID supplied with the task>' --json
+```
+
+**JSON-RPC:** `workflow.attachments`, with only `invocationId` (UUID string).
+The Host verifies socket process ancestry, the live Agent binding and current
+run authorization, then verifies each file's size, format and SHA-256. It checks
+the binding and authorization again before returning. The result contains
+`invocationId` and `attachments`, whose entries contain `id`, `name`, `mediaType`,
+`sha256`, `path` and `readWith`. Paths refer to this Host's imported copies, not
+the Viewer's filesystem. Converted files also include `conversion` with
+`sourceName`, `sourceSHA256` and `description`. This describes provenance, not
+permission to read the retained original. Video samples and their notes must be
+read together; the notes identify sampling limits and excluded audio.
+Images (PNG/JPEG, up to 20 MiB) must be inspected using
+the Agent's image-reading tool; text (UTF-8 plain text/Markdown, up to 2 MiB)
+must be read in full. Audio/video require explicit conversion. This command
+always prints JSON and permits a response up to 256 KiB within 30 seconds.
+It does not grant arbitrary file access or prove that an Agent read the files.
+Pausing handoffs retains access for an already accepted, still-running invocation.
+Expired, ended, unaccepted and completed invocations cannot read files.
+Target overrides and self-reported caller identities are not accepted.
+
+`workflow share` snapshots one local artifact for the current invocation:
+
+```bash
+ctrlx workflow share --invocation '<UUID supplied with the task>' --file report.md --json
+```
+
+Share required files before providing the final answer. The CLI reads a regular
+file, checks for changes while reading, and sends 64 KiB chunks with a SHA-256
+digest. It never asks the Host to open a caller-supplied path. Supported formats
+are PNG/JPEG, UTF-8 text/Markdown, WAV/MP3/M4A and MP4/MOV, up to 1 GiB per file;
+the receiving Agent's reading or conversion limits still apply. Storage success
+does not prove model media support.
+
+**JSON-RPC:** `workflow.artifact`, common params `invocationId`, `uploadId` (UUID
+strings) and `action`: `begin` adds `name`, `mediaType`, `size`; `append` adds
+`offset` and Base64 `data`; `finish` adds `sha256`; `cancel` adds no fields.
+The Host checks the socket caller, active accepted invocation and live binding
+before and after disk I/O. The upload belongs to that invocation; another
+invocation cannot adopt or cancel it. Finish records the attachment metadata and
+invocation reference atomically. Up to 32 artifacts can be shared per invocation.
+They become downstream input only after verified successful completion; fan-out
+reuses the same immutable IDs, and fan-in keeps configured source order.
+
+Receipts contain `invocationId`, `uploadId`, `offset`; finish also includes
+`artifact` with `id`, `name`, `mediaType`, `size`, `sha256`. The CLI prints only
+the final receipt, always as JSON. Each request has a 30-second timeout and
+64 KiB response limit. Failed transfers attempt cancellation without resending
+chunks. A lost finish reply may mean the artifact was already saved: inspect
+the workflow record before sharing again. Mentioning a path in prose does not
+publish an artifact. An accepted invocation can keep sharing while handoffs are
+paused; the snapshots stay with its result until an operator continues the run.
+Expired, ended and completed invocations cannot publish new artifacts; an already
+committed snapshot is never overwritten.
+
+`workflow finish` requests completion of the current, explicitly authorized
+workflow invocation. Workflow creation and the full runtime are still under
+development; this command alone does not start a workflow.
+
+```bash
+ctrlx workflow finish --invocation '<UUID supplied with the task>' --reason 'Review passed'
+```
+
+**JSON-RPC:** `workflow.finish`, params `invocationId` (UUID string) and `reason`
+(nonblank UTF-8 text, maximum 8192 bytes). No other params are accepted. The Host
+reads caller identity from the Unix socket and verifies the live Agent process,
+conversation and run grant. Claimed process IDs or pane IDs cannot grant access.
+The command must originate from the authorized Agent's process tree; ordinary
+Viewer commands cannot impersonate that caller.
+
+Success returns `runId`, `invocationId`, `status` and a `message`.
+It means the request was saved and new handoffs have stopped. The Agent must still
+provide its final answer; completion requires the Host's native result check.
+The status is `finishing` unless the workflow was already paused. A paused run
+retains the request and final answer without advancing; an operator must continue
+it before completion is settled. The command never resumes a paused workflow.
+Repeating the same active invocation does not replace its accepted reason.
+Expired, ended, superseded or unauthorized invocations return
+`workflow_denied`. `--pane`, `--session` and `--window` overrides are rejected.
+The CLI allows 30 seconds for the response and at most 64 KiB of response data;
+transport failure is reported without automatically repeating the command.
+
 ### Sessions
 
 #### `list-sessions`

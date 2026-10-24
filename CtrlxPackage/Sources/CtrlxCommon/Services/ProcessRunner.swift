@@ -67,6 +67,18 @@ public struct ProcessRunner: Sendable {
         _ timeout: TimeInterval?
     ) async throws -> ProcessResult
 
+    /// Runs the synchronous process launch through the caller's final input
+    /// authorization. Setup and executor hops must happen before this boundary.
+    public var runWithLaunch: @Sendable (
+        _ executable: String,
+        _ arguments: [String],
+        _ environment: [String: String]?,
+        _ timeout: TimeInterval?,
+        _ launch: @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void
+    ) async throws -> ProcessResult = { _, _, _, _, _ in
+        throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Guarded process launch is not configured")
+    }
+
     /// Retains the most recent maximumBytes from each stream while draining the process.
     public var runBounded: @Sendable (
         _ executable: String,
@@ -111,7 +123,9 @@ public extension ProcessRunner {
             throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Process input is not configured")
         }
     ) {
-        self.init(run: run, runBounded: runBounded, runCancellable: run, runWithInput: runWithInput)
+        self.init(run: run, runWithLaunch: { _, _, _, _, _ in
+            throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Guarded process launch is not configured")
+        }, runBounded: runBounded, runCancellable: run, runWithInput: runWithInput)
     }
 }
 
@@ -176,6 +190,9 @@ extension ProcessRunner: DependencyKey {
         #if os(macOS)
             return ProcessRunner(
                 run: { try await execute($0, $1, $2, $3, maximumBytes: nil) },
+                runWithLaunch: { executable, arguments, environment, timeout, launch in
+                    try await execute(executable, arguments, environment, timeout, maximumBytes: nil, launch: launch)
+                },
                 runBounded: { executable, arguments, environment, timeout, maximumBytes in
                     guard maximumBytes > 0 else { throw ProcessRunnerError.invalidOutputLimit }
                     return try await execute(executable, arguments, environment, timeout, maximumBytes: maximumBytes)
@@ -206,7 +223,8 @@ extension ProcessRunner: DependencyKey {
         private static func execute(
             _ executable: String, _ arguments: [String], _ environment: [String: String]?,
             _ timeout: TimeInterval?, maximumBytes: Int?, cancelOnTaskCancellation: Bool = false,
-            input: Data? = nil
+            input: Data? = nil,
+            launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil
         ) async throws -> ProcessResult {
             if cancelOnTaskCancellation {
                 try Task.checkCancellation()
@@ -257,7 +275,17 @@ extension ProcessRunner: DependencyKey {
                 outputCollector.collectStderr(from: handle)
             }
 
-            try process.run()
+            do {
+                if let launch {
+                    try await launch { try process.run() }
+                } else {
+                    try process.run()
+                }
+            } catch {
+                stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                stderrPipe.fileHandleForReading.readabilityHandler = nil
+                throw error
+            }
 
             if let input, let inputPipe {
                 do {

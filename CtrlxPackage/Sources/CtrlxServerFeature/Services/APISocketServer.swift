@@ -1,5 +1,6 @@
 #if os(macOS)
     import CtrlxNetworking
+    import CtrlxPluginProtocol
     import CtrlxSimulatorProtocol
     import Dependencies
     import DependenciesMacros
@@ -9,7 +10,7 @@
     /// Handler type for incoming JSON-RPC requests.
     /// Returns a response for normal requests.
     /// For editor.open, the handler should block until editing completes, then return.
-    public typealias APIRequestHandler = @Sendable (JSONRPCRequest) async -> JSONRPCResponse
+    public typealias APIRequestHandler = @Sendable (JSONRPCRequest, PluginIngressPeer?) async -> JSONRPCResponse
 
     /// Unix domain socket server that accepts JSON-RPC connections.
     public struct APISocketServer: Sendable {
@@ -157,11 +158,27 @@
 
         private func acceptLoop() async {
             while !Task.isCancelled && isRunning {
+                // Keep this listener alive while the blocking accept is queued.
+                // stop() may close serverFd and another server may reuse its
+                // number before the worker starts. shutdown still wakes the dup.
+                let listener = fcntl(serverFd, F_DUPFD_CLOEXEC, 0)
+                guard listener >= 0 else {
+                    logger.error("Could not retain API socket listener")
+                    break
+                }
                 let clientFd = await withCheckedContinuation { continuation in
-                    DispatchQueue.global().async { [serverFd] in
-                        let fd = accept(serverFd, nil, nil)
+                    DispatchQueue.global().async {
+                        let fd = accept(listener, nil, nil)
+                        close(listener)
                         continuation.resume(returning: fd)
                     }
+                }
+
+                guard !Task.isCancelled, isRunning else {
+                    if clientFd >= 0 {
+                        close(clientFd)
+                    }
+                    break
                 }
 
                 guard clientFd >= 0 else {
@@ -203,7 +220,9 @@
                         var data = Data()
                         var byte: UInt8 = 0
                         while Darwin.read(fd, &byte, 1) == 1 {
-                            if byte == UInt8(ascii: "\n") { break }
+                            if byte == UInt8(ascii: "\n") {
+                                break
+                            }
                             data.append(byte)
                         }
                         continuation.resume(returning: data)
@@ -229,8 +248,12 @@
                         params["_peerPID"] = .int(Int(peerPID))
                         request = JSONRPCRequest(id: request.id, method: request.method, params: params)
                     }
+                    // Evidence stays outside JSON, so a caller cannot forge it
+                    // through _peerPID, TMUX_PANE or a claimed instance UUID.
+                    @Dependency(PluginIngressPeerClient.self) var peers
+                    let peer = ["workflow.finish", "workflow.attachments", "workflow.artifact"].contains(request.method) ? peers.capture(fd) : nil
                     if let handler {
-                        response = await handler(request)
+                        response = await handler(request, peer)
                     } else {
                         response = .internalError(id: request.id, "No request handler configured")
                     }
@@ -264,7 +287,9 @@
                 var offset = 0
                 while offset < bytes.count {
                     let written = Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
-                    if written < 0, errno == EINTR { continue }
+                    if written < 0, errno == EINTR {
+                        continue
+                    }
                     guard written > 0 else {
                         throw POSIXError(written == 0 ? .EIO : POSIXErrorCode(rawValue: errno) ?? .EIO)
                     }
