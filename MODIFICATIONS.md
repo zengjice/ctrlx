@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.96 — Browser control focus handoff
+
+- Keep the iOS Browser keyboard button available after control is released;
+  pressing it takes control and shows the keyboard.
+- Restore Mac Browser canvas focus only for an explicit takeover or navigation,
+  so releasing control no longer steals focus from the address field.
+- Wait for a pending release request before retaking control, preventing stale
+  ownership when release and takeover overlap.
+- Release validation: 22 focused Browser tests and the complete 3,779-test
+  serial Swift regression passed. The Apple Intelligence `StopFinality` suite
+  was skipped because this Mac reports `deviceNotEligible`. Brand and technical
+  boundaries passed, as did the 14-page website build, the iOS Simulator compile
+  check, the signed Mac Release build and all 63 offline publisher/COS tests.
+- Mac distribution is build 29 through COS, using an Apple Development signature
+  without notarization. Publication verifies source metadata, signatures and the
+  complete public download before installer promotion.
+
 ## 3.0.95 — Browser navigation and iOS tab attention
 
 - Open new Host browser tabs at Google. Accept Chrome-style address-bar input:
