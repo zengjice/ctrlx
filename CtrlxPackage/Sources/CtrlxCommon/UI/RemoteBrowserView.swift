@@ -87,15 +87,21 @@ public struct RemoteBrowserView: View {
                         Label("Keyboard", symbol: .keyboard).labelStyle(.iconOnly)
                     }
                     #endif
-                    Button(session.tab.isAgentOwned ? "Return to Agent" : "Release Control") {
+                    RemoteControlButton(
+                        title: session.tab.isAgentOwned ? "Return to Agent" : "Release Control",
+                        isControlled: true
+                    ) {
                         keyboardRequested = false
                         session.releaseControl()
                     }
                 } else if session.tab.isExtensionWindow != true {
-                    Button(session.tab.isControlled ? "Read Only · Take Control" : "Take Control") {
+                    RemoteControlButton(
+                        title: session.tab.isControlled ? "Read Only · Take Control" : "Take Control",
+                        isControlled: false,
+                        isDisabled: session.isTakingControl || !client.isHostConnected || session.frame == nil
+                    ) {
                         Task { await session.takeControl() }
                     }
-                    .disabled(session.isTakingControl || !client.isHostConnected || session.frame == nil)
                 }
                 if session.tab.isExtensionWindow != true {
                     Button { captureRequest = UUID() } label: {

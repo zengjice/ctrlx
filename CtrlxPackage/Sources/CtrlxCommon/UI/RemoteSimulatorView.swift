@@ -38,7 +38,9 @@ public struct RemoteSimulatorView: View {
                 Spacer()
                 if session.supportsClipboard {
                     if session.controlID != nil {
-                        Button("Release Control") { session.releaseControl() }
+                        RemoteControlButton(title: "Release Control", isControlled: true) {
+                            session.releaseControl()
+                        }
                         Menu {
                             Button("Copy Selection", action: session.copy)
                             Button("Get Simulator Clipboard", action: session.readClipboard)
@@ -50,8 +52,13 @@ public struct RemoteSimulatorView: View {
                             .help("Paste from this device")
                             .accessibilityIdentifier("simulator-paste")
                     } else {
-                        Button("Take Control") { Task { await session.takeControl() } }
-                            .disabled(session.preview == nil || session.isTakingControl)
+                        RemoteControlButton(
+                            title: "Take Control",
+                            isControlled: false,
+                            isDisabled: session.preview == nil || session.isTakingControl
+                        ) {
+                            Task { await session.takeControl() }
+                        }
                             .accessibilityIdentifier("simulator-take-control")
                     }
                 } else {
