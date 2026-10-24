@@ -30,7 +30,7 @@ struct AgentBrowserTabContentView: View {
                     .disabled(state.isRemotelyControlled)
                 Button { state.service.reload(state) } label: { Label("Reload", symbol: .arrowClockwise) }
                     .disabled(state.isRemotelyControlled)
-                TextField("https://…", text: $address)
+                TextField("Search Google or enter address", text: $address)
                     .focused($editingAddress)
                     .onSubmit(navigate)
                     .accessibilityIdentifier("agent-browser-address")
@@ -184,7 +184,7 @@ struct AgentBrowserTabContentView: View {
     }
 
     private func navigate() {
-        guard let url = BrowserTabState.normalizedURL(from: address) else { return }
+        guard let url = BrowserWebURL.navigationURL(from: address) else { return }
         address = url.absoluteString
         state.service.navigate(state, url: address)
         editingAddress = false

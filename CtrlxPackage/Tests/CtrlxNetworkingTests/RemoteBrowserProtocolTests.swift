@@ -185,6 +185,16 @@ struct RemoteBrowserProtocolTests {
         let url = try #require(URL(string: address))
         #expect(!BrowserWebURL.isSupported(url))
         #expect(BrowserWebURL.normalized(url) == nil)
+        #expect(BrowserWebURL.navigationURL(from: address) == nil)
+    }
+
+    @Test(arguments: [
+        "user:pass@example.com/path",
+        "user:pass@example.com",
+        "user:p%40ss@example.com/path",
+    ])
+    func addressBarRejectsSchemelessCredentials(_ address: String) {
+        #expect(BrowserWebURL.navigationURL(from: address) == nil)
     }
 
     @Test(arguments: [
@@ -199,6 +209,50 @@ struct RemoteBrowserProtocolTests {
         let normalized = try #require(BrowserWebURL.normalized(url))
         #expect(normalized.absoluteString == expected)
         #expect(BrowserWebURL.normalized(normalized) == normalized)
+    }
+
+    @Test
+    func browserHomepageUsesGoogle() {
+        #expect(BrowserWebURL.homepage.absoluteString == "https://www.google.com/")
+    }
+
+    @Test(arguments: [
+        ("example.com", "https://example.com/"),
+        ("example.com/path?q=one", "https://example.com/path?q=one"),
+        ("localhost:3000", "https://localhost:3000/"),
+        ("127.0.0.1:8080/health", "https://127.0.0.1:8080/health"),
+        ("HTTP://EXAMPLE.com:80/page", "http://example.com/page"),
+    ])
+    func addressBarNavigatesURLsAndHostLikeInput(_ text: String, _ expected: String) throws {
+        let url = try #require(BrowserWebURL.navigationURL(from: text))
+        #expect(url.absoluteString == expected)
+    }
+
+    @Test(arguments: [
+        ("swift", "q=swift"),
+        ("swift concurrency", "q=swift%20concurrency"),
+        ("a & b", "q=a%20%26%20b"),
+        ("C++", "q=C%2B%2B"),
+        ("fetch https://example.com CORS error", "q=fetch%20https%3A%2F%2Fexample.com%20CORS%20error"),
+    ])
+    func addressBarSearchesPlainTextWithGoogle(_ query: String, _ encodedQuery: String) throws {
+        let url = try #require(BrowserWebURL.navigationURL(from: query))
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        #expect(components.scheme == "https")
+        #expect(components.host == "www.google.com")
+        #expect(components.path == "/search")
+        #expect(components.percentEncodedQuery == encodedQuery)
+        #expect(components.queryItems == [URLQueryItem(name: "q", value: query)])
+    }
+
+    @Test(arguments: ["file:///tmp/a", "ftp://example.com", "https:///"])
+    func addressBarRejectsInvalidExplicitURLs(_ address: String) {
+        #expect(BrowserWebURL.navigationURL(from: address) == nil)
+    }
+
+    @Test
+    func addressBarIgnoresEmptyInput() {
+        #expect(BrowserWebURL.navigationURL(from: " \n ") == nil)
     }
 
     @Test(arguments: [

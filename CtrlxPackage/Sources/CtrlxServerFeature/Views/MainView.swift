@@ -5352,12 +5352,14 @@ public struct MainView: View {
             attachError = "This window no longer has a source pane."
             return
         }
+        let opensLinkedPage = url != nil
+        let destination = url ?? BrowserWebURL.homepage
         let target = ManualBrowserTarget(hostID: hostID, sessionName: sessionName)
         let tabs = manualBrowserTabs(for: target)
         let existingIDs = Set(tabs?.openBrowserTabs.map(\.id) ?? [])
         let selection = browserOpenSelection(for: target)
         let isCurrent = { browserOpenSelection(for: target) == selection }
-        let openInSplit = url != nil && settings.alwaysOpenLinksInSplit
+        let openInSplit = opensLinkedPage && settings.alwaysOpenLinksInSplit
         browserOpenTask?.cancel()
         browserOpenTask = Task {
             do {
@@ -5367,7 +5369,7 @@ public struct MainView: View {
                         client.isHostConnected, client.hostSupportsPaneBrowser else {
                         throw RemoteBrowserError.message("Connect and update the Host Mac to open this pane's browser.")
                     }
-                    let tab = try await RemoteBrowserSession.open(sessionName: sessionName, sourcePaneID: paneID, url: url, client: client)
+                    let tab = try await RemoteBrowserSession.open(sessionName: sessionName, sourcePaneID: paneID, url: destination, client: client)
                     try Task.checkCancellation()
                     guard isCurrent() else { return }
                     claimBrowser(tab.id, hostID: hostID, session: sessionName, windowID: tab.windowID)
@@ -5382,7 +5384,7 @@ public struct MainView: View {
                     }
                     selectRemoteBrowserTab(tab.id, hostId: hostID, sessionName: sessionName)
                 } else {
-                    let tab = try await coordinator.agentBrowser.openPaneBrowser(sessionName: sessionName, paneID: paneID, url: url)
+                    let tab = try await coordinator.agentBrowser.openPaneBrowser(sessionName: sessionName, paneID: paneID, url: destination)
                     try Task.checkCancellation()
                     guard isCurrent() else { return }
                     claimBrowser(

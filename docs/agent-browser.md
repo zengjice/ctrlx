@@ -89,6 +89,11 @@ Agent pages and popup children retain their own control grants and parent routes
 Cancelled/obsolete UI requests do not switch selection, including a switch from
 the terminal to Git/Files within the same Mac window.
 
+Opening Browser without a link loads `https://www.google.com/` as the default
+homepage on Mac and iOS. Address fields treat explicit HTTP(S) URLs and
+host-like input (for example `example.com` or `localhost:3000`) as navigation,
+and send other text to Google search.
+
 The former New Browser engine preference is retired. Existing/restored WebKit
 tabs stay device-local and usable, including their popups; they are not converted.
 Chromium shares CtrlX's dedicated profile/logins, not WebKit's or system Chrome's.
@@ -272,13 +277,13 @@ directories, with manual **Update → Check Chrome Web Store** rather than Chrom
 automatic store updates. Native Chromium may require an additional confirmation.
 
 On Mac Host, choose the standalone **Open Page as Chrome Window** button for
-pages that need extension actions. Mac Viewer and iOS expose the same separate
-browser-toolbar entry, followed by extension control where required. It opens a
-separate CtrlX-owned Chrome-style window with its native toolbar and extension
-popups. Extension management and extension-window entry points are intentionally
-separate. Existing embedded pages remain available, but extensions relying on
-Chrome's active-tab/window APIs need the extension window. Installations and
-extension settings persist across restarts; open pages remain transient.
+pages that need extension actions. Mac Viewer keeps the same separate
+browser-toolbar entry; on iOS, open **Browser Extensions** and switch to the
+**Window** view. It opens a separate CtrlX-owned Chrome-style window with its
+native toolbar and extension popups. Existing embedded pages remain available,
+but extensions relying on Chrome's active-tab/window APIs need the extension
+window. Installations and extension settings persist across restarts; open pages
+remain transient.
 
 **Settings** resolves the extension's current `options_ui` / `options_page`
 declaration on the Host. It opens a reusable native options window, using Chromium's

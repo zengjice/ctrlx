@@ -148,6 +148,9 @@ public enum RemoteBrowserOperation: Codable, Sendable, Equatable {
 }
 
 public enum BrowserWebURL {
+    /// Default destination for a human-created browser tab.
+    public static let homepage = URL(string: "https://www.google.com/")!
+
     public static func isSupported(_ url: URL) -> Bool {
         guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return false }
         return ["http", "https"].contains(parts.scheme?.lowercased() ?? "")
@@ -167,6 +170,49 @@ public enum BrowserWebURL {
             parts.percentEncodedPath = "/"
         }
         return parts.url
+    }
+
+    /// Resolve Chrome-style address-bar input: URLs and host-like text navigate,
+    /// while plain text becomes a Google search.
+    public static func navigationURL(from text: String) -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if hasExplicitScheme(trimmed) {
+            guard let url = URL(string: trimmed) else { return nil }
+            return normalized(url)
+        }
+        if let candidate = URL(string: "https://\(trimmed)"), candidate.password != nil {
+            return nil
+        }
+        guard looksLikeHost(trimmed), let url = URL(string: "https://\(trimmed)") else {
+            return searchURL(for: trimmed)
+        }
+        return normalized(url)
+    }
+
+    private static func hasExplicitScheme(_ text: String) -> Bool {
+        text.range(of: #"^[A-Za-z][A-Za-z0-9+.-]*://"#, options: .regularExpression) != nil
+    }
+
+    private static func looksLikeHost(_ text: String) -> Bool {
+        guard !text.contains(where: \.isWhitespace) else { return false }
+        let authority = text.prefix { !"/?#".contains($0) }
+        guard !authority.isEmpty, !authority.contains("@") else { return false }
+        if authority.hasPrefix("[") {
+            return authority.contains("]")
+        }
+        if authority == "localhost" || authority.hasPrefix("localhost:") {
+            return true
+        }
+        return authority.contains(".")
+    }
+
+    private static func searchURL(for query: String) -> URL? {
+        guard var components = URLComponents(string: "https://www.google.com/search") else { return nil }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        components.percentEncodedQuery = "q=\(encodedQuery)"
+        return components.url.flatMap(normalized)
     }
 }
 

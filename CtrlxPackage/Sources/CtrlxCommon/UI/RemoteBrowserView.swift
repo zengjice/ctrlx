@@ -40,7 +40,7 @@ public struct RemoteBrowserView: View {
                 Button { session.submit(.back) } label: { Label("Back", symbol: .chevronLeft) }
                 Button { session.submit(.forward) } label: { Label("Forward", symbol: .chevronRight) }
                 Button { session.submit(.reload) } label: { Label("Reload", symbol: .arrowClockwise) }
-                TextField("https://…", text: $address)
+                TextField("Search Google or enter address", text: $address)
                     .focused($editingAddress)
                     .onSubmit(navigate)
                     .textFieldStyle(.roundedBorder)
@@ -63,11 +63,13 @@ public struct RemoteBrowserView: View {
                 Spacer()
                 if client.hostSupportsBrowserExtensions {
                     if session.tab.isExtensionWindow != true {
+                        #if os(macOS)
                         Button {
                             session.releaseControl()
                             extensionRequest = ExtensionRequest(storeID: nil, initialView: .window)
                         } label: { Label("Open Page as Chrome Window", symbol: .arrowUpRightSquare).labelStyle(.iconOnly) }
                         .accessibilityIdentifier("remote-browser-extension-window")
+                        #endif
                     }
                     Button {
                         session.releaseControl()
@@ -192,9 +194,9 @@ public struct RemoteBrowserView: View {
     }
 
     private func navigate() {
-        var value = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !value.contains("://"), value != "about:blank" { value = "https://" + value }
-        session.submit(.navigate(value))
+        guard let url = BrowserWebURL.navigationURL(from: address) else { return }
+        address = url.absoluteString
+        session.submit(.navigate(address))
         editingAddress = false
     }
 

@@ -251,9 +251,9 @@ final class BrowserTabState {
     }
 
     /// Loads the URL currently in `urlFieldText`, fixing it up to a browsable
-    /// URL when the user typed something incomplete (no scheme, plain host).
+    /// URL or Google search when the user typed something incomplete.
     func loadFromURLField() {
-        guard let url = Self.normalizedURL(from: urlFieldText) else { return }
+        guard let url = BrowserWebURL.navigationURL(from: urlFieldText) else { return }
         urlFieldText = url.absoluteString
         navigationError = nil
         webView.load(URLRequest(url: url))
@@ -331,16 +331,6 @@ final class BrowserTabState {
             !version.isEmpty
         else { return nil }
         return version
-    }
-
-    static func normalizedURL(from text: String) -> URL? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if let url = URL(string: trimmed), url.scheme != nil {
-            return url
-        }
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
-        return URL(string: "https://\(encoded)")
     }
 }
 
@@ -531,7 +521,7 @@ private struct BrowserURLField: NSViewRepresentable {
     func makeNSView(context: Context) -> AddressBarTextField {
         let field = AddressBarTextField()
         field.delegate = context.coordinator
-        field.placeholderString = "Enter URL"
+        field.placeholderString = "Search Google or enter address"
         field.isEditable = true
         field.isSelectable = true
         field.isBezeled = true
