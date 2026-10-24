@@ -110,6 +110,9 @@
       if ([request[@"action"] isEqual:@"stop"]) ForgetProbeView(browserID);
       Reply(id, result); return true;
     }
+    if ([command isEqual:@"probe.remote-state"]) {
+      Reply(id, @{@"pressed": @(remotePressedPointers_.contains(client.tab))}); return true;
+    }
     if ([command isEqual:@"probe.remote-control"]) {
       NSString* lease = request[@"lease"];
       Reply(id, @{@"accepted": @(SetHumanControl(token, [lease isKindOfClass:NSString.class] ? lease : nil))});

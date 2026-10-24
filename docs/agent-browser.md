@@ -490,9 +490,13 @@ the Viewer does not load a second copy of the URL or receive browser credentials
 - Viewers scale the existing viewport by default. **Fit to This Device** is an
   explicit shared Host viewport change. Inputs carry the last displayed page /
   geometry generation and an exact surface/control identity. Stale inputs fail,
-  never replay. Input is ordered, bounded to 32 queued items, with consecutive
-  moves/wheel deltas coalesced. Losing the lease cancels the input task and clears
-  the queue; retaking control never promotes old input to the new lease.
+  never replay. A Host that advertises `supportsBrowserStalePointerCleanup` ends
+  any unfinished pointer gesture left by a stale generation, so the Viewer drops
+  the input but keeps the lease. Older Hosts return the same error without that
+  cleanup, so the Viewer releases control instead. Input is ordered, bounded to
+  32 queued items, with consecutive moves/wheel deltas coalesced. Losing the
+  lease cancels the input task and clears the queue; retaking control never
+  promotes old input to the new lease.
   Transport failure releases control.
 - Mac uses native IME composition; iOS commits UITextView composition before
   sending text, with explicit Keyboard and Paste buttons. One finger scrolls;

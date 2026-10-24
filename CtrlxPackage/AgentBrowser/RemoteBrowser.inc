@@ -15,9 +15,13 @@
     NSUInteger maximumBytes;
     std::vector<RemoteReply> replies;
   };
+  struct RemotePointer {
+    NSMutableDictionary* params = nil;
+    uint64_t generation = 0;
+  };
   std::map<std::string, std::string> humanControl_;
   std::map<std::string, NSSize> remoteViewports_;
-  std::map<std::string, NSMutableDictionary*> remotePressedPointers_;
+  std::map<std::string, RemotePointer> remotePressedPointers_;
   std::map<std::string, NSDictionary*> remoteClipboardPoints_;
   std::map<std::pair<int, int>, RemotePending> remotePending_;
   std::map<std::tuple<std::string, int, NSUInteger>, std::shared_ptr<RemoteFrame>> remoteFrames_;
@@ -43,12 +47,33 @@
     remotePending_.erase(found);
     pending.reply(value, error);
   }
+  void DispatchRemotePointerRelease(const RemotePointer& pointer, CefRefPtr<CefBrowser> browser) {
+    pointer.params[@"type"] = @"mouseReleased";
+    pointer.params[@"buttons"] = @0;
+    auto value = CefParseJSON(JSON(pointer.params), JSON_PARSER_RFC);
+    browser->GetHost()->ExecuteDevToolsMethod(++nextMessage_, "Input.dispatchMouseEvent", value->GetDictionary());
+  }
+  void RemoteReleasePointer(const std::string& id) {
+    auto pointer = remotePressedPointers_.find(id);
+    if (pointer == remotePressedPointers_.end()) return;
+    auto tab = tabs_.find(id);
+    if (tab != tabs_.end()) DispatchRemotePointerRelease(pointer->second, tab->second.browser);
+    remotePressedPointers_.erase(pointer);
+  }
+  void RemoteReleaseStalePointer(const std::string& id, uint64_t generation) {
+    auto pointer = remotePressedPointers_.find(id);
+    // A stale request may trail the press by several generations. Release an
+    // older unfinished gesture, but never a newer press that replaced it.
+    if (pointer == remotePressedPointers_.end() || pointer->second.generation > generation) return;
+    RemoteReleasePointer(id);
+  }
   bool RemoteResult(CefRefPtr<CefBrowser> browser, int message, bool success, const void* data, size_t size) {
     auto key = std::pair{browser->GetIdentifier(), message};
     auto found = remotePending_.find(key);
     if (found == remotePending_.end()) return false;
     auto tab = tabs_.find(found->second.tab);
     if (tab == tabs_.end() || tab->second.generation != found->second.generation) {
+      RemoteReleaseStalePointer(found->second.tab, found->second.generation);
       RemoteFinish(key, nil, @"Page changed. Read a new frame before interacting."); return true;
     }
     id value = success && size <= found->second.maximumBytes ? Parse(data, size) : nil;
@@ -93,14 +118,7 @@
     if (!token.length) {
       AgentBrowserCancelHumanInput(found->second.browser);
       humanControl_.erase(id);
-      auto pointer = remotePressedPointers_.find(id);
-      if (pointer != remotePressedPointers_.end()) {
-        pointer->second[@"type"] = @"mouseReleased";
-        pointer->second[@"buttons"] = @0;
-        auto value = CefParseJSON(JSON(pointer->second), JSON_PARSER_RFC);
-        found->second.browser->GetHost()->ExecuteDevToolsMethod(++nextMessage_, "Input.dispatchMouseEvent", value->GetDictionary());
-        remotePressedPointers_.erase(pointer);
-      }
+      RemoteReleasePointer(id);
       return true;
     }
     // Never interrupt an in-flight Agent action or recording. The caller can
@@ -214,8 +232,10 @@
     if (![lease isKindOfClass:NSString.class] || !humanControl_.contains(id) || humanControl_.at(id) != lease.UTF8String) {
       reply(nil, @"Control expired. Take Control again."); return;
     }
-    if (![request[@"generation"] isKindOfClass:NSNumber.class] ||
-        [request[@"generation"] unsignedLongLongValue] != found->second.generation) {
+    NSNumber* generation = request[@"generation"];
+    if (![generation isKindOfClass:NSNumber.class] ||
+        generation.unsignedLongLongValue != found->second.generation) {
+      if ([generation isKindOfClass:NSNumber.class]) RemoteReleaseStalePointer(id, generation.unsignedLongLongValue);
       reply(nil, @"Page changed. Read a new frame before interacting."); return;
     }
     if ([action isEqual:@"navigate"]) {
@@ -301,8 +321,10 @@
       if ([type isEqual:@"mousePressed"]) remoteClipboardPoints_[id] = @{@"x":params[@"x"], @"y":params[@"y"]};
       if ([type isEqual:@"mousePressed"] && [button isEqual:@"left"])
         AgentBrowserHumanInput(browser, lease.UTF8String);
-      if ([type isEqual:@"mousePressed"] || ([type isEqual:@"mouseMoved"] && remotePressedPointers_.contains(id)))
-        remotePressedPointers_[id] = [params mutableCopy];
+      if ([type isEqual:@"mousePressed"])
+        remotePressedPointers_[id] = RemotePointer{[params mutableCopy], found->second.generation};
+      else if ([type isEqual:@"mouseMoved"] && remotePressedPointers_.contains(id))
+        remotePressedPointers_[id].params = [params mutableCopy];
       if ([type isEqual:@"mouseReleased"]) remotePressedPointers_.erase(id);
       RemoteCall(id, "Input.dispatchMouseEvent", params, reply); return;
     }

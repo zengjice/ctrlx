@@ -119,6 +119,10 @@ struct RemoteBrowserSessionTests {
         var maximumFrames = 0
         var heldInput: CheckedContinuation<RemoteBrowserResponse, any Error>?
         var heldInputFinished = false
+        var frameGeneration: UInt64 = 1
+        var inputFailure: (RemoteBrowserOperation, any Error)?
+        var failedPageInput = false
+        var supportsStalePointerCleanup = false
         let tab: RemoteBrowserTab
         init(agent: Bool, extensionWindow: Bool = false) {
             self.tab = RemoteBrowserTab(
@@ -153,13 +157,22 @@ struct RemoteBrowserSessionTests {
                 try await Task.sleep(for: .milliseconds(2))
                 return .init(
                     tab: tab,
-                    frame: .init(jpeg: Data([1]), width: 1_200, height: 700, generation: 1),
+                    frame: .init(jpeg: Data([1]), width: 1_200, height: 700, generation: frameGeneration),
                     controlID: owned && request.controlID == control ? control : nil
                 )
             case .text("hold"):
                 defer { heldInputFinished = true }
                 return try await withCheckedThrowingContinuation { heldInput = $0 }
-            default: return .init(tab: tab, controlID: owned ? control : nil)
+            default:
+                if let failure = inputFailure, failure.0 == request.operation {
+                    inputFailure = nil
+                    frameGeneration += 1
+                    if case ViewerRelayClientError.commandFailed("Page changed. Read a new frame before interacting.") = failure.1 {
+                        failedPageInput = true
+                    }
+                    throw failure.1
+                }
+                return .init(tab: tab, controlID: owned ? control : nil)
             }
         }
     }
@@ -303,6 +316,107 @@ struct RemoteBrowserSessionTests {
         try await wait { host.operations.contains(.text("from old rendered image")) }
         let index = try #require(host.operations.firstIndex(of: .text("from old rendered image")))
         #expect(host.generations[index] == 0, "Do not upgrade input to a newer frame before it is displayed")
+    }
+
+    @Test
+    func stalePageInputKeepsLeaseAndAcceptsNextFrame() async throws {
+        let host = Host(agent: false)
+        host.supportsStalePointerCleanup = true
+        let session = RemoteBrowserSession(
+            tab: host.tab,
+            supportsStalePointerCleanup: { host.supportsStalePointerCleanup },
+            send: host.send
+        )
+        let task = Task { await session.watch() }
+        defer { session.stop()
+            task.cancel()
+        }
+        try await wait { session.controlID != nil && session.frame?.generation == 1 }
+        let control = try #require(session.controlID)
+        host.inputFailure = (
+            .pointer(.init(.up, x: 20, y: 30)),
+            ViewerRelayClientError.commandFailed("Page changed. Read a new frame before interacting.")
+        )
+
+        session.submit(.pointer(.init(.up, x: 20, y: 30)))
+        try await wait { host.failedPageInput && session.frame?.generation == 2 }
+
+        #expect(session.controlID == control)
+        #expect(session.error == nil)
+        #expect(!host.operations.contains(.releaseControl))
+
+        session.submit(.text("after navigation"))
+        try await wait { host.operations.contains(.text("after navigation")) }
+        let index = try #require(host.operations.firstIndex(of: .text("after navigation")))
+        #expect(host.generations[index] == 2)
+        #expect(session.controlID == control)
+    }
+
+    @Test
+    func stalePageInputReadsCleanupCapabilityAfterReconnect() async throws {
+        let host = Host(agent: false)
+        let session = RemoteBrowserSession(
+            tab: host.tab,
+            supportsStalePointerCleanup: { host.supportsStalePointerCleanup },
+            send: host.send
+        )
+        let task = Task { await session.watch() }
+        defer { session.stop()
+            task.cancel()
+        }
+        try await wait { session.controlID != nil }
+        let control = try #require(session.controlID)
+        host.supportsStalePointerCleanup = true
+        host.inputFailure = (
+            .pointer(.init(.up, x: 20, y: 30)),
+            ViewerRelayClientError.commandFailed("Page changed. Read a new frame before interacting.")
+        )
+
+        session.submit(.pointer(.init(.up, x: 20, y: 30)))
+        try await wait { host.failedPageInput }
+
+        #expect(session.controlID == control)
+        #expect(!host.operations.contains(.releaseControl))
+    }
+
+    @Test
+    func stalePageInputReleasesControlOnLegacyHost() async throws {
+        let host = Host(agent: false)
+        let session = RemoteBrowserSession(tab: host.tab, send: host.send)
+        let task = Task { await session.watch() }
+        defer { session.stop()
+            task.cancel()
+        }
+        try await wait { session.controlID != nil }
+        host.inputFailure = (
+            .pointer(.init(.up, x: 20, y: 30)),
+            ViewerRelayClientError.commandFailed("Page changed. Read a new frame before interacting.")
+        )
+
+        session.submit(.pointer(.init(.up, x: 20, y: 30)))
+        try await wait {
+            host.failedPageInput && session.controlID == nil && host.operations.contains(.releaseControl)
+        }
+
+        #expect(session.error != nil)
+        #expect(!host.owned)
+    }
+
+    @Test
+    func fatalInputFailureStillReleasesControl() async throws {
+        let host = Host(agent: false)
+        let session = RemoteBrowserSession(tab: host.tab, send: host.send)
+        let task = Task { await session.watch() }
+        defer { session.stop()
+            task.cancel()
+        }
+        try await wait { session.controlID != nil }
+        host.inputFailure = (.text("fail"), URLError(.timedOut))
+
+        session.submit(.text("fail"))
+        try await wait { session.controlID == nil && host.operations.contains(.releaseControl) }
+
+        #expect(session.error != nil)
     }
 
     @Test(arguments: [false, true])

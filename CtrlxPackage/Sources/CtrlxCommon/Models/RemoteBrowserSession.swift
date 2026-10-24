@@ -20,6 +20,7 @@ final public class RemoteBrowserSession {
     public private(set) var extensionSurface: RemoteBrowserExtensionSurface = .manager
     @ObservationIgnored private let anchorTabID: UUID
     @ObservationIgnored private let surfaceID = UUID()
+    @ObservationIgnored private let supportsStalePointerCleanup: @MainActor () -> Bool
     @ObservationIgnored private let send: @MainActor (BrowseBrowser) async throws -> RemoteBrowserResponse
     @ObservationIgnored private var watching = false
     @ObservationIgnored private var epoch = UUID()
@@ -28,15 +29,27 @@ final public class RemoteBrowserSession {
     @ObservationIgnored private var inputEpoch = UUID()
     @ObservationIgnored public var frameMaxDimension: Int?
 
-    public init(tab: RemoteBrowserTab, managesExtensions: Bool = false, send: @escaping @MainActor (BrowseBrowser) async throws -> RemoteBrowserResponse) {
+    public init(
+        tab: RemoteBrowserTab,
+        managesExtensions: Bool = false,
+        supportsStalePointerCleanup: @escaping @MainActor () -> Bool = { false },
+        send: @escaping @MainActor (BrowseBrowser) async throws -> RemoteBrowserResponse
+    ) {
         self.tab = tab
         self.anchorTabID = tab.id
         self.managesExtensions = managesExtensions
+        self.supportsStalePointerCleanup = supportsStalePointerCleanup
         self.send = send
     }
 
     public convenience init(tab: RemoteBrowserTab, client: ViewerRelayClient, managesExtensions: Bool = false) {
-        self.init(tab: tab, managesExtensions: managesExtensions) { request in
+        self.init(
+            tab: tab,
+            managesExtensions: managesExtensions,
+            supportsStalePointerCleanup: { [weak client] in
+                client?.hostSupportsBrowserStalePointerCleanup == true
+            }
+        ) { request in
             let timeout: TimeInterval
             switch request.operation {
             case .extensions(.prepareStore),
@@ -391,6 +404,17 @@ final public class RemoteBrowserSession {
                     guard
                         !Task.isCancelled, self.epoch == current,
                         self.inputEpoch == inputGeneration, self.controlID == controlID else { return }
+                    if
+                        case let ViewerRelayClientError.commandFailed(message) = error,
+                        message == "Page changed. Read a new frame before interacting.",
+                        self.supportsStalePointerCleanup() {
+                        // Navigation can advance the Host generation between a
+                        // pointer down and up. New Hosts end the stale pointer
+                        // before replying, so the lease remains valid. Older
+                        // Hosts leave it pressed; release control to clean up.
+                        self.inputs.removeAll()
+                        return
+                    }
                     self.error = error.localizedDescription
                     self.inputs.removeAll()
                     self.releaseControl()

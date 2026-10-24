@@ -45,11 +45,20 @@ struct RemoteBrowserProtocolTests {
         let state = try JSONDecoder().decode(SessionStateMessage.self, from: data)
         #expect(state.supportsBrowserSharing == nil)
         #expect(state.supportsPaneBrowser == nil)
+        #expect(state.supportsBrowserStalePointerCleanup == nil)
         #expect(state.browserTabs == nil)
         let tab = RemoteBrowserTab(id: UUID(), sessionName: "s", title: "page", url: "about:blank", isLoading: false, isAgentOwned: true)
-        let updated = SessionStateMessage(pairId: "a", paneStates: [:], supportsBrowserSharing: true, supportsPaneBrowser: true, browserTabs: [tab]).withPairId("b")
+        let updated = SessionStateMessage(
+            pairId: "a",
+            paneStates: [:],
+            supportsBrowserSharing: true,
+            supportsPaneBrowser: true,
+            supportsBrowserStalePointerCleanup: true,
+            browserTabs: [tab]
+        ).withPairId("b")
         #expect(updated.supportsBrowserSharing == true)
         #expect(updated.supportsPaneBrowser == true)
+        #expect(updated.supportsBrowserStalePointerCleanup == true)
         #expect(updated.browserTabs == [tab])
         #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab)).sourcePaneID == nil)
         #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab)).networkPermission == nil)

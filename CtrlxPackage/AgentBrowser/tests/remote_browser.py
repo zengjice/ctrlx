@@ -258,6 +258,56 @@ class RemoteBrowser(Managed):
         assert actual['result']['value'] == 1, actual
         self.passed('releasing control ends an unfinished pointer drag')
 
+        await self.request(run, 'probe.cdp', tab=tab, method='Runtime.evaluate',
+            params={'expression': 'window.remoteMouseUps=0'})
+        shot = await frame()
+        assert (await self.request(run, 'probe.remote-control', tab=tab, lease=lease))['accepted']
+        point = {'x': shot['width'] / 2, 'y': shot['height'] / 2}
+        await remote(action='mouse', lease=lease, generation=shot['generation'], type='mousePressed',
+                     button='left', buttons=1, clickCount=1, **point)
+        state = await self.request(run, 'probe.remote-state', tab=tab)
+        assert state['pressed'] is True, state
+        await remote(action='fit', lease=lease, generation=shot['generation'],
+                     width=int(shot['width']), height=int(shot['height']))
+        newer = await frame()
+        await remote(action='fit', lease=lease, generation=newer['generation'],
+                     width=int(newer['width']), height=int(newer['height']))
+        stale = await asyncio.to_thread(call, self.endpoint['socket'], dict(run, command='probe.remote', tab=tab,
+            request=dict(action='mouse', lease=lease, generation=newer['generation'], type='mouseReleased',
+                         button='left', buttons=0, clickCount=1, **point)), False)
+        assert 'changed' in stale, stale
+        state = await self.request(run, 'probe.remote-state', tab=tab)
+        assert state['pressed'] is False, state
+        await self.request(run, 'probe.remote-control', tab=tab)
+        actual = await self.request(run, 'probe.cdp', tab=tab, method='Runtime.evaluate',
+            params={'expression': 'window.remoteMouseUps', 'returnByValue': True})
+        assert actual['result']['value'] == 1, actual
+        self.passed('stale pointer release ends the Host pointer gesture without dropping control')
+
+        await self.request(run, 'probe.cdp', tab=tab, method='Runtime.evaluate',
+            params={'expression': 'window.remoteMouseUps=0'})
+        shot = await frame()
+        assert (await self.request(run, 'probe.remote-control', tab=tab, lease=lease))['accepted']
+        await remote(action='fit', lease=lease, generation=shot['generation'],
+                     width=int(shot['width']), height=int(shot['height']))
+        newer = await frame()
+        point = {'x': newer['width'] / 2, 'y': newer['height'] / 2}
+        await remote(action='mouse', lease=lease, generation=newer['generation'], type='mousePressed',
+                     button='left', buttons=1, clickCount=1, **point)
+        stale = await asyncio.to_thread(call, self.endpoint['socket'], dict(run, command='probe.remote', tab=tab,
+            request=dict(action='mouse', lease=lease, generation=shot['generation'], type='mouseReleased',
+                         button='left', buttons=0, clickCount=1, **point)), False)
+        assert 'changed' in stale, stale
+        state = await self.request(run, 'probe.remote-state', tab=tab)
+        assert state['pressed'] is True, state
+        await remote(action='mouse', lease=lease, generation=newer['generation'], type='mouseReleased',
+                     button='left', buttons=0, clickCount=1, **point)
+        await self.request(run, 'probe.remote-control', tab=tab)
+        actual = await self.request(run, 'probe.cdp', tab=tab, method='Runtime.evaluate',
+            params={'expression': 'window.remoteMouseUps', 'returnByValue': True})
+        assert actual['result']['value'] == 1, actual
+        self.passed('an older stale release cannot end a newer Host pointer gesture')
+
         await evaluate("window.remoteKeys=[];document.addEventListener('keydown',e=>remoteKeys.push({key:e.key,trusted:e.isTrusted}))")
         shot = await frame()
         assert (await self.request(run, 'probe.remote-control', tab=tab, lease=lease))['accepted']

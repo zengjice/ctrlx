@@ -82,6 +82,9 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsBrowserSharing: Bool?
     public let supportsBrowserExtensions: Bool?
     public let supportsPaneBrowser: Bool?
+    /// A stale browser input from an older Host leaves an unfinished pointer
+    /// press behind. New Viewers retain the lease only when cleanup is explicit.
+    public let supportsBrowserStalePointerCleanup: Bool?
     public let supportsAgentImageInput: Bool?
     public let browserTabs: [RemoteBrowserTab]?
     public let supportsSimulatorViewing: Bool?
@@ -116,6 +119,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsBrowserSharing: Bool? = nil,
         supportsBrowserExtensions: Bool? = nil,
         supportsPaneBrowser: Bool? = nil,
+        supportsBrowserStalePointerCleanup: Bool? = nil,
         supportsAgentImageInput: Bool? = nil,
         browserTabs: [RemoteBrowserTab]? = nil,
         supportsSimulatorViewing: Bool? = nil,
@@ -158,6 +162,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsBrowserSharing = supportsBrowserSharing
         self.supportsBrowserExtensions = supportsBrowserExtensions
         self.supportsPaneBrowser = supportsPaneBrowser
+        self.supportsBrowserStalePointerCleanup = supportsBrowserStalePointerCleanup
         self.supportsAgentImageInput = supportsAgentImageInput
         self.browserTabs = browserTabs
         self.supportsSimulatorViewing = supportsSimulatorViewing
@@ -198,6 +203,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsBrowserSharing: supportsBrowserSharing,
             supportsBrowserExtensions: supportsBrowserExtensions,
             supportsPaneBrowser: supportsPaneBrowser,
+            supportsBrowserStalePointerCleanup: supportsBrowserStalePointerCleanup,
             supportsAgentImageInput: supportsAgentImageInput,
             browserTabs: browserTabs,
             supportsSimulatorViewing: supportsSimulatorViewing,

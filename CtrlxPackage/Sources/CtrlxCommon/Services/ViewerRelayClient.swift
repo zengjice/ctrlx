@@ -116,6 +116,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsBrowserSharing = false
     public private(set) var hostSupportsBrowserExtensions = false
     public private(set) var hostSupportsPaneBrowser = false
+    public private(set) var hostSupportsBrowserStalePointerCleanup = false
     public private(set) var hostSupportsAgentImageInput = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
     public private(set) var hostSupportsSimulatorViewing = false
@@ -1194,6 +1195,7 @@ final public class ViewerRelayClient {
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
             hostSupportsBrowserExtensions = sessionState.supportsBrowserExtensions == true
             hostSupportsPaneBrowser = sessionState.supportsPaneBrowser == true
+            hostSupportsBrowserStalePointerCleanup = sessionState.supportsBrowserStalePointerCleanup == true
             hostSupportsAgentImageInput = sessionState.supportsAgentImageInput == true
             browserTabs = sessionState.browserTabs ?? []
             hostSupportsSimulatorViewing = sessionState.supportsSimulatorViewing == true
@@ -1686,6 +1688,7 @@ final public class ViewerRelayClient {
         hostSupportsWorkspaceClipboard = false
         hostSupportsBrowserSharing = false
         hostSupportsBrowserExtensions = false
+        hostSupportsBrowserStalePointerCleanup = false
         hostSupportsSimulatorViewing = false
         hostSupportsPaneSimulator = false
         hostSupportsSimulatorClosing = false
