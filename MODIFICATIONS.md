@@ -7,6 +7,33 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.95 — Browser navigation and iOS tab attention
+
+- Open new Host browser tabs at Google. Accept Chrome-style address-bar input:
+  explicit URLs navigate, plain text becomes a Google search, and credential
+  URLs are rejected before navigation.
+- Complete unfinished pointer presses when stale Browser Viewer input is
+  rejected. Retain the lease only when the Host advertises stale-pointer
+  cleanup, including across reconnects.
+- Show attention badges on iOS window tabs when an Agent in that window is
+  waiting for the user. Reuse linked tabs from window shortcuts and create only
+  the active tab kind.
+- Gate explicit iOS Simulator creation on a Host capability so older Hosts
+  cannot silently reuse their default device.
+- Present Browser and Simulator control ownership as compact lock buttons, and
+  remove the duplicate iOS extension-window toolbar entry.
+- Release validation: the full parallel Swift regression completed with only
+  the expected Apple Intelligence `StopFinalityEvaluations` failure because
+  this Mac reports `deviceNotEligible`. A PTY-induced interactive-zsh suspension
+  and parallel contention were isolated to test launch conditions; the affected
+  targets passed focused serial reruns, including 1,760 ServerFeature tests in
+  no-TTY mode and 793 Common tests. Brand and technical boundaries passed, as
+  did the 14-page website build, the iOS Simulator compile check and the signed
+  Mac Release build. All 63 offline publisher/COS tests passed.
+- Mac distribution is build 28 through COS, using an Apple Development signature
+  without notarization. Publication verifies source metadata, signatures and the
+  complete public download before installer promotion.
+
 ## 3.0.94 — Simulator ownership and iOS toolbar cleanup
 
 - Keep Simulator device ownership immutable. Agents can no longer adopt a
