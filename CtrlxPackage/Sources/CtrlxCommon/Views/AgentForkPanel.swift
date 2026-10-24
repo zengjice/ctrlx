@@ -140,7 +140,7 @@ public struct AgentForkPanel: View {
     @State private var directory: String
     @State private var targetProviderID: String?
     @State private var acceptsCleanWorktree = false
-    @State private var showsDirectoryBrowser = false
+    @State private var showsDirectoryBrowser: Bool
     @State private var isCreatingDirectory = false
     @State private var isLoading = false
     @State private var isLaunching = false
@@ -151,6 +151,7 @@ public struct AgentForkPanel: View {
         self.configuration = configuration
         self._sourceID = State(initialValue: configuration.sources.first?.paneID ?? "")
         self._directory = State(initialValue: configuration.sources.first?.workingDirectory ?? "")
+        self._showsDirectoryBrowser = State(initialValue: configuration.destination == .otherDirectory)
         let agentName = configuration.sources.first?.pluginID == "codex" ? "codex" : "claude"
         self._forkName = State(initialValue: configuration.destination == .worktree ? "\(agentName)-\(UUID().uuidString.prefix(8).lowercased())" : "\(agentName) fork")
     }
@@ -201,7 +202,7 @@ public struct AgentForkPanel: View {
         .task(id: sourceID) {
             request = nil
             acceptsCleanWorktree = false
-            showsDirectoryBrowser = false
+            showsDirectoryBrowser = configuration.destination == .otherDirectory
             isCreatingDirectory = false
             targetProviderID = nil
             preparation = nil
