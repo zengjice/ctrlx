@@ -58,7 +58,7 @@ actor AgentWorkflowService {
             try await store.update(runID: run.id) { $0.pause(reason: "Workflow authorization expired. No further tasks will be sent.") }
         }
         let instances: [AgentWorkflowInstance]
-        do { instances = try await refreshInstancesCatalog() }
+        do { instances = monitored.contains(where: { !$0.instances.isEmpty }) ? try await refreshInstancesCatalog() : [] }
         catch {
             idleSince.removeAll()
             throw error
@@ -141,7 +141,9 @@ actor AgentWorkflowService {
             }
             return existing
         }
-        _ = try await refreshInstancesCatalog()
+        if try await store.snapshot().definitions.first(where: { $0.id == definitionID })?.agentInstanceIDs.isEmpty == false {
+            _ = try await refreshInstancesCatalog()
+        }
         let attachments = try await store.definitionAttachments(id: definitionID, revision: expectedRevision)
         try await attachmentReader.validate(attachments)
         let run = try await store.start(
@@ -159,7 +161,8 @@ actor AgentWorkflowService {
     }
 
     func resume(runID: UUID, expectedRevision: Int, roundLimit: Int? = nil) async throws -> AgentWorkflowRun {
-        let instances = try await refreshInstancesCatalog()
+        let needsAgents = try await store.snapshot().runs.first(where: { $0.id == runID })?.instances.isEmpty == false
+        let instances = needsAgents ? try await refreshInstancesCatalog() : []
         let timestamp = now()
         let run = try await store.update(runID: runID, expectedRevision: expectedRevision) {
             try $0.resume(instances: instances, roundLimit: roundLimit, now: timestamp)

@@ -82,7 +82,8 @@ extension AgentWorkflowStore {
         }
         var files: [AgentWorkflowAttachmentFile] = []
         for node in definition.nodes {
-            guard let instance = archive.instances.first(where: { $0.id == node.agentInstanceID }) else {
+            let instance = archive.instances.first(where: { $0.id == node.agentInstanceID })
+            guard node.kind == .content || instance != nil else {
                 throw AgentWorkflowError("An Agent is no longer available.")
             }
             let ids = node.input.attachmentIDs + (node.id == definition.entryNodeID ? definition.initialInput.attachmentIDs : [])
@@ -92,11 +93,12 @@ extension AgentWorkflowStore {
         return files.filter { seen.insert($0.attachment.id).inserted }
     }
 
-    private func attachmentFiles(_ ids: [UUID], instance: AgentWorkflowInstance) throws -> [AgentWorkflowAttachmentFile] {
+    private func attachmentFiles(_ ids: [UUID], instance: AgentWorkflowInstance?) throws -> [AgentWorkflowAttachmentFile] {
         try attachmentMetadata(ids).map { attachment in
-            guard
-                let ext = Self.fileExtension(for: attachment.mediaType),
-                instance.capabilities?.mediaTypes.contains(attachment.mediaType) == true else {
+            guard let ext = Self.fileExtension(for: attachment.mediaType) else {
+                throw AgentWorkflowError("Convert \(attachment.name) before starting.")
+            }
+            if let instance, instance.capabilities?.mediaTypes.contains(attachment.mediaType) != true {
                 throw AgentWorkflowError("\(instance.displayName) cannot read \(attachment.name) in its current format. Convert it before starting.")
             }
             return .init(attachment: attachment, url: attachmentDirectory(attachment.id).appendingPathComponent("content.\(ext)"))

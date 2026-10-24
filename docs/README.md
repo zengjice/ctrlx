@@ -33,12 +33,16 @@ argument-aware Agent commands, Agent-side CtrlX plugin update/reinstall UX, and
 file-browser playback cache cleanup. Implemented behavior and deferred acceptance
 are tracked separately; release contents are recorded in [MODIFICATIONS.md](../MODIFICATIONS.md).
 
-The [multi-agent collaboration design](multi-agent-design.md) defines manual
+The [multi-agent collaboration design](multi-agent-design.md) includes preset-content
+nodes that join upstream outputs and forward them without an Agent, alongside manual
 single-Host workflows managed from Mac Host, Mac Viewer and iOS. Users choose
 existing or new Agent tabs, configure per-role instructions and attachments,
 connect multiple upstream/downstream nodes, and optionally repeat bounded rounds.
 The Host owns global instance identity, authorization, durable handoffs and
 execution; cross-Host Relay/P2P and Agent-driven orchestration remain later stages.
+
+Content nodes have separate incremental validation in the same report. The UI and
+real-Agent evidence below describes the initial Agent-only version.
 
 The single-Host first version is implemented and its scoped acceptance is complete;
 iOS automatic speech transcription on a physical device is explicitly deferred to

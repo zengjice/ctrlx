@@ -46,7 +46,7 @@ struct AgentWorkflowEndpointTests {
         transport.response = .init(hostID: UUID())
         await #expect(throws: AgentWorkflowError.self) { try await endpoint.request(.runs(offset: 0), hostID: hostID) }
         var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(transport.response)) as? [String: Any])
-        object["version"] = 2
+        object["version"] = 1
         transport.response = try JSONDecoder().decode(AgentWorkflowResponse.self, from: JSONSerialization.data(withJSONObject: object))
         await #expect(throws: AgentWorkflowError.self) { try await endpoint.request(.runs(offset: 0)) }
     }

@@ -67,30 +67,38 @@ struct AgentWorkflowEditor: View {
                         add: { chooseAttachments(for: .initial) },
                         remove: { id in draft.initialInput.attachmentIDs.removeAll { $0 == id } }
                     )
-                    Text("Initial attachments go to the entry Agent. Each role can also have its own preset attachments.")
+                    Text("Initial attachments go to the entry node. Each node can also have its own preset attachments.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach($draft.nodes) { $node in
                     Section {
-                        TextField("Role", text: $node.name)
-                        Picker("Agent", selection: $node.agentInstanceID) {
-                            ForEach(instances) { instance in
-                                Text("\(instance.displayName) · \(instance.pluginID)").tag(instance.id)
+                        TextField("Name", text: $node.name)
+                        if node.kind == .agent {
+                            Picker("Agent", selection: $node.agentInstanceID) {
+                                ForEach(instances) { instance in
+                                    Text("\(instance.displayName) · \(instance.pluginID)").tag(Optional(instance.id))
+                                }
+                                if !instances.contains(where: { $0.id == node.agentInstanceID }) {
+                                    Text("Agent unavailable · choose a replacement").tag(node.agentInstanceID)
+                                }
                             }
-                            if !instances.contains(where: { $0.id == node.agentInstanceID }) {
-                                Text("Agent unavailable · choose a replacement").tag(node.agentInstanceID)
+                            if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
+                                Text(instance.workingDirectory).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                                if let issue = instance.capabilityIssue {
+                                    Text(issue).font(.caption).foregroundStyle(.orange)
+                                } else if instance.readiness != .ready {
+                                    Text(instance.readiness.title).font(.caption).foregroundStyle(.orange)
+                                }
                             }
-                        }
-                        if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
-                            Text(instance.workingDirectory).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                            if let issue = instance.capabilityIssue {
-                                Text(issue).font(.caption).foregroundStyle(.orange)
-                            } else if instance.readiness != .ready {
-                                Text(instance.readiness.title).font(.caption).foregroundStyle(.orange)
-                            }
+                        } else {
+                            Label("Content node", symbol: .docTextFill).font(.caption).foregroundStyle(.secondary)
+                            Text("Combines preset content with upstream outputs, then forwards it without calling an Agent.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                         TextField("Instructions or skill", text: $node.input.text, axis: .vertical).lineLimit(3...12)
-                        Text("Skill availability is not verified. Check that this Agent has the skills used in your instructions.")
+                        Text(node.kind == .content
+                            ? "Skill commands are forwarded as text. Check that the downstream Agents have the required skills."
+                            : "Skill availability is not verified. Check that this Agent has the skills used in your instructions.")
                             .font(.caption).foregroundStyle(.secondary)
                         AgentWorkflowAttachmentRows(
                             ids: node.input.attachmentIDs,
@@ -98,28 +106,30 @@ struct AgentWorkflowEditor: View {
                             add: { chooseAttachments(for: .node(node.id)) },
                             remove: { id in node.input.attachmentIDs.removeAll { $0 == id } }
                         )
-                        NavigationLink("Preview task input") { AgentWorkflowInputPreview(definition: draft, node: node, attachments: attachments) }
-                        Toggle("Allow this Agent to end the workflow", isOn: $node.allowsFinish)
-                        DisclosureGroup("Wait for upstream Agents") {
+                        NavigationLink(node.kind == .content ? "Preview output" : "Preview task input") { AgentWorkflowInputPreview(definition: draft, node: node, attachments: attachments) }
+                        if node.kind == .agent {
+                            Toggle("Allow this Agent to end the workflow", isOn: $node.allowsFinish)
+                        }
+                        DisclosureGroup("Wait for upstream nodes") {
                             ForEach(draft.nodes.filter { $0.id != node.id }) { source in
                                 Toggle(source.name, isOn: connection(from: source.id, to: node.id))
                             }
-                            Text("All selected upstream Agents must complete this round. Their answers are combined into one task.")
+                            Text("All selected upstream nodes must complete this round. Their outputs are combined in the order shown.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         let targets = draft.nodes.filter { target in
                             draft.edges.contains(.init(source: node.id, target: target.id))
                         }
                         if targets.isEmpty {
-                            Text("No downstream Agents in this round.")
+                            Text("No downstream nodes in this round.")
                                 .font(.caption).foregroundStyle(.secondary)
                         } else {
                             Text("Sends results to: \(targets.map(\.name).joined(separator: ", "))")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        Button("Remove role", role: .destructive) { remove(node.id) }
+                        Button("Remove node", role: .destructive) { remove(node.id) }
                     } header: {
-                        Text(node.name.isEmpty ? "Agent role" : node.name)
+                        Text(node.name.isEmpty ? "Node" : node.name)
                     }
                 }
                 Section {
@@ -129,6 +139,9 @@ struct AgentWorkflowEditor: View {
                         }
                     } label: { Label("Add Agent role", symbol: .plus) }
                         .disabled(instances.allSatisfy { instance in draft.nodes.contains(where: { $0.agentInstanceID == instance.id }) })
+                    Button { addNode(.init(name: "Content", content: .init())) } label: {
+                        Label("Add content node", symbol: .docTextFill)
+                    }
                     if createAgent != nil {
                         Button("New Agent tab") { showingCreation = true }
                             .disabled(createdAgent != nil)
@@ -148,18 +161,18 @@ struct AgentWorkflowEditor: View {
                 }
                 if !draft.nodes.isEmpty {
                     Section("Execution") {
-                        Picker("Entry Agent", selection: $draft.entryNodeID) {
+                        Picker("Entry node", selection: $draft.entryNodeID) {
                             ForEach(draft.nodes) { Text($0.name).tag($0.id) }
                         }
                         Toggle("Repeat rounds", isOn: Binding(get: { draft.loop != nil }, set: { enabled in
                             draft.loop = enabled ? .init(finalNodeID: draft.nodes.last?.id ?? draft.entryNodeID) : nil
                         }))
                         if draft.loop != nil {
-                            Picker("Final Agent", selection: Binding(get: { draft.loop?.finalNodeID ?? draft.entryNodeID }, set: { draft.loop?.finalNodeID = $0 })) {
+                            Picker("Final node", selection: Binding(get: { draft.loop?.finalNodeID ?? draft.entryNodeID }, set: { draft.loop?.finalNodeID = $0 })) {
                                 ForEach(draft.nodes) { Text($0.name).tag($0.id) }
                             }
                             TextField("Maximum rounds", value: Binding(get: { draft.loop?.maximumRounds ?? 5 }, set: { draft.loop?.maximumRounds = $0 }), format: .number)
-                            Text("Every branch must reach the final Agent. Its answer starts the next round unless it requests completion. The round limit pauses the workflow.")
+                            Text("Every branch must reach the final node. Its output starts the next round unless an authorized Agent requests completion. The round limit pauses the workflow.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -298,7 +311,10 @@ struct AgentWorkflowEditor: View {
     }
 
     private func add(_ instance: AgentWorkflowInstance) {
-        let node = AgentWorkflowNode(name: instance.displayName, agentInstanceID: instance.id)
+        addNode(.init(name: instance.displayName, agentInstanceID: instance.id))
+    }
+
+    private func addNode(_ node: AgentWorkflowNode) {
         if draft.nodes.isEmpty {
             draft.entryNodeID = node.id
         }

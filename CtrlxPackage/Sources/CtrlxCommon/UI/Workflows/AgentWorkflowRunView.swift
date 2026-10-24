@@ -34,7 +34,7 @@ struct AgentWorkflowRunView: View {
                         Text("Host offline · showing the last received state").foregroundStyle(.secondary)
                     }
                 }
-                Section("Agents · current round") {
+                Section("Nodes · current round") {
                     ForEach(state.nodes) { node in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
@@ -42,6 +42,9 @@ struct AgentWorkflowRunView: View {
                                 Spacer()
                                 Text(node.invocation?.status.title ?? (state.summary.status.isTerminal ? "Not run" : "Waiting"))
                                     .font(.caption).foregroundStyle(.secondary)
+                            }
+                            if node.kind == .content {
+                                Label("Content node", symbol: .docTextFill).font(.caption).foregroundStyle(.secondary)
                             }
                             if node.invocation == nil, !state.summary.status.isTerminal, !node.upstreamIDs.isEmpty {
                                 let names = state.nodes.filter { node.upstreamIDs.contains($0.id) }.map(\.name)
@@ -89,7 +92,7 @@ struct AgentWorkflowRunView: View {
                             AgentWorkflowInvocationView(endpoint: endpoint, hostID: hostID, runID: runID, invocation: invocation)
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(state.nodes.first(where: { $0.id == invocation.nodeID })?.name ?? "Agent")
+                                Text(state.nodes.first(where: { $0.id == invocation.nodeID })?.name ?? "Node")
                                 Text("Round \(invocation.round) · \(invocation.status.title)").font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -196,7 +199,7 @@ private struct AgentWorkflowInvocationView: View {
                 Picker("Content", selection: $part) {
                     Text("Input").tag(ManageAgentWorkflows.TextPart.input)
                     if invocation.status == .succeeded {
-                        Text("Answer").tag(ManageAgentWorkflows.TextPart.result)
+                        Text("Output").tag(ManageAgentWorkflows.TextPart.result)
                     }
                 }
                 .pickerStyle(.segmented)

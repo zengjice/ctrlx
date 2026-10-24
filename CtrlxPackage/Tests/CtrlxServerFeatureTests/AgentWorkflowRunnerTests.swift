@@ -95,7 +95,7 @@ struct AgentWorkflowRunnerTests {
         #expect(await probe.persistedStatuses == [.writing, .writing, .writing])
         #expect(await Set(probe.writes.map(\.id)).count == 3)
         let writes = await probe.writes
-        #expect(Set(writes.dropFirst().map(\.delivery.toAgentID)) == Set(fixture.run.instances.dropFirst().map(\.id)))
+        #expect(Set(writes.dropFirst().compactMap(\.delivery.toAgentID)) == Set(fixture.run.instances.dropFirst().map(\.id)))
         await runner.shutdown()
     }
 

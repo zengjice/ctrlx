@@ -55,7 +55,7 @@ struct AgentWorkflowPromptTests {
         let summary = AgentWorkflowPrompt.preview(definition: definition, node: definition.nodes[3], round: 1).text
         #expect(try #require(summary.range(of: "Answer from Review A")).lowerBound < #require(summary.range(of: "Answer from Review B")).lowerBound)
         #expect(!summary.contains("Answer from Developer"))
-        #expect(summary.contains("<Full final answer"))
+        #expect(summary.contains("<Full output and attachments"))
         #expect(summary.contains("<assigned when this task is created>"))
         let first = AgentWorkflowPrompt.preview(definition: definition, node: definition.nodes[0], round: 1).text
         let second = AgentWorkflowPrompt.preview(definition: definition, node: definition.nodes[0], round: 2).text
@@ -77,5 +77,32 @@ struct AgentWorkflowPromptTests {
         let summary = AgentWorkflowPrompt.compose(definition: definition, node: definition.nodes[3], answers: answers, invocationReference: "id")
         #expect(entry.attachmentIDs == [preset, initial, result])
         #expect(summary.attachmentIDs == [preset, result])
+    }
+
+    @Test
+    func contentCombinesExactMaterialWithoutInjectingAgentCommands() {
+        let initial = UUID(), preset = UUID(), shared = UUID()
+        let node = AgentWorkflowNode(name: "Brief", content: .init(text: "$review-changes\nKeep this exact.\n", attachmentIDs: [preset]))
+        let definition = AgentWorkflowDefinition(
+            name: "Content",
+            hostID: UUID(),
+            nodes: [node],
+            edges: [],
+            entryNodeID: node.id,
+            initialInput: .init(text: "Original task", attachmentIDs: [initial])
+        )
+        let input = AgentWorkflowPrompt.compose(
+            definition: definition,
+            node: node,
+            answers: [.init(role: "Review", round: 1, text: "中文🙂\nFull answer", attachmentIDs: [shared, preset])],
+            invocationReference: "must-not-be-injected"
+        )
+        #expect(input.text == "$review-changes\nKeep this exact.\n\n\nInitial task:\nOriginal task\n\nOutput from Review (round 1):\n中文🙂\nFull answer")
+        #expect(input.attachmentIDs == [preset, initial, shared])
+        #expect(!input.text.contains("ctrlx workflow"))
+        #expect(!input.text.contains("must-not-be-injected"))
+        let preview = AgentWorkflowPrompt.preview(definition: definition, node: node, round: 1)
+        #expect(preview.attachmentIDs == [preset, initial])
+        #expect(!preview.text.contains("assigned when"))
     }
 }

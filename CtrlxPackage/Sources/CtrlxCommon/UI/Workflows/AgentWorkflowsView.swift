@@ -83,7 +83,7 @@ private struct AgentWorkflowHostView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(definition.name)
-                                Text("\(definition.nodeCount) Agents").font(.caption).foregroundStyle(.secondary)
+                                Text("\(definition.nodeCount) nodes").font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -178,10 +178,13 @@ struct AgentWorkflowConfigurationView: View {
         Form {
             if let definition {
                 Section("Initial task") { Text(verbatim: definition.initialInput.text).textSelection(.enabled) }
-                Section("Agents") {
+                Section("Nodes") {
                     ForEach(definition.nodes) { node in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(node.name).font(.headline)
+                            if node.kind == .content {
+                                Label("Content node", symbol: .docTextFill).font(.caption).foregroundStyle(.secondary)
+                            }
                             Text(node.id == definition.entryNodeID ? "Entry" : "Waits for: " + definition.upstream(of: node.id).map(\.name).joined(separator: ", "))
                                 .font(.caption).foregroundStyle(.secondary)
                             if !node.input.text.isEmpty {
@@ -190,14 +193,14 @@ struct AgentWorkflowConfigurationView: View {
                             if node.allowsFinish {
                                 Label("Can end this workflow", symbol: .checkmarkCircle).font(.caption)
                             }
-                            NavigationLink("Preview task input") { AgentWorkflowInputPreview(definition: definition, node: node, attachments: attachments) }
+                            NavigationLink(node.kind == .content ? "Preview output" : "Preview task input") { AgentWorkflowInputPreview(definition: definition, node: node, attachments: attachments) }
                         }.padding(.vertical, 4)
                     }
                 }
                 Section {
                     if let loop = definition.loop {
                         LabeledContent("Loop", value: "Up to \(loop.maximumRounds) rounds")
-                        Text("The final Agent’s answer returns to the entry unless completion is requested.").foregroundStyle(.secondary)
+                        Text("The final node’s output returns to the entry unless an authorized Agent requests completion.").foregroundStyle(.secondary)
                     } else {
                         Text("Run once after all dependencies finish.")
                     }

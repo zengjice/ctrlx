@@ -26,7 +26,7 @@ public enum AgentWorkflowInvocationStatus: String, Codable, Sendable {
 public struct AgentWorkflowResult: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let invocationID: UUID
-    public let nativeTurnID: String
+    public let nativeTurnID: String?
     public let text: String
     public let attachmentIDs: [UUID]
     public let completedAt: Date
@@ -34,7 +34,7 @@ public struct AgentWorkflowResult: Codable, Equatable, Identifiable, Sendable {
     public init(
         id: UUID = UUID(),
         invocationID: UUID,
-        nativeTurnID: String,
+        nativeTurnID: String?,
         text: String,
         attachmentIDs: [UUID] = [],
         completedAt: Date
@@ -50,10 +50,10 @@ public struct AgentWorkflowResult: Codable, Equatable, Identifiable, Sendable {
 
 public struct AgentWorkflowSource: Codable, Equatable, Sendable {
     public let nodeID: UUID
-    public let agentInstanceID: UUID
+    public let agentInstanceID: UUID?
     public let resultID: UUID
 
-    public init(nodeID: UUID, agentInstanceID: UUID, resultID: UUID) {
+    public init(nodeID: UUID, agentInstanceID: UUID?, resultID: UUID) {
         self.nodeID = nodeID
         self.agentInstanceID = agentInstanceID
         self.resultID = resultID
@@ -65,7 +65,7 @@ public struct AgentWorkflowDelivery: Codable, Equatable, Identifiable, Sendable 
     public let runID: UUID
     public let round: Int
     public let invocationID: UUID
-    public let toAgentID: UUID
+    public let toAgentID: UUID?
     public let sources: [AgentWorkflowSource]
     public let input: AgentWorkflowInput
 
@@ -74,7 +74,7 @@ public struct AgentWorkflowDelivery: Codable, Equatable, Identifiable, Sendable 
         runID: UUID,
         round: Int,
         invocationID: UUID,
-        toAgentID: UUID,
+        toAgentID: UUID?,
         sources: [AgentWorkflowSource],
         input: AgentWorkflowInput
     ) {

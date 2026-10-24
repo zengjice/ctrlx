@@ -119,6 +119,11 @@ actor AgentWorkflowRunner {
                     continue
                 }
                 guard !halted, !Task.isCancelled else { return }
+                // Content outputs are committed with their invocation. Pump
+                // newly ready downstream nodes only after that durable commit.
+                if try !AgentWorkflowExecution(validating: prepared).readyNodeIDs.isEmpty {
+                    requestedPumps.insert(runID)
+                }
                 for invocation in prepared.invocations where invocation.status == .pending {
                     guard deliveries[invocation.id] == nil else { continue }
                     deliveries[invocation.id] = Task { await self.deliver(runID: runID, invocationID: invocation.id) }

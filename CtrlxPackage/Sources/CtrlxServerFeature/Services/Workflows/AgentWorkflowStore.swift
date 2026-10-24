@@ -181,7 +181,7 @@ actor AgentWorkflowStore {
             throw AgentWorkflowError("The workflow changed. Reload before starting.")
         }
         try validateAttachments(definition.attachmentIDs, in: updated)
-        let instanceIDs = Set(definition.nodes.map(\.agentInstanceID))
+        let instanceIDs = definition.agentInstanceIDs
         let occupied = updated.runs.contains { run in
             !run.status.isTerminal && run.instances.contains { instanceIDs.contains($0.id) }
         }
@@ -259,7 +259,7 @@ actor AgentWorkflowStore {
         }
         var loaded = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: fileURL))
         guard
-            loaded.schemaVersion == 1, loaded.hostID == hostID,
+            [1, 2].contains(loaded.schemaVersion), loaded.hostID == hostID,
             Set(loaded.definitions.map(\.id)).count == loaded.definitions.count,
             Set(loaded.runs.map(\.id)).count == loaded.runs.count,
             Set(loaded.instances.map(\.id)).count == loaded.instances.count else {
@@ -287,6 +287,12 @@ actor AgentWorkflowStore {
     }
 
     func commit(_ updated: AgentWorkflowArchive) throws {
+        var updated = updated
+        if
+            updated.definitions.contains(where: { $0.nodes.contains { $0.kind == .content } })
+            || updated.runs.contains(where: { $0.definition.nodes.contains { $0.kind == .content } }) {
+            updated.schemaVersion = 2
+        }
         guard updated != archive else { return }
         let data = try JSONEncoder().encode(updated)
         try FileManager.default.createDirectory(

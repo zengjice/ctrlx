@@ -11,9 +11,12 @@ public struct AgentWorkflowInput: Codable, Equatable, Sendable {
 }
 
 public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
+    public enum Kind: String, Codable, Sendable { case agent, content }
+
     public let id: UUID
+    public let kind: Kind
     public var name: String
-    public var agentInstanceID: UUID
+    public var agentInstanceID: UUID?
     public var input: AgentWorkflowInput
     public var allowsFinish: Bool
 
@@ -25,10 +28,32 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         allowsFinish: Bool = false
     ) {
         self.id = id
+        self.kind = .agent
         self.name = name
         self.agentInstanceID = agentInstanceID
         self.input = input
         self.allowsFinish = allowsFinish
+    }
+
+    public init(id: UUID = UUID(), name: String, content: AgentWorkflowInput = .init()) {
+        self.id = id
+        self.kind = .content
+        self.name = name
+        self.agentInstanceID = nil
+        self.input = content
+        self.allowsFinish = false
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, kind, name, agentInstanceID, input, allowsFinish }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try values.decode(UUID.self, forKey: .id)
+        self.kind = try values.decodeIfPresent(Kind.self, forKey: .kind) ?? .agent
+        self.name = try values.decode(String.self, forKey: .name)
+        self.agentInstanceID = try values.decodeIfPresent(UUID.self, forKey: .agentInstanceID)
+        self.input = try values.decode(AgentWorkflowInput.self, forKey: .input)
+        self.allowsFinish = try values.decode(Bool.self, forKey: .allowsFinish)
     }
 }
 
@@ -92,6 +117,10 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         return nodes.filter { sources.contains($0.id) }
     }
 
+    public var agentInstanceIDs: Set<UUID> {
+        Set(nodes.compactMap(\.agentInstanceID))
+    }
+
     public func validate() throws {
         guard revision > 0, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentWorkflowError("A workflow needs a name and a positive revision.")
@@ -100,7 +129,10 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         guard !nodes.isEmpty, nodeIDs.count == nodes.count, nodeIDs.contains(entryNodeID) else {
             throw AgentWorkflowError("Choose an entry and distinct workflow nodes.")
         }
-        guard Set(nodes.map(\.agentInstanceID)).count == nodes.count else {
+        guard nodes.allSatisfy({ $0.kind == .agent ? $0.agentInstanceID != nil : $0.agentInstanceID == nil && !$0.allowsFinish }) else {
+            throw AgentWorkflowError("Agent nodes need an instance. Content nodes cannot bind an Agent or request completion.")
+        }
+        guard agentInstanceIDs.count == nodes.filter({ $0.kind == .agent }).count else {
             throw AgentWorkflowError("An Agent instance can participate only once in a workflow.")
         }
         guard nodes.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {

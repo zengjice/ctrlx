@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AgentWorkflowWire {
-    public static let version = 1
+    public static let version = 2
     public static let maximumEncodedBytes = 256 * 1_024
     public static let maximumDefinitionBytes = 128 * 1_024
     public static let maximumNodes = 32
@@ -10,6 +10,7 @@ public enum AgentWorkflowWire {
     // Base64 plus JSON slash escaping still fits maximumEncodedBytes.
     public static let attachmentChunkBytes = 64 * 1_024
     public static let maximumAttachments = 32
+    public static let maximumContentBytes = 2 * 1_024 * 1_024
 
     public static func validate(_ definition: AgentWorkflowDefinition) throws {
         try definition.validate()
@@ -18,7 +19,7 @@ public enum AgentWorkflowWire {
             definition.name.utf8.count <= 256,
             definition.nodes.allSatisfy({ $0.name.utf8.count <= 256 }),
             try JSONEncoder().encode(definition).count <= maximumDefinitionBytes else {
-            throw AgentWorkflowError("Use at most 32 Agents, names up to 256 UTF-8 bytes, and a configuration up to 128 KiB. Import large content as attachments.")
+            throw AgentWorkflowError("Use at most 32 nodes, names up to 256 UTF-8 bytes, and a configuration up to 128 KiB. Import large content as attachments.")
         }
     }
 }
@@ -160,6 +161,7 @@ public struct AgentWorkflowInvocationSummary: Codable, Equatable, Identifiable, 
 public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
     public struct Node: Codable, Equatable, Identifiable, Sendable {
         public let id: UUID
+        public let kind: AgentWorkflowNode.Kind
         public let name: String
         public let instance: AgentWorkflowInstance?
         public let upstreamIDs: [UUID]
@@ -177,7 +179,7 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
             let bound = run.instances.first { $0.id == node.agentInstanceID }
             let current = bound.flatMap { binding in currentInstances.first { binding.matchesBinding($0) } }
             return Node(
-                id: node.id, name: node.name, instance: current ?? bound,
+                id: node.id, kind: node.kind, name: node.name, instance: current ?? bound,
                 upstreamIDs: run.definition.upstream(of: node.id).map(\.id),
                 invocation: run.invocations.first { $0.nodeID == node.id && $0.round == run.round }.map(AgentWorkflowInvocationSummary.init)
             )

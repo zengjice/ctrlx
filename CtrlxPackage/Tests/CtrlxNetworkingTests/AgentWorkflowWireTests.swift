@@ -21,11 +21,11 @@ struct AgentWorkflowWireTests {
         #expect(decoded.id == instance.id && decoded.capabilityIssue == nil)
     }
 
-    @Test
-    func capabilitySurvivesPairRoutingAndOldHostDecodeDefaultsToUnavailable() throws {
-        let message = SessionStateMessage(pairId: "one", paneStates: [:], agentWorkflowVersion: 1, workflowAgentPluginIDs: ["codex", "claude-code"])
+    @Test(arguments: [1, AgentWorkflowWire.version])
+    func capabilitySurvivesPairRoutingAndOldHostDecodeDefaultsToUnavailable(version: Int) throws {
+        let message = SessionStateMessage(pairId: "one", paneStates: [:], agentWorkflowVersion: version, workflowAgentPluginIDs: ["codex", "claude-code"])
         let routed = message.withPairId("two")
-        #expect(routed.agentWorkflowVersion == 1)
+        #expect(routed.agentWorkflowVersion == version)
         #expect(routed.workflowAgentPluginIDs == ["codex", "claude-code"])
         #expect(routed.pairId == "two")
         let decoded = try JSONDecoder().decode(SessionStateMessage.self, from: Data(#"{"pairId":"old","paneStates":{},"homeDirectory":""}"#.utf8))

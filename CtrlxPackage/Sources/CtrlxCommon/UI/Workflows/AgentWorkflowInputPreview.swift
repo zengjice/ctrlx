@@ -15,10 +15,12 @@ struct AgentWorkflowInputPreview: View {
                 if definition.loop != nil, node.id == definition.entryNodeID {
                     Toggle("Preview a later round", isOn: $nextRound)
                 }
-                Text("This shows the task format. Upstream answers and the invocation ID are placeholders until execution; full answers appear in the run's handoff history.")
+                Text(node.kind == .content
+                    ? "This content is forwarded automatically. Upstream outputs are placeholders until execution; the saved output appears in the run's handoff history."
+                    : "This shows the task format. Upstream outputs and the invocation ID are placeholders until execution; full outputs appear in the run's handoff history.")
                     .font(.callout).foregroundStyle(.secondary)
             }
-            Section("Text sent to Agent") {
+            Section(node.kind == .content ? "Text forwarded to downstream nodes" : "Text sent to Agent") {
                 Text(verbatim: input.text).font(.body.monospaced()).textSelection(.enabled)
             }
             Section("Attachments") {
@@ -28,10 +30,10 @@ struct AgentWorkflowInputPreview: View {
                     ForEach(input.attachmentIDs, id: \.self) { AgentWorkflowAttachmentLabel(attachment: attachments[$0]) }
                 }
                 if !definition.upstream(of: node.id).isEmpty || nextRound {
-                    Text("Artifacts explicitly shared by upstream Agents are added after they complete.").foregroundStyle(.secondary)
+                    Text("Attachments from upstream content nodes and artifacts explicitly shared by upstream Agents are added after they complete.").foregroundStyle(.secondary)
                 }
             }
         }
-        .navigationTitle("Input · \(node.name)")
+        .navigationTitle("\(node.kind == .content ? "Output" : "Input") · \(node.name)")
     }
 }

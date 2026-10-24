@@ -8,12 +8,14 @@ public enum AgentWorkflowPrompt {
         public let round: Int
         public let text: String
         public let attachmentIDs: [UUID]
+        public let kind: AgentWorkflowNode.Kind
 
-        public init(role: String, round: Int, text: String, attachmentIDs: [UUID] = []) {
+        public init(role: String, round: Int, text: String, attachmentIDs: [UUID] = [], kind: AgentWorkflowNode.Kind = .agent) {
             self.role = role
             self.round = round
             self.text = text
             self.attachmentIDs = attachmentIDs
+            self.kind = kind
         }
     }
 
@@ -21,13 +23,16 @@ public enum AgentWorkflowPrompt {
         definition: AgentWorkflowDefinition, node: AgentWorkflowNode,
         answers: [Answer], invocationReference: String
     ) -> AgentWorkflowInput {
+        if node.kind == .content {
+            return contentOutput(definition: definition, node: node, answers: answers)
+        }
         var sections = [node.input.text, "Initial task:\n\(definition.initialInput.text)"]
         var attachments = node.input.attachmentIDs
         if node.id == definition.entryNodeID {
             attachments += definition.initialInput.attachmentIDs
         }
         for answer in answers {
-            sections.append("Answer from \(answer.role) (round \(answer.round)):\n\(answer.text)")
+            sections.append("\(answer.kind == .content ? "Content" : "Answer") from \(answer.role) (round \(answer.round)):\n\(answer.text)")
             attachments += answer.attachmentIDs
         }
         if !attachments.isEmpty {
@@ -45,6 +50,27 @@ public enum AgentWorkflowPrompt {
         )
     }
 
+    /// Content nodes forward task material only. Invocation helper commands
+    /// are added when a later Agent task is composed.
+    private static func contentOutput(
+        definition: AgentWorkflowDefinition, node: AgentWorkflowNode, answers: [Answer]
+    ) -> AgentWorkflowInput {
+        var sections = [node.input.text]
+        var attachments = node.input.attachmentIDs
+        if node.id == definition.entryNodeID {
+            if !definition.initialInput.text.isEmpty {
+                sections.append("Initial task:\n\(definition.initialInput.text)")
+            }
+            attachments += definition.initialInput.attachmentIDs
+        }
+        for answer in answers {
+            sections.append("Output from \(answer.role) (round \(answer.round)):\n\(answer.text)")
+            attachments += answer.attachmentIDs
+        }
+        var seen: Set<UUID> = []
+        return .init(text: sections.filter { !$0.isEmpty }.joined(separator: "\n\n"), attachmentIDs: attachments.filter { seen.insert($0).inserted })
+    }
+
     /// Before execution, upstream answers and the correlation UUID do not yet
     /// exist. The UI labels these placeholders instead of claiming an exact task.
     public static func preview(definition: AgentWorkflowDefinition, node: AgentWorkflowNode, round: Int) -> AgentWorkflowInput {
@@ -60,7 +86,7 @@ public enum AgentWorkflowPrompt {
         return compose(
             definition: definition, node: node,
             answers: sources.map {
-                .init(role: $0.name, round: sourceRound, text: "<Full final answer and shared artifacts will be inserted here after this Agent completes.>")
+                .init(role: $0.name, round: sourceRound, text: "<Full output and attachments will be inserted here after this node completes.>", kind: $0.kind)
             }, invocationReference: "<assigned when this task is created>"
         )
     }

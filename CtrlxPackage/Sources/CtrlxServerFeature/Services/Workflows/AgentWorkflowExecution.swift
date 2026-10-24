@@ -16,9 +16,9 @@ struct AgentWorkflowExecution: Sendable {
         try definition.validate()
         guard authorizationExpiresAt > now else { throw AgentWorkflowError("The workflow authorization has expired.") }
         guard
-            instances.count == definition.nodes.count,
-            Set(instances.map(\.id)) == Set(definition.nodes.map(\.agentInstanceID)) else {
-            throw AgentWorkflowError("Every workflow node must have a distinct live Agent binding.")
+            instances.count == definition.agentInstanceIDs.count,
+            Set(instances.map(\.id)) == definition.agentInstanceIDs else {
+            throw AgentWorkflowError("Every Agent node must have a distinct live Agent binding.")
         }
         for instance in instances {
             guard
@@ -42,8 +42,8 @@ struct AgentWorkflowExecution: Sendable {
         try run.definition.validate()
         guard
             run.round > 0, run.roundLimit >= run.round,
-            Set(run.instances.map(\.id)) == Set(run.definition.nodes.map(\.agentInstanceID)),
-            run.instances.count == run.definition.nodes.count,
+            Set(run.instances.map(\.id)) == run.definition.agentInstanceIDs,
+            run.instances.count == run.definition.agentInstanceIDs.count,
             Set(run.invocations.map(\.id)).count == run.invocations.count else {
             throw AgentWorkflowError("The saved workflow has inconsistent instance or invocation records.")
         }
@@ -64,6 +64,16 @@ struct AgentWorkflowExecution: Sendable {
                 (invocation.status == .succeeded) == (invocation.result != nil),
                 invocation.result.map({ $0.invocationID == invocation.id && $0.nativeTurnID == invocation.nativeTurnID }) ?? true else {
                 throw AgentWorkflowError("The saved workflow contains an invalid invocation.")
+            }
+            if node.kind == .content {
+                guard
+                    invocation.status == .succeeded, invocation.nativeTurnID == nil, invocation.nativeTranscriptPath == nil,
+                    invocation.result?.text == invocation.delivery.input.text,
+                    shared == invocation.delivery.input.attachmentIDs else {
+                    throw AgentWorkflowError("The saved content output is inconsistent.")
+                }
+            } else if invocation.status == .succeeded, invocation.result?.nativeTurnID?.isEmpty != false {
+                throw AgentWorkflowError("The saved Agent result has no verified native turn.")
             }
         }
         if let finish = run.finishRequest {
@@ -120,9 +130,7 @@ struct AgentWorkflowExecution: Sendable {
             return existing
         }
         guard
-            readyNodeIDs.contains(nodeID), let node = run.definition.nodes.first(where: { $0.id == nodeID }),
-            let instance = run.instances.first(where: { $0.id == node.agentInstanceID }),
-            let capabilities = instance.capabilities else {
+            readyNodeIDs.contains(nodeID), let node = run.definition.nodes.first(where: { $0.id == nodeID }) else {
             throw AgentWorkflowError("This node is still waiting for its upstream results.")
         }
         let invocationID = UUID()
@@ -138,7 +146,7 @@ struct AgentWorkflowExecution: Sendable {
             guard let result = source.result, let sourceNode = run.definition.nodes.first(where: { $0.id == source.nodeID }) else {
                 throw AgentWorkflowError("An upstream result is missing.")
             }
-            answers.append(.init(role: sourceNode.name, round: source.round, text: result.text, attachmentIDs: result.attachmentIDs))
+            answers.append(.init(role: sourceNode.name, round: source.round, text: result.text, attachmentIDs: result.attachmentIDs, kind: sourceNode.kind))
             sources.append(.init(nodeID: sourceNode.id, agentInstanceID: sourceNode.agentInstanceID, resultID: result.id))
         }
         // Public correlation marker, not a credential. The adapter verifies the
@@ -149,25 +157,42 @@ struct AgentWorkflowExecution: Sendable {
         guard input.attachmentIDs.count <= AgentWorkflowWire.maximumAttachments else {
             throw AgentWorkflowError("The combined input exceeds 32 attachments. Nothing was sent.")
         }
-        guard input.text.utf8.count <= capabilities.maximumInputBytes else {
+        let limit: Int
+        if node.kind == .content {
+            limit = AgentWorkflowWire.maximumContentBytes
+        } else {
+            guard let capabilities = run.instances.first(where: { $0.id == node.agentInstanceID })?.capabilities else {
+                throw AgentWorkflowError("The Agent's input capabilities are unavailable.")
+            }
+            limit = capabilities.maximumInputBytes
+        }
+        guard input.text.utf8.count <= limit else {
             throw AgentWorkflowError("The complete input exceeds \(node.name)'s input limit. Nothing was sent.")
         }
         let delivery = AgentWorkflowDelivery(
             runID: run.id,
             round: run.round,
             invocationID: invocationID,
-            toAgentID: instance.id,
+            toAgentID: node.agentInstanceID,
             sources: sources,
             input: input
         )
-        let created = AgentWorkflowInvocation(
+        var created = AgentWorkflowInvocation(
             id: invocationID,
             nodeID: nodeID,
             round: run.round,
             delivery: delivery,
             createdAt: now
         )
+        if node.kind == .content {
+            created.status = .succeeded
+            created.sharedAttachmentIDs = input.attachmentIDs
+            created.result = .init(invocationID: invocationID, nativeTurnID: nil, text: input.text, attachmentIDs: input.attachmentIDs, completedAt: now)
+        }
         run.invocations.append(created)
+        if node.kind == .content {
+            settle(now: now)
+        }
         changed()
         return created
     }
@@ -243,7 +268,7 @@ struct AgentWorkflowExecution: Sendable {
         let index = try index(of: result.invocationID)
         let invocation = run.invocations[index]
         try validate(instance, for: invocation)
-        guard !result.nativeTurnID.isEmpty, invocation.nativeTurnID == result.nativeTurnID else {
+        guard let nativeTurnID = result.nativeTurnID, !nativeTurnID.isEmpty, invocation.nativeTurnID == nativeTurnID else {
             throw AgentWorkflowError("The result has no matching accepted native turn.")
         }
         if invocation.status == .succeeded {

@@ -72,4 +72,31 @@ struct AgentWorkflowModelTests {
         let data = try JSONEncoder().encode(definition)
         #expect(try JSONDecoder().decode(AgentWorkflowDefinition.self, from: data) == definition)
     }
+
+    @Test
+    func legacyAgentNodesAndContentNodesRoundTrip() throws {
+        let node = AgentWorkflowNode(name: "Developer", agentInstanceID: UUID())
+        var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(node)) as? [String: Any])
+        legacy.removeValue(forKey: "kind")
+        #expect(try JSONDecoder().decode(AgentWorkflowNode.self, from: JSONSerialization.data(withJSONObject: legacy)) == node)
+        let content = AgentWorkflowNode(name: "Review instructions", content: .init(text: "$review-changes", attachmentIDs: [UUID()]))
+        #expect(try JSONDecoder().decode(AgentWorkflowNode.self, from: JSONEncoder().encode(content)) == content)
+        let definition = AgentWorkflowDefinition(name: "Content", hostID: UUID(), nodes: [content], edges: [], entryNodeID: content.id)
+        try definition.validate()
+        #expect(definition.agentInstanceIDs.isEmpty)
+    }
+
+    @Test(arguments: ["content-binding", "content-finish", "missing-agent"])
+    func nodeKindsEnforceIdentityAndFinishPermissions(scenario: String) {
+        var node = AgentWorkflowNode(name: "Content", content: .init())
+        switch scenario {
+        case "content-binding": node.agentInstanceID = UUID()
+        case "content-finish": node.allowsFinish = true
+        default:
+            node = .init(name: "Agent", agentInstanceID: UUID())
+            node.agentInstanceID = nil
+        }
+        let definition = AgentWorkflowDefinition(name: "Invalid", hostID: UUID(), nodes: [node], edges: [], entryNodeID: node.id)
+        #expect(throws: AgentWorkflowError.self) { try definition.validate() }
+    }
 }
