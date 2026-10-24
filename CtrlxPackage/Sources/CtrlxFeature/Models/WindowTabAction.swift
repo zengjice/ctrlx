@@ -8,6 +8,7 @@ enum WindowTabAction: Equatable, Sendable {
         case openAnotherFiles
         case openBrowser
         case openSimulator
+        case openNewSimulator
         case fork(usingWorktree: Bool)
         case rename
         case close
@@ -26,5 +27,23 @@ enum WindowTabAction: Equatable, Sendable {
     func targetWindow(in windows: [TmuxWindow]) -> TmuxWindow? {
         guard case let .window(stableID, _) = self else { return nil }
         return windows.first { $0.stableId == stableID }
+    }
+}
+
+enum WindowTabKind: Equatable, Sendable {
+    case terminal
+    case files
+    case browser
+    case simulator
+
+    enum ShortcutMode: Equatable, Sendable {
+        case reuseOrCreate
+        case create
+        case unavailable
+    }
+
+    func shortcutMode(whenActive active: WindowTabKind, canCreate: Bool = true) -> ShortcutMode {
+        guard self == active else { return .reuseOrCreate }
+        return canCreate ? .create : .unavailable
     }
 }

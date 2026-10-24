@@ -579,7 +579,8 @@
                 try await self.resolveHumanPane(request, identity: identity)
             }
             let pane = try await resolve()
-            let state = try await openDevice(parameters: [:], owner: nil, pane: pane, coordinator: coordinator, resolve: resolve)
+            let parameters: [String: JSONValue] = request.createsNew ? ["new": .bool(true)] : [:]
+            let state = try await openDevice(parameters: parameters, owner: nil, pane: pane, coordinator: coordinator, resolve: resolve)
             return remoteDescriptor(state)
         }
 

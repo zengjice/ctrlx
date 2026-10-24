@@ -18,7 +18,7 @@ struct WindowTabActionTests {
     }
 
     @Test("Window actions keep their stable target after reorder", arguments: [
-        WindowTabAction.WindowOperation.select, .openFiles, .openAnotherFiles, .openBrowser, .openSimulator, .fork(usingWorktree: false), .fork(usingWorktree: true), .rename, .close,
+        WindowTabAction.WindowOperation.select, .openFiles, .openAnotherFiles, .openBrowser, .openSimulator, .openNewSimulator, .fork(usingWorktree: false), .fork(usingWorktree: true), .rename, .close,
     ])
     func targetAfterReorder(operation: WindowTabAction.WindowOperation) throws {
         let action = WindowTabAction.window(stableID: "@2", operation: operation)
@@ -48,5 +48,19 @@ struct WindowTabActionTests {
         #expect(WindowTabAction.closeSimulator(id).targetWindow(in: windows()) == nil)
         #expect(WindowTabAction.newAgent.targetWindow(in: windows()) == nil)
         #expect(WindowTabAction.newTerminal.targetWindow(in: windows()) == nil)
+    }
+
+    @Test("Only the active linked tab creates its own kind")
+    func shortcutModes() {
+        #expect(WindowTabKind.terminal.shortcutMode(whenActive: .terminal) == .create)
+        #expect(WindowTabKind.files.shortcutMode(whenActive: .terminal) == .reuseOrCreate)
+        #expect(WindowTabKind.browser.shortcutMode(whenActive: .terminal) == .reuseOrCreate)
+        #expect(WindowTabKind.simulator.shortcutMode(whenActive: .terminal) == .reuseOrCreate)
+        #expect(WindowTabKind.files.shortcutMode(whenActive: .files) == .create)
+        #expect(WindowTabKind.files.shortcutMode(whenActive: .browser) == .reuseOrCreate)
+        #expect(WindowTabKind.browser.shortcutMode(whenActive: .browser) == .create)
+        #expect(WindowTabKind.simulator.shortcutMode(whenActive: .simulator) == .create)
+        #expect(WindowTabKind.simulator.shortcutMode(whenActive: .simulator, canCreate: false) == .unavailable)
+        #expect(WindowTabKind.simulator.shortcutMode(whenActive: .files, canCreate: false) == .reuseOrCreate)
     }
 }

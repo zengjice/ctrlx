@@ -3872,6 +3872,7 @@
                     browserTabs: await self?.agentBrowser.sharedBrowserTabs,
                     supportsSimulatorViewing: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsPaneSimulator: await self?.agentSimulator.supportsSimulatorViewing,
+                    supportsPaneSimulatorCreation: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsSimulatorClosing: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsDashboard: true,
                     simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs,

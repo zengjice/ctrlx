@@ -89,6 +89,8 @@ public struct SessionStateMessage: Codable, Sendable {
     public let browserTabs: [RemoteBrowserTab]?
     public let supportsSimulatorViewing: Bool?
     public let supportsPaneSimulator: Bool?
+    /// Older Hosts ignore OpenPaneSimulator's explicit "new" request.
+    public let supportsPaneSimulatorCreation: Bool?
     public let supportsSimulatorClosing: Bool?
     public let supportsDashboard: Bool?
     public let simulatorTabs: [RemoteSimulatorTab]?
@@ -124,6 +126,7 @@ public struct SessionStateMessage: Codable, Sendable {
         browserTabs: [RemoteBrowserTab]? = nil,
         supportsSimulatorViewing: Bool? = nil,
         supportsPaneSimulator: Bool? = nil,
+        supportsPaneSimulatorCreation: Bool? = nil,
         supportsSimulatorClosing: Bool? = nil,
         supportsDashboard: Bool? = nil,
         simulatorTabs: [RemoteSimulatorTab]? = nil,
@@ -167,6 +170,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.browserTabs = browserTabs
         self.supportsSimulatorViewing = supportsSimulatorViewing
         self.supportsPaneSimulator = supportsPaneSimulator
+        self.supportsPaneSimulatorCreation = supportsPaneSimulatorCreation
         self.supportsSimulatorClosing = supportsSimulatorClosing
         self.supportsDashboard = supportsDashboard
         self.simulatorTabs = simulatorTabs
@@ -208,6 +212,7 @@ public struct SessionStateMessage: Codable, Sendable {
             browserTabs: browserTabs,
             supportsSimulatorViewing: supportsSimulatorViewing,
             supportsPaneSimulator: supportsPaneSimulator,
+            supportsPaneSimulatorCreation: supportsPaneSimulatorCreation,
             supportsSimulatorClosing: supportsSimulatorClosing,
             supportsDashboard: supportsDashboard,
             simulatorTabs: simulatorTabs,

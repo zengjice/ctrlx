@@ -57,10 +57,25 @@ public struct OpenPaneSimulator: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
     public let sessionName: String
     public let sourcePaneID: String
+    public let createsNew: Bool
 
-    public init(sessionName: String, sourcePaneID: String) {
+    public init(sessionName: String, sourcePaneID: String, createsNew: Bool = false) {
         self.sessionName = sessionName
         self.sourcePaneID = sourcePaneID
+        self.createsNew = createsNew
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionName
+        case sourcePaneID
+        case createsNew = "new"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionName = try container.decode(String.self, forKey: .sessionName)
+        self.sourcePaneID = try container.decode(String.self, forKey: .sourcePaneID)
+        self.createsNew = try container.decodeIfPresent(Bool.self, forKey: .createsNew) ?? false
     }
 
     public var commandType: CommandType {

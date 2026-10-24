@@ -425,6 +425,18 @@
         }
 
         @Test
+        func viewerCanCreateAnotherDeviceForTheSamePane() async throws {
+            let (fixture, identity, request) = try humanFixture()
+            let first = try await fixture.service.openPaneSimulator(request, expectedWorkspacePane: identity)
+            let second = try await fixture.service.openPaneSimulator(
+                .init(sessionName: request.sessionName, sourcePaneID: request.sourcePaneID, createsNew: true),
+                expectedWorkspacePane: identity
+            )
+            #expect(first.id != second.id && fixture.boots == 2)
+            await fixture.service.shutdown()
+        }
+
+        @Test
         func simultaneousViewerOpensShareOneBoot() async throws {
             let (fixture, identity, request) = try humanFixture()
             fixture.probe.holdBoot.withLock { $0 = true }

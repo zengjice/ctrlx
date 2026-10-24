@@ -38,16 +38,24 @@
 
         private struct SimulatorOpenRequest: Equatable {
             let paneID: String
+            let createsNew: Bool
             let inputBinding: ViewerWorkspaceInputBinding
         }
 
         private enum WindowShortcutScope {
             case terminal
-            case linkedTab(sourcePaneID: String)
+            case linkedTab(sourcePaneID: String, kind: WindowTabKind)
 
             var sourcePaneID: String? {
-                guard case let .linkedTab(sourcePaneID) = self else { return nil }
+                guard case let .linkedTab(sourcePaneID, _) = self else { return nil }
                 return sourcePaneID
+            }
+
+            var kind: WindowTabKind {
+                switch self {
+                case .terminal: .terminal
+                case let .linkedTab(_, kind): kind
+                }
             }
 
             var includesFork: Bool {
@@ -246,8 +254,14 @@
             return fileWorkspace.selectedID.map(PaneLinkedTabID.file)
         }
 
-        private var selectedLinkedTabSource: (paneID: String, window: TmuxWindow)? {
-            selectedLinkedTab.flatMap(linkedTabSource)
+        private var selectedLinkedTabSource: (paneID: String, window: TmuxWindow, kind: WindowTabKind)? {
+            guard let selectedLinkedTab, let source = linkedTabSource(selectedLinkedTab) else { return nil }
+            let kind = switch selectedLinkedTab {
+            case .file: WindowTabKind.files
+            case .browser: WindowTabKind.browser
+            case .simulator: WindowTabKind.simulator
+            }
+            return (source.paneID, source.window, kind)
         }
 
         private func linkedTabSource(_ tab: PaneLinkedTabID) -> (paneID: String, window: TmuxWindow)? {
@@ -406,7 +420,7 @@
                 if terminalIsVisible, let window {
                     windowShortcutBar(window)
                 } else if let source = selectedLinkedTabSource {
-                    windowShortcutBar(source.window, scope: .linkedTab(sourcePaneID: source.paneID))
+                    windowShortcutBar(source.window, scope: .linkedTab(sourcePaneID: source.paneID, kind: source.kind))
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -486,7 +500,8 @@
                     guard let request = pendingSimulatorRequest else { return }
                     do {
                         let tab = try await RemoteSimulatorSession.open(
-                            sessionName: sessionName, sourcePaneID: request.paneID, client: relayClient, inputBinding: request.inputBinding
+                            sessionName: sessionName, sourcePaneID: request.paneID, createsNew: request.createsNew,
+                            client: relayClient, inputBinding: request.inputBinding
                         )
                         try Task.checkCancellation()
                         guard pendingSimulatorRequest == request else { return }
@@ -1118,12 +1133,16 @@
             WindowTabActions(
                 window: window,
                 focusedPaneID: activePaneId,
+                files: fileWorkspace.tabs,
+                browsers: sessionBrowsers,
                 simulators: sessionSimulators,
+                activeTab: scope.kind,
                 isConnected: relayClient.isHostConnected,
                 canOpenFiles: relayClient.hostSupportsPaneFiles,
                 canOpenBrowser: relayClient.hostSupportsPaneBrowser,
                 canOpenSimulator: relayClient.hostSupportsSimulatorViewing,
                 canCreateSimulator: relayClient.hostSupportsPaneSimulator,
+                canCreateNewSimulator: relayClient.hostSupportsPaneSimulatorCreation,
                 isCreatingWindow: isCreatingWindow,
                 forkUnavailableReason: agentForkUnavailableReason(),
                 includesWindowManagement: includesWindowManagement,
@@ -1189,11 +1208,16 @@
                     isKeyboardActive = false
                     quickActionPresentation.dismiss()
                     pendingFilesRequest = .init(paneID: paneID, new: operation == .openAnotherFiles, inputBinding: relayClient.workspaceInputState.binding(paneID: paneID))
-                case .openSimulator:
+                case .openSimulator,
+                     .openNewSimulator:
                     guard
                         relayClient.hostSupportsPaneSimulator,
                         let paneID = actionPaneID(in: target, preferredPaneID: preferredPaneID) else {
                         commandError = "Update the Host to open iOS Simulator for this window."
+                        return
+                    }
+                    if operation == .openNewSimulator, !relayClient.hostSupportsPaneSimulatorCreation {
+                        commandError = "Update the Host Mac to create another iOS simulator."
                         return
                     }
                     cancelCreationFollowUp()
@@ -1202,7 +1226,11 @@
                     pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
-                    pendingSimulatorRequest = .init(paneID: paneID, inputBinding: relayClient.workspaceInputState.binding(paneID: paneID))
+                    pendingSimulatorRequest = .init(
+                        paneID: paneID,
+                        createsNew: operation == .openNewSimulator,
+                        inputBinding: relayClient.workspaceInputState.binding(paneID: paneID)
+                    )
                 case .openBrowser:
                     guard let paneID = actionPaneID(in: target, preferredPaneID: preferredPaneID) else {
                         commandError = "This window no longer has a source pane."
