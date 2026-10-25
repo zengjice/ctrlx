@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.103 — Codex Provider models and stable Fork menus
+
+- Add optional reasoning-effort selection to custom Codex Providers and apply it
+  consistently to New Agent, Fork and recovery launches.
+- Generate a credential-free per-Provider model catalog from the installed Codex
+  CLI so the native `/model` command exposes the configured model and reasoning
+  levels.
+- Build Fork and window context menus from stable native menu snapshots so
+  choosing a destination does not tear down the open SwiftUI menu.
+- Release validation: the bounded serial Swift regression passed with 4,020
+  tests (`StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac), as did both boundary checks, SwiftFormat, the 14-page
+  website build, the iOS Simulator compile check and the signed Mac Release
+  package published through COS.
+- Mac distribution is build 36 through COS, using an Apple Development signature
+  without notarization. Publication signs and archives both `mac.sh` and the
+  detached `mac.sh.sig`, then verifies the public pair before promotion.
+
 ## 3.0.102 — Settings sidebar crash mitigation
 
 - Move Settings navigation out of the native toolbar into a sidebar-adaptable
