@@ -28,6 +28,11 @@ Custom Providers are Anthropic-compatible endpoints with `id`, `name`,
 the credential kind. The secret is stored in Keychain under
 `agent-provider.claude-code.<provider-id>` and is never synchronized.
 
+- Settings asks only for a display name and connection details. New Providers get
+  an automatic stable ID; existing IDs and Keychain accounts are preserved when
+  renamed. The list shows the name and Base URL, without exposing the ID. New or
+  renamed entries must have distinct names within Claude Code, ignoring case and
+  outer whitespace; unchanged legacy duplicate names remain editable.
 - `default_provider_id = null` keeps the CLI's current configuration. An
   explicit `anthropic` selection clears inherited `ANTHROPIC_BASE_URL`,
   `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_MODEL`, then runs

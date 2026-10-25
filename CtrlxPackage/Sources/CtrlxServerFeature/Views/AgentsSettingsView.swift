@@ -569,7 +569,7 @@
                     Text("Current CLI configuration").tag(String?.none)
                     Text(builtInProviderName).tag(Optional(builtInProviderID))
                     ForEach(providers) { provider in
-                        Text(provider.name.isEmpty ? provider.providerID : provider.name)
+                        Text(provider.name.isEmpty ? "Unnamed Provider" : provider.name)
                             .tag(Optional(provider.providerID))
                     }
                 }
@@ -581,8 +581,8 @@
                 ForEach(providers) { provider in
                     HStack(alignment: .top, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(provider.name.isEmpty ? provider.providerID : provider.name)
-                            Text("\(provider.providerID) · \(provider.baseURL)")
+                            Text(provider.name.isEmpty ? "Unnamed Provider" : provider.name)
+                            Text(provider.baseURL)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -593,7 +593,7 @@
                             providerEditor = AgentProviderEditorPresentation(
                                 pluginID: pluginID,
                                 original: provider,
-                                reservedProviderIDs: Set(providers.map(\.providerID))
+                                providers: providerOptions
                             )
                         }
                         .buttonStyle(.borderless)
@@ -611,7 +611,7 @@
                     providerEditor = AgentProviderEditorPresentation(
                         pluginID: pluginID,
                         original: nil,
-                        reservedProviderIDs: Set(providers.map(\.providerID))
+                        providers: providerOptions
                     )
                 }
                 .accessibilityIdentifier("agentAddProvider-\(pluginID)")
@@ -635,13 +635,16 @@
                 : ClaudeCodeSettings.builtInProvider.name
         }
 
+        private var providerOptions: [AgentProviderOption] {
+            [AgentProviderOption(id: builtInProviderID, name: builtInProviderName)]
+                + providers.map { AgentProviderOption(id: $0.providerID, name: $0.name) }
+        }
+
         private func saveProvider(_ draft: AgentProviderDraft) {
-            if let originalID = draft.originalID, let index = providers.firstIndex(where: { $0.providerID == originalID }) {
+            if let index = providers.firstIndex(where: { $0.providerID == draft.providerID }) {
                 providers[index] = draft
             } else {
-                var saved = draft
-                saved.originalID = draft.providerID
-                providers.append(saved)
+                providers.append(draft)
             }
             persist()
         }
@@ -901,9 +904,8 @@
 
     // MARK: - Provider editing
 
-    private struct AgentProviderDraft: Identifiable, Equatable {
-        var originalID: String?
-        var providerID: String
+    struct AgentProviderDraft: Identifiable, Equatable {
+        let providerID: String
         var name: String
         var baseURL: String
         var model: String
@@ -911,12 +913,11 @@
         var authKind: ClaudeProviderAuthKind
 
         var id: String {
-            originalID ?? providerID
+            providerID
         }
 
         init(pluginID: String) {
-            self.originalID = nil
-            self.providerID = ""
+            self.providerID = UUID().uuidString.lowercased()
             self.name = ""
             self.baseURL = ""
             self.model = ""
@@ -930,7 +931,6 @@
         }
 
         init(profile: CodexProviderProfile, pluginID _: String) {
-            self.originalID = profile.id
             self.providerID = profile.id
             self.name = profile.name
             self.baseURL = profile.baseURL
@@ -940,7 +940,6 @@
         }
 
         init(profile: ClaudeProviderProfile, pluginID _: String) {
-            self.originalID = profile.id
             self.providerID = profile.id
             self.name = profile.name
             self.baseURL = profile.baseURL
@@ -971,14 +970,31 @@
         }
     }
 
-    private struct AgentProviderEditorPresentation: Identifiable {
+    struct AgentProviderEditorPresentation: Identifiable {
         let id = UUID()
         let pluginID: String
         let original: AgentProviderDraft?
-        let reservedProviderIDs: Set<String>
+        let providers: [AgentProviderOption]
+
+        func nameValidationError(for draft: AgentProviderDraft) -> String? {
+            let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return "Enter a Provider name." }
+            // Existing duplicate names must not block connection-only edits.
+            if let original, name.caseInsensitiveCompare(original.name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame {
+                return nil
+            }
+            if
+                providers.contains(where: {
+                    $0.id != draft.providerID
+                        && name.caseInsensitiveCompare($0.name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+                }) {
+                return "A Provider with this name already exists. Choose a different name."
+            }
+            return nil
+        }
     }
 
-    private struct AgentProviderEditorSheet: View {
+    struct AgentProviderEditorSheet: View {
         let presentation: AgentProviderEditorPresentation
         let onSave: (AgentProviderDraft) -> Void
 
@@ -1009,13 +1025,6 @@
         var body: some View {
             Form {
                 Section("Provider") {
-                    TextField("Provider ID", text: $draft.providerID)
-                        .disabled(!isNew)
-                        .accessibilityIdentifier("agentProviderID")
-                    Text(isNew
-                        ? "Letters, numbers, '-' or '_'. The ID cannot change after saving."
-                        : "Provider IDs are immutable so running sessions and recovery keep the same identity.")
-                        .font(.caption).foregroundStyle(.secondary)
                     TextField("Name", text: $draft.name)
                         .accessibilityIdentifier("agentProviderName")
                 }
@@ -1094,7 +1103,7 @@
         private func save() async {
             guard !isSaving else { return }
             errorMessage = nil
-            let providerID = draft.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let providerID = draft.providerID
             let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
             let baseURL = draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
             let model = draft.model.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1102,16 +1111,8 @@
                 ? draft.authKind.environmentKey
                 : draft.environmentKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            guard isClaude ? ClaudeCodeSettings.isValidProviderID(providerID) : CodexSettings.isValidProviderID(providerID) else {
-                errorMessage = "Use a unique Provider ID with letters, numbers, '-' or '_'. Built-in Provider IDs are reserved."
-                return
-            }
-            guard !isNew || !presentation.reservedProviderIDs.contains(providerID) else {
-                errorMessage = "A Provider with this ID already exists."
-                return
-            }
-            guard !name.isEmpty else {
-                errorMessage = "Enter a Provider name."
+            if let error = presentation.nameValidationError(for: draft) {
+                errorMessage = error
                 return
             }
             guard
@@ -1151,7 +1152,6 @@
                 return
             }
 
-            draft.providerID = providerID
             draft.name = name
             draft.baseURL = baseURL
             draft.model = model

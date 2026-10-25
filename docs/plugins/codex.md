@@ -27,6 +27,11 @@ stores only `id`, `name`, `base_url`, `model` and `environment_key` in
 `agent-provider.codex.<provider-id>`. Credentials are never sent to Viewers or
 written to recovery snapshots.
 
+- Settings asks only for a display name and connection details. New Providers get
+  an automatic stable ID; existing IDs and Keychain accounts are preserved when
+  renamed. The list shows the name and Base URL, without exposing the ID. New or
+  renamed entries must have distinct names within Codex, ignoring case and outer
+  whitespace; unchanged legacy duplicate names remain editable.
 - `default_provider_id = null` keeps the CLI's current configuration for new
   sessions. An explicit `openai` selection forces the official login even when
   the user's Codex config names another Provider.
