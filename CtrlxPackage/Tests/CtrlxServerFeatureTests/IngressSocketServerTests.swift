@@ -1,8 +1,10 @@
 #if os(macOS)
     import CtrlxNetworking
-    import Darwin
-    import Foundation
     import CtrlxPluginProtocol
+    import Darwin
+    import Dependencies
+    import Foundation
+    import Synchronization
     import Testing
     @testable import CtrlxServerFeature
 
@@ -59,7 +61,9 @@
                         connect(fd, sockPtr, addrLen)
                     }
                 }
-                if result == 0 { return fd }
+                if result == 0 {
+                    return fd
+                }
                 close(fd)
                 usleep(20_000) // 20ms; server is mid-bind
             }
@@ -73,7 +77,9 @@
                 var offset = 0
                 while offset < raw.count {
                     let n = Darwin.write(fd, base + offset, raw.count - offset)
-                    if n <= 0 { return false }
+                    if n <= 0 {
+                        return false
+                    }
                     offset += n
                 }
                 return true
@@ -91,7 +97,9 @@
             let deadline = Date().addingTimeInterval(30)
             while Date() < deadline {
                 let events = await collector.events
-                if events.count >= count { return events }
+                if events.count >= count {
+                    return events
+                }
                 try? await Task.sleep(for: .milliseconds(20))
             }
             return await collector.events
@@ -104,6 +112,39 @@
         }
 
         // MARK: - Tests
+
+        @Test("receipt captures a kernel peer before a synchronous hook exits")
+        func receiptCapturesKernelPeer() async throws {
+            let captured = Mutex<PluginIngressPeer?>(nil)
+            try await withDependencies {
+                $0[PluginIngressPeerClient.self].capture = { fd in
+                    let peer = PluginIngressPeerClient.liveValue.capture(fd)
+                    captured.withLock { $0 = peer }
+                    return peer
+                }
+            } operation: {
+                let collector = EventCollector()
+                let core = EchoPluginCore()
+                let server = IngressSocketServer(socketPath: makeSocketPath(), coreLookup: { _ in core }, dispatcher: makeDispatcher(collector))
+                try await server.start()
+                defer { Task { await server.stop() } }
+                let fd = try #require(connectClient(to: await pathOf(server), deadline: Date().addingTimeInterval(5)))
+                defer { close(fd) }
+                var timeout = timeval(tv_sec: 5, tv_usec: 0)
+                #expect(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))) == 0)
+                #expect(try writeAll(fd, echoFrameData(directive: .init(sessionID: "workflow-peer", state: .working), context: [
+                    "TMUX_PANE": "%1", "CTRLX_INGRESS_ACK": "1", "PEER_PID": "1",
+                ])))
+                #expect(shutdown(fd, SHUT_WR) == 0)
+                var receipt: UInt8 = 0
+                #expect(Darwin.read(fd, &receipt, 1) == 1 && receipt == 1)
+                let peer = try #require(captured.withLock { $0 })
+                #expect(peer.processes.first?.processID == getpid())
+                #expect(peer.processes.first?.userID == getuid())
+                #expect(await waitForEvents(collector, atLeast: 1).count == 1)
+                await server.stop()
+            }
+        }
 
         @Test("round-trip: an echo frame produces a PluginEvent that reaches the dispatcher")
         func roundTrip() async throws {

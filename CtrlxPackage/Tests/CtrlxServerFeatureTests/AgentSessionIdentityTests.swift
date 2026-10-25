@@ -354,6 +354,108 @@ struct AgentSessionIdentityTests {
         }
     }
 
+    @Test(
+        "Resuming the same conversation in a replacement process refreshes its native identity",
+        arguments: [false, true]
+    )
+    func resumedConversationReplacesRuntime(reusesPID: Bool) async throws {
+        let rows = LockIsolated("100 1 zsh\n101 100 claude\n")
+        let stored = LockIsolated<AgentSessionIdentity?>(nil)
+        let runtimes = LockIsolated(["101": "101:start-1"])
+        let client = AgentSessionIdentityClient(load: { _ in stored.value }, save: {
+            stored.setValue($0)
+            return true
+        }, runtimeID: { runtimes.value[$0] }, codexSessionID: { _, _ in nil })
+        try await withDependencies {
+            defaults(&$0, rows: rows, client: client)
+        } operation: {
+            let original = manager()
+            let sessionID = UUID().uuidString
+            let names = ["claude-code": ["claude"]]
+            original.applyState(
+                pluginID: "claude-code",
+                sessionID: sessionID,
+                state: .idle,
+                tmuxPane: "%5",
+                projectPath: "/repo"
+            )
+            await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names)
+            let old = try #require(stored.value)
+
+            // A process can exit without delivering SessionEnd. Its replacement
+            // can resume the same native conversation before the next scan.
+            let replacementPID = reusesPID ? "101" : "202"
+            rows.setValue("100 1 zsh\n\(replacementPID) 100 claude\n")
+            runtimes.setValue([replacementPID: "\(replacementPID):start-2"])
+            original.applyState(
+                pluginID: "claude-code",
+                sessionID: sessionID,
+                state: .idle,
+                tmuxPane: "%5",
+                projectPath: "/repo"
+            )
+            await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names)
+
+            let replacement = try #require(stored.value)
+            #expect(replacement.source == old.source)
+            #expect(replacement.processID == replacementPID)
+            #expect(replacement.runtimeID == "\(replacementPID):start-2")
+            #expect(replacement != old)
+        }
+    }
+
+    @Test("A hook waiting for a failed identity write retries instead of losing its registration")
+    func concurrentHookRetriesFailedWrite() async throws {
+        try await withMainSerialExecutor {
+            let rows = LockIsolated("100 1 zsh\n101 100 claude\n")
+            let stored = LockIsolated<AgentSessionIdentity?>(nil)
+            let writes = LockIsolated(0)
+            let (started, start) = AsyncStream<Void>.makeStream()
+            let (release, resume) = AsyncStream<Void>.makeStream()
+            defer { start.finish()
+                resume.finish()
+            }
+            let client = AgentSessionIdentityClient(load: { _ in stored.value }, save: { identity in
+                if
+                    writes.withValue({ $0 += 1
+                        return $0 }) == 1 {
+                    start.yield(())
+                    var iterator = release.makeAsyncIterator()
+                    _ = await iterator.next()
+                    return false
+                }
+                stored.setValue(identity)
+                return true
+            }, runtimeID: { "\($0):start-1" }, codexSessionID: { _, _ in nil })
+            try await withDependencies {
+                defaults(&$0, rows: rows, client: client)
+            } operation: {
+                let original = manager()
+                let sessionID = UUID().uuidString
+                let names = ["claude-code": ["claude"]]
+                original.applyState(
+                    pluginID: "claude-code",
+                    sessionID: sessionID,
+                    state: .idle,
+                    tmuxPane: "%5",
+                    projectPath: "/repo"
+                )
+                let first = Task { await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names) }
+                var iterator = started.makeAsyncIterator()
+                _ = await iterator.next()
+                let second = Task { await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names) }
+                await Task.yield()
+                #expect(writes.value == 1)
+                resume.yield(())
+                await first.value
+                await second.value
+                let identity = try #require(stored.value)
+                #expect(identity.source.sessionID == sessionID)
+                #expect(writes.value == 2)
+            }
+        }
+    }
+
     @Test("Conversation-switch writes are serialized so a delayed old UUID cannot replace the new one")
     func switchDuringWrite() async throws {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")

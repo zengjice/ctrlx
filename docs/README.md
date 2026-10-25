@@ -33,6 +33,55 @@ argument-aware Agent commands, Agent-side CtrlX plugin update/reinstall UX, and
 file-browser playback cache cleanup. Implemented behavior and deferred acceptance
 are tracked separately; release contents are recorded in [MODIFICATIONS.md](../MODIFICATIONS.md).
 
+The [multi-agent collaboration design](multi-agent-design.md) includes preset-content
+nodes that join upstream outputs and forward them without an Agent, alongside manual
+single-Host workflows managed from Mac Host, Mac Viewer and iOS. Users choose
+existing or new Agent tabs, configure per-role instructions and attachments,
+connect multiple upstream/downstream nodes, and optionally repeat bounded rounds.
+The Host owns global instance identity, authorization, durable handoffs and
+execution; cross-Host Relay/P2P and Agent-driven orchestration remain later stages.
+
+Content nodes have separate incremental validation in the same report. The UI and
+real-Agent evidence below describes the initial Agent-only version.
+
+The single-Host first version is implemented and its scoped acceptance is complete;
+iOS automatic speech transcription on a physical device is explicitly deferred to
+the user. The
+[implementation status](multi-agent-design.md#10-实现进度) separates current evidence
+from historical checks. Full isolated Host tests use real Codex/Claude TUI agents
+with a deterministic model provider; they cover fan-out/join, six-Agent
+many-to-many execution, native completion, authorization, process replacement,
+human input, Questions, restart recovery and uncertain writes without replay.
+Command-boundary fault injection does not claim coverage inside a PTY syscall.
+
+Actual Mac Host, Mac Viewer and iOS UI evidence covers configuration, new Agent
+creation, previews and run controls. Mac/iOS Viewers also operate the same run:
+Mac starts, iOS pauses, both retain the upstream result, and Mac continues exactly
+one downstream handoff before both automatically show completion. Mac Host End
+keeps the Agent alive and archives its late result; native Questions require an
+answer before Continue. The restored Mac workflow window's stale readiness label
+is fixed, with a signed rebuild and startup UI verification.
+
+Media checks cover snapshot transport and explicit handoff, iOS reviewed audio
+text/video frames, and Mac video sampling plus automatic Chinese speech import.
+Independent real-model Codex and Claude checks read the same sampled images and
+reviewed transcript; they are separate from the deterministic-provider workflow
+runs. The iOS simulator provides no compatible speech-recognition format, so
+its automatic transcription remains unverified; the user deferred this physical
+device check on October 24. Manual transcription and the explicit
+unsupported-format error have been exercised.
+
+A real Mac Viewer Pause run exposed a lost completion during a temporary Host
+process-scan timeout. The bounded verification retry passes 57 focused tests and
+has a signed Mac build; actual two-Viewer, End and Questions flows pass on that
+build. No new process-scan fault was injected into those UI runs. The final
+current-source filtered regression reports 593 tests across 68 suites, with the
+opt-in system-speech test skipped in that invocation and separately exercised on
+Mac. All 23 CLI/hook/skill script tests pass. Mac signing/build and iOS Simulator
+build evidence are recorded with source-impact checks. This is not an unfiltered
+test-suite result or a release; Apple Intelligence device evaluations were not
+run, and the installed production app was not replaced.
+
 ## Active validation plans
 
 [Android automation research and validation](android-artemis-validation-plan.md)

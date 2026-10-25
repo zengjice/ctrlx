@@ -35,6 +35,8 @@
         private var connectionFlights: [String: ConnectionFlight] = [:]
         private var isShuttingDown = false
 
+        @ObservationIgnored var workflowInputGate: AgentWorkflowInputGate?
+
         /// Callback for dimension changes (forwarded to PaneStreamManager)
         private var _onDimensionChange: (@MainActor (String, Int, Int, String) -> Void)?
 
@@ -289,7 +291,7 @@
                 return false
             }
             return try await sendInputCommandsIfConnected(
-                commands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten
+                commands, paneID: paneId, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten
             )
         }
 
@@ -320,16 +322,33 @@
                 guardedCommands = commands
             }
             return try await sendInputCommandsIfConnected(
-                guardedCommands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten,
+                guardedCommands, paneID: paneId, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten,
+                editsInput: AgentWorkflowInputGate.editsInput(data),
                 checksWorkspaceIdentity: expectedWorkspacePane != nil
             )
         }
 
         private func sendInputCommandsIfConnected(
             _ commands: [String],
+            paneID: String,
             sessionName: String,
             onFirstCommandWritten: (@Sendable () -> Void)?,
+            editsInput: Bool = true,
             checksWorkspaceIdentity: Bool = false
+        ) async throws -> Bool {
+            guard let workflowInputGate else {
+                return try await writeInputCommandsIfConnected(commands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten, checksWorkspaceIdentity: checksWorkspaceIdentity)
+            }
+            return try await workflowInputGate.human(paneID: paneID, editsInput: editsInput) {
+                try await self.writeInputCommandsIfConnected(commands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten, checksWorkspaceIdentity: checksWorkspaceIdentity)
+            }
+        }
+
+        private func writeInputCommandsIfConnected(
+            _ commands: [String],
+            sessionName: String,
+            onFirstCommandWritten: (@Sendable () -> Void)?,
+            checksWorkspaceIdentity: Bool
         ) async throws -> Bool {
             guard !commands.isEmpty else { return true }
             guard let client = clients[sessionName], await client.isConnected else { return false }

@@ -430,6 +430,8 @@
         @State private var showingSettings = false
         @State private var showingDashboard = false
         @State private var dashboardDestination: SessionNavigation?
+        @State private var showingWorkflows = false
+        @State private var workflowDestination: SessionNavigation?
 
         @State private var pushService = PushNotificationService.shared
         /// Tracks the currently displayed session pane ID for deep link deduplication.
@@ -446,7 +448,8 @@
                 SessionListView(
                     navigationPath: $sessionsNavigationPath,
                     onOpenSettings: { showingSettings = true },
-                    onOpenDashboard: { showingDashboard = true }
+                    onOpenDashboard: { showingDashboard = true },
+                    onOpenWorkflows: { showingWorkflows = true }
                 )
             }
             .sheet(isPresented: $showingSettings, onDismiss: {
@@ -476,6 +479,20 @@
                     dashboardDestination = SessionNavigation(sessionName: session, hostId: host)
                 }
                 .presentationDetents([.large])
+            }
+            .sheet(isPresented: $showingWorkflows, onDismiss: {
+                if let destination = workflowDestination {
+                    workflowDestination = nil
+                    currentlyDisplayedPaneId = nil
+                    sessionsNavigationPath = NavigationPath()
+                    sessionsNavigationPath.append(destination)
+                }
+                if pushService.pendingDashboard {
+                    openDashboardNotification()
+                }
+            }) {
+                IOSWorkflowsView { workflowDestination = $0 }
+                    .presentationDetents([.large])
             }
             .onChange(of: pushService.pendingDashboard) { _, pending in
                 if pending {
@@ -511,6 +528,10 @@
         }
 
         private func openDashboardNotification() {
+            if showingWorkflows {
+                showingWorkflows = false
+                return
+            }
             if showingSettings {
                 showingSettings = false
                 return
@@ -528,6 +549,7 @@
 
             // Dismiss Settings sheet if open so the deep link target is visible
             showingSettings = false
+            showingWorkflows = false
 
             // If we're already displaying this session, don't navigate again.
             // This prevents redundant navigation when receiving multiple push

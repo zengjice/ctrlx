@@ -126,8 +126,7 @@
 
         /// Latches once the consent dialog has been offered this launch so it
         /// isn't re-presented on every subsequent session creation.
-        @ObservationIgnored
-        private var hasPresentedEditorOverrideDialogThisLaunch = false
+        @ObservationIgnored private var hasPresentedEditorOverrideDialogThisLaunch = false
 
         // MARK: - In-Process Plugin Runtime (additive; coexists with HookServerService)
 
@@ -137,18 +136,27 @@
         ///
         /// `internal` (not `private`) so `@testable import` tests can inject a
         /// temp-dir `CtrlxPaths` without calling `setupAllServices()`.
-        @ObservationIgnored
-        var ctrlxPaths: CtrlxPaths?
+        @ObservationIgnored var ctrlxPaths: CtrlxPaths?
 
         /// Owns the plugin factory table + enabled-core lifecycle.
         ///
         /// `internal` (not `private`) so `@testable import` tests can inject a
         /// pre-configured `PluginRegistry` without calling `setupAllServices()`.
-        @ObservationIgnored
-        var pluginRegistry: PluginRegistry?
+        @ObservationIgnored var pluginRegistry: PluginRegistry?
 
-        @ObservationIgnored
-        private lazy var agentForkService = makeAgentForkService()
+        @ObservationIgnored var agentWorkflowStore: AgentWorkflowStore?
+
+        var agentWorkflowService: AgentWorkflowService?
+
+        @ObservationIgnored var agentWorkflowAgentService: AgentWorkflowAgentService?
+
+        @ObservationIgnored var agentWorkflowRunner: AgentWorkflowRunner?
+
+        @ObservationIgnored var agentWorkflowEvents: AgentWorkflowEventRouter?
+
+        @ObservationIgnored var agentWorkflowCompletion: AgentWorkflowCompletionMonitor?
+
+        @ObservationIgnored private lazy var agentForkService = makeAgentForkService()
 
         private func makeAgentForkService() -> AgentForkService {
             AgentForkService(
@@ -234,27 +242,23 @@
 
         /// The single agent-blind event dispatcher; its sinks are wired to the
         /// local adapter methods (status/notification/app-action) below.
-        @ObservationIgnored
-        private var pluginDispatcher: PluginEventDispatcher?
+        @ObservationIgnored private var pluginDispatcher: PluginEventDispatcher?
 
         /// The one app-owned ingress socket server. Coexists with
         /// `hookServer`; in normal runs no frames reach it (hook bridges aren't
         /// installed to it), so the new path is exercised only by E2E/tests.
-        @ObservationIgnored
-        private var ingressSocketServer: IngressSocketServer?
+        @ObservationIgnored private var ingressSocketServer: IngressSocketServer?
 
         /// Mac-local OTLP/JSON receiver for Claude Code telemetry (issue #597).
         /// Loopback-only; accumulates per-session token/cost/latency and emits
         /// milestone / mode-change events. Additive to the hook channel.
-        @ObservationIgnored
-        private var otlpReceiver: OTLPReceiver?
+        @ObservationIgnored private var otlpReceiver: OTLPReceiver?
 
         /// Durable cross-session cost/usage aggregation (issue #598). Persists
         /// per-(project, day) totals under the ctrlx state tree so they outlive
         /// session end and app restarts. Fed from telemetry updates; finalized on
         /// session end.
-        @ObservationIgnored
-        private var usageStore: UsageAggregationStore?
+        @ObservationIgnored private var usageStore: UsageAggregationStore?
 
         /// Latest cross-session usage rollup for the host's own surfaces (the menu
         /// bar today-total, issue #598). Observable so those views refresh; `nil`
@@ -264,14 +268,12 @@
 
         /// Per-plugin log sinks (one per active plugin), retained so the host's
         /// `log()` calls keep landing in the right file.
-        @ObservationIgnored
-        private var pluginLogSinks: [String: PluginLogSink] = [:]
+        @ObservationIgnored private var pluginLogSinks: [String: PluginLogSink] = [:]
 
         /// Latest project list each plugin pushed via `PluginHost.setProjects`.
         /// Merged across plugins into `SessionStateMessage.agentProjects` by
         /// `currentAgentProjects()` on each session-state push.
-        @ObservationIgnored
-        private var pluginProjects: [String: [AgentProject]] = [:]
+        @ObservationIgnored private var pluginProjects: [String: [AgentProject]] = [:]
 
         #if DEBUG
             /// When `true` (E2E `--e2e-seed-projects`), `scanProjects()` returns
@@ -279,8 +281,7 @@
             /// `refreshProjects()` — which would otherwise re-scan the host's real
             /// `~/.claude/projects` / `~/.codex/sessions` and clobber the seed when
             /// the project picker opens (`loadProjects` → `scanProjects`).
-            @ObservationIgnored
-            private var e2eSeededProjects = false
+            @ObservationIgnored private var e2eSeededProjects = false
         #endif
 
         // MARK: - Private Services
@@ -298,23 +299,19 @@
         @Dependency(TerminalNotificationService.self) private var terminalNotificationService
 
         /// Task for observing system wake notifications.
-        @ObservationIgnored
-        private var wakeObserverTask: Task<Void, Never>?
-        @ObservationIgnored
-        private var e2eReconnectObserverTask: Task<Void, Never>?
+        @ObservationIgnored private var wakeObserverTask: Task<Void, Never>?
+        @ObservationIgnored private var e2eReconnectObserverTask: Task<Void, Never>?
         @ObservationIgnored private var paneActivationTask: Task<Void, Never>?
 
         /// 30-minute trial-expiry monitoring loop (Task 14): refreshes
         /// `licenseManager.status` and fires any pending 48h/24h alerts.
-        @ObservationIgnored
-        private var licenseMonitorTask: Task<Void, Never>?
+        @ObservationIgnored private var licenseMonitorTask: Task<Void, Never>?
 
         /// Trailing-edge throttle for `OSC 9;4` progress pushes to viewers. Each
         /// new progress arrival cancels the pending task and schedules a fresh
         /// 150ms delay, so a stream stepping 0 → 100% in 1% increments collapses
         /// into a single relay send carrying the latest `PaneState.progress`.
-        @ObservationIgnored
-        private var pendingProgressPush: Task<Void, Never>?
+        @ObservationIgnored private var pendingProgressPush: Task<Void, Never>?
 
         /// Throttle handle for OTEL telemetry pushes to viewers (issue #597). A
         /// true trailing throttle (not a debounce): the first event opens a 1s
@@ -322,8 +319,7 @@
         /// the latest pane state), so a sustained burst still flushes ~1/sec
         /// instead of starving. The host's own sidebar updates synchronously via
         /// the `paneStates` assignment; only the cross-device push is throttled.
-        @ObservationIgnored
-        private var pendingTelemetryPush: Task<Void, Never>?
+        @ObservationIgnored private var pendingTelemetryPush: Task<Void, Never>?
 
         @ObservationIgnored
         @Dependency(PreferencesService.self) private var preferences
@@ -579,6 +575,8 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
+            agentWorkflowAgentService = nil
+            await stopAgentWorkflows()
             paneActivationTask?.cancel()
             paneActivationTask = nil
             await workspaceRecovery?.stop()
@@ -757,6 +755,9 @@
                         projectPath: projectPath,
                         permissionMode: permissionMode
                     )
+                    if state.openForm != nil, let tmuxPane {
+                        await self?.pauseAgentWorkflows(paneID: tmuxPane, reason: "The Agent needs a human response. Resolve it before continuing the workflow.")
+                    }
                     // (handlePluginState also forwards agent_session_status to iOS;
                     // the open form rides AgentSession.state so it's in the snapshot.)
                 },
@@ -789,6 +790,9 @@
                 isYoloModeEnabled: { [weak self] paneID in
                     guard let self else { return false }
                     return await self.windowManager.isYoloModeEnabled(for: paneID)
+                },
+                onWorkflow: { [weak self] event, peer in
+                    await self?.handleAgentWorkflowEvent(event, peer: peer)
                 }
             )
             pluginDispatcher = dispatcher
@@ -968,6 +972,10 @@
             // states — the launch-time check's hasActiveSessions consult would
             // otherwise race initial agent-pane discovery and hot-restart a
             // sidecar underneath live sessions.
+
+            // Preserve authenticated SessionStart evidence even before the first
+            // pane/catalog refresh. The ingress consumer may run immediately.
+            await setupAgentWorkflows()
 
             // Ingress socket: route frames by pluginID to the enabled core.
             let server = IngressSocketServer(
@@ -2077,7 +2085,7 @@
         }
 
         public func dashboardSnapshot() async throws -> DashboardSnapshot {
-            guard let hostID = workspaceRecovery?.snapshot?.hostID else {
+            guard let hostID = workspaceRecovery?.hostID else {
                 throw ViewerRelayClientError.commandFailed("Host workspace identity is not ready.")
             }
             let sources = (pluginRegistry?.active ?? [:]).sorted { $0.key < $1.key }.map { id, core in
@@ -3133,9 +3141,13 @@
             liveRouter = router
 
             // Set the router as the request handler on the socket server
-            await apiSocketServer.setRequestHandler { [agentSimulator] request in
+            await apiSocketServer.setRequestHandler { [weak self, agentSimulator] request, peer in
                 if request.method == "simulator.action" {
                     return await agentSimulator.handle(request)
+                }
+                if ["workflow.finish", "workflow.attachments", "workflow.artifact"].contains(request.method) {
+                    guard let self else { return .internalError(id: request.id, "Host is shutting down.") }
+                    return await self.handleWorkflowAgentCommand(request, peer: peer)
                 }
                 return await router.handleRequest(request)
             }
@@ -3401,6 +3413,14 @@
             let tmux = tmuxService
             let editorManager = editorSessionManager
             connectionManager.onCommand = { [weak self, executor, streamService, tmux, winManager, editorManager, paneStreaming, weak connectionManager] viewerId, command in
+                if case let .manageAgentWorkflows(spec) = command.command {
+                    guard let service = self?.agentWorkflowService else {
+                        return .failure(for: command.id, error: "Workflows are unavailable on this Host.")
+                    }
+                    do {
+                        return try await CommandResponseMessage(commandId: command.id, success: true, agentWorkflow: service.handle(spec))
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case .readDashboard = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
                     do {
@@ -3549,7 +3569,7 @@
                             spec: spec,
                             preparation: preparation,
                             defaultCommand: self?.pluginRegistry?.manifest(spec.pluginID)?.processNames.first,
-                            hostID: self?.workspaceRecovery?.snapshot?.hostID,
+                            hostID: self?.workspaceRecovery?.hostID,
                             tmuxService: tmux
                         )
                     } catch {
@@ -3863,7 +3883,8 @@
                 // empty, so an older viewer sees no field at all (graceful skew).
                 let usageOverview = await self?.currentUsageOverview()
                 let sharedTerminalLayouts = await windowManager.sharedTerminalLayouts
-                let recoveryHostID = await self?.workspaceRecovery?.snapshot?.hostID
+                let recoveryHostID = await self?.workspaceRecovery?.hostID
+                let workflowVersion: Int? = await self?.agentWorkflowService == nil ? nil : AgentWorkflowWire.version
                 let workspaceIdentity = HostSessionStateSnapshot.workspaceIdentity(hostID: recoveryHostID, panes: paneStates)
 
                 // Open response forms ride `AgentSession.state` in `paneStates`, so a
@@ -3906,6 +3927,8 @@
                     supportsPaneSimulatorCreation: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsSimulatorClosing: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsDashboard: true,
+                    agentWorkflowVersion: workflowVersion,
+                    workflowAgentPluginIDs: workflowVersion == nil ? nil : await self?.workflowAgentPluginIDs(),
                     simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs,
                     supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs,
                     workspaceIdentity: workspaceIdentity,

@@ -77,12 +77,14 @@ public struct NewAgentTabConfiguration: Identifiable {
 @MainActor
 public struct NewAgentTabPanel: View {
     let configuration: NewAgentTabConfiguration
+    let destinationDescription: String?
     @Environment(\.dismiss) private var dismiss
     @State private var launchingAgentID: String?
     @State private var errorMessage: String?
 
-    public init(configuration: NewAgentTabConfiguration) {
+    public init(configuration: NewAgentTabConfiguration, destinationDescription: String? = nil) {
         self.configuration = configuration
+        self.destinationDescription = destinationDescription
     }
 
     public var body: some View {
@@ -93,7 +95,7 @@ public struct NewAgentTabPanel: View {
                 Button("Close") { dismiss() }
                     .disabled(launchingAgentID != nil)
             }
-            Text("New tab in \(configuration.id.sessionName)")
+            Text(destinationDescription ?? "New tab in \(configuration.id.sessionName)")
                 .font(.caption).foregroundStyle(.secondary)
             if let reason = configuration.unavailableReason {
                 Text(reason).foregroundStyle(.secondary)

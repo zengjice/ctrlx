@@ -55,20 +55,17 @@ enum SocketClient {
         var data = try encoder.encode(request)
         data.append(UInt8(ascii: "\n"))
 
-        let written = data.withUnsafeBytes { ptr in
-            Darwin.write(fd, ptr.baseAddress!, ptr.count)
-        }
-        guard written == data.count else {
-            throw CLIError.writeFailed
-        }
+        try writeAll(data) { Darwin.write(fd, $0.baseAddress, $0.count) }
 
         // Read response (newline-delimited JSON)
         var responseData = Data()
         if let responseLimit {
-            var buffer = [UInt8](repeating: 0, count: 16384)
+            var buffer = [UInt8](repeating: 0, count: 16_384)
             while true {
                 let count = Darwin.read(fd, &buffer, buffer.count)
-                if count < 0, errno == EINTR { continue }
+                if count < 0, errno == EINTR {
+                    continue
+                }
                 guard count > 0 else { throw CLIError.responseTimeout }
                 if let end = buffer.prefix(count).firstIndex(of: 10) {
                     responseData.append(contentsOf: buffer.prefix(end))
@@ -81,7 +78,9 @@ enum SocketClient {
         } else {
             var byte: UInt8 = 0
             while Darwin.read(fd, &byte, 1) == 1 {
-                if byte == UInt8(ascii: "\n") { break }
+                if byte == UInt8(ascii: "\n") {
+                    break
+                }
                 responseData.append(byte)
             }
         }
@@ -91,6 +90,23 @@ enum SocketClient {
         }
 
         return try JSONDecoder().decode(JSONRPCResponse.self, from: responseData)
+    }
+
+    /// Large artifact chunks may require multiple writes on the same connection.
+    /// Continue only the remaining bytes; never retry the whole request.
+    static func writeAll(_ data: Data, write: (UnsafeRawBufferPointer) -> Int) throws {
+        try data.withUnsafeBytes { bytes in
+            var offset = 0
+            while offset < bytes.count {
+                let remaining = UnsafeRawBufferPointer(rebasing: bytes[offset...])
+                let count = write(remaining)
+                if count < 0, errno == EINTR {
+                    continue
+                }
+                guard count > 0, count <= remaining.count else { throw CLIError.writeFailed }
+                offset += count
+            }
+        }
     }
 }
 

@@ -1,6 +1,8 @@
 #if os(iOS) || os(macOS)
     import AVFoundation
+    import Dependencies
     import Foundation
+    import os
     import Speech
 
     @available(iOS 26.0, macOS 26.0, *)
@@ -330,7 +332,33 @@
             try await analyzer.setContext(context)
             try Task.checkCancellation()
 
-            let audioFile = try AVAudioFile(forReading: url)
+            let sourceFile = try AVAudioFile(forReading: url)
+            guard
+                let format = await SpeechAnalyzer.bestAvailableAudioFormat(
+                    compatibleWith: modules,
+                    considering: sourceFile.processingFormat
+                ) else { throw SpeechAnalyzerVoiceSessionError.compatibleAudioFormatUnavailable }
+            var convertedURL: URL?
+            defer {
+                if let convertedURL, FileManager.default.fileExists(atPath: convertedURL.path) {
+                    do { try FileManager.default.removeItem(at: convertedURL) }
+                    catch { Logger(subsystem: "com.jicezeng.ctrlx", category: "VoiceInput").error("Could not remove converted speech recording: \(error.localizedDescription)") }
+                }
+            }
+            let audioFile: AVAudioFile
+            if sourceFile.processingFormat == format {
+                audioFile = sourceFile
+            } else {
+                @Dependency(SpeechAudioFileConverter.self) var converter
+                let destination = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("ctrlx-speech-converted-\(UUID().uuidString).caf")
+                convertedURL = destination
+                try await converter.convert(url, destination, format)
+                // SpeechAnalyzer's file reader needs Float32 processing even when the stored samples are Int16.
+                audioFile = try AVAudioFile(forReading: destination)
+            }
+            try Task.checkCancellation()
+            try await analyzer.prepareToAnalyze(in: format)
             let resultTask = Task {
                 try await transcriber.collectedResult(
                     liveTranscript: liveTranscript,

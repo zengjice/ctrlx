@@ -124,6 +124,8 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsPaneSimulatorCreation = false
     public private(set) var hostSupportsSimulatorClosing = false
     public private(set) var hostSupportsDashboard = false
+    public private(set) var hostAgentWorkflowVersion: Int?
+    public private(set) var hostWorkflowAgentPluginIDs: Set<String> = []
     public private(set) var simulatorTabs: [RemoteSimulatorTab] = []
     /// Whether the Host can check and install a macOS CtrlX app update.
     public private(set) var hostSupportsCtrlXAppUpdate = false
@@ -553,6 +555,8 @@ final public class ViewerRelayClient {
         }
 
         switch command.commandType {
+        case .manageAgentWorkflows where hostAgentWorkflowVersion != AgentWorkflowWire.version:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage Agent workflows."))
         case .readDashboard where !hostSupportsDashboard:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view its Dashboard"))
         case .installCtrlXAppUpdate where !hostSupportsCtrlXAppUpdate:
@@ -764,6 +768,8 @@ final public class ViewerRelayClient {
     @discardableResult
     public func send(_ command: CommandType, paneId: String, inputBinding: ViewerWorkspaceInputBinding? = nil) async -> Bool {
         switch command {
+        case let .manageAgentWorkflows(spec):
+            return (try? await sendCommand(spec, paneId: "").get())?.success == true
         case let .readDashboard(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .installCtrlXAppUpdate(spec):
@@ -1221,6 +1227,8 @@ final public class ViewerRelayClient {
             hostSupportsPaneSimulatorCreation = sessionState.supportsPaneSimulatorCreation == true
             hostSupportsSimulatorClosing = sessionState.supportsSimulatorClosing == true
             hostSupportsDashboard = sessionState.supportsDashboard == true
+            hostAgentWorkflowVersion = sessionState.agentWorkflowVersion
+            hostWorkflowAgentPluginIDs = Set(sessionState.workflowAgentPluginIDs ?? [])
             simulatorTabs = sessionState.simulatorTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             hostSupportsCtrlXAppUpdate = sessionState.supportsCtrlXAppUpdate == true
@@ -1723,6 +1731,8 @@ final public class ViewerRelayClient {
         hostSupportsPaneSimulatorCreation = false
         hostSupportsSimulatorClosing = false
         hostSupportsDashboard = false
+        hostAgentWorkflowVersion = nil
+        hostWorkflowAgentPluginIDs = []
         hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false
     }

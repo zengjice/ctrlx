@@ -515,6 +515,12 @@ struct TmuxPaneMirrorApp: App {
         .defaultSize(width: 720, height: 760)
         .defaultLaunchBehavior(.suppressed)
 
+        Window("Workflows", id: "workflows") {
+            MacWorkflowsView().environment(coordinator)
+        }
+        .defaultSize(width: 720, height: 760)
+        .defaultLaunchBehavior(.suppressed)
+
         // About window - custom CtrlX provenance and build information
         Window("About CtrlX", id: "about") {
             AboutWindowView()

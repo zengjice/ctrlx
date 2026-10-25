@@ -116,6 +116,7 @@ enum PaneSurfaceRetry {
 @Observable
 @MainActor
 final public class TmuxService {
+    @ObservationIgnored var workflowInputGate: AgentWorkflowInputGate?
     /// Base environment variables set on all sessions/windows/panes created by the app.
     /// Includes Claude Code rendering/accessibility config, color + locale fidelity
     /// hints for the mirror, and oh-my-zsh update suppression.
@@ -2251,9 +2252,9 @@ final public class TmuxService {
         var args = ["send-keys", "-t", target, "-H"]
         args.append(contentsOf: data.map { String(format: "%02x", $0) })
         if let expectedWorkspacePane {
-            return try await sendWorkspaceInput([args], target: target, identity: expectedWorkspacePane)
+            return try await sendWorkspaceInput([args], target: target, identity: expectedWorkspacePane, editsInput: AgentWorkflowInputGate.editsInput(data))
         }
-        let result = try await runTmuxCommand(args)
+        let result = try await runHumanTmuxInput(args, target: target, editsInput: AgentWorkflowInputGate.editsInput(data))
         guard result.isSuccess else {
             throw TmuxError.commandFailed(message: result.stderrString)
         }
@@ -2279,7 +2280,7 @@ final public class TmuxService {
         }
         args.append(escapeTmuxSemicolon(keys))
 
-        let result = try await runTmuxCommand(args)
+        let result = try await runHumanTmuxInput(args, target: target)
         guard result.isSuccess else {
             throw TmuxError.commandFailed(message: result.stderrString)
         }
@@ -2301,7 +2302,7 @@ final public class TmuxService {
         for key in keys {
             args.append(escapeTmuxSemicolon(key))
         }
-        let result = try await runTmuxCommand(args)
+        let result = try await runHumanTmuxInput(args, target: target)
         guard result.isSuccess else {
             throw TmuxError.commandFailed(message: result.stderrString)
         }
@@ -2397,11 +2398,7 @@ final public class TmuxService {
         if let expectedWorkspacePane {
             return try await sendWorkspaceInput([loadArguments, pasteArguments], target: target, identity: expectedWorkspacePane)
         }
-        let load = try await runTmuxCommand(loadArguments)
-        guard load.isSuccess else {
-            throw TmuxError.commandFailed(message: load.stderrString)
-        }
-        let paste = try await runTmuxCommand(pasteArguments)
+        let paste = try await runHumanTmuxInput(loadArguments + [";"] + pasteArguments, target: target)
         guard paste.isSuccess else {
             throw TmuxError.commandFailed(message: paste.stderrString)
         }
@@ -2874,11 +2871,11 @@ final public class TmuxService {
 
     /// Sends Ctrl+C to cancel the current operation in a pane
     public func sendInterrupt(_ target: String) async throws {
-        _ = try await runTmuxCommand([
+        _ = try await runHumanTmuxInput([
             "send-keys",
             "-t", target,
             "C-c",
-        ])
+        ], target: target)
     }
 
     /// Kills a tmux session by name.
@@ -3655,12 +3652,21 @@ final public class TmuxService {
         "=\(sessionName):\(windowIndex)"
     }
 
-    func runTmuxCommand(_ arguments: [String]) async throws -> ProcessResult {
+    func runTmuxCommand(
+        _ arguments: [String],
+        launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil
+    ) async throws -> ProcessResult {
         var args = arguments
 
         // Add socket path if configured
         if let socket = socketPath {
             args = ["-S", socket] + args
+        }
+
+        if let launch {
+            return try await processRunner.runWithLaunch(
+                executable: tmuxPath, arguments: args, environment: ["TMUX": "", "TMUX_PANE": ""], timeout: nil, launch: launch
+            )
         }
 
         return try await processRunner.run(

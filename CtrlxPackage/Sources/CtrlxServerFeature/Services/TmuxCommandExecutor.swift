@@ -119,6 +119,7 @@ public actor TmuxCommandExecutor {
                  .prepareSessionWorktree,
                  .readDashboard,
                  .installCtrlXAppUpdate,
+                 .manageAgentWorkflows,
                  .browseFiles,
                  .browseBrowser,
                  .browseSimulator,

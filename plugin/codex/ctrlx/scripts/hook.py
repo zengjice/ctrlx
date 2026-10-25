@@ -61,7 +61,9 @@ def main():
         return
 
     body = json.dumps(
-        {"plugin_id": PLUGIN_ID, "context": {"TMUX_PANE": tmux_pane}, "payload": payload}
+        {"plugin_id": PLUGIN_ID,
+         "context": {"TMUX_PANE": tmux_pane, "CTRLX_INGRESS_ACK": "1", "CTRLX_WORKFLOW_VERSION": "1"},
+         "payload": payload}
     ).encode("utf-8")
     frame = struct.pack(">I", len(body)) + body
 
@@ -70,6 +72,11 @@ def main():
             sock.settimeout(5)
             sock.connect(SOCKET_PATH)
             sock.sendall(frame)
+            # Keep this process alive until the Host captures socket ancestry.
+            # Older Hosts close on EOF without a reply, so no upgrade handshake
+            # or extra timeout is needed for backward compatibility.
+            sock.shutdown(socket.SHUT_WR)
+            sock.recv(1)
     except Exception:
         return
 

@@ -17,6 +17,7 @@
         @Binding var navigationPath: NavigationPath
         let onOpenSettings: () -> Void
         let onOpenDashboard: () -> Void
+        var onOpenWorkflows: () -> Void = { }
 
         @Environment(SessionStore.self) private var sessionStore
         @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
@@ -187,6 +188,10 @@
 
         private var sessionsList: some View {
             List {
+                Section {
+                    Button(action: onOpenWorkflows) { Label("Workflows", symbol: .arrowTriangleBranch) }
+                        .accessibilityIdentifier("workflows-open")
+                }
                 ForEach(settings.pairedHosts) { host in
                     HostSessionsSection(
                         host: host,

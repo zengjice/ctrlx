@@ -93,6 +93,8 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsPaneSimulatorCreation: Bool?
     public let supportsSimulatorClosing: Bool?
     public let supportsDashboard: Bool?
+    public let agentWorkflowVersion: Int?
+    public let workflowAgentPluginIDs: [String]?
     public let simulatorTabs: [RemoteSimulatorTab]?
     /// Host supports inspecting and installing a macOS CtrlX app update.
     public let supportsCtrlXAppUpdate: Bool?
@@ -133,6 +135,8 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsPaneSimulatorCreation: Bool? = nil,
         supportsSimulatorClosing: Bool? = nil,
         supportsDashboard: Bool? = nil,
+        agentWorkflowVersion: Int? = nil,
+        workflowAgentPluginIDs: [String]? = nil,
         simulatorTabs: [RemoteSimulatorTab]? = nil,
         supportsPaneFiles: Bool? = nil, fileTabs: [HostFileTab]? = nil,
         workspaceIdentity: WorkspaceIdentityScope? = nil,
@@ -179,6 +183,8 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsPaneSimulatorCreation = supportsPaneSimulatorCreation
         self.supportsSimulatorClosing = supportsSimulatorClosing
         self.supportsDashboard = supportsDashboard
+        self.agentWorkflowVersion = agentWorkflowVersion
+        self.workflowAgentPluginIDs = workflowAgentPluginIDs
         self.simulatorTabs = simulatorTabs
         self.supportsCtrlXAppUpdate = supportsCtrlXAppUpdate
         self.ctrlXAppUpdate = ctrlXAppUpdate
@@ -223,6 +229,8 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsPaneSimulatorCreation: supportsPaneSimulatorCreation,
             supportsSimulatorClosing: supportsSimulatorClosing,
             supportsDashboard: supportsDashboard,
+            agentWorkflowVersion: agentWorkflowVersion,
+            workflowAgentPluginIDs: workflowAgentPluginIDs,
             simulatorTabs: simulatorTabs,
             supportsPaneFiles: supportsPaneFiles, fileTabs: fileTabs,
             workspaceIdentity: workspaceIdentity,

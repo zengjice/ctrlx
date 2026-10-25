@@ -62,6 +62,7 @@ For scripting, most `--json` results are `{id, ok, result}`; check exit status a
 - [Session labels, progress, notifications, prompt editor and projects](references/workflows.md).
 - [Reusable layouts, idempotent creation and raw tmux fallback](references/layouts.md).
 - [Installed plugin inspection, trust, updates and removal](references/plugins.md).
+- [Reading collaboration attachments, sharing artifacts and requesting completion](references/workflows.md#agent-collaboration).
 - [Direct socket requests and response fields](references/api-reference.md).
 
 Do not read all references for a simple command. Creating a new sidecar is a

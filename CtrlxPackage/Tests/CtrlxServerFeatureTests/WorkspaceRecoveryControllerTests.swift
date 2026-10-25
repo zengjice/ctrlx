@@ -80,12 +80,13 @@ struct WorkspaceRecoveryControllerTests {
         _ backend: Backend, boot: String, mode: WorkspaceRecoveryMode = .layoutAndAgents,
         captureExtras: @escaping (WorkspaceRecoverySnapshot) async throws -> WorkspaceRecoverySnapshot = { $0 },
         present: @escaping (WorkspaceRecoverySnapshot, WorkspaceTmuxState) async throws -> Void = { _, _ in },
-        resumeAgents: @escaping WorkspaceAgentRecoveryHandler = { source, _, _, _ in (source, []) }
+        resumeAgents: @escaping WorkspaceAgentRecoveryHandler = { source, _, _, _ in (source, []) },
+        resolveHostID: @escaping @Sendable (UUID?) async throws -> UUID = { $0 ?? UUID() }
     ) -> WorkspaceRecoveryController {
         WorkspaceRecoveryController(
             store: backend.store, tmux: backend.client,
             system: .init(bootID: { boot }, directoryExists: { _ in true }, pathExists: { _ in true }), mode: { mode },
-            captureExtras: captureExtras, present: present, resumeAgents: resumeAgents
+            captureExtras: captureExtras, present: present, resumeAgents: resumeAgents, resolveHostID: resolveHostID
         )
     }
 
@@ -101,6 +102,39 @@ struct WorkspaceRecoveryControllerTests {
         #expect(saved.recovery == nil)
         #expect(saved.bootID == "new-boot" && saved.serverID == "new-server")
         #expect(saved.sessions == original.sessions)
+        await recovery.stop()
+    }
+
+    @Test
+    func disablingRecoveryDoesNotChangePersistentHostIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-recovery-host-id-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identity = HostIdentityClient.diskBacked(stateRoot: root)
+        let backend = Backend(store: .inMemory())
+        let disabled = controller(backend, boot: "boot", mode: .disabled, resolveHostID: { _ in try await identity.load() })
+        await disabled.start(periodic: false)
+        #expect(disabled.phase == .ready)
+        let hostID = try #require(disabled.hostID)
+        #expect(try await backend.store.load() == nil)
+        await disabled.stop()
+
+        let enabled = controller(backend, boot: "boot", mode: .layoutOnly, resolveHostID: { _ in try await identity.load() })
+        await enabled.start(periodic: false)
+        #expect(enabled.phase == .ready)
+        #expect(try await backend.store.load()?.hostID == hostID)
+        await enabled.stop()
+    }
+
+    @Test
+    func conflictingHostIdentityPreservesRecoverySource() async throws {
+        let original = WorkspaceRecoveryStoreTests.snapshot()
+        let backend = Backend(store: .inMemory(original))
+        let other = UUID()
+        let recovery = controller(backend, boot: "new-boot", resolveHostID: { _ in other })
+        await recovery.start(periodic: false)
+        #expect(recovery.phase == .failed)
+        #expect(backend.captures == 0 && backend.restores == 0)
+        #expect(try await backend.store.load() == original)
         await recovery.stop()
     }
 

@@ -7,6 +7,7 @@ Never connects to a live CtrlX/tmux session or downloads/builds a simulator.
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import re
@@ -140,7 +141,8 @@ class PluginSessionContext(unittest.TestCase):
                                 PRODUCT_NAME="CtrlX"),
                        check=True, capture_output=True, timeout=15)
 
-    def run_hook(self, plugin, payload, *, pane="%999", available=True, forward=True):
+    def run_hook(self, plugin, payload, *, pane="%999", available=True, forward=True,
+                 acknowledge=True):
         # Override only the socket in the loaded script: never change HOME or
         # connect test lifecycle events to the user's running app.
         driver = "\n".join((
@@ -157,20 +159,28 @@ class PluginSessionContext(unittest.TestCase):
                     listener.listen(1)
                     listener.settimeout(2)
                 raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
-                result = subprocess.run(
-                    [sys.executable, "-c", driver,
-                     str(self.plugins[plugin] / "scripts/hook.py"), path],
-                    input=raw, cwd=ipc, capture_output=True, timeout=5,
-                    env=dict(os.environ, TMUX_PANE=pane, CLAUDE_PROJECT_DIR="/tmp/project"))
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stderr, b"")
-                if available and forward:
+                def receive():
                     connection, _ = listener.accept()
                     with connection, connection.makefile("rb") as stream:
                         length = struct.unpack(">I", stream.read(4))[0]
                         message = json.loads(stream.read(length))
                         self.assertEqual(stream.read(), b"")
-                    context = {"TMUX_PANE": pane}
+                        if acknowledge:
+                            connection.sendall(b"\x01")
+                    return message
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    received = pool.submit(receive) if available and forward else None
+                    result = subprocess.run(
+                        [sys.executable, "-c", driver,
+                         str(self.plugins[plugin] / "scripts/hook.py"), path],
+                        input=raw, cwd=ipc, capture_output=True, timeout=5,
+                        env=dict(os.environ, TMUX_PANE=pane, CLAUDE_PROJECT_DIR="/tmp/project"))
+                    message = received.result(timeout=2) if received else None
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, b"")
+                if available and forward:
+                    context = {"TMUX_PANE": pane, "CTRLX_INGRESS_ACK": "1", "CTRLX_WORKFLOW_VERSION": "1"}
                     if plugin == "claude-code":
                         context["CLAUDE_PROJECT_DIR"] = "/tmp/project"
                     self.assertEqual(message, {"plugin_id": plugin, "context": context,
@@ -180,6 +190,13 @@ class PluginSessionContext(unittest.TestCase):
                     with self.assertRaises(BlockingIOError):
                         listener.accept()
                 return result.stdout
+
+    def test_legacy_host_eof_keeps_hooks_compatible(self):
+        for plugin in self.plugins:
+            with self.subTest(plugin=plugin):
+                stdout = self.run_hook(plugin, {"hook_event_name": "SessionStart"},
+                                       acknowledge=False)
+                self.assertTrue(stdout)
 
     def skill_context(self, plugin, name):
         skill = (self.plugins[plugin] / "skills" / name / "SKILL.md").resolve()

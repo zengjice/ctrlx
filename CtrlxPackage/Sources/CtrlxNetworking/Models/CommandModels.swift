@@ -1137,6 +1137,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case readDashboard(ReadDashboard)
     /// Install the Host's verified CtrlX app update.
     case installCtrlXAppUpdate(InstallCtrlXAppUpdate)
+    case manageAgentWorkflows(ManageAgentWorkflows)
     /// Send keystrokes to a tmux pane
     case sendKeystroke(SendKeystroke)
     /// Paste one complete clipboard payload without synthesizing Enter keys.
@@ -1451,6 +1452,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let dashboard: DashboardSnapshot?
     /// Host-owned CtrlX app update state, when this command changed it.
     public let ctrlXAppUpdate: CtrlXAppUpdateState?
+    public let agentWorkflow: AgentWorkflowResponse?
     /// True only after the Host sent the opener or already handled this queue.
     /// Missing on older Hosts; a generic success is not an acknowledgement.
     public let codexQuestionsHandled: Bool?
@@ -1473,6 +1475,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         simulatorTab: RemoteSimulatorTab? = nil,
         dashboard: DashboardSnapshot? = nil,
         ctrlXAppUpdate: CtrlXAppUpdateState? = nil,
+        agentWorkflow: AgentWorkflowResponse? = nil,
         codexQuestionsHandled: Bool? = nil
     ) {
         self.commandId = commandId
@@ -1492,6 +1495,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.simulatorTab = simulatorTab
         self.dashboard = dashboard
         self.ctrlXAppUpdate = ctrlXAppUpdate
+        self.agentWorkflow = agentWorkflow
         self.codexQuestionsHandled = codexQuestionsHandled
     }
 
