@@ -135,7 +135,8 @@ struct CodexPluginCoreTests {
             name: "Custom API",
             baseURL: "https://api.example.com/v1",
             model: "custom-model",
-            environmentKey: "CUSTOM_API_KEY"
+            environmentKey: "CUSTOM_API_KEY",
+            reasoningEffort: .xhigh
         )
         let settings = try JSONEncoder().encode(CodexSettings(exportTelemetry: false, providers: [profile]))
         let secrets = SecretsService.inMemory()
@@ -167,6 +168,7 @@ struct CodexPluginCoreTests {
                 "-c", #"model_providers.custom.env_key="CUSTOM_API_KEY""#,
                 "-c", #"model_providers.custom.wire_api="responses""#,
                 "-c", "model_providers.custom.requires_openai_auth=false",
+                "-c", #"model_reasoning_effort="xhigh""#,
                 "--model", "custom-model",
             ])
         }
@@ -179,7 +181,8 @@ struct CodexPluginCoreTests {
             name: "Custom API",
             baseURL: "https://api.example.com/v1",
             model: "custom-model",
-            environmentKey: "CUSTOM_API_KEY"
+            environmentKey: "CUSTOM_API_KEY",
+            reasoningEffort: .high
         )
         let settings = try JSONEncoder().encode(
             CodexSettings(exportTelemetry: false, providers: [profile], defaultProviderID: profile.id)
@@ -202,6 +205,7 @@ struct CodexPluginCoreTests {
                 AgentProviderEnvironment.markerKey: profile.id,
             ])
             #expect(custom.args.contains(#"model_provider="custom""#))
+            #expect(custom.args.contains(#"model_reasoning_effort="high""#))
 
             let official = try #require(try await core.commandForLaunch(projectPath: "/repo", providerID: CodexSettings.builtInProviderID))
             #expect(official.args == ["-c", #"model_provider="openai""#])
@@ -242,7 +246,8 @@ struct CodexPluginCoreTests {
             name: "Custom API",
             baseURL: "https://api.example.com/v1",
             model: "custom-model",
-            environmentKey: "CUSTOM_API_KEY"
+            environmentKey: "CUSTOM_API_KEY",
+            reasoningEffort: .medium
         )
         let settings = try JSONEncoder().encode(CodexSettings(exportTelemetry: false, providers: [profile]))
         let secrets = SecretsService.inMemory()
@@ -273,6 +278,7 @@ struct CodexPluginCoreTests {
             #expect(resumed.command.env["CODEX_HOME"] == "/source/codex")
             #expect(resumed.command.env["CUSTOM_API_KEY"] == "fixture-key")
             #expect(resumed.command.args.contains(#"model_provider="custom""#))
+            #expect(resumed.command.args.contains(#"model_reasoning_effort="medium""#))
             #expect(!resumed.command.args.contains(#"model_provider="old""#))
             #expect(!resumed.command.args.contains("old-model"))
             #expect(resumed.command.args.contains("custom-model"))

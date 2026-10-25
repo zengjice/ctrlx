@@ -587,6 +587,12 @@
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
+                            if !providerSummary(provider).isEmpty {
+                                Text(providerSummary(provider))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
                         Spacer()
                         Button("Edit") {
@@ -638,6 +644,15 @@
         private var providerOptions: [AgentProviderOption] {
             [AgentProviderOption(id: builtInProviderID, name: builtInProviderName)]
                 + providers.map { AgentProviderOption(id: $0.providerID, name: $0.name) }
+        }
+
+        private func providerSummary(_ provider: AgentProviderDraft) -> String {
+            [provider.model, provider.reasoningEffort?.displayName]
+                .compactMap { value in
+                    guard let value, !value.isEmpty else { return nil }
+                    return value
+                }
+                .joined(separator: " · ")
         }
 
         private func saveProvider(_ draft: AgentProviderDraft) {
@@ -911,6 +926,7 @@
         var model: String
         var environmentKey: String
         var authKind: ClaudeProviderAuthKind
+        var reasoningEffort: CodexReasoningEffort?
 
         var id: String {
             providerID
@@ -921,6 +937,7 @@
             self.name = ""
             self.baseURL = ""
             self.model = ""
+            self.reasoningEffort = nil
             if pluginID == CodexPluginCore.pluginID {
                 self.environmentKey = "OPENAI_API_KEY"
                 self.authKind = .apiKey
@@ -937,6 +954,7 @@
             self.model = profile.model
             self.environmentKey = profile.environmentKey
             self.authKind = .apiKey
+            self.reasoningEffort = profile.reasoningEffort
         }
 
         init(profile: ClaudeProviderProfile, pluginID _: String) {
@@ -946,6 +964,7 @@
             self.model = profile.model
             self.environmentKey = profile.environmentKey
             self.authKind = profile.authKind
+            self.reasoningEffort = nil
         }
 
         func codexProfile() -> CodexProviderProfile {
@@ -954,7 +973,8 @@
                 name: name,
                 baseURL: baseURL,
                 model: model,
-                environmentKey: environmentKey
+                environmentKey: environmentKey,
+                reasoningEffort: reasoningEffort
             )
         }
 
@@ -1036,6 +1056,17 @@
                     TextField("Model", text: $draft.model)
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("agentProviderModel")
+                    if !isClaude {
+                        Picker("Reasoning effort", selection: $draft.reasoningEffort) {
+                            Text("Use Codex configuration").tag(CodexReasoningEffort?.none)
+                            ForEach(CodexReasoningEffort.allCases) { effort in
+                                Text(effort.displayName).tag(Optional(effort))
+                            }
+                        }
+                        .accessibilityIdentifier("agentProviderReasoningEffort")
+                        Text("Overrides model_reasoning_effort for this Provider. Leave it at the Codex configuration default unless the endpoint supports reasoning effort.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("Authentication") {

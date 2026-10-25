@@ -93,7 +93,8 @@ struct CodexSettingsTests {
             "name": "Custom API",
             "base_url": "https://api.example.com/v1",
             "model": "custom-model",
-            "environment_key": "CUSTOM_API_KEY"
+            "environment_key": "CUSTOM_API_KEY",
+            "reasoning_effort": "xhigh"
           }],
           "default_provider_id": "custom"
         }
@@ -104,10 +105,22 @@ struct CodexSettingsTests {
             name: "Custom API",
             baseURL: "https://api.example.com/v1",
             model: "custom-model",
-            environmentKey: "CUSTOM_API_KEY"
+            environmentKey: "CUSTOM_API_KEY",
+            reasoningEffort: .xhigh
         )])
         #expect(settings.providerOptions.map(\.id) == ["openai", "custom"])
         #expect(settings.resolvedDefaultProviderID == "custom")
+
+        let legacyProvider = try JSONDecoder().decode(CodexProviderProfile.self, from: Data("""
+        {
+          "id": "legacy",
+          "name": "Legacy API",
+          "base_url": "https://legacy.example.com/v1",
+          "model": "legacy-model",
+          "environment_key": "LEGACY_API_KEY"
+        }
+        """.utf8))
+        #expect(legacyProvider.reasoningEffort == nil)
 
         let legacy = try JSONDecoder().decode(CodexSettings.self, from: Data(#"{"auto_run":true}"#.utf8))
         #expect(legacy.providers.isEmpty && legacy.defaultProviderID == nil)

@@ -596,15 +596,18 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             throw AgentProviderError("Add an API key for Codex Provider '\(profile.name)' in Settings → Agents → Codex → Providers.")
         }
         let prefix = "model_providers.\(profile.id)"
-        let arguments = [
+        var arguments = [
             "-c", "model_provider=\(Self.tomlString(profile.id))",
             "-c", "\(prefix).name=\(Self.tomlString(profile.name))",
             "-c", "\(prefix).base_url=\(Self.tomlString(profile.baseURL))",
             "-c", "\(prefix).env_key=\(Self.tomlString(profile.environmentKey))",
             "-c", #"\#(prefix).wire_api="responses""#,
             "-c", "\(prefix).requires_openai_auth=false",
-            "--model", profile.model,
         ]
+        if let reasoningEffort = profile.reasoningEffort {
+            arguments += ["-c", "model_reasoning_effort=\(Self.tomlString(reasoningEffort.rawValue))"]
+        }
+        arguments += ["--model", profile.model]
         return CodexProviderLaunch(
             arguments: arguments,
             environment: [

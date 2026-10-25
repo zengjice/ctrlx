@@ -33,6 +33,9 @@
             draft.name = "团队接入"
             draft.baseURL = "https://api.example.com/v1"
             draft.model = "test-model"
+            if pluginID == "codex" {
+                draft.reasoningEffort = .xhigh
+            }
             let providerID = draft.providerID
             let originalSettings = try settings(draft, pluginID: pluginID)
             let secrets = SecretsService.inMemory()
@@ -59,6 +62,9 @@
                 #expect(after.env[AgentProviderEnvironment.markerKey] == providerID)
                 #expect(after.env[pluginID == "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_AUTH_TOKEN"] == "fixture-key")
                 #expect(await core.providerOptions().contains(AgentProviderOption(id: providerID, name: edited.name)))
+                if pluginID == "codex" {
+                    #expect(after.args.contains(#"model_reasoning_effort="xhigh""#))
+                }
             }
         }
 

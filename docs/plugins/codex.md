@@ -22,8 +22,8 @@ Code core; only the agent-specific differences are called out here. See
 
 Configure Providers in **Settings → Agents → Codex → Providers**. The built-in
 `openai` Provider is the normal Codex login/configuration. A custom Provider
-stores only `id`, `name`, `base_url`, `model` and `environment_key` in
-`settings.json`; its credential is a Keychain item named
+stores only `id`, `name`, `base_url`, `model`, optional `reasoning_effort` and
+`environment_key` in `settings.json`; its credential is a Keychain item named
 `agent-provider.codex.<provider-id>`. Credentials are never sent to Viewers or
 written to recovery snapshots.
 
@@ -35,17 +35,22 @@ written to recovery snapshots.
 - `default_provider_id = null` keeps the CLI's current configuration for new
   sessions. An explicit `openai` selection forces the official login even when
   the user's Codex config names another Provider.
+- `reasoning_effort` is optional and overrides `model_reasoning_effort` for
+  New Agent, Fork and recovery launches that use this Provider. Unset keeps the
+  CLI configuration. Settings exposes `none`, `minimal`, `low`, `medium`, `high`,
+  `xhigh`, `max` and `ultra`; choose a value the Provider's model supports.
 - A custom launch passes `model_provider`, `model_providers.<id>.*`,
-  `wire_api="responses"`, `requires_openai_auth=false` and `--model` as runtime
-  overrides. The complete shell script is installed through tmux's stdin into a
-  pane-scoped user option, never session environment, process arguments, command
-  text, settings, Viewer messages or recovery snapshots. After login rc files
-  run, a short fixed-size shell entry removes that pane option, decodes the
-  script and runs it in a subshell. Credentials therefore cannot be truncated
-  during slow shell startup, inherited by another window, or left in the
-  persistent login shell after Ctrl-C or Agent exit. Workspace recovery uses the
-  same per-pane payload path. Provider overrides require zsh, bash, sh, dash or
-  ksh; other login shells fail explicitly.
+  `wire_api="responses"`, `requires_openai_auth=false`, optional
+  `model_reasoning_effort` and `--model` as runtime overrides. The complete shell
+  script is installed through tmux's stdin into a pane-scoped user option, never
+  session environment, process arguments, command text, settings, Viewer
+  messages or recovery snapshots. After login rc files run, a short fixed-size
+  shell entry removes that pane option, decodes the script and runs it in a
+  subshell. Credentials therefore cannot be truncated during slow shell startup,
+  inherited by another window, or left in the persistent login shell after
+  Ctrl-C or Agent exit. Workspace recovery uses the same per-pane payload path.
+  Provider overrides require zsh, bash, sh, dash or ksh; other login shells fail
+  explicitly.
 - Forking preserves the source conversation's `CODEX_HOME`; only the copied
   conversation's Provider overrides change. This allows an official-login
   conversation to fork into a custom Provider (and the reverse) without moving

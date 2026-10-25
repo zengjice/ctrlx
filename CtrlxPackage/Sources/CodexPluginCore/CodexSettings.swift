@@ -2,19 +2,59 @@ import CtrlxNetworking
 import CtrlxPluginProtocol
 import Foundation
 
+/// Codex's reasoning-effort override for a custom Provider.
+///
+/// `nil` on a profile follows the user's Codex configuration. Keeping this on
+/// the Provider makes the selected launch model and its thinking level a single
+/// Host-owned choice for New Agent, Fork and recovery.
+public enum CodexReasoningEffort: String, Codable, Sendable, CaseIterable, Hashable, Identifiable {
+    case none
+    case minimal
+    case low
+    case medium
+    case high
+    case xhigh
+    case max
+    case ultra
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .none: "None"
+        case .minimal: "Minimal"
+        case .low: "Low"
+        case .medium: "Medium"
+        case .high: "High"
+        case .xhigh: "Extra High"
+        case .max: "Max"
+        case .ultra: "Ultra"
+        }
+    }
+}
+
 public struct CodexProviderProfile: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public var name: String
     public var baseURL: String
     public var model: String
     public var environmentKey: String
+    public var reasoningEffort: CodexReasoningEffort?
 
-    public init(id: String, name: String, baseURL: String, model: String, environmentKey: String) {
+    public init(
+        id: String,
+        name: String,
+        baseURL: String,
+        model: String,
+        environmentKey: String,
+        reasoningEffort: CodexReasoningEffort? = nil
+    ) {
         self.id = id
         self.name = name
         self.baseURL = baseURL
         self.model = model
         self.environmentKey = environmentKey
+        self.reasoningEffort = reasoningEffort
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -23,6 +63,7 @@ public struct CodexProviderProfile: Codable, Sendable, Equatable, Identifiable {
         case baseURL = "base_url"
         case model
         case environmentKey = "environment_key"
+        case reasoningEffort = "reasoning_effort"
     }
 }
 
