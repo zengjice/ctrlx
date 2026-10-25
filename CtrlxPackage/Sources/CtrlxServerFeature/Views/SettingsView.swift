@@ -61,6 +61,7 @@ public struct SettingsView: View {
                 Label("About", symbol: .infoCircle)
             }
         }
+        .tabViewStyle(.sidebarAdaptable)
         .frame(minWidth: 900, minHeight: 500)
     }
 
