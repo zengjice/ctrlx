@@ -6,10 +6,10 @@
 // ==========================================
 // CtrlX changes the application, storage, E2EE and Relay identity. It is a new
 // major distribution and deliberately does not interoperate with Gallager 2.x.
-MARKETING_VERSION = 3.0.98
+MARKETING_VERSION = 3.0.99
 // Increase for each distributed build, including when MARKETING_VERSION changes.
 // iOS installation tools use CFBundleVersion to identify updated builds.
-CURRENT_PROJECT_VERSION = 31
+CURRENT_PROJECT_VERSION = 32
 
 // Local/release packaging scripts override these with a UTC timestamp and the
 // source commit. They are display-only and must not affect protocol versioning.

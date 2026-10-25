@@ -1,10 +1,10 @@
 #if os(macOS)
-    import CtrlxCommon
     import Clocks
     import ConcurrencyExtras
+    import CtrlxCommon
+    import CtrlxPluginProtocol
     import Dependencies
     import Foundation
-    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 
@@ -59,7 +59,7 @@
         }
 
         init(entries: [PluginRegistryEntry]) {
-            registry = PluginRegistryFile(schemaVersion: 1, plugins: entries)
+            self.registry = PluginRegistryFile(schemaVersion: 1, plugins: entries)
         }
 
         func makeManager(automaticTriggers: Bool = false) -> PluginUpdateManager {
@@ -143,7 +143,7 @@
     @MainActor
     struct PluginUpdateManagerAccessorTests {
         @Test("isUpdatable is true only for url entries with a manifestURL")
-        func isUpdatableFiltersSources() throws {
+        func isUpdatableFiltersSources() {
             let folderEntry = PluginRegistryEntry(
                 id: "dev", version: "1.0.0", source: .folder, runtime: .sidecar, enabled: true,
                 manifestURL: nil, bundleURL: nil, bundleSHA256: nil
@@ -160,7 +160,7 @@
         }
 
         @Test("setAutoUpdate persists through the registry file")
-        func setAutoUpdatePersists() throws {
+        func setAutoUpdatePersists() {
             withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: {
@@ -184,7 +184,7 @@
         }
 
         @Test("idle plugin: install, then disable→enable, then bridges refreshed only where installed")
-        func idlePluginHotRestartsAndRefreshesBridges() async throws {
+        func idlePluginHotRestartsAndRefreshesBridges() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -212,7 +212,7 @@
         }
 
         @Test("busy plugin: install only, needsBridgeRefresh persisted, app restart required")
-        func busyPluginDefersBridgeRefresh() async throws {
+        func busyPluginDefersBridgeRefresh() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -231,7 +231,7 @@
         }
 
         @Test("sourceChanged update is never installed")
-        func sourceChangedSkipped() async throws {
+        func sourceChangedSkipped() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -248,7 +248,7 @@
         }
 
         @Test("install failure reports failed and leaves no notice")
-        func installFailureReported() async throws {
+        func installFailureReported() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -268,7 +268,7 @@
         }
 
         @Test("boot sweep refreshes bridges for flagged entries and clears the flag")
-        func sweepRefreshesAndClearsFlag() async throws {
+        func sweepRefreshesAndClearsFlag() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -285,7 +285,7 @@
         }
 
         @Test("failed re-enable after the hot swap reports failed and flags the bridge refresh")
-        func enableFailureSurfaces() async throws {
+        func enableFailureSurfaces() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -313,7 +313,7 @@
         }
 
         @Test("failed bridge re-install keeps the update applied but flags a retry")
-        func bridgeFailureFlagsRetry() async throws {
+        func bridgeFailureFlagsRetry() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -330,7 +330,7 @@
         }
 
         @Test("a sweep whose bridge re-install fails keeps the flag for the next launch")
-        func failedSweepKeepsFlag() async throws {
+        func failedSweepKeepsFlag() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -348,7 +348,7 @@
         }
 
         @Test("an installed id that differs from the update's id is refused")
-        func manifestIDMismatchRefused() async throws {
+        func manifestIDMismatchRefused() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -371,7 +371,7 @@
         }
 
         @Test("a live-disabled plugin is not respawned — the update defers like a busy one")
-        func disabledPluginDefersInsteadOfRespawning() async throws {
+        func disabledPluginDefersInsteadOfRespawning() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -394,7 +394,7 @@
     @MainActor
     struct PluginUpdateManagerCheckTests {
         @Test("checkNow on an up-to-date plugin reports upToDate and stamps lastCheckDate")
-        func checkNowUpToDate() async throws {
+        func checkNowUpToDate() async {
             let fixedNow = Date(timeIntervalSince1970: 1_000_000)
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
@@ -414,7 +414,7 @@
         }
 
         @Test("checkNow works even when autoUpdate is off, applies, and notifies")
-        func checkNowIgnoresToggle() async throws {
+        func checkNowIgnoresToggle() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
                 $0.date = .constant(Date(timeIntervalSince1970: 1_000_000))
@@ -433,7 +433,7 @@
         }
 
         @Test("checkNow surfaces fetch errors inline")
-        func checkNowSurfacesError() async throws {
+        func checkNowSurfacesError() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
                 $0.date = .constant(Date(timeIntervalSince1970: 1_000_000))
@@ -469,7 +469,7 @@
         }
 
         @Test("first launch (no stored version) checks immediately and stores the version")
-        func firstLaunchChecks() async throws {
+        func firstLaunchChecks() async {
             await withMainSerialExecutor {
                 let prefs = PreferencesService.inMemory()
                 await withDependencies {
@@ -489,12 +489,12 @@
         }
 
         @Test("same version + recent check does not trigger")
-        func sameVersionRecentCheckSkips() async throws {
+        func sameVersionRecentCheckSkips() async {
             await withMainSerialExecutor {
                 let now = Date(timeIntervalSince1970: 1_000_000)
                 let prefs = PreferencesService.inMemory()
                 prefs.setString("2.0.0", PluginUpdateManager.Keys.lastRunAppVersion)
-                prefs.setDouble(now.timeIntervalSince1970 - 3600, PluginUpdateManager.Keys.lastCheckAt) // 1h ago
+                prefs.setDouble(now.timeIntervalSince1970 - 3_600, PluginUpdateManager.Keys.lastCheckAt) // 1h ago
                 await withDependencies {
                     $0[PreferencesService.self] = prefs
                     $0.continuousClock = TestClock()
@@ -511,12 +511,12 @@
         }
 
         @Test("same version but stale (>24h) check triggers the daily check")
-        func staleCheckTriggersDaily() async throws {
+        func staleCheckTriggersDaily() async {
             await withMainSerialExecutor {
                 let now = Date(timeIntervalSince1970: 1_000_000)
                 let prefs = PreferencesService.inMemory()
                 prefs.setString("2.0.0", PluginUpdateManager.Keys.lastRunAppVersion)
-                prefs.setDouble(now.timeIntervalSince1970 - 25 * 3600, PluginUpdateManager.Keys.lastCheckAt)
+                prefs.setDouble(now.timeIntervalSince1970 - 25 * 3_600, PluginUpdateManager.Keys.lastCheckAt)
                 await withDependencies {
                     $0[PreferencesService.self] = prefs
                     $0.continuousClock = TestClock()
@@ -533,7 +533,7 @@
         }
 
         @Test("automatic checks include only autoUpdate-enabled url entries")
-        func automaticChecksFilterByToggle() async throws {
+        func automaticChecksFilterByToggle() async {
             await withMainSerialExecutor {
                 await withDependencies {
                     $0[PreferencesService.self] = .inMemory()
@@ -555,7 +555,7 @@
         }
 
         @Test("automatic checks skip live-disabled plugins entirely")
-        func automaticChecksSkipDisabledPlugins() async throws {
+        func automaticChecksSkipDisabledPlugins() async {
             await withMainSerialExecutor {
                 await withDependencies {
                     $0[PreferencesService.self] = .inMemory()
@@ -578,7 +578,7 @@
         }
 
         @Test("a pass where every fetch failed does not stamp lastCheckDate")
-        func allFailedPassDoesNotStamp() async throws {
+        func allFailedPassDoesNotStamp() async {
             await withMainSerialExecutor {
                 await withDependencies {
                     $0[PreferencesService.self] = .inMemory()
@@ -600,7 +600,7 @@
         }
 
         @Test("the 24h loop re-checks after the clock advances a day")
-        func dailyLoopReChecks() async throws {
+        func dailyLoopReChecks() async {
             await withMainSerialExecutor {
                 let clock = TestClock()
                 await withDependencies {
@@ -625,7 +625,7 @@
         }
 
         @Test("app update checks run at startup and reuse the 24h loop")
-        func appUpdateChecksReuseMaintenanceLoop() async throws {
+        func appUpdateChecksReuseMaintenanceLoop() async {
             await withMainSerialExecutor {
                 let clock = TestClock()
                 await withDependencies {
@@ -682,7 +682,7 @@
         }
 
         @Test("automaticTriggersEnabled=false runs only the sweep")
-        func disabledTriggersOnlySweep() async throws {
+        func disabledTriggersOnlySweep() async {
             await withMainSerialExecutor {
                 await withDependencies {
                     $0[PreferencesService.self] = .inMemory()
@@ -712,7 +712,7 @@
         /// since two concurrent `PluginInstaller.install` runs for one id would
         /// race on the shared deterministic staging dir.
         @Test("CLI apply waits for an in-flight automatic check, which itself waits for the boot sweep")
-        func cliApplyWaitsForInFlightChain() async throws {
+        func cliApplyWaitsForInFlightChain() async {
             await withMainSerialExecutor {
                 await withDependencies {
                     $0[PreferencesService.self] = .inMemory()
@@ -828,7 +828,7 @@
         }
 
         @Test("a reinstall replaces a stale updateAvailableNewSource status")
-        func reinstallClearsStaleNewSourceStatus() async throws {
+        func reinstallClearsStaleNewSourceStatus() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -854,7 +854,7 @@
         }
 
         @Test("an id missing from the registry is a no-op")
-        func unknownIDIsNoOp() async throws {
+        func unknownIDIsNoOp() async {
             await withDependencies {
                 $0[PreferencesService.self] = .inMemory()
             } operation: { @MainActor in
@@ -871,7 +871,7 @@
         }
 
         @Test("finishReinstall chains behind an in-flight run")
-        func reinstallChainsBehindInFlightRun() async throws {
+        func reinstallChainsBehindInFlightRun() async {
             await withMainSerialExecutor {
                 await withDependencies {
                     $0[PreferencesService.self] = .inMemory()

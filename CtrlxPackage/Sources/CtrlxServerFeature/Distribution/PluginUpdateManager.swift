@@ -1,8 +1,8 @@
 #if os(macOS)
     import CtrlxCommon
+    import CtrlxPluginProtocol
     import Dependencies
     import Foundation
-    import CtrlxPluginProtocol
     import Logging
     import Observation
 
@@ -27,7 +27,9 @@
         /// true when the sidecar could not be hot-swapped (plugin had active
         /// sessions), so restarting CtrlX is required too.
         public let needsAppRestart: Bool
-        public var id: String { pluginID }
+        public var id: String {
+            pluginID
+        }
     }
 
     // MARK: - PluginUpdateManager
@@ -40,7 +42,7 @@
     /// many wired callbacks, per AGENTS.md.
     @MainActor
     @Observable
-    public final class PluginUpdateManager {
+    final public class PluginUpdateManager {
         // MARK: Types
 
         /// Outcome of applying one update (also consumed by the CLI apply path).
@@ -155,7 +157,7 @@
         public init(callbacks: Callbacks, automaticTriggersEnabled: Bool = true) {
             self.callbacks = callbacks
             self.automaticTriggersEnabled = automaticTriggersEnabled
-            lastCheckDate = preferences
+            self.lastCheckDate = preferences
                 .optionalDouble(Keys.lastCheckAt)
                 .map(Date.init(timeIntervalSince1970:))
         }
@@ -247,8 +249,9 @@
             guard let entry = entry(id) else { return }
             let result = await finishSwap(id)
             recordOutcome(id: id, newVersion: entry.version, result: result)
-            if case .applied = result,
-               let notice = restartNotices.first(where: { $0.pluginID == id }) {
+            if
+                case .applied = result,
+                let notice = restartNotices.first(where: { $0.pluginID == id }) {
                 callbacks.notify(Self.notificationBody([notice]))
             }
         }
@@ -390,8 +393,9 @@
                 inlineStatus[id] = .upToDate
                 return
             }
-            if case .applied = await applyUpdate(update),
-               let notice = restartNotices.first(where: { $0.pluginID == id }) {
+            if
+                case .applied = await applyUpdate(update),
+                let notice = restartNotices.first(where: { $0.pluginID == id }) {
                 callbacks.notify(Self.notificationBody([notice]))
             }
         }
@@ -452,7 +456,9 @@
             loopTask = Task { [weak self] in
                 while let clock = self?.clock {
                     try? await clock.sleep(for: .seconds(Self.checkInterval))
-                    if Task.isCancelled { return }
+                    if Task.isCancelled {
+                        return
+                    }
                     self?.scheduleRun { [weak self] in
                         await self?.runAutomaticCheck()
                         await self?.callbacks.checkAgentCLIUpdates()
@@ -486,8 +492,9 @@
 
             var applied: [PluginRestartNotice] = []
             for update in updates {
-                if case .applied = await applyUpdate(update),
-                   let notice = restartNotices.first(where: { $0.pluginID == update.id }) {
+                if
+                    case .applied = await applyUpdate(update),
+                    let notice = restartNotices.first(where: { $0.pluginID == update.id }) {
                     applied.append(notice)
                 }
             }

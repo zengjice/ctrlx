@@ -7,6 +7,22 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.99 — Signed in-app updates
+
+- Replace the runtime Sparkle updater with a Host-owned macOS update flow that
+  verifies the Qcloud `mac.sh` bytes against the bundled Ed25519
+  `SUPublicEDKey` before downloading the installer.
+- Surface verified app-update state on Mac, remote Viewer and iOS, with a
+  Host-gated install action and consistent progress/error reporting.
+- Apply the same reminder-expiry policy to App, Plugin and CLI updates while
+  removing Sparkle from the application runtime and dependency graph.
+- Release validation: the complete serial Swift regression, 58 publisher and
+  20 COS tests, both boundary checks, SwiftFormat, the 14-page website build,
+  the iOS Simulator compile check and the signed Mac Release app build passed.
+- Mac distribution is build 32 through COS, using an Apple Development signature
+  without notarization. Publication signs and archives both `mac.sh` and the
+  detached `mac.sh.sig`, then verifies the public pair before promotion.
+
 ## 3.0.98 — Expanded Fork directory picker
 
 - Open the Other Directory path picker automatically when the shared Mac/iOS
