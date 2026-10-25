@@ -501,34 +501,7 @@ struct WindowTabBar: View {
                 onRename: { newName in
                     onRenameWindow(window, newName)
                 },
-                additionalMenu: {
-                    Button("Open in Separate Window") { onDetachWindow?(window, nil) }
-                        .disabled(onDetachWindow == nil || DetachedTerminalTarget(hostID: nil, windowID: window.stableId) == nil)
-                    Button { onOpenFiles(window, false) } label: {
-                        Label("Open Files", symbol: .folderBadgePlus)
-                    }
-                    .disabled(window.panes.isEmpty)
-                    .accessibilityIdentifier("window-open-files-\(window.stableId)")
-                    Button { onOpenFiles(window, true) } label: {
-                        Label("Open Another Files Tab", symbol: .folderBadgePlus)
-                    }
-                    .disabled(window.panes.isEmpty)
-                    .accessibilityIdentifier("window-open-another-files-\(window.stableId)")
-
-                    Button { onOpenBrowser(window) } label: {
-                        Label("Open Browser", symbol: .globe)
-                    }
-                    .disabled(window.panes.isEmpty)
-                    .accessibilityIdentifier("window-open-browser-\(window.stableId)")
-
-                    AgentForkMenu(
-                        sources: window.panes.compactMap { windowManager.paneStates[$0.paneId].flatMap(AgentForkSource.init(pane:)) },
-                        unavailableReason: nil,
-                        sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }),
-                        allowsOtherDirectory: true,
-                        choose: { onForkWindow(window, $0) }
-                    )
-                }
+                additionalMenu: { windowContextMenuItems(for: window) }
             ))
 
             TabSplitToggleButton(
@@ -559,6 +532,33 @@ struct WindowTabBar: View {
         } isTargeted: { isTargeted in
             updateDropIndicator(target: isTargeted ? payload : nil, for: .window)
         }
+    }
+
+    private func windowContextMenuItems(for window: LocalTmuxWindow) -> [ContextMenuItem] {
+        [
+            .button(
+                title: "Open in Separate Window",
+                isEnabled: onDetachWindow != nil && DetachedTerminalTarget(hostID: nil, windowID: window.stableId) != nil
+            ) {
+                onDetachWindow?(window, nil)
+            },
+            .button(title: "Open Files", symbol: .folderBadgePlus, isEnabled: !window.panes.isEmpty) {
+                onOpenFiles(window, false)
+            },
+            .button(title: "Open Another Files Tab", symbol: .folderBadgePlus, isEnabled: !window.panes.isEmpty) {
+                onOpenFiles(window, true)
+            },
+            .button(title: "Open Browser", symbol: .globe, isEnabled: !window.panes.isEmpty) {
+                onOpenBrowser(window)
+            },
+            AgentForkMenu(
+                sources: window.panes.compactMap { windowManager.paneStates[$0.paneId].flatMap(AgentForkSource.init(pane:)) },
+                unavailableReason: nil,
+                sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }),
+                allowsOtherDirectory: true,
+                choose: { onForkWindow(window, $0) }
+            ).contextMenuItem,
+        ]
     }
 
     @ViewBuilder

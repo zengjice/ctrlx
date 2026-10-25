@@ -1,14 +1,15 @@
+#if os(macOS)
 import CtrlxNetworking
 import SwiftUI
 
 /// View modifier that adds a "Rename Window" context menu and an alert for
 /// editing the window name. Kept parallel to `DescriptionEditingModifier` so
 /// tabs feel consistent with session description editing.
-public struct WindowRenamingModifier<AdditionalMenu: View>: ViewModifier {
+public struct WindowRenamingModifier: ViewModifier {
     let currentName: String
     let isDisabled: Bool
     let onRename: (_ newName: String) -> Void
-    let additionalMenu: AdditionalMenu
+    let additionalMenu: @MainActor () -> [ContextMenuItem]
 
     @State private var isEditingName = false
     @State private var editedName = ""
@@ -19,12 +20,12 @@ public struct WindowRenamingModifier<AdditionalMenu: View>: ViewModifier {
         currentName: String,
         isDisabled: Bool = false,
         onRename: @escaping (_ newName: String) -> Void,
-        @ViewBuilder additionalMenu: () -> AdditionalMenu
+        additionalMenu: @escaping @MainActor () -> [ContextMenuItem] = { [] }
     ) {
         self.currentName = currentName
         self.isDisabled = isDisabled
         self.onRename = onRename
-        self.additionalMenu = additionalMenu()
+        self.additionalMenu = additionalMenu
     }
 
     public func body(content: Content) -> some View {
@@ -33,13 +34,14 @@ public struct WindowRenamingModifier<AdditionalMenu: View>: ViewModifier {
                 TapGesture(count: 2)
                     .onEnded { beginRenaming() }
             )
-            .contextMenu {
-                Button(action: beginRenaming) {
-                    Label("Rename Window", symbol: .pencil)
-                }
-                .disabled(isDisabled)
-
-                additionalMenu
+            .stableContextMenu {
+                var items: [ContextMenuItem] = [
+                    .button(title: "Rename Window", symbol: .pencil, isEnabled: !isDisabled) {
+                        beginRenaming()
+                    },
+                ]
+                items.append(contentsOf: additionalMenu())
+                return items
             }
             .modifier(TextEntryPresentation(
                 isPresented: $isEditingName,
@@ -63,18 +65,4 @@ public struct WindowRenamingModifier<AdditionalMenu: View>: ViewModifier {
         isEditingName = true
     }
 }
-
-public extension WindowRenamingModifier where AdditionalMenu == EmptyView {
-    init(
-        currentName: String,
-        isDisabled: Bool = false,
-        onRename: @escaping (_ newName: String) -> Void
-    ) {
-        self.init(
-            currentName: currentName,
-            isDisabled: isDisabled,
-            onRename: onRename,
-            additionalMenu: { EmptyView() }
-        )
-    }
-}
+#endif

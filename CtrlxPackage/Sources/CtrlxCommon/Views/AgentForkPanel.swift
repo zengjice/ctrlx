@@ -107,6 +107,30 @@ public struct AgentForkMenu: View {
         unavailableReason ?? (sources.isEmpty ? sourceUnavailableReason ?? "Fork requires a recognized Codex or Claude Code conversation." : nil)
     }
 
+    #if os(macOS)
+        /// Native-menu representation used by host-side `stableContextMenu`.
+        /// Keeping the submenu in AppKit prevents periodic pane updates from
+        /// dismissing it while the user moves from Fork to a destination.
+        @MainActor
+        public var contextMenuItem: ContextMenuItem {
+            var items: [ContextMenuItem] = [
+                .button(title: "In Current Directory", isEnabled: disabledReason == nil) {
+                    choose(.currentDirectory)
+                },
+                .button(title: "In Other Directory…", isEnabled: disabledReason == nil && allowsOtherDirectory) {
+                    choose(.otherDirectory)
+                },
+                .button(title: "In New Worktree…", isEnabled: disabledReason == nil) {
+                    choose(.worktree)
+                },
+            ]
+            if let disabledReason {
+                items.append(.button(title: disabledReason, isEnabled: false) {})
+            }
+            return .submenu(title: "Fork", symbol: .arrowTriangleBranch, items: items)
+        }
+    #endif
+
     public var body: some View {
         Menu {
             Button("In Current Directory") { choose(.currentDirectory) }

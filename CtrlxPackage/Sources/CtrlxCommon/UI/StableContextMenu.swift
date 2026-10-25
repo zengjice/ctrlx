@@ -1,9 +1,10 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
 /// Declarative description of an item in a right-click menu built by
 /// ``View/stableContextMenu(_:)``.
-enum ContextMenuItem {
+public enum ContextMenuItem {
     case button(
         title: String,
         image: NSImage? = nil,
@@ -19,6 +20,38 @@ enum ContextMenuItem {
         items: [ContextMenuItem]
     )
     case divider
+
+    public static func button(
+        title: String,
+        symbol: Symbols,
+        isEnabled: Bool = true,
+        accessibilityLabel: String? = nil,
+        action: @escaping @MainActor () -> Void
+    ) -> Self {
+        .button(
+            title: title,
+            image: NSImage(systemSymbolName: symbol.rawValue, accessibilityDescription: nil),
+            isEnabled: isEnabled,
+            accessibilityLabel: accessibilityLabel,
+            action: action
+        )
+    }
+
+    public static func submenu(
+        title: String,
+        symbol: Symbols,
+        isEnabled: Bool = true,
+        accessibilityLabel: String? = nil,
+        items: [ContextMenuItem]
+    ) -> Self {
+        .submenu(
+            title: title,
+            image: NSImage(systemSymbolName: symbol.rawValue, accessibilityDescription: nil),
+            isEnabled: isEnabled,
+            accessibilityLabel: accessibilityLabel,
+            items: items
+        )
+    }
 }
 
 extension View {
@@ -33,7 +66,7 @@ extension View {
     /// event (left-click, drag, hover, focus, accessibility traversal) pass
     /// straight through to the SwiftUI content below, so accessibility
     /// queries against the wrapped content keep working.
-    func stableContextMenu(
+    public func stableContextMenu(
         _ items: @escaping @MainActor () -> [ContextMenuItem]
     ) -> some View {
         overlay(StableContextMenuCatcher(items: items))
@@ -155,7 +188,7 @@ final private class StableContextMenu: NSMenu {
 /// the File Explorer. The menu retains its action dispatcher for its lifetime
 /// (see ``StableContextMenu``). No-op for an empty item list.
 @MainActor
-func presentStableContextMenu(items: [ContextMenuItem], with event: NSEvent, for view: NSView) {
+public func presentStableContextMenu(items: [ContextMenuItem], with event: NSEvent, for view: NSView) {
     guard !items.isEmpty else { return }
     let menu = makeNSMenu(items: items)
     NSMenu.popUpContextMenu(menu, with: event, for: view)
@@ -210,3 +243,4 @@ private func makeNSMenuItem(
         return .separator()
     }
 }
+#endif

@@ -206,4 +206,53 @@ struct AgentForkConfigurationTests {
         #expect(!store.hostsSupportingAgentForkDirectory.contains("office"))
         #expect(store.agentForkUnavailableReason(hostID: "office", isConnected: true, requiresDirectory: true)?.contains("Update") == true)
     }
+
+    #if os(macOS)
+    @Test("Native window context menu preserves every Fork destination and action")
+    func nativeForkContextMenu() throws {
+        let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
+        var chosen: [AgentForkDestination] = []
+        let menu = AgentForkMenu(
+            sources: [source], unavailableReason: nil, sourceUnavailableReason: nil,
+            allowsOtherDirectory: true, choose: { chosen.append($0) }
+        )
+        guard case let .submenu(title, _, isEnabled, _, items) = menu.contextMenuItem else {
+            Issue.record("Expected a native Fork submenu")
+            return
+        }
+        let buttons = try items.map { try #require(buttonParts($0)) }
+        #expect(title == "Fork")
+        #expect(isEnabled)
+        #expect(buttons.map { $0.title } == ["In Current Directory", "In Other Directory…", "In New Worktree…"])
+        #expect(buttons.allSatisfy { $0.isEnabled })
+        for button in buttons {
+            button.action()
+        }
+        #expect(chosen == [.currentDirectory, .otherDirectory, .worktree])
+    }
+
+    @Test("Native window context menu explains an unavailable Fork without hiding its submenu")
+    func nativeForkContextMenuUnavailable() throws {
+        let menu = AgentForkMenu(
+            sources: [], unavailableReason: "Host is offline.", sourceUnavailableReason: nil,
+            allowsOtherDirectory: true, choose: { _ in }
+        )
+        guard case let .submenu(title, _, isEnabled, _, items) = menu.contextMenuItem else {
+            Issue.record("Expected a native Fork submenu")
+            return
+        }
+        let buttons = try items.map { try #require(buttonParts($0)) }
+        #expect(title == "Fork")
+        #expect(isEnabled)
+        #expect(buttons.map { $0.title } == ["In Current Directory", "In Other Directory…", "In New Worktree…", "Host is offline."])
+        #expect(buttons.allSatisfy { !$0.isEnabled })
+    }
+
+    private func buttonParts(
+        _ item: ContextMenuItem
+    ) -> (title: String, isEnabled: Bool, action: @MainActor () -> Void)? {
+        guard case let .button(title, _, isEnabled, _, action) = item else { return nil }
+        return (title, isEnabled, action)
+    }
+    #endif
 }

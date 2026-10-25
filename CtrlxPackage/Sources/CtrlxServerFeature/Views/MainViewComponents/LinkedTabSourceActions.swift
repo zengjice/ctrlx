@@ -1,3 +1,4 @@
+import CtrlxCommon
 import SwiftUI
 
 /// Source-terminal actions shared by Mac Files, Browser and Simulator tabs.
