@@ -1232,6 +1232,10 @@ exposed to the Mac app, Viewer, and iOS clients.
 - Checks at Host startup, on the existing 24-hour maintenance loop, and when the
   user presses **Check Again**; automatic checks are disabled under
   `--e2e-test`, and opening Settings does not start a network request.
+- The App menu reports checking, preparing, installing, up-to-date, and failure
+  states instead of silently reverting. A user-initiated check always presents
+  its result, and starting an update first confirms that CtrlX will quit and
+  relaunch automatically.
 - Fetches the fixed HTTPS `mac.sh` installer and its detached `mac.sh.sig`, then
   verifies the script with the bundled Sparkle Ed25519 public key
   (`SUPublicEDKey`) before parsing it.
