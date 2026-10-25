@@ -7,6 +7,22 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.102 — Settings sidebar crash mitigation
+
+- Move Settings navigation out of the native toolbar into a sidebar-adaptable
+  layout, avoiding the AppKit toolbar item layout loop seen in the 3.0.100 crash
+  report.
+- Include 3.0.101's clearer App update feedback, including checking, preparing,
+  installing, up-to-date and failure states in the App menu.
+- Release validation: the bounded serial Swift regression passed with 4,018
+  tests (`StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac), as did both boundary checks, SwiftFormat, the 14-page
+  website build, the iOS Simulator compile check and the signed Mac Release
+  package published through COS.
+- Mac distribution is build 35 through COS, using an Apple Development signature
+  without notarization. Publication signs and archives both `mac.sh` and the
+  detached `mac.sh.sig`, then verifies the public pair before promotion.
+
 ## 3.0.101 — Clear update feedback
 
 - Show checking, preparing, installing, up-to-date and failure states in the App
@@ -18,11 +34,9 @@
 - Release validation: the complete 4,018-test serial Swift regression passed
   (with `StopFinalityEvaluationSuite` skipped because Apple Intelligence is
   unavailable on this Mac), as did both boundary checks, SwiftFormat, the
-  14-page website build, the iOS Simulator compile check and the signed Mac
-  Release package published through COS.
-- Mac distribution is build 34 through COS, using an Apple Development signature
-  without notarization. Publication signs and archives both `mac.sh` and the
-  detached `mac.sh.sig`, then verifies the public pair before promotion.
+  14-page website build and the iOS Simulator compile check.
+- 3.0.101 build 34 was built locally but not published; it is superseded by
+  3.0.102 with the Settings crash mitigation.
 
 ## 3.0.100 — Multi-Agent workflows
 

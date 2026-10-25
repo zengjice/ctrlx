@@ -2,8 +2,9 @@
 
 Status: mitigated, pending runtime validation
 
-Scope: macOS `3.0.89`, `3.0.95`, `3.0.100`; `3.0.101` is the first source build
-with the Settings sidebar mitigation.
+Scope: macOS `3.0.89`, `3.0.95`, `3.0.100`; `3.0.102` is the first distributed
+build with the Settings sidebar mitigation. The locally built `3.0.101` package
+predates the mitigation and was not published.
 
 Last updated: 2026-10-25
 
