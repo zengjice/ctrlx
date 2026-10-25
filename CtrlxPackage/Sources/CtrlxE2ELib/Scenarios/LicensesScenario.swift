@@ -34,10 +34,13 @@ public enum LicensesScenario {
         // The Licenses sections sit below the (tall) "Why CtrlX" and
         // "Links" sections, so their rows start off-screen. They're still in
         // the AX tree, so assert the header plus the first row of the first
-        // section and the last row of the last section ("Website") exist
-        // before scrolling them into view for the baseline.
+        // section, the Build Tools section, and the last row of the last
+        // section ("Website") exist before scrolling them into view for the
+        // baseline.
         TestStep.macWaitForElement(titled: "Licenses", timeout: 5)
         TestStep.macWaitForElement(titled: "SwiftTerm", timeout: 5)
+        TestStep.macWaitForElement(titled: "Build Tools", timeout: 5)
+        TestStep.macWaitForElement(titled: "Sparkle", timeout: 5)
         TestStep.macWaitForElement(titled: "@astrojs/sitemap", timeout: 5)
         TestStep.wait(seconds: 0.5)
 
@@ -71,7 +74,7 @@ public enum LicensesScenario {
         // The macOS section already asserts the full range including the last
         // row ("Unicode CLDR emoji data").
         TestStep.iosWaitForElement(.labelContains("SwiftTerm"), timeout: 5)
-        TestStep.iosWaitForElement(.labelContains("Sparkle"), timeout: 5)
+        TestStep.iosWaitForElement(.labelContains("agent-browser"), timeout: 5)
         TestStep.wait(seconds: 0.5)
         TestStep.iosScreenshot(label: "ios-licenses-list")
     }

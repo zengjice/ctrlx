@@ -7,6 +7,7 @@
     enum AgentUpdateReminderChannel: String, Sendable {
         case plugin
         case cli
+        case app
 
         var dismissalsKey: String {
             "agentUpdates.\(rawValue).dismissals.v1"
@@ -24,6 +25,10 @@
 
         static func cli(agentID: String, version: String) -> Self {
             Self(targetID: agentID, configRoot: nil, version: version)
+        }
+
+        static func ctrlXApp(version: String, build: String) -> Self {
+            Self(targetID: "ctrlx-app", configRoot: nil, version: "\(version) (\(build))")
         }
     }
 
@@ -49,8 +54,8 @@
         }
     }
 
-    /// Reusable, persisted dismissal state for one Agent update channel.
-    /// Plugin and CLI reminders use separate instances and storage keys.
+    /// Reusable, persisted dismissal state for one update channel.
+    /// CtrlX, plugin and CLI reminders use separate instances and storage keys.
     @Observable @MainActor
     final class AgentUpdateReminderStore {
         private struct Record: Codable {

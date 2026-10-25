@@ -56,7 +56,6 @@ public extension ThirdPartyLicense {
         ThirdPartyLicense(name: "Chromium Embedded Framework", license: "BSD-3-Clause / Chromium third-party licenses", url: URL(staticString: "https://github.com/chromiumembedded/cef")),
         ThirdPartyLicense(name: "idb simulator transport", license: "MIT", url: URL(staticString: "https://github.com/facebook/idb")),
         ThirdPartyLicense(name: "simslim", license: "MIT", url: URL(staticString: "https://github.com/MobAI-App/simslim")),
-        ThirdPartyLicense(name: "Sparkle", license: "MIT", url: URL(staticString: "https://github.com/sparkle-project/Sparkle")),
         ThirdPartyLicense(name: "Vapor", license: "MIT", url: URL(staticString: "https://github.com/vapor/vapor")),
         ThirdPartyLicense(name: "vapor/apns (APNSwift)", license: "MIT / Apache-2.0", url: URL(staticString: "https://github.com/vapor/apns")),
         ThirdPartyLicense(name: "async-http-client", license: "Apache-2.0", url: URL(staticString: "https://github.com/swift-server/async-http-client")),
@@ -77,6 +76,7 @@ public extension ThirdPartyLicense {
         ThirdPartyLicense(name: "ZIPFoundation", license: "MIT", url: URL(staticString: "https://github.com/weichsel/ZIPFoundation")),
         ThirdPartyLicense(name: "Unicode CLDR emoji data", license: "Unicode License", url: URL(staticString: "https://cldr.unicode.org")),
         ThirdPartyLicense(name: "SwiftFormat", license: "MIT", url: URL(staticString: "https://github.com/nicklockwood/SwiftFormat"), usage: .buildTools),
+        ThirdPartyLicense(name: "Sparkle", license: "MIT", url: URL(staticString: "https://github.com/sparkle-project/Sparkle"), usage: .buildTools),
         ThirdPartyLicense(name: "Astro", license: "MIT", url: URL(staticString: "https://github.com/withastro/astro"), usage: .website),
         ThirdPartyLicense(name: "@astrojs/sitemap", license: "MIT", url: URL(staticString: "https://github.com/withastro/astro/tree/main/packages/integrations/sitemap"), usage: .website),
     ]

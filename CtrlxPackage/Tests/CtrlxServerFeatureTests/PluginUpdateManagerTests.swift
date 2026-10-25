@@ -38,6 +38,7 @@
         var log: [String] = []
         var notifications: [String] = []
         var agentCLIChecks = 0
+        var appUpdateChecks = 0
 
         /// When true, `installBridge`/`checkUpdates` suspend on an unstructured
         /// gate instead of returning immediately, so a test can observe what
@@ -114,7 +115,8 @@
                     displayName: { $0.capitalized },
                     currentAppVersion: { "2.0.0" },
                     notify: { self.notifications.append($0) },
-                    checkAgentCLIUpdates: { self.agentCLIChecks += 1 }
+                    checkAgentCLIUpdates: { self.agentCLIChecks += 1 },
+                    checkCtrlXAppUpdate: { self.appUpdateChecks += 1 }
                 ),
                 automaticTriggersEnabled: automaticTriggers
             )
@@ -617,6 +619,30 @@
                     await manager.waitForPendingRuns()
                     #expect(checksRun(harness) == 2)
                     #expect(harness.agentCLIChecks == 1)
+                    manager.stop()
+                }
+            }
+        }
+
+        @Test("app update checks run at startup and reuse the 24h loop")
+        func appUpdateChecksReuseMaintenanceLoop() async throws {
+            await withMainSerialExecutor {
+                let clock = TestClock()
+                await withDependencies {
+                    $0[PreferencesService.self] = .inMemory()
+                    $0.continuousClock = clock
+                    $0.date = .constant(Date(timeIntervalSince1970: 1_000_000))
+                } operation: { @MainActor in
+                    let harness = UpdateHarness(entries: [])
+                    let manager = harness.makeManager(automaticTriggers: true)
+                    manager.start()
+                    await manager.waitForPendingRuns()
+                    #expect(harness.appUpdateChecks == 1)
+
+                    await clock.advance(by: .seconds(PluginUpdateManager.checkInterval))
+                    await Task.yield()
+                    await manager.waitForPendingRuns()
+                    #expect(harness.appUpdateChecks == 2)
                     manager.stop()
                 }
             }

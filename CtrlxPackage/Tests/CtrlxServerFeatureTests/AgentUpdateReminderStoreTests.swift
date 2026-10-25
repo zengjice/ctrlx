@@ -61,10 +61,17 @@
             #expect(!second.shouldShow(reminder))
         }
 
-        @Test("Plugin and CLI stores keep independent dismissals")
+        @Test("App, plugin, and CLI stores keep independent dismissals")
         func independentChannels() {
             let now = Date(timeIntervalSinceReferenceDate: 3_000_000)
             let preferences = PreferencesService.inMemory()
+            #expect(
+                Set([
+                    AgentUpdateReminderChannel.plugin.dismissalsKey,
+                    AgentUpdateReminderChannel.cli.dismissalsKey,
+                    AgentUpdateReminderChannel.app.dismissalsKey,
+                ]).count == 3
+            )
             let pluginStore = AgentUpdateReminderStore(
                 channel: .plugin,
                 preferences: preferences,
@@ -75,17 +82,54 @@
                 preferences: preferences,
                 now: { now }
             )
-            let plugin = AgentUpdateReminderKey.plugin(pluginID: "codex", configRoot: nil, version: "1.1.0")
+            let appStore = AgentUpdateReminderStore(
+                channel: .app,
+                preferences: preferences,
+                now: { now }
+            )
+            let plugin = AgentUpdateReminderKey.plugin(pluginID: "claude-code", configRoot: nil, version: "1.1.0")
             let cli = AgentUpdateReminderKey.cli(agentID: "codex", version: "1.1.0")
+            let app = AgentUpdateReminderKey.ctrlXApp(version: "3.0.99", build: "32")
 
             pluginStore.dismiss(plugin)
+            cliStore.dismiss(cli)
+            appStore.dismiss(app)
+
             #expect(!pluginStore.shouldShow(plugin))
             #expect(pluginStore.shouldShow(plugin.withVersion("1.2.0")))
-            #expect(cliStore.shouldShow(cli))
-
-            cliStore.dismiss(cli)
             #expect(!cliStore.shouldShow(cli))
+            #expect(!appStore.shouldShow(app))
+            #expect(appStore.shouldShow(.ctrlXApp(version: "3.0.99", build: "33")))
+            #expect(appStore.shouldShow(.ctrlXApp(version: "3.0.100", build: "32")))
+
+            #expect(cliStore.shouldShow(cli.withVersion("1.2.0")))
             #expect(!pluginStore.shouldShow(plugin))
+            #expect(!cliStore.shouldShow(cli))
+
+            let reloadedPluginStore = AgentUpdateReminderStore(
+                channel: .plugin,
+                preferences: preferences,
+                now: { now }
+            )
+            let reloadedCLIStore = AgentUpdateReminderStore(
+                channel: .cli,
+                preferences: preferences,
+                now: { now }
+            )
+            let reloadedAppStore = AgentUpdateReminderStore(
+                channel: .app,
+                preferences: preferences,
+                now: { now }
+            )
+            #expect(!reloadedPluginStore.shouldShow(plugin))
+            #expect(reloadedPluginStore.shouldShow(cli))
+            #expect(reloadedPluginStore.shouldShow(app))
+            #expect(!reloadedCLIStore.shouldShow(cli))
+            #expect(reloadedCLIStore.shouldShow(plugin))
+            #expect(reloadedCLIStore.shouldShow(app))
+            #expect(!reloadedAppStore.shouldShow(app))
+            #expect(reloadedAppStore.shouldShow(plugin))
+            #expect(reloadedAppStore.shouldShow(cli))
         }
 
         @Test("Shortening the interval makes an already expired dismissal visible")

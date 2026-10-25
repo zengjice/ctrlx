@@ -15,7 +15,6 @@ authors and contributors.
 | Project | License |
 |---|---|
 | [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) | MIT |
-| [Sparkle](https://github.com/sparkle-project/Sparkle) | MIT (bundles permissively licensed components; see its LICENSE) |
 | [Vapor](https://github.com/vapor/vapor) | MIT |
 | [vapor/apns](https://github.com/vapor/apns) (APNSwift) | MIT / Apache-2.0 |
 | [async-http-client](https://github.com/swift-server/async-http-client) | Apache-2.0 |
@@ -28,7 +27,6 @@ authors and contributors.
 | [ProjectNavigator](https://github.com/mchakravarty/ProjectNavigator) | Apache-2.0 |
 | [textual](https://github.com/gonzalezreal/textual) | MIT |
 | [Yams](https://github.com/jpsim/Yams) | MIT |
-| [SwiftFormat](https://github.com/nicklockwood/SwiftFormat) (build tool) | MIT |
 | [SFSymbolsMacro](https://github.com/gpambrozio/SFSymbolsMacro) (fork of [lukepistrol/SFSymbolsMacro](https://github.com/lukepistrol/SFSymbolsMacro)) | MIT |
 | [GitWorkbench](https://github.com/gpambrozio/GitWorkbench) | MIT |
 | [ZIPFoundation](https://github.com/weichsel/ZIPFoundation) | MIT |
@@ -36,6 +34,13 @@ authors and contributors.
 Transitive dependencies from the Apple, Vapor, and Point-Free ecosystems are
 Apache-2.0 or MIT; the pinned set is in
 [`CtrlxPackage/Package.resolved`](CtrlxPackage/Package.resolved).
+
+## Build tools
+
+| Project | License |
+|---|---|
+| [SwiftFormat](https://github.com/nicklockwood/SwiftFormat) | MIT |
+| [Sparkle](https://github.com/sparkle-project/Sparkle) | MIT (bundles permissively licensed components; see its LICENSE) |
 
 ## Artifact previews (Mac and iOS)
 

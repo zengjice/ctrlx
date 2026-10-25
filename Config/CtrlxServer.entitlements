@@ -11,10 +11,5 @@
 	<!-- Network client - required for downloading updates -->
 	<key>com.apple.security.network.client</key>
 	<true/>
-
-	<!-- NOTE: disable-library-validation is NOT needed for Release builds -->
-	<!-- It's only required for Debug builds because Sparkle.framework has -->
-	<!-- a different Team ID when loaded via SPM. Release builds use -->
-	<!-- properly signed frameworks. See CtrlxServer.Debug.entitlements -->
 </dict>
 </plist>

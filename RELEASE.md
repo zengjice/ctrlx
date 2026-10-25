@@ -17,11 +17,22 @@ CtrlX releases bind each binary to an immutable source commit.
 The script refuses dirty or untagged source, archives and signs `CtrlX.app`,
 submits the app and DMG for notarization, generates `CtrlX-<version>.dmg`, a
 Sparkle appcast, SHA-256 file and JSON manifest containing the full source
-commit and AGPL license.
+commit and AGPL license. The appcast is retained for older clients that still
+used Sparkle's in-process updater; current clients use the Qcloud installer
+below and do not load Sparkle at runtime.
 
-Sparkle stays disabled in the application until a CtrlX feed URL and EdDSA
-public key are supplied in ignored `Config/Local-macOS.xcconfig`. Gallager's
-feed, key and domains are never fallback values.
+The EdDSA public key in ignored `Config/Local-macOS.xcconfig` is required for
+the in-app Qcloud updater to verify the installer script. Gallager's key and
+domains are never fallback values.
+
+The in-app Qcloud updater uses the bundled Sparkle EdDSA public key
+(`SUPublicEDKey`). Each published `macos/mac.sh` must have a matching
+`macos/mac.sh.sig` containing the base64 detached signature of the exact script
+bytes, produced with the corresponding Sparkle private key (`sign_update
+mac.sh`, taking the base64 value from `sparkle:edSignature`). Missing or invalid
+signatures fail closed; HTTPS alone is not the update trust root. The app does
+not check the installer merely because Settings → General opened; startup, the
+daily maintenance loop and the explicit **Check Again** action trigger a check.
 
 The simulator build scripts sign both `CtrlxSimulatorHost` and the pinned
 `simslim` helper with Hardened Runtime. Validate actual display, input,
@@ -59,7 +70,8 @@ The sibling maintainer files `publish-ctrlx-macos.py`, `ctrlx-cos.py` and
 `install-ctrlx-macos.sh` must be kept together, outside this public repository.
 The local installer template is rendered with the release's version, build, source
 revision, build stamp and DMG SHA-256. Its stable COS entrypoint is `macos/mac.sh`;
-DMGs and content-addressed installer backups also live under `macos/`.
+its detached `macos/mac.sh.sig` is published beside it. DMGs and content-addressed
+installer backups also live under `macos/`.
 The old host's installer is a legacy entrypoint and is not updated by this flow.
 
 `--check-cos` checks local credentials and bucket versioning without requiring
@@ -89,13 +101,14 @@ next normal Mac publication; editing the local template does not update COS.
 
 Installer promotion uses a COS lock object created with overwrite forbidden.
 While holding it, the publisher rechecks the previous installer, saves an immutable
-backup, replaces `mac.sh`, and verifies the anonymous public response. Failure
-restores only this attempt's installer under the same lock. The stable entrypoint
-uses `Cache-Control: no-store`. Lock release and initial-publication rollback need
-`cos:DeleteObject` only for `macos/.publish-lock.json` and `macos/mac.sh`; release
-artifacts are never deleted. A killed publisher may leave a lock: inspect the
-recorded attempt and confirm it has stopped before manually clearing that lock;
-there is no automatic expiry or lock stealing.
+backup, replaces `mac.sh` and `mac.sh.sig`, and verifies the anonymous public
+responses. Failure restores only this attempt's installer and signature under the
+same lock. The stable entrypoint uses `Cache-Control: no-store`. Lock release and
+initial-publication rollback need `cos:DeleteObject` only for
+`macos/.publish-lock.json`, `macos/mac.sh` and `macos/mac.sh.sig`; release artifacts
+are never deleted. A killed publisher may leave a lock: inspect the recorded attempt
+and confirm it has stopped before manually clearing that lock; there is no automatic
+expiry or lock stealing.
 
 Logs and receipts retain the existing worktree-local `dist/qcloud-release/` path
 for cleanup compatibility. First COS publication creates the new installer URL;

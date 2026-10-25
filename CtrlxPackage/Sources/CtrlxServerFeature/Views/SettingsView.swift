@@ -87,7 +87,7 @@ public struct SettingsView: View {
 /// General settings tab
 struct GeneralSettingsView: View {
     @Environment(AppSettings.self) private var settings
-    @Environment(UpdaterController.self) private var updaterController
+    @Environment(AppCoordinator.self) private var coordinator
 
     @State private var launchAtLoginEnabled = false
     @State private var showingLoginItemError = false
@@ -238,35 +238,7 @@ struct GeneralSettingsView: View {
                 Text("On Mac, browser recording diagnostics are saved locally while enabled. Turning this off stops collection and keeps existing logs.")
             }
 
-            Section("Updates") {
-                if !UpdaterController.isConfigured {
-                    Text("Updates are not configured for this build.")
-                        .foregroundStyle(.secondary)
-                }
-
-                Toggle(
-                    "Automatically check for updates",
-                    isOn: Binding(
-                        get: { updaterController.automaticallyChecksForUpdates },
-                        set: { updaterController.automaticallyChecksForUpdates = $0 }
-                    )
-                )
-                .disabled(!UpdaterController.isConfigured)
-                .help("Periodically check for new versions in the background")
-
-                HStack {
-                    Button("Check for Updates Now") {
-                        updaterController.checkForUpdates()
-                    }
-                    .disabled(!updaterController.canCheckForUpdates)
-
-                    if let lastCheck = updaterController.lastUpdateCheckDate {
-                        Text("Last checked: \(lastCheck, format: .relative(presentation: .named))")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
-                }
-            }
+            CtrlXAppUpdateSettingsSection(service: coordinator.ctrlXAppUpdateService)
         }
         .formStyle(.grouped)
         .onAppear {
@@ -278,6 +250,107 @@ struct GeneralSettingsView: View {
         } message: {
             Text(loginItemErrorMessage)
         }
+    }
+}
+
+private struct CtrlXAppUpdateSettingsSection: View {
+    let service: CtrlXAppUpdateService
+
+    var body: some View {
+        let state = service.state
+
+        Section {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(statusTitle(for: state))
+                        .font(.headline)
+
+                    Text("Current version \(versionDescription(state.currentVersion, build: state.currentBuild))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let error = state.error, state.phase == .available || state.phase == .failed {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    if let checkedAt = state.checkedAt {
+                        Text("Last checked \(checkedAt, format: .relative(presentation: .named))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                updateAction(for: state)
+            }
+        } header: {
+            Text("Updates")
+        } footer: {
+            Text("CtrlX checks the signed installer feed automatically every 24 hours. Updating quits and relaunches the app.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func updateAction(for state: CtrlXAppUpdateState) -> some View {
+        if state.phase == .checking {
+            ProgressView()
+                .controlSize(.small)
+        } else if state.phase == .installing {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Installing...")
+                    .foregroundStyle(.secondary)
+            }
+        } else if state.updateAvailable {
+            VStack(alignment: .trailing, spacing: 6) {
+                Button("Update and Relaunch") {
+                    Task { await service.installAvailableUpdate() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!state.canInstall || service.isInstalling)
+
+                Button("Check Again") {
+                    Task { await service.refresh() }
+                }
+                .disabled(service.isInstalling)
+            }
+        } else {
+            Button("Check Again") {
+                Task { await service.refresh() }
+            }
+            .disabled(service.isInstalling)
+        }
+    }
+
+    private func statusTitle(for state: CtrlXAppUpdateState) -> String {
+        switch state.phase {
+        case .idle:
+            "Updates are checked automatically."
+        case .checking:
+            "Checking for updates..."
+        case .upToDate:
+            "CtrlX is up to date."
+        case .available:
+            "CtrlX \(state.latestDisplayVersion) is available."
+        case .installing:
+            "Installing CtrlX \(state.latestDisplayVersion)..."
+        case .failed:
+            "Could not check for updates."
+        }
+    }
+
+    private func versionDescription(_ version: String, build: String?) -> String {
+        if version.isEmpty {
+            return build.map { "Build \($0)" } ?? "Unknown"
+        }
+        guard let build, !build.isEmpty else { return version }
+        return "\(version) (\(build))"
     }
 }
 
@@ -335,6 +408,5 @@ private func browseForTerminalApp(settings: AppSettings) {
         .environment(coordinator)
         .environment(coordinator.licenseManager)
         .environment(PairingManager(settings: settings, e2eeService: e2eeService))
-        .environment(UpdaterController(startUpdater: false))
         .e2eeService(e2eeService)
 }

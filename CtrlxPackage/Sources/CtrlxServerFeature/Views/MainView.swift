@@ -468,6 +468,7 @@ public struct MainView: View {
             if detachedWorkspace == nil {
                 AgentCLIStartupPrompt()
                 DashboardQuotaRecoveryBanner(store: coordinator.dashboardStore)
+                CtrlXAppUpdateBanner()
                 AgentCLIUpdateBanner()
                 AgentPluginUpdateBanner()
                 WorkspaceRecoveryStatusView()

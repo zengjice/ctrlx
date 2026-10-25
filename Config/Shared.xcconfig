@@ -37,7 +37,7 @@ CTRLX_IOS_NOTIFICATION_EXTENSION_ENTITLEMENTS = CtrlxNotificationExtension/Ctrlx
 CODE_SIGN_ENTITLEMENTS = $(CTRLX_IOS_APP_ENTITLEMENTS)
 
 // ==========================================
-// Sparkle Auto-Update Support
+// Embedded Frameworks
 // ==========================================
-// Required for Sparkle.framework to be found at runtime
+// Required for embedded frameworks to be found at runtime
 LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks

@@ -125,6 +125,10 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsSimulatorClosing = false
     public private(set) var hostSupportsDashboard = false
     public private(set) var simulatorTabs: [RemoteSimulatorTab] = []
+    /// Whether the Host can check and install a macOS CtrlX app update.
+    public private(set) var hostSupportsCtrlXAppUpdate = false
+    /// Latest Host-owned app update snapshot. Nil on old Hosts or while offline.
+    public private(set) var ctrlXAppUpdateState: CtrlXAppUpdateState?
 
     func rememberOpenedSimulator(_ tab: RemoteSimulatorTab) {
         if let index = simulatorTabs.firstIndex(where: { $0.id == tab.id }) {
@@ -551,6 +555,8 @@ final public class ViewerRelayClient {
         switch command.commandType {
         case .readDashboard where !hostSupportsDashboard:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view its Dashboard"))
+        case .installCtrlXAppUpdate where !hostSupportsCtrlXAppUpdate:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to install CtrlX updates remotely"))
         case let .sendKeystroke(spec) where spec.acknowledgeCompletion == true && !workspaceInputState.supportsIdentity:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to confirm draft submission"))
         case let .sendDroppedFiles(spec) where spec.expectedAgent != nil && !hostSupportsAgentImageInput:
@@ -760,6 +766,12 @@ final public class ViewerRelayClient {
         switch command {
         case let .readDashboard(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
+        case let .installCtrlXAppUpdate(spec):
+            return (try? await sendCommand(
+                spec,
+                paneId: "",
+                timeout: InstallCtrlXAppUpdate.responseTimeout
+            ).get()) != nil
         case let .sendKeystroke(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .pasteTerminalText(spec):
@@ -1211,12 +1223,17 @@ final public class ViewerRelayClient {
             hostSupportsDashboard = sessionState.supportsDashboard == true
             simulatorTabs = sessionState.simulatorTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
+            hostSupportsCtrlXAppUpdate = sessionState.supportsCtrlXAppUpdate == true
+            ctrlXAppUpdateState = sessionState.ctrlXAppUpdate
             onSessionState?(sessionState)
 
         case let .commandResponse(response):
             logger.info("Received command response from host")
             timeoutTasks[response.commandId]?.cancel()
             timeoutTasks.removeValue(forKey: response.commandId)
+            if let updateState = response.ctrlXAppUpdate {
+                ctrlXAppUpdateState = updateState
+            }
             if let handler = pendingCommands.removeValue(forKey: response.commandId) {
                 if response.success {
                     handler(.success(response))
@@ -1232,6 +1249,7 @@ final public class ViewerRelayClient {
         case let .hostConnected(connectedMessage):
             resetFileUploads()
             resetBrowserState()
+            resetCtrlXAppUpdate()
             hostSupportsTerminalPaste = false
             workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
@@ -1284,6 +1302,7 @@ final public class ViewerRelayClient {
         case let .peerHello(peerHello):
             resetFileUploads()
             resetBrowserState()
+            resetCtrlXAppUpdate()
             hostSupportsTerminalPaste = false
             workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
@@ -1320,6 +1339,7 @@ final public class ViewerRelayClient {
         case .hostDisconnected:
             resetFileUploads()
             resetBrowserState()
+            resetCtrlXAppUpdate()
             hostSupportsTerminalPaste = false
             workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
@@ -1338,6 +1358,7 @@ final public class ViewerRelayClient {
         case .hostSubscriptionInactive:
             resetFileUploads()
             resetBrowserState()
+            resetCtrlXAppUpdate()
             hostSupportsTerminalPaste = false
             workspaceInputState.invalidate()
             hostSupportsCodexQuestionAcknowledgement = false
@@ -1642,6 +1663,7 @@ final public class ViewerRelayClient {
     private func cleanupConnection() async {
         resetFileUploads()
         resetBrowserState()
+        resetCtrlXAppUpdate()
         hostSupportsTerminalPaste = false
         workspaceInputState.invalidate()
         hostSupportsCodexQuestionAcknowledgement = false
@@ -1703,5 +1725,10 @@ final public class ViewerRelayClient {
         hostSupportsDashboard = false
         hostSupportsPaneBrowser = false
         hostSupportsAgentImageInput = false
+    }
+
+    private func resetCtrlXAppUpdate() {
+        hostSupportsCtrlXAppUpdate = false
+        ctrlXAppUpdateState = nil
     }
 }

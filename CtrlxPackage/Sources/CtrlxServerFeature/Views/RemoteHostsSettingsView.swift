@@ -227,6 +227,8 @@ private struct HostRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
 
+    @State private var isRequestingUpdate = false
+
     var body: some View {
         HStack(spacing: 12) {
             connectionIndicator
@@ -239,6 +241,21 @@ private struct HostRow: View {
                 Text("Paired \(host.pairedAt.formatted(date: .abbreviated, time: .omitted))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let update = appUpdate, update.updateAvailable {
+                    Text("CtrlX \(update.latestDisplayVersion) is available on the Host")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    if let error = update.error {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                } else if appUpdate?.phase == .installing {
+                    Text("Installing CtrlX \(appUpdate?.latestDisplayVersion ?? "update")...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Spacer()
@@ -247,8 +264,19 @@ private struct HostRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if isRequestingUpdate {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
             Menu {
                 Button("Edit Name", action: onEdit)
+                if let update = appUpdate, update.updateAvailable {
+                    Button(isRequestingUpdate ? "Requesting Update..." : "Update Host to \(update.latestDisplayVersion)") {
+                        requestHostUpdate(update)
+                    }
+                    .disabled(!update.canInstall || isRequestingUpdate)
+                }
                 Divider()
                 Button("Unpair", role: .destructive, action: onDelete)
             } label: {
@@ -258,6 +286,33 @@ private struct HostRow: View {
             .fixedSize()
         }
         .padding(.vertical, 4)
+    }
+
+    private var appUpdate: CtrlXAppUpdateState? {
+        guard
+            let client = connection?.relayClient,
+            client.hostSupportsCtrlXAppUpdate
+        else { return nil }
+        return client.ctrlXAppUpdateState
+    }
+
+    private func requestHostUpdate(_ update: CtrlXAppUpdateState) {
+        guard
+            let client = connection?.relayClient,
+            let version = update.latestVersion,
+            let build = update.latestBuild,
+            !isRequestingUpdate
+        else { return }
+
+        isRequestingUpdate = true
+        Task {
+            _ = await client.sendCommand(
+                InstallCtrlXAppUpdate(version: version, build: build),
+                paneId: "",
+                timeout: InstallCtrlXAppUpdate.responseTimeout
+            )
+            isRequestingUpdate = false
+        }
     }
 
     @ViewBuilder

@@ -50,8 +50,8 @@
 
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Agent update reminders")
-                        Text("Dismissed plugin and CLI notices reappear after")
+                        Text("Update reminders")
+                        Text("Dismissed CtrlX, plugin, and CLI notices reappear after")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

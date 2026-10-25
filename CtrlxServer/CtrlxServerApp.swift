@@ -17,15 +17,11 @@ struct TmuxPaneMirrorApp: App {
     @State private var coordinator: AppCoordinator
     @State private var showingTmuxInstallGuide: Bool
     @State private var showingLaunchAtLoginPrompt = false
-    @State private var updaterController: UpdaterController
     @NSApplicationDelegateAdaptor private var shutdownDelegate: AppShutdownDelegate
     @Environment(\.openSettings) private var openSettings
 
     init() {
         let isE2E = CommandLine.arguments.contains("--e2e-test")
-        _updaterController = State(
-            initialValue: UpdaterController(startUpdater: !isE2E && UpdaterController.isConfigured)
-        )
 
         // Check if tmux is available at any common path (skip check in E2E tests)
         @Dependency(TmuxBinaryLocator.self) var tmuxLocator
@@ -477,7 +473,7 @@ struct TmuxPaneMirrorApp: App {
 
             // App menu - Check for Updates + Install CLI
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(updaterController: updaterController)
+                CheckForUpdatesView(coordinator: coordinator)
                 InstallCLIMenuItem()
             }
 
@@ -537,7 +533,6 @@ struct TmuxPaneMirrorApp: App {
         Settings {
             SettingsView()
                 .environment(coordinator.settings)
-                .environment(updaterController)
                 .environment(coordinator.getOrCreatePairingManager())
                 .environment(coordinator)
                 .environment(coordinator.licenseManager)

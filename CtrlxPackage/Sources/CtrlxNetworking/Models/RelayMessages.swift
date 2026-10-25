@@ -94,6 +94,10 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsSimulatorClosing: Bool?
     public let supportsDashboard: Bool?
     public let simulatorTabs: [RemoteSimulatorTab]?
+    /// Host supports inspecting and installing a macOS CtrlX app update.
+    public let supportsCtrlXAppUpdate: Bool?
+    /// Latest Host-owned update state. Absent on older Hosts.
+    public let ctrlXAppUpdate: CtrlXAppUpdateState?
 
     public init(
         pairId: String,
@@ -133,7 +137,9 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsPaneFiles: Bool? = nil, fileTabs: [HostFileTab]? = nil,
         workspaceIdentity: WorkspaceIdentityScope? = nil,
         supportsWorkspaceInputIdentity: Bool? = nil,
-        supportsTerminalStreamIdentity: Bool? = nil
+        supportsTerminalStreamIdentity: Bool? = nil,
+        supportsCtrlXAppUpdate: Bool? = nil,
+        ctrlXAppUpdate: CtrlXAppUpdateState? = nil
     ) {
         self.pairId = pairId
         self.workspaceIdentity = workspaceIdentity
@@ -174,6 +180,8 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsSimulatorClosing = supportsSimulatorClosing
         self.supportsDashboard = supportsDashboard
         self.simulatorTabs = simulatorTabs
+        self.supportsCtrlXAppUpdate = supportsCtrlXAppUpdate
+        self.ctrlXAppUpdate = ctrlXAppUpdate
     }
 
     /// Returns a copy with the `pairId` replaced. Centralises the per-connection
@@ -219,7 +227,9 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsPaneFiles: supportsPaneFiles, fileTabs: fileTabs,
             workspaceIdentity: workspaceIdentity,
             supportsWorkspaceInputIdentity: supportsWorkspaceInputIdentity,
-            supportsTerminalStreamIdentity: supportsTerminalStreamIdentity
+            supportsTerminalStreamIdentity: supportsTerminalStreamIdentity,
+            supportsCtrlXAppUpdate: supportsCtrlXAppUpdate,
+            ctrlXAppUpdate: ctrlXAppUpdate
         )
     }
 }

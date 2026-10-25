@@ -83,6 +83,9 @@
             /// Daily CLI update check, coalesced onto this manager's existing
             /// 24-hour maintenance loop rather than a second timer.
             public var checkAgentCLIUpdates: @MainActor () async -> Void
+            /// Daily CtrlX app update check. Reuses the same maintenance loop;
+            /// the app update service owns its own Host-only network/install state.
+            public var checkCtrlXAppUpdate: @MainActor () async -> Void
 
             public init(
                 loadRegistry: @escaping @MainActor () -> PluginRegistryFile,
@@ -101,7 +104,8 @@
                 displayName: @escaping @MainActor (String) -> String,
                 currentAppVersion: @escaping @MainActor () -> String,
                 notify: @escaping @MainActor (String) -> Void,
-                checkAgentCLIUpdates: @escaping @MainActor () async -> Void = { }
+                checkAgentCLIUpdates: @escaping @MainActor () async -> Void = { },
+                checkCtrlXAppUpdate: @escaping @MainActor () async -> Void = { }
             ) {
                 self.loadRegistry = loadRegistry
                 self.saveRegistry = saveRegistry
@@ -119,6 +123,7 @@
                 self.currentAppVersion = currentAppVersion
                 self.notify = notify
                 self.checkAgentCLIUpdates = checkAgentCLIUpdates
+                self.checkCtrlXAppUpdate = checkCtrlXAppUpdate
             }
         }
 
@@ -430,6 +435,10 @@
             }
             guard automaticTriggersEnabled else { return }
 
+            scheduleRun { [weak self] in
+                await self?.callbacks.checkCtrlXAppUpdate()
+            }
+
             let current = callbacks.currentAppVersion()
             let lastRun = preferences.string(Keys.lastRunAppVersion)
             preferences.setString(current, Keys.lastRunAppVersion)
@@ -447,6 +456,7 @@
                     self?.scheduleRun { [weak self] in
                         await self?.runAutomaticCheck()
                         await self?.callbacks.checkAgentCLIUpdates()
+                        await self?.callbacks.checkCtrlXAppUpdate()
                     }
                 }
             }

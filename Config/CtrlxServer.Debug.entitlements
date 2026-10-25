@@ -11,11 +11,5 @@
 	<!-- Network client - required for downloading updates -->
 	<key>com.apple.security.network.client</key>
 	<true/>
-
-	<!-- Disable library validation - DEBUG ONLY -->
-	<!-- Required because Sparkle.framework has a different Team ID when loaded via SPM -->
-	<!-- See: https://sparkle-project.org/documentation/#1-add-the-sparkle-framework-to-your-project -->
-	<key>com.apple.security.cs.disable-library-validation</key>
-	<true/>
 </dict>
 </plist>

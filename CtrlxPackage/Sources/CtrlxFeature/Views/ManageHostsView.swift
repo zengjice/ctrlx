@@ -32,17 +32,14 @@
                             HostRowView(
                                 host: host,
                                 connection: connectionManager.connection(for: host.id),
-                                showUsername: settings.hasDuplicateHostName(for: host)
+                                showUsername: settings.hasDuplicateHostName(for: host),
+                                onEdit: { hostToEdit = host }
                             )
                             .accessibilityIdentifier("host-row")
                             .accessibilityAction(named: "Delete") {
                                 // E2E tests use this custom action to delete without the
                                 // confirmation dialog (triggered via XCUITest runner).
                                 Task { await removeHost(host) }
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                hostToEdit = host
                             }
                         }
                         .onDelete { indexSet in
@@ -148,42 +145,108 @@
         let host: PairedHost
         let connection: ViewerConnection?
         var showUsername = false
+        let onEdit: () -> Void
+
+        @State private var isRequestingUpdate = false
 
         var body: some View {
             HStack(spacing: 12) {
-                // Host icon with connection indicator
-                ZStack(alignment: .bottomTrailing) {
-                    Symbols.laptopcomputer.image
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
+                Button(action: onEdit) {
+                    HStack(spacing: 12) {
+                        // Host icon with connection indicator
+                        ZStack(alignment: .bottomTrailing) {
+                            Symbols.laptopcomputer.image
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
 
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 10, height: 10)
-                        .overlay(
                             Circle()
-                                .stroke(Color(.systemBackground), lineWidth: 2)
-                        )
-                        .offset(x: 2, y: 2)
+                                .fill(statusColor)
+                                .frame(width: 10, height: 10)
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color(.systemBackground), lineWidth: 2)
+                                )
+                                .offset(x: 2, y: 2)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(host.displayName(showUsername: showUsername))
+                                .font(.headline)
+
+                            Text(statusText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if let update = appUpdate, update.updateAvailable {
+                                Text("CtrlX \(update.latestDisplayVersion) is available on the Host")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                if let error = update.error {
+                                    Text(error)
+                                        .font(.caption)
+                                        .foregroundStyle(.red)
+                                }
+                            } else if appUpdate?.phase == .installing {
+                                Text("Installing CtrlX \(appUpdate?.latestDisplayVersion ?? "update")...")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Spacer()
+
+                        Symbols.chevronRight.image
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(host.displayName(showUsername: showUsername))
-                        .font(.headline)
-
-                    Text(statusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if isRequestingUpdate {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if let update = appUpdate, update.updateAvailable {
+                    Button {
+                        requestHostUpdate(update)
+                    } label: {
+                        Label("Update", symbol: .arrowDownCircle)
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!update.canInstall)
+                    .accessibilityLabel("Update Host to CtrlX \(update.latestDisplayVersion)")
+                    .accessibilityIdentifier("host-update-button")
                 }
-
-                Spacer()
-
-                // Edit indicator
-                Symbols.chevronRight.image
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
             }
             .padding(.vertical, 4)
+        }
+
+        private var appUpdate: CtrlXAppUpdateState? {
+            guard
+                let client = connection?.relayClient,
+                client.hostSupportsCtrlXAppUpdate
+            else { return nil }
+            return client.ctrlXAppUpdateState
+        }
+
+        private func requestHostUpdate(_ update: CtrlXAppUpdateState) {
+            guard
+                let client = connection?.relayClient,
+                let version = update.latestVersion,
+                let build = update.latestBuild,
+                !isRequestingUpdate
+            else { return }
+
+            isRequestingUpdate = true
+            Task {
+                _ = await client.sendCommand(
+                    InstallCtrlXAppUpdate(version: version, build: build),
+                    paneId: "",
+                    timeout: InstallCtrlXAppUpdate.responseTimeout
+                )
+                isRequestingUpdate = false
+            }
         }
 
         private var statusColor: Color {

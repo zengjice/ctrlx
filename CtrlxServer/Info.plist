@@ -16,10 +16,7 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>CtrlX recognizes your speech on this Mac to compose terminal input.</string>
 
-	<!-- Sparkle Auto-Update Configuration -->
-	<key>SUFeedURL</key>
-	<string>$(CTRLX_SPARKLE_FEED_URL)</string>
-
+	<!-- Verifies the signed macOS installer script (mac.sh.sig). -->
 	<key>SUPublicEDKey</key>
 	<string>$(CTRLX_SPARKLE_PUBLIC_KEY)</string>
 

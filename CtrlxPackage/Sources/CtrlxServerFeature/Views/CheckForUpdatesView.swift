@@ -1,16 +1,31 @@
 import SwiftUI
 
 public struct CheckForUpdatesView: View {
-    private let updaterController: UpdaterController
+    private let coordinator: AppCoordinator
 
-    public init(updaterController: UpdaterController) {
-        self.updaterController = updaterController
+    public init(coordinator: AppCoordinator) {
+        self.coordinator = coordinator
     }
 
     public var body: some View {
-        Button("Check for Updates...") {
-            updaterController.checkForUpdates()
+        let service = coordinator.ctrlXAppUpdateService
+        let state = service.state
+
+        if state.updateAvailable {
+            Button("Update CtrlX to \(state.latestDisplayVersion)...") {
+                Task { await service.installAvailableUpdate() }
+            }
+            .disabled(!state.canInstall || service.isInstalling)
+
+            Button("Check for Updates Again") {
+                Task { await service.refresh() }
+            }
+            .disabled(service.isInstalling)
+        } else {
+            Button(state.phase == .checking ? "Checking for Updates..." : "Check for Updates...") {
+                Task { await service.refresh() }
+            }
+            .disabled(state.phase == .checking || service.isInstalling)
         }
-        .disabled(!updaterController.canCheckForUpdates)
     }
 }

@@ -744,13 +744,18 @@ Startup and manual checks also compare the installed CLI with the current stable
 release published in the official npm package metadata. The check is also repeated
 on the existing 24-hour plugin-update maintenance loop instead of adding a second
 timer. A newer version produces a workbench banner and a **CLI Update** section on
-that agent's Settings page. Plugin and CLI version banners use the same reusable
-reminder implementation, but keep independent dismissal state and persistence.
-Dismissal is keyed by target and offered version. Settings → Agents controls how
-long a dismissed notice stays hidden (1 hour, 6 hours, 1 day, 3 days or 7 days;
-default 1 day). Expiry restores the banner without another update check, while a
-newer version is surfaced immediately. Dismissing a banner does not install or
-run anything.
+that agent's Settings page. Plugin, CLI, and CtrlX app version banners use the
+same reusable reminder implementation, but keep independent dismissal state and
+persistence. Dismissal is keyed by target and offered version; the app channel
+also includes the build number. Settings → Agents controls how long a dismissed
+notice stays hidden (1 hour, 6 hours, 1 day, 3 days or 7 days; default 1 day).
+Expiry restores the banner without another update check, while a newer version
+or build is surfaced immediately. Dismissing a banner does not install or run
+anything. Opening Settings → General does not perform a network check; the app
+update channel is checked at startup, on the existing 24-hour maintenance loop,
+or when the user presses **Check Again**. The Host authenticates the installer
+script with the bundled Sparkle Ed25519 public key before parsing or executing
+it; an absent or invalid `mac.sh.sig` is rejected.
 Custom wrappers, npm layouts, and direct immutable version paths remain usable
 but must be updated using their original installer. Updating or repairing preserves
 working commands, so shell aliases/functions survive. If a previously broken
@@ -1219,12 +1224,20 @@ opens it in its default app.
   handlers (the reveal logic is the shared `revealInFileExplorer`) so the menu
   reaches full parity with the file explorer.
 
-### UpdaterController (`CtrlxServerFeature/Services/UpdaterController.swift`)
+### CtrlXAppUpdateService (`CtrlxServerFeature/Distribution/CtrlXAppUpdateService.swift`)
 
-`@Observable @MainActor` wrapping Sparkle updater for SwiftUI.
+`@Observable @MainActor` Host-owned desktop app update status and installer,
+exposed to the Mac app, Viewer, and iOS clients.
 
-- Exposes `canCheckForUpdates` binding
-- `checkForUpdates()` action
+- Checks at Host startup, on the existing 24-hour maintenance loop, and when the
+  user presses **Check Again**; automatic checks are disabled under
+  `--e2e-test`, and opening Settings does not start a network request.
+- Fetches the fixed HTTPS `mac.sh` installer and its detached `mac.sh.sig`, then
+  verifies the script with the bundled Sparkle Ed25519 public key
+  (`SUPublicEDKey`) before parsing it.
+- Re-fetches and re-verifies the installer immediately before launching it.
+  Sparkle supplies the signing key and release signing tools; there is no
+  in-process Sparkle updater.
 
 ### PluginUpdateManager (`CtrlxServerFeature/Distribution/PluginUpdateManager.swift`)
 

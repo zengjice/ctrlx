@@ -543,11 +543,8 @@ else
     fi
     ok "Simulator: ${_BOLD}$SIM_NAME${_RESET} ($SIM_UDID)"
 
-    # Build macOS targets contiguously so the Sparkle precompiled module stays
-    # consistent between consumers. Interleaving an iOS build between the macOS
-    # app and the E2E coordinator caused intermittent "header has been modified"
-    # PCM-cache failures because the iOS build path regenerates Sparkle's
-    # umbrella header.
+    # Build macOS targets contiguously before switching to the iOS destination
+    # so shared package and PCM caches are not interleaved between consumers.
     step "Building macOS app (CtrlxServer)"
     xcodebuild "${XCODEBUILD_FLAGS[@]}" \
         -scheme CtrlxServer \
@@ -581,7 +578,7 @@ else
     # own .build/debug — a plain SwiftPM path none of the xcodebuild steps above
     # emit. Without this, those scenarios fail at step 1 with "EchoPluginSidecar
     # binary not found". Built last so its SwiftPM invocation can't interleave
-    # with the macOS PCM/Sparkle module cache (see the contiguous-build note above).
+    # with the macOS PCM caches (see the contiguous-build note above).
     step "Building EchoPluginSidecar (plugin fixture)"
     swift build \
         --package-path "$PACKAGE_ROOT" \

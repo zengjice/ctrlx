@@ -3,5 +3,5 @@
 
 #include "Shared-macOS.xcconfig"
 
-// Optional, untracked signing and Sparkle release configuration.
+// Optional, untracked signing, installer verification and release configuration.
 #include? "Local-macOS.xcconfig"

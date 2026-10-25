@@ -424,6 +424,30 @@ public struct ReadDashboard: CommandSpec, Equatable {
     }
 }
 
+/// Install a CtrlX app update the Host previously verified.
+///
+/// The Host re-fetches its fixed installer endpoint and rejects the request if
+/// the available version/build changed. Viewers cannot supply an installer URL.
+public struct InstallCtrlXAppUpdate: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+
+    /// The Host re-downloads and verifies the installer script before replying,
+    /// so this command needs a longer response window than ordinary commands.
+    public static let responseTimeout: TimeInterval = 30
+
+    public let version: String
+    public let build: String
+
+    public init(version: String, build: String) {
+        self.version = version
+        self.build = build
+    }
+
+    public var commandType: CommandType {
+        .installCtrlXAppUpdate(self)
+    }
+}
+
 /// Send keystrokes to a tmux pane. Returns success/failure.
 public struct SendKeystroke: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
@@ -1111,6 +1135,8 @@ public struct PasteTerminalText: CommandSpec, Equatable {
 /// Each case holds its corresponding CommandSpec struct.
 public enum CommandType: Codable, Sendable, Equatable {
     case readDashboard(ReadDashboard)
+    /// Install the Host's verified CtrlX app update.
+    case installCtrlXAppUpdate(InstallCtrlXAppUpdate)
     /// Send keystrokes to a tmux pane
     case sendKeystroke(SendKeystroke)
     /// Paste one complete clipboard payload without synthesizing Enter keys.
@@ -1423,6 +1449,8 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let simulatorControl: RemoteSimulatorControlResponse?
     public let simulatorTab: RemoteSimulatorTab?
     public let dashboard: DashboardSnapshot?
+    /// Host-owned CtrlX app update state, when this command changed it.
+    public let ctrlXAppUpdate: CtrlXAppUpdateState?
     /// True only after the Host sent the opener or already handled this queue.
     /// Missing on older Hosts; a generic success is not an acknowledgement.
     public let codexQuestionsHandled: Bool?
@@ -1444,6 +1472,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         simulatorControl: RemoteSimulatorControlResponse? = nil,
         simulatorTab: RemoteSimulatorTab? = nil,
         dashboard: DashboardSnapshot? = nil,
+        ctrlXAppUpdate: CtrlXAppUpdateState? = nil,
         codexQuestionsHandled: Bool? = nil
     ) {
         self.commandId = commandId
@@ -1462,6 +1491,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.simulatorControl = simulatorControl
         self.simulatorTab = simulatorTab
         self.dashboard = dashboard
+        self.ctrlXAppUpdate = ctrlXAppUpdate
         self.codexQuestionsHandled = codexQuestionsHandled
     }
 

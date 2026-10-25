@@ -32,6 +32,9 @@
         /// App settings
         public let settings: AppSettings
 
+        /// Host-owned desktop app update status and installer.
+        let ctrlXAppUpdateService = CtrlXAppUpdateService()
+
         let detachedWindows = DetachedTerminalWindows()
 
         /// Owns the hosted-relay license status and trial-expiry alerting
@@ -214,6 +217,7 @@
         var agentSettingsSelection: String?
         let agentPluginUpdateReminders = AgentUpdateReminderStore(channel: .plugin)
         let agentCLIUpdateReminders = AgentUpdateReminderStore(channel: .cli)
+        let ctrlXAppUpdateReminders = AgentUpdateReminderStore(channel: .app)
         private(set) var agentPluginInstallations: AgentPluginInstallations?
         private(set) var agentCLIInstallations: AgentCLIInstallations?
         var pendingAgentCLILaunch: String?
@@ -224,6 +228,7 @@
             set {
                 agentPluginUpdateReminders.interval = newValue
                 agentCLIUpdateReminders.interval = newValue
+                ctrlXAppUpdateReminders.interval = newValue
             }
         }
 
@@ -950,6 +955,9 @@
                     },
                     checkAgentCLIUpdates: { [weak self] in
                         self?.agentCLIInstallations?.refresh()
+                    },
+                    checkCtrlXAppUpdate: { [weak self] in
+                        await self?.ctrlXAppUpdateService.refresh()
                     }
                 ),
                 automaticTriggersEnabled: !isE2ETest
@@ -3226,6 +3234,11 @@
             )
             connectedViewerManager = connectionManager
 
+            ctrlXAppUpdateService.onStateChange = { [weak self] in
+                guard let self, let connectionManager = self.connectedViewerManager else { return }
+                Task { await connectionManager.pushSessionStateToAll() }
+            }
+
             // Outgoing pushes carry the host's current needs-attention count as
             // the iOS app icon badge. The same provider feeds silent badge
             // updates broadcast on markSessionHandled.
@@ -3393,6 +3406,24 @@
                     do {
                         return try await CommandResponseMessage(commandId: command.id, success: true, dashboard: self.dashboardSnapshot())
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
+                if case let .installCtrlXAppUpdate(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        try await self.ctrlXAppUpdateService.install(version: spec.version, build: spec.build)
+                        return CommandResponseMessage(
+                            commandId: command.id,
+                            success: true,
+                            ctrlXAppUpdate: self.ctrlXAppUpdateService.state
+                        )
+                    } catch {
+                        return CommandResponseMessage(
+                            commandId: command.id,
+                            success: false,
+                            error: error.localizedDescription,
+                            ctrlXAppUpdate: self.ctrlXAppUpdateService.state
+                        )
+                    }
                 }
                 if case let .controlSimulator(spec) = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
@@ -3879,7 +3910,9 @@
                     supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs,
                     workspaceIdentity: workspaceIdentity,
                     supportsWorkspaceInputIdentity: recoveryHostID != nil,
-                    supportsTerminalStreamIdentity: true
+                    supportsTerminalStreamIdentity: true,
+                    supportsCtrlXAppUpdate: await self?.ctrlXAppUpdateService.isConfigured == true,
+                    ctrlXAppUpdate: await self?.ctrlXAppUpdateService.state
                 )
             }
 

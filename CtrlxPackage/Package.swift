@@ -24,7 +24,6 @@ func macOnlyDependencies() -> [Package.Dependency] {
                 url: "https://github.com/jicezeng/SwiftTerm.git",
                 revision: "a2860913f95c3204a577be758f57d9e9e1fcf3d1"
             ),
-            .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.4"),
             .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
             .package(url: "https://github.com/mchakravarty/ProjectNavigator", exact: "1.10.1"),
             .package(url: "https://github.com/gonzalezreal/textual", from: "0.5.0"),
@@ -49,7 +48,7 @@ func macOnlyTargetDependencies(for target: String) -> [Target.Dependency] {
         case "CtrlxFeature":
             return [.swiftTerm]
         case "CtrlxServerFeature":
-            return [.target(name: "CtrlxBrowserBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorProtocol", condition: .when(platforms: [.macOS])), .swiftTerm, .sparkle, .textual, .projectNavigator, .files, .gitWorkbench, .gitWorkbenchGitKit, .product(name: "ZIPFoundation", package: "ZIPFoundation", condition: .when(platforms: [.macOS]))]
+            return [.target(name: "CtrlxBrowserBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorBridge", condition: .when(platforms: [.macOS])), .target(name: "CtrlxSimulatorProtocol", condition: .when(platforms: [.macOS])), .swiftTerm, .textual, .projectNavigator, .files, .gitWorkbench, .gitWorkbenchGitKit, .product(name: "ZIPFoundation", package: "ZIPFoundation", condition: .when(platforms: [.macOS]))]
         case "CtrlxServerFeatureTests":
             return [.swiftTerm, .product(name: "ZIPFoundation", package: "ZIPFoundation", condition: .when(platforms: [.macOS]))]
         case "CtrlxExternalServerTests":
@@ -119,10 +118,6 @@ extension Target.Dependency {
 
         static var swiftTerm: Self {
             .product(name: "SwiftTerm", package: "SwiftTerm")
-        }
-
-        static var sparkle: Self {
-            .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS]))
         }
 
         static var textual: Self {

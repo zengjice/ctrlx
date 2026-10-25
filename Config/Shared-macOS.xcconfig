@@ -14,7 +14,7 @@ MACOSX_DEPLOYMENT_TARGET = 26.0
 // ==========================================
 PRODUCT_NAME = CtrlX
 
-// A distribution must supply its own Sparkle endpoint and EdDSA public key in
-// Local-macOS.xcconfig. Empty values keep updates safely disabled.
-CTRLX_SPARKLE_FEED_URL =
+// A distribution must supply its own Sparkle EdDSA public key in
+// Local-macOS.xcconfig. It verifies the Qcloud installer script; an empty value
+// keeps in-app updates safely disabled.
 CTRLX_SPARKLE_PUBLIC_KEY =
