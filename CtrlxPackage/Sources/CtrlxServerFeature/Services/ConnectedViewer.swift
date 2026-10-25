@@ -30,7 +30,9 @@ final public class ConnectedViewer: Identifiable {
         case error(String)
 
         public var isConnected: Bool {
-            if case .connected = self { return true }
+            if case .connected = self {
+                return true
+            }
             return false
         }
 
@@ -519,10 +521,11 @@ final public class ConnectedViewer: Identifiable {
 
     /// Admit bytes before the caller suspends; fan-out tasks must only await delivery.
     func enqueueTerminalStream(_ streamMessage: TerminalStreamMessage) -> Task<Void, Never>? {
-        guard Self.canSendTerminalStream(
-            relayConnected: state.isConnected,
-            viewerConnected: isViewerConnected
-        ) else {
+        guard
+            Self.canSendTerminalStream(
+                relayConnected: state.isConnected,
+                viewerConnected: isViewerConnected
+            ) else {
             return nil
         }
 
@@ -547,7 +550,9 @@ final public class ConnectedViewer: Identifiable {
             ]
         )
         await sendEncrypted(.peerHello(hello))
-        if connectionGeneration.isCurrent(generation), state.isConnected { quickPhraseSync?.didSendHello() }
+        if connectionGeneration.isCurrent(generation), state.isConnected {
+            quickPhraseSync?.didSendHello()
+        }
     }
 
     /// Proactively push current session state to viewer
@@ -792,10 +797,11 @@ final public class ConnectedViewer: Identifiable {
                     return
                 }
                 let generation = connectionGeneration.current
-                if !browserRequests.enqueue(command, execute: onCommand, reply: { [weak self] response in
-                    guard let self, self.connectionGeneration.isCurrent(generation) else { return }
-                    await self.sendEncrypted(.commandResponse(response))
-                }) {
+                if
+                    !browserRequests.enqueue(command, execute: onCommand, reply: { [weak self] response in
+                        guard let self, self.connectionGeneration.isCurrent(generation) else { return }
+                        await self.sendEncrypted(.commandResponse(response))
+                    }) {
                     await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Too many preview requests.")))
                 }
                 return
@@ -813,24 +819,28 @@ final public class ConnectedViewer: Identifiable {
             if isFileRequest, let onCommand {
                 let generation = connectionGeneration.current
                 let uploads = fileUploads
-                if !fileRequests.enqueue(command, execute: { command in
-                    if case let .browseFiles(spec) = command.command, case let .upload(operation) = spec.operation {
-                        do {
-                            let response = try await uploads.request(operation)
-                            return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
-                        } catch { return .failure(for: command.id, error: error.localizedDescription) }
-                    }
-                    return await onCommand(command)
-                }, reply: { [weak self] response in
-                    guard let self, self.connectionGeneration.isCurrent(generation) else { return }
-                    await self.sendEncrypted(.commandResponse(response))
-                }) {
+                if
+                    !fileRequests.enqueue(command, execute: { command in
+                        if case let .browseFiles(spec) = command.command, case let .upload(operation) = spec.operation {
+                            do {
+                                let response = try await uploads.request(operation)
+                                return CommandResponseMessage(commandId: command.id, success: true, fileBrowser: response)
+                            } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                        }
+                        return await onCommand(command)
+                    }, reply: { [weak self] response in
+                        guard let self, self.connectionGeneration.isCurrent(generation) else { return }
+                        await self.sendEncrypted(.commandResponse(response))
+                    }) {
                     await sendEncrypted(.commandResponse(.failure(for: command.id, error: "Too many file requests. Please retry.")))
                 }
                 return
             }
-            let logType = if case .pasteTerminalText = command.command { "pasteTerminalText" }
-                else { String(describing: command.command) }
+            let logType = if case .pasteTerminalText = command.command {
+                "pasteTerminalText"
+            } else {
+                String(describing: command.command)
+            }
             logger.info("Received command from viewer", metadata: ["type": "\(logType)"])
             if let onCommand {
                 // Acknowledged terminal actions still share the keyboard FIFO.

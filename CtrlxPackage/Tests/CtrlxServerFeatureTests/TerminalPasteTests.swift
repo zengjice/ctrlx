@@ -1,7 +1,7 @@
 #if os(macOS)
+    import ConcurrencyExtras
     import CtrlxCommon
     import CtrlxNetworking
-    import ConcurrencyExtras
     import Dependencies
     import Foundation
     import Testing
@@ -20,7 +20,8 @@
             await withDependencies {
                 $0[ProcessRunner.self].run = { _, arguments, _, _ in
                     commands.withValue { $0.append(arguments) }
-                    if arguments.first == "load-buffer", let path = arguments.last {
+                    if arguments.first == "load-buffer", arguments.count > 3 {
+                        let path = arguments[3]
                         temporaryPath.setValue(path)
                         let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
                         loaded.setValue(bytes)
@@ -36,16 +37,19 @@
                 #expect(response.commandId == commandID)
             }
             #expect(loaded.value == Data(text.utf8))
-            #expect(commands.value.count == 2)
+            #expect(commands.value.count == 1)
+            let path = try #require(temporaryPath.value)
             #expect(commands.value.last == [
+                "load-buffer", "-b", "ctrlx-paste-\(commandID.uuidString)", path, ";",
                 "paste-buffer", "-p", "-d", "-b", "ctrlx-paste-\(commandID.uuidString)", "-t", "%7", "-r",
             ])
-            let path = try #require(temporaryPath.value)
             #expect(!FileManager.default.fileExists(atPath: path))
         }
 
-        @Test("Empty, oversized and paste-end control payloads do not execute tmux",
-              arguments: ["empty", "oversized", "terminator"])
+        @Test(
+            "Empty, oversized and paste-end control payloads do not execute tmux",
+            arguments: ["empty", "oversized", "terminator"]
+        )
         func rejectedOrEmptyPayload(kind: String) async {
             let text = switch kind {
             case "empty": ""
@@ -68,16 +72,13 @@
             #expect(commands.value.isEmpty)
         }
 
-        @Test("Failed load or paste reports an error without falling back to Enter", arguments: ["load-buffer", "paste-buffer"])
-        func failedPaste(failedCommand: String) async {
+        @Test("A failed combined paste reports an error without falling back to Enter")
+        func failedPaste() async {
             let commands = LockIsolated<[[String]]>([])
             await withDependencies {
                 $0[ProcessRunner.self].run = { _, arguments, _, _ in
                     commands.withValue { $0.append(arguments) }
-                    return ProcessResult(
-                        exitCode: arguments.first == failedCommand ? 1 : 0,
-                        stdout: Data(), stderr: Data("paste failed".utf8)
-                    )
+                    return ProcessResult(exitCode: 1, stdout: Data(), stderr: Data("paste failed".utf8))
                 }
             } operation: {
                 let executor = TmuxCommandExecutor(tmuxService: TmuxService(tmuxPath: "/usr/bin/tmux"))
@@ -88,7 +89,7 @@
                 #expect(response.error?.contains("paste failed") == true)
             }
             #expect(!commands.value.contains { $0.contains("send-keys") })
-            #expect(commands.value.count == (failedCommand == "load-buffer" ? 1 : 2))
+            #expect(commands.value.count == 1)
         }
 
         @Test("File-drop callers retain their existing paste flags")
@@ -104,7 +105,12 @@
                     target: "%7", content: "'/tmp/file name.png'", bufferName: "test-drop"
                 )
             }
-            #expect(commands.value.last == ["paste-buffer", "-p", "-d", "-b", "test-drop", "-t", "%7"])
+            let command = try #require(commands.value.first)
+            #expect(commands.value.count == 1)
+            #expect(command.count == 12)
+            #expect(Array(command.prefix(3)) == ["load-buffer", "-b", "test-drop"])
+            #expect(command[3].contains("ctrlx-drop-buf-"))
+            #expect(Array(command.suffix(8)) == [";", "paste-buffer", "-p", "-d", "-b", "test-drop", "-t", "%7"])
         }
 
         @Test("Real tmux wraps only when the receiving app enables bracketed paste", arguments: [false, true])
@@ -158,7 +164,9 @@
         private func waitFor(_ marker: String, tmux: TmuxService) async throws -> Bool {
             let deadline = ContinuousClock.now + .seconds(5)
             repeat {
-                if try await tmux.capturePaneText("%0", scrollback: true).contains(marker) { return true }
+                if try await tmux.capturePaneText("%0", scrollback: true).contains(marker) {
+                    return true
+                }
                 try await Task.sleep(for: .milliseconds(20))
             } while ContinuousClock.now < deadline
             return false

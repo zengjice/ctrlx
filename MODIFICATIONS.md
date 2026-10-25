@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.100 — Multi-Agent workflows
+
+- Add manual single-Host multi-Agent workflows on Mac Host, Mac Viewer and iOS,
+  with existing or newly created Agent tabs, per-role instructions and
+  attachments, fan-out/join connections and bounded repeat rounds.
+- Add content nodes that combine upstream outputs and forward text, skills or
+  attachments without an Agent, plus durable handoffs and Host-owned execution,
+  authorization, recovery and native completion tracking.
+- Support text, image, video and audio workflow inputs, including reviewed media
+  conversion and explicit attachment handoff.
+- Simplify Agent provider naming in settings and keep Viewer-initiated app update
+  actions responsive and retryable.
+- Preserve the installed Relay URL and auto-connect preference across app updates
+  and reinstalls.
+- Release validation: the complete 4,018-test serial Swift regression passed
+  (with `StopFinalityEvaluationSuite` skipped), as did both boundary checks,
+  SwiftFormat, the 14-page website build, the iOS Simulator compile check and the
+  signed Mac Release app build. Offline publisher, COS and installer regressions
+  passed.
+- Mac distribution is build 33 through COS, using an Apple Development signature
+  without notarization. Publication signs and archives both `mac.sh` and the
+  detached `mac.sh.sig`, then verifies the public pair before promotion.
+
 ## 3.0.99 — Signed in-app updates
 
 - Replace the runtime Sparkle updater with a Host-owned macOS update flow that

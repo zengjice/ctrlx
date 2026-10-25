@@ -266,11 +266,12 @@ final public class MirrorWindowManager {
         }
 
         let ratio = min(max(splitRatio, 0.15), 0.85)
-        if let current = sharedTerminalLayouts[sessionName],
-           current.leftWindowId == leftWindowId,
-           current.rightWindowIds == rightWindowIds,
-           current.selectedRightWindowId == selectedRightWindowId,
-           current.splitRatio == ratio {
+        if
+            let current = sharedTerminalLayouts[sessionName],
+            current.leftWindowId == leftWindowId,
+            current.rightWindowIds == rightWindowIds,
+            current.selectedRightWindowId == selectedRightWindowId,
+            current.splitRatio == ratio {
             return false
         }
 
@@ -460,9 +461,10 @@ final public class MirrorWindowManager {
         processNamesByPlugin: [String: [String]],
         refreshSnapshot: Bool = false
     ) async {
-        guard let panes = await tmuxService.detectAgentPanesIfAvailable(
-            processNamesByPlugin: processNamesByPlugin, refreshSnapshot: refreshSnapshot
-        ), !Task.isCancelled else { return }
+        guard
+            let panes = await tmuxService.detectAgentPanesIfAvailable(
+                processNamesByPlugin: processNamesByPlugin, refreshSnapshot: refreshSnapshot
+            ), !Task.isCancelled else { return }
         let changed = reconcileDetectedAgentSessions(panes)
         let restored = await restoreNativeAgentIdentities(from: panes, processNamesByPlugin: processNamesByPlugin)
         if changed || restored {
@@ -527,9 +529,10 @@ final public class MirrorWindowManager {
         for (paneID, info) in detected {
             guard processDetectedPaneIds.contains(paneID) else { continue }
             let identity = await agentIdentities.load(paneID)
-            guard !Task.isCancelled, processDetectedPaneIds.contains(paneID), let pane = paneStates[paneID],
-                  lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
-                  lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs
+            guard
+                !Task.isCancelled, processDetectedPaneIds.contains(paneID), let pane = paneStates[paneID],
+                lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
+                lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs
             else { continue }
             if let identity, identity.matches(pane: pane, detected: info, runtimeID: agentIdentities.runtimeID(identity.processID)) {
                 // Restore only the join key, never old working/approval/notification state.
@@ -545,15 +548,16 @@ final public class MirrorWindowManager {
                 rememberedAgentIdentities.removeValue(forKey: paneID)
                 changed = true
             }
-            guard info.pluginID == "codex", info.processIDs.count == 1, let pid = info.processIDs.first,
-                  let runtime = agentIdentities.runtimeID(pid),
-                  let sessionID = await agentIdentities.codexSessionID(pid, runtime),
-                  !Task.isCancelled, processDetectedPaneIds.contains(paneID),
-                  lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
-                  lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs,
-                  agentIdentities.runtimeID(pid) == runtime,
-                  var current = paneStates[paneID], current.claudeSessionID == nil,
-                  current.sessionName == pane.sessionName, current.stableWindowId == pane.stableWindowId
+            guard
+                info.pluginID == "codex", info.processIDs.count == 1, let pid = info.processIDs.first,
+                let runtime = agentIdentities.runtimeID(pid),
+                let sessionID = await agentIdentities.codexSessionID(pid, runtime),
+                !Task.isCancelled, processDetectedPaneIds.contains(paneID),
+                lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
+                lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs,
+                agentIdentities.runtimeID(pid) == runtime,
+                var current = paneStates[paneID], current.claudeSessionID == nil,
+                current.sessionName == pane.sessionName, current.stableWindowId == pane.stableWindowId
             else { continue }
             current.claudeSessionID = sessionID
             guard let source = AgentForkSource(pane: current) else { continue }

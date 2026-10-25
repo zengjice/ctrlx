@@ -26,9 +26,13 @@ struct AgentSessionIdentityTests {
         var runner = ProcessRunner.previewValue
         runner.run = { executable, arguments, _, _ in
             let output: String
-            if executable == "/bin/ps" { output = rows.value }
-            else if arguments.contains("list-panes") { output = "%5\(PaneInfo.fieldSeparator)100\(PaneInfo.fieldSeparator)/repo\n" }
-            else { throw AgentForkError("Unexpected process request") }
+            if executable == "/bin/ps" {
+                output = rows.value
+            } else if arguments.contains("list-panes") {
+                output = "%5\(PaneInfo.fieldSeparator)100\(PaneInfo.fieldSeparator)/repo\n"
+            } else {
+                throw AgentForkError("Unexpected process request")
+            }
             return .init(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
         }
         return runner
@@ -100,15 +104,19 @@ struct AgentSessionIdentityTests {
         }
     }
 
-    @Test("Native events, process replacement and cancellation invalidate an in-flight writer lookup",
-          arguments: ["hook", "runtime", "process", "cancel"])
+    @Test(
+        "Native events, process replacement and cancellation invalidate an in-flight writer lookup",
+        arguments: ["hook", "runtime", "process", "cancel"]
+    )
     func writerRecoveryRace(scenario: String) async {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
         let runtime = LockIsolated("101:start-1")
         let writes = LockIsolated(0)
         let (started, start) = AsyncStream<Void>.makeStream()
         let (release, resume) = AsyncStream<Void>.makeStream()
-        defer { start.finish(); resume.finish() }
+        defer { start.finish()
+            resume.finish()
+        }
         let client = AgentSessionIdentityClient(load: { _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
@@ -147,7 +155,9 @@ struct AgentSessionIdentityTests {
         let newID = UUID().uuidString
         let (started, start) = AsyncStream<Void>.makeStream()
         let (release, resume) = AsyncStream<Void>.makeStream()
-        defer { start.finish(); resume.finish() }
+        defer { start.finish()
+            resume.finish()
+        }
         let client = AgentSessionIdentityClient(load: { _ in stored.value }, save: { identity in
             if identity.source.sessionID == oldID {
                 start.yield(())
@@ -230,25 +240,43 @@ struct AgentSessionIdentityTests {
         }
     }
 
-    @Test("A cached UUID cannot be reused for a different runtime, Agent, window, or ambiguous pane",
-          arguments: ["reused-pid", "missing-process", "new-pid", "multiple", "helper-id", "other-agent", "other-window", "invalid-id"])
+    @Test(
+        "A cached UUID cannot be reused for a different runtime, Agent, window, or ambiguous pane",
+        arguments: ["reused-pid", "missing-process", "new-pid", "multiple", "helper-id", "other-agent", "other-window", "invalid-id"]
+    )
     func rejectsStaleIdentity(scenario: String) async throws {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
-        let pane = PaneState(paneId: "%5", sessionName: "work", tmuxWindowId: "@7", currentPath: "/repo",
-                             agentSession: .init(paneId: "%5", pluginID: "codex"), claudeSessionID: UUID().uuidString)
+        let pane = PaneState(
+            paneId: "%5",
+            sessionName: "work",
+            tmuxWindowId: "@7",
+            currentPath: "/repo",
+            agentSession: .init(paneId: "%5", pluginID: "codex"),
+            claudeSessionID: UUID().uuidString
+        )
         let pid = scenario == "helper-id" ? "202" : "101"
-        let valid = AgentSessionIdentity(source: try #require(AgentForkSource(pane: pane)), processID: pid, runtimeID: "\(pid):start-1")
-        let data = String(decoding: try JSONEncoder().encode(valid), as: UTF8.self)
+        let valid = try AgentSessionIdentity(source: #require(AgentForkSource(pane: pane)), processID: pid, runtimeID: "\(pid):start-1")
+        let data = try String(decoding: JSONEncoder().encode(valid), as: UTF8.self)
         let identity = try JSONDecoder().decode(AgentSessionIdentity.self, from: Data((scenario == "invalid-id"
-            ? data.replacingOccurrences(of: valid.source.sessionID, with: "--last") : data).utf8))
+                ? data.replacingOccurrences(of: valid.source.sessionID, with: "--last") : data).utf8))
         let client = AgentSessionIdentityClient(load: { _ in identity }, save: { _ in false }, runtimeID: {
-            if scenario == "missing-process" { return nil }
+            if scenario == "missing-process" {
+                return nil
+            }
             return $0 == "101" ? (scenario == "reused-pid" ? "101:start-2" : "101:start-1") : "202:start-1"
         }, codexSessionID: { _, _ in nil })
-        if scenario == "new-pid" { rows.setValue("100 1 zsh\n202 100 codex\n") }
-        if scenario == "multiple" { rows.setValue("100 1 zsh\n101 100 codex\n202 100 codex\n") }
-        if scenario == "helper-id" { rows.setValue("100 1 zsh\n101 100 codex\n201 101 node_repl\n202 201 codex\n") }
-        if scenario == "other-agent" { rows.setValue("100 1 zsh\n101 100 claude\n") }
+        if scenario == "new-pid" {
+            rows.setValue("100 1 zsh\n202 100 codex\n")
+        }
+        if scenario == "multiple" {
+            rows.setValue("100 1 zsh\n101 100 codex\n202 100 codex\n")
+        }
+        if scenario == "helper-id" {
+            rows.setValue("100 1 zsh\n101 100 codex\n201 101 node_repl\n202 201 codex\n")
+        }
+        if scenario == "other-agent" {
+            rows.setValue("100 1 zsh\n101 100 claude\n")
+        }
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
@@ -305,9 +333,15 @@ struct AgentSessionIdentityTests {
     @Test("A native event arriving during cache loading takes precedence over recovered identity")
     func hookDuringRecovery() async throws {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
-        let pane = PaneState(paneId: "%5", sessionName: "work", tmuxWindowId: "@7", currentPath: "/repo",
-                             agentSession: .init(paneId: "%5", pluginID: "codex"), claudeSessionID: UUID().uuidString)
-        let identity = AgentSessionIdentity(source: try #require(AgentForkSource(pane: pane)), processID: "101", runtimeID: "101:start-1")
+        let pane = PaneState(
+            paneId: "%5",
+            sessionName: "work",
+            tmuxWindowId: "@7",
+            currentPath: "/repo",
+            agentSession: .init(paneId: "%5", pluginID: "codex"),
+            claudeSessionID: UUID().uuidString
+        )
+        let identity = try AgentSessionIdentity(source: #require(AgentForkSource(pane: pane)), processID: "101", runtimeID: "101:start-1")
         let (started, start) = AsyncStream<Void>.makeStream()
         let (release, resume) = AsyncStream<Void>.makeStream()
         let client = AgentSessionIdentityClient(load: { _ in
@@ -457,7 +491,7 @@ struct AgentSessionIdentityTests {
     }
 
     @Test("Conversation-switch writes are serialized so a delayed old UUID cannot replace the new one")
-    func switchDuringWrite() async throws {
+    func switchDuringWrite() async {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
         let stored = LockIsolated<AgentSessionIdentity?>(nil)
         let (started, start) = AsyncStream<String>.makeStream()
