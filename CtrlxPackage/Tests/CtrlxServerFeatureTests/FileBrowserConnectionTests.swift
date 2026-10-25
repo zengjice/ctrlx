@@ -300,8 +300,8 @@ struct FileBrowserConnectionTests {
         try await app.asyncShutdown()
     }
 
-    @Test
-    func encryptedVideoRangeReadsLeaveKeyboardCommandsResponsive() async throws {
+    @Test("Downloads and app updates leave keyboard input responsive", arguments: [false, true])
+    func backgroundRequestsLeaveKeyboardCommandsResponsive(duringAppUpdate: Bool) async throws {
         let originalVersion = VersionCompatibility.appVersionOverride
         VersionCompatibility.appVersionOverride = "3.0.43"
         defer { VersionCompatibility.appVersionOverride = originalVersion }
@@ -341,12 +341,20 @@ struct FileBrowserConnectionTests {
             var reading = false
             var replied = false
             var keysArrived = false
-            host.onSessionStateRequest = { .init(pairId: "", paneStates: [:], supportsFileBrowsing: true, supportsFileDownloads: true) }
+            host.onSessionStateRequest = { .init(pairId: "", paneStates: [:], supportsFileBrowsing: true, supportsFileDownloads: true, supportsCtrlXAppUpdate: true) }
             host.onCommand = { command in
+                if case .installCtrlXAppUpdate = command.command {
+                    reading = true
+                    for await _ in gate {
+                        break
+                    }
+                    replied = true
+                    return .success(for: command.id)
+                }
                 if
                     case let .browseFiles(spec) = command.command,
                     case let .download(path, offset, revision) = spec.operation {
-                    if offset == block {
+                    if offset == block, !duringAppUpdate {
                         reading = true
                         for await _ in gate {
                             break
@@ -385,12 +393,17 @@ struct FileBrowserConnectionTests {
                     return try #require(response.fileBrowser)
                 }
                 let reader = try FileBrowserVideoReader(info: info, source: source)
-                let request = Task { try await reader.read(offset: block + 7, length: 4) }
+                let request = Task {
+                    if duringAppUpdate {
+                        _ = try await viewer.sendCommand(InstallCtrlXAppUpdate(version: "3.0.99", build: "32"), paneId: "", timeout: InstallCtrlXAppUpdate.responseTimeout).get()
+                    }
+                    return try await reader.read(offset: block + 7, length: 4)
+                }
                 defer { request.cancel() }
                 try await waitUntil { reading }
                 _ = await viewer.sendCommand(SendKeystroke([.text("test")]), paneId: "%7")
                 try await waitUntil { keysArrived }
-                #expect(!replied, "Keyboard input must arrive even while a video read is blocked")
+                #expect(!replied, "Keyboard input must arrive before a blocked download or app update completes")
                 release.yield()
                 #expect(try await request.value == Data(repeating: 0xFF, count: 4))
                 #expect(try await reader.read(offset: info.size - 2, length: 8) == Data(repeating: 0xFF, count: 2))

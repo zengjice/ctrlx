@@ -137,6 +137,64 @@
         }
 
         @Test
+        func transientInstallFailureKeepsRemoteRetryAvailable() async throws {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-app-retry-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let key = Curve25519.Signing.PrivateKey()
+            let script = manifest(version: "3.0.99", build: "32")
+            let failNextLoad = LockIsolated(false)
+            var launches = 0
+            let service = CtrlXAppUpdateService(
+                buildInfo: buildInfo(version: "3.0.98", build: "31"), signingKey: key.publicKey,
+                loadScript: { _ in
+                    if
+                        failNextLoad.withValue({ value in
+                            defer { value = false }
+                            return value
+                        }) {
+                        throw URLError(.networkConnectionLost)
+                    }
+                    return try signedInstaller(script, using: key)
+                },
+                installationPreflight: { nil },
+                launchInstaller: { _, _ in launches += 1
+                    return nil
+                },
+                updateDirectory: root.appendingPathComponent("Updates"), logDirectory: root.appendingPathComponent("Logs")
+            )
+            await service.refresh()
+            failNextLoad.setValue(true)
+            await #expect(throws: URLError.self) { try await service.install(version: "3.0.99", build: "32") }
+            #expect(service.state.phase == .available)
+            #expect(service.state.canInstall, "A Viewer must be able to retry without a separate Host refresh")
+            #expect(service.state.error != nil)
+            #expect(launches == 0)
+            try await service.install(version: "3.0.99", build: "32")
+            #expect(launches == 1)
+            #expect(service.state.phase == .installing)
+        }
+
+        @Test
+        func changedInstallationPreflightPublishesTheFailure() async {
+            let reason = LockIsolated<String?>(nil)
+            let key = Curve25519.Signing.PrivateKey()
+            let script = manifest(version: "3.0.99", build: "32")
+            let service = CtrlXAppUpdateService(
+                buildInfo: buildInfo(version: "3.0.98", build: "31"), signingKey: key.publicKey,
+                loadScript: { _ in try signedInstaller(script, using: key) },
+                installationPreflight: { reason.value },
+                launchInstaller: { _, _ in Issue.record("An unavailable installation must not launch")
+                    return nil
+                }
+            )
+            await service.refresh()
+            reason.setValue("Administrator permission is required")
+            await service.installAvailableUpdate()
+            #expect(!service.state.canInstall)
+            #expect(service.state.error == reason.value)
+        }
+
+        @Test
         func refreshRejectsTamperedInstaller() async throws {
             let privateKey = Curve25519.Signing.PrivateKey()
             let script = manifest(version: "3.0.99", build: "32")

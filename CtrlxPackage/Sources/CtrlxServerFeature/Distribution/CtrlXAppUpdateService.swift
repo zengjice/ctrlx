@@ -246,14 +246,13 @@
             guard state.phase == .available else {
                 throw CtrlXAppUpdateError.updateUnavailable
             }
-            if let reason = installationPreflight() {
-                throw CtrlXAppUpdateError.installationUnavailable(reason)
-            }
-
             isInstalling = true
             defer { isInstalling = false }
 
             do {
+                if let reason = installationPreflight() {
+                    throw CtrlXAppUpdateError.installationUnavailable(reason)
+                }
                 let installer = try await verifiedInstaller(from: installerURL)
                 let release = installer.release
                 guard release.version == version, release.build == build else {
@@ -287,7 +286,7 @@
                     latestBuild: state.latestBuild,
                     latestBuildStamp: state.latestBuildStamp,
                     checkedAt: state.checkedAt,
-                    canInstall: false,
+                    canInstall: installationPreflight() == nil,
                     error: Self.userFacingMessage(error)
                 )
                 throw error

@@ -1238,6 +1238,13 @@ exposed to the Mac app, Viewer, and iOS clients.
 - Re-fetches and re-verifies the installer immediately before launching it.
   Sparkle supplies the signing key and release signing tools; there is no
   in-process Sparkle updater.
+- Viewer update requests use the existing bounded file-request queue so installer
+  verification cannot hold the keyboard receive loop. A failed attempt publishes
+  its error and retains retry eligibility when installation preflight still passes;
+  retries fetch and verify the installer again.
+- The installer preserves Relay settings for existing installations and reinstalls
+  with saved preferences. Only a first installation without Relay preferences
+  initializes the distribution's default connection.
 
 ### PluginUpdateManager (`CtrlxServerFeature/Distribution/PluginUpdateManager.swift`)
 

@@ -98,6 +98,11 @@ failures print a bounded log excerpt and its path. Pass flags to the downloaded
 script with `bash -s -- --force --verbose`, or through a local `ctrlx-install`
 wrapper that forwards `"$@"`. Template changes reach `macos/mac.sh` through the
 next normal Mac publication; editing the local template does not update COS.
+Updates preserve the installed App's Relay URL and auto-connect preference, even
+when those keys are absent. Reinstalls without an App also keep saved Relay
+preferences; only a first install with no Relay preferences initializes the
+distribution defaults. Installer regressions live alongside the private template
+in `test-ctrlx-installer.py` and must pass before publishing its signed bytes.
 
 Installer promotion uses a COS lock object created with overwrite forbidden.
 While holding it, the publisher rechecks the previous installer, saves an immutable
