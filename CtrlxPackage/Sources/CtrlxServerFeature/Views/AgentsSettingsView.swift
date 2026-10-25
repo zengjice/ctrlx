@@ -1064,7 +1064,7 @@
                             }
                         }
                         .accessibilityIdentifier("agentProviderReasoningEffort")
-                        Text("Overrides model_reasoning_effort for this Provider. Leave it at the Codex configuration default unless the endpoint supports reasoning effort.")
+                        Text("Overrides model_reasoning_effort for this Provider. Custom Providers also expose this model and all reasoning levels to Codex's /model command. Leave it at the Codex configuration default unless the endpoint supports reasoning effort.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

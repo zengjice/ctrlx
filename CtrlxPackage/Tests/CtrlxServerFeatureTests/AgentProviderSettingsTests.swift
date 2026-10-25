@@ -2,10 +2,12 @@
     import AppKit
     import ClaudeCodePluginCore
     import CodexPluginCore
+    import CtrlxCommon
     import CtrlxEncryption
     import CtrlxNetworking
     import CtrlxPluginProtocol
     import Dependencies
+    import Foundation
     import SwiftUI
     import Testing
     @testable import CtrlxServerFeature
@@ -40,12 +42,34 @@
             let originalSettings = try settings(draft, pluginID: pluginID)
             let secrets = SecretsService.inMemory()
             try await secrets.storeSecret("fixture-key", AgentProviderKeychainAccount.account(pluginID: pluginID, providerID: providerID))
+            let stateDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("ctrlx-provider-settings-\(UUID().uuidString)", isDirectory: true)
+            let environment = PluginEnv(
+                pluginRoot: URL(fileURLWithPath: "/fixture/plugin"),
+                stateDir: stateDirectory,
+                appVersion: "fixture",
+                settings: originalSettings,
+                marketplaceSource: URL(fileURLWithPath: "/fixture/marketplace")
+            )
+            defer { try? FileManager.default.removeItem(at: stateDirectory) }
 
             try await withDependencies {
                 $0[SecretsService.self] = secrets
+                $0[ProcessRunner.self] = modelCatalogRunner()
             } operation: {
-                let core: any AgentProviderSelecting = pluginID == "codex" ? CodexPluginCore() : ClaudeCodePluginCore()
-                _ = await core.applySettings(originalSettings)
+                let core: any AgentProviderSelecting
+                let codexCore: CodexPluginCore?
+                if pluginID == "codex" {
+                    let initialized = CodexPluginCore()
+                    try await initialized.initialize(environment, host: MockPluginHost())
+                    core = initialized
+                    codexCore = initialized
+                } else {
+                    let initialized = ClaudeCodePluginCore()
+                    _ = await initialized.applySettings(originalSettings)
+                    core = initialized
+                    codexCore = nil
+                }
                 let before = try #require(try await core.commandForLaunch(projectPath: "/fixture", providerID: nil))
                 var edited: AgentProviderDraft
                 if pluginID == "codex" {
@@ -65,6 +89,7 @@
                 if pluginID == "codex" {
                     #expect(after.args.contains(#"model_reasoning_effort="xhigh""#))
                 }
+                await codexCore?.shutdown()
             }
         }
 
@@ -142,6 +167,24 @@
                 return try JSONEncoder().encode(CodexSettings(exportTelemetry: false, providers: [draft.codexProfile()], defaultProviderID: draft.providerID))
             }
             return try JSONEncoder().encode(ClaudeCodeSettings(providers: [draft.claudeProfile()], defaultProviderID: draft.providerID))
+        }
+
+        private func modelCatalogRunner() -> ProcessRunner {
+            ProcessRunner(
+                run: { _, _, _, _ in
+                    throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "runBounded expected")
+                },
+                runBounded: { executable, arguments, environment, _, _ in
+                    #expect(executable == "/usr/bin/env")
+                    #expect(arguments == ["codex", "debug", "models", "--bundled"])
+                    #expect(environment == nil)
+                    return ProcessResult(
+                        exitCode: 0,
+                        stdout: Data(#"{"models":[{"model_messages":{"instructions_template":"fixture instructions"}}]}"#.utf8),
+                        stderr: Data()
+                    )
+                }
+            )
         }
     }
 #endif

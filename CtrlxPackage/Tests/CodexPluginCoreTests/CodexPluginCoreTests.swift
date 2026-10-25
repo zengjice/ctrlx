@@ -127,6 +127,34 @@ struct CodexPluginCoreTests {
         return CodexPluginCore(correlation: CodexSessionCorrelation(root: correlationRoot))
     }
 
+    private func makeModelCatalogRunner(command: String = "codex") -> ProcessRunner {
+        ProcessRunner(
+            run: { _, _, _, _ in
+                throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "runBounded expected")
+            },
+            runBounded: { executable, arguments, environment, timeout, maximumBytes in
+                #expect(executable == "/usr/bin/env")
+                #expect(arguments == [command, "debug", "models", "--bundled"])
+                #expect(environment == nil)
+                #expect(timeout == CodexProviderModelCatalog.commandTimeout)
+                #expect(maximumBytes == CodexProviderModelCatalog.maximumBundledCatalogBytes)
+                return ProcessResult(
+                    exitCode: 0,
+                    stdout: Data(Self.bundledModelCatalog.utf8),
+                    stderr: Data()
+                )
+            }
+        )
+    }
+
+    private static let bundledModelCatalog = #"""
+    {"models":[{"slug":"template-model","display_name":"Template","description":"Template model","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":"Low"}],"shell_type":"freeform","visibility":"hide","supported_in_api":false,"priority":99,"additional_speed_tiers":["fast"],"service_tiers":[{"id":"priority","name":"Fast","description":"Fast tier"}],"availability_nux":{"message":"New"},"upgrade":{"model":"newer","migration_markdown":"upgrade"},"model_messages":{"instructions_template":"fixture instructions","approvals":"fixture approvals"},"base_instructions":"legacy fixture instructions","include_skills_usage_instructions":true,"include_plugin_usage_instructions":true,"include_apps_usage_instructions":true,"support_verbosity":true,"default_verbosity":"high","apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","truncation_policy":{"mode":"tokens","limit":10000},"supports_image_detail_original":true,"context_window":1000,"max_context_window":2000,"effective_context_window_percent":80,"experimental_supported_tools":["clock"],"input_modalities":["text"],"supports_search_tool":true,"supports_experimental_context":true,"use_responses_lite":true,"supports_reasoning_effort_updates":true,"node_repl_auto_review_required":true,"node_repl_disabled":true,"model_specialty":"cyber","tool_mode":"code_mode_only","multi_agent_version":"v2","multi_agent_reasoning_effort":"xhigh"}]}
+    """#
+
+    private func catalogArgument(environment: PluginEnv, providerID: String) -> String {
+        #"model_catalog_json="\#(environment.stateDir.appendingPathComponent("model-catalogs/\(providerID).json").path)""#
+    }
+
     @Test("Forking from the official account into a custom Provider keeps the source CODEX_HOME")
     func customProviderFork() async throws {
         let id = UUID().uuidString
@@ -147,13 +175,15 @@ struct CodexPluginCoreTests {
 
         try await withDependencies {
             $0[SecretsService.self] = secrets
+            $0[ProcessRunner.self] = makeModelCatalogRunner()
             $0[AgentForkHistoryClient.self].root = { _, _, layout in
                 #expect(layout == .codex)
                 return "/source/official-codex"
             }
         } operation: {
             let core = makeCore()
-            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+            let environment = makeEnv(settings: settings)
+            try await core.initialize(environment, host: MockPluginHost())
 
             let fork = try await core.commandForFork(sessionID: id, projectPath: "/repo", targetProviderID: profile.id)
             #expect(fork.command.command == "codex")
@@ -169,6 +199,7 @@ struct CodexPluginCoreTests {
                 "-c", #"model_providers.custom.wire_api="responses""#,
                 "-c", "model_providers.custom.requires_openai_auth=false",
                 "-c", #"model_reasoning_effort="xhigh""#,
+                "-c", catalogArgument(environment: environment, providerID: profile.id),
                 "--model", "custom-model",
             ])
         }
@@ -195,9 +226,11 @@ struct CodexPluginCoreTests {
 
         try await withDependencies {
             $0[SecretsService.self] = secrets
+            $0[ProcessRunner.self] = makeModelCatalogRunner()
         } operation: {
             let core = makeCore()
-            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+            let environment = makeEnv(settings: settings)
+            try await core.initialize(environment, host: MockPluginHost())
 
             let custom = try #require(try await core.commandForLaunch(projectPath: "/repo", providerID: nil))
             #expect(custom.env == [
@@ -206,6 +239,29 @@ struct CodexPluginCoreTests {
             ])
             #expect(custom.args.contains(#"model_provider="custom""#))
             #expect(custom.args.contains(#"model_reasoning_effort="high""#))
+            #expect(custom.args.contains(catalogArgument(environment: environment, providerID: profile.id)))
+            let catalogURL = environment.stateDir.appendingPathComponent("model-catalogs/\(profile.id).json")
+            let catalog = try #require(
+                try JSONSerialization.jsonObject(with: Data(contentsOf: catalogURL)) as? [String: Any]
+            )
+            let models = try #require(catalog["models"] as? [[String: Any]])
+            #expect(models.count == 1)
+            let model = try #require(models.first)
+            #expect(model["slug"] as? String == profile.model)
+            #expect(model["display_name"] as? String == profile.model)
+            #expect(model["default_reasoning_level"] as? String == CodexReasoningEffort.high.rawValue)
+            let efforts = try #require(model["supported_reasoning_levels"] as? [[String: Any]])
+                .compactMap { $0["effort"] as? String }
+            #expect(efforts == CodexReasoningEffort.allCases.map(\.rawValue))
+            #expect(model["visibility"] as? String == "list")
+            #expect(model["shell_type"] as? String == "unified_exec")
+            #expect((model["service_tiers"] as? [Any])?.isEmpty == true)
+            #expect(model["support_verbosity"] as? Bool == false)
+            #expect(model["use_responses_lite"] as? Bool == false)
+            #expect(model["upgrade"] == nil)
+            #expect(model["availability_nux"] == nil)
+            let messages = try #require(model["model_messages"] as? [String: Any])
+            #expect(messages["instructions_template"] as? String == "fixture instructions")
 
             let official = try #require(try await core.commandForLaunch(projectPath: "/repo", providerID: CodexSettings.builtInProviderID))
             #expect(official.args == ["-c", #"model_provider="openai""#])
@@ -258,16 +314,23 @@ struct CodexPluginCoreTests {
 
         try await withDependencies {
             $0[SecretsService.self] = secrets
+            $0[ProcessRunner.self] = makeModelCatalogRunner(command: "/tools/codex")
             $0[AgentForkHistoryClient.self].root = { _, _, _ in "/source/codex" }
         } operation: {
             let core = makeCore()
-            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+            let environment = makeEnv(settings: settings)
+            try await core.initialize(environment, host: MockPluginHost())
             let descriptor = try await core.recoveryDescriptor(
                 sessionID: id,
                 projectPath: "/repo",
                 invocation: .init(
                     executable: "/tools/codex",
-                    arguments: ["-c", #"model_provider="old""#, "-c", #"model_providers.old.base_url="https://old.example.com""#, "--model", "old-model"],
+                    arguments: [
+                        "-c", #"model_provider="old""#,
+                        "-c", #"model_providers.old.base_url="https://old.example.com""#,
+                        "-c", #"model_catalog_json="/old/catalog.json""#,
+                        "--model", "old-model",
+                    ],
                     configurationRoots: ["CODEX_HOME": "/source/codex"],
                     providerID: profile.id
                 )
@@ -279,7 +342,9 @@ struct CodexPluginCoreTests {
             #expect(resumed.command.env["CUSTOM_API_KEY"] == "fixture-key")
             #expect(resumed.command.args.contains(#"model_provider="custom""#))
             #expect(resumed.command.args.contains(#"model_reasoning_effort="medium""#))
+            #expect(resumed.command.args.contains(catalogArgument(environment: environment, providerID: profile.id)))
             #expect(!resumed.command.args.contains(#"model_provider="old""#))
+            #expect(!resumed.command.args.contains(#"model_catalog_json="/old/catalog.json""#))
             #expect(!resumed.command.args.contains("old-model"))
             #expect(resumed.command.args.contains("custom-model"))
         }

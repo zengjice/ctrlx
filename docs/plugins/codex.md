@@ -41,7 +41,14 @@ written to recovery snapshots.
   `xhigh`, `max` and `ultra`; choose a value the Provider's model supports.
 - A custom launch passes `model_provider`, `model_providers.<id>.*`,
   `wire_api="responses"`, `requires_openai_auth=false`, optional
-  `model_reasoning_effort` and `--model` as runtime overrides. The complete shell
+  `model_reasoning_effort`, a generated `model_catalog_json` and `--model` as
+  runtime overrides. The catalog is regenerated from the installed CLI's
+  `codex debug models --bundled` output at launch and contains only this
+  Provider's model. It lets Codex's native `/model` command show the model and
+  all `none` through `ultra` reasoning levels; `/model <model> --reasoning=<level>`
+  is session-only, while the normal picker follows Codex's persistence rules.
+  The generated file lives at `<stateDir>/model-catalogs/<provider-id>.json` and
+  contains no credentials. The complete shell
   script is installed through tmux's stdin into a pane-scoped user option, never
   session environment, process arguments, command text, settings, Viewer
   messages or recovery snapshots. After login rc files run, a short fixed-size

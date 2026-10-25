@@ -35,6 +35,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     private var marketplaceSource = URL(fileURLWithPath: "/")
     private var command = "codex"
+    private var stateDirectory: URL?
 
     /// Base URL of the Mac-local OTLP receiver (e.g. `http://127.0.0.1:24318`),
     /// from `PluginEnv`. Used to build the `-c otel.…` launch overrides that
@@ -106,6 +107,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         // `env.settings` is the authoritative initial settings value (spec §11).
         settings = CodexSettings.decode(from: env.settings)
         marketplaceSource = env.marketplaceSource
+        stateDirectory = env.stateDir
         otlpReceiverEndpoint = env.otlpReceiverEndpoint
         command = settings.commandPath
         await refreshProjects()
@@ -529,7 +531,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             ignoredFlags: ["--last", "--all", "--include-non-interactive", "--worktree"],
             aliases: ["-c": "--config", "-m": "--model", "-p": "--profile", "-s": "--sandbox", "-a": "--ask-for-approval", "-C": "--cd", "-i": "--image"],
             configKeys: ["model", "model_provider", "model_reasoning_effort", "model_reasoning_summary", "service_tier", "approval_policy", "sandbox_mode"],
-            ignoredConfigPrefixes: allowsProviderOverrides ? ["model_providers."] : []
+            ignoredConfigPrefixes: allowsProviderOverrides ? ["model_providers.", "model_catalog_json"] : []
         )
     }
 
@@ -546,7 +548,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         guard try Self.resumeArguments(descriptor.arguments, allowsProviderOverrides: descriptor.providerID != nil) == descriptor.arguments else {
             throw AgentForkError("Invalid Codex recovery options.")
         }
-        let provider = try await providerConfiguration(descriptor.providerID)
+        let provider = try await providerConfiguration(
+            descriptor.providerID,
+            catalogCommand: descriptor.executable
+        )
         var arguments = descriptor.providerID == nil ? descriptor.arguments : Self.removingProviderOverrides(descriptor.arguments)
         // A recovered TUI owns its process lifetime; no shared daemon keeps an
         // interrupted launch running after its pane disappears.
@@ -562,7 +567,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     // MARK: - Provider launch configuration
 
-    private func providerConfiguration(_ requestedID: String?) async throws -> CodexProviderLaunch {
+    private func providerConfiguration(
+        _ requestedID: String?,
+        catalogCommand: String? = nil
+    ) async throws -> CodexProviderLaunch {
         guard let providerID = requestedID else { return CodexProviderLaunch(arguments: [], environment: [:]) }
         guard settings.providerOptions.contains(where: { $0.id == providerID }) else {
             throw AgentProviderError("The selected Codex Provider no longer exists in Settings → Agents → Codex.")
@@ -607,6 +615,11 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         if let reasoningEffort = profile.reasoningEffort {
             arguments += ["-c", "model_reasoning_effort=\(Self.tomlString(reasoningEffort.rawValue))"]
         }
+        let catalogURL = try await providerModelCatalogURL(
+            for: profile,
+            command: catalogCommand ?? settings.commandPath
+        )
+        arguments += ["-c", "model_catalog_json=\(Self.tomlString(catalogURL.path))"]
         arguments += ["--model", profile.model]
         return CodexProviderLaunch(
             arguments: arguments,
@@ -615,6 +628,27 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
                 AgentProviderEnvironment.markerKey: profile.id,
             ]
         )
+    }
+
+    private func providerModelCatalogURL(
+        for profile: CodexProviderProfile,
+        command: String
+    ) async throws -> URL {
+        guard let stateDirectory else {
+            throw AgentProviderError("The Codex plugin state directory is unavailable.")
+        }
+        do {
+            return try await CodexProviderModelCatalog.write(
+                provider: profile,
+                command: command,
+                stateDirectory: stateDirectory,
+                processRunner: processRunner
+            )
+        } catch {
+            throw AgentProviderError(
+                "Could not prepare /model reasoning options for Codex Provider '\(profile.name)': \(error.localizedDescription)"
+            )
+        }
     }
 
     private static func tomlString(_ value: String) -> String {
@@ -681,6 +715,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     private static func isProviderOverride(_ value: String) -> Bool {
         value.hasPrefix("model_provider=") || value.hasPrefix("model_providers.")
+            || value.hasPrefix("model_catalog_json=")
     }
 
     /// Manual launches opt into the same telemetry as UI launches, independently
