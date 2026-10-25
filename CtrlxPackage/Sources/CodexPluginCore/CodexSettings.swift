@@ -17,7 +17,9 @@ public enum CodexReasoningEffort: String, Codable, Sendable, CaseIterable, Hasha
     case max
     case ultra
 
-    public var id: String { rawValue }
+    public var id: String {
+        rawValue
+    }
 
     public var displayName: String {
         switch self {

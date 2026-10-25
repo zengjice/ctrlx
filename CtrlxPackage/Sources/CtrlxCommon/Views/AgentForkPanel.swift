@@ -125,7 +125,7 @@ public struct AgentForkMenu: View {
                 },
             ]
             if let disabledReason {
-                items.append(.button(title: disabledReason, isEnabled: false) {})
+                items.append(.button(title: disabledReason, isEnabled: false) { })
             }
             return .submenu(title: "Fork", symbol: .arrowTriangleBranch, items: items)
         }
