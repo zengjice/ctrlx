@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.101 — Clear update feedback
+
+- Show checking, preparing, installing, up-to-date and failure states in the App
+  menu instead of silently reverting after an update action.
+- Present the result of user-initiated checks and confirm that CtrlX will quit
+  and relaunch before starting an available update.
+- Route install actions and update failures through Settings when an in-place
+  update is unavailable.
+- Release validation: the complete 4,018-test serial Swift regression passed
+  (with `StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac), as did both boundary checks, SwiftFormat, the
+  14-page website build, the iOS Simulator compile check and the signed Mac
+  Release package published through COS.
+- Mac distribution is build 34 through COS, using an Apple Development signature
+  without notarization. Publication signs and archives both `mac.sh` and the
+  detached `mac.sh.sig`, then verifies the public pair before promotion.
+
 ## 3.0.100 — Multi-Agent workflows
 
 - Add manual single-Host multi-Agent workflows on Mac Host, Mac Viewer and iOS,
