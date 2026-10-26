@@ -1,3 +1,4 @@
+import CtrlxNetworking
 import Foundation
 
 struct VoiceRecognitionResult: Sendable {
@@ -126,12 +127,40 @@ struct VoiceRecognitionCandidateAccumulator {
     }
 }
 
+public struct VoiceInputPaneMetadata: Equatable, Sendable {
+    public let sessionName: String?
+    public let windowName: String?
+    public let command: String?
+    public let currentPath: String?
+
+    public init(
+        sessionName: String? = nil,
+        windowName: String? = nil,
+        command: String? = nil,
+        currentPath: String? = nil
+    ) {
+        self.sessionName = sessionName
+        self.windowName = windowName
+        self.command = command
+        self.currentPath = currentPath
+    }
+
+    public init(pane: PaneState) {
+        self.init(
+            sessionName: pane.sessionName,
+            windowName: pane.windowName,
+            command: pane.command,
+            currentPath: pane.currentPath
+        )
+    }
+}
+
 public enum VoiceInputContext {
     public static let maximumTerminalCharacterCount = 12_000
     static let terminalHeader = "Recent terminal text:\n"
 
     public static func paneMetadata(
-        sessionName: String, windowName: String, command: String?, currentPath: String?
+        sessionName: String?, windowName: String?, command: String?, currentPath: String?
     ) -> [String] {
         [
             ("Session", sessionName),
@@ -139,7 +168,25 @@ public enum VoiceInputContext {
             ("Running command", command ?? ""),
             ("Current path", currentPath ?? ""),
         ]
-        .compactMap { label, value in value.isEmpty ? nil : "\(label): \(value)" }
+        .compactMap { label, value in
+            guard let value, !value.isEmpty else { return nil }
+            return "\(label): \(value)"
+        }
+    }
+
+    public static func terminalSnapshot(
+        pane: VoiceInputPaneMetadata,
+        terminalText: String?
+    ) -> VoiceInputContextSnapshot {
+        VoiceInputContextSnapshot(
+            paneMetadata: paneMetadata(
+                sessionName: pane.sessionName,
+                windowName: pane.windowName,
+                command: pane.command,
+                currentPath: pane.currentPath
+            ),
+            terminalText: terminalText
+        )
     }
 
     public static func terminalExcerpt(

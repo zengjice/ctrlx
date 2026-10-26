@@ -15,6 +15,7 @@
     struct LiveTerminalView: View {
         let paneId: String
         let hostId: String
+        let voiceInputPaneMetadata: VoiceInputPaneMetadata
         let scrollingAgentID: String?
         let codexQuestionID: String?
 
@@ -140,6 +141,7 @@
         init(
             paneId: String,
             hostId: String,
+            voiceInputPaneMetadata: VoiceInputPaneMetadata = .init(),
             scrollingAgentID: String? = nil,
             codexQuestionID: String? = nil,
             responseState: Binding<ResponseState?>,
@@ -177,6 +179,7 @@
         ) {
             self.paneId = paneId
             self.hostId = hostId
+            self.voiceInputPaneMetadata = voiceInputPaneMetadata
             self.scrollingAgentID = scrollingAgentID
             self.codexQuestionID = codexQuestionID
             self._responseState = responseState
@@ -362,10 +365,7 @@
             }
             .onAppear {
                 onCopyActionChange(coordinator.streamState == .streaming ? presentTextSnapshot : nil)
-                let coordinator = coordinator
-                onVoiceInputContextProviderChange { [weak coordinator] in
-                    VoiceInputContextSnapshot(terminalText: coordinator?.voiceInputContext())
-                }
+                publishVoiceInputContextProvider()
                 onCursorNavigationCancellationChange { [weak coordinator] in
                     coordinator?.terminalState?.cancelCursorNavigation?()
                 }
@@ -390,6 +390,9 @@
                 onCopyActionChange(nil)
                 coordinator.cancelPendingKeys()
                 Task { await stopStreaming() }
+            }
+            .onChange(of: voiceInputPaneMetadata) {
+                publishVoiceInputContextProvider()
             }
             .onChange(of: isActive) { _, active in
                 if !active {
@@ -525,9 +528,21 @@
         }
 
         private func terminalVoiceInputContext() -> VoiceInputContextSnapshot? {
-            VoiceInputContextSnapshot(
+            VoiceInputContext.terminalSnapshot(
+                pane: voiceInputPaneMetadata,
                 terminalText: coordinator.voiceInputContext()
             )
+        }
+
+        private func publishVoiceInputContextProvider() {
+            let coordinator = coordinator
+            let metadata = voiceInputPaneMetadata
+            onVoiceInputContextProviderChange { [weak coordinator] in
+                VoiceInputContext.terminalSnapshot(
+                    pane: metadata,
+                    terminalText: coordinator?.voiceInputContext()
+                )
+            }
         }
 
         private func restoreTerminalInputAfterCopy() {

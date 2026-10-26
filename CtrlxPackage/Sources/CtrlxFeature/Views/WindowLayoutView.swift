@@ -1741,6 +1741,7 @@
             return LiveTerminalView(
                 paneId: pane.paneId,
                 hostId: hostId,
+                voiceInputPaneMetadata: VoiceInputPaneMetadata(pane: pane),
                 scrollingAgentID: pane.agentSession?.pluginID,
                 codexQuestionID: pane.codexQuestionID,
                 responseState: .constant(nil),
@@ -2137,16 +2138,11 @@
         private func activeVoiceInputContext() -> VoiceInputContextSnapshot? {
             guard let activePaneId else { return nil }
 
-            var metadata: [String] = []
-            if let pane = window?.panes.first(where: { $0.paneId == activePaneId }) {
-                metadata = VoiceInputContext.paneMetadata(
-                    sessionName: sessionName, windowName: pane.windowName,
-                    command: pane.command, currentPath: pane.currentPath
-                )
-            }
-
-            return VoiceInputContextSnapshot(
-                paneMetadata: metadata,
+            let metadata = window?.panes.first { $0.paneId == activePaneId }
+                .map(VoiceInputPaneMetadata.init(pane:))
+                ?? VoiceInputPaneMetadata(sessionName: sessionName, windowName: window?.windowName)
+            return VoiceInputContext.terminalSnapshot(
+                pane: metadata,
                 terminalText: voiceInputContextProviders[activePaneId]?()?.terminalText
             )
         }

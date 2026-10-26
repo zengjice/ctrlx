@@ -17,10 +17,15 @@ struct VoiceInputTerminalContextTests {
         terminal.feed(text: message)
         let text = try #require(VoiceInputContext.recentTerminalText(terminal))
         #expect(text == message)
-        let metadata = VoiceInputContext.paneMetadata(
-            sessionName: "test", windowName: "code", command: "codex", currentPath: "/tmp/project"
+        let snapshot = VoiceInputContext.terminalSnapshot(
+            pane: VoiceInputPaneMetadata(
+                sessionName: "test", windowName: "code", command: "codex", currentPath: "/tmp/project"
+            ),
+            terminalText: text
         )
-        #expect(metadata == ["Session: test", "Window: code", "Running command: codex", "Current path: /tmp/project"])
+        #expect(snapshot.paneMetadata == ["Session: test", "Window: code", "Running command: codex", "Current path: /tmp/project"])
+        #expect(snapshot.terminalText == message)
+        #expect(snapshot.formatted()?.contains("Current path: /tmp/project") == true)
         withExtendedLifetime(delegate) { }
     }
 

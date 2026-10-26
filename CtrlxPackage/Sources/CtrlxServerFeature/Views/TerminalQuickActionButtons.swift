@@ -128,11 +128,8 @@ struct TerminalQuickActionButtons: View {
 
     private func voiceInputContext() -> VoiceInputContextSnapshot? {
         guard let pane else { return nil }
-        return VoiceInputContextSnapshot(
-            paneMetadata: VoiceInputContext.paneMetadata(
-                sessionName: pane.sessionName, windowName: pane.windowName,
-                command: pane.command, currentPath: pane.currentPath
-            ),
+        return VoiceInputContext.terminalSnapshot(
+            pane: VoiceInputPaneMetadata(pane: pane),
             terminalText: router.active?.terminalText()
         )
     }

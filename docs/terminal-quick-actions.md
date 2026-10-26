@@ -295,7 +295,8 @@ analyzer cleanup. iOS alone configures `AVAudioSession`; Mac uses its local audi
 input and declares microphone/speech usage plus the hardened-runtime audio-input
 entitlement.
 
-Both clients create a fresh `VoiceInputContextSnapshot` once at recording start:
+Both clients create a fresh `VoiceInputContextSnapshot` once at recording start
+through the shared `VoiceInputContext.terminalSnapshot` builder:
 
 - Pane metadata: session/window names, command and current path, from pane state.
 - Terminal background: recent text from the focused buffer. The shared extractor
