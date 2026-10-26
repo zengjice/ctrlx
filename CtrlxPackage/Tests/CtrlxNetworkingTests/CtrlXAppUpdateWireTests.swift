@@ -38,10 +38,23 @@ struct CtrlXAppUpdateWireTests {
     }
 
     @Test
+    func checkCommandRoundTrip() throws {
+        let command = CommandMessage(paneId: "", command: CheckCtrlXAppUpdate().commandType)
+
+        let decoded = try JSONDecoder().decode(
+            CommandMessage.self,
+            from: JSONEncoder().encode(command)
+        )
+        #expect(decoded.command == .checkCtrlXAppUpdate(CheckCtrlXAppUpdate()))
+        #expect(decoded.command.requiresResponse)
+    }
+
+    @Test
     func sessionStateCapabilityIsAdditiveAndSurvivesRebinding() throws {
         let oldData = Data(#"{"pairId":"old","paneStates":{},"homeDirectory":""}"#.utf8)
         let old = try JSONDecoder().decode(SessionStateMessage.self, from: oldData)
         #expect(old.supportsCtrlXAppUpdate == nil)
+        #expect(old.supportsCtrlXAppUpdateCheck == nil)
         #expect(old.ctrlXAppUpdate == nil)
 
         let state = CtrlXAppUpdateState(
@@ -55,6 +68,7 @@ struct CtrlXAppUpdateWireTests {
             pairId: "a",
             paneStates: [:],
             supportsCtrlXAppUpdate: true,
+            supportsCtrlXAppUpdateCheck: true,
             ctrlXAppUpdate: state
         )
         let copy = try JSONDecoder().decode(
@@ -63,6 +77,7 @@ struct CtrlXAppUpdateWireTests {
         )
         #expect(copy.pairId == "b")
         #expect(copy.supportsCtrlXAppUpdate == true)
+        #expect(copy.supportsCtrlXAppUpdateCheck == true)
         #expect(copy.ctrlXAppUpdate == state)
     }
 }

@@ -67,8 +67,30 @@
             let signature: Data
         }
 
+        struct DownloadProgress: Equatable {
+            let downloadedBytes: Int64
+            let totalBytes: Int64
+
+            var fraction: Double {
+                guard totalBytes > 0 else { return 0 }
+                return min(1, max(0, Double(downloadedBytes) / Double(totalBytes)))
+            }
+
+            var percent: Int {
+                if isComplete {
+                    return 100
+                }
+                return min(99, max(0, Int(fraction * 100)))
+            }
+
+            var isComplete: Bool {
+                totalBytes > 0 && downloadedBytes >= totalBytes
+            }
+        }
+
         typealias ScriptLoader = @MainActor (URL) async throws -> InstallerScript
-        typealias InstallerLauncher = @MainActor (URL, URL) throws -> Int32?
+        typealias InstallerLauncher = @MainActor (URL, URL, URL) throws -> Int32?
+        typealias DownloadSizeLoader = @MainActor (URL) async -> Int64?
 
         static let installerURL = URL(
             string: "https://ctrlx-1256844776.cos.ap-guangzhou.myqcloud.com/macos/mac.sh"
@@ -93,6 +115,7 @@
         private let loadScript: ScriptLoader
         private let installationPreflight: @MainActor () -> String?
         private let launchInstaller: InstallerLauncher
+        private let loadDownloadSize: DownloadSizeLoader
         private let now: @MainActor () -> Date
         private let updateDirectory: URL
         private let logDirectory: URL
@@ -104,6 +127,7 @@
 
         private(set) var isInstalling = false
         private(set) var installationError: String?
+        private(set) var downloadProgress: DownloadProgress?
 
         var state: CtrlXAppUpdateState {
             didSet {
@@ -126,8 +150,15 @@
             installationPreflight: @escaping @MainActor () -> String? = {
                 CtrlXAppUpdateService.defaultInstallationPreflight()
             },
-            launchInstaller: @escaping InstallerLauncher = { scriptURL, logURL in
-                try CtrlXAppUpdateService.launchDetachedInstaller(scriptURL: scriptURL, logURL: logURL)
+            launchInstaller: @escaping InstallerLauncher = { scriptURL, logURL, downloadRoot in
+                try CtrlXAppUpdateService.launchDetachedInstaller(
+                    scriptURL: scriptURL,
+                    logURL: logURL,
+                    downloadRoot: downloadRoot
+                )
+            },
+            loadDownloadSize: @escaping DownloadSizeLoader = { url in
+                await CtrlXAppUpdateService.fetchDownloadSize(from: url)
             },
             now: @escaping @MainActor () -> Date = { Date() },
             updateDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -141,6 +172,7 @@
             self.loadScript = loadScript
             self.installationPreflight = installationPreflight
             self.launchInstaller = launchInstaller
+            self.loadDownloadSize = loadDownloadSize
             self.now = now
             self.updateDirectory = updateDirectory
             self.logDirectory = logDirectory
@@ -249,8 +281,10 @@
             }
             isInstalling = true
             installationError = nil
+            downloadProgress = nil
             defer { isInstalling = false }
 
+            var downloadRoot: URL?
             do {
                 if let reason = installationPreflight() {
                     throw CtrlXAppUpdateError.installationUnavailable(reason)
@@ -266,7 +300,9 @@
 
                 let scriptURL = try persistInstallerScript(installer.script.body, release: release)
                 let logURL = try makeInstallerLogURL(release: release)
-                let installerPID = try launchInstaller(scriptURL, logURL)
+                let root = try makeDownloadRoot()
+                downloadRoot = root
+                let installerPID = try launchInstaller(scriptURL, logURL, root)
 
                 state = CtrlXAppUpdateState(
                     phase: .installing,
@@ -279,9 +315,15 @@
                     canInstall: true
                 )
                 if let installerPID {
-                    monitorInstaller(pid: installerPID, logURL: logURL)
+                    monitorInstaller(pid: installerPID, logURL: logURL, release: release, downloadRoot: root)
+                } else {
+                    try? FileManager.default.removeItem(at: root)
                 }
             } catch {
+                downloadProgress = nil
+                if let downloadRoot {
+                    try? FileManager.default.removeItem(at: downloadRoot)
+                }
                 let message = Self.userFacingMessage(error)
                 installationError = message
                 setState(
@@ -297,21 +339,42 @@
             }
         }
 
-        private func monitorInstaller(pid: Int32, logURL: URL) {
+        private func monitorInstaller(pid: Int32, logURL: URL, release: InstallerRelease, downloadRoot: URL) {
             installerMonitorTask?.cancel()
-            installerMonitorTask = Task { [weak self] in
+            installerMonitorTask = Task { @MainActor [weak self] in
+                defer { try? FileManager.default.removeItem(at: downloadRoot) }
+                var expectedBytes: Int64?
+                if let self, let downloadURL = Self.downloadURL(for: release) {
+                    expectedBytes = await self.loadDownloadSize(downloadURL)
+                    guard !Task.isCancelled else { return }
+                    if let expectedBytes {
+                        self.downloadProgress = DownloadProgress(downloadedBytes: 0, totalBytes: expectedBytes)
+                    }
+                }
+
                 while !Task.isCancelled {
                     do {
-                        try await Task.sleep(for: .seconds(1))
+                        try await Task.sleep(for: .milliseconds(250))
                     } catch {
                         return
                     }
                     guard let self, self.state.phase == .installing else { return }
+                    if let expectedBytes {
+                        let downloadedBytes = Self.downloadedBytes(
+                            in: downloadRoot,
+                            dmgName: release.dmgName
+                        ) ?? 0
+                        self.downloadProgress = DownloadProgress(
+                            downloadedBytes: downloadedBytes,
+                            totalBytes: expectedBytes
+                        )
+                    }
                     if Self.processIsRunning(pid) {
                         continue
                     }
 
                     self.installerMonitorTask = nil
+                    self.downloadProgress = nil
                     let message = "The CtrlX installer stopped before completing. Review the installer log at \(logURL.path)."
                     self.installationError = message
                     self.setState(
@@ -326,6 +389,17 @@
                     return
                 }
             }
+        }
+
+        private func makeDownloadRoot() throws -> URL {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("ctrlx-app-update-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: root,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            return root
         }
 
         private var currentVersion: String {
@@ -524,6 +598,49 @@
             }
         }
 
+        private static func downloadURL(for release: InstallerRelease) -> URL? {
+            guard
+                let baseURL = URL(string: release.downloadBase),
+                baseURL.scheme?.lowercased() == "https"
+            else { return nil }
+            return baseURL.appendingPathComponent(release.dmgName)
+        }
+
+        private static func fetchDownloadSize(from url: URL) async -> Int64? {
+            guard url.scheme?.lowercased() == "https" else { return nil }
+            var request = URLRequest(
+                url: url,
+                cachePolicy: .reloadIgnoringLocalCacheData,
+                timeoutInterval: installerRequestTimeout
+            )
+            request.httpMethod = "HEAD"
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            guard
+                let (_, response) = try? await URLSession.shared.data(for: request),
+                let httpResponse = response as? HTTPURLResponse,
+                httpResponse.statusCode == 200,
+                httpResponse.expectedContentLength > 0
+            else { return nil }
+            return httpResponse.expectedContentLength
+        }
+
+        static func downloadedBytes(in downloadRoot: URL, dmgName: String) -> Int64? {
+            guard
+                let directories = try? FileManager.default.contentsOfDirectory(
+                    at: downloadRoot,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                ) else { return nil }
+
+            return directories.compactMap { directory -> Int64? in
+                guard directory.lastPathComponent.hasPrefix("ctrlx-install.") else { return nil }
+                let attributes = try? FileManager.default.attributesOfItem(
+                    atPath: directory.appendingPathComponent(dmgName).path
+                )
+                return (attributes?[.size] as? NSNumber)?.int64Value
+            }.max()
+        }
+
         static func decodeInstallerScript(_ data: Data) throws -> String {
             guard data.count <= maximumManifestBytes else {
                 throw CtrlXAppUpdateError.responseTooLarge
@@ -599,7 +716,11 @@
             return errno != ESRCH
         }
 
-        private static func launchDetachedInstaller(scriptURL: URL, logURL: URL) throws -> Int32 {
+        private static func launchDetachedInstaller(
+            scriptURL: URL,
+            logURL: URL,
+            downloadRoot: URL
+        ) throws -> Int32 {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
             process.arguments = [
@@ -611,6 +732,7 @@
             ]
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+            environment["TMPDIR"] = downloadRoot.path
             process.environment = environment
 
             let outputPipe = Pipe()

@@ -4,9 +4,8 @@
 
     /// Foreground status window for an explicitly requested CtrlX update.
     ///
-    /// The detached installer writes progress to its own log, so this window
-    /// deliberately uses an indeterminate indicator rather than inventing a
-    /// download percentage.
+    /// Shows the detached installer's actual download progress when the Host
+    /// can determine the artifact size, with an indeterminate fallback.
     public struct CtrlXAppUpdateProgressView: View {
         public static let windowID = "ctrlx-app-update-progress"
 
@@ -26,14 +25,15 @@
         public var body: some View {
             let state = service.state
             let failure = activeInstallationError
+            let download = service.downloadProgress
 
             VStack(spacing: 20) {
                 VStack(spacing: 8) {
-                    Text(title(for: state, failure: failure))
+                    Text(title(for: state, failure: failure, download: download))
                         .font(.title3.weight(.semibold))
                         .multilineTextAlignment(.center)
 
-                    Text(message(for: state, failure: failure))
+                    Text(message(for: state, failure: failure, download: download))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -46,6 +46,24 @@
                         .multilineTextAlignment(.leading)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if let download {
+                    VStack(spacing: 8) {
+                        ProgressView(value: download.fraction)
+                            .progressViewStyle(.linear)
+                            .frame(maxWidth: 360)
+                            .animation(.linear(duration: 0.2), value: download.fraction)
+                            .accessibilityLabel("Update download progress")
+                            .accessibilityValue("\(download.percent) percent")
+
+                        HStack {
+                            Text(download.isComplete ? "Download complete" : "\(download.percent)%")
+                            Spacer()
+                            Text("\(download.downloadedBytes.formatted(.byteCount(style: .file))) of \(download.totalBytes.formatted(.byteCount(style: .file)))")
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 360)
+                    }
                 } else {
                     ProgressView()
                         .controlSize(.large)
@@ -85,14 +103,20 @@
             return service.installationError
         }
 
-        private func title(for state: CtrlXAppUpdateState, failure: String?) -> String {
+        private func title(
+            for state: CtrlXAppUpdateState,
+            failure: String?,
+            download: CtrlXAppUpdateService.DownloadProgress?
+        ) -> String {
             if failure != nil {
                 return "Update Could Not Complete"
             }
 
             switch state.phase {
             case .installing:
-                return "Installing CtrlX \(state.latestDisplayVersion)"
+                return download?.isComplete == true
+                    ? "Installing CtrlX \(state.latestDisplayVersion)"
+                    : "Downloading CtrlX \(state.latestDisplayVersion)"
             case .checking:
                 return "Checking for Updates..."
             case .upToDate:
@@ -105,14 +129,21 @@
             }
         }
 
-        private func message(for state: CtrlXAppUpdateState, failure: String?) -> String {
+        private func message(
+            for state: CtrlXAppUpdateState,
+            failure: String?,
+            download: CtrlXAppUpdateService.DownloadProgress?
+        ) -> String {
             if failure != nil {
                 return "The update did not complete. You can retry, or review the update settings."
             }
 
             switch state.phase {
             case .installing:
-                return "The signed update is being installed. CtrlX will quit and reopen automatically."
+                if download?.isComplete == true {
+                    return "Download complete. Verifying and installing the signed update. CtrlX will quit and reopen automatically."
+                }
+                return "Downloading the signed update. CtrlX will quit and reopen automatically when installation completes."
             case .checking:
                 return "Contacting the signed update feed..."
             case .upToDate:

@@ -448,6 +448,23 @@ public struct InstallCtrlXAppUpdate: CommandSpec, Equatable {
     }
 }
 
+/// Ask the Host to refresh its verified CtrlX app update availability.
+///
+/// The response carries the resulting Host-owned state. Viewers never choose
+/// the feed or supply an installer URL.
+public struct CheckCtrlXAppUpdate: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+
+    /// The Host fetches and verifies the installer script before replying.
+    public static let responseTimeout: TimeInterval = 30
+
+    public init() { }
+
+    public var commandType: CommandType {
+        .checkCtrlXAppUpdate(self)
+    }
+}
+
 /// Send keystrokes to a tmux pane. Returns success/failure.
 public struct SendKeystroke: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
@@ -1135,6 +1152,8 @@ public struct PasteTerminalText: CommandSpec, Equatable {
 /// Each case holds its corresponding CommandSpec struct.
 public enum CommandType: Codable, Sendable, Equatable {
     case readDashboard(ReadDashboard)
+    /// Check the fixed Host-owned CtrlX app update feed now.
+    case checkCtrlXAppUpdate(CheckCtrlXAppUpdate)
     /// Install the Host's verified CtrlX app update.
     case installCtrlXAppUpdate(InstallCtrlXAppUpdate)
     case manageAgentWorkflows(ManageAgentWorkflows)

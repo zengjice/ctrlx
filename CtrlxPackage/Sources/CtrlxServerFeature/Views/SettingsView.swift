@@ -302,11 +302,21 @@ private struct CtrlXAppUpdateSettingsSection: View {
             ProgressView()
                 .controlSize(.small)
         } else if state.phase == .installing {
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Installing...")
-                    .foregroundStyle(.secondary)
+            if let download = service.downloadProgress {
+                VStack(alignment: .trailing, spacing: 4) {
+                    ProgressView(value: download.fraction)
+                        .frame(width: 160)
+                    Text(download.isComplete ? "Installing..." : "Downloading \(download.percent)%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Installing...")
+                        .foregroundStyle(.secondary)
+                }
             }
         } else if state.updateAvailable {
             VStack(alignment: .trailing, spacing: 6) {

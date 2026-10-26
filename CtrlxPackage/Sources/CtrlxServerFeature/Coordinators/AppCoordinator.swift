@@ -3430,6 +3430,15 @@
                         return try await CommandResponseMessage(commandId: command.id, success: true, dashboard: self.dashboardSnapshot())
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
+                if case .checkCtrlXAppUpdate = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    await self.ctrlXAppUpdateService.refresh()
+                    return CommandResponseMessage(
+                        commandId: command.id,
+                        success: true,
+                        ctrlXAppUpdate: self.ctrlXAppUpdateService.state
+                    )
+                }
                 if case let .installCtrlXAppUpdate(spec) = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
                     do {
@@ -3939,6 +3948,7 @@
                     supportsWorkspaceInputIdentity: recoveryHostID != nil,
                     supportsTerminalStreamIdentity: true,
                     supportsCtrlXAppUpdate: await self?.ctrlXAppUpdateService.isConfigured == true,
+                    supportsCtrlXAppUpdateCheck: await self?.ctrlXAppUpdateService.isConfigured == true,
                     ctrlXAppUpdate: await self?.ctrlXAppUpdateService.state
                 )
             }

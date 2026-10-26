@@ -30,6 +30,34 @@
         }
 
         @Test
+        func reportsActualInstallerDownloadBytes() throws {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("ctrlx-app-progress-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let downloadDirectory = root.appendingPathComponent("ctrlx-install.fixture", isDirectory: true)
+            try FileManager.default.createDirectory(at: downloadDirectory, withIntermediateDirectories: true)
+            try Data(repeating: 0x61, count: 250).write(
+                to: downloadDirectory.appendingPathComponent("CtrlX-3.0.99.dmg")
+            )
+
+            #expect(CtrlXAppUpdateService.downloadedBytes(
+                in: root,
+                dmgName: "CtrlX-3.0.99.dmg"
+            ) == 250)
+            #expect(CtrlXAppUpdateService.downloadedBytes(in: root, dmgName: "missing.dmg") == nil)
+
+            let partial = CtrlXAppUpdateService.DownloadProgress(downloadedBytes: 250, totalBytes: 500)
+            #expect(partial.fraction == 0.5)
+            #expect(partial.percent == 50)
+            #expect(!partial.isComplete)
+
+            let complete = CtrlXAppUpdateService.DownloadProgress(downloadedBytes: 500, totalBytes: 500)
+            #expect(complete.fraction == 1)
+            #expect(complete.percent == 100)
+            #expect(complete.isComplete)
+        }
+
+        @Test
         func verifiesInstallerSignature() throws {
             let privateKey = Curve25519.Signing.PrivateKey()
             let installer = try signedInstaller(manifest(version: "3.0.99", build: "32"), using: privateKey)
@@ -157,7 +185,7 @@
                     return try signedInstaller(script, using: key)
                 },
                 installationPreflight: { nil },
-                launchInstaller: { _, _ in launches += 1
+                launchInstaller: { _, _, _ in launches += 1
                     return nil
                 },
                 updateDirectory: root.appendingPathComponent("Updates"), logDirectory: root.appendingPathComponent("Logs")
@@ -185,7 +213,7 @@
                 buildInfo: buildInfo(version: "3.0.98", build: "31"), signingKey: key.publicKey,
                 loadScript: { _ in try signedInstaller(script, using: key) },
                 installationPreflight: { reason.value },
-                launchInstaller: { _, _ in Issue.record("An unavailable installation must not launch")
+                launchInstaller: { _, _, _ in Issue.record("An unavailable installation must not launch")
                     return nil
                 }
             )
@@ -212,7 +240,7 @@
                     )
                 },
                 installationPreflight: { nil },
-                launchInstaller: { _, _ in nil },
+                launchInstaller: { _, _, _ in nil },
                 now: { Date() }
             )
 
@@ -234,7 +262,7 @@
                 signingKey: privateKey.publicKey,
                 loadScript: { _ in current.value },
                 installationPreflight: { nil },
-                launchInstaller: { _, _ in
+                launchInstaller: { _, _, _ in
                     launched.withValue { $0 = true }
                     return nil
                 },
@@ -267,7 +295,7 @@
                     CtrlXAppUpdateService.InstallerScript(body: "", signature: Data())
                 },
                 installationPreflight: { nil },
-                launchInstaller: { _, _ in nil },
+                launchInstaller: { _, _, _ in nil },
                 now: { Date() }
             )
 
@@ -292,7 +320,7 @@
                 signingKey: privateKey.publicKey,
                 loadScript: { _ in try signedInstaller(expectedScript, using: privateKey) },
                 installationPreflight: { nil },
-                launchInstaller: { scriptURL, logURL in
+                launchInstaller: { scriptURL, logURL, _ in
                     launched = (scriptURL, logURL)
                     return nil
                 },
@@ -325,7 +353,8 @@
                     try signedInstaller(manifest(version: "3.0.99", build: "32"), using: privateKey)
                 },
                 installationPreflight: { nil },
-                launchInstaller: { _, _ in Int32.max },
+                launchInstaller: { _, _, _ in Int32.max },
+                loadDownloadSize: { _ in nil },
                 now: { Date(timeIntervalSince1970: 1_000_000) },
                 updateDirectory: root.appendingPathComponent("Updates", isDirectory: true),
                 logDirectory: root.appendingPathComponent("Logs", isDirectory: true)
@@ -355,7 +384,7 @@
                     try signedInstaller(manifest(version: "3.0.99", build: "32"), using: privateKey)
                 },
                 installationPreflight: { nil },
-                launchInstaller: { _, _ in nil },
+                launchInstaller: { _, _, _ in nil },
                 now: { Date() }
             )
             #expect(service.isConfigured == false)
@@ -383,7 +412,7 @@
                 signingKey: privateKey.publicKey,
                 loadScript: { _ in try signedInstaller(scriptProvider(), using: privateKey) },
                 installationPreflight: { nil },
-                launchInstaller: { _, _ in nil },
+                launchInstaller: { _, _, _ in nil },
                 now: { Date(timeIntervalSince1970: 1_000_000) }
             )
         }

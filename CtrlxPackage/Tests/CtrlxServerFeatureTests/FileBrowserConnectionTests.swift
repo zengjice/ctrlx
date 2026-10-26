@@ -130,6 +130,122 @@ struct FileBrowserConnectionTests {
         try await app.asyncShutdown()
     }
 
+    @Test("Viewer can check for a Host update only after the Host advertises the command")
+    func remoteAppUpdateCheckCapability() async throws {
+        let originalVersion = VersionCompatibility.appVersionOverride
+        VersionCompatibility.appVersionOverride = "3.0.106"
+        defer { VersionCompatibility.appVersionOverride = originalVersion }
+        let relay = PhraseTestRelay()
+        let app = try await Application.make(.testing)
+        app.webSocket("api", "ws", maxFrameSize: .init(integerLiteral: RelayPayloadLimits.maxWebSocketFrameBytes)) { _, ws in
+            ws.onBinary { ws, bytes in
+                let data = Data(bytes.readableBytesView)
+                Task { await relay.receive(data, from: ws) }
+            }
+        }
+        try await app.asyncBoot()
+        try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+        do {
+            let port = try #require(app.http.server.shared.localAddress?.port)
+            let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
+            let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
+            let host = ConnectedViewer(
+                pairedViewer: .init(
+                    id: "pair",
+                    deviceName: "Viewer",
+                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
+                    partnerPublicKeyId: viewerEncryption.keyId
+                ),
+                e2eeService: hostEncryption
+            )
+            let connection = ViewerConnection(pairedDevice: .init(
+                id: "pair", hostName: "Host", username: "test",
+                partnerPublicKey: hostEncryption.publicKey.base64EncodedString(),
+                partnerPublicKeyId: hostEncryption.keyId
+            ), e2eeService: viewerEncryption)
+            let viewer = connection.relayClient
+            let supportsCheck = LockIsolated(false)
+            var commands = 0
+            host.onSessionStateRequest = {
+                .init(
+                    pairId: "",
+                    paneStates: [:],
+                    supportsCtrlXAppUpdate: true,
+                    supportsCtrlXAppUpdateCheck: supportsCheck.value
+                )
+            }
+            host.onCommand = { command in
+                guard case .checkCtrlXAppUpdate = command.command else {
+                    Issue.record("Unexpected command")
+                    return .failure(for: command.id, error: "Unexpected command")
+                }
+                commands += 1
+                return .init(
+                    commandId: command.id,
+                    success: true,
+                    ctrlXAppUpdate: .init(
+                        phase: .upToDate,
+                        currentVersion: "3.0.106",
+                        currentBuild: "1",
+                        latestVersion: "3.0.106",
+                        latestBuild: "1"
+                    )
+                )
+            }
+            await host.connect(
+                serverURL: url,
+                deviceId: "host",
+                deviceName: "Host",
+                username: "test",
+                publicKey: hostEncryption.publicKey.base64EncodedString(),
+                publicKeyId: hostEncryption.keyId
+            )
+            do {
+                await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
+                try await waitUntil { host.isViewerConnected && viewer.hostSupportsCtrlXAppUpdate }
+                #expect(!viewer.hostSupportsCtrlXAppUpdateCheck)
+
+                let rejected = await viewer.sendCommand(
+                    CheckCtrlXAppUpdate(),
+                    paneId: "",
+                    timeout: CheckCtrlXAppUpdate.responseTimeout
+                )
+                #expect(commands == 0)
+                if case let .failure(error) = rejected {
+                    #expect(error.localizedDescription.contains("check for CtrlX updates"))
+                } else {
+                    Issue.record("Expected the capability check to reject the command")
+                }
+
+                supportsCheck.setValue(true)
+                await host.pushSessionState()
+                try await waitUntil { viewer.hostSupportsCtrlXAppUpdateCheck }
+
+                let response = try await viewer.sendCommand(
+                    CheckCtrlXAppUpdate(),
+                    paneId: "",
+                    timeout: CheckCtrlXAppUpdate.responseTimeout
+                ).get()
+                #expect(commands == 1)
+                #expect(response.ctrlXAppUpdate?.phase == .upToDate)
+                #expect(viewer.ctrlXAppUpdateState?.phase == .upToDate)
+                #expect(await relay.errors.isEmpty)
+            } catch {
+                await viewer.disconnect()
+                await host.disconnect()
+                throw error
+            }
+            await viewer.disconnect()
+            await host.disconnect()
+        } catch {
+            await app.server.shutdown()
+            try await app.asyncShutdown()
+            throw error
+        }
+        await app.server.shutdown()
+        try await app.asyncShutdown()
+    }
+
     @Test
     func browserCapabilitySlowFramesAndReconnect() async throws {
         let originalVersion = VersionCompatibility.appVersionOverride

@@ -1242,10 +1242,16 @@ exposed to the Mac app, Viewer, and iOS clients.
 - Re-fetches and re-verifies the installer immediately before launching it.
   Sparkle supplies the signing key and release signing tools; there is no
   in-process Sparkle updater.
-- Viewer update requests use the existing bounded file-request queue so installer
-  verification cannot hold the keyboard receive loop. A failed attempt publishes
-  its error and retains retry eligibility when installation preflight still passes;
-  retries fetch and verify the installer again.
+- Gives the detached installer a private `TMPDIR` and follows the DMG file's
+  actual growth against the HTTPS `Content-Length` so the foreground update
+  window and General settings show determinate download progress. If either
+  size cannot be determined, they fall back to an indeterminate indicator.
+- Viewers with the separate `supportsCtrlXAppUpdateCheck` capability can ask the
+  Host to refresh the feed on demand, then request the exact resulting
+  version/build. Both check and install requests use the bounded file-request
+  queue so verification cannot hold the keyboard receive loop. A failed attempt
+  publishes its error and retains retry eligibility when installation preflight
+  still passes; retries fetch and verify the installer again.
 - The installer preserves Relay settings for existing installations and reinstalls
   with saved preferences. Only a first installation without Relay preferences
   initializes the distribution's default connection.

@@ -130,6 +130,8 @@ final public class ViewerRelayClient {
     public private(set) var simulatorTabs: [RemoteSimulatorTab] = []
     /// Whether the Host can check and install a macOS CtrlX app update.
     public private(set) var hostSupportsCtrlXAppUpdate = false
+    /// Whether the Host accepts a Viewer-triggered refresh of its update feed.
+    public private(set) var hostSupportsCtrlXAppUpdateCheck = false
     /// Latest Host-owned app update snapshot. Nil on old Hosts or while offline.
     public private(set) var ctrlXAppUpdateState: CtrlXAppUpdateState?
 
@@ -570,6 +572,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage Agent workflows."))
         case .readDashboard where !hostSupportsDashboard:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view its Dashboard"))
+        case .checkCtrlXAppUpdate where !hostSupportsCtrlXAppUpdateCheck:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to check for CtrlX updates remotely"))
         case .installCtrlXAppUpdate where !hostSupportsCtrlXAppUpdate:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to install CtrlX updates remotely"))
         case let .sendKeystroke(spec) where spec.acknowledgeCompletion == true && !workspaceInputState.supportsIdentity:
@@ -786,6 +790,12 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: "").get())?.success == true
         case let .readDashboard(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
+        case let .checkCtrlXAppUpdate(spec):
+            return (try? await sendCommand(
+                spec,
+                paneId: "",
+                timeout: CheckCtrlXAppUpdate.responseTimeout
+            ).get())?.success == true
         case let .installCtrlXAppUpdate(spec):
             return (try? await sendCommand(
                 spec,
@@ -1247,6 +1257,7 @@ final public class ViewerRelayClient {
             simulatorTabs = sessionState.simulatorTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
             hostSupportsCtrlXAppUpdate = sessionState.supportsCtrlXAppUpdate == true
+            hostSupportsCtrlXAppUpdateCheck = sessionState.supportsCtrlXAppUpdateCheck == true
             ctrlXAppUpdateState = sessionState.ctrlXAppUpdate
             onSessionState?(sessionState)
 
@@ -1762,6 +1773,7 @@ final public class ViewerRelayClient {
 
     private func resetCtrlXAppUpdate() {
         hostSupportsCtrlXAppUpdate = false
+        hostSupportsCtrlXAppUpdateCheck = false
         ctrlXAppUpdateState = nil
     }
 }

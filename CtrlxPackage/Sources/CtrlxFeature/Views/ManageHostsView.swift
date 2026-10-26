@@ -148,6 +148,8 @@
         let onEdit: () -> Void
 
         @State private var isRequestingUpdate = false
+        @State private var isCheckingUpdate = false
+        @State private var updateActionError: String?
 
         var body: some View {
             HStack(spacing: 12) {
@@ -177,20 +179,7 @@
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
-                            if let update = appUpdate, update.updateAvailable {
-                                Text("CtrlX \(update.latestDisplayVersion) is available on the Host")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                                if let error = update.error {
-                                    Text(error)
-                                        .font(.caption)
-                                        .foregroundStyle(.red)
-                                }
-                            } else if appUpdate?.phase == .installing {
-                                Text("Installing CtrlX \(appUpdate?.latestDisplayVersion ?? "update")...")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            updateStatus
                         }
 
                         Spacer()
@@ -203,23 +192,94 @@
                 }
                 .buttonStyle(.plain)
 
-                if isRequestingUpdate {
+                if isRequestingUpdate || isCheckingUpdate || appUpdate?.phase == .checking {
                     ProgressView()
                         .controlSize(.small)
-                } else if let update = appUpdate, update.updateAvailable {
-                    Button {
-                        requestHostUpdate(update)
-                    } label: {
-                        Label("Update", symbol: .arrowDownCircle)
-                            .font(.caption)
+                } else {
+                    HStack(spacing: 8) {
+                        if let update = appUpdate, update.updateAvailable {
+                            Button {
+                                requestHostUpdate(update)
+                            } label: {
+                                Label("Update", symbol: .arrowDownCircle)
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!update.canInstall)
+                            .accessibilityLabel("Update Host to CtrlX \(update.latestDisplayVersion)")
+                            .accessibilityIdentifier("host-update-button")
+                        }
+
+                        if supportsUpdateCheck {
+                            Button {
+                                checkHostUpdate()
+                            } label: {
+                                Symbols.arrowClockwise.image
+                                    .frame(width: 20, height: 20)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!canCheckHostUpdate)
+                            .accessibilityLabel("Check for Host Update")
+                            .accessibilityIdentifier("host-update-check-button")
+                        }
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(!update.canInstall)
-                    .accessibilityLabel("Update Host to CtrlX \(update.latestDisplayVersion)")
-                    .accessibilityIdentifier("host-update-button")
                 }
             }
             .padding(.vertical, 4)
+        }
+
+        @ViewBuilder
+        private var updateStatus: some View {
+            if let update = appUpdate {
+                switch update.phase {
+                case .available:
+                    Text("CtrlX \(update.latestDisplayVersion) is available on the Host")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                case .installing:
+                    Text("Installing CtrlX \(update.latestDisplayVersion)...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .upToDate:
+                    Text("Host is up to date")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .failed:
+                    Text("Host update check failed")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                case .idle,
+                     .checking:
+                    EmptyView()
+                }
+
+                if let error = update.error {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            if let updateActionError {
+                Text(updateActionError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+
+        private var supportsUpdateCheck: Bool {
+            connection?.relayClient.hostSupportsCtrlXAppUpdateCheck == true
+        }
+
+        private var canCheckHostUpdate: Bool {
+            guard
+                let connection,
+                connection.isHostConnected,
+                connection.relayClient.hostSupportsCtrlXAppUpdateCheck,
+                !isCheckingUpdate,
+                !isRequestingUpdate
+            else { return false }
+            return appUpdate?.phase != .checking && appUpdate?.phase != .installing
         }
 
         private var appUpdate: CtrlXAppUpdateState? {
@@ -239,13 +299,38 @@
             else { return }
 
             isRequestingUpdate = true
+            updateActionError = nil
             Task {
-                _ = await client.sendCommand(
+                let result = await client.sendCommand(
                     InstallCtrlXAppUpdate(version: version, build: build),
                     paneId: "",
                     timeout: InstallCtrlXAppUpdate.responseTimeout
                 )
+                if case let .failure(error) = result {
+                    updateActionError = error.localizedDescription
+                }
                 isRequestingUpdate = false
+            }
+        }
+
+        private func checkHostUpdate() {
+            guard
+                canCheckHostUpdate,
+                let client = connection?.relayClient
+            else { return }
+
+            isCheckingUpdate = true
+            updateActionError = nil
+            Task {
+                let result = await client.sendCommand(
+                    CheckCtrlXAppUpdate(),
+                    paneId: "",
+                    timeout: CheckCtrlXAppUpdate.responseTimeout
+                )
+                if case let .failure(error) = result {
+                    updateActionError = error.localizedDescription
+                }
+                isCheckingUpdate = false
             }
         }
 

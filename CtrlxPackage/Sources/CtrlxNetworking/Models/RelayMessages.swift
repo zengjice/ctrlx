@@ -99,6 +99,8 @@ public struct SessionStateMessage: Codable, Sendable {
     public let simulatorTabs: [RemoteSimulatorTab]?
     /// Host supports inspecting and installing a macOS CtrlX app update.
     public let supportsCtrlXAppUpdate: Bool?
+    /// Host accepts a Viewer-triggered refresh of its app update feed.
+    public let supportsCtrlXAppUpdateCheck: Bool?
     /// Latest Host-owned update state. Absent on older Hosts.
     public let ctrlXAppUpdate: CtrlXAppUpdateState?
 
@@ -145,6 +147,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsWorkspaceInputIdentity: Bool? = nil,
         supportsTerminalStreamIdentity: Bool? = nil,
         supportsCtrlXAppUpdate: Bool? = nil,
+        supportsCtrlXAppUpdateCheck: Bool? = nil,
         ctrlXAppUpdate: CtrlXAppUpdateState? = nil
     ) {
         self.pairId = pairId
@@ -190,6 +193,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.workflowAgentPluginIDs = workflowAgentPluginIDs
         self.simulatorTabs = simulatorTabs
         self.supportsCtrlXAppUpdate = supportsCtrlXAppUpdate
+        self.supportsCtrlXAppUpdateCheck = supportsCtrlXAppUpdateCheck
         self.ctrlXAppUpdate = ctrlXAppUpdate
     }
 
@@ -241,6 +245,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsWorkspaceInputIdentity: supportsWorkspaceInputIdentity,
             supportsTerminalStreamIdentity: supportsTerminalStreamIdentity,
             supportsCtrlXAppUpdate: supportsCtrlXAppUpdate,
+            supportsCtrlXAppUpdateCheck: supportsCtrlXAppUpdateCheck,
             ctrlXAppUpdate: ctrlXAppUpdate
         )
     }
