@@ -11,6 +11,36 @@
     @MainActor
     struct ArtifactWebPreviewTests {
         @Test
+        func previewWindowUsesLargerResizableContent() {
+            _ = NSApplication.shared
+            let window = NSWindow(
+                contentRect: CGRect(x: -10_000, y: -10_000, width: 480, height: 600),
+                styleMask: [.titled, .closable],
+                backing: .buffered,
+                defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.orderBack(nil)
+            defer { window.close() }
+
+            ArtifactPreviewWindowSizing.configure(window, availableSize: NSSize(width: 1_200, height: 900))
+
+            #expect(window.styleMask.contains(.resizable))
+            #expect(window.contentMinSize == ArtifactPreviewWindowSizing.minimumContentSize)
+            #expect(window.contentLayoutRect.size == ArtifactPreviewWindowSizing.initialContentSize(
+                availableSize: NSSize(width: 1_200, height: 900)
+            ))
+            #expect(window.contentLayoutRect.size == NSSize(width: 960, height: 720))
+            #expect(ArtifactPreviewWindowSizing.initialContentSize(
+                availableSize: NSSize(width: 1_400, height: 1_100)
+            ) == ArtifactPreviewWindowSizing.preferredContentSize)
+            #expect(
+                ArtifactPreviewWindowSizing.initialContentSize(availableSize: NSSize(width: 640, height: 480))
+                    == ArtifactPreviewWindowSizing.minimumContentSize
+            )
+        }
+
+        @Test
         func rendersBundledDiagramsAndExportsPNGInBothThemes() async throws {
             let renderer = ArtifactWebRenderer()
             let window = mount(renderer)

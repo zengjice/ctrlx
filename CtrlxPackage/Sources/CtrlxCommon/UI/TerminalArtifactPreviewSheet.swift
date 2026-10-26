@@ -1,4 +1,7 @@
 #if os(macOS) || os(iOS)
+    #if os(macOS)
+        import AppKit
+    #endif
     import CoreTransferable
     import Dependencies
     import SwiftUI
@@ -137,7 +140,8 @@
                     }
             }
             #if os(macOS)
-            .frame(minWidth: 480, idealWidth: 800, maxWidth: .infinity, minHeight: 360, idealHeight: 600, maxHeight: .infinity)
+            .frame(minWidth: 600, idealWidth: 1_000, maxWidth: .infinity, minHeight: 420, idealHeight: 760, maxHeight: .infinity)
+            .background(ArtifactPreviewSheetWindowConfigurator())
             #else
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
@@ -229,4 +233,56 @@
                 .suggestedFileName { $0.name }
         }
     }
+
+    #if os(macOS)
+        @MainActor
+        enum ArtifactPreviewWindowSizing {
+            static let minimumContentSize = NSSize(width: 600, height: 420)
+            static let preferredContentSize = NSSize(width: 1_000, height: 760)
+
+            static func initialContentSize(availableSize: NSSize) -> NSSize {
+                NSSize(
+                    width: min(preferredContentSize.width, max(minimumContentSize.width, availableSize.width * 0.8)),
+                    height: min(preferredContentSize.height, max(minimumContentSize.height, availableSize.height * 0.8))
+                )
+            }
+
+            static func configure(_ window: NSWindow, availableSize: NSSize) {
+                window.styleMask.insert(.resizable)
+                window.contentMinSize = minimumContentSize
+                window.setContentSize(initialContentSize(availableSize: availableSize))
+            }
+        }
+
+        /// SwiftUI sizes a macOS sheet from its minimum frame and does not make
+        /// the sheet window resizable. Configure the AppKit window after it is
+        /// attached so the preview opens at a useful size and can be resized.
+        private struct ArtifactPreviewSheetWindowConfigurator: NSViewRepresentable {
+            func makeNSView(context: Context) -> SheetWindowView {
+                SheetWindowView()
+            }
+
+            func updateNSView(_ view: SheetWindowView, context: Context) {
+                view.configureIfNeeded()
+            }
+
+            final class SheetWindowView: NSView {
+                private weak var configuredWindow: NSWindow?
+
+                override func viewDidMoveToWindow() {
+                    super.viewDidMoveToWindow()
+                    configureIfNeeded()
+                }
+
+                func configureIfNeeded() {
+                    guard let window, window.isSheet, window !== configuredWindow else { return }
+                    configuredWindow = window
+                    let availableSize = window.sheetParent?.contentLayoutRect.size
+                        ?? window.screen?.visibleFrame.size
+                        ?? ArtifactPreviewWindowSizing.preferredContentSize
+                    ArtifactPreviewWindowSizing.configure(window, availableSize: availableSize)
+                }
+            }
+        }
+    #endif
 #endif
