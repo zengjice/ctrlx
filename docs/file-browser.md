@@ -410,6 +410,9 @@ video/audio using AVKit and the validated local file URL, without loading media
 into memory or applying remote preview limits. Mac supports tree expansion;
 iOS opens folders as full-area lists. Markdown attachments do not automatically
 fetch network resources or read Viewer-local `file://` URLs.
+On Mac Host and Viewer, vertical scrolling over a Markdown code block scrolls the
+document; horizontal scrolling remains within the code block. This routing applies
+only inside the visible file preview and leaves text selection unchanged.
 
 Word (`doc`, `docx`), Excel (`xls`, `xlsx`) and PowerPoint (`ppt`, `pptx`)
 use read-only system Quick Look inside the Files preview area: `QLPreviewView`

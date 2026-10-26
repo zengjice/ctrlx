@@ -2009,6 +2009,7 @@ private struct MarkdownContentView: View {
             ScrollView {
                 StructuredText(markdown: text)
                     .padding()
+                    .background(MarkdownScrollSupport())
                     .frame(
                         maxWidth: .infinity,
                         minHeight: geometry.size.height + 8,
