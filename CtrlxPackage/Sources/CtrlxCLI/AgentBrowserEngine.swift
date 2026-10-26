@@ -95,6 +95,19 @@ enum ManagedAgentBrowser {
     static let version = "0.38.1"
     static let sha256 = "2e61287259053ea964d39e77002c6a34af0e589e55ccff25e659efae7e892e0d"
 
+    enum Stage: String {
+        case initialization
+        case command
+        case snapshot
+        case screenshot
+    }
+
+    enum ProcessFailure: Error {
+        case timeout
+        case outputLimit
+        case exit(Int32)
+    }
+
     static func readBaseline(_ path: String, image: Bool) throws -> Data {
         let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { throw AgentBrowserTransport.Failure("Baseline must be a readable regular file, not a symlink.") }
@@ -191,37 +204,54 @@ enum ManagedAgentBrowser {
         while child.isRunning {
             let size = (try stdout.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
             let errorSize = (try stderr.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
-            guard Date() < deadline, size < 9 * 1024 * 1024, errorSize < 1024 * 1024 else {
+            let timedOut = Date() >= deadline
+            guard !timedOut, size < 9 * 1_024 * 1_024, errorSize < 1_024 * 1_024 else {
                 child.terminate()
                 let stopDeadline = Date().addingTimeInterval(1)
                 while child.isRunning, Date() < stopDeadline { Thread.sleep(forTimeInterval: 0.02) }
                 if child.isRunning { Darwin.kill(child.processIdentifier, SIGKILL) }
-                throw AgentBrowserTransport.Failure("vercel command timed out or exceeded output limit; outcome unknown. Inspect the page; not retried.")
+                throw timedOut ? ProcessFailure.timeout : ProcessFailure.outputLimit
             }
             Thread.sleep(forTimeInterval: 0.02)
         }
         guard child.terminationStatus == 0 else {
-            throw AgentBrowserTransport.Failure("vercel command failed; outcome may be unknown. Inspect with read/snapshot; not retried. References expire after navigation or engine idle shutdown.")
+            throw ProcessFailure.exit(child.terminationStatus)
         }
         let data = try Data(contentsOf: stdout)
-        guard data.count < 9 * 1024 * 1024 else { throw AgentBrowserTransport.Failure("Engine output too large.") }
+        guard data.count < 9 * 1_024 * 1_024 else { throw ProcessFailure.outputLimit }
         return data
     }
 
-    static func invoke(binary: URL, words: [String], env: [String: String], root: URL, input: Data? = nil) throws -> [String: Any] {
+    static func invoke(binary: URL, words: [String], env: [String: String], root: URL, input: Data? = nil, stage: Stage = .command) throws -> [String: Any] {
+        let started = ContinuousClock.now
+        func failure(_ category: String) -> AgentBrowserTransport.Failure {
+            let elapsed = started.duration(to: .now).components
+            let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1E18
+            let outcome = stage == .initialization ? "Requested page action not sent" : "Outcome may be unknown; inspect with read/snapshot before repeating"
+            return AgentBrowserTransport.Failure("vercel \(stage.rawValue) failed [\(category), \(String(format: "%.2f", seconds))s]. \(outcome); not retried. References expire after navigation or engine idle shutdown.")
+        }
         @Dependency(AgentBrowserEngineProcessClient.self) var process
-        let data = try process.run(binary, words, env, root, input)
-        let decoded = try JSONSerialization.jsonObject(with: data)
+        let data: Data
+        do {
+            data = try process.run(binary, words, env, root, input)
+        } catch ProcessFailure.timeout {
+            throw failure("timeout")
+        } catch ProcessFailure.outputLimit {
+            throw failure("output-limit")
+        } catch let ProcessFailure.exit(status) {
+            throw failure("process-exit-\(status)")
+        } catch {
+            throw failure("process-error")
+        }
+        guard data.count < 9 * 1_024 * 1_024 else { throw failure("output-limit") }
+        guard let decoded = try? JSONSerialization.jsonObject(with: data) else { throw failure("invalid-response") }
         // Commands travel as JSON on stdin via upstream batch, never through
         // its global argv scanner (preserves empty strings and leading dashes).
         let batch = decoded as? [[String: Any]]
         let value = input == nil ? decoded as? [String: Any] : (batch?.count == 1 ? batch?.first : nil)
         // Never print upstream stderr or an unsanitized error (may contain URL tokens).
-        guard data.count < 9 * 1024 * 1024,
-              let value,
-              value["success"] as? Bool == true else {
-            throw AgentBrowserTransport.Failure("vercel command failed; outcome may be unknown. Inspect with read/snapshot; not retried. References expire after navigation or engine idle shutdown.")
-        }
+        guard let value else { throw failure("invalid-response") }
+        guard value["success"] as? Bool == true else { throw failure("command-rejected") }
         return value[input == nil ? "data" : "result"] as? [String: Any] ?? [:]
     }
 
@@ -338,8 +368,9 @@ enum ManagedAgentBrowser {
                 throw AgentBrowserTransport.Failure("Engine reference state expired. Run snapshot again; no page action sent.")
             }
             // Disable the upstream preview listener before loading any page.
-            _ = try invoke(binary: binary, words: base + ["stream", "disable"], env: env, root: root)
-            _ = try invoke(binary: binary, words: base + ["snapshot", "-i"], env: env, root: root)
+            // The requested command attaches directly; a bootstrap snapshot
+            // would make pixel capture depend on scanning the entire AX tree.
+            _ = try invoke(binary: binary, words: base + ["stream", "disable"], env: env, root: root, stage: .initialization)
         }
         if arguments.first == "frame", arguments.count == 3, ["--name", "--url"].contains(arguments[1]) {
             // 0.38.1's daemon implements name/URL selection, but its CLI
@@ -440,7 +471,7 @@ enum ManagedAgentBrowser {
             } else if arguments.first == "diff" {
                 arguments += ["--output", path.path]
             } else { arguments.append(path.path) }
-            var result = try invoke(binary: binary, words: base + flags + ["batch"], env: env, root: root, input: JSONSerialization.data(withJSONObject: [arguments]))
+            var result = try invoke(binary: binary, words: base + flags + ["batch"], env: env, root: root, input: JSONSerialization.data(withJSONObject: [arguments]), stage: arguments.first == "screenshot" ? .screenshot : .command)
             // Conditional capture intentionally produces no file on unchanged
             // pixels. Preserve its revision/change metadata instead of failing.
             if (result["changed"] as? Bool == false && arguments.first == "screenshot") ||
@@ -455,7 +486,7 @@ enum ManagedAgentBrowser {
             result["data"] = try Data(contentsOf: path).base64EncodedString()
             return result
         }
-        let result = try invoke(binary: binary, words: base + ["batch"], env: env, root: root, input: JSONSerialization.data(withJSONObject: [arguments]))
+        let result = try invoke(binary: binary, words: base + ["batch"], env: env, root: root, input: JSONSerialization.data(withJSONObject: [arguments]), stage: arguments.first == "snapshot" ? .snapshot : .command)
         if operation == "setup" { return ["configured": true, "reloadRequired": true, "referencesExpired": true] }
         return operation == "snapshot" || operation == "upstream" ? result : [:]
     }

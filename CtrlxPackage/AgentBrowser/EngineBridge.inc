@@ -291,7 +291,10 @@
     if (enginePending_.size() >= 128) { EngineError(connection, wireID, @"Engine is busy; operation not sent."); return; }
     if ([method isEqual:@"Target.attachToTarget"]) engineCaptureAttaching_.insert(browserID);
     const int message = ++nextMessage_;
-    bool navigation = [@[@"Page.navigate", @"Page.reload", @"Page.navigateToHistoryEntry"] containsObject:method];
+    // Release may navigate before its ACK arrives. Accept confirmed delivery,
+    // never stale document reads or an earlier step of the click sequence.
+    bool navigation = [@[@"Page.navigate", @"Page.reload", @"Page.navigateToHistoryEntry"] containsObject:method] ||
+      ([method isEqual:@"Input.dispatchMouseEvent"] && [params[@"type"] isEqual:@"mouseReleased"]);
     enginePending_[{tab.browser->GetIdentifier(), message}] = {connection, wireID, token, tab.generation, Clock::now() + std::chrono::seconds(10), navigation, session, method};
     if (!session.length && [method isEqual:@"Emulation.setDeviceMetricsOverride"])
       enginePending_.at({browserID, message}).mobile = [params[@"mobile"] isKindOfClass:NSNumber.class] && [params[@"mobile"] boolValue] ? 1 : 0;

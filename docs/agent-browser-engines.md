@@ -41,6 +41,35 @@ no-overwrite handling retain the existing CLI envelope. Unsupported combinations
 fail explicitly, with no automatic engine switch or retry. A timed-out mutation
 can have taken effect: inspect before deciding whether to repeat it.
 
+Plain screenshots attach without first taking an interactive snapshot. Only an
+explicit snapshot or a feature that requires one (such as screenshot annotation)
+scans the page's accessibility tree. Preview streaming remains disabled. An
+explicit snapshot is performed once, including on a cold engine.
+
+Click success confirms delivery of the final mouse release, not completion of
+navigation or application work. Follow it with `wait`/`read` when needed. A
+navigation may precede that release's acknowledgement without invalidating it;
+earlier click steps and document results still expire, and ownership/takeover
+checks remain in force. Interrupted clicks are never replayed automatically.
+Vercel failures report a sanitized stage (initialization, command, snapshot or
+screenshot), elapsed seconds and category (timeout, output limit, process exit,
+invalid response or rejected command), without upstream stderr, URL tokens or
+page contents. Initialization failures distinguish a requested action not yet
+sent from an uncertain outcome after dispatch.
+
+The `interaction_results.py` regression uses a private signed Host and native
+Codex-named fixtures. It covers both engines' navigation click acknowledgements,
+early-navigation failures without replay, cross-owner refusal, cold screenshots
+through both public entry points on a 10,000-control page, expired refs, explicit
+snapshot refs, annotated screenshots and cold init-script/named-frame adapters.
+Local validation on 2026-10-26 (base
+`8aeae02b` plus these working-tree fixes) passed; both cold screenshot entry points
+took about 0.5–0.7 seconds. The CLI/native runtime builds, 43 focused Swift tests,
+existing `managed_engine.py` suite and CLI parser tests also passed. This is
+controlled fixture evidence, not reproduction of the
+original private site or its reported 60-second timeout. No installed App or
+Chromium core was replaced.
+
 ## Extended page capabilities
 
 Both engines create a new tab for every `action open`, including the same URL.
@@ -291,6 +320,9 @@ python3 CtrlxPackage/AgentBrowser/tests/page_capabilities.py \
   '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
   '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex
 python3 CtrlxPackage/AgentBrowser/tests/tab_opening.py \
+  '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
+  '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex
+python3 CtrlxPackage/AgentBrowser/tests/interaction_results.py \
   '<isolated signed CtrlX.app with updated native library and CtrlXCLI>' \
   '<that app>/Contents/Resources/AgentBrowserEngine/agent-browser' /tmp/codex
 python3 CtrlxPackage/AgentBrowser/tests/expanded_capabilities.py \

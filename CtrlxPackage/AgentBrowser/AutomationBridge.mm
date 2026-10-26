@@ -305,7 +305,9 @@ class Bridge final : public CefDevToolsMessageObserver {
     std::vector<int> cancelled;
     for (auto& [id, client] : clients_) {
       if (!client.busy || !client.browser || !client.browser->IsSame(browser)) continue;
-      if (client.waiting) client.generation = tabs_.at(client.tab).generation;
+      // A final mouse-release acknowledgement confirms input delivery, not
+      // state in the old document. All earlier steps still expire on navigation.
+      if (client.waiting || client.completingClick) client.generation = tabs_.at(client.tab).generation;
       else cancelled.push_back(id);
     }
     for (int id : cancelled) Reply(id, nil, @"Navigation invalidated the page action; inspect again. Not retried.");
@@ -326,6 +328,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     bool opening = false;
     CefRefPtr<CefBrowser> browser;
     bool waiting = false;
+    bool completingClick = false;
     Clock::time_point waitUntil;
     std::string waitScript;
   };
@@ -410,6 +413,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     auto& client = it->second;
     client.busy = false;
     client.waiting = false;
+    client.completingClick = false;
     client.output = JSON(error ? @{ @"ok": @NO, @"error": error }
                                : @{ @"ok": @YES, @"result": result ?: @{} }) + "\n";
     client.deadline = Clock::now() + std::chrono::seconds(5);
@@ -417,10 +421,11 @@ class Bridge final : public CefDevToolsMessageObserver {
   }
 
   void Call(int id, const char* method, NSDictionary* params,
-            std::function<void(NSDictionary*)> done) {
+            std::function<void(NSDictionary*)> done, bool completingClick = false) {
     auto it = clients_.find(id);
     if (it == clients_.end() || !it->second.busy) return;
     if (!Authorized(id)) return;
+    it->second.completingClick = completingClick;
     auto browser = it->second.browser;
     AgentBrowserCancelHumanInput(browser);
     const int message = ++nextMessage_;
@@ -691,7 +696,7 @@ class Bridge final : public CefDevToolsMessageObserver {
             if ([command isEqual:@"check"]) {
               Evaluate(id, PageAction("verifyCheck", JSON(params)), [this, id](::id result) { Reply(id, result); });
             } else Reply(id, @{});
-          });
+          }, [command isEqual:@"click"]);
         });
       });
   }

@@ -1,5 +1,6 @@
 import Dependencies
 import Foundation
+import Synchronization
 import Testing
 @testable import CtrlxCLI
 
@@ -84,6 +85,40 @@ struct AgentBrowserEngineTests {
                 #expect(String(describing: error).contains("not retried"))
             }
         }
+    }
+
+    @Test(arguments: ["timeout", "output-limit", "process-exit-7", "process-error", "invalid-response", "command-rejected"])
+    func diagnosticStagesAreTimedSanitizedAndNeverRetry(_ category: String) {
+        let calls = Mutex(0)
+        withDependencies {
+            $0[AgentBrowserEngineProcessClient.self].run = { _, _, _, _, _ in
+                calls.withLock { $0 += 1 }
+                switch category {
+                case "timeout": throw ManagedAgentBrowser.ProcessFailure.timeout
+                case "output-limit": throw ManagedAgentBrowser.ProcessFailure.outputLimit
+                case "process-exit-7": throw ManagedAgentBrowser.ProcessFailure.exit(7)
+                case "process-error": throw AgentBrowserTransport.Failure("secret ws://localhost/private-token")
+                case "invalid-response": return Data("secret invalid JSON private-token".utf8)
+                default: return Data(#"{"success":false,"error":"secret private-token"}"#.utf8)
+                }
+            }
+        } operation: {
+            for stage in [ManagedAgentBrowser.Stage.initialization, .screenshot, .snapshot, .command] {
+                do {
+                    _ = try ManagedAgentBrowser.invoke(binary: URL(fileURLWithPath: "/fixture"), words: [], env: [:], root: URL(fileURLWithPath: "/fixture"), stage: stage)
+                    Issue.record("Expected failure")
+                } catch {
+                    let message = String(describing: error)
+                    #expect(message.contains("vercel \(stage.rawValue) failed [\(category), "))
+                    #expect(message.contains("s]."))
+                    #expect(message.contains("not retried"))
+                    #expect(!message.contains("secret"))
+                    #expect(!message.contains("private-token"))
+                    #expect(message.contains("Requested page action not sent") == (stage == .initialization))
+                }
+            }
+        }
+        #expect(calls.withLock { $0 } == 4)
     }
 
     @Test func pageCatalogAndBoundary() throws {
