@@ -7,6 +7,19 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.105 — Foreground update progress
+
+- Show update checking, preparation, installer launch and failure states in a
+  dedicated foreground window instead of leaving long-running Mac updates
+  without visible feedback.
+- Keep the progress window synchronized with the shared update service so
+  manually triggered and background update checks expose the same status.
+- Cover the new installation-error state in the update service tests.
+- Release validation: the complete serial Swift regression passed
+  (`StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac), as did both boundary checks, SwiftFormat, the
+  14-page website build and the iOS Simulator compile check.
+
 ## 3.0.104 — Claude Provider effort and context window
 
 - Add optional reasoning-effort selection to Claude Code custom Providers and
