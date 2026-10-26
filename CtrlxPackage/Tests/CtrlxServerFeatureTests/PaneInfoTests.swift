@@ -29,6 +29,25 @@ struct PaneInfoTests {
         #expect(PaneInfo(fromTmuxOutput: Self.currentLine)?.workspaceIdentity == nil)
     }
 
+    @Test("Window activity parses and advances sorting without overwriting newer plugin activity")
+    func windowActivity() throws {
+        let activity = 1_793_005_165
+        let line = Self.currentLine + String(repeating: Self.sep, count: 6) + String(activity)
+        let pane = try #require(PaneInfo(fromTmuxOutput: line))
+        #expect(pane.lastActivityAt == Date(timeIntervalSince1970: TimeInterval(activity)))
+
+        var state = PaneState(
+            paneId: pane.paneId,
+            lastAgentActivityAt: Date(timeIntervalSince1970: 100)
+        )
+        #expect(pane.updateMetadata(of: &state))
+        #expect(state.lastAgentActivityAt == Date(timeIntervalSince1970: TimeInterval(activity)))
+
+        state.lastAgentActivityAt = Date(timeIntervalSince1970: TimeInterval(activity + 10))
+        #expect(!pane.updateMetadata(of: &state))
+        #expect(state.lastAgentActivityAt == Date(timeIntervalSince1970: TimeInterval(activity + 10)))
+    }
+
     @Test("The physical server identity survives incomplete recovery metadata")
     func serverIdentityBeforeRecoveryIDs() throws {
         let line = Self.currentLine + Self.sep + "100:1" + String(repeating: Self.sep, count: 3)

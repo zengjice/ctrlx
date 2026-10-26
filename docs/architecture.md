@@ -188,14 +188,15 @@ updates, but verify decoding, capability gating and envelope limits per change.
   any pane's explicit progress wins, otherwise any working agent supplies a bar.
   Within the idle group, the latest task activity sorts first; ties and missing
   timestamps fall back to session-name ordering. Other groups keep name ordering.
-  Activity is the Host's latest plugin-state receipt time, taking the maximum
-  across every pane/window in the session. Viewing/marking handled and metadata
-  refreshes do not update it. The optional `PaneState.lastAgentActivityAt` travels
+  Activity is the latest of Host plugin-state receipt and tmux window activity,
+  taking the maximum across every pane/window in the session. Tmux activity is
+  the durable fallback across Host restarts; viewing/marking handled does not
+  update it. The optional `PaneState.lastAgentActivityAt` travels
   in full snapshots, so local Mac and remote Viewers share the same time across
   Viewer reconnects. All recency sorting uses whole seconds to match the wire's
   ISO 8601 precision; activity within the same second ties and sorts by name.
-  Older Hosts, and panes without activity recorded since Host
-  startup, fall back to name ordering. Saved sort-mode choices are
+  Older Hosts, and panes with neither plugin nor tmux activity, fall back to
+  name ordering. Saved sort-mode choices are
   preserved on Mac, which uses its own sort mode for local and remote sections.
   iOS automatic order always uses this activity-first rule, independent of the
   Host's saved sidebar mode. Mac Settings → Sidebar → Sort Order changes the

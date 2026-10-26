@@ -137,9 +137,9 @@ extension SessionSortData {
             gitBranch: metadata.gitBranch
         )
 
-        // Recency = the latest plugin-status arrival across the session's panes.
-        // The per-event timestamp buffer was dropped (spec §16); status-arrival
-        // order is the agent-blind stand-in and matches event-receipt order.
+        // Recency = the latest activity across the session's panes. Hosts seed
+        // this from tmux window activity so a Host restart does not reset every
+        // idle session to name order; plugin state can advance it further.
         // Not `.lazy`: max() consumes every element anyway, and a lazy chain
         // would escape the non-escaping `lastActivity` closure.
         let latestActivity = session.windows
@@ -180,5 +180,4 @@ extension SessionSortData {
         }
         return RemoteSessionOrder.applying(preferredSessionNames, to: automaticOrder, sessionName: \.sessionName)
     }
-
 }

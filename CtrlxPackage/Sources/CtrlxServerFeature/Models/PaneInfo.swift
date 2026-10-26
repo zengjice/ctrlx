@@ -35,6 +35,9 @@ public struct PaneInfo: Identifiable, Sendable, Hashable {
     public let height: Int
     /// Whether this pane is the active pane in its window
     public let isActive: Bool
+    /// tmux's last activity time for this pane's window. Unlike plugin status,
+    /// this survives a Host restart because tmux keeps it alongside the pane.
+    public let lastActivityAt: Date?
     /// The terminal title set via OSC escape sequences (empty string means default/unset)
     public let paneTitle: String
     /// The tmux window layout string (e.g., "d0c6,191x50,0,0{95x50,0,0,5,95x50,96,0,6}")
@@ -78,6 +81,7 @@ public struct PaneInfo: Identifiable, Sendable, Hashable {
         width: Int,
         height: Int,
         isActive: Bool,
+        lastActivityAt: Date? = nil,
         paneTitle: String = "",
         windowLayout: String = "",
         windowName: String = "",
@@ -103,6 +107,7 @@ public struct PaneInfo: Identifiable, Sendable, Hashable {
         self.width = width
         self.height = height
         self.isActive = isActive
+        self.lastActivityAt = lastActivityAt
         self.paneTitle = paneTitle
         self.windowLayout = windowLayout
         self.windowName = windowName
@@ -134,7 +139,7 @@ public extension PaneInfo {
     /// id, session, window, pane, command, path, width, height, active,
     /// title, layout, windowName, windowActive, customColor, customEmoji,
     /// customDescription, tmuxWindowId, tmuxServerID, persistent session/window/pane UUIDs,
-    /// tmuxSessionID. Trailing identity fields are optional for legacy records.
+    /// tmuxSessionID, window activity. Trailing fields are optional for legacy records.
     init?(fromTmuxOutput line: String) {
         let components = line.split(separator: Self.fieldSeparator, omittingEmptySubsequences: false).map(String.init)
         guard components.count >= 9 else { return nil }
@@ -161,6 +166,11 @@ public extension PaneInfo {
         self.width = width
         self.height = height
         self.isActive = components[8] == "1"
+        if components.count > 22, let seconds = TimeInterval(components[22]), seconds > 0 {
+            self.lastActivityAt = Date(timeIntervalSince1970: seconds)
+        } else {
+            self.lastActivityAt = nil
+        }
         self.paneTitle = components.count >= 10 ? components[9] : ""
         self.windowLayout = components.count >= 11 ? components[10] : ""
         self.windowName = components.count >= 12 ? components[11] : ""
@@ -223,6 +233,7 @@ public extension PaneInfo {
             customDescription: customDescription,
             customColor: customColor,
             customEmoji: customEmoji,
+            lastAgentActivityAt: lastActivityAt,
             workspaceIdentity: workspaceIdentity
         )
     }
@@ -236,6 +247,7 @@ public extension PaneInfo {
             state = makePaneState()
             return true
         }
+        let hasNewerActivity = lastActivityAt.map { $0 > (state.lastAgentActivityAt ?? .distantPast) } ?? false
         guard
             state.target != target
             || state.sessionName != sessionName
@@ -254,6 +266,7 @@ public extension PaneInfo {
             || state.customColor != customColor
             || state.customEmoji != customEmoji
             || state.workspaceIdentity != workspaceIdentity
+            || hasNewerActivity
         else { return false }
 
         state.target = target
@@ -273,6 +286,9 @@ public extension PaneInfo {
         state.customColor = customColor
         state.customEmoji = customEmoji
         state.workspaceIdentity = workspaceIdentity
+        if hasNewerActivity {
+            state.lastAgentActivityAt = lastActivityAt
+        }
         return true
     }
 }

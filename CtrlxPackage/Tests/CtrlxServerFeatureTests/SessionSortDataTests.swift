@@ -33,13 +33,14 @@
             command: String = "zsh",
             currentPath: String = "/tmp/dir",
             isActive: Bool = true,
+            lastActivityAt: Date? = nil,
             windowName: String = "",
             isWindowActive: Bool = false
         ) -> PaneInfo {
             PaneInfo(
                 paneId: paneId, target: "\(session):\(window).\(pane)", sessionName: session,
                 windowIndex: window, paneIndex: pane, command: command, currentPath: currentPath,
-                width: 80, height: 24, isActive: isActive,
+                width: 80, height: 24, isActive: isActive, lastActivityAt: lastActivityAt,
                 windowName: windowName, isWindowActive: isWindowActive
             )
         }
@@ -165,6 +166,30 @@
             #expect(data.primaryLabel == "/tmp/dir")
             #expect(data.statusPriority == 3)
             #expect(data.latestEventTimestamp == newer)
+        }
+
+        @Test("Window activity restores idle recency after a Host restart")
+        func windowActivityAfterRestart() {
+            let older = Date(timeIntervalSince1970: 100)
+            let newer = Date(timeIntervalSince1970: 200)
+            let panes = [
+                makePane("%1", session: "cm", lastActivityAt: older),
+                makePane("%2", session: "multi-agent", lastActivityAt: newer),
+            ]
+            let states = Dictionary(uniqueKeysWithValues: panes.map { pane in
+                var state = pane.makePaneState()
+                state.agentSession = AgentSession(paneId: pane.paneId, state: .idle)
+                return (pane.paneId, state)
+            })
+            let order = SessionSortData.sortedLocalSessions(
+                LocalTmuxSession.groupWindows(LocalTmuxWindow.groupPanes(panes)),
+                mode: .statusPriority,
+                paneStates: states,
+                lastActivity: { states[$0]?.lastAgentActivityAt },
+                sidebarFields: sidebarFields,
+                sidebarTerminalFields: terminalFields
+            ).map(\.sessionName)
+            #expect(order == ["multi-agent", "cm"])
         }
 
         @Test("Local and remote task order agrees after ISO 8601 encoding", arguments: [

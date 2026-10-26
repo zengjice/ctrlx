@@ -837,7 +837,8 @@ final public class MirrorWindowManager {
             paneStates[paneId]?.permissionMode = permissionMode
         }
 
-        // Record arrival order for the "most recent activity" sort.
+        // Plugin state is newer than (or at least as trustworthy as) tmux's
+        // window activity, and immediately re-ranks an idle session.
         paneStates[paneId]?.lastAgentActivityAt = Date()
 
         // A definitive state wins over any CLI-driven override so subsequent
@@ -921,8 +922,9 @@ final public class MirrorWindowManager {
 
     // MARK: - Mark Handled
 
-    /// The most recent plugin-state arrival time, shared with Viewers through
-    /// the pane snapshot. Metadata refreshes and viewing do not update it.
+    /// The latest activity time used for sorting, shared with Viewers through
+    /// the pane snapshot. Plugin state and tmux window activity both advance it;
+    /// viewing does not.
     public func lastActivity(for paneId: String) -> Date? {
         paneStates[paneId]?.lastAgentActivityAt
     }
