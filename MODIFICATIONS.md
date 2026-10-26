@@ -7,6 +7,30 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.108 — Detached session windows and standalone previews
+
+- Detach an entire macOS session into a workspace window by dragging its sidebar
+  row or choosing Open in New Window. Session windows preserve tab selections and
+  split layouts, focus an existing window instead of duplicating it, and return
+  the workspace to the main window when closed.
+- Preserve live Git selections, drafts, pending snapshot state and Agent Simulator
+  ownership while sessions and panes move between windows.
+- Open artifact previews in independent, movable macOS windows so images,
+  Mermaid and Markdown can remain visible on another Space while the workbench
+  stays interactive.
+- Keep idle-session recency across Host restarts by seeding sorting from durable
+  tmux window activity.
+- Allow vertical scrolling over horizontally scrolling Markdown code blocks in
+  file previews.
+- Reveal and edit stored custom Provider API keys from Agent settings with an
+  explicit visibility toggle.
+- Release validation: the complete serial Swift regression passed (4,053 tests;
+  `StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac), as did 110 focused window, recovery, sorting and
+  preview tests. Both boundary checks, the 14-page website build and the iOS
+  Simulator compile check passed. No new SwiftFormat violations were introduced;
+  remaining whole-file deviations predate this release.
+
 ## 3.0.107 — Remote update checks and installer progress
 
 - Let capable Mac and iOS Viewers ask a Host to refresh its CtrlX update feed,
