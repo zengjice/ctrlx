@@ -103,6 +103,7 @@
         private var installerMonitorTask: Task<Void, Never>?
 
         private(set) var isInstalling = false
+        private(set) var installationError: String?
 
         var state: CtrlXAppUpdateState {
             didSet {
@@ -247,6 +248,7 @@
                 throw CtrlXAppUpdateError.updateUnavailable
             }
             isInstalling = true
+            installationError = nil
             defer { isInstalling = false }
 
             do {
@@ -280,6 +282,8 @@
                     monitorInstaller(pid: installerPID, logURL: logURL)
                 }
             } catch {
+                let message = Self.userFacingMessage(error)
+                installationError = message
                 setState(
                     phase: .available,
                     latestVersion: state.latestVersion,
@@ -287,7 +291,7 @@
                     latestBuildStamp: state.latestBuildStamp,
                     checkedAt: state.checkedAt,
                     canInstall: installationPreflight() == nil,
-                    error: Self.userFacingMessage(error)
+                    error: message
                 )
                 throw error
             }
@@ -308,6 +312,8 @@
                     }
 
                     self.installerMonitorTask = nil
+                    let message = "The CtrlX installer stopped before completing. Review the installer log at \(logURL.path)."
+                    self.installationError = message
                     self.setState(
                         phase: .available,
                         latestVersion: self.state.latestVersion,
@@ -315,7 +321,7 @@
                         latestBuildStamp: self.state.latestBuildStamp,
                         checkedAt: self.state.checkedAt,
                         canInstall: true,
-                        error: "The CtrlX installer stopped before completing. Review the installer log at \(logURL.path)."
+                        error: message
                     )
                     return
                 }

@@ -4,6 +4,7 @@ import SwiftUI
 
 public struct CheckForUpdatesView: View {
     private let coordinator: AppCoordinator
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
     public init(coordinator: AppCoordinator) {
@@ -17,8 +18,8 @@ public struct CheckForUpdatesView: View {
         if service.isInstalling || state.phase == .installing {
             Button(installationStatus(for: state)) { }
                 .disabled(true)
-            Button("Show Update Status in Settings...") {
-                openUpdateSettings()
+            Button("Show Update Progress...") {
+                presentUpdateProgress()
             }
         } else if state.phase == .checking {
             Button("Checking for Updates...") { }
@@ -98,18 +99,23 @@ public struct CheckForUpdatesView: View {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
+        presentUpdateProgress()
         installAvailableUpdate(state)
     }
 
     private func installAvailableUpdate(_ state: CtrlXAppUpdateState) {
         guard let version = state.latestVersion, let build = state.latestBuild else { return }
         Task { @MainActor in
-            do {
-                try await coordinator.ctrlXAppUpdateService.install(version: version, build: build)
-            } catch {
-                presentInstallFailure(error)
-            }
+            // The service publishes failures through `installationError`, which
+            // the foreground progress window presents with a retry action.
+            try? await coordinator.ctrlXAppUpdateService.install(version: version, build: build)
         }
+    }
+
+    private func presentUpdateProgress() {
+        NSApp.setActivationPolicy(.regular)
+        openWindow(id: CtrlXAppUpdateProgressView.windowID)
+        NSApp.activate()
     }
 
     private func presentUpToDate(_ state: CtrlXAppUpdateState) {
@@ -125,13 +131,6 @@ public struct CheckForUpdatesView: View {
         presentFailure(
             title: "Could not check for updates",
             message: state.error ?? "The update check failed for an unknown reason."
-        )
-    }
-
-    private func presentInstallFailure(_ error: any Error) {
-        presentFailure(
-            title: "Could not update CtrlX",
-            message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         )
     }
 

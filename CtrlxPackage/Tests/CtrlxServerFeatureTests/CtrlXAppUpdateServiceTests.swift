@@ -168,10 +168,12 @@
             #expect(service.state.phase == .available)
             #expect(service.state.canInstall, "A Viewer must be able to retry without a separate Host refresh")
             #expect(service.state.error != nil)
+            #expect(service.installationError == service.state.error)
             #expect(launches == 0)
             try await service.install(version: "3.0.99", build: "32")
             #expect(launches == 1)
             #expect(service.state.phase == .installing)
+            #expect(service.installationError == nil)
         }
 
         @Test
@@ -339,6 +341,7 @@
             #expect(service.state.phase == .available)
             #expect(service.state.canInstall)
             #expect(service.state.error?.contains("installer log") == true)
+            #expect(service.installationError == service.state.error)
         }
 
         @Test

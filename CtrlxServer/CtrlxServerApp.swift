@@ -535,6 +535,15 @@ struct TmuxPaneMirrorApp: App {
         .defaultSize(width: 700, height: 600)
         .defaultLaunchBehavior(.suppressed)
 
+        Window("Updating CtrlX", id: CtrlXAppUpdateProgressView.windowID) {
+            CtrlXAppUpdateProgressView(coordinator: coordinator)
+        }
+        .defaultSize(width: 460, height: 240)
+        .defaultPosition(.center)
+        .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
         // Settings window
         Settings {
             SettingsView()
