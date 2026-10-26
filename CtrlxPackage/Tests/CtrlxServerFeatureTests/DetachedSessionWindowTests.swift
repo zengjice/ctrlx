@@ -89,7 +89,7 @@ struct DetachedSessionWindowTests {
             let ids = ["@1", "@2"].filter { manager.owner(hostID: "host", windowID: $0) == workspaceID }
             store.tabs(hostID: "host", session: "work").syncHostSimulatorTabs(
                 manager.simulatorTabs([simulator], hostID: "host", session: "work", workspaceID: workspaceID),
-                sessionWindowIDs: ids,
+                sessionWindowIDs: ids
             )
         }
 

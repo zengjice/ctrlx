@@ -20,7 +20,7 @@ public enum DetachedTerminalWindowScenario {
     }
 
     public static let session = CtrlxE2ELib.scenario(
-        "Detached Session Window", tags: ["tabs", "macos-only", "isolated-api"],
+        "Detached Session Window", tags: ["tabs", "macos-only", "isolated-api"]
     ) {
         setupWindows
         TestStep.launchMacApp()
@@ -29,7 +29,7 @@ public enum DetachedTerminalWindowScenario {
     }
 
     public static let sessionMacViewer = CtrlxE2ELib.scenario(
-        "Detached Session Window Mac Viewer", tags: ["tabs", "macos-only", "isolated-api"],
+        "Detached Session Window Mac Viewer", tags: ["tabs", "macos-only", "isolated-api"]
     ) {
         Shortcut.twoMacPairing
         setupWindows

@@ -105,7 +105,7 @@ final class DetachedTerminalWindows {
 
     func detachSession(
         hostID: String?, name: String, windowIDs: [String], selectedWindowID: String?, position: CGPoint?,
-        session: (DetachedTerminalTarget) -> String?,
+        session: (DetachedTerminalTarget) -> String?
     ) -> DetachedTerminalWorkspace? {
         let live = windowIDs.compactMap { DetachedTerminalTarget(hostID: hostID, windowID: $0) }
         guard !live.isEmpty, live.count == windowIDs.count, live.allSatisfy({ session($0) == name }) else { return nil }
@@ -121,7 +121,7 @@ final class DetachedTerminalWindows {
         _ = mainTabs.tabs(hostID: hostID, session: name)
         let selection = WorkbenchTabStore.Selection(
             hostID: hostID, sessionName: name,
-            windowID: members.first(where: { $0.windowID == selectedWindowID })?.windowID ?? anchor.windowID,
+            windowID: members.first(where: { $0.windowID == selectedWindowID })?.windowID ?? anchor.windowID
         )
         let destination = DetachedTerminalWorkspace(target: anchor, sessionName: name)
         destination.isSessionWindow = true

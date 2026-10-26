@@ -544,7 +544,7 @@ private struct FileBrowserPreview: View {
                                 .textual.emojiAttachmentLoader(FilePreviewAttachments())
                                 .padding()
                                 #if os(macOS)
-                                .background(MarkdownScrollSupport())
+                                    .background(MarkdownScrollSupport())
                                 #endif
                         } else {
                             Text(String(decoding: data, as: UTF8.self)).font(.system(.body, design: .monospaced))
