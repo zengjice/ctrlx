@@ -1040,6 +1040,7 @@
         @State private var draft: AgentProviderDraft
         @State private var contextWindowTokensText: String
         @State private var apiKey = ""
+        @State private var isAPIKeyVisible = false
         @State private var hasStoredKey = false
         @State private var isLoadingKey = false
         @State private var isSaving = false
@@ -1116,11 +1117,34 @@
                             .autocorrectionDisabled()
                             .accessibilityIdentifier("agentProviderEnvironmentKey")
                     }
-                    SecureField(
-                        hasStoredKey && isNew == false ? "API key (leave blank to keep stored key)" : "API key",
-                        text: $apiKey
-                    )
-                    .accessibilityIdentifier("agentProviderAPIKey")
+                    HStack {
+                        Group {
+                            if isAPIKeyVisible {
+                                TextField(apiKeyPrompt, text: $apiKey)
+                            } else {
+                                SecureField(apiKeyPrompt, text: $apiKey)
+                            }
+                        }
+                        .autocorrectionDisabled()
+                        .textContentType(.password)
+                        .privacySensitive()
+                        .accessibilityIdentifier("agentProviderAPIKey")
+
+                        Button {
+                            isAPIKeyVisible.toggle()
+                        } label: {
+                            Label(
+                                isAPIKeyVisible ? "Hide API Key" : "Show API Key",
+                                symbol: isAPIKeyVisible ? .eyeSlash : .eye
+                            )
+                            .labelStyle(.iconOnly)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .help(isAPIKeyVisible ? "Hide API Key" : "Show API Key")
+                        .accessibilityIdentifier("agentProviderAPIKeyVisibility")
+                    }
                     if hasStoredKey {
                         Text("A key is stored in Keychain. Enter a new value only to replace it.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -1158,11 +1182,16 @@
                     providerID: original.providerID
                 )
                 do {
-                    hasStoredKey = try await secrets.loadSecret(account)?.isEmpty == false
+                    apiKey = try await secrets.loadSecret(account) ?? ""
+                    hasStoredKey = !apiKey.isEmpty
                 } catch {
                     errorMessage = "The stored API key could not be read from Keychain."
                 }
             }
+        }
+
+        private var apiKeyPrompt: String {
+            hasStoredKey && !isNew ? "API key (leave blank to keep stored key)" : "API key"
         }
 
         private func save() async {
