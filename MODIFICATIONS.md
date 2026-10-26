@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.107 — Remote update checks and installer progress
+
+- Let capable Mac and iOS Viewers ask a Host to refresh its CtrlX update feed,
+  then show the resulting Host-owned availability and install or retry the exact
+  checked release. The command is separately capability-gated; Viewers cannot
+  choose a feed or supply an installer URL.
+- Show determinate installer download progress in the foreground update window
+  and settings by following the DMG's actual growth against its HTTPS
+  `Content-Length`, with an indeterminate fallback when the size is unknown.
+- Bump both bundled agent plugin versions so cached installations refresh
+  hook-delivered guidance for non-Git file references.
+- Release validation: the complete serial Swift regression passed (4,039 tests;
+  `StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac). The changed Swift files passed SwiftFormat, both
+  boundary checks passed, and the 14-page website build and iOS Simulator
+  compile check succeeded.
+
 ## 3.0.106 — Browser audio and attention badges
 
 - Stream embedded browser page audio to paired Mac and iOS Viewers over the
