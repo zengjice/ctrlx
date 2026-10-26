@@ -136,7 +136,9 @@ struct ClaudeCodePluginCoreTests {
             baseURL: "https://api.example.com/v1",
             model: "claude-custom",
             authKind: .authToken,
-            environmentKey: ClaudeProviderAuthKind.authToken.environmentKey
+            environmentKey: ClaudeProviderAuthKind.authToken.environmentKey,
+            reasoningEffort: .high,
+            contextWindowTokens: 1_000_000
         )
         let settings = try JSONEncoder().encode(ClaudeCodeSettings(providers: [profile]))
         let secrets = SecretsService.inMemory()
@@ -157,11 +159,12 @@ struct ClaudeCodePluginCoreTests {
 
             let fork = try await core.commandForFork(sessionID: id, projectPath: "/repo", targetProviderID: profile.id)
             #expect(fork.command.command == "claude")
-            #expect(fork.command.args == ["--resume", id, "--fork-session"])
+            #expect(fork.command.args == ["--resume", id, "--fork-session", "--effort", "high"])
             #expect(fork.command.env == [
                 "ANTHROPIC_BASE_URL": "https://api.example.com/v1",
                 "ANTHROPIC_AUTH_TOKEN": "fixture-key",
                 "ANTHROPIC_MODEL": "claude-custom",
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000",
                 AgentProviderEnvironment.markerKey: profile.id,
                 "CLAUDE_CONFIG_DIR": "/source/claude",
             ])
@@ -170,7 +173,39 @@ struct ClaudeCodePluginCoreTests {
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_AUTH_TOKEN",
                 "ANTHROPIC_MODEL",
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
             ]))
+        }
+    }
+
+    @Test("Custom Claude Provider launch applies its effort and context window")
+    func customProviderLaunchEffortAndContextWindow() async throws {
+        let profile = ClaudeProviderProfile(
+            id: "custom",
+            name: "Custom Anthropic",
+            baseURL: "https://api.example.com/v1",
+            model: "claude-custom",
+            authKind: .authToken,
+            environmentKey: ClaudeProviderAuthKind.authToken.environmentKey,
+            reasoningEffort: .max,
+            contextWindowTokens: 500_000
+        )
+        let settings = try JSONEncoder().encode(ClaudeCodeSettings(providers: [profile], defaultProviderID: profile.id))
+        let secrets = SecretsService.inMemory()
+        try await secrets.storeSecret(
+            "fixture-key",
+            AgentProviderKeychainAccount.account(pluginID: ClaudeCodePluginCore.pluginID, providerID: profile.id)
+        )
+
+        try await withDependencies {
+            $0[SecretsService.self] = secrets
+        } operation: {
+            let core = ClaudeCodePluginCore()
+            try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
+            let launch = try #require(try await core.commandForLaunch(projectPath: "/repo", providerID: nil))
+            #expect(launch.args == ["--effort", "max"])
+            #expect(launch.env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "500000")
+            #expect(launch.unsetEnvironment.contains("CLAUDE_CODE_MAX_CONTEXT_TOKENS"))
         }
     }
 
@@ -187,6 +222,7 @@ struct ClaudeCodePluginCoreTests {
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_MODEL",
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
         ]))
     }
 
@@ -226,7 +262,9 @@ struct ClaudeCodePluginCoreTests {
             baseURL: "https://api.example.com/v1",
             model: "claude-custom",
             authKind: .apiKey,
-            environmentKey: ClaudeProviderAuthKind.apiKey.environmentKey
+            environmentKey: ClaudeProviderAuthKind.apiKey.environmentKey,
+            reasoningEffort: .high,
+            contextWindowTokens: 1_000_000
         )
         let settings = try JSONEncoder().encode(ClaudeCodeSettings(providers: [profile]))
         let secrets = SecretsService.inMemory()
@@ -246,7 +284,7 @@ struct ClaudeCodePluginCoreTests {
                 projectPath: "/repo",
                 invocation: .init(
                     executable: "/tools/claude",
-                    arguments: [],
+                    arguments: ["--effort", "high"],
                     configurationRoots: ["CLAUDE_CONFIG_DIR": "/source/claude"],
                     providerID: profile.id
                 )
@@ -256,7 +294,9 @@ struct ClaudeCodePluginCoreTests {
             #expect(resumed.command.env["ANTHROPIC_API_KEY"] == "fixture-key")
             #expect(resumed.command.env["ANTHROPIC_BASE_URL"] == "https://api.example.com/v1")
             #expect(resumed.command.env["ANTHROPIC_MODEL"] == "claude-custom")
+            #expect(resumed.command.env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "1000000")
             #expect(resumed.command.env["CLAUDE_CONFIG_DIR"] == "/source/claude")
+            #expect(resumed.command.args == ["--resume", id, "--effort", "high"])
         }
     }
 

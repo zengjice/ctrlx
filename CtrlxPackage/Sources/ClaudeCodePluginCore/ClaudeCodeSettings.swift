@@ -14,6 +14,28 @@ public enum ClaudeProviderAuthKind: String, Codable, Sendable, CaseIterable {
     }
 }
 
+public enum ClaudeReasoningEffort: String, Codable, Sendable, CaseIterable, Hashable, Identifiable {
+    case low
+    case medium
+    case high
+    case xhigh
+    case max
+
+    public var id: String {
+        rawValue
+    }
+
+    public var displayName: String {
+        switch self {
+        case .low: "Low"
+        case .medium: "Medium"
+        case .high: "High"
+        case .xhigh: "Extra High"
+        case .max: "Max"
+        }
+    }
+}
+
 public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public var name: String
@@ -21,6 +43,8 @@ public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable 
     public var model: String
     public var authKind: ClaudeProviderAuthKind
     public var environmentKey: String
+    public var reasoningEffort: ClaudeReasoningEffort?
+    public var contextWindowTokens: Int?
 
     public init(
         id: String,
@@ -28,7 +52,9 @@ public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable 
         baseURL: String,
         model: String,
         authKind: ClaudeProviderAuthKind,
-        environmentKey: String
+        environmentKey: String,
+        reasoningEffort: ClaudeReasoningEffort? = nil,
+        contextWindowTokens: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -36,6 +62,8 @@ public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable 
         self.model = model
         self.authKind = authKind
         self.environmentKey = environmentKey
+        self.reasoningEffort = reasoningEffort
+        self.contextWindowTokens = contextWindowTokens
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -45,6 +73,8 @@ public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable 
         case model
         case authKind = "auth_kind"
         case environmentKey = "environment_key"
+        case reasoningEffort = "reasoning_effort"
+        case contextWindowTokens = "context_window_tokens"
     }
 }
 
@@ -149,6 +179,10 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
     public static func isValidEnvironmentKey(_ key: String) -> Bool {
         !key.hasPrefix("CTRLX_") && key != "CLAUDE_CONFIG_DIR" && key != "PATH" && key != "HOME"
             && key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil
+    }
+
+    public static func isValidContextWindowTokens(_ tokens: Int) -> Bool {
+        (1...10_000_000).contains(tokens)
     }
 
     /// Decode from raw `settings.json` bytes, falling back to defaults when the

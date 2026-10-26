@@ -263,6 +263,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         let provider = try await providerConfiguration(providerID ?? settings.defaultProviderID)
         return LaunchCommand(
             command: settings.commandPath,
+            args: provider.arguments,
             env: provider.environment,
             unsetEnvironment: provider.unsetEnvironment
         )
@@ -287,7 +288,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         return AgentForkLaunch(
             command: LaunchCommand(
                 command: settings.commandPath,
-                args: ["--resume", sessionID, "--fork-session"],
+                args: ["--resume", sessionID, "--fork-session"] + provider.arguments,
                 env: environment
             ),
             // Setting even the default root changes where Claude stores .claude.json.
@@ -364,13 +365,14 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
 
     private func providerConfiguration(_ requestedID: String?) async throws -> ClaudeProviderLaunch {
         guard let providerID = requestedID else {
-            return ClaudeProviderLaunch(environment: [:], unsetEnvironment: [])
+            return ClaudeProviderLaunch(arguments: [], environment: [:], unsetEnvironment: [])
         }
         guard settings.providerOptions.contains(where: { $0.id == providerID }) else {
             throw AgentProviderError("The selected Claude Code Provider no longer exists in Settings → Agents → Claude Code.")
         }
         if providerID == ClaudeCodeSettings.builtInProviderID {
             return ClaudeProviderLaunch(
+                arguments: [],
                 environment: [AgentProviderEnvironment.markerKey: providerID],
                 unsetEnvironment: Self.providerEnvironmentKeys
             )
@@ -384,7 +386,8 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
             profile.environmentKey == profile.authKind.environmentKey,
             !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             let url = URL(string: profile.baseURL), url.scheme == "http" || url.scheme == "https", url.host != nil,
-            !profile.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !profile.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            profile.contextWindowTokens.map(ClaudeCodeSettings.isValidContextWindowTokens) ?? true
         else {
             throw AgentProviderError("The selected Claude Code Provider has invalid settings. Edit it in Settings → Agents → Claude Code → Providers.")
         }
@@ -398,13 +401,18 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         guard let apiKey, !apiKey.isEmpty else {
             throw AgentProviderError("Add an API key for Claude Code Provider '\(profile.name)' in Settings → Agents → Claude Code → Providers.")
         }
+        var environment = [
+            "ANTHROPIC_BASE_URL": profile.baseURL,
+            profile.environmentKey: apiKey,
+            "ANTHROPIC_MODEL": profile.model,
+            AgentProviderEnvironment.markerKey: profile.id,
+        ]
+        if let contextWindowTokens = profile.contextWindowTokens {
+            environment["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = String(contextWindowTokens)
+        }
         return ClaudeProviderLaunch(
-            environment: [
-                "ANTHROPIC_BASE_URL": profile.baseURL,
-                profile.environmentKey: apiKey,
-                "ANTHROPIC_MODEL": profile.model,
-                AgentProviderEnvironment.markerKey: profile.id,
-            ],
+            arguments: profile.reasoningEffort.map { ["--effort", $0.rawValue] } ?? [],
+            environment: environment,
             unsetEnvironment: Self.providerEnvironmentKeys
         )
     }
@@ -414,6 +422,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_MODEL",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
     ]
 
     private static func unique(_ values: [String]) -> [String] {
@@ -488,6 +497,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
 }
 
 private struct ClaudeProviderLaunch {
+    let arguments: [String]
     let environment: [String: String]
     let unsetEnvironment: [String]
 }

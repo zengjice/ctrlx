@@ -112,10 +112,41 @@ struct ClaudeCodeSettingsTests {
         #expect(invalid.resolvedDefaultProviderID == nil)
     }
 
+    @Test("Provider effort and context window decode and round-trip")
+    func providerEffortAndContextWindow() throws {
+        let json = Data("""
+        {
+          "providers": [{
+            "id": "custom",
+            "name": "Custom Anthropic",
+            "base_url": "https://api.example.com/v1",
+            "model": "claude-custom",
+            "auth_kind": "auth_token",
+            "environment_key": "ANTHROPIC_AUTH_TOKEN",
+            "reasoning_effort": "xhigh",
+            "context_window_tokens": 1000000
+          }]
+        }
+        """.utf8)
+        let settings = try JSONDecoder().decode(ClaudeCodeSettings.self, from: json)
+        #expect(settings.providers.first?.reasoningEffort == .xhigh)
+        #expect(settings.providers.first?.contextWindowTokens == 1_000_000)
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(ClaudeCodeSettings.self, from: data)
+        #expect(decoded == settings)
+    }
+
     @Test("Claude auth kinds map to their SDK environment variables")
     func providerValidation() {
         #expect(ClaudeProviderAuthKind.apiKey.environmentKey == "ANTHROPIC_API_KEY")
         #expect(ClaudeProviderAuthKind.authToken.environmentKey == "ANTHROPIC_AUTH_TOKEN")
+        #expect(ClaudeReasoningEffort.allCases.map(\.rawValue) == ["low", "medium", "high", "xhigh", "max"])
+        #expect(ClaudeCodeSettings.isValidContextWindowTokens(1))
+        #expect(ClaudeCodeSettings.isValidContextWindowTokens(1_000_000))
+        #expect(!ClaudeCodeSettings.isValidContextWindowTokens(0))
+        #expect(!ClaudeCodeSettings.isValidContextWindowTokens(-1))
+        #expect(!ClaudeCodeSettings.isValidContextWindowTokens(10_000_001))
         #expect(ClaudeCodeSettings.isValidProviderID("custom_1"))
         for id in ["", "anthropic", "-custom", "has space", "a/b", String(repeating: "a", count: 65)] {
             #expect(!ClaudeCodeSettings.isValidProviderID(id))

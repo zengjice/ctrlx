@@ -37,6 +37,9 @@
             draft.model = "test-model"
             if pluginID == "codex" {
                 draft.reasoningEffort = .xhigh
+            } else {
+                draft.claudeReasoningEffort = .high
+                draft.contextWindowTokens = 1_000_000
             }
             let providerID = draft.providerID
             let originalSettings = try settings(draft, pluginID: pluginID)
@@ -88,6 +91,9 @@
                 #expect(await core.providerOptions().contains(AgentProviderOption(id: providerID, name: edited.name)))
                 if pluginID == "codex" {
                     #expect(after.args.contains(#"model_reasoning_effort="xhigh""#))
+                } else {
+                    #expect(after.args == ["--effort", "high"])
+                    #expect(after.env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "1000000")
                 }
                 await codexCore?.shutdown()
             }

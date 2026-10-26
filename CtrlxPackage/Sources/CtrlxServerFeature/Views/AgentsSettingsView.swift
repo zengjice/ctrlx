@@ -647,7 +647,13 @@
         }
 
         private func providerSummary(_ provider: AgentProviderDraft) -> String {
-            [provider.model, provider.reasoningEffort?.displayName]
+            let effort = pluginID == ClaudeCodePluginCore.pluginID
+                ? provider.claudeReasoningEffort?.displayName
+                : provider.reasoningEffort?.displayName
+            let contextWindow = pluginID == ClaudeCodePluginCore.pluginID
+                ? provider.contextWindowTokens.map { "\($0) tokens" }
+                : nil
+            return [provider.model, effort, contextWindow]
                 .compactMap { value in
                     guard let value, !value.isEmpty else { return nil }
                     return value
@@ -927,6 +933,8 @@
         var environmentKey: String
         var authKind: ClaudeProviderAuthKind
         var reasoningEffort: CodexReasoningEffort?
+        var claudeReasoningEffort: ClaudeReasoningEffort?
+        var contextWindowTokens: Int?
 
         var id: String {
             providerID
@@ -938,6 +946,8 @@
             self.baseURL = ""
             self.model = ""
             self.reasoningEffort = nil
+            self.claudeReasoningEffort = nil
+            self.contextWindowTokens = nil
             if pluginID == CodexPluginCore.pluginID {
                 self.environmentKey = "OPENAI_API_KEY"
                 self.authKind = .apiKey
@@ -955,6 +965,8 @@
             self.environmentKey = profile.environmentKey
             self.authKind = .apiKey
             self.reasoningEffort = profile.reasoningEffort
+            self.claudeReasoningEffort = nil
+            self.contextWindowTokens = nil
         }
 
         init(profile: ClaudeProviderProfile, pluginID _: String) {
@@ -965,6 +977,8 @@
             self.environmentKey = profile.environmentKey
             self.authKind = profile.authKind
             self.reasoningEffort = nil
+            self.claudeReasoningEffort = profile.reasoningEffort
+            self.contextWindowTokens = profile.contextWindowTokens
         }
 
         func codexProfile() -> CodexProviderProfile {
@@ -985,7 +999,9 @@
                 baseURL: baseURL,
                 model: model,
                 authKind: authKind,
-                environmentKey: authKind.environmentKey
+                environmentKey: authKind.environmentKey,
+                reasoningEffort: claudeReasoningEffort,
+                contextWindowTokens: contextWindowTokens
             )
         }
     }
@@ -1022,6 +1038,7 @@
         @Dependency(SecretsService.self) private var secrets
 
         @State private var draft: AgentProviderDraft
+        @State private var contextWindowTokensText: String
         @State private var apiKey = ""
         @State private var hasStoredKey = false
         @State private var isLoadingKey = false
@@ -1031,7 +1048,9 @@
         init(presentation: AgentProviderEditorPresentation, onSave: @escaping (AgentProviderDraft) -> Void) {
             self.presentation = presentation
             self.onSave = onSave
-            _draft = State(initialValue: presentation.original ?? AgentProviderDraft(pluginID: presentation.pluginID))
+            let original = presentation.original ?? AgentProviderDraft(pluginID: presentation.pluginID)
+            _draft = State(initialValue: original)
+            _contextWindowTokensText = State(initialValue: original.contextWindowTokens.map(String.init) ?? "")
         }
 
         private var isNew: Bool {
@@ -1056,7 +1075,22 @@
                     TextField("Model", text: $draft.model)
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("agentProviderModel")
-                    if !isClaude {
+                    if isClaude {
+                        Picker("Default reasoning effort", selection: $draft.claudeReasoningEffort) {
+                            Text("Use Claude Code default").tag(ClaudeReasoningEffort?.none)
+                            ForEach(ClaudeReasoningEffort.allCases) { effort in
+                                Text(effort.displayName).tag(Optional(effort))
+                            }
+                        }
+                        .accessibilityIdentifier("agentProviderClaudeReasoningEffort")
+                        Text("Passed as --effort to new sessions and forks that target this Provider. Leave it at the Claude Code default unless the Provider supports Claude's effort levels.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        TextField("Context window (tokens)", text: $contextWindowTokensText, prompt: Text("e.g. 1000000"))
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("agentProviderContextWindowTokens")
+                        Text("Optional. Declares the model's real context window through CLAUDE_CODE_MAX_CONTEXT_TOKENS. Set this for custom models Claude Code does not recognize to remove its 200K-window warning.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
                         Picker("Reasoning effort", selection: $draft.reasoningEffort) {
                             Text("Use Codex configuration").tag(CodexReasoningEffort?.none)
                             ForEach(CodexReasoningEffort.allCases) { effort in
@@ -1138,6 +1172,20 @@
             let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
             let baseURL = draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
             let model = draft.model.trimmingCharacters(in: .whitespacesAndNewlines)
+            let contextWindowTokens: Int?
+            if isClaude {
+                let value = contextWindowTokensText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if value.isEmpty {
+                    contextWindowTokens = nil
+                } else if let tokens = Int(value), ClaudeCodeSettings.isValidContextWindowTokens(tokens) {
+                    contextWindowTokens = tokens
+                } else {
+                    errorMessage = "Enter a context window between 1 and 10,000,000 tokens, or leave it blank."
+                    return
+                }
+            } else {
+                contextWindowTokens = nil
+            }
             let environmentKey = isClaude
                 ? draft.authKind.environmentKey
                 : draft.environmentKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1187,6 +1235,7 @@
             draft.baseURL = baseURL
             draft.model = model
             draft.environmentKey = environmentKey
+            draft.contextWindowTokens = contextWindowTokens
             onSave(draft)
             dismiss()
         }

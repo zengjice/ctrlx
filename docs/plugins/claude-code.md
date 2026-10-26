@@ -27,6 +27,11 @@ Custom Providers are Anthropic-compatible endpoints with `id`, `name`,
 `base_url`, `model` and either `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` as
 the credential kind. The secret is stored in Keychain under
 `agent-provider.claude-code.<provider-id>` and is never synchronized.
+Optional `reasoning_effort` values are `low`, `medium`, `high`, `xhigh` and
+`max`; New Agent and Fork targeting that Provider pass the selected value as
+`--effort`. An optional positive `context_window_tokens` value is exported as
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS`, which lets Claude Code use the real window for
+a model it does not recognize and removes its 200K-window warning.
 
 - Settings asks only for a display name and connection details. New Providers get
   an automatic stable ID; existing IDs and Keychain accounts are preserved when
@@ -35,29 +40,32 @@ the credential kind. The secret is stored in Keychain under
   outer whitespace; unchanged legacy duplicate names remain editable.
 - `default_provider_id = null` keeps the CLI's current configuration. An
   explicit `anthropic` selection clears inherited `ANTHROPIC_BASE_URL`,
-  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_MODEL`, then runs
-  the normal official login flow.
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL` and
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, then runs the normal official login flow.
 - A custom launch sets `ANTHROPIC_BASE_URL`, the selected API-key/token variable,
-  `ANTHROPIC_MODEL` and the Provider marker for the Agent launch. The complete
-  shell script is installed through tmux's stdin into a pane-scoped user option,
-  never session environment, process arguments or command text. After login rc
-  files run, a short fixed-size shell entry removes that pane option, decodes
-  the script and runs it in a subshell. Credentials therefore cannot be
-  truncated during slow shell startup, inherited by another window, or left in
-  the persistent login shell after Ctrl-C or Agent exit. Workspace recovery uses
-  the same per-pane payload path. The other Anthropic credential variable is
-  cleared after rc so a token Provider cannot accidentally inherit a key, or the
-  reverse. Provider overrides require zsh, bash, sh, dash or ksh; other login
-  shells fail explicitly rather than launching with the wrong Provider.
+  `ANTHROPIC_MODEL`, the Provider marker, and `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
+  when configured. The complete shell script is installed through tmux's stdin
+  into a pane-scoped user option, never session environment, process arguments
+  or command text. After login rc files run, a short fixed-size shell entry
+  removes that pane option, decodes the script and runs it in a subshell.
+  Credentials therefore cannot be truncated during slow shell startup, inherited
+  by another window, or left in the persistent login shell after Ctrl-C or Agent
+  exit. Workspace recovery uses the same per-pane payload path. The other
+  Anthropic credential variable is cleared after rc so a token Provider cannot
+  accidentally inherit a key, or the reverse. Provider overrides require zsh,
+  bash, sh, dash or ksh; other login shells fail explicitly rather than launching
+  with the wrong Provider.
 - Fork/Resume preserve the source `CLAUDE_CONFIG_DIR`, including clearing it
   when the source used the default `~/.claude` location. Provider credentials
   are re-created in the new shell scope rather than inherited from the source
   process.
 - The Fork panel's **Current CLI configuration** target applies no Provider
-  override. Choose a built-in or custom entry to force that Provider.
+  override or Provider launch options. Choose a built-in or custom entry to
+  force that Provider.
 - Recovery records `CTRLX_AGENT_PROVIDER_ID`, rebuilds the environment from the
   current profile and Keychain value, and fails explicitly if that Provider was
-  removed or its credential is missing.
+  removed or its credential is missing. A recorded `--effort` argument is
+  preserved with the other verified startup options.
 - Older Hosts omit Provider choices from plugin presentations; older Viewers
   omit the optional command fields. Both retain their previous behavior.
 
