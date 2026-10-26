@@ -7,6 +7,31 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.109 — Workflow-to-terminal navigation
+
+- Make Agent nodes in workflow configuration and run pages navigate directly to
+  their bound terminal tabs. Mac restores the owning main or detached window,
+  split layout and pane; iOS restores the matching session, tab and pane.
+- Add View Workflow to Agent tab context menus, opening the instance's active run
+  or returning to the configuration or finished run previously opened from that
+  terminal. Keep workflow navigation state across page closes without requiring
+  another Host picker selection.
+- Preview content-node output formats from configuration and completed round
+  output from runs, with waiting reasons shown before execution.
+- Remember an optional default session for Agents created by a workflow. Persist
+  the discovered session and tmux server identity, require reselection when it is
+  unavailable, and never substitute a same-named session.
+- Prevent delayed workflow-start responses from changing navigation after leaving
+  the originating configuration while retaining any run confirmed by the Host.
+- Release validation: the complete serial Swift regression passed (4,063 tests;
+  `StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac), as did the focused workflow navigation and
+  configuration tests. Both boundary checks, the 14-page website build and the
+  iOS Simulator compile check passed. No new SwiftFormat violations were
+  introduced; the remaining `MainView.swift` whole-file deviations match
+  `v3.0.108`. Physical-device and real terminal click/focus acceptance remain
+  pending.
+
 ## 3.0.108 — Detached session windows and standalone previews
 
 - Detach an entire macOS session into a workspace window by dragging its sidebar
