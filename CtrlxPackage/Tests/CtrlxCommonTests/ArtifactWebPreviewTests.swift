@@ -41,6 +41,32 @@
         }
 
         @Test
+        func standalonePreviewWindowIsIndependentAndManagedByTheDesktop() throws {
+            _ = NSApplication.shared
+            let context = RepositoryFileContext(pluginID: "codex", sessionID: "preview", projectDirectory: "/tmp")
+            let preview = TerminalArtifactPreview(
+                link: .init(path: "preview.png", paneID: "%1", hostID: nil),
+                context: context,
+                source: .init(id: "local", paneID: "%1") { _ in
+                    throw FileBrowserError.message("Preview loading is not expected in this test")
+                },
+                path: "/tmp/preview.png"
+            )
+            let controller = TerminalArtifactPreviewWindowController(
+                preview: preview,
+                colorScheme: .light,
+                onOpenFiles: { _ in Issue.record("Unexpected Open in Files") }
+            )
+            let window = try #require(controller.window)
+            defer { controller.close() }
+
+            #expect(!window.isSheet)
+            #expect(window.isMovable)
+            #expect(window.styleMask.contains(.resizable))
+            #expect(window.collectionBehavior.contains(.managed))
+        }
+
+        @Test
         func previewWindowConfigurationWaitsUntilSheetAttachment() async throws {
             _ = NSApplication.shared
             let parent = NSWindow(

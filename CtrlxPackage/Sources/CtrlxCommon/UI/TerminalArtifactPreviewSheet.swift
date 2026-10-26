@@ -11,6 +11,8 @@
     public struct TerminalArtifactPreviewSheet: View {
         private let preview: TerminalArtifactPreview
         private let onOpenFiles: (TerminalFileLinkRequest) -> Void
+        private let onClose: (() -> Void)?
+        private let configuresMacSheetWindow: Bool
         private let isFullscreen: Bool
         @Environment(\.dismiss) private var dismiss
         @Environment(\.colorScheme) private var colorScheme
@@ -25,12 +27,45 @@
         @State private var linkError: String?
 
         public init(preview: TerminalArtifactPreview, onOpenFiles: @escaping (TerminalFileLinkRequest) -> Void) {
-            self.init(preview: preview, initialData: nil, isFullscreen: false, onOpenFiles: onOpenFiles)
+            self.init(
+                preview: preview,
+                initialData: nil,
+                isFullscreen: false,
+                onOpenFiles: onOpenFiles,
+                onClose: nil,
+                configuresMacSheetWindow: true
+            )
         }
 
-        private init(preview: TerminalArtifactPreview, initialData: Data?, isFullscreen: Bool, onOpenFiles: @escaping (TerminalFileLinkRequest) -> Void) {
+        #if os(macOS)
+            public init(
+                preview: TerminalArtifactPreview,
+                onOpenFiles: @escaping (TerminalFileLinkRequest) -> Void,
+                onClose: @escaping () -> Void
+            ) {
+                self.init(
+                    preview: preview,
+                    initialData: nil,
+                    isFullscreen: false,
+                    onOpenFiles: onOpenFiles,
+                    onClose: onClose,
+                    configuresMacSheetWindow: false
+                )
+            }
+        #endif
+
+        private init(
+            preview: TerminalArtifactPreview,
+            initialData: Data?,
+            isFullscreen: Bool,
+            onOpenFiles: @escaping (TerminalFileLinkRequest) -> Void,
+            onClose: (() -> Void)?,
+            configuresMacSheetWindow: Bool
+        ) {
             self.preview = preview
             self.onOpenFiles = onOpenFiles
+            self.onClose = onClose
+            self.configuresMacSheetWindow = configuresMacSheetWindow
             self.isFullscreen = isFullscreen
             _data = State(initialValue: initialData)
         }
@@ -93,7 +128,7 @@
                 #endif
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                            Button("Done") { closePreview() }.keyboardShortcut(.cancelAction)
                         }
                         ToolbarItem(placement: .primaryAction) {
                             Menu {
@@ -141,12 +176,23 @@
             }
             #if os(macOS)
             .frame(minWidth: 600, idealWidth: 1_000, maxWidth: .infinity, minHeight: 420, idealHeight: 760, maxHeight: .infinity)
-            .background(ArtifactPreviewSheetWindowConfigurator())
+            .background {
+                if configuresMacSheetWindow {
+                    ArtifactPreviewSheetWindowConfigurator()
+                }
+            }
             #else
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
             .fullScreenCover(isPresented: $showsFullscreen) {
-                TerminalArtifactPreviewSheet(preview: preview, initialData: data, isFullscreen: true, onOpenFiles: onOpenFiles)
+                TerminalArtifactPreviewSheet(
+                    preview: preview,
+                    initialData: data,
+                    isFullscreen: true,
+                    onOpenFiles: onOpenFiles,
+                    onClose: nil,
+                    configuresMacSheetWindow: false
+                )
             }
             #endif
             .task(id: colorScheme) { await load() }
@@ -159,6 +205,14 @@
                 Button("OK", role: .cancel) { linkError = nil }
             } message: { Text(linkError ?? "") }
             .onDisappear { renderer.stop() }
+        }
+
+        private func closePreview() {
+            if let onClose {
+                onClose()
+            } else {
+                dismiss()
+            }
         }
 
         private func load() async {

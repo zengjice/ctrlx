@@ -238,8 +238,7 @@ public struct MainView: View {
     @State private var localSessionRenameRequest: String?
     @State private var attachError: String?
     @State private var pendingFileLink: TerminalFileLinkRequest?
-    @State private var artifactPreview: TerminalArtifactPreview?
-    @State private var previewFilesLink: TerminalFileLinkRequest?
+    @State private var artifactPreviewWindow: TerminalArtifactPreviewWindowController?
     @State private var browserOpenTask: Task<Void, Never>?
     @State private var filesOpenTask: Task<Void, Never>?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -402,18 +401,6 @@ public struct MainView: View {
             .environment(\.terminalQuickActions, terminalQuickActions)
             .environment(\.terminalViewportInteraction, fitTerminalIfViewportChanged)
             .environment(\.openTerminalFileLink) { request in pendingFileLink = request }
-            .sheet(item: $artifactPreview, onDismiss: {
-                if let link = previewFilesLink {
-                    previewFilesLink = nil
-                    pendingFileLink = link
-                }
-            }) { preview in
-                TerminalArtifactPreviewSheet(preview: preview) { request in
-                    previewFilesLink = request
-                    artifactPreview = nil
-                }
-                .preferredColorScheme(settings.theme.workspaceColorScheme)
-            }
             .terminalFileLinkTask($pendingFileLink) { request in
                 await openTerminalFile(request)
             }
@@ -434,6 +421,10 @@ public struct MainView: View {
             .onChange(of: selectedWindow?.id) { pendingFileLink = nil }
             .onChange(of: selectedRemoteWindowId) { pendingFileLink = nil }
             .onChange(of: selectedRemoteSession) { pendingFileLink = nil }
+            .onDisappear {
+                artifactPreviewWindow?.close()
+                artifactPreviewWindow = nil
+            }
             .onChange(of: automaticTabFitInput) { fitSelectedTerminalIfReady() }
             .onChange(of: coordinator.pendingAgentCLILaunch, initial: true) { launchInstalledAgentIfNeeded() }
             .onChange(of: creatingSelection) { launchInstalledAgentIfNeeded() }
@@ -4564,7 +4555,7 @@ public struct MainView: View {
             }
             guard initialSelection == browserOpenSelection(for: target) else { return }
             if shouldPreview, let path = destination.file, let fileContext {
-                artifactPreview = .init(link: request, context: fileContext, source: source, path: path)
+                presentArtifactPreview(.init(link: request, context: fileContext, source: source, path: path))
             } else if let descriptor {
                 let tab = try presentHostFileTab(descriptor, hostID: request.hostID, windowID: windowID)
                 tab.openTerminalFile(destination, paneID: request.paneID)
@@ -4575,6 +4566,26 @@ public struct MainView: View {
                 attachError = "Cannot open Host path: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func presentArtifactPreview(_ preview: TerminalArtifactPreview) {
+        artifactPreviewWindow?.close()
+        artifactPreviewWindow = nil
+        let controller = TerminalArtifactPreviewWindowController(
+            preview: preview,
+            colorScheme: settings.theme.workspaceColorScheme,
+            onOpenFiles: { request in
+                artifactPreviewWindow?.close()
+                artifactPreviewWindow = nil
+                pendingFileLink = request
+            }
+        )
+        controller.onWindowClosed = { [weak controller] in
+            guard let controller, artifactPreviewWindow === controller else { return }
+            artifactPreviewWindow = nil
+        }
+        artifactPreviewWindow = controller
+        controller.show()
     }
 
     /// Captures a pane in the source window as the initial directory and return target.
