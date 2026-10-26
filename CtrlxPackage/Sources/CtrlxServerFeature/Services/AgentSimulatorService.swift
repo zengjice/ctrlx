@@ -84,7 +84,13 @@
 
         func register(_ workspace: SimulatorWorkspace) {
             workspaces[workspace.id] = workspace
-            for state in tabs.values where workspaces[state.workspaceID] == nil {
+            for state in tabs.values {
+                if let previous = workspaces[state.workspaceID], !previous.acceptsPane(state.sourcePane) {
+                    previous.onDetach(state)
+                    state.view.removeFromSuperview()
+                    visibility(state, visible: false)
+                    state.workspaceID = detachedWorkspaceID
+                }
                 attach(state)
             }
         }

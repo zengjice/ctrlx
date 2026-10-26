@@ -20,6 +20,7 @@ enum WorkspaceRecoveryPresentationMapper {
                 frame: windows.frame(for: workspace.id),
                 store: workspace.tabs,
                 sessions: sessions.filter { $0.name == workspace.sessionName },
+                isSessionWindow: workspace.isSessionWindow,
                 owns: { runtime in workspace.members.contains { $0.windowID == runtime } }
             )
         }
@@ -28,7 +29,7 @@ enum WorkspaceRecoveryPresentationMapper {
 
     private static func scene(
         id: UUID, main: Bool, frame: CGRect?, store: WorkbenchTabStore,
-        sessions: [WorkspaceRecoverySession], owns: (String) -> Bool
+        sessions: [WorkspaceRecoverySession], isSessionWindow: Bool = false, owns: (String) -> Bool
     ) -> WorkspaceRecoveryScene {
         let presentations = sessions.map { session in
             let tabs = store.local[session.name] ?? SessionFileTabsState()
@@ -79,7 +80,8 @@ enum WorkspaceRecoveryPresentationMapper {
             frame: frame,
             sessions: presentations,
             selectedSessionID: selected,
-            selectedHostID: selection?.hostID
+            selectedHostID: selection?.hostID,
+            isSessionWindow: isSessionWindow ? true : nil
         )
     }
 
@@ -113,6 +115,7 @@ enum WorkspaceRecoveryPresentationMapper {
             }
             let fallback = session.windows.first.flatMap { DetachedTerminalTarget(hostID: nil, windowID: $0.runtimeID) }
             if let workspace = windows.restoreWorkspace(id: saved.id, members: members, session: session.name, frame: saved.frame, fallbackAnchor: fallback) {
+                workspace.isSessionWindow = saved.isSessionWindow == true
                 for (id, member) in presentation.ownedWindowIDs.compactMap({ id -> (UUID, DetachedTerminalTarget)? in
                     guard
                         let window = session.windows.first(where: { $0.id == id }),

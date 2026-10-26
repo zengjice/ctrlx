@@ -303,6 +303,8 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
         MultiWindowTabsScenario.scenario,
         DetachedTerminalWindowScenario.scenario,
         DetachedTerminalWindowScenario.macViewer,
+        DetachedTerminalWindowScenario.session,
+        DetachedTerminalWindowScenario.sessionMacViewer,
         WorkspaceRecoveryScenario.scenario,
         WorkspaceLinkedWindowScenario.scenario,
         WorkspaceRecoveryPerformanceScenario.scenario,

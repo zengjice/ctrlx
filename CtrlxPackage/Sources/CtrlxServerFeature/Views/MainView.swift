@@ -107,8 +107,7 @@ public struct MainView: View {
             tabStore.recoveryFileTrees[name] = SavedFileTree(sidebarWidth: browser.sidebarWidth)
         }
         for (name, git) in gitWorkbenchStores {
-            tabStore.recoveryGitPaths[name] = git.path
-            tabStore.recoveryGitStates[name] = git.snapshot
+            tabStore.recordGitState(git.snapshot, for: name)
         }
     }
 
@@ -514,7 +513,7 @@ public struct MainView: View {
         .onAppear {
             tabStore.capturePresentation = { recordWorkspacePresentation() }
             if let detachedWorkspace {
-                detachedWorkspace.onClose = { [weak service = coordinator.agentBrowser, weak workspace = agentBrowserWorkspace] in
+                detachedWorkspace.onClose = { [weak service = coordinator.agentBrowser, weak workspace = agentBrowserWorkspace, weak simulator = coordinator.agentSimulator, weak simulatorWorkspace] in
                     guard let service, let workspace else { return }
                     service.unregister(workspace)
                     workspace.acceptsPane = { _ in false }
@@ -525,6 +524,10 @@ public struct MainView: View {
                     workspace.onSelect = { _ in }
                     workspace.onClose = { _ in }
                     workspace.onDetach = { _ in }
+                    if let simulator, let simulatorWorkspace {
+                        simulator.unregister(simulatorWorkspace)
+                        simulatorWorkspace.acceptsPane = { _ in false }
+                    }
                 }
                 if tabStore.restorationRevision == 0 {
                     selectDetachedWorkspace()
@@ -533,9 +536,7 @@ public struct MainView: View {
                 }
             }
             registerAgentBrowserWorkspace()
-            if detachedWorkspace == nil {
-                registerSimulatorWorkspace()
-            }
+            registerSimulatorWorkspace()
         }
         .onChange(of: detachedWorkspace?.selectionRevision) {
             recordUserTabSelection()
@@ -551,6 +552,7 @@ public struct MainView: View {
         }
         .onChange(of: coordinator.detachedWindows.presentationRevision) {
             coordinator.agentBrowser.register(agentBrowserWorkspace)
+            coordinator.agentSimulator.register(simulatorWorkspace)
             repairWorkspaceSelection()
             if
                 let remote = selectedRemoteSession,
@@ -560,13 +562,12 @@ public struct MainView: View {
         }
         .onChange(of: tmuxService.windows.map(\.id)) { _, _ in
             coordinator.agentBrowser.register(agentBrowserWorkspace)
-            if detachedWorkspace == nil {
-                coordinator.agentSimulator.register(simulatorWorkspace)
-            }
+            coordinator.agentSimulator.register(simulatorWorkspace)
         }
         .onChange(of: coordinator.detachedWindows.targets) { _, _ in
             repairWorkspaceSelection()
             coordinator.agentBrowser.register(agentBrowserWorkspace)
+            coordinator.agentSimulator.register(simulatorWorkspace)
             if
                 let remote = selectedRemoteSession,
                 let client = coordinator.viewerConnectionManager?.connection(for: remote.hostId)?.relayClient {
@@ -1097,7 +1098,8 @@ public struct MainView: View {
                 SessionReorderableRows(
                     sessions: sessions, sessionName: \.sessionName,
                     selection: { .local(sessionName: $0.sessionName) },
-                    onMove: moveLocalSession, rowBackground: localSessionBackground
+                    onMove: moveLocalSession, rowBackground: localSessionBackground,
+                    onDetach: { session, point in detachSession(hostID: nil, name: session.sessionName, position: point) }
                 ) { session in
                     sessionButton(session: session)
                 }
@@ -1220,6 +1222,7 @@ public struct MainView: View {
                         selectedWindow = nil
                         requestAutomaticTabFit()
                     },
+                    onDetachSession: { name, point in detachSession(hostID: host.id, name: name, position: point) },
                     onCreate: { request in
                         Task {
                             await createRemoteSession(on: host, request: request)
@@ -1393,6 +1396,12 @@ public struct MainView: View {
                 }
             },
             additionalMenu: {
+                Button {
+                    detachSession(hostID: nil, name: session.sessionName, position: nil)
+                } label: {
+                    Label("Open in New Window", symbol: .macwindow)
+                }
+                Divider()
                 ColorContextMenuButtons(currentColor: color) { newColor in
                     guard let identity = session.windows.first?.panes.first?.workspaceIdentity else {
                         attachError = "The terminal is still being discovered. Try again in a moment."
@@ -2422,7 +2431,7 @@ public struct MainView: View {
         guard coordinator.workspaceRecoveryReady else { return }
         // A recovered Git preview owns its saved directory. Only an explicit Git
         // selection may retarget it; a terminal's startup cwd must not erase it.
-        if gitWorkbenchStores[sessionName]?.retainsRecoveredDirectory != true {
+        if tabStore.pendingGitRecoverySessions.contains(sessionName) || gitWorkbenchStores[sessionName]?.retainsRecoveredDirectory != true {
             ensureGitStore(sessionName: sessionName, directoryPath: directoryPath)
         }
         await gitWorkbenchStores[sessionName]?.load()
@@ -3811,6 +3820,32 @@ public struct MainView: View {
         if let workspace = coordinator.detachedWindows.detach(target, position: position, session: terminalSession) {
             openWindow(id: "detached-terminal", value: workspace.id)
         }
+    }
+
+    private func detachSession(hostID: String?, name: String, position: CGPoint?) {
+        guard detachedWorkspace == nil else { return }
+        let ids: [String]
+        let selectedID: String?
+        if let hostID {
+            guard coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true else { return }
+            let windows = remoteSessionWindows(hostId: hostID, sessionName: name)
+            ids = windows.map(\.stableId)
+            selectedID = selectedRemoteSession?.hostId == hostID && selectedRemoteSession?.sessionName == name
+                ? selectedRemoteWindow?.stableId : windows.first(where: \.isWindowActive)?.stableId
+        } else {
+            let windows = tmuxService.windows.filter { $0.sessionName == name }
+            ids = windows.map(\.stableId)
+            selectedID = selectedRemoteSession == nil && selectedWindow?.sessionName == name
+                ? selectedWindow?.stableId : windows.first(where: \.isWindowActive)?.stableId
+        }
+        guard
+            let workspace = coordinator.detachedWindows.detachSession(
+                hostID: hostID, name: name, windowIDs: ids, selectedWindowID: selectedID,
+                position: position, session: terminalSession,
+            ) else { return }
+        openWindow(id: "detached-terminal", value: workspace.id)
+        coordinator.detachedWindows.focusNativeWindow(workspaceID: workspace.id)
+        coordinator.agentSimulator.register(simulatorWorkspace)
     }
 
     private func fileLinkIsCurrent(_ request: TerminalFileLinkRequest, detachedRequestID: UUID?) -> Bool {
@@ -5591,7 +5626,9 @@ public struct MainView: View {
     }
 
     private func registerSimulatorWorkspace() {
-        simulatorWorkspace.acceptsPane = { pane in tmuxService.windows.contains { $0.id == pane.windowId } }
+        simulatorWorkspace.acceptsPane = { pane in
+            tmuxService.windows.contains { $0.stableId == pane.stableWindowId && ownsTerminal(hostID: nil, windowID: $0.stableId) }
+        }
         simulatorWorkspace.onCreate = { state in
             let pane = state.sourcePane
             let tabs = sessionFileTabsStates[pane.sessionName] ?? SessionFileTabsState()
@@ -5886,7 +5923,7 @@ public struct MainView: View {
             .filter { ownsTerminal(hostID: hostId, windowID: $0.stableId) }
         let update = tabs.syncHostBrowserTabs(values, sessionWindowIDs: windows.map(\.stableId))
         let simulatorsCollapsed = tabs.syncHostSimulatorTabs(
-            client.simulatorTabs.filter { detachedWorkspace == nil && $0.sessionName == sessionName },
+            coordinator.detachedWindows.simulatorTabs(client.simulatorTabs, hostID: hostId, session: sessionName, workspaceID: detachedWorkspace?.id),
             sessionWindowIDs: windows.map(\.stableId)
         )
         if update.restoreLeftWindow || simulatorsCollapsed {

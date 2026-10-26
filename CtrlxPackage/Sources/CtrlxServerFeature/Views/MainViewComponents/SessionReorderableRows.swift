@@ -8,6 +8,7 @@ struct SessionReorderableRows<Session: Identifiable, Row: View>: View {
     let selection: (Session) -> SidebarSessionSelection
     let onMove: (String, SessionDropTarget) -> Void
     let rowBackground: (Session) -> Color?
+    var onDetach: ((Session, CGPoint?) -> Void)? = nil
     @ViewBuilder let row: (Session) -> Row
 
     @State private var rowFrames: [String: CGRect] = [:]
@@ -21,8 +22,16 @@ struct SessionReorderableRows<Session: Identifiable, Row: View>: View {
             let name = session[keyPath: sessionName]
             HStack(spacing: 4) {
                 row(session)
+                    .accessibilityIdentifier("session-row-\(name)")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(dragSource == name ? 0.6 : 1)
+                    .background {
+                        if let onDetach {
+                            WindowTabDragSource(windowID: "", label: name, sessionName: name) { point in
+                                onDetach(session, point)
+                            }
+                        }
+                    }
                 dragHandle(for: name)
             }
             .background(rowBackground(session) ?? .clear, in: .rect(cornerRadius: 5))

@@ -19,6 +19,49 @@ public enum DetachedTerminalWindowScenario {
         exercise(instance: 1)
     }
 
+    public static let session = CtrlxE2ELib.scenario(
+        "Detached Session Window", tags: ["tabs", "macos-only", "isolated-api"],
+    ) {
+        setupWindows
+        TestStep.launchMacApp()
+        Shortcut.openPanesWindow()
+        exerciseSession(instance: 0)
+    }
+
+    public static let sessionMacViewer = CtrlxE2ELib.scenario(
+        "Detached Session Window Mac Viewer", tags: ["tabs", "macos-only", "isolated-api"],
+    ) {
+        Shortcut.twoMacPairing
+        setupWindows
+        Shortcut.openPanesWindow(instance: 1)
+        exerciseSession(instance: 1)
+    }
+
+    private static func exerciseSession(instance: Int) -> TestScenario {
+        CtrlxE2ELib.scenario("Detach whole session and restore", tags: ["shortcut"]) {
+            TestStep.macMoveWindow(x: 180, y: 100, instance: instance)
+            TestStep.macWaitForElementQuery(.identifier("session-row-detached-test"), timeout: 15, instance: instance)
+            TestStep.macDragElementOutsideWindow(.identifier("session-row-detached-test"), instance: instance)
+            TestStep.macWaitForWindow(titled: "detached-test — Workspace", timeout: 10, instance: instance)
+            TestStep.macWaitForElementQuery(.labelContains("OTHER_WINDOW"), timeout: 10, instance: instance)
+            TestStep.macCGClickElement(query: .labelContains("OTHER_WINDOW"), instance: instance)
+            TestStep.macWaitForElementQuery(.identifier("terminal-%1"), timeout: 10, instance: instance)
+            TestStep.macCGClickElement(query: .identifier("terminal-%1"), instance: instance)
+            TestStep.macType(text: "echo SESSION_WINDOW_INPUT", pressReturn: true, instance: instance)
+            TestStep.tmuxWaitForPaneContent(target: "detached-test:1.0", contains: "SESSION_WINDOW_INPUT", timeout: 10)
+            TestStep.tmuxCapturePaneContent(target: "detached-test:0.0", storeAs: "otherWindow")
+            TestStep.assertStoredNotContains(key: "otherWindow", substring: "SESSION_WINDOW_INPUT")
+            TestStep.macScreenshot(label: "session-detached", compare: false, instance: instance)
+            TestStep.macCloseWindow(titled: "detached-test — Workspace", instance: instance)
+            TestStep.macContextMenuClick(elementTitle: "detached-test", menuItem: "Open in New Window", instance: instance)
+            TestStep.macWaitForWindow(titled: "detached-test — Workspace", timeout: 10, instance: instance)
+            TestStep.macWaitForElementQuery(.labelContains("OTHER_WINDOW"), timeout: 10, instance: instance)
+            TestStep.macCloseWindow(titled: "detached-test — Workspace", instance: instance)
+            TestStep.tmuxStoreDisplayMessage(target: "detached-test:0", format: "#{window_id}", storeAs: "restoredWindowID")
+            TestStep.assertStoredEqual(key: "originalWindowID", otherKey: "restoredWindowID")
+        }
+    }
+
     private static let setupWindows = CtrlxE2ELib.scenario("Detached fixtures", tags: ["shortcut"]) {
         TestStep.tmuxCreateSession(name: "detached-test", width: 120, height: 40)
         TestStep.tmuxCommand(arguments: ["rename-window", "-t", "detached-test:0", "DETACHED_SOURCE"])

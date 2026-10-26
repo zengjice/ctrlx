@@ -242,6 +242,31 @@
             }
         }
 
+        @Test
+        func simulatorFollowsItsPaneBetweenSessionWindowsWithoutRebooting() async throws {
+            let fixture = try Fixture()
+            let response = await fixture.action("open")
+            #expect(response.ok)
+            let state = try #require(fixture.created.first)
+            let detached = SimulatorWorkspace()
+            detached.acceptsPane = { _ in true }
+            var received: [UUID] = []
+            detached.onCreate = { received.append($0.id) }
+            fixture.workspace.acceptsPane = { _ in false }
+
+            fixture.service.register(detached)
+
+            #expect(state.workspaceID == detached.id)
+            #expect(received == [state.id])
+            #expect(fixture.detached == [state.id])
+            #expect(!state.isClosed && fixture.boots == 1)
+            fixture.workspace.acceptsPane = { _ in true }
+            fixture.service.unregister(detached)
+            #expect(state.workspaceID == fixture.workspace.id)
+            #expect(!state.isClosed && fixture.boots == 1)
+            await fixture.service.shutdown()
+        }
+
         func wait(_ condition: () -> Bool) async throws {
             for _ in 0..<500 {
                 if condition() {

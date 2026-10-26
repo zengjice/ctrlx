@@ -53,6 +53,13 @@ final class WorkbenchTabStore {
         return recoveryGitStates[session]
     }
 
+    func recordGitState(_ state: WorkspaceGitState, for session: String) {
+        // The scene can still hold its pre-move store until the snapshot is consumed.
+        guard !pendingGitRecoverySessions.contains(session) else { return }
+        recoveryGitPaths[session] = state.directory
+        recoveryGitStates[session] = state
+    }
+
     func existing(hostID: String?, session: String) -> SessionFileTabsState? {
         if let hostID {
             return remote[RemoteSessionTabsKey(hostId: hostID, sessionName: session)]
@@ -117,6 +124,56 @@ final class WorkbenchTabStore {
         }
     }
 
+    /// Move the live layout as a unit; merge tabs opened in the destination meanwhile.
+    func moveSession(hostID: String?, session: String, to destination: WorkbenchTabStore, selection: Selection? = nil) {
+        guard self !== destination, let source = existing(hostID: hostID, session: session) else { return }
+        if let previous = destination.existing(hostID: hostID, session: session), previous !== source {
+            let previousOrder = previous.tabOrder
+            let previousRight = previous.rightSide
+            let previousSelectedRight = previous.selectedRight
+            let owned = Set(source.tabOrder)
+            for tab in previous.openFileTabs {
+                previous.move(.file(tab.id), to: source)
+            }
+            for tab in previous.openBrowserTabs {
+                previous.move(.browser(tab.id), to: source, includingSimulators: true)
+            }
+            source.tabOrder += previousOrder.filter { !source.tabOrder.contains($0) }
+            source.rightSide.formUnion(previousRight.subtracting(owned))
+            if source.selectedRight == nil, let previousSelectedRight, source.rightSide.contains(previousSelectedRight) {
+                source.selectedRight = previousSelectedRight
+            }
+        }
+        if let hostID {
+            let key = RemoteSessionTabsKey(hostId: hostID, sessionName: session)
+            remote.removeValue(forKey: key)
+            destination.remote[key] = source
+            if let reference = remoteRecoveryReferences.removeValue(forKey: key) {
+                destination.remoteRecoveryReferences[key] = reference
+            }
+            if restoredRemoteSessions.remove(key) != nil {
+                destination.restoredRemoteSessions.insert(key)
+            }
+        } else {
+            local.removeValue(forKey: session)
+            destination.local[session] = source
+            destination.recoveryFileTrees[session] = recoveryFileTrees.removeValue(forKey: session)
+            destination.recoveryGitPaths[session] = recoveryGitPaths.removeValue(forKey: session)
+            destination.recoveryGitStates[session] = recoveryGitStates.removeValue(forKey: session)
+            pendingGitRecoverySessions.remove(session)
+            if destination.recoveryGitStates[session] != nil {
+                destination.pendingGitRecoverySessions.insert(session)
+            } else {
+                destination.pendingGitRecoverySessions.remove(session)
+            }
+        }
+        if let selection {
+            destination.recoverySelection = selection
+            destination.restoredSelection = selection
+            destination.restorationRevision += 1
+        }
+    }
+
     var isEmpty: Bool {
         (Array(local.values) + Array(remote.values)).allSatisfy { $0.openFileTabs.isEmpty && $0.openBrowserTabs.isEmpty }
     }
@@ -127,6 +184,7 @@ final class DetachedTerminalWorkspace {
     let id: UUID
     var anchor: DetachedTerminalTarget
     var sessionName: String?
+    var isSessionWindow = false
     var members: [DetachedTerminalTarget]
     var selection: TabDragPayload
     var selectionRevision = 0
@@ -248,7 +306,7 @@ extension SessionFileTabsState {
 
     /// Move live state, not a snapshot: directory selection, WebKit history and CEF identity survive.
     @discardableResult
-    func move(_ tab: TabDragPayload, to destination: SessionFileTabsState) -> Bool {
+    func move(_ tab: TabDragPayload, to destination: SessionFileTabsState, includingSimulators: Bool = false) -> Bool {
         guard self !== destination else { return true }
         switch tab {
         case .window: break
@@ -259,11 +317,13 @@ extension SessionFileTabsState {
             destination.directoryTabs[id] = directoryTabs.removeValue(forKey: id)
             destination.scrollOffsets[id] = scrollOffsets.removeValue(forKey: id)
         case let .browser(id):
-            guard let index = openBrowserTabs.firstIndex(where: { $0.id == id }), !openBrowserTabs[index].isSimulator else { return false }
+            guard let index = openBrowserTabs.firstIndex(where: { $0.id == id }), includingSimulators || !openBrowserTabs[index].isSimulator else { return false }
             destination.openBrowserTabs.append(openBrowserTabs.remove(at: index))
             destination.browserStates[id] = browserStates.removeValue(forKey: id)
             destination.agentBrowserStates[id] = agentBrowserStates.removeValue(forKey: id)
             destination.remoteBrowserTabs[id] = remoteBrowserTabs.removeValue(forKey: id)
+            destination.simulatorStates[id] = simulatorStates.removeValue(forKey: id)
+            destination.remoteSimulatorTabs[id] = remoteSimulatorTabs.removeValue(forKey: id)
         default: return false
         }
         tabOrder.removeAll { $0 == tab }

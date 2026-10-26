@@ -169,6 +169,17 @@ updates, but verify decoding, capability gating and envelope limits per change.
 
 ## Sidebar Session Ordering
 
+- On Mac Host and Viewer, dragging the session row beyond its native window
+  opens that session's main-window workbench in one independent window. The row's
+  context menu provides **Open in New Window**. Repeating the action focuses the
+  same session window; previously detached tabs stay in their own windows.
+  The live tab state moves with its ordering, selection, file offsets and split
+  layout. Closing the native window returns that state and merges tabs opened
+  in the main window meanwhile. It does not terminate tmux or restart an Agent.
+  Git selection and draft snapshots are restored once after each move and
+  protected from captures of the old scene's cache. Simulator tabs follow their
+  source terminal's current native-window owner, including later terminal moves.
+  Session-window identity is scoped by Host and retained in workspace recovery.
 - Mac session rows have an explicit drag handle, independent of the row's click,
   double-click and context menu. Local and remote sections share
   `SessionReorderableRows`; a line marks the insertion point before/after a row.

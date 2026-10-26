@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct WindowTabDragSource: NSViewRepresentable {
     let windowID: String
     let label: String
+    var sessionName: String? = nil
     let detach: (CGPoint) -> Void
     @Environment(\.workbenchTabContext) private var tabContext
 
@@ -17,6 +18,7 @@ struct WindowTabDragSource: NSViewRepresentable {
     func updateNSView(_ view: DragView, context: Context) {
         view.windowID = windowID
         view.label = label
+        view.sessionName = sessionName
         view.dragContext = tabContext
         view.detach = detach
     }
@@ -40,9 +42,12 @@ struct WindowTabDragSource: NSViewRepresentable {
         operation.isEmpty && !cancelled && mouseReleased && !tabStripFrame.insetBy(dx: -24, dy: -24).contains(point)
     }
 
-    static func tabStripFrame(tabFrame: CGRect, windowFrame: CGRect) -> CGRect {
+    static func tabStripFrame(tabFrame: CGRect, windowFrame: CGRect, isSession: Bool = false) -> CGRect {
+        if isSession {
+            return windowFrame
+        }
         // Horizontal movement within the window remains tab reordering, even over an empty slot.
-        CGRect(x: windowFrame.minX, y: tabFrame.minY, width: windowFrame.width, height: tabFrame.height)
+        return CGRect(x: windowFrame.minX, y: tabFrame.minY, width: windowFrame.width, height: tabFrame.height)
     }
 
     static func screenPoint(for event: NSEvent) -> CGPoint {
@@ -54,6 +59,7 @@ struct WindowTabDragSource: NSViewRepresentable {
     final class DragView: NSView, NSDraggingSource {
         var windowID = ""
         var label = ""
+        var sessionName: String?
         var dragContext: WorkbenchTabContext?
         var detach: ((CGPoint) -> Void)?
         private var monitor: Any?
@@ -131,10 +137,14 @@ struct WindowTabDragSource: NSViewRepresentable {
             mouseReleasePoint = nil
             let item = NSPasteboardItem()
             do {
-                let data = try JSONEncoder().encode(TabDragPayload.window(windowID))
-                item.setData(data, forType: NSPasteboard.PasteboardType(UTType.ctrlxTabDrag.identifier))
-                if let drag = dragContext?.drag(.window(windowID)) {
-                    try item.setData(JSONEncoder().encode(drag), forType: NSPasteboard.PasteboardType(UTType.ctrlxWorkbenchTab.identifier))
+                if let sessionName {
+                    item.setString(sessionName, forType: .init("com.jicezeng.ctrlx.session-window"))
+                } else {
+                    let data = try JSONEncoder().encode(TabDragPayload.window(windowID))
+                    item.setData(data, forType: NSPasteboard.PasteboardType(UTType.ctrlxTabDrag.identifier))
+                    if let drag = dragContext?.drag(.window(windowID)) {
+                        try item.setData(JSONEncoder().encode(drag), forType: NSPasteboard.PasteboardType(UTType.ctrlxWorkbenchTab.identifier))
+                    }
                 }
             } catch {
                 assertionFailure("Cannot encode a terminal tab: \(error)")
@@ -152,7 +162,7 @@ struct WindowTabDragSource: NSViewRepresentable {
             let draggingItem = NSDraggingItem(pasteboardWriter: item)
             draggingItem.setDraggingFrame(bounds, contents: preview)
             tabStripFrame = WindowTabDragSource.tabStripFrame(
-                tabFrame: window.convertToScreen(convert(bounds, to: nil)), windowFrame: window.frame,
+                tabFrame: window.convertToScreen(convert(bounds, to: nil)), windowFrame: window.frame, isSession: sessionName != nil,
             )
             dragSession = beginDraggingSession(with: [draggingItem], event: event, source: self)
             dragSession?.animatesToStartingPositionsOnCancelOrFail = false

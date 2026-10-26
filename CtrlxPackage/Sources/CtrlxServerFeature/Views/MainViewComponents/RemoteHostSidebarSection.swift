@@ -18,6 +18,7 @@ struct RemoteHostSidebarSection: View {
     let onHostDragChanged: (CGPoint) -> Void
     let onHostDragEnded: (CGPoint) -> Void
     let onSelect: (RemoteSessionSelection) -> Void
+    let onDetachSession: (String, CGPoint?) -> Void
     let onCreate: (SessionLaunchRequest) -> Void
     let onRename: (String, String) -> Void
     let onSetDescription: (String, String?) -> Void
@@ -86,7 +87,8 @@ struct RemoteHostSidebarSection: View {
                 SessionReorderableRows(
                     sessions: sortedSessions, sessionName: \.sessionName,
                     selection: { .remote(hostID: host.id, sessionName: $0.sessionName) },
-                    onMove: moveSession, rowBackground: sessionBackground
+                    onMove: moveSession, rowBackground: sessionBackground,
+                    onDetach: connection?.isHostConnected == true ? { session, point in onDetachSession(session.sessionName, point) } : nil
                 ) { session in
                     remoteSessionButton(session)
                 }
@@ -235,6 +237,13 @@ struct RemoteHostSidebarSection: View {
             onSetDescription: onSetDescription,
             onSetEmoji: onSetEmoji,
             additionalMenu: {
+                Button {
+                    onDetachSession(session.sessionName, nil)
+                } label: {
+                    Label("Open in New Window", symbol: .macwindow)
+                }
+                .disabled(connection?.isHostConnected != true)
+                Divider()
                 ColorContextMenuButtons(
                     currentColor: session.customColor,
                     isDisabled: connection?.isHostConnected != true

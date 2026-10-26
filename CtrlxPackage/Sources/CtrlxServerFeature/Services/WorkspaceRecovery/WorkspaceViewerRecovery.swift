@@ -89,6 +89,7 @@ final class WorkspaceViewerRecovery {
             var scene = scenes.first { $0.id == id } ?? .init(id: id, isMain: main, sessions: [])
             rememberSelectionRevisions(scene, store: store)
             scene.frame = frame ?? scene.frame
+            scene.isSessionWindow = windows.workspaces[id]?.isSessionWindow == true ? true : nil
             let selection = store.restoredSelection ?? store.recoverySelection
             if let selection {
                 scene.selectedHostID = selection.hostID
@@ -347,6 +348,7 @@ final class WorkspaceViewerRecovery {
                 } else {
                     let fallback = DetachedTerminalTarget(hostID: hostID, windowID: route.windowID)
                     guard let workspace = windows.restoreWorkspace(id: scene.id, members: members, session: route.sessionName, frame: scene.frame, fallbackAnchor: fallback) else { continue }
+                    workspace.isSessionWindow = scene.isSessionWindow == true
                     if !(applied[scene.id] ?? []).contains(reference) {
                         workspace.members = members
                         workspace.sessionName = route.sessionName

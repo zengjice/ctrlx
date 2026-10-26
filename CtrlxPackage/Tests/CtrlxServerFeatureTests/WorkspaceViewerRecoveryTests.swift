@@ -51,15 +51,18 @@ struct WorkspaceViewerRecoveryTests {
         )], selectedSessionID: sessionID, selectedHostID: "pair")
     }
 
-    @Test("A detached terminal selected before restart becomes selected when its identity arrives later")
-    func lateSelectedTerminal() throws {
+    @Test("A detached terminal selected before restart becomes selected when its identity arrives later", arguments: [false, true])
+    func lateSelectedTerminal(sessionWindow: Bool) throws {
         var scene = try selectionScene()
+        scene.isSessionWindow = sessionWindow ? true : nil
         scene.sessions[0].layout.rightSide = [.file(id: fileID)]
         scene.sessions[0].layout.selectedRight = .file(id: fileID)
         let recovery = WorkspaceViewerRecovery(), windows = DetachedTerminalWindows()
         recovery.restore([scene], windows: windows)
         recovery.update(state(server: "200:2", offset: 20, indices: [0]), windows: windows)
         let store = try #require(windows.workspaces[scene.id]?.tabs)
+        #expect(windows.workspaces[scene.id]?.isSessionWindow == sessionWindow)
+        #expect(recovery.capture(windows: windows).first { $0.id == scene.id }?.isSessionWindow == scene.isSessionWindow)
         let tabs = try #require(store.existing(hostID: "pair", session: "project"))
         tabs.isRightPaneFocused = true
         store.restoredSelection = nil

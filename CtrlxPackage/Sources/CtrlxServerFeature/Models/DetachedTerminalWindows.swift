@@ -103,6 +103,36 @@ final class DetachedTerminalWindows {
         return destination
     }
 
+    func detachSession(
+        hostID: String?, name: String, windowIDs: [String], selectedWindowID: String?, position: CGPoint?,
+        session: (DetachedTerminalTarget) -> String?,
+    ) -> DetachedTerminalWorkspace? {
+        let live = windowIDs.compactMap { DetachedTerminalTarget(hostID: hostID, windowID: $0) }
+        guard !live.isEmpty, live.count == windowIDs.count, live.allSatisfy({ session($0) == name }) else { return nil }
+        if let existing = workspaces.values.first(where: { $0.isSessionWindow && $0.anchor.hostID == hostID && $0.resolvedSession(using: session) == name }) {
+            return existing
+        }
+        let members = live.filter { workspace(containing: $0) == nil }
+        guard let anchor = members.first else {
+            return live.first(where: { $0.windowID == selectedWindowID }).flatMap(workspace(containing:))
+                ?? live.compactMap(workspace(containing:)).first
+        }
+        mainTabs.capturePresentation?()
+        _ = mainTabs.tabs(hostID: hostID, session: name)
+        let selection = WorkbenchTabStore.Selection(
+            hostID: hostID, sessionName: name,
+            windowID: members.first(where: { $0.windowID == selectedWindowID })?.windowID ?? anchor.windowID,
+        )
+        let destination = DetachedTerminalWorkspace(target: anchor, sessionName: name)
+        destination.isSessionWindow = true
+        destination.members = members
+        workspaces[destination.id] = destination
+        positions[destination.id] = position
+        mainTabs.moveSession(hostID: hostID, session: name, to: destination.tabs, selection: selection)
+        presentationRevision += 1
+        return destination
+    }
+
     /// Validate against live session metadata, never a drag payload's claimed session name.
     @discardableResult
     func merge(
@@ -232,6 +262,13 @@ final class DetachedTerminalWindows {
         return windowID.flatMap { owner(hostID: hostID, windowID: $0) }
     }
 
+    /// Simulator tabs follow their source terminal and cannot move independently.
+    func simulatorTabs(_ catalog: [RemoteSimulatorTab], hostID: String, session: String, workspaceID: UUID?) -> [RemoteSimulatorTab] {
+        catalog.filter {
+            $0.sessionName == session && owner(hostID: hostID, windowID: $0.windowID) == workspaceID
+        }
+    }
+
     @discardableResult
     func transfer(_ drag: WorkbenchTabDrag, to destinationID: UUID?, session: (DetachedTerminalTarget) -> String?) -> Bool {
         guard
@@ -324,12 +361,23 @@ final class DetachedTerminalWindows {
         }
         windows.removeValue(forKey: id)
         positions.removeValue(forKey: id)
+        workspaces[id]?.tabs.capturePresentation?()
         guard let workspace = workspaces.removeValue(forKey: id) else { return }
         for (session, tabs) in workspace.tabs.local {
-            returnTabs(tabs, to: mainTabs.tabs(hostID: nil, session: session))
+            if workspace.isSessionWindow {
+                let selection = mainTabs.recoverySelection.flatMap { $0.hostID == nil && $0.sessionName == session ? workspace.tabs.recoverySelection : nil }
+                workspace.tabs.moveSession(hostID: nil, session: session, to: mainTabs, selection: selection)
+            } else {
+                returnTabs(tabs, to: mainTabs.tabs(hostID: nil, session: session))
+            }
         }
         for (key, tabs) in workspace.tabs.remote {
-            returnTabs(tabs, to: mainTabs.tabs(hostID: key.hostId, session: key.sessionName))
+            if workspace.isSessionWindow {
+                let selection = mainTabs.recoverySelection.flatMap { $0.hostID == key.hostId && $0.sessionName == key.sessionName ? workspace.tabs.recoverySelection : nil }
+                workspace.tabs.moveSession(hostID: key.hostId, session: key.sessionName, to: mainTabs, selection: selection)
+            } else {
+                returnTabs(tabs, to: mainTabs.tabs(hostID: key.hostId, session: key.sessionName))
+            }
         }
         let close = workspace.onClose
         workspace.onClose = { }

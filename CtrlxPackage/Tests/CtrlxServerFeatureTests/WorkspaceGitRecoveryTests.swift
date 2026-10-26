@@ -1,3 +1,4 @@
+import AppKit
 import CtrlxCommon
 import Dependencies
 import Foundation
@@ -77,6 +78,57 @@ struct WorkspaceGitRecoveryTests {
             restored.store.setCommitMessage("new text")
             await restored.load()
             #expect(restored.snapshot.commitMessage == "new text")
+        }
+    }
+
+    @Test("Moving a session restores the live Git selection and latest draft in both directions", arguments: [false, true])
+    func sessionWindowRoundTrip(mainSelectedAnotherSession: Bool) async throws {
+        try await withRepository { repo in
+            _ = NSApplication.shared
+            try repo.write("changed\n")
+            let original = repo.entry()
+            await original.load()
+            try original.store.select(file: #require(original.store.state.repo.files.first).id)
+            original.store.setCommitMessage("main window draft")
+            let saved = original.snapshot
+            let head = try await repo.git(["rev-parse", "HEAD"])
+            let windows = DetachedTerminalWindows()
+            let tabs = windows.mainTabs.tabs(hostID: nil, session: "work")
+            tabs.tabOrder = [.window("@1"), .git]
+            tabs.isGitSelected = true
+            windows.mainTabs.capturePresentation = {
+                windows.mainTabs.recordGitState(original.snapshot, for: "work")
+            }
+            defer { windows.mainTabs.capturePresentation = nil }
+            #expect(windows.mainTabs.pendingGitRecoverySessions.isEmpty)
+
+            let group = try #require(windows.detachSession(hostID: nil, name: "work", windowIDs: ["@1"], selectedWindowID: "@1", position: nil, session: { _ in "work" }))
+            let detachedRecovery = try #require(group.tabs.takeGitRecovery(for: "work"))
+            let detached = repo.entry(detachedRecovery)
+            await detached.load()
+            #expect(detached.snapshot == saved)
+            #expect(group.tabs.takeGitRecovery(for: "work") == nil)
+            #expect(group.tabs.local["work"]?.isGitSelected == true)
+            detached.store.setCommitMessage("edited in detached window")
+            group.tabs.capturePresentation = {
+                group.tabs.recordGitState(detached.snapshot, for: "work")
+            }
+            defer { group.tabs.capturePresentation = nil }
+            windows.mainTabs.recoverySelection = .init(sessionName: mainSelectedAnotherSession ? "other" : "work", windowID: mainSelectedAnotherSession ? "@9" : "@1")
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 500, height: 400), styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            windows.attach(window, toWorkspace: group.id)
+            window.close()
+
+            windows.mainTabs.capturePresentation?()
+            let returnedRecovery = try #require(windows.mainTabs.takeGitRecovery(for: "work"))
+            let returned = repo.entry(returnedRecovery)
+            await returned.load()
+            #expect(returned.snapshot == detached.snapshot)
+            #expect(returned.store.state.commitMessage == "edited in detached window")
+            #expect(windows.mainTabs.takeGitRecovery(for: "work") == nil)
+            #expect(windows.mainTabs.local["work"]?.isGitSelected == true)
+            #expect(try await repo.git(["rev-parse", "HEAD"]) == head)
         }
     }
 

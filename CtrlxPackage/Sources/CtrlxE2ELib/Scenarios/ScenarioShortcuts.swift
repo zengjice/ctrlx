@@ -99,8 +99,8 @@ public enum Shortcut {
         TestStep.wait(seconds: 3)
 
         TestStep.macOpenSettings()
-        TestStep.macWaitForWindow(titled: "General", timeout: 5)
-        TestStep.macSelectSettingsTab("Remote Access")
+        TestStep.macWaitForElement(titled: "General", timeout: 5)
+        TestStep.macCGClickElement(query: .anyTextMatches("Remote Access"))
         TestStep.wait(seconds: 1)
         TestStep.macClickButton(titled: "Generate Pairing Code")
         TestStep.wait(seconds: 3)
@@ -113,8 +113,8 @@ public enum Shortcut {
         TestStep.wait(seconds: 3)
 
         TestStep.macOpenSettings(instance: 1)
-        TestStep.macWaitForWindow(titled: "General", timeout: 5, instance: 1)
-        TestStep.macSelectSettingsTab("Remote Hosts", instance: 1)
+        TestStep.macWaitForElement(titled: "General", timeout: 5, instance: 1)
+        TestStep.macCGClickElement(query: .anyTextMatches("Remote Hosts"), instance: 1)
         TestStep.wait(seconds: 1)
         TestStep.macClickButton(titled: "Add Host", instance: 1)
         TestStep.wait(seconds: 1)

@@ -310,6 +310,7 @@ struct WorkspaceRecoveryScene: Codable, Equatable, Sendable {
     var sessions: [WorkspaceRecoveryPresentation]
     var selectedSessionID: UUID?
     var selectedHostID: String?
+    var isSessionWindow: Bool?
 }
 
 struct WorkspaceRecoveryPresentation: Codable, Equatable, Sendable {

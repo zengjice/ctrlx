@@ -91,12 +91,14 @@ struct WorkspaceRecoveryPresentationTests {
         )
     }
 
-    @Test("Two same-directory sessions and native-window ownership remap by persistent identity")
-    func identityAndOwnership() throws {
+    @Test("Two same-directory sessions and native-window ownership remap by persistent identity", arguments: [false, true])
+    func identityAndOwnership(sessionWindow: Bool) throws {
         let old = sessions()
         let owner = DetachedTerminalWindows()
         let target = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@2"))
-        let detached = try #require(owner.detach(target, position: nil, session: { _ in "two" }))
+        let detached = try #require(sessionWindow
+            ? owner.detachSession(hostID: nil, name: "two", windowIDs: ["@2"], selectedWindowID: "@2", position: nil, session: { _ in "two" })
+            : owner.detach(target, position: nil, session: { _ in "two" }))
         owner.mainTabs.recoverySelection = .init(sessionName: "one", windowID: "@1")
         detached.tabs.recoverySelection = .init(sessionName: "two", windowID: "@2")
         let saved = WorkspaceRecoveryPresentationMapper.captureLocal(windows: owner, sessions: old, mainID: owner.mainSceneID)
@@ -110,6 +112,7 @@ struct WorkspaceRecoveryPresentationTests {
         #expect(restored.owner(hostID: nil, windowID: "@2") == nil)
         #expect(restored.mainTabs.restoredSelection?.windowID == "@2")
         #expect(restored.workspaces[detached.id]?.tabs.restoredSelection?.windowID == "@1")
+        #expect(restored.workspaces[detached.id]?.isSessionWindow == sessionWindow)
         #expect(restored.restoredWindowIDs == [detached.id])
         WorkspaceRecoveryPresentationMapper.restoreLocal(saved, live: .init(serverID: "new", sessions: live), windows: restored, files: [])
         #expect(restored.restoredWindowIDs == [detached.id])
