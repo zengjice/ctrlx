@@ -333,11 +333,17 @@ struct RemoteWindowTabBar: View {
             Button {
                 onSelectWindow(window)
             } label: {
-                TerminalWindowTabLabel(name: windowName, hasAgent: window.hasClaude)
+                TerminalWindowTabLabel(
+                    name: windowName,
+                    hasAgent: window.hasClaude,
+                    needsAttention: window.needsAttention
+                )
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(window.id) \(windowName)")
-            .accessibilityValue(isSelected ? "selected" : "")
+            .accessibilityValue(
+                windowTabAccessibilityValue(isSelected: isSelected, needsAttention: window.needsAttention)
+            )
             .background(WindowTabDragSource(windowID: window.stableId, label: windowName) { point in
                 onDetachWindow?(window, point)
             })

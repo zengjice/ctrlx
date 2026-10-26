@@ -4,6 +4,7 @@ import SwiftUI
 struct TerminalWindowTabLabel: View {
     let name: String
     let hasAgent: Bool
+    let needsAttention: Bool
 
     var body: some View {
         HStack(spacing: 4) {
@@ -15,12 +16,29 @@ struct TerminalWindowTabLabel: View {
             Text(name)
                 .font(.system(.caption, design: .monospaced))
                 .lineLimit(1)
+            if needsAttention {
+                Symbols.bellBadgeFill.image
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.leading, 12)
         .padding(.trailing, 4)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
     }
+}
+
+func windowTabAccessibilityValue(isSelected: Bool, needsAttention: Bool) -> String {
+    var values: [String] = []
+    if isSelected {
+        values.append("selected")
+    }
+    if needsAttention {
+        values.append("needs attention")
+    }
+    return values.joined(separator: ", ")
 }
 
 /// Identifies which trailing drop zone is being targeted. The single section
