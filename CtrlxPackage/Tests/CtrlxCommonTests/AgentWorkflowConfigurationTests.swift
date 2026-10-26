@@ -58,6 +58,61 @@
             }
         }
 
+        @Test(arguments: [false, true])
+        func workflowRoutesReloadAfterRecreatingThePage(running: Bool) async throws {
+            _ = NSApplication.shared
+            let hostID = UUID()
+            let instance = AgentWorkflowInstance(
+                hostID: hostID, pluginID: "codex", processID: 123, processRuntimeID: "123:start",
+                workspacePane: .init(serverID: "tmux", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
+                paneID: "%1", conversationID: "native", displayName: "work · Developer", workingDirectory: "/work",
+                capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
+            )
+            let node = AgentWorkflowNode(name: "Developer", agentInstanceID: instance.id)
+            let definition = AgentWorkflowDefinition(name: "Review", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id)
+            let run = AgentWorkflowRun(definition: definition, instances: [instance], createdAt: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
+            let navigation = AgentWorkflowNavigation()
+            let destination: AgentWorkflowNavigation.Destination = running
+                ? .run(route: "fixture", hostID: hostID, id: run.id)
+                : .configuration(route: "fixture", hostID: hostID, id: definition.id)
+            navigation.path = [.host("fixture"), destination]
+            var reads: [ManageAgentWorkflows.Operation] = []
+            let endpoint = AgentWorkflowEndpoint(id: "fixture", name: "Test Host", connected: { true }, supported: { true }) { request in
+                reads.append(request.operation)
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .definitions: response.definitions = .init(items: [.init(definition)], nextOffset: nil)
+                case .runs: response.runs = .init(items: [.init(run)], nextOffset: nil)
+                case .definition: response.definition = definition
+                case .catalog: response.instances = .init(items: [instance], nextOffset: nil)
+                case .attachments: response.attachments = []
+                case .run: response.run = .init(run, currentInstances: [instance])
+                case .invocations: response.invocations = .init(items: [], nextOffset: nil)
+                default: Issue.record("Unexpected workflow UI request")
+                }
+                return response
+            }
+            let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 700, height: 800), styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            for iteration in 0..<2 {
+                reads.removeAll()
+                let hosting = NSHostingView(rootView: AgentWorkflowsView(endpoints: { [endpoint] }, openAgent: { _, _ in }, navigation: navigation)
+                    .environment(\.scenePhase, .active))
+                window.contentView = hosting
+                window.orderBack(nil)
+                try await wait {
+                    running ? reads.contains(.run(run.id)) && reads.contains(.invocations(runID: run.id, offset: 0))
+                        : reads.contains(.definition(definition.id)) && reads.contains(.catalog(offset: 0))
+                }
+                #expect(navigation.path == [.host("fixture"), destination])
+                if iteration == 1, let directory = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_UI_EVIDENCE"] {
+                    try await capture(hosting, directory: directory, name: running ? "restored-run-navigation" : "restored-configuration-navigation")
+                }
+                window.contentView = nil
+            }
+        }
+
         private func capture(_ view: NSView, directory: String, name: String) async throws {
             view.frame = CGRect(x: 0, y: 0, width: 700, height: 1_100)
             view.layoutSubtreeIfNeeded()

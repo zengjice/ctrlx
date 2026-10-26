@@ -250,7 +250,7 @@ struct AgentWorkflowEditor: View {
         .sheet(isPresented: $showingCreation, onDismiss: { creation = nil }) {
             VStack {
                 if let creation {
-                    AgentWorkflowNewAgentView(creation: creation) { createdAgent = $0 }
+                    AgentWorkflowNewAgentView(creation: creation, preferredSession: draft.creationSession, workflowName: draft.name) { createdAgent = $0 }
                 } else if let error {
                     VStack {
                         Text(error).textSelection(.enabled)
@@ -341,6 +341,7 @@ struct AgentWorkflowEditor: View {
             try Task.checkCancellation()
             instances = values
             if let target = createdAgent, let instance = values.first(where: { target.matches($0) }) {
+                draft.creationSession = AgentWorkflowSessionReference(instance.workspacePane)
                 if !draft.nodes.contains(where: { $0.agentInstanceID == instance.id }) {
                     add(instance)
                 }

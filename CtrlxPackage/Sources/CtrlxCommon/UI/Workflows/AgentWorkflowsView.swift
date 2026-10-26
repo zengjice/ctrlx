@@ -7,31 +7,29 @@ public struct AgentWorkflowsView: View {
     private let openAgent: (String, AgentWorkflowInstance) -> Void
     private let createAgent: ((String, UUID) async throws -> AgentWorkflowAgentCreation)?
     private let close: (() -> Void)?
+    private let navigation: AgentWorkflowNavigation
 
     public init(
         endpoints: @escaping () -> [AgentWorkflowEndpoint],
         openAgent: @escaping (String, AgentWorkflowInstance) -> Void,
         createAgent: ((String, UUID) async throws -> AgentWorkflowAgentCreation)? = nil,
-        close: (() -> Void)? = nil
+        close: (() -> Void)? = nil,
+        navigation: AgentWorkflowNavigation = .init()
     ) {
         self.endpoints = endpoints
         self.openAgent = openAgent
         self.createAgent = createAgent
         self.close = close
+        self.navigation = navigation
     }
 
     public var body: some View {
-        NavigationStack {
+        @Bindable var navigation = navigation
+        NavigationStack(path: $navigation.path) {
             List {
                 Section {
                     ForEach(endpoints()) { endpoint in
-                        NavigationLink {
-                            AgentWorkflowHostView(
-                                endpoint: endpoint, openAgent: { openAgent(endpoint.id, $0) },
-                                createAgent: createAgent.map { action in { hostID in try await action(endpoint.id, hostID) } }
-                            )
-                            .id(endpoint.id)
-                        } label: {
+                        NavigationLink(value: AgentWorkflowNavigation.Destination.host(endpoint.id)) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(endpoint.name)
                                 Text(endpoint.isConnected ? (endpoint.isSupported ? "Available" : "Update Host to use workflows") : "Offline")
@@ -49,6 +47,25 @@ public struct AgentWorkflowsView: View {
                 }
             }
             .navigationTitle("Workflows")
+            .navigationDestination(for: AgentWorkflowNavigation.Destination.self) { destination in
+                if let endpoint = endpoints().first(where: { $0.id == destination.route }) {
+                    let open: (AgentWorkflowInstance) -> Void = { instance in
+                        navigation.remember(instance, route: endpoint.id)
+                        openAgent(endpoint.id, instance)
+                    }
+                    let create = createAgent.map { action in { hostID in try await action(endpoint.id, hostID) } }
+                    switch destination {
+                    case .host:
+                        AgentWorkflowHostView(endpoint: endpoint, createAgent: create)
+                    case let .configuration(_, hostID, id):
+                        AgentWorkflowConfigurationView(endpoint: endpoint, hostID: hostID, definitionID: id, openAgent: open, createAgent: create, navigation: navigation)
+                    case let .run(_, hostID, id):
+                        AgentWorkflowRunView(endpoint: endpoint, hostID: hostID, runID: id, openAgent: open)
+                    }
+                } else {
+                    ContentUnavailableView("Host unavailable", image: Symbols.exclamationmarkTriangle.rawValue)
+                }
+            }
             .toolbar {
                 if let close {
                     ToolbarItem(placement: .cancellationAction) { Button("Done", action: close) }
@@ -62,7 +79,6 @@ public struct AgentWorkflowsView: View {
 @MainActor
 private struct AgentWorkflowHostView: View {
     let endpoint: AgentWorkflowEndpoint
-    let openAgent: (AgentWorkflowInstance) -> Void
     let createAgent: ((UUID) async throws -> AgentWorkflowAgentCreation)?
     @Environment(\.scenePhase) private var scenePhase
     @State private var overview: AgentWorkflowOverview?
@@ -75,12 +91,7 @@ private struct AgentWorkflowHostView: View {
             if let overview {
                 Section("Configurations") {
                     ForEach(overview.definitions) { definition in
-                        NavigationLink {
-                            AgentWorkflowConfigurationView(
-                                endpoint: endpoint, hostID: overview.hostID, definitionID: definition.id,
-                                openAgent: openAgent, createAgent: createAgent
-                            )
-                        } label: {
+                        NavigationLink(value: AgentWorkflowNavigation.Destination.configuration(route: endpoint.id, hostID: overview.hostID, id: definition.id)) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(definition.name)
                                 Text("\(definition.nodeCount) nodes").font(.caption).foregroundStyle(.secondary)
@@ -93,9 +104,7 @@ private struct AgentWorkflowHostView: View {
                 }
                 Section("Runs") {
                     ForEach(overview.runs) { run in
-                        NavigationLink {
-                            AgentWorkflowRunView(endpoint: endpoint, hostID: overview.hostID, runID: run.id, openAgent: openAgent)
-                        } label: {
+                        NavigationLink(value: AgentWorkflowNavigation.Destination.run(route: endpoint.id, hostID: overview.hostID, id: run.id)) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(run.name)
                                 Text("\(run.status.title) · round \(run.round)").font(.caption).foregroundStyle(.secondary)
@@ -162,11 +171,12 @@ struct AgentWorkflowConfigurationView: View {
     let definitionID: UUID
     let openAgent: (AgentWorkflowInstance) -> Void
     let createAgent: ((UUID) async throws -> AgentWorkflowAgentCreation)?
+    var navigation = AgentWorkflowNavigation()
     @Environment(\.dismiss) private var dismiss
     @State private var definition: AgentWorkflowDefinition?
     @State private var attachments: [UUID: AgentWorkflowAttachment] = [:]
     @State private var editing: AgentWorkflowDefinition?
-    @State private var startedRun: UUID?
+    @State private var instances: [AgentWorkflowInstance] = []
     @State private var startRequestID = UUID()
     @State private var pendingStart: ManageAgentWorkflows.Operation?
     @State private var expiresAt = Date().addingTimeInterval(86_400)
@@ -180,21 +190,24 @@ struct AgentWorkflowConfigurationView: View {
                 Section("Initial task") { Text(verbatim: definition.initialInput.text).textSelection(.enabled) }
                 Section("Nodes") {
                     ForEach(definition.nodes) { node in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(node.name).font(.headline)
-                            if node.kind == .content {
-                                Label("Content node", symbol: .docTextFill).font(.caption).foregroundStyle(.secondary)
+                        if node.kind == .content {
+                            NavigationLink {
+                                AgentWorkflowInputPreview(definition: definition, node: node, attachments: attachments)
+                            } label: { nodeLabel(node, definition: definition) }
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                let instance = instances.first { $0.id == node.agentInstanceID }
+                                Button {
+                                    if let instance {
+                                        openAgent(instance)
+                                    }
+                                } label: { nodeLabel(node, definition: definition) }
+                                    .buttonStyle(.plain)
+                                    .disabled(!endpoint.isConnected || instance == nil || instance?.readiness == .unavailable)
+                                    .accessibilityIdentifier("workflow-open-agent-\(node.id)")
+                                NavigationLink("Preview task input") { AgentWorkflowInputPreview(definition: definition, node: node, attachments: attachments) }
                             }
-                            Text(node.id == definition.entryNodeID ? "Entry" : "Waits for: " + definition.upstream(of: node.id).map(\.name).joined(separator: ", "))
-                                .font(.caption).foregroundStyle(.secondary)
-                            if !node.input.text.isEmpty {
-                                Text(verbatim: node.input.text).textSelection(.enabled)
-                            }
-                            if node.allowsFinish {
-                                Label("Can end this workflow", symbol: .checkmarkCircle).font(.caption)
-                            }
-                            NavigationLink(node.kind == .content ? "Preview output" : "Preview task input") { AgentWorkflowInputPreview(definition: definition, node: node, attachments: attachments) }
-                        }.padding(.vertical, 4)
+                        }
                     }
                 }
                 Section {
@@ -236,9 +249,6 @@ struct AgentWorkflowConfigurationView: View {
         .sheet(item: $editing, onDismiss: { Task { await load() } }) {
             AgentWorkflowEditor(endpoint: endpoint, definition: $0, isNew: false, createAgent: createAgent)
         }
-        .navigationDestination(item: $startedRun) {
-            AgentWorkflowRunView(endpoint: endpoint, hostID: hostID, runID: $0, openAgent: openAgent)
-        }
         .confirmationDialog("Delete this configuration?", isPresented: $confirmingDelete) {
             if let definition {
                 Button("Delete configuration", role: .destructive) {
@@ -256,6 +266,30 @@ struct AgentWorkflowConfigurationView: View {
         .task { await load() }
     }
 
+    private func nodeLabel(_ node: AgentWorkflowNode, definition: AgentWorkflowDefinition) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(node.name, symbol: node.kind == .content ? .docTextFill : .terminal).font(.headline)
+            if node.kind == .content {
+                Text("Content node").font(.caption).foregroundStyle(.secondary)
+            } else if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
+                Text("\(instance.displayName) · \(instance.readiness.title)").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Agent unavailable").font(.caption).foregroundStyle(.secondary)
+            }
+            Text(node.id == definition.entryNodeID ? "Entry" : "Waits for: " + definition.upstream(of: node.id).map(\.name).joined(separator: ", "))
+                .font(.caption).foregroundStyle(.secondary)
+            if !node.input.text.isEmpty {
+                Text(verbatim: node.input.text)
+            }
+            if node.allowsFinish {
+                Label("Can end this workflow", symbol: .checkmarkCircle).font(.caption)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+
     private func load() async {
         do {
             let response = try await endpoint.request(.definition(definitionID), hostID: hostID)
@@ -264,6 +298,8 @@ struct AgentWorkflowConfigurationView: View {
             try Task.checkCancellation()
             attachments = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
             definition = value
+            instances = value.agentInstanceIDs.isEmpty ? [] : try await endpoint.instances(hostID: hostID)
+            try Task.checkCancellation()
             error = nil
         } catch {
             guard !Task.isCancelled else { return }
@@ -282,9 +318,7 @@ struct AgentWorkflowConfigurationView: View {
         Task {
             defer { busy = false }
             do {
-                let response = try await endpoint.request(attempt, hostID: hostID)
-                guard let run = response.run else { throw AgentWorkflowError("The Host did not confirm the workflow. Retry to check this request.") }
-                startedRun = run.summary.id
+                _ = try await navigation.startRun(attempt, endpoint: endpoint, hostID: hostID, configurationID: definition.id)
                 startRequestID = UUID()
                 pendingStart = nil
                 error = nil

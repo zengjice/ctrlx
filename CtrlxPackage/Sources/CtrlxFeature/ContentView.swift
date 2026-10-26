@@ -430,7 +430,7 @@
         @State private var showingSettings = false
         @State private var showingDashboard = false
         @State private var dashboardDestination: SessionNavigation?
-        @State private var showingWorkflows = false
+        @State private var workflowNavigation = AgentWorkflowNavigation()
         @State private var workflowDestination: SessionNavigation?
 
         @State private var pushService = PushNotificationService.shared
@@ -449,7 +449,7 @@
                     navigationPath: $sessionsNavigationPath,
                     onOpenSettings: { showingSettings = true },
                     onOpenDashboard: { showingDashboard = true },
-                    onOpenWorkflows: { showingWorkflows = true }
+                    onOpenWorkflows: { workflowNavigation.isPresented = true }
                 )
             }
             .sheet(isPresented: $showingSettings, onDismiss: {
@@ -480,7 +480,7 @@
                 }
                 .presentationDetents([.large])
             }
-            .sheet(isPresented: $showingWorkflows, onDismiss: {
+            .sheet(isPresented: $workflowNavigation.isPresented, onDismiss: {
                 if let destination = workflowDestination {
                     workflowDestination = nil
                     currentlyDisplayedPaneId = nil
@@ -491,7 +491,7 @@
                     openDashboardNotification()
                 }
             }) {
-                IOSWorkflowsView { workflowDestination = $0 }
+                IOSWorkflowsView(openSession: { workflowDestination = $0 }, navigation: workflowNavigation)
                     .presentationDetents([.large])
             }
             .onChange(of: pushService.pendingDashboard) { _, pending in
@@ -513,6 +513,7 @@
                     handleDeepLink(deepLink)
                 }
             }
+            .environment(\.agentWorkflowNavigation, workflowNavigation)
             .onChange(of: sessionsNavigationPath.count) { _, count in
                 // Clear the currently displayed pane ID when user pops back to session list
                 if count == 0 {
@@ -528,8 +529,8 @@
         }
 
         private func openDashboardNotification() {
-            if showingWorkflows {
-                showingWorkflows = false
+            if workflowNavigation.isPresented {
+                workflowNavigation.isPresented = false
                 return
             }
             if showingSettings {
@@ -549,7 +550,7 @@
 
             // Dismiss Settings sheet if open so the deep link target is visible
             showingSettings = false
-            showingWorkflows = false
+            workflowNavigation.isPresented = false
 
             // If we're already displaying this session, don't navigate again.
             // This prevents redundant navigation when receiving multiple push

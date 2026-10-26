@@ -424,13 +424,7 @@ public struct MainView: View {
                     coordinator.detachedWindows.mainRequest = nil
                 }
             }
-            .onChange(of: coordinator.detachedWindows.sourcePaneRequest?.id) {
-                guard
-                    let request = coordinator.detachedWindows.sourcePaneRequest,
-                    ownsTerminal(hostID: request.hostID, windowID: request.pane.stableWindowId) else { return }
-                coordinator.detachedWindows.sourcePaneRequest = nil
-                showSourcePane(request.pane, hostID: request.hostID)
-            }
+            .onChange(of: coordinator.detachedWindows.sourcePaneRequest?.id) { consumeSourcePaneRequest() }
             .onChange(of: selectedWindow?.id) { pendingFileLink = nil }
             .onChange(of: selectedRemoteWindowId) { pendingFileLink = nil }
             .onChange(of: selectedRemoteSession) { pendingFileLink = nil }
@@ -541,6 +535,9 @@ public struct MainView: View {
                     applyRecoveredWorkspacePresentation()
                 }
             }
+            if detachedWorkspace != nil {
+                consumeSourcePaneRequest()
+            }
             registerAgentBrowserWorkspace()
             if detachedWorkspace == nil {
                 registerSimulatorWorkspace()
@@ -611,6 +608,7 @@ public struct MainView: View {
             windowManager.initializeSharedTerminalLayoutsIfNeeded()
             seedLayoutIfNeeded()
             seedRemoteLayoutIfNeeded()
+            consumeSourcePaneRequest()
         }
         .task {
             // Silently rescan every 60s so new projects appear without restarting.
@@ -1651,6 +1649,7 @@ public struct MainView: View {
                         )
                     },
                     linkedTabActions: linkedTabActions(hostID: remote.hostId, sessionName: remote.sessionName),
+                    onViewWorkflow: { pane in openWorkflow(for: pane, hostID: remote.hostId) },
                     onDetachWindow: { sourceWindow, point in
                         detachTerminal(hostID: remote.hostId, windowID: sourceWindow.stableId, position: point)
                     }
@@ -1867,6 +1866,7 @@ public struct MainView: View {
                             )
                         },
                         linkedTabActions: linkedTabActions(hostID: nil, sessionName: session.sessionName),
+                        onViewWorkflow: { pane in openWorkflow(for: pane, hostID: nil) },
                         onDetachWindow: { sourceWindow, point in
                             detachTerminal(hostID: nil, windowID: sourceWindow.stableId, position: point)
                         }
@@ -3519,6 +3519,33 @@ public struct MainView: View {
             showSourcePane(pane, hostID: selectedRemoteSession?.hostId)
             return nil
         case nil: return nil
+        }
+    }
+
+    private func consumeSourcePaneRequest() {
+        guard
+            detachedWorkspace != nil || isLayoutStoreReady,
+            let request = coordinator.detachedWindows.sourcePaneRequest,
+            ownsTerminal(hostID: request.hostID, windowID: request.pane.stableWindowId) else { return }
+        coordinator.detachedWindows.sourcePaneRequest = nil
+        showSourcePane(request.pane, hostID: request.hostID)
+    }
+
+    private func openWorkflow(for pane: PaneState, hostID: String?) {
+        let endpoint: AgentWorkflowEndpoint
+        if let hostID {
+            guard let host = settings.pairedHosts.first(where: { $0.id == hostID }) else { return }
+            endpoint = .remote(host, manager: coordinator.viewerConnectionManager)
+        } else {
+            endpoint = coordinator.localWorkflowEndpoint()
+        }
+        Task {
+            do {
+                try await coordinator.workflowNavigation.open(for: pane, endpoint: endpoint)
+                openWindow(id: "workflows")
+            } catch is CancellationError {
+                // A newer navigation replaced this request.
+            } catch { attachError = error.localizedDescription }
         }
     }
 
