@@ -61,6 +61,7 @@ struct WindowTabBar: View {
     let onReorderBrowserTabs: ([UUID]) -> Void
     let onOpenFiles: (LocalTmuxWindow, Bool) -> Void
     let linkedTabActions: LinkedTabSourceActions
+    var onViewWorkflow: ((PaneState) -> Void)?
     var onDetachWindow: ((LocalTmuxWindow, CGPoint?) -> Void)?
 
     @Environment(MirrorWindowManager.self) private var windowManager
@@ -561,7 +562,7 @@ struct WindowTabBar: View {
                 allowsOtherDirectory: true,
                 choose: { onForkWindow(window, $0) }
             ).contextMenuItem,
-        ]
+        ] + AgentWorkflowMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, open: onViewWorkflow)
     }
 
     @ViewBuilder

@@ -6,6 +6,7 @@
     @MainActor
     struct IOSWorkflowsView: View {
         let openSession: (SessionNavigation) -> Void
+        let navigation: AgentWorkflowNavigation
         @Environment(SessionStore.self) private var sessionStore
         @Environment(ViewerConnectionManager.self) private var connections
         @Environment(IOSFileBrowserWorkspaceStore.self) private var workspaces
@@ -15,7 +16,7 @@
         @State private var opening = false
 
         var body: some View {
-            AgentWorkflowsView(endpoints: endpoints, openAgent: openAgent, createAgent: createAgent, close: { dismiss() })
+            AgentWorkflowsView(endpoints: endpoints, openAgent: openAgent, createAgent: createAgent, close: { dismiss() }, navigation: navigation)
                 .preferredColorScheme(settings.appearanceMode.colorScheme)
                 .alert("Could not open Agent", isPresented: Binding(get: { error != nil }, set: {
                     if !$0 {

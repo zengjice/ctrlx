@@ -36,31 +36,18 @@ struct AgentWorkflowRunView: View {
                 }
                 Section("Nodes · current round") {
                     ForEach(state.nodes) { node in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(node.name).font(.headline)
-                                Spacer()
-                                Text(node.invocation?.status.title ?? (state.summary.status.isTerminal ? "Not run" : "Waiting"))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            if node.kind == .content {
-                                Label("Content node", symbol: .docTextFill).font(.caption).foregroundStyle(.secondary)
-                            }
-                            if node.invocation == nil, !state.summary.status.isTerminal, !node.upstreamIDs.isEmpty {
-                                let names = state.nodes.filter { node.upstreamIDs.contains($0.id) }.map(\.name)
-                                Text("Waiting for: \(names.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
-                            }
-                            if let issue = node.invocation?.issue {
-                                Text(issue).foregroundStyle(.orange)
-                            }
-                            if let instance = node.instance {
-                                Button { openAgent(instance) } label: {
-                                    Label("Open \(instance.displayName)", symbol: .terminal)
-                                }
+                        if let instance = node.instance {
+                            Button { openAgent(instance) } label: { nodeLabel(node, state: state) }
+                                .buttonStyle(.plain)
                                 .disabled(!endpoint.isConnected || instance.readiness == .unavailable)
-                            }
+                                .accessibilityIdentifier("workflow-open-agent-\(node.id)")
+                        } else if let invocation = node.invocation, invocation.status == .succeeded {
+                            NavigationLink {
+                                AgentWorkflowInvocationView(endpoint: endpoint, hostID: hostID, runID: runID, invocation: invocation, initialPart: .result)
+                            } label: { nodeLabel(node, state: state) }
+                        } else {
+                            nodeLabel(node, state: state)
                         }
-                        .padding(.vertical, 4)
                     }
                 }
                 if !state.summary.status.isTerminal {
@@ -138,6 +125,32 @@ struct AgentWorkflowRunView: View {
         .accessibilityIdentifier("workflow-run")
     }
 
+    private func nodeLabel(_ node: AgentWorkflowRunState.Node, state: AgentWorkflowRunState) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(node.name, symbol: node.kind == .content ? .docTextFill : .terminal).font(.headline)
+                Spacer()
+                Text(node.invocation?.status.title ?? (state.summary.status.isTerminal ? "Not run" : "Waiting"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let instance = node.instance {
+                Text(instance.displayName).font(.caption).foregroundStyle(.secondary)
+            } else if node.kind == .content {
+                Text("Content node").font(.caption).foregroundStyle(.secondary)
+            }
+            if node.invocation == nil, !state.summary.status.isTerminal, !node.upstreamIDs.isEmpty {
+                let names = state.nodes.filter { node.upstreamIDs.contains($0.id) }.map(\.name)
+                Text("Waiting for: \(names.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
+            }
+            if let issue = node.invocation?.issue {
+                Text(issue).foregroundStyle(.orange)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+
     private func refresh() async {
         guard !changing else { return }
         do {
@@ -192,6 +205,14 @@ private struct AgentWorkflowInvocationView: View {
     @State private var text: String?
     @State private var attachments: [AgentWorkflowAttachment] = []
     @State private var error: String?
+
+    init(endpoint: AgentWorkflowEndpoint, hostID: UUID, runID: UUID, invocation: AgentWorkflowInvocationSummary, initialPart: ManageAgentWorkflows.TextPart = .input) {
+        self.endpoint = endpoint
+        self.hostID = hostID
+        self.runID = runID
+        self.invocation = invocation
+        self._part = State(initialValue: initialPart)
+    }
 
     var body: some View {
         ScrollView {

@@ -77,6 +77,17 @@ public struct AgentWorkflowLoop: Codable, Equatable, Sendable {
     }
 }
 
+/// A remembered creation destination; it is not an Agent binding.
+public struct AgentWorkflowSessionReference: Codable, Equatable, Hashable, Sendable {
+    public let serverID: String
+    public let sessionID: UUID
+
+    public init(_ identity: WorkspacePaneIdentity) {
+        self.serverID = identity.serverID
+        self.sessionID = identity.sessionID
+    }
+}
+
 /// A run keeps a value copy; later template edits never change an in-flight task.
 public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
@@ -88,6 +99,8 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
     public var entryNodeID: UUID
     public var initialInput: AgentWorkflowInput
     public var loop: AgentWorkflowLoop?
+    /// Launch preference only; it grants no execution or terminal access.
+    public var creationSession: AgentWorkflowSessionReference?
 
     public init(
         id: UUID = UUID(),
@@ -98,7 +111,8 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         edges: [AgentWorkflowEdge],
         entryNodeID: UUID,
         initialInput: AgentWorkflowInput = .init(),
-        loop: AgentWorkflowLoop? = nil
+        loop: AgentWorkflowLoop? = nil,
+        creationSession: AgentWorkflowSessionReference? = nil
     ) {
         self.id = id
         self.revision = revision
@@ -109,6 +123,7 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         self.entryNodeID = entryNodeID
         self.initialInput = initialInput
         self.loop = loop
+        self.creationSession = creationSession
     }
 
     /// Node order, rather than arrival order, determines a join's prompt order.

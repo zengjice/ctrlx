@@ -13,7 +13,7 @@
         public init() { }
 
         public var body: some View {
-            AgentWorkflowsView(endpoints: endpoints, openAgent: openAgent, createAgent: createAgent)
+            AgentWorkflowsView(endpoints: endpoints, openAgent: openAgent, createAgent: createAgent, navigation: coordinator.workflowNavigation)
                 .frame(minWidth: 560, minHeight: 480)
                 .alert("Could not open Agent", isPresented: Binding(get: { error != nil }, set: {
                     if !$0 {
@@ -48,23 +48,26 @@
                 defer { opening = false }
                 do {
                     let current = try await endpoint.currentInstance(instance)
+                    let pane: PaneState?
                     if host == "local" {
-                        guard
-                            coordinator.tmuxService.panes.contains(where: {
-                                $0.paneId == current.paneID && current.workspacePane.isSamePane(as: $0.workspaceIdentity)
-                            }) else { throw AgentWorkflowError("The Agent’s terminal is no longer available.") }
-                        coordinator.pendingMenuBarSelection = .local(paneId: current.paneID)
+                        pane = coordinator.windowManager.paneStates[current.paneID]
                     } else {
-                        guard
-                            let catalog = coordinator.remoteSessionStore?.workspaceCatalogsByHost[host],
-                            catalog.scope.hostID == current.hostID,
-                            let route = catalog.routes[current.workspacePane.paneID],
-                            route.identity.isSamePane(as: current.workspacePane) else {
-                            throw AgentWorkflowError("Waiting for the Host’s current terminal layout. Try again.")
-                        }
-                        coordinator.pendingMenuBarSelection = .remote(hostId: host, hostName: endpoint.name, paneId: route.paneID)
+                        pane = coordinator.remoteSessionStore?.paneState(for: current.paneID, hostId: host)
                     }
-                    openWindow(id: "panes")
+                    guard
+                        let pane, current.workspacePane.isSamePane(as: pane.workspaceIdentity),
+                        host == "local" || coordinator.remoteSessionStore?.workspaceCatalogsByHost[host]?.scope.hostID == current.hostID else {
+                        throw AgentWorkflowError("Waiting for the Host’s current terminal layout. Try again.")
+                    }
+                    coordinator.detachedWindows.sourcePaneRequest = .init(hostID: host == "local" ? nil : host, pane: pane)
+                    let owner = coordinator.detachedWindows.owner(hostID: host == "local" ? nil : host, windowID: pane.stableWindowId)
+                    if !coordinator.detachedWindows.focusNativeWindow(workspaceID: owner) {
+                        if let owner {
+                            openWindow(id: "detached-terminal", value: owner)
+                        } else {
+                            openWindow(id: "panes")
+                        }
+                    }
                 } catch { self.error = error.localizedDescription }
             }
         }

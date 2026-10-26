@@ -23,6 +23,7 @@
         @Environment(ViewerConnectionManager.self) private var connectionManager
         @Environment(AgentBackgroundMonitoringService.self) private var backgroundMonitoring
         @Environment(\.dismiss) private var dismiss
+        @Environment(\.agentWorkflowNavigation) private var workflowNavigation
 
         /// The currently selected window within the session
         @State private var selectedWindowId: String?
@@ -980,6 +981,15 @@
             } else if terminalIsVisible, let window {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        if
+                            workflowNavigation != nil, relayClient.hostAgentWorkflowVersion == AgentWorkflowWire.version,
+                            let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane,
+                            pane.agentSession != nil {
+                            Button { openWorkflow(for: pane) } label: {
+                                Label("View Workflow", symbol: .arrowTriangleBranch)
+                            }.disabled(!relayClient.isHostConnected)
+                            Divider()
+                        }
                         Button {
                             activeCopyAction?()
                         } label: {
@@ -1152,6 +1162,19 @@
                     performWindowTabAction(action, preferredPaneID: scope.sourcePaneID)
                 }
             )
+        }
+
+        private func openWorkflow(for pane: PaneState) {
+            guard let workflowNavigation, let host = settings.pairedHosts.first(where: { $0.id == hostId }) else { return }
+            let endpoint = AgentWorkflowEndpoint.remote(host, manager: connectionManager)
+            Task {
+                do {
+                    try await workflowNavigation.open(for: pane, endpoint: endpoint)
+                    isKeyboardActive = false
+                } catch is CancellationError {
+                    // A newer navigation replaced this request.
+                } catch { commandError = error.localizedDescription }
+            }
         }
 
         private func openWindowTabs() {

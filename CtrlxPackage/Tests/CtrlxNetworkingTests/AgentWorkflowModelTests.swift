@@ -74,6 +74,22 @@ struct AgentWorkflowModelTests {
     }
 
     @Test
+    func creationDestinationIsOptionalAndUsesStableSessionIdentity() throws {
+        var definition = graph()
+        let oldData = try JSONEncoder().encode(definition)
+        #expect(try JSONDecoder().decode(AgentWorkflowDefinition.self, from: oldData).creationSession == nil)
+        let identity = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        definition.creationSession = .init(identity)
+        #expect(try JSONDecoder().decode(AgentWorkflowDefinition.self, from: JSONEncoder().encode(definition)) == definition)
+        var moved = identity
+        moved.windowID = UUID()
+        moved.paneID = UUID()
+        #expect(AgentWorkflowSessionReference(moved) == definition.creationSession)
+        moved.serverID = "replacement-server"
+        #expect(AgentWorkflowSessionReference(moved) != definition.creationSession)
+    }
+
+    @Test
     func legacyAgentNodesAndContentNodesRoundTrip() throws {
         let node = AgentWorkflowNode(name: "Developer", agentInstanceID: UUID())
         var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(node)) as? [String: Any])

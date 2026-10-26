@@ -56,6 +56,7 @@ struct RemoteWindowTabBar: View {
     var onCloseFileTab: ((UUID) -> Void)?
     let onOpenFiles: (TmuxWindow, Bool) -> Void
     let linkedTabActions: LinkedTabSourceActions
+    var onViewWorkflow: ((PaneState) -> Void)?
     var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
 
     /// Cached width of the split-mode tab strip. Measured via the background
@@ -420,7 +421,7 @@ struct RemoteWindowTabBar: View {
                 allowsOtherDirectory: supportsOtherDirectoryFork,
                 choose: { onForkWindow(window, $0) }
             ).contextMenuItem,
-        ]
+        ] + AgentWorkflowMenu.items(panes: window.panes, isEnabled: isHostConnected && hasCurrentHostState, open: onViewWorkflow)
     }
 
     private func openBrowserTabView(_ tab: BrowserTab) -> some View {

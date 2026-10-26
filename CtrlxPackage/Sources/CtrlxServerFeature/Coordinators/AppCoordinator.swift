@@ -36,6 +36,7 @@
         let ctrlXAppUpdateService = CtrlXAppUpdateService()
 
         let detachedWindows = DetachedTerminalWindows()
+        let workflowNavigation = AgentWorkflowNavigation()
 
         /// Owns the hosted-relay license status and trial-expiry alerting
         /// (Task 14).
