@@ -41,6 +41,49 @@
         }
 
         @Test
+        func previewWindowConfigurationWaitsUntilSheetAttachment() async throws {
+            _ = NSApplication.shared
+            let parent = NSWindow(
+                contentRect: CGRect(x: -10_000, y: -10_000, width: 1_200, height: 900),
+                styleMask: [.titled, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            parent.isReleasedWhenClosed = false
+            parent.orderBack(nil)
+
+            let sheet = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 480, height: 360),
+                styleMask: [.titled, .closable],
+                backing: .buffered,
+                defer: false
+            )
+            sheet.isReleasedWhenClosed = false
+            sheet.contentView = ArtifactPreviewSheetWindowConfigurator.SheetWindowView()
+            defer {
+                if parent.attachedSheet === sheet {
+                    parent.endSheet(sheet)
+                }
+                sheet.close()
+                parent.close()
+            }
+
+            #expect(!sheet.styleMask.contains(.resizable))
+            parent.beginSheet(sheet, completionHandler: nil)
+
+            let deadline = ContinuousClock.now + .seconds(2)
+            while !sheet.styleMask.contains(.resizable), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(25))
+            }
+
+            #expect(sheet.styleMask.contains(.resizable))
+            #expect(sheet.contentMinSize == ArtifactPreviewWindowSizing.minimumContentSize)
+            #expect(sheet.contentLayoutRect.size == ArtifactPreviewWindowSizing.initialContentSize(
+                availableSize: parent.contentLayoutRect.size
+            ))
+        }
+
+        @Test
         func rendersBundledDiagramsAndExportsPNGInBothThemes() async throws {
             let renderer = ArtifactWebRenderer()
             let window = mount(renderer)

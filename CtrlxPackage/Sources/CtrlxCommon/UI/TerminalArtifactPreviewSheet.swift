@@ -257,7 +257,7 @@
         /// SwiftUI sizes a macOS sheet from its minimum frame and does not make
         /// the sheet window resizable. Configure the AppKit window after it is
         /// attached so the preview opens at a useful size and can be resized.
-        private struct ArtifactPreviewSheetWindowConfigurator: NSViewRepresentable {
+        struct ArtifactPreviewSheetWindowConfigurator: NSViewRepresentable {
             func makeNSView(context: Context) -> SheetWindowView {
                 SheetWindowView()
             }
@@ -268,6 +268,7 @@
 
             final class SheetWindowView: NSView {
                 private weak var configuredWindow: NSWindow?
+                private var configurationTask: Task<Void, Never>?
 
                 override func viewDidMoveToWindow() {
                     super.viewDidMoveToWindow()
@@ -275,12 +276,30 @@
                 }
 
                 func configureIfNeeded() {
-                    guard let window, window.isSheet, window !== configuredWindow else { return }
+                    guard configurationTask == nil, window !== configuredWindow else { return }
+                    configurationTask = Task { @MainActor [weak self] in
+                        for attempt in 0..<40 {
+                            guard !Task.isCancelled, let self else { return }
+                            if self.configureWindowIfReady() {
+                                self.configurationTask = nil
+                                return
+                            }
+                            if attempt < 39 {
+                                try? await Task.sleep(for: .milliseconds(25))
+                            }
+                        }
+                        self?.configurationTask = nil
+                    }
+                }
+
+                private func configureWindowIfReady() -> Bool {
+                    guard let window, window.isSheet, window !== configuredWindow else { return false }
                     configuredWindow = window
                     let availableSize = window.sheetParent?.contentLayoutRect.size
                         ?? window.screen?.visibleFrame.size
                         ?? ArtifactPreviewWindowSizing.preferredContentSize
                     ArtifactPreviewWindowSizing.configure(window, availableSize: availableSize)
+                    return true
                 }
             }
         }
