@@ -32,7 +32,7 @@ struct AgentWorkflowNewAgentView: View {
             }
             NewAgentTabPanel(
                 configuration: configuration,
-                destinationDescription: selectedSession == nil ? "Create a session for this Agent" : nil,
+                destinationDescription: selectedSession == nil ? "Create a session for this Agent" : nil
             ).id(selectedSession)
         }
         .interactiveDismissDisabled(launching)

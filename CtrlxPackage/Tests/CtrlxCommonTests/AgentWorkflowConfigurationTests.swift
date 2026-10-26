@@ -66,7 +66,7 @@
                 hostID: hostID, pluginID: "codex", processID: 123, processRuntimeID: "123:start",
                 workspacePane: .init(serverID: "tmux", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
                 paneID: "%1", conversationID: "native", displayName: "work · Developer", workingDirectory: "/work",
-                capabilities: .init(maximumInputBytes: 100_000), readiness: .ready,
+                capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
             )
             let node = AgentWorkflowNode(name: "Developer", agentInstanceID: instance.id)
             let definition = AgentWorkflowDefinition(name: "Review", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id)

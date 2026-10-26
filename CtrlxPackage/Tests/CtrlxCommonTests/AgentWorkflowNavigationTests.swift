@@ -19,7 +19,7 @@ struct AgentWorkflowNavigationTests {
                 hostID: hostID, pluginID: "codex", processID: 123, processRuntimeID: "123:start",
                 workspacePane: .init(serverID: "tmux", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
                 paneID: "%1", conversationID: "native", displayName: "work · Developer", workingDirectory: "/work",
-                capabilities: .init(maximumInputBytes: 100_000), readiness: .ready,
+                capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
             )
         }
 
@@ -69,7 +69,7 @@ struct AgentWorkflowNavigationTests {
         navigation.path = scenario == "already-away" ? [.host("another-pair")] : originalPath
         let attempt = ManageAgentWorkflows.Operation.start(
             definitionID: run.definition.id, expectedRevision: run.definition.revision,
-            requestID: run.id, authorizationExpiresAt: run.authorizationExpiresAt,
+            requestID: run.id, authorizationExpiresAt: run.authorizationExpiresAt
         )
         let task = Task {
             try await navigation.startRun(attempt, endpoint: fixture.endpoint, hostID: fixture.hostID, configurationID: run.definition.id)
@@ -159,7 +159,7 @@ struct AgentWorkflowNavigationTests {
         fixture.instance = .init(
             hostID: fixture.hostID, pluginID: old.pluginID, processID: old.processID, processRuntimeID: "replacement",
             workspacePane: old.workspacePane, paneID: old.paneID, conversationID: old.conversationID,
-            displayName: old.displayName, workingDirectory: old.workingDirectory, capabilities: old.capabilities, readiness: .ready,
+            displayName: old.displayName, workingDirectory: old.workingDirectory, capabilities: old.capabilities, readiness: .ready
         )
         await #expect(throws: AgentWorkflowError.self) { try await navigation.open(for: fixture.pane, endpoint: fixture.endpoint) }
         #expect(!navigation.isPresented)

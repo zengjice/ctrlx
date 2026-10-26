@@ -34,7 +34,7 @@ final public class AgentWorkflowNavigation {
 
     func startRun(
         _ attempt: ManageAgentWorkflows.Operation, endpoint: AgentWorkflowEndpoint,
-        hostID: UUID, configurationID: UUID,
+        hostID: UUID, configurationID: UUID
     ) async throws -> AgentWorkflowRunState {
         let originalPath = path
         let configuration = Destination.configuration(route: endpoint.id, hostID: hostID, id: configurationID)
