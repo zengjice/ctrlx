@@ -7,6 +7,20 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.104 — Claude Provider effort and context window
+
+- Add optional reasoning-effort selection to Claude Code custom Providers and
+  pass the selected value to New Agent, Fork and recovery launches.
+- Add an optional context-window setting that exports
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for custom models and clears it when the
+  official Claude Provider is selected.
+- Persist both settings with the existing Provider configuration while keeping
+  older Hosts and Viewers compatible with their default behavior.
+- Release validation: the complete serial Swift regression passed
+  (`StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac), as did both boundary checks, SwiftFormat and the
+  14-page website build.
+
 ## 3.0.103 — Codex Provider models and stable Fork menus
 
 - Add optional reasoning-effort selection to custom Codex Providers and apply it
