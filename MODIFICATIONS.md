@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.106 — Browser audio and attention badges
+
+- Stream embedded browser page audio to paired Mac and iOS Viewers over the
+  existing E2EE connection. Audio is capability-gated, scoped to the active
+  page/control lease, encoded as 48 kHz stereo AAC, and bounded end to end so old
+  samples are dropped instead of accumulating playback delay.
+- Preserve Host page playback before and after remote audio control, including
+  takeover while a page is already playing; mute, release, tab changes and lease
+  loss stop or restore the correct sink without leaking audio to sibling pages.
+- Show attention badges directly on both local and remote Mac window tabs.
+- Share one terminal/pane metadata model between iOS Live Terminal and quick
+  actions so voice input receives the same session, window, command and path
+  context regardless of entry point.
+- Open macOS artifact preview sheets larger and make them user-resizable, with
+  minimum and preferred sizes that adapt to the available screen area.
+- Release validation: the complete serial Swift regression passed (4,036 tests)
+  (`StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac), as did the native Agent Browser runtime build, the
+  browser audio buffer test, both boundary checks, the 14-page website build and
+  the iOS Simulator compile check. SwiftFormat passed for the other 28 changed
+  Swift files; the pre-existing whole-file `#if` indentation deviation in
+  `RemoteBrowserView.swift` was not introduced by this release.
+
 ## 3.0.105 — Foreground update progress
 
 - Show update checking, preparation, installer launch and failure states in a
