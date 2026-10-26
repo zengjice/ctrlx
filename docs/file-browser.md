@@ -330,6 +330,8 @@ Prior read/write/existence evidence can be reused rather than rechecking each li
 
 Current bundle versions are recorded in `plugin/codex/ctrlx/.codex-plugin/plugin.json`
 and `plugin/ctrlx/.claude-plugin/plugin.json`.
+Changes to bundled skills or hook-delivered guidance must bump both plugin versions
+so cached installations become eligible for an update.
 Update the Host and each Mac/iOS Viewer, update the installed agent plugin,
 then start a new agent session with plugin hooks enabled/trusted. Updating only
 the App does not refresh a cached agent plugin. Both TUIs should receive an
