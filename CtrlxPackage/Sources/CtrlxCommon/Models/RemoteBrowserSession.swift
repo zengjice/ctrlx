@@ -14,6 +14,17 @@ final public class RemoteBrowserSession {
     public private(set) var isTakingControl = false
     public var supportsClipboard = true
     public private(set) var clipboardMessage: String?
+    public private(set) var audioEnabled = true
+    public private(set) var isAudioActive = false
+    public private(set) var supportsAudio = false
+    public private(set) var audioError: String?
+    @ObservationIgnored @Dependency(BrowserAudioOutputClient.self) private var audioOutput
+    @ObservationIgnored private var audioStreamID: UUID?
+    @ObservationIgnored private var audioRevision: UInt64 = 0
+    @ObservationIgnored private var audioSequence: UInt64 = 0
+    @ObservationIgnored private var audioTask: Task<Void, Never>?
+    @ObservationIgnored private var registerAudio: @MainActor (UUID, @escaping @MainActor @Sendable (RemoteBrowserAudio) -> Void) -> Void = { _, _ in }
+    @ObservationIgnored private var unregisterAudio: @MainActor (UUID) -> Void = { _ in }
     @ObservationIgnored @Dependency(ClipboardClient.self) private var clipboard
     public let managesExtensions: Bool
     public private(set) var openedStoreTab: RemoteBrowserTab?
@@ -66,6 +77,9 @@ final public class RemoteBrowserSession {
             return response
         }
         self.supportsClipboard = client.hostSupportsWorkspaceClipboard && !managesExtensions
+        self.supportsAudio = client.hostSupportsBrowserAudio && !managesExtensions
+        self.registerAudio = { [weak client] id, handler in client?.registerBrowserAudio(id, handler: handler) }
+        self.unregisterAudio = { [weak client] id in client?.unregisterBrowserAudio(id) }
     }
 
     private func request(_ operation: RemoteBrowserOperation, generation: UInt64? = nil) -> BrowseBrowser {
@@ -177,6 +191,7 @@ final public class RemoteBrowserSession {
                 }
                 if controlID == sent.controlID, controlID != response.controlID {
                     invalidateInput()
+                    stopAudio()
                     controlID = response.controlID
                 }
                 if first, !managesExtensions, !tab.isAgentOwned, !tab.isControlled, tab.isExtensionWindow != true {
@@ -259,6 +274,7 @@ final public class RemoteBrowserSession {
                 self.tab = tab
             }
             error = nil
+            configureAudio()
             if managesExtensions, controlID != nil {
                 _ = try await performExtension(
                     tab.isExtensionWindow == true || opensExtensionWindow ? .openWindow : .showSurface(.manager)
@@ -275,6 +291,7 @@ final public class RemoteBrowserSession {
     }
 
     public func releaseControl() {
+        stopAudio()
         invalidateInput()
         if let id = controlID {
             release(id)
@@ -282,6 +299,92 @@ final public class RemoteBrowserSession {
         controlID = nil
         if managesExtensions {
             frame = nil
+        }
+    }
+
+    public func setAudioEnabled(_ enabled: Bool) {
+        guard audioEnabled != enabled else { return }
+        audioEnabled = enabled
+        configureAudio()
+    }
+
+    public func setAudioSupport(_ supported: Bool) {
+        let supported = supported && !managesExtensions
+        guard supportsAudio != supported else { return }
+        supportsAudio = supported
+        configureAudio()
+    }
+
+    private func stopAudio() {
+        audioTask?.cancel()
+        audioTask = nil
+        if let id = audioStreamID {
+            unregisterAudio(id)
+            audioOutput.stop(id)
+        }
+        audioStreamID = nil
+        audioSequence = 0
+        isAudioActive = false
+    }
+
+    private func configureAudio(active: Bool = true) {
+        stopAudio()
+        guard watching, supportsAudio, let grant = controlID, !managesExtensions else { return }
+        audioError = nil
+        let id = UUID()
+        audioStreamID = id
+        audioRevision += 1
+        let enabled = audioEnabled && active
+        let message = request(.audio(streamID: id, revision: audioRevision, enabled: enabled))
+        registerAudio(id) { [weak self] packet in self?.receiveAudio(packet) }
+        if active {
+            do {
+                try audioOutput.start(id) { [weak self] error in
+                    guard let self, self.audioStreamID == id else { return }
+                    if error == nil {
+                        self.configureAudio(active: false)
+                    } else {
+                        self.setAudioEnabled(false)
+                    }
+                    self.audioError = error
+                }
+                isAudioActive = true
+            } catch {
+                audioError = error.localizedDescription
+                audioEnabled = false
+                configureAudio()
+                audioError = error.localizedDescription
+                return
+            }
+        }
+        audioTask = Task { [weak self, send] in
+            do {
+                let response = try await send(message)
+                guard let self, self.audioStreamID == id, self.controlID == grant, !Task.isCancelled else { return }
+                guard response.controlID == grant else {
+                    self.releaseControl()
+                    return
+                }
+            } catch {
+                guard !Task.isCancelled, let self, self.audioStreamID == id else { return }
+                self.stopAudio()
+                self.audioEnabled = false
+                self.audioError = error.localizedDescription
+            }
+        }
+    }
+
+    func receiveAudio(_ packet: RemoteBrowserAudio) {
+        guard
+            watching, audioEnabled, packet.isValid, packet.tabID == anchorTabID,
+            packet.surfaceID == surfaceID, packet.controlID == controlID, packet.streamID == audioStreamID,
+            packet.sequence > audioSequence else { return }
+        audioSequence = packet.sequence
+        if let error = packet.error {
+            setAudioEnabled(false)
+            audioError = error
+        } else {
+            audioOutput.receive(packet.streamID, packet)
         }
     }
 
@@ -308,6 +411,7 @@ final public class RemoteBrowserSession {
     public func dismissError() {
         error = nil
         frameError = nil
+        audioError = nil
     }
 
     public func respondToNetworkPermission(_ id: UUID, allow: Bool) async throws {
@@ -350,6 +454,13 @@ final public class RemoteBrowserSession {
 
     public func submit(_ operation: RemoteBrowserOperation, generation: UInt64) {
         guard watching, let controlID else { return }
+        let activatesAudio = switch operation {
+        case let .pointer(pointer): pointer.kind == .down || pointer.kind == .scroll
+        default: true
+        }
+        if activatesAudio, supportsAudio, !isAudioActive {
+            configureAudio()
+        }
         if
             case let .pointer(new) = operation, new.kind == .move,
             let last = inputs.last, last.1 == generation, case let .pointer(old) = last.0, old.kind == .move {

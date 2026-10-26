@@ -54,6 +54,8 @@ extension AgentBrowserService {
     }
 
     func releaseBrowserControl(_ tabID: UUID) {
+        stopBrowserAudio(tabID)
+        browserAudioRevisions[tabID] = nil
         if extensionControl?.anchorID == tabID || extensionControl?.pageID == tabID {
             releaseExtensionControl()
         }
@@ -123,6 +125,12 @@ extension AgentBrowserService {
             throw RemoteBrowserError.message("This Host browser tab is no longer available in the session.")
         }
         switch request.operation {
+        case let .audio(streamID, revision, enabled):
+            guard !tab.isExtensionWindow, let lease = renewBrowserControl(request, viewerID: viewerID) else {
+                throw RemoteBrowserError.message("Take Control of the page before receiving sound.")
+            }
+            try configureBrowserAudio(tabID: tabID, lease: lease, streamID: streamID, revision: revision, enabled: enabled)
+            return RemoteBrowserResponse(tab: descriptor(tab), controlID: lease.id)
         case let .networkPermission(id, allow):
             guard let lease = renewBrowserControl(request, viewerID: viewerID) else {
                 throw RemoteBrowserError.message("Control expired. Take Control again.")

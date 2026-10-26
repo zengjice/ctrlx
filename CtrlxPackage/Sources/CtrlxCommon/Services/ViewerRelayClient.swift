@@ -113,6 +113,7 @@ final public class ViewerRelayClient {
     public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
     public private(set) var hostSupportsWorkspaceClipboard = false
+    public private(set) var hostSupportsBrowserAudio = false
     public private(set) var hostSupportsBrowserSharing = false
     public private(set) var hostSupportsBrowserExtensions = false
     public private(set) var hostSupportsPaneBrowser = false
@@ -276,6 +277,16 @@ final public class ViewerRelayClient {
 
     /// Per-pane terminal stream handlers, keyed by pane ID.
     /// Multiple panes can receive stream data concurrently.
+    private var browserAudioHandlers: [UUID: @MainActor @Sendable (RemoteBrowserAudio) -> Void] = [:]
+
+    func registerBrowserAudio(_ streamID: UUID, handler: @escaping @MainActor @Sendable (RemoteBrowserAudio) -> Void) {
+        browserAudioHandlers[streamID] = handler
+    }
+
+    func unregisterBrowserAudio(_ streamID: UUID) {
+        browserAudioHandlers[streamID] = nil
+    }
+
     private var terminalStreamHandlers = TerminalStreamHandlerRegistry()
     private var legacyTerminalHandlerRegistrationIds: [String: UUID] = [:]
 
@@ -581,6 +592,9 @@ final public class ViewerRelayClient {
         case .browseBrowser where !hostSupportsBrowserSharing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
         case let .browseBrowser(spec):
+            if case .audio = spec.operation, !hostSupportsBrowserAudio {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to receive page sound"))
+            }
             if spec.operation == .copy || spec.operation.isClipboardPaste, !hostSupportsWorkspaceClipboard {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to copy and paste in workspace tabs"))
             }
@@ -1216,6 +1230,7 @@ final public class ViewerRelayClient {
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
             hostSupportsWorkspaceClipboard = sessionState.supportsWorkspaceClipboard == true
+            hostSupportsBrowserAudio = sessionState.supportsBrowserAudio == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
             hostSupportsBrowserExtensions = sessionState.supportsBrowserExtensions == true
             hostSupportsPaneBrowser = sessionState.supportsPaneBrowser == true
@@ -1248,6 +1263,12 @@ final public class ViewerRelayClient {
                 } else {
                     handler(.failure(ViewerRelayClientError.commandFailed(response.error ?? "Unknown error")))
                 }
+            }
+
+        case let .browserAudio(audio):
+            guard case .encrypted = message else { return }
+            if audio.isValid {
+                browserAudioHandlers[audio.streamID]?(audio)
             }
 
         case let .terminalStream(streamMessage):
@@ -1722,6 +1743,8 @@ final public class ViewerRelayClient {
     }
 
     private func resetBrowserState() {
+        hostSupportsBrowserAudio = false
+        browserAudioHandlers.removeAll()
         hostSupportsWorkspaceClipboard = false
         hostSupportsBrowserSharing = false
         hostSupportsBrowserExtensions = false

@@ -41,5 +41,6 @@ void AgentBrowserDialogReset(CefRefPtr<CefBrowser>);
 // Isolated acceptance only. Never exported by a production runtime.
 NSDictionary *ProbeAgentBrowserDevTools(CefRefPtr<CefBrowser> source, NSString *action);
 NSDictionary *ProbeExternalApplication(CefRefPtr<CefBrowser> source, NSDictionary *request);
+void ProbeBrowserAudio(CefRefPtr<CefBrowser> source, NSDictionary *request, void (^reply)(NSDictionary *, NSString *));
 void ProbeNetworkPermission(CefRefPtr<CefBrowser> source, NSDictionary *request, void (^reply)(NSDictionary *, NSString *));
 #endif

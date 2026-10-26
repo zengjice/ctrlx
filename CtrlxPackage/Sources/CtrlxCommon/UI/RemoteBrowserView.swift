@@ -15,6 +15,7 @@ public struct RemoteBrowserView: View {
     @State private var inputFocusRequest: UUID?
     @State private var isAnnotating = false
     @State private var captureRequest: UUID?
+    @AppStorage("browserAudioEnabled") private var audioEnabled = true
     private struct ExtensionRequest: Identifiable {
         let id = UUID()
         let storeID: String?
@@ -62,6 +63,20 @@ public struct RemoteBrowserView: View {
             HStack {
                 Label("Host · Chromium", symbol: .globe).font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                if client.hostSupportsBrowserAudio, session.tab.isExtensionWindow != true {
+                    Button {
+                        audioEnabled = !session.audioEnabled
+                        session.setAudioEnabled(audioEnabled)
+                    } label: {
+                        Label(
+                            session.audioEnabled ? "Mute Page Sound" : "Enable Page Sound",
+                            symbol: session.audioEnabled ? .speakerWave2Fill : .speakerSlashFill
+                        ).labelStyle(.iconOnly)
+                    }
+                    .disabled(session.controlID == nil)
+                    .help(session.controlID == nil ? "Take Control to receive page sound" : "Play this page's sound on this device")
+                    .accessibilityIdentifier("remote-browser-audio")
+                }
                 if client.hostSupportsBrowserExtensions {
                     if session.tab.isExtensionWindow != true {
                         #if os(macOS)
@@ -174,7 +189,7 @@ public struct RemoteBrowserView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .modifier(WorkspaceClipboardFeedback(message: session.clipboardMessage))
             }
-            if let error = session.error ?? session.frameError {
+            if let error = session.error ?? session.frameError ?? session.audioError {
                 HStack {
                     Text(error).font(.caption)
                     Spacer()
@@ -187,6 +202,7 @@ public struct RemoteBrowserView: View {
             guard extensionRequest == nil, scenePhase == .active, client.isHostConnected, client.hostSupportsBrowserSharing else {
                 session.stop(); image = nil; displayedFrame = nil; return
             }
+            session.setAudioEnabled(audioEnabled)
             await session.watch()
         }
         .modifier(RemoteBrowserFrameDecoding(frame: session.frame, isAnnotating: isAnnotating,
@@ -197,6 +213,7 @@ public struct RemoteBrowserView: View {
         .onChange(of: session.frame.map { CGSize(width: $0.width, height: $0.height) }) { _, _ in updateFrameResolution() }
         .onChange(of: displayScale) { _, _ in updateFrameResolution() }
         .onChange(of: client.hostSupportsWorkspaceClipboard, initial: true) { _, supported in session.supportsClipboard = supported }
+        .onChange(of: client.hostSupportsBrowserAudio, initial: true) { _, supported in session.setAudioSupport(supported) }
         .onDisappear { session.stop() }
         .accessibilityIdentifier("remote-browser-page")
         .sheet(item: $extensionRequest) { request in

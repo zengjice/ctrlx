@@ -51,6 +51,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)beginShutdown;
 - (BOOL)finishShutdown;
 @optional
+- (BOOL)setBrowserAudioForTab:(NSString *)identifier controlToken:(NSString *)token enabled:(BOOL)enabled;
+- (void)readBrowserAudioForTab:(NSString *)identifier controlToken:(NSString *)token completion:(void (^)(NSData * _Nullable pcm, NSString * _Nullable error))completion;
 - (void)respondToNetworkPermission:(NSString *)permissionID forTab:(NSString *)identifier allow:(BOOL)allow controlToken:(nullable NSString *)controlToken completion:(void (^)(NSString * _Nullable error))completion;
 // Human-only Chrome-style windows share this Host's profile. Older native
 // bundles omit these selectors; callers must report unavailable capability.

@@ -507,8 +507,52 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   sending text, with explicit Keyboard and Paste buttons. One finger scrolls;
   two fingers drag; long press holds a pointer for selection. Copy/Paste transfer
   bounded text/images with the current page lease (see Viewer clipboard above).
-  System/CEF popup UI and file chooser,
-  remote audio/video streaming and remote DevTools are not included.
+  System/CEF popup UI and file chooser, video streaming and remote DevTools are
+  not included. Page audio has its own bounded stream below.
+
+### Viewer page sound
+
+Mac and iOS Viewers automatically receive sound when controlling a regular
+embedded Chromium tab. The speaker button remembers this device's sound
+preference (on by default); volume uses the system controls. Read-only pages
+and Chrome-style extension windows do not subscribe. Switching tabs, releasing
+control, backgrounding, disconnecting or losing the lease clears pending sound.
+Only the most recently operated browser surface plays on a Viewer; returning
+input to another controlled surface activates its audio again. Pointer hover
+alone does not switch audio.
+
+The Host captures the page's CEF audio mix, never system-wide audio. CEF loopback
+suppresses the page's native output, so a bounded local PCM sink preserves Host
+playback before and after remote control, including takeover midway through a
+playing source. While Viewer audio owns the output, the Host sink is silent;
+Viewer mute discards samples without suddenly playing them on the Host. Other
+pages keep their own output. Audio-device changes restart the Host sink; Viewer
+output changes or interruptions mute the stream with an inline resume message.
+
+`supportsBrowserAudio` gates the new command and encrypted push message. Only
+an exact page/Viewer/surface/control grant can configure a stream. A monotonic
+configuration revision rejects delayed enable requests after a newer mute;
+packets carry their stream UUID and sequence so retired or duplicate data cannot
+play in a replacement surface. Old peers retain their existing behavior. Both
+Host and Viewer need the new capability; the Relay forwards existing ciphertext.
+
+Audio uses system AAC-LC encoding at 48 kHz stereo and 96 kbit/s. The Host polls
+its private native PCM ring independently of screenshots and pushes small audio
+batches on the existing E2EE connection. The native ring holds at most 8192
+frames (171 ms); each wire batch holds up to 8 packets/16 KiB. Audio is skipped
+while the send queue is congested; Viewer decode and playback buffers are bounded
+and replace old samples rather than accumulating a delayed playback history.
+Screenshots still use the existing polling path: this adds page sound, not a
+synchronized high-frame-rate video transport or audio tracks to recordings.
+
+`tests/browser_audio.py` exercises capture, playback takeover, mute, release,
+bounded buffering, page isolation and closing a playing page in the signed
+isolated probe App. Swift `BrowserAudio` tests cover AAC, wire/control identity
+and playback lifecycle. On a Mac with a working audio output device, set
+`CTRLX_BROWSER_AUDIO_PLAYBACK_TEST=1` to include the native output test; it
+decodes and schedules encoded silence. The default suite keeps this device
+check disabled. These checks do not establish physical-iPhone listening or
+video/audio synchronization acceptance.
 
 Validation scope and outstanding physical-device acceptance are tracked in
 [`v3.0.52/STAGE1_TODO.md`](v3.0.52/STAGE1_TODO.md). Native acceptance:

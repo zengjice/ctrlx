@@ -4,6 +4,7 @@
 #include "AgentBrowser.h"
 #include "Ownership.h"
 #include "ExternalApplication.h"
+#include "BrowserAudio.h"
 #include <atomic>
 #include <map>
 #include <set>
@@ -230,6 +231,8 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
   CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
   CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
+  CefRefPtr<CefAudioHandler> GetAudioHandler() override { return extensionWindow_ ? nullptr : audio_; }
+  CefRefPtr<BrowserAudio> Audio() { return audio_; }
   bool OnJSDialog(CefRefPtr<CefBrowser> browser, const CefString&, JSDialogType type,
       const CefString& message, const CefString& defaultText, CefRefPtr<CefJSDialogCallback> callback, bool&) override {
     return AgentBrowserDialog(browser, type, message, defaultText, callback);
@@ -269,6 +272,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   }
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
+    audio_->Close();
     FinishNetworkPermission(CEF_PERMISSION_RESULT_IGNORE);
     AgentBrowserCancelHumanInput(browser);
     ReleaseExtensionControlFor(identifier_);
@@ -393,11 +397,26 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   NSString *identifier_;
   NSString *title_;
   bool extensionWindow_;
+  CefRefPtr<BrowserAudio> audio_ = new BrowserAudio();
   std::shared_ptr<ExternalApplicationActivation> popupActivation_;
   IMPLEMENT_REFCOUNTING(EmbeddedClient);
 };
 
 #ifdef CTRLX_UPSTREAM_BROWSER_PROBE
+void ProbeBrowserAudio(CefRefPtr<CefBrowser> source, NSDictionary *request, void (^reply)(NSDictionary *, NSString *)) {
+  auto audio = static_cast<EmbeddedClient*>(source->GetHost()->GetClient().get())->Audio();
+  NSString *identifier = identifiers.at(source->GetIdentifier());
+  if ([request[@"action"] isEqual:@"route"]) {
+    BOOL accepted = [runtime setBrowserAudioForTab:identifier controlToken:request[@"lease"] enabled:[request[@"enabled"] boolValue]];
+    reply(@{@"accepted": @(accepted)}, nil);
+  } else if ([request[@"action"] isEqual:@"read"]) {
+    [runtime readBrowserAudioForTab:identifier controlToken:request[@"lease"] completion:^(NSData *pcm, NSString *error) {
+      reply(pcm ? @{@"pcm": [pcm base64EncodedStringWithOptions:0]} : nil, error);
+    }];
+  } else if ([request[@"action"] isEqual:@"release"]) {
+    reply(@{@"accepted": @([runtime setHumanControl:nil forTab:identifier])}, nil);
+  } else reply(audio->Status(), nil);
+}
 void ProbeNetworkPermission(CefRefPtr<CefBrowser> source, NSDictionary *request, void (^reply)(NSDictionary *, NSString *)) {
   auto client = static_cast<EmbeddedClient *>(source->GetHost()->GetClient().get());
   if ([request[@"action"] isEqual:@"respond"]) {
@@ -880,7 +899,33 @@ void RecordBrowserDiagnostic(NSDictionary* event) {
     if (token.length) return NO;
     extensionSurface->Revoke();
   }
-  return self.started && !self.closing && SetAgentBrowserHumanControl(identifier, token);
+  if (!self.started || self.closing || !SetAgentBrowserHumanControl(identifier, token)) return NO;
+  auto browser = AgentBrowserTarget(identifier);
+  if (browser && browsers.contains(browser->GetIdentifier())) {
+    auto client = static_cast<EmbeddedClient*>(browser->GetHost()->GetClient().get());
+    client->Audio()->Route(false, false);
+  }
+  return YES;
+}
+- (BOOL)setBrowserAudioForTab:(NSString *)identifier controlToken:(NSString *)token enabled:(BOOL)enabled {
+  auto browser = AgentBrowserTarget(identifier);
+  if (!self.isReady || !browser || !browsers.contains(browser->GetIdentifier()) || !token.length ||
+      AgentBrowserHumanControlToken(browser) != std::string(token.UTF8String)) return NO;
+  auto client = static_cast<EmbeddedClient*>(browser->GetHost()->GetClient().get());
+  if (client->IsExtensionWindow()) return NO;
+  client->Audio()->Route(true, enabled);
+  return YES;
+}
+- (void)readBrowserAudioForTab:(NSString *)identifier controlToken:(NSString *)token completion:(void (^)(NSData *, NSString *))completion {
+  auto browser = AgentBrowserTarget(identifier);
+  if (!self.isReady || !browser || !browsers.contains(browser->GetIdentifier()) || !token.length ||
+      AgentBrowserHumanControlToken(browser) != std::string(token.UTF8String)) {
+    completion(nil, @"Browser audio control expired."); return;
+  }
+  auto client = static_cast<EmbeddedClient*>(browser->GetHost()->GetClient().get());
+  NSString *error = nil;
+  NSData *data = client->Audio()->Read(&error);
+  completion(data, error);
 }
 - (void)requestBrowserTab:(NSString *)identifier request:(NSData *)request completion:(void (^)(NSData *, NSString *))completion {
   if (!self.started || self.closing) { completion(nil, @"Chromium is not ready."); return; }

@@ -168,6 +168,7 @@ struct FileBrowserConnectionTests {
             ), e2eeService: viewerEncryption)
             let viewer = connection.relayClient
             let enabled = LockIsolated(false)
+            let browserAudioEnabled = LockIsolated(false)
             let paneBrowserEnabled = LockIsolated(false)
             let paneFilesEnabled = LockIsolated(false)
             let filesClosed = LockIsolated(false)
@@ -184,6 +185,7 @@ struct FileBrowserConnectionTests {
                     pairId: "",
                     paneStates: [:],
                     supportsFileBrowsing: true,
+                    supportsBrowserAudio: browserAudioEnabled.value ? true : nil,
                     supportsBrowserSharing: enabled.value ? true : nil,
                     supportsPaneBrowser: paneBrowserEnabled.value ? true : nil,
                     supportsPaneFiles: paneFilesEnabled.value ? true : nil,
@@ -228,9 +230,45 @@ struct FileBrowserConnectionTests {
                     Issue.record("Legacy Host accepted browser input")
                 }
                 #expect(await relay.encryptedFrames == frames)
+                let legacyAudio = await viewer.sendCommand(BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .audio(streamID: UUID(), revision: 1, enabled: true)), paneId: "")
+                if case .success = legacyAudio {
+                    Issue.record("Legacy Host accepted audio")
+                }
+                #expect(await relay.encryptedFrames == frames)
                 enabled.setValue(true)
                 await host.pushSessionState()
                 try await waitUntil { viewer.hostSupportsBrowserSharing }
+                let beforeAudio = await relay.encryptedFrames
+                let unsupportedAudio = await viewer.sendCommand(BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .audio(streamID: UUID(), revision: 1, enabled: true)), paneId: "")
+                if case .success = unsupportedAudio {
+                    Issue.record("Browser-sharing-only Host accepted audio")
+                }
+                #expect(await relay.encryptedFrames == beforeAudio)
+                browserAudioEnabled.setValue(true)
+                await host.pushSessionState()
+                try await waitUntil { viewer.hostSupportsBrowserAudio }
+                let streamID = UUID()
+                var receivedAudio: [RemoteBrowserAudio] = []
+                viewer.registerBrowserAudio(streamID) { receivedAudio.append($0) }
+                let audio = RemoteBrowserAudio(
+                    tabID: UUID(),
+                    surfaceID: UUID(),
+                    controlID: UUID(),
+                    streamID: streamID,
+                    sequence: 1,
+                    packets: [Data(repeating: 255, count: 4_096)]
+                )
+                let relayViewer = try #require(await relay.viewer)
+                try await relayViewer.send(raw: JSONEncoder().encode(WebSocketMessage.browserAudio(audio)), opcode: .binary)
+                try await Task.sleep(for: .milliseconds(20))
+                #expect(receivedAudio.isEmpty)
+                await host.sendBrowserAudio(audio)
+                try await waitUntil { receivedAudio.count == 1 }
+                #expect(receivedAudio == [audio])
+                viewer.unregisterBrowserAudio(streamID)
+                await host.sendBrowserAudio(audio)
+                try await Task.sleep(for: .milliseconds(20))
+                #expect(receivedAudio.count == 1)
                 let open = BrowseBrowser(sessionName: "test", surfaceID: UUID(), operation: .openPane(url: nil), sourcePaneID: "%7")
                 let legacyOpen = await viewer.sendCommand(open, paneId: "")
                 if case .success = legacyOpen {

@@ -77,6 +77,9 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }
 
     var remoteControls: [UUID: BrowserControlLease] = [:]
+    var browserAudioStreams: [UUID: BrowserAudioStream] = [:]
+    var browserAudioRevisions: [UUID: UInt64] = [:]
+    var sendBrowserAudio: (@MainActor (String, RemoteBrowserAudio) async -> Void)?
     var remoteCaptures: Set<UUID> = []
     var controlExpiryTask: Task<Void, Never>?
     // Stable display-route identity survives session renames and is not an
@@ -703,6 +706,10 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         publishTask = nil
         controlExpiryTask?.cancel()
         controlExpiryTask = nil
+        for id in browserAudioStreams.keys {
+            stopBrowserAudio(id)
+        }
+        browserAudioRevisions.removeAll()
         remoteControls.removeAll()
         guard let runtime else { return }
         runtime.beginShutdown()

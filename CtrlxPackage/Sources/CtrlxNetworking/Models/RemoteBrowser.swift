@@ -125,6 +125,7 @@ public enum RemoteBrowserOperation: Codable, Sendable, Equatable {
     case frame
     case takeControl
     case releaseControl
+    case audio(streamID: UUID, revision: UInt64, enabled: Bool)
     case navigate(String)
     case back
     case forward

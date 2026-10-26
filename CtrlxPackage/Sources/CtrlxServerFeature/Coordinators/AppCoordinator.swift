@@ -3331,6 +3331,9 @@
             agentBrowser.onTabsChanged = { [weak connectionManager] in
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
+            agentBrowser.sendBrowserAudio = { [weak connectionManager] viewerID, message in
+                await connectionManager?.connection(for: viewerID)?.sendBrowserAudio(message)
+            }
             hostFileTabs.onChange = { [weak connectionManager] in
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
@@ -3916,6 +3919,7 @@
                     supportsFileUploads: true,
                     supportsRepositoryFileLinks: true,
                     supportsWorkspaceClipboard: true,
+                    supportsBrowserAudio: await self?.agentBrowser.supportsBrowserAudio,
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
                     supportsBrowserExtensions: await self?.agentBrowser.supportsBrowserExtensions,
                     supportsPaneBrowser: await self?.agentBrowser.supportsBrowserSharing,

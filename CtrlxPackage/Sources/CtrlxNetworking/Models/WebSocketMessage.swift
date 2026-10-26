@@ -16,6 +16,7 @@ public enum WebSocketMessage: Codable, Sendable {
 
     /// Host sends terminal stream data (continuous updates)
     case terminalStream(TerminalStreamMessage)
+    case browserAudio(RemoteBrowserAudio)
 
     /// Host sends complete session state (on viewer connect or request)
     case sessionState(SessionStateMessage)
@@ -209,6 +210,7 @@ public extension WebSocketMessage {
         case registerHost
         case commandResponse
         case terminalStream
+        case browserAudio
         case sessionState
         case hostRegistered
         case command
@@ -250,6 +252,8 @@ public extension WebSocketMessage {
         case .terminalStream:
             let payload = try container.decode(TerminalStreamMessage.self, forKey: .payload)
             self = .terminalStream(payload)
+        case .browserAudio:
+            self = try .browserAudio(container.decode(RemoteBrowserAudio.self, forKey: .payload))
         case .sessionState:
             let payload = try container.decode(SessionStateMessage.self, forKey: .payload)
             self = .sessionState(payload)
@@ -291,7 +295,7 @@ public extension WebSocketMessage {
             let payload = try container.decode(PeerHelloMessage.self, forKey: .payload)
             self = .peerHello(payload)
         case .quickPhraseSync:
-            self = .quickPhraseSync(try container.decode(QuickPhraseSyncMessage.self, forKey: .payload))
+            self = try .quickPhraseSync(container.decode(QuickPhraseSyncMessage.self, forKey: .payload))
         case .ping:
             self = .ping
         case .pong:
@@ -332,6 +336,9 @@ public extension WebSocketMessage {
             try container.encode(payload, forKey: .payload)
         case let .terminalStream(payload):
             try container.encode(MessageType.terminalStream, forKey: .type)
+            try container.encode(payload, forKey: .payload)
+        case let .browserAudio(payload):
+            try container.encode(MessageType.browserAudio, forKey: .type)
             try container.encode(payload, forKey: .payload)
         case let .sessionState(payload):
             try container.encode(MessageType.sessionState, forKey: .type)
@@ -410,6 +417,7 @@ public extension WebSocketMessage {
         case .registerHost: MessageType.registerHost.rawValue
         case .commandResponse: MessageType.commandResponse.rawValue
         case .terminalStream: MessageType.terminalStream.rawValue
+        case .browserAudio: MessageType.browserAudio.rawValue
         case .sessionState: MessageType.sessionState.rawValue
         case .hostRegistered: MessageType.hostRegistered.rawValue
         case .command: MessageType.command.rawValue
@@ -449,6 +457,7 @@ public extension WebSocketMessage {
              .command,
              .commandResponse,
              .terminalStream,
+             .browserAudio,
              .peerHello,
              .quickPhraseSync,
              .agentSessionStatus,

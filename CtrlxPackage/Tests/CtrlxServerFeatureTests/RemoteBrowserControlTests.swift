@@ -22,6 +22,24 @@
             var deferExtensionFrame = false
             var onManualCreated: (() -> Void)?
             var permissionResponses: [(String, String, Bool, String?)] = []
+            var audioRoutes: [(String, Bool)] = []
+            var audioPCM = Data()
+            var pendingAudioRead: ((Data?, String?) -> Void)?
+            var holdAudioRead = false
+            func setBrowserAudioForTab(_ identifier: String, controlToken: String, enabled: Bool) -> Bool {
+                guard controls[identifier] == controlToken else { return false }
+                audioRoutes.append((identifier, enabled))
+                return true
+            }
+
+            func readBrowserAudio(forTab identifier: String, controlToken: String, completion: @escaping (Data?, String?) -> Void) {
+                if holdAudioRead {
+                    pendingAudioRead = completion
+                } else {
+                    completion(audioPCM, nil)
+                }
+            }
+
             func respond(toNetworkPermission id: String, forTab tab: String, allow: Bool, controlToken: String?, completion: @escaping (String?) -> Void) {
                 permissionResponses.append((id, tab, allow, controlToken))
                 delegate?.browserTab?(tab, networkPermissionChanged: nil)

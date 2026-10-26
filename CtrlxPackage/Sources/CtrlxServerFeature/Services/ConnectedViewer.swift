@@ -519,6 +519,18 @@ final public class ConnectedViewer: Identifiable {
         await enqueueTerminalStream(streamMessage)?.value
     }
 
+    func sendBrowserAudio(_ message: RemoteBrowserAudio) async {
+        // Admit at most one short audio batch. Never enqueue audio behind a
+        // congested terminal stream; the native ring keeps only recent samples.
+        guard state.isConnected, isViewerConnected, message.isValid else { return }
+        if
+            message.error == nil,
+            terminalSendQueueSnapshot.depth >= 2 || terminalSendQueueSnapshot.oldestWaitMilliseconds >= 100 {
+            return
+        }
+        await enqueueEncrypted(.browserAudio(message)).value
+    }
+
     /// Admit bytes before the caller suspends; fan-out tasks must only await delivery.
     func enqueueTerminalStream(_ streamMessage: TerminalStreamMessage) -> Task<Void, Never>? {
         guard
