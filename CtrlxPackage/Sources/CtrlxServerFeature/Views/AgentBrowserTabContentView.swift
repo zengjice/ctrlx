@@ -37,8 +37,11 @@ struct AgentBrowserTabContentView: View {
                     .accessibilityIdentifier("agent-browser-address")
                     .disabled(state.isRemotelyControlled)
                 if state.isRemotelyControlled {
-                    Button("Take Back Control") { state.service.releaseBrowserControl(state.id) }
-                        .help("This page is controlled by a Viewer")
+                    Button { state.service.releaseBrowserControl(state.id) } label: {
+                        Label("Take Back Control", symbol: .eye)
+                    }
+                    .help("This page is controlled by a Viewer")
+                    .accessibilityValue("Read Only")
                 } else {
                     Text(state.manualTarget == nil ? "Codex · \(state.owner.prefix(6))" : "Chromium")
                         .font(.caption)

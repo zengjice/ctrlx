@@ -499,6 +499,11 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   independent Host background recording can continue during Viewer control. Both CLI backends,
   including existing Vercel gateway attachments, reject commands during handoff.
   The Host page blocks direct keyboard/pointer input until Take Back.
+  Mac/iOS Viewer controls use an eye icon for read-only viewing and a theme-colored
+  tapping hand while controlling. Tooltips and accessibility expose the current
+  state and the take/release action. Extension management and remote Chrome windows
+  use the same control indicator; Host **Take Back Control** shows an eye while
+  that page is controlled by a Viewer.
 - Viewers scale the existing viewport by default. **Fit to This Device** is an
   explicit shared Host viewport change. Inputs carry the last displayed page /
   geometry generation and an exact surface/control identity. Stale inputs fail,

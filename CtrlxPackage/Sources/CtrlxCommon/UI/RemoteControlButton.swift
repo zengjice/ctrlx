@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Compact control-ownership toggle shared by Browser and Simulator.
-/// The lock state reflects whether this Viewer currently owns the surface.
+/// The icon shows whether this Viewer is viewing or controlling the surface.
 struct RemoteControlButton: View {
     let title: String
     let isControlled: Bool
@@ -10,10 +10,12 @@ struct RemoteControlButton: View {
 
     var body: some View {
         Button(action: action) {
-            Label(title, symbol: isControlled ? .lockFill : .lockOpenFill)
+            Label(title, symbol: isControlled ? .handTapFill : .eye)
                 .labelStyle(.iconOnly)
         }
+        .foregroundStyle(isControlled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
         .disabled(isDisabled)
-        .help(title)
+        .help("\(isControlled ? "Controlling" : "Read Only") · \(title)")
+        .accessibilityValue(isControlled ? "Controlling" : "Read Only")
     }
 }

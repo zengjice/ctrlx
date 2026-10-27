@@ -65,11 +65,14 @@
                                 ? "Take control to open this page in a Chrome-style window with extension actions. Interaction on the Host takes control back."
                                 : "Take control to install, update, enable, or remove extensions. Interaction on the Host takes control back."
                         )
-                        Button(initialView == .window ? "Open Page as Chrome Window" : "Take Extension Control") {
+                        Button {
                             Task { await session.takeControl(opensExtensionWindow: initialView == .window) }
+                        } label: {
+                            Label(initialView == .window ? "Open Page as Chrome Window" : "Take Extension Control", symbol: .eye)
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(session.isTakingControl || !client.isHostConnected)
+                        .accessibilityValue("Read Only")
                     } else {
                         Picker("View", selection: $showsWindow) {
                             Text("Extensions").tag(false)
@@ -98,7 +101,7 @@
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                     ToolbarItem(placement: .cancellationAction) {
                         if session.controlID != nil {
-                            Button("Release Control") { cancelAndRelease() }
+                            RemoteControlButton(title: "Release Control", isControlled: true) { cancelAndRelease() }
                         }
                     }
                 }

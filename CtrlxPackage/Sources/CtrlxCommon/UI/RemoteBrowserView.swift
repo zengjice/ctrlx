@@ -121,7 +121,7 @@ public struct RemoteBrowserView: View {
                     }
                 } else if session.tab.isExtensionWindow != true {
                     RemoteControlButton(
-                        title: session.tab.isControlled ? "Read Only · Take Control" : "Take Control",
+                        title: "Take Control",
                         isControlled: false,
                         isDisabled: session.isTakingControl || !client.isHostConnected || session.frame == nil
                     ) {

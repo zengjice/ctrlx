@@ -70,6 +70,7 @@ public enum Symbols: String {
     case globe
     case handDraw = "hand.draw"
     case handsAndSparklesFill = "hands.and.sparkles.fill"
+    case handTapFill = "hand.tap.fill"
     case hourglass = "hourglass"
     case house
     case infoCircle = "info.circle"
