@@ -7,8 +7,11 @@ Mac Host 和 Mac Viewer 均可从菜单「File → Install IPA on iPhone…」�
 也有「Install on iPhone…」。Viewer 的安装器不使用远端 Host 路径或设备；这里不涉及
 Relay 或远端设备控制协议。
 
-安装窗口展示包名称、Bundle ID、版本、大小、USB 设备、持续输出和结果。范围为不超过
-2 GiB、含一个主 iPhone App、签名资源和 embedded.mobileprovision 的 IPA；设备负责最终
+安装窗口展示包名称、Bundle ID、版本、大小、USB 设备、持续输出和结果。
+安装成功或失败后会弹出结果提示；成功时包含 App 和设备名称，失败时显示错误原因。
+确认提示后保留窗口内结果和日志；Stop Waiting 继续显示取消等待的说明，不弹安装成功提示。
+安装成功后 Install 按钮置灰，关闭并重新打开安装页后恢复；失败或停止等待后可以重试。
+范围为不超过 2 GiB、含一个主 iPhone App、签名资源和 embedded.mobileprovision 的 IPA；设备负责最终
 校验签名与描述文件。设备需解锁、信任本机，并按分发类型满足 Developer Mode / 开发者
 信任要求。CtrlX 不登录 Apple ID 或重新签名。
 

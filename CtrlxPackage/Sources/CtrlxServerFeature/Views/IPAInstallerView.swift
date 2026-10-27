@@ -49,6 +49,8 @@
         @State private var refresh = 0
         @State private var request: InstallRequest?
         @State private var message: String?
+        @State private var showsInstallationResult = false
+        @State private var installationSucceeded = false
         @State private var deviceMessage: String?
         @State private var log = ""
 
@@ -122,7 +124,8 @@
                 }
                 .formStyle(.grouped)
                 if let message {
-                    Text(message).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(message).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal).padding(.bottom, 8)
                         .accessibilityIdentifier("ipa-installation-result")
                 }
@@ -153,7 +156,7 @@
                             request = .init(file: file, package: package, device: device)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(package == nil || selectedDeviceID == nil || isInspecting || isLoadingDevices)
+                        .disabled(installationSucceeded || package == nil || selectedDeviceID == nil || isInspecting || isLoadingDevices)
                         .accessibilityIdentifier("ipa-install")
                     }
                 }.padding()
@@ -165,20 +168,36 @@
                 case let .failure(error): message = error.localizedDescription
                 }
             }
+            .alert(installationSucceeded ? "Installation Complete" : "Installation Failed", isPresented: $showsInstallationResult) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(message ?? "")
+            }
+            .onDisappear {
+                installationSucceeded = false
+            }
             .task(id: file) { await inspectFile() }
             .task(id: refresh) { await refreshDevices() }
             .task(id: request?.id) {
                 guard let request else { return }
-                defer { isInstalling = false }
+                defer {
+                    isInstalling = false
+                    self.request = nil
+                }
                 do {
                     try await client.install(request.file, request.package, request.device.id) { text in
                         log = String((log + text).suffix(64 * 1_024))
                     }
+                    try Task.checkCancellation()
                     message = "Installed \(request.package.name) on \(request.device.name)."
+                    installationSucceeded = true
+                    showsInstallationResult = true
                 } catch is CancellationError {
                     message = "Stopped waiting. The iPhone may still finish installation; check it before trying again."
                 } catch {
                     message = error.localizedDescription
+                    installationSucceeded = false
+                    showsInstallationResult = true
                 }
             }
         }
