@@ -7,6 +7,31 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.110 — Native iPhone IPA installation
+
+- Install a local IPA on a USB-connected iPhone from the Mac File menu or the
+  local Files tab context menu. Mac Host and Viewer both use the current Mac's
+  local IPA and USB device, without Relay or remote-device control.
+- Validate the package, selected device, pairing and installation result, with
+  bounded logs, cancellation, a single concurrent installation per Mac and
+  private temporary-copy cleanup. Bundle fixed-version, SHA-256-verified
+  `ideviceinstaller` and `libimobiledevice` components and their licenses so
+  users do not need Xcode, Homebrew or Apple Configurator.
+- Fix browser click acknowledgement and cold screenshots: plain screenshots no
+  longer take an interactive snapshot first, and failed engine operations report
+  a sanitized stage, elapsed time and failure category without replaying clicks.
+- Route linked tabs back to their exact source pane in either split, adapt source
+  action and rename labels, and clarify browser link destinations across Mac and
+  iOS.
+- Release validation: the complete serial Swift regression passed (4,072 tests;
+  `StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac). Both boundary checks, the 14-page website build and
+  the iOS Simulator compile check passed. No new SwiftFormat violations were
+  introduced; remaining whole-file deviations predate this release. Physical
+  iPhone installation and launch passed before the cancellation follow-up; that
+  follow-up passed 21 focused tests and fake-device cancellation checks but did
+  not repeat a physical-device installation.
+
 ## 3.0.109 — Workflow-to-terminal navigation
 
 - Make Agent nodes in workflow configuration and run pages navigate directly to
