@@ -73,6 +73,11 @@ New Terminal / Agent are available directly in the iOS icon row and remain at
 the bottom of the Tabs list; the Mac `+` menu does not create Files.
 Each session can keep multiple independent Files tabs alongside terminals and
 web browsers. On Mac, these are ordinary reorderable, closable, splittable tabs.
+Mac Host and Viewer also support dragging Files, Browser and Simulator tabs out
+into independent windows, or using **Open in Separate Window**. The same
+Host/session tabs can merge or move back. Closing the native window returns its
+tabs; closing a resource tab closes that resource. Moving a tab preserves its
+state and source pane binding, without moving the source terminal.
 Normal **Open Files** and terminal file links reuse the source pane's human
 default tab. **Open Another Files Tab** explicitly creates an extra without
 replacing that default. Tab identity and source routing belong to the Host;

@@ -85,7 +85,7 @@
         func register(_ workspace: SimulatorWorkspace) {
             workspaces[workspace.id] = workspace
             for state in tabs.values {
-                if let previous = workspaces[state.workspaceID], !previous.acceptsPane(state.sourcePane) {
+                if let previous = workspaces[state.workspaceID], !previous.accepts(state) {
                     previous.onDetach(state)
                     state.view.removeFromSuperview()
                     visibility(state, visible: false)
@@ -108,7 +108,7 @@
 
         private func attach(_ state: SimulatorTabState) {
             guard !state.isClosed, workspaces[state.workspaceID] == nil else { return }
-            let candidates = workspaces.values.filter { $0.acceptsPane(state.sourcePane) }
+            let candidates = workspaces.values.filter { $0.accepts(state) }
             guard let workspace = candidates.first(where: { $0.window?.isVisible == true }) ?? candidates.first else { return }
             state.workspaceID = workspace.id
             workspace.onCreate(state)
@@ -1840,10 +1840,15 @@
         let id = UUID()
         weak var window: NSWindow?
         var acceptsPane: (PaneInfo) -> Bool = { _ in false }
+        var acceptsTab: ((SimulatorTabState) -> Bool)?
         var onCreate: (SimulatorTabState) -> Void = { _ in }
         var onSelect: (SimulatorTabState, Bool) -> Void = { _, _ in }
         var onClose: (SimulatorTabState) -> Void = { _ in }
         var onDetach: (SimulatorTabState) -> Void = { _ in }
+
+        func accepts(_ state: SimulatorTabState) -> Bool {
+            acceptsTab?(state) ?? acceptsPane(state.sourcePane)
+        }
     }
 
     // Each queued run owns its coordinates; later clicks or keys end coalescing without discarding it.

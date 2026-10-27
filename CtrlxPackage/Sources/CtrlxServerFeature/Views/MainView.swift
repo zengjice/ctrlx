@@ -178,7 +178,7 @@ public struct MainView: View {
     }
 
     private func tabContext(hostID: String?, session: String) -> WorkbenchTabContext {
-        WorkbenchTabContext(workspaceID: detachedWorkspace?.id, hostID: hostID, sessionName: session, onRejected: {
+        var context = WorkbenchTabContext(workspaceID: detachedWorkspace?.id, hostID: hostID, sessionName: session, onRejected: {
             rejectedTabDropID = UUID()
         }) { drag, before, right in
             guard
@@ -207,6 +207,21 @@ public struct MainView: View {
             coordinator.agentBrowser.register(agentBrowserWorkspace)
             return true
         }
+        let ids: [String]
+        if let hostID {
+            ids = remoteSessionWindows(hostId: hostID, sessionName: session).map(\.stableId)
+        } else {
+            ids = tmuxService.windows.filter { $0.sessionName == session }.map(\.stableId)
+        }
+        if let anchor = ids.compactMap({ DetachedTerminalTarget(hostID: hostID, windowID: $0) }).first {
+            context.detach = { drag, point in
+                guard
+                    drag.workspaceID == detachedWorkspace?.id,
+                    let workspace = coordinator.detachedWindows.detach(drag, anchor: anchor, position: point, session: terminalSession) else { return }
+                openWindow(id: "detached-terminal", value: workspace.id)
+            }
+        }
+        return context
     }
 
     private func claimBrowser(_ id: UUID, hostID: String?, session: String, windowID: String?) {
@@ -521,6 +536,7 @@ public struct MainView: View {
                     if let simulator, let simulatorWorkspace {
                         simulator.unregister(simulatorWorkspace)
                         simulatorWorkspace.acceptsPane = { _ in false }
+                        simulatorWorkspace.acceptsTab = nil
                     }
                 }
                 if tabStore.restorationRevision == 0 {
@@ -538,6 +554,9 @@ public struct MainView: View {
         .onChange(of: detachedWorkspace?.selectionRevision) {
             recordUserTabSelection()
             selectDetachedWorkspace()
+        }
+        .onChange(of: detachedWorkspace?.tabs.isEmpty) {
+            coordinator.detachedWindows.closeEmptyWorkspaces()
         }
         .onChange(of: coordinator.hostFileTabs.tabs, initial: true) { _, tabs in
             syncHostFiles(hostID: nil, descriptors: tabs)
@@ -2024,7 +2043,7 @@ public struct MainView: View {
                 selectRemoteBrowserTab(opened.id, hostId: remote.hostId, sessionName: remote.sessionName)
             }.id("\(tab.id):\(tab.sessionName)")
         } else if let selectedBrowserTab, let state = remoteSessionTabsStates[tabsKey]?.agentBrowserStates[selectedBrowserTab.id] {
-            AgentBrowserTabContentView(state: state)
+            AgentBrowserTabContentView(state: state, workspaceID: agentBrowserWorkspace.id)
                 .id(selectedBrowserTab.id)
         } else if
             let selectedBrowserTab,
@@ -2137,7 +2156,7 @@ public struct MainView: View {
                 .id("\(tab.id):\(tab.sessionName)")
                 .accessibilityIdentifier("split-right-pane")
             } else if let state = sessionTabs.agentBrowserStates[id] {
-                AgentBrowserTabContentView(state: state)
+                AgentBrowserTabContentView(state: state, workspaceID: agentBrowserWorkspace.id)
                     .id(id)
                     .accessibilityIdentifier("split-right-pane")
             } else if
@@ -2272,10 +2291,10 @@ public struct MainView: View {
             OpenFileTabContentView(tab: tab, sessionTabs: sessionTabs)
                 .id(tab.id)
         } else if let selectedBrowserTab, let state = sessionTabs?.simulatorStates[selectedBrowserTab.id] {
-            SimulatorTabContentView(state: state)
+            SimulatorTabContentView(state: state, workspaceID: simulatorWorkspace.id)
                 .id(selectedBrowserTab.id)
         } else if let selectedBrowserTab, let state = sessionTabs?.agentBrowserStates[selectedBrowserTab.id] {
-            AgentBrowserTabContentView(state: state)
+            AgentBrowserTabContentView(state: state, workspaceID: agentBrowserWorkspace.id)
                 .id(selectedBrowserTab.id)
         } else if
             let selectedBrowserTab,
@@ -2551,11 +2570,11 @@ public struct MainView: View {
                 .accessibilityIdentifier("split-right-pane")
         case let .browser(id):
             if let state = sessionTabs.simulatorStates[id] {
-                SimulatorTabContentView(state: state)
+                SimulatorTabContentView(state: state, workspaceID: simulatorWorkspace.id)
                     .id("right-\(id)")
                     .accessibilityIdentifier("split-right-pane")
             } else if let state = sessionTabs.agentBrowserStates[id] {
-                AgentBrowserTabContentView(state: state)
+                AgentBrowserTabContentView(state: state, workspaceID: agentBrowserWorkspace.id)
                     .id("right-\(id)")
                     .accessibilityIdentifier("split-right-pane")
             } else if
@@ -5679,6 +5698,11 @@ public struct MainView: View {
     private func registerSimulatorWorkspace() {
         simulatorWorkspace.acceptsPane = { pane in
             tmuxService.windows.contains { $0.stableId == pane.stableWindowId && ownsTerminal(hostID: nil, windowID: $0.stableId) }
+        }
+        simulatorWorkspace.acceptsTab = { state in
+            coordinator.detachedWindows.browserOwner(
+                hostID: nil, session: state.sourcePane.sessionName, id: state.id, windowID: state.sourcePane.stableWindowId
+            ) == detachedWorkspace?.id
         }
         simulatorWorkspace.onCreate = { state in
             let pane = state.sourcePane

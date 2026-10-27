@@ -224,8 +224,8 @@ struct BrowserTabStripItem: View {
         .onHover { hovering in
             isHovered = hovering
         }
-        .workbenchDraggable(payload) {
-            TabDragPreview(label: tab.tabLabel, symbol: .globe)
+        .workbenchDraggable(payload, label: tab.tabLabel) {
+            TabDragPreview(label: tab.tabLabel, symbol: tab.isSimulator ? .iphone : .globe)
         }
         .workbenchDropDestination(before: payload) { payloads, _ in
             onDrop(payloads)

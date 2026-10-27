@@ -55,9 +55,9 @@
 
         var body: some View {
             HStack {
-                if !trailing { SimulatorTabContentView(state: state) }
+                if !trailing { SimulatorTabContentView(state: state, workspaceID: state.workspaceID) }
                 Text("Other pane")
-                if trailing { SimulatorTabContentView(state: state) }
+                if trailing { SimulatorTabContentView(state: state, workspaceID: state.workspaceID) }
             }
         }
     }
@@ -751,7 +751,7 @@
                 contentRect: CGRect(x: -10000, y: -10000, width: 600, height: 500), styleMask: .borderless, backing: .buffered, defer: false
             )
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SimulatorTabContentView(state: state))
+            window.contentView = NSHostingView(rootView: SimulatorTabContentView(state: state, workspaceID: state.workspaceID))
             window.contentView?.layoutSubtreeIfNeeded()
             defer {
                 view.close()

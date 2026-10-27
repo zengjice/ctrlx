@@ -136,7 +136,7 @@ final class WorkbenchTabStore {
                 previous.move(.file(tab.id), to: source)
             }
             for tab in previous.openBrowserTabs {
-                previous.move(.browser(tab.id), to: source, includingSimulators: true)
+                previous.move(.browser(tab.id), to: source)
             }
             source.tabOrder += previousOrder.filter { !source.tabOrder.contains($0) }
             source.rightSide.formUnion(previousRight.subtracting(owned))
@@ -306,7 +306,7 @@ extension SessionFileTabsState {
 
     /// Move live state, not a snapshot: directory selection, WebKit history and CEF identity survive.
     @discardableResult
-    func move(_ tab: TabDragPayload, to destination: SessionFileTabsState, includingSimulators: Bool = false) -> Bool {
+    func move(_ tab: TabDragPayload, to destination: SessionFileTabsState) -> Bool {
         guard self !== destination else { return true }
         switch tab {
         case .window: break
@@ -317,7 +317,7 @@ extension SessionFileTabsState {
             destination.directoryTabs[id] = directoryTabs.removeValue(forKey: id)
             destination.scrollOffsets[id] = scrollOffsets.removeValue(forKey: id)
         case let .browser(id):
-            guard let index = openBrowserTabs.firstIndex(where: { $0.id == id }), includingSimulators || !openBrowserTabs[index].isSimulator else { return false }
+            guard let index = openBrowserTabs.firstIndex(where: { $0.id == id }) else { return false }
             destination.openBrowserTabs.append(openBrowserTabs.remove(at: index))
             destination.browserStates[id] = browserStates.removeValue(forKey: id)
             destination.agentBrowserStates[id] = agentBrowserStates.removeValue(forKey: id)

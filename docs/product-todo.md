@@ -17,7 +17,7 @@ Mac 自测使用隔离 App，不操作用户会话。用户随后已授权提交
 **会话行拖出增量（2026-10-26，已实现、未发布）：** Host / Viewer 的会话行拖到原生窗口外，
 或右键选择 Open in New Window，将主窗口中该会话的整组标签、选中项及分屏一起迁移。
 重复打开聚焦已有窗口，先前单独拖出的标签不强行收回。关闭独立窗口归还布局，并保留
-期间在主窗口中新开的标签。Simulator 展示随 pane 的原生窗口归属路由，仍不支持单独拖动。
+期间在主窗口中新开的标签。后续资源标签增量见下方；模拟器的来源 pane 绑定与展示位置分开。
 
 本轮 101 项定向测试、Mac Release / Debug 编译通过；隔离签名 App 的 Host / Viewer
 会话拖出与单标签拖出共四个原生场景（224 步）通过，覆盖关闭归还、右键重新打开、
@@ -28,12 +28,24 @@ Mac 自测使用隔离 App，不操作用户会话。用户随后已授权提交
 Simulator 按所属终端的当前原生窗口归属路由。116 项相关回归通过，当前 Debug App
 重新完成 Host / Viewer 整组拖出两个原生场景（97 步），未启动真实模拟器复测。
 
+**资源标签增量（2026-10-27，未发布）：** Mac Host / Viewer 的 Files、Browser、Simulator
+复用终端标签的原生拖放和跨窗口转移流程，可单独拖出，或右键 Open in Separate Window。
+同 Host / Session 可合并、拖回；仅含资源的独立窗口也支持关闭归还，最后一个标签迁出后
+收起空窗口。直接关闭标签仍关闭对应资源。目录 / 页面 / 设备状态随标签迁移，来源 pane
+及 Agent / 人工控制权限不变；新资源默认跟随来源终端，已有明确位置不再被来源终端收回。
+
+本轮 119 项定向测试及签名 Mac Release 构建通过。隔离 Host App 实测三类资源标签的
+独立开窗与关闭归还：Files 保留目录 / 搜索，Chromium 两种引擎保留未提交的页面内容，
+真实 Simulator 保留设备 ID、画面与 Agent 控制；临时设备及进程已回收。
+合并与跨 Host / Session 拒绝由模型回归覆盖；原生跨窗口合并手势及真实配对 Viewer
+未完成实测，不能用本轮结果代替这些验收。未覆盖安装本机 App，未发布。
+
 **目标：** 主 CtrlX 留在一个屏幕，将某个 Agent / Terminal Window 拖到另一屏幕，独立放大和操作。
 
 **实现进展：** 已接入独立原生 Scene、Host + 稳定 Window ID 的展示所有权、
 独立输入路由、主窗口展示 / Fit 排除，以及带 Host / Session 范围的原生标签拖动。
 当前增量将独立窗口改为复用主窗口的多标签工作区：同 Host、同 Session 的
-Terminal / Files / Browser 可互移；New Terminal / Agent、Fork 和 Files / Browser
+Terminal / Files / Browser / Simulator 可互移；New Terminal / Agent、Fork 和 Files / Browser
 均留在发起窗口。下列旧版验收不代替本次多标签增量验收。
 隔离原生视图已验证拖到窗外、栏内放下、Esc 取消和普通点击；隔离完整 App 已验证
 Local / Viewer 拖出及菜单打开、重复聚焦、单 / 多 pane 输入、Fit、关闭返回和 Viewer 重连。
@@ -50,7 +62,7 @@ Local / Viewer Files 路由、Mac 参数命令交互及两端独立窗口的 Cod
 - [x] 关闭独立 macOS 窗口只结束独立展示，并恢复主窗口入口的正常展示；真正关闭 tmux Window 仍走原有明确的关闭操作。
 - [ ] 输入焦点、快捷命令、语音、Questions、Files / Fork 等操作绑定独立窗口自己的目标，不跟随主窗口当前选择串台。
 - [x] 复用现有终端流和连接服务；明确尺寸控制权，避免主窗口与独立窗口反复竞争 resize。（独立窗口仅显式 Fit；主窗口 Fit 排除已脱离的 Window）
-- [x] 独立窗口复用主窗口标签栏、右键菜单和 Fit 按钮，关闭原生窗口会归还标签；同 Host / Session 可互移 Terminal / Files / Browser。Git 保留为各窗口的工具入口，Simulator 暂不互移，不要求跨重启恢复独立窗口。
+- [x] 独立窗口复用主窗口标签栏、右键菜单和 Fit 按钮，关闭原生窗口会归还标签；同 Host / Session 可互移 Terminal / Files / Browser / Simulator。Git 保留为各窗口的工具入口，不要求跨重启恢复独立窗口。
 - [x] 跨 Host / Session 拖入标签栏时保留原标签，在目标窗口轻提示仅支持同主机、同会话合并，约 3 秒后自动消失。此类拒绝会结束拖放，不再进入“拖出新窗口”的回退；同会话合并与栏内排序仍走原流程。
 
 **验收：**

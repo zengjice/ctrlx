@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Icon resources are inert; menu items, drop routing and native handling use production code.
+public struct Symbols {
+    let rawValue: String
+}
+
 @MainActor @Observable
 final class TabDropFixtureState {
     let workspaceID = UUID()

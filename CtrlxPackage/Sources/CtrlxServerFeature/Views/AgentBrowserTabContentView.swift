@@ -8,6 +8,7 @@ import SwiftUI
 @MainActor
 struct AgentBrowserTabContentView: View {
     let state: AgentBrowserTabState
+    let workspaceID: UUID
     @Environment(\.browserAnnotationContext) private var annotationContext
     @State private var address = ""
     @State private var captureRequest: UUID?
@@ -129,7 +130,8 @@ struct AgentBrowserTabContentView: View {
                     },
                     captureRequest: captureRequest
                 ) {
-                    EmbeddedAgentBrowserView(state: state)
+                    EmbeddedAgentBrowserView(state: state, workspaceID: workspaceID)
+                        .id(state.workspaceID)
                         .overlay {
                             if state.isRemotelyControlled {
                                 Color.black.opacity(0.05)
@@ -193,6 +195,7 @@ struct AgentBrowserTabContentView: View {
 
 private struct EmbeddedAgentBrowserView: NSViewRepresentable {
     let state: AgentBrowserTabState
+    let workspaceID: UUID
     private var view: NSView {
         state.view
     }
@@ -208,11 +211,13 @@ private struct EmbeddedAgentBrowserView: NSViewRepresentable {
     }
 
     func updateNSView(_ host: NSView, context: Context) {
+        guard view.superview == nil || view.window is AgentBrowserParkingWindow else { return }
         attach(to: host)
     }
 
     private func attach(to host: NSView) {
-        guard view.superview !== host else { return }
+        // A retiring window can still create its old surface after the tab has moved.
+        guard state.workspaceID == workspaceID, view.superview !== host else { return }
         view.removeFromSuperview()
         view.isHidden = false
         view.frame = host.bounds

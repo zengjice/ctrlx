@@ -16,6 +16,7 @@ import UniformTypeIdentifiers
 /// - Trailing drop zone for "drop past the last tab".
 struct RemoteWindowTabBar: View {
     @Environment(AppSettings.self) private var settings
+    @Environment(\.workbenchTabContext) private var workbenchContext
 
     let windows: [TmuxWindow]
     var sourcePanes: [PaneState] = []
@@ -305,7 +306,7 @@ struct RemoteWindowTabBar: View {
         }
         .tabStripItemStyle(isSelected: selected, isOnRightSplit: onRight, isSplit: isSplit)
         .overlay(alignment: .leading) { DropIndicator(visible: dropIndicator == payload) }
-        .workbenchDraggable(payload) { TabDragPreview(label: tab.title, symbol: .folder) }
+        .workbenchDraggable(payload, label: tab.title) { TabDragPreview(label: tab.title, symbol: .folder) }
         .workbenchDropDestination(before: payload) { payloads, _ in
             handleDrop(payloads: payloads, target: payload)
         } isTargeted: { targeted in
@@ -454,7 +455,7 @@ struct RemoteWindowTabBar: View {
         guard let sourcePaneID = sessionTabs?.sourcePaneID(for: payload) else { return [] }
         let isSourceAvailable = groupPanes.contains { $0.paneId == sourcePaneID }
         let isAgentSource = groupPanes.first { $0.paneId == sourcePaneID }?.agentSession != nil
-        return linkedTabActions.menuItems(
+        return (workbenchContext?.detachmentMenuItems(for: payload) ?? []) + linkedTabActions.menuItems(
             paneID: sourcePaneID,
             isSourceAvailable: isSourceAvailable,
             isAgentSource: isAgentSource

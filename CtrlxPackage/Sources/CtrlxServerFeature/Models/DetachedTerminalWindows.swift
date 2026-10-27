@@ -84,17 +84,24 @@ final class DetachedTerminalWindows {
 
     func detach(_ target: DetachedTerminalTarget, position: CGPoint?, session: (DetachedTerminalTarget) -> String?) -> DetachedTerminalWorkspace? {
         guard let sessionName = session(target) else { return nil }
-        let sourceID = workspace(containing: target)?.id
-        let destination = DetachedTerminalWorkspace(target: target, sessionName: sessionName)
-        destination.members = []
-        workspaces[destination.id] = destination
-        positions[destination.id] = position
         let drag = WorkbenchTabDrag(
-            workspaceID: sourceID,
+            workspaceID: workspace(containing: target)?.id,
             hostID: target.hostID,
             sessionName: sessionName,
             tab: .window(target.windowID)
         )
+        return detach(drag, anchor: target, position: position, session: session)
+    }
+
+    func detach(
+        _ drag: WorkbenchTabDrag, anchor: DetachedTerminalTarget, position: CGPoint?,
+        session: (DetachedTerminalTarget) -> String?
+    ) -> DetachedTerminalWorkspace? {
+        guard drag.tab.canDetach, anchor.hostID == drag.hostID, session(anchor) == drag.sessionName else { return nil }
+        let destination = DetachedTerminalWorkspace(target: anchor, sessionName: drag.sessionName)
+        destination.members = []
+        workspaces[destination.id] = destination
+        positions[destination.id] = position
         guard transfer(drag, to: destination.id, session: session) else {
             workspaces.removeValue(forKey: destination.id)
             positions.removeValue(forKey: destination.id)
@@ -262,10 +269,10 @@ final class DetachedTerminalWindows {
         return windowID.flatMap { owner(hostID: hostID, windowID: $0) }
     }
 
-    /// Simulator tabs follow their source terminal and cannot move independently.
+    /// Existing placement wins; a new tab initially follows its source terminal.
     func simulatorTabs(_ catalog: [RemoteSimulatorTab], hostID: String, session: String, workspaceID: UUID?) -> [RemoteSimulatorTab] {
         catalog.filter {
-            $0.sessionName == session && owner(hostID: hostID, windowID: $0.windowID) == workspaceID
+            $0.sessionName == session && browserOwner(hostID: hostID, session: session, id: $0.id, windowID: $0.windowID) == workspaceID
         }
     }
 

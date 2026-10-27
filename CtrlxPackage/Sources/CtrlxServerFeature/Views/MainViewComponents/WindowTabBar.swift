@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 /// Always visible, even for single-window sessions. The leading "+" button
 /// pops up a menu for Agent cards or a terminal window. Browsers belong to panes.
 struct WindowTabBar: View {
+    @Environment(\.workbenchTabContext) private var workbenchContext
     let session: LocalTmuxSession
     let selectedWindow: LocalTmuxWindow?
     /// True only when the Files (tree) tab is the active view — i.e. the file browser
@@ -635,7 +636,7 @@ struct WindowTabBar: View {
         .onHover { hovering in
             hoveredFileTabId = hovering ? tab.id : nil
         }
-        .workbenchDraggable(payload) {
+        .workbenchDraggable(payload, label: tab.name) {
             TabDragPreview(label: tab.name, symbol: .docPlaintextFill)
         }
         .workbenchDropDestination(before: payload) { payloads, _ in
@@ -679,7 +680,7 @@ struct WindowTabBar: View {
         let isAgentSource = sourcePaneID.flatMap { paneID in
             groupPanes.first { $0.paneId == paneID }
         }?.agentSession != nil
-        return linkedTabActions.menuItems(
+        return (workbenchContext?.detachmentMenuItems(for: payload) ?? []) + linkedTabActions.menuItems(
             paneID: sourcePaneID,
             isSourceAvailable: isSourceAvailable,
             isAgentSource: isAgentSource

@@ -8,6 +8,7 @@
     import Foundation
     import ImageIO
     import IOSurface
+    import SwiftUI
     import Synchronization
     import Testing
     @testable import CtrlxServerFeature
@@ -267,6 +268,53 @@
             await fixture.service.shutdown()
         }
 
+        @Test
+        func explicitTabPlacementOverridesTheSourcePaneWithoutRebooting() async throws {
+            let fixture = try Fixture()
+            #expect(await fixture.action("open").ok)
+            let state = try #require(fixture.created.first)
+            let view = state.view
+            let owner = state.owner
+            let target = SimulatorWorkspace()
+            var received: [SimulatorTabState] = []
+            target.acceptsTab = { $0.id == state.id }
+            target.onCreate = { received.append($0) }
+            fixture.workspace.acceptsTab = { _ in false }
+            let window = NSWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 800), styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let source = NSWindow(contentRect: window.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            source.isReleasedWhenClosed = false
+            source.contentView = NSHostingView(rootView: SimulatorTabContentView(state: state, workspaceID: fixture.workspace.id))
+            source.orderBack(nil)
+            defer { source.close() }
+            try await wait { source.contentView?.layoutSubtreeIfNeeded()
+                return state.view.window === source
+            }
+            window.contentView = NSHostingView(rootView: SimulatorTabContentView(state: state, workspaceID: target.id))
+            window.orderBack(nil)
+            defer { window.close() }
+
+            fixture.service.register(target)
+            fixture.service.register(fixture.workspace)
+
+            try await wait { window.contentView?.layoutSubtreeIfNeeded()
+                return state.view.window === window
+            }
+            #expect(state.workspaceID == target.id)
+            #expect(received.count == 1 && received.first === state)
+            #expect(state.view === view && state.owner == owner)
+            #expect(!state.isClosed && fixture.boots == 1)
+            fixture.workspace.acceptsTab = nil
+            fixture.service.unregister(target)
+            try await wait { source.contentView?.layoutSubtreeIfNeeded()
+                return state.view.window === source
+            }
+            #expect(state.workspaceID == fixture.workspace.id)
+            #expect(state.view === view && state.owner == owner)
+            #expect(!state.isClosed && fixture.boots == 1)
+            await fixture.service.shutdown()
+        }
+
         func wait(_ condition: () -> Bool) async throws {
             for _ in 0..<500 {
                 if condition() {
@@ -385,7 +433,7 @@
             let surface = UUID()
             let acquired = try await fixture.service.controlSimulator(.init(
                 sessionName: "work", tabID: tab.id, surfaceID: surface,
-                controlID: nil, generation: nil, operation: .takeControl,
+                controlID: nil, generation: nil, operation: .takeControl
             ), viewerID: "viewer")
             let reads = Mutex(0)
             let selected = oversizedSelection ? Data(repeating: 120, count: 400 * 1_024) : Data("selected 中文".utf8)
@@ -412,7 +460,7 @@
             }
             let request = ControlSimulator(
                 sessionName: "work", tabID: tab.id, surfaceID: surface,
-                controlID: acquired.controlID, generation: acquired.generation, operation: .copy,
+                controlID: acquired.controlID, generation: acquired.generation, operation: .copy
             )
             if oversizedSelection {
                 await #expect(throws: (any Error).self) {

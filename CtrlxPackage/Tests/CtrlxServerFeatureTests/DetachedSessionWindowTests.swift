@@ -71,7 +71,7 @@ struct DetachedSessionWindowTests {
     }
 
     @Test(arguments: [false, true])
-    func viewerSimulatorFollowsItsTerminalAfterSessionDetachment(sourceFirst: Bool) throws {
+    func viewerSimulatorKeepsItsPlacementAfterItsTerminalMoves(sourceFirst: Bool) throws {
         let manager = DetachedTerminalWindows()
         let simulator = RemoteSimulatorTab(id: UUID(), sessionName: "work", windowID: "@1", sourcePaneID: "%1", title: "iPhone", runtime: "iOS", isPrimary: true)
         let original = manager.mainTabs.tabs(hostID: "host", session: "work")
@@ -93,9 +93,9 @@ struct DetachedSessionWindowTests {
             )
         }
 
-        #expect(manager.mainTabs.existing(hostID: "host", session: "work")?.remoteSimulatorTabs[simulator.id] == simulator)
-        #expect(original.remoteSimulatorTabs[simulator.id] == nil)
-        #expect(!original.openBrowserTabs.contains { $0.id == simulator.id })
+        #expect(manager.mainTabs.existing(hostID: "host", session: "work")?.remoteSimulatorTabs[simulator.id] == nil)
+        #expect(original.remoteSimulatorTabs[simulator.id] == simulator)
+        #expect(original.openBrowserTabs.contains { $0.id == simulator.id })
         #expect(manager.browserOwner(hostID: "host", session: "work", id: page.id, windowID: "@1") == group.id)
         #expect(manager.simulatorTabs([simulator], hostID: "other-host", session: "work", workspaceID: group.id).isEmpty)
     }

@@ -5,6 +5,7 @@
 
     struct SimulatorTabContentView: View {
         @Bindable var state: SimulatorTabState
+        let workspaceID: UUID
         @Environment(\.browserAnnotationContext) private var annotationContext
         @State private var captureRequest: UUID?
         @State private var isAnnotating = false
@@ -55,7 +56,8 @@
                     captureRequest: captureRequest,
                     identifierPrefix: "simulator"
                 ) {
-                    EmbeddedSimulatorView(view: state.view)
+                    EmbeddedSimulatorView(state: state, workspaceID: workspaceID)
+                        .id(state.workspaceID)
                 }
             }
             .onDisappear { state.view.setInputSuppressed(false) }
@@ -68,16 +70,26 @@
     }
 
     private struct EmbeddedSimulatorView: NSViewRepresentable {
-        let view: SimulatorMetalView
+        let state: SimulatorTabState
+        let workspaceID: UUID
+        private var view: SimulatorMetalView {
+            state.view
+        }
+
         func makeNSView(context: Context) -> NSView {
             let host = NSView()
             attach(to: host)
             return host
         }
-        // The tab owns a stable renderer. A previous host must not reattach it after a tab move.
-        func updateNSView(_ host: NSView, context: Context) {}
+
+        func updateNSView(_ host: NSView, context: Context) {
+            guard view.superview == nil else { return }
+            attach(to: host)
+        }
+
         private func attach(to host: NSView) {
-            guard view.superview !== host else { return }
+            // Do not let a retiring window mount the renderer again.
+            guard state.workspaceID == workspaceID, view.superview !== host else { return }
             view.removeFromSuperview()
             view.frame = host.bounds
             view.autoresizingMask = [.width, .height]

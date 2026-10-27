@@ -5,18 +5,29 @@ import UniformTypeIdentifiers
 /// Keep SwiftUI's click, rename and context-menu handling; take over only an actual drag.
 /// AppKit supplies the end position on macOS 15 as well as newer releases.
 struct WindowTabDragSource: NSViewRepresentable {
-    let windowID: String
+    let tab: TabDragPayload
     let label: String
-    var sessionName: String? = nil
+    let sessionName: String?
     let detach: (CGPoint) -> Void
     @Environment(\.workbenchTabContext) private var tabContext
+
+    init(windowID: String, label: String, sessionName: String? = nil, detach: @escaping (CGPoint) -> Void) {
+        self.init(tab: .window(windowID), label: label, sessionName: sessionName, detach: detach)
+    }
+
+    init(tab: TabDragPayload, label: String, sessionName: String? = nil, detach: @escaping (CGPoint) -> Void) {
+        self.tab = tab
+        self.label = label
+        self.sessionName = sessionName
+        self.detach = detach
+    }
 
     func makeNSView(context: Context) -> DragView {
         DragView()
     }
 
     func updateNSView(_ view: DragView, context: Context) {
-        view.windowID = windowID
+        view.tab = tab
         view.label = label
         view.sessionName = sessionName
         view.dragContext = tabContext
@@ -57,7 +68,7 @@ struct WindowTabDragSource: NSViewRepresentable {
     }
 
     final class DragView: NSView, NSDraggingSource {
-        var windowID = ""
+        var tab = TabDragPayload.window("")
         var label = ""
         var sessionName: String?
         var dragContext: WorkbenchTabContext?
@@ -140,14 +151,14 @@ struct WindowTabDragSource: NSViewRepresentable {
                 if let sessionName {
                     item.setString(sessionName, forType: .init("com.jicezeng.ctrlx.session-window"))
                 } else {
-                    let data = try JSONEncoder().encode(TabDragPayload.window(windowID))
+                    let data = try JSONEncoder().encode(tab)
                     item.setData(data, forType: NSPasteboard.PasteboardType(UTType.ctrlxTabDrag.identifier))
-                    if let drag = dragContext?.drag(.window(windowID)) {
+                    if let drag = dragContext?.drag(tab) {
                         try item.setData(JSONEncoder().encode(drag), forType: NSPasteboard.PasteboardType(UTType.ctrlxWorkbenchTab.identifier))
                     }
                 }
             } catch {
-                assertionFailure("Cannot encode a terminal tab: \(error)")
+                assertionFailure("Cannot encode a workbench tab: \(error)")
                 return
             }
             let preview = NSImage(size: bounds.size)

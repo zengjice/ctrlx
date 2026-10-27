@@ -2,6 +2,14 @@
 
 当前源码的对外入口为 `ctrlx ios`，配套技能为 `ctrlx:agent-ios`（`plugin/ctrlx/skills/agent-ios/`）。运行与控制仍由 Host Mac 上的 iOS Simulator 提供；配对 Mac / iOS Viewer 支持画面查看，以及显式接管后的触摸和剪贴板操作，真机及 Android 支持留待后续。内部 `Simulator*` 类型、`simulator.action` 协议和设备存储目录继续沿用。旧 CLI 名称不保留别名，调用脚本与 Skill 应随新版本一同更新；下文历史证据中的 `ctrlx simulator` / `agent-simulator` 保留当时名称，不代表本次改名已经过同样的设备验收。
 
+## Mac 展示位置
+
+Host 和 Mac Viewer 的 Simulator 标签可单独拖出为独立窗口，或通过右键菜单打开；
+复用终端 / Files / Browser 的同 Host、同 Session 合并与归还流程。
+新标签默认随来源终端展示，已有标签按客户端的当前工作区位置路由，来源终端移动
+不覆盖显式位置。迁移复用同一设备及原生画面，不重启设备，不更改来源 pane、
+Agent 归属或人工控制权限。关闭独立窗口只归还标签；直接 Close Tab 才关闭设备。
+
 ## Viewer 剪贴板与接管
 
 更新后的 Host 用 `supportsWorkspaceClipboard` 为配对 Mac / iOS Viewer 开启 Take Control、

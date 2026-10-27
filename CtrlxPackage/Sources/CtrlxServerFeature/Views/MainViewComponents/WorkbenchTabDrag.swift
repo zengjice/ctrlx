@@ -1,3 +1,4 @@
+import CtrlxCommon
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -18,13 +19,31 @@ struct WorkbenchTabDrag: Codable, Transferable {
     }
 }
 
+extension TabDragPayload {
+    var canDetach: Bool {
+        switch self {
+        case .window,
+             .file,
+             .browser: true
+        case .git,
+             .fileExplorer: false
+        }
+    }
+}
+
 @MainActor
 struct WorkbenchTabContext {
     let workspaceID: UUID?
     let hostID: String?
     let sessionName: String
     let onRejected: () -> Void
+    var detach: ((WorkbenchTabDrag, CGPoint?) -> Void)? = nil
     let receive: (WorkbenchTabDrag, TabDragPayload?, Bool) -> Bool
+
+    func detachmentMenuItems(for tab: TabDragPayload) -> [ContextMenuItem] {
+        guard tab.canDetach, let detach else { return [] }
+        return [.button(title: "Open in Separate Window") { detach(drag(tab), nil) }]
+    }
 
     func drag(_ tab: TabDragPayload) -> WorkbenchTabDrag {
         WorkbenchTabDrag(workspaceID: workspaceID, hostID: hostID, sessionName: sessionName, tab: tab)
@@ -54,11 +73,16 @@ extension EnvironmentValues {
 
 private struct WorkbenchDragModifier<Preview: View>: ViewModifier {
     let payload: TabDragPayload
+    let label: String?
     let preview: Preview
     @Environment(\.workbenchTabContext) private var context
 
     func body(content: Content) -> some View {
-        if let context {
+        if let context, let detach = context.detach, payload.canDetach {
+            content.background(WindowTabDragSource(tab: payload, label: label ?? "Tab") { point in
+                detach(context.drag(payload), point)
+            })
+        } else if let context {
             content.draggable(context.drag(payload)) { preview }
         } else {
             content.draggable(payload) { preview }
@@ -115,8 +139,8 @@ struct WorkbenchTabDropNotice: ViewModifier {
 }
 
 extension View {
-    func workbenchDraggable(_ payload: TabDragPayload, @ViewBuilder preview: () -> some View) -> some View {
-        modifier(WorkbenchDragModifier(payload: payload, preview: preview()))
+    func workbenchDraggable(_ payload: TabDragPayload, label: String? = nil, @ViewBuilder preview: () -> some View) -> some View {
+        modifier(WorkbenchDragModifier(payload: payload, label: label, preview: preview()))
     }
 
     func workbenchDropDestination(
