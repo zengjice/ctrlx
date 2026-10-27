@@ -58,6 +58,7 @@ public enum Symbols: String {
     case faceSmiling = "face.smiling"
     case figureRun = "figure.run"
     case flag
+    case flowchart
     case folder
     case folderBadgeGearshape = "folder.badge.gearshape"
     case folderBadgePlus = "folder.badge.plus"

@@ -11,14 +11,23 @@ struct LinkedTabSourceActions {
     var canOpenFiles = true
     var canOpenBrowser = true
     var canOpenSimulator = true
+    let onRevealSource: @MainActor (String) -> Void
     let onOpenFiles: @MainActor (String) -> Void
     let onOpenBrowser: @MainActor (String) -> Void
     let onOpenSimulator: @MainActor (String) -> Void
 
-    func menuItems(paneID: String?, isSourceAvailable: Bool) -> [ContextMenuItem] {
+    func menuItems(paneID: String?, isSourceAvailable: Bool, isAgentSource: Bool) -> [ContextMenuItem] {
         let hasSource = paneID != nil && isSourceAvailable
 
         return [
+            .button(
+                title: isAgentSource ? "Go to Agent Tab" : "Go to Terminal Tab",
+                symbol: isAgentSource ? .sparkles : .terminal,
+                isEnabled: hasSource
+            ) {
+                guard let paneID, isSourceAvailable else { return }
+                onRevealSource(paneID)
+            },
             .button(title: "Open Files", isEnabled: hasSource && canOpenFiles) {
                 guard let paneID, isSourceAvailable else { return }
                 onOpenFiles(paneID)

@@ -189,7 +189,7 @@
         private var sessionsList: some View {
             List {
                 Section {
-                    Button(action: onOpenWorkflows) { Label("Workflows", symbol: .arrowTriangleBranch) }
+                    Button(action: onOpenWorkflows) { Label("Workflows", symbol: .flowchart) }
                         .accessibilityIdentifier("workflows-open")
                 }
                 ForEach(settings.pairedHosts) { host in

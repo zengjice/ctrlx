@@ -3,6 +3,7 @@
     import CtrlxNetworking
     import Dependencies
     import SwiftUI
+    import UIKit
 
     struct TerminalLinkSheet: View {
         let url: URL
@@ -12,6 +13,10 @@
         @Environment(\.dismiss) private var dismiss
         @Dependency(URLOpener.self) private var urlOpener
         @Dependency(ClipboardClient.self) private var clipboard
+
+        private var thisDeviceName: String {
+            UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        }
 
         var body: some View {
             NavigationStack {
@@ -32,8 +37,8 @@
                             } label: {
                                 Label {
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text("Open on Host")
-                                        Text("View the Host's browser in CtrlX")
+                                        Text("Open on Host CtrlX")
+                                        Text("Use CtrlX's browser on the Host")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
@@ -50,8 +55,8 @@
                         } label: {
                             Label {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text("Open on This Device")
-                                    Text("Use this device's default browser")
+                                    Text("Open on This \(thisDeviceName)")
+                                    Text("Use this \(thisDeviceName)'s default browser")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }

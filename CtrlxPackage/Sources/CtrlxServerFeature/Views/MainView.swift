@@ -2628,7 +2628,7 @@ public struct MainView: View {
     private var toolbarContent: some ToolbarContent {
         if detachedWorkspace == nil {
             ToolbarItem(id: "ctrlx.toolbar.workflows", placement: .automatic) {
-                Button { openWindow(id: "workflows") } label: { Label("Workflows", symbol: .arrowTriangleBranch) }
+                Button { openWindow(id: "workflows") } label: { Label("Workflows", symbol: .flowchart) }
                     .help("Agent Workflows")
                     .accessibilityIdentifier("workflows-open")
             }
@@ -3868,7 +3868,7 @@ public struct MainView: View {
         guard
             let workspace = coordinator.detachedWindows.detachSession(
                 hostID: hostID, name: name, windowIDs: ids, selectedWindowID: selectedID,
-                position: position, session: terminalSession,
+                position: position, session: terminalSession
             ) else { return }
         openWindow(id: "detached-terminal", value: workspace.id)
         coordinator.detachedWindows.focusNativeWindow(workspaceID: workspace.id)
@@ -5289,6 +5289,9 @@ public struct MainView: View {
             canOpenFiles: isConnected && (hostID == nil || client?.hostSupportsPaneFiles == true),
             canOpenBrowser: isConnected && (hostID == nil || client?.hostSupportsPaneBrowser == true),
             canOpenSimulator: canPresentSimulator && isConnected && (hostID == nil || client?.hostSupportsPaneSimulator == true),
+            onRevealSource: { paneID in
+                revealLinkedSource(paneID: paneID, hostID: hostID, sessionName: sessionName)
+            },
             onOpenFiles: { paneID in
                 openLinkedFiles(paneID: paneID, hostID: hostID, sessionName: sessionName)
             },
@@ -5299,6 +5302,27 @@ public struct MainView: View {
                 openLinkedSimulator(paneID: paneID, hostID: hostID, sessionName: sessionName)
             }
         )
+    }
+
+    private func revealLinkedSource(paneID: String, hostID: String?, sessionName: String) {
+        let pane: PaneState?
+        if let hostID {
+            pane = remoteSessionWindows(hostId: hostID, sessionName: sessionName)
+                .lazy
+                .flatMap(\.panes)
+                .first { $0.paneId == paneID && $0.sessionName == sessionName }
+        } else {
+            let windowExists = tmuxService.windows.contains { window in
+                window.sessionName == sessionName && window.panes.contains { $0.paneId == paneID }
+            }
+            pane = windowExists ? windowManager.paneStates[paneID] : nil
+        }
+
+        guard let pane, pane.sessionName == sessionName else {
+            attachError = "This tab's source terminal is no longer available."
+            return
+        }
+        showSourcePane(pane, hostID: hostID)
     }
 
     private func openLinkedFiles(paneID: String, hostID: String?, sessionName: String) {

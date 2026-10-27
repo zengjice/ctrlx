@@ -1105,7 +1105,7 @@ struct BrowserURLConfirmationView: View {
 
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Button("In Host Browser") {
+                    Button("Open in Host CtrlX") {
                         onResolve(.inApp, rememberScope)
                     }
                     .keyboardShortcut(.defaultAction)
@@ -1118,7 +1118,7 @@ struct BrowserURLConfirmationView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Button("In This Device's Browser") {
+                    Button("Open in This Mac's Browser") {
                         onResolve(.defaultBrowser, rememberScope)
                     }
 

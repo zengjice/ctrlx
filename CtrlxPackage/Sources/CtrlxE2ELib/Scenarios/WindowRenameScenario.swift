@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Verifies that:
 /// 1. Tabs show the tmux window name (not the running command).
-/// 2. Double-clicking a tab on the host opens "Rename Window"; saving a new
+/// 2. Double-clicking a tab on the host opens "Rename Tab"; saving a new
 ///    name updates both the host and the paired viewer.
 /// 3. Double-clicking a tab on the viewer opens the same editor; saving relays
 ///    the rename back through the host and both ends update.
@@ -68,7 +68,7 @@ public enum WindowRenameScenario {
         for instance in 0...1 {
             TestStep.tmuxStoreDisplayMessage(target: "e2e-rename:0", format: "#{window_name}:#{pane_pid}", storeAs: "rename-before")
             TestStep.macCGClickElement(query: .labelContains("e2e-rename:0"), clickCount: 2, instance: instance)
-            TestStep.macWaitForElement(titled: "Rename Window", timeout: 5, instance: instance)
+            TestStep.macWaitForElement(titled: "Rename Tab", timeout: 5, instance: instance)
             TestStep.wait(seconds: 0.5)
             TestStep.macPressKey(.character("a"), modifiers: .command, instance: instance)
             TestStep.macWriteClipboard(text: "StaleName", instance: instance)
@@ -89,7 +89,7 @@ public enum WindowRenameScenario {
         // "e2e-rename:0 win0"); matching by the windowId prefix via `contains`
         // is enough and keeps this step independent of the current name.
         TestStep.macCGClickElement(query: .labelContains("e2e-rename:0"), clickCount: 2)
-        TestStep.macWaitForElement(titled: "Rename Window", timeout: 5)
+        TestStep.macWaitForElement(titled: "Rename Tab", timeout: 5)
         TestStep.wait(seconds: 0.5)
         TestStep.macPressKey(.character("a"), modifiers: .command)
         TestStep.macWriteClipboard(text: "HostRenamed")
@@ -109,7 +109,7 @@ public enum WindowRenameScenario {
         // ── Phase 6: Viewer renames window 1 via double-click ──
         TestStep.log("Phase 6: Viewer double-clicks tab and renames window 1")
         TestStep.macCGClickElement(query: .labelContains("e2e-rename:1"), clickCount: 2, instance: 1)
-        TestStep.macWaitForElement(titled: "Rename Window", timeout: 5, instance: 1)
+        TestStep.macWaitForElement(titled: "Rename Tab", timeout: 5, instance: 1)
         TestStep.wait(seconds: 0.5)
         TestStep.macPressKey(.character("a"), modifiers: .command, instance: 1)
         TestStep.macWriteClipboard(text: "ViewerRenamed", instance: 1)

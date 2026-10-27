@@ -453,7 +453,12 @@ struct RemoteWindowTabBar: View {
     private func linkedTabMenuItems(for payload: TabDragPayload) -> [ContextMenuItem] {
         guard let sourcePaneID = sessionTabs?.sourcePaneID(for: payload) else { return [] }
         let isSourceAvailable = groupPanes.contains { $0.paneId == sourcePaneID }
-        return linkedTabActions.menuItems(paneID: sourcePaneID, isSourceAvailable: isSourceAvailable)
+        let isAgentSource = groupPanes.first { $0.paneId == sourcePaneID }?.agentSession != nil
+        return linkedTabActions.menuItems(
+            paneID: sourcePaneID,
+            isSourceAvailable: isSourceAvailable,
+            isAgentSource: isAgentSource
+        )
     }
 
     // MARK: - Drag and Drop

@@ -2,8 +2,8 @@
     import CtrlxNetworking
     import SwiftUI
 
-    /// View modifier that adds a "Rename Window" context menu and an alert for
-    /// editing the window name. Kept parallel to `DescriptionEditingModifier` so
+    /// View modifier that adds a "Rename Tab" context menu and an alert for
+    /// editing the tab name. Kept parallel to `DescriptionEditingModifier` so
     /// tabs feel consistent with session description editing.
     public struct WindowRenamingModifier: ViewModifier {
         let currentName: String
@@ -36,7 +36,7 @@
                 )
                 .stableContextMenu {
                     var items: [ContextMenuItem] = [
-                        .button(title: "Rename Window", symbol: .pencil, isEnabled: !isDisabled) {
+                        .button(title: "Rename Tab", symbol: .pencil, isEnabled: !isDisabled) {
                             beginRenaming()
                         },
                     ]
@@ -45,9 +45,9 @@
                 }
                 .modifier(TextEntryPresentation(
                     isPresented: $isEditingName,
-                    title: "Rename Window",
-                    message: "Enter a new name for this window",
-                    placeholder: "Window Name",
+                    title: "Rename Tab",
+                    message: "Enter a new name for this tab",
+                    placeholder: "Tab Name",
                     text: $editedName,
                     onSave: { raw in
                         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

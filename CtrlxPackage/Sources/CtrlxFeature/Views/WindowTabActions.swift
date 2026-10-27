@@ -26,7 +26,7 @@
         var body: some View {
             if includesWindowManagement {
                 Button { choose(.window(stableID: window.stableId, operation: .rename)) } label: {
-                    Label("Rename Window", symbol: .pencil)
+                    Label("Rename Tab", symbol: .pencil)
                 }
                 .disabled(!isConnected)
                 Button(role: .destructive) { choose(.window(stableID: window.stableId, operation: .close)) } label: {

@@ -669,7 +669,7 @@
                 }
                 // Intentionally inline rather than using `WindowRenamingModifier`:
                 // The tab list closes before this enclosing view presents rename.
-                .alert("Rename Window", isPresented: .init(
+                .alert("Rename Tab", isPresented: .init(
                     get: { renamingWindow != nil },
                     set: {
                         if !$0 {
@@ -677,7 +677,7 @@
                         }
                     }
                 )) {
-                    TextField("Window Name", text: $renameWindowText)
+                    TextField("Tab Name", text: $renameWindowText)
                     Button("Save") {
                         let trimmed = renameWindowText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if let target = renamingWindow, !trimmed.isEmpty {
@@ -699,7 +699,7 @@
                     }
                     Button("Cancel", role: .cancel) { renamingWindow = nil }
                 } message: {
-                    Text("Enter a new name for this window")
+                    Text("Enter a new name for this tab")
                 }
         }
 
@@ -986,7 +986,7 @@
                             let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane,
                             pane.agentSession != nil {
                             Button { openWorkflow(for: pane) } label: {
-                                Label("View Workflow", symbol: .arrowTriangleBranch)
+                                Label("View Workflow", symbol: .flowchart)
                             }.disabled(!relayClient.isHostConnected)
                             Divider()
                         }
@@ -1059,13 +1059,19 @@
 
         private func linkedTabMenu(_ tab: PaneLinkedTabID) -> some View {
             let source = linkedTabSource(tab)
+            let isAgentSource = source.map {
+                sessionStore.paneState(for: $0.paneID, hostId: hostId)?.agentSession != nil
+            } ?? false
             return Menu {
                 Button {
                     if let source {
                         selectTerminalWindow(source.window, preferredPaneID: source.paneID)
                     }
                 } label: {
-                    Label("Go to Terminal Tab", symbol: .terminal)
+                    Label(
+                        isAgentSource ? "Go to Agent Tab" : "Go to Terminal Tab",
+                        symbol: isAgentSource ? .sparkles : .terminal
+                    )
                 }
                 .disabled(source == nil)
                 Divider()

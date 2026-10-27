@@ -80,8 +80,8 @@ public enum BrowserLinkBehavior: String, CaseIterable, Codable, Identifiable, Se
     public var displayName: String {
         switch self {
         case .ask: "Ask"
-        case .alwaysInApp: "Always in Host browser"
-        case .alwaysInDefaultBrowser: "Always in this device's browser"
+        case .alwaysInApp: "Always in Host CtrlX"
+        case .alwaysInDefaultBrowser: "Always in this Mac's browser"
         }
     }
 }

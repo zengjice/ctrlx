@@ -676,7 +676,14 @@ struct WindowTabBar: View {
         let isSourceAvailable = sourcePaneID.map { paneID in
             groupPanes.contains { $0.paneId == paneID }
         } ?? false
-        return linkedTabActions.menuItems(paneID: sourcePaneID, isSourceAvailable: isSourceAvailable)
+        let isAgentSource = sourcePaneID.flatMap { paneID in
+            groupPanes.first { $0.paneId == paneID }
+        }?.agentSession != nil
+        return linkedTabActions.menuItems(
+            paneID: sourcePaneID,
+            isSourceAvailable: isSourceAvailable,
+            isAgentSource: isAgentSource
+        )
     }
 
     @ViewBuilder
