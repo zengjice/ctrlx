@@ -21,6 +21,7 @@ public struct DetachedTerminalTarget: Hashable, Codable, Sendable {
 final class DetachedTerminalWindows {
     enum Action: Equatable {
         case show
+        case tab(TabDragPayload)
         case files(paneID: String?)
         case fork(paneID: String?, destination: AgentForkDestination)
         case fileLink(TerminalFileLinkRequest)
@@ -167,6 +168,19 @@ final class DetachedTerminalWindows {
         guard let workspace = workspace(containing: target) else { return }
         workspace.members.removeAll { $0 == target }
         closeEmptyWorkspaces()
+    }
+
+    @discardableResult
+    func returnToMain(
+        _ drag: WorkbenchTabDrag, anchor: DetachedTerminalTarget,
+        session: (DetachedTerminalTarget) -> String?
+    ) -> Bool {
+        guard
+            drag.workspaceID != nil, drag.tab.canDetach,
+            anchor.hostID == drag.hostID, session(anchor) == drag.sessionName,
+            transfer(drag, to: nil, session: session) else { return false }
+        request(.tab(drag.tab), from: anchor)
+        return true
     }
 
     func closeEmptyWorkspaces() {

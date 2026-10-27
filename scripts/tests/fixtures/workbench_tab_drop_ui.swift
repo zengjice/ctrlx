@@ -3,8 +3,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Icon resources are inert; menu items, drop routing and native handling use production code.
-public struct Symbols {
-    let rawValue: String
+public enum Symbols: String {
+    case minus
+    var image: Image {
+        Image(systemName: rawValue)
+    }
 }
 
 @MainActor @Observable
@@ -14,12 +17,18 @@ final class TabDropFixtureState {
     var rejections = 0
     var transfers = 0
     var reorders = 0
+    var isDetached = false
+    var canReturn = true
+    var returnTab = TabDragPayload.window("@1")
+    var returned: [WorkbenchTabDrag] = []
 }
 
 struct TabDropNoticeAnchor: NSViewRepresentable {
+    var identifier = "rendered-drop-notice"
+
     func makeNSView(context _: Context) -> NSView {
         let view = Passthrough()
-        view.identifier = .init("rendered-drop-notice")
+        view.identifier = .init(identifier)
         return view
     }
 
@@ -50,6 +59,23 @@ struct TabDropFixture: View {
                 receive: { _, _, _ in state.transfers += 1; return true }
             ))
             .modifier(WorkbenchTabDropNotice(presentationID: $state.notice))
+    }
+}
+
+struct TabReturnFixture: View {
+    let state: TabDropFixtureState
+
+    var body: some View {
+        var context = WorkbenchTabContext(
+            workspaceID: state.isDetached ? state.workspaceID : nil,
+            hostID: "viewer-host", sessionName: "work", onRejected: {}, receive: { _, _, _ in false }
+        )
+        if state.canReturn {
+            context.returnToMain = { state.returned.append($0) }
+        }
+        return TabReturnToMainButton(tab: state.returnTab, name: "Resource")
+            .environment(\.workbenchTabContext, context)
+            .frame(width: 200, height: 50)
     }
 }
 
@@ -119,6 +145,7 @@ final class TabDropFixtureDelegate: NSObject, NSApplicationDelegate {
         window.contentView = host
         Task { @MainActor in
             do {
+                try await checkReturnButton(state)
                 try await settle(host)
                 try require(!hasNotice(host), "notice initially visible")
                 try await drop(.init(workspaceID: UUID(), hostID: nil, sessionName: "other", tab: .window("@1")),
@@ -158,6 +185,53 @@ final class TabDropFixtureDelegate: NSObject, NSApplicationDelegate {
                 exit(1)
             }
         }
+    }
+
+    private func checkReturnButton(_ state: TabDropFixtureState) async throws {
+        let host = NSHostingView(rootView: TabReturnFixture(state: state))
+        let window = NSWindow(contentRect: .init(x: -10000, y: -10000, width: 200, height: 50),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.close() }
+        func buttons() -> [NSView] {
+            descendants(host).filter { $0.identifier?.rawValue == "rendered-return-button" }
+        }
+        try await settle(host)
+        try require(buttons().isEmpty, "return button appeared in the main window")
+        state.isDetached = true
+        for payload in [TabDragPayload.window("@1"), .file(UUID()), .browser(UUID())] {
+            state.returnTab = payload
+            try await settle(host)
+            let visible = buttons()
+            try require(visible.count == 1, "separate window is missing its return button")
+            let control = visible[0]
+            let point = control.convert(NSPoint(x: control.bounds.midX, y: control.bounds.midY), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                                     timestamp: ProcessInfo.processInfo.systemUptime,
+                                                     windowNumber: window.windowNumber, context: nil,
+                                                     eventNumber: 0, clickCount: 1, pressure: 1)
+                else {
+                    throw failure("could not create a private window click")
+                }
+                NSApp.postEvent(event, atStart: false)
+            }
+            try await settle(host)
+            try require(state.returned.last?.tab == payload,
+                        "return button targeted another tab")
+            try require(state.returned.last?.hostID == "viewer-host" && state.returned.last?.workspaceID == state.workspaceID,
+                        "return button lost its source workspace")
+        }
+        state.canReturn = false
+        try await settle(host)
+        try require(buttons().isEmpty, "return button appeared without a return action")
+        state.canReturn = true
+        state.returnTab = .git
+        try await settle(host)
+        try require(buttons().isEmpty, "non-movable tool exposed a return button")
+        print("PASS: return button visibility and native action")
     }
 
     private func drop(_ drag: WorkbenchTabDrag, sequence: Int, host: NSView, window: NSWindow) async throws {

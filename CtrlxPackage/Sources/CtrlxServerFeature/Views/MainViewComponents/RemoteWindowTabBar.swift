@@ -292,8 +292,12 @@ struct RemoteWindowTabBar: View {
         let selected = onRight ? selectedRight == payload : sessionTabs?.selectedFileTabId == tab.id
         return HStack(spacing: 0) {
             Button { onSelectFileTab?(tab.id) } label: {
-                Label(tab.title, symbol: .folder).lineLimit(1).padding(.horizontal, 10).padding(.vertical, 6)
+                Label(tab.title, symbol: .folder)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1).padding(.horizontal, 10).padding(.vertical, 6)
             }.buttonStyle(.plain)
+            TabReturnToMainButton(tab: payload, name: tab.title)
+
             TabSplitToggleButton(
                 isSplit: isSplit,
                 isOnRight: onRight,
@@ -357,6 +361,8 @@ struct RemoteWindowTabBar: View {
                 },
                 additionalMenu: { windowContextMenuItems(for: window) }
             ))
+
+            TabReturnToMainButton(tab: payload, name: windowName)
 
             TabSplitToggleButton(
                 isSplit: isSplit,

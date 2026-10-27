@@ -94,7 +94,7 @@ struct PaneLinkedTabStrip<Content: View>: View {
             let color = PaneTabGroupStyle.color(for: pane?.workspaceIdentity?.paneID.uuidString ?? group.id)
             HStack(spacing: 0) {
                 Text(groupTitle(group.id, pane: pane))
-                    .font(.caption2)
+                    .font(.callout)
                     .foregroundStyle(color)
                     .lineLimit(1)
                     .frame(maxWidth: 100)

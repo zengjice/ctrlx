@@ -14,7 +14,7 @@ struct TerminalWindowTabLabel: View {
                     .foregroundStyle(.purple)
             }
             Text(name)
-                .font(.system(.caption, design: .monospaced))
+                .font(.system(.body, design: .monospaced))
                 .lineLimit(1)
             if needsAttention {
                 Symbols.bellBadgeFill.image
@@ -92,7 +92,7 @@ struct TabDragPreview: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Text(label)
-                .font(.system(.caption, design: .monospaced))
+                .font(.system(.body, design: .monospaced))
                 .lineLimit(1)
         }
         .padding(.horizontal, 10)
@@ -185,7 +185,7 @@ struct BrowserTabStripItem: View {
                         .foregroundStyle(.secondary)
 
                     Text(tab.tabLabel)
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(.body, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: 160, alignment: .leading)
@@ -199,6 +199,8 @@ struct BrowserTabStripItem: View {
             .help(tab.isSimulator ? tab.tabLabel : tab.url.absoluteString)
             .accessibilityLabel("\(tab.isSimulator ? "Simulator" : "Browser") tab: \(tab.tabLabel)")
             .accessibilityValue(isSelected ? "selected" : "")
+
+            TabReturnToMainButton(tab: payload, name: tab.tabLabel)
 
             TabSplitToggleButton(
                 isSplit: isSplit,

@@ -509,6 +509,8 @@ struct WindowTabBar: View {
                 additionalMenu: { windowContextMenuItems(for: window) }
             ))
 
+            TabReturnToMainButton(tab: payload, name: windowName)
+
             TabSplitToggleButton(
                 isSplit: isSplit,
                 isOnRight: tabIsOnRight,
@@ -585,7 +587,7 @@ struct WindowTabBar: View {
                         .foregroundStyle(.secondary)
 
                     Text(sessionTabs.directoryTabs[tab.id]?.title ?? tab.name)
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(.body, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: 180, alignment: .leading)
@@ -599,6 +601,8 @@ struct WindowTabBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("File tab: \(tab.name)")
             .accessibilityValue(isSelected ? "selected" : "")
+
+            TabReturnToMainButton(tab: payload, name: tab.name)
 
             TabSplitToggleButton(
                 isSplit: isSplit,

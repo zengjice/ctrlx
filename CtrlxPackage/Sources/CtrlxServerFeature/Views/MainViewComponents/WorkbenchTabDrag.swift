@@ -38,6 +38,7 @@ struct WorkbenchTabContext {
     let sessionName: String
     let onRejected: () -> Void
     var detach: ((WorkbenchTabDrag, CGPoint?) -> Void)? = nil
+    var returnToMain: ((WorkbenchTabDrag) -> Void)? = nil
     let receive: (WorkbenchTabDrag, TabDragPayload?, Bool) -> Bool
 
     func detachmentMenuItems(for tab: TabDragPayload) -> [ContextMenuItem] {

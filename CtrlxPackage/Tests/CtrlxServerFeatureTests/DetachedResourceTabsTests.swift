@@ -111,4 +111,64 @@ struct DetachedResourceTabsTests {
         #expect(main.openFileTabs.count + main.openBrowserTabs.count == 1)
         #expect(!TabDragPayload.git.canDetach && !TabDragPayload.fileExplorer.canDetach)
     }
+
+    @Test(arguments: [nil, "viewer"] as [String?], Kind.allCases.flatMap { kind in [false, true].map { (kind, $0) } })
+    func returnButtonMovesOnlyTheRequestedResource(host: String?, configuration: (Kind, Bool)) throws {
+        let (kind, keepSibling) = configuration
+        let manager = DetachedTerminalWindows()
+        let main = manager.mainTabs.tabs(hostID: host, session: "work")
+        let payload = resource(kind, in: main)
+        let anchor = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let group = try #require(manager.detach(.init(workspaceID: nil, hostID: host, sessionName: "work", tab: payload), anchor: anchor, position: nil, session: { _ in "work" }))
+        let detached = group.tabs.tabs(hostID: host, session: "work")
+        let sibling = keepSibling ? resource(kind, in: detached) : nil
+        var closed = false
+        group.onClose = { closed = true }
+
+        #expect(manager.returnToMain(.init(workspaceID: group.id, hostID: host, sessionName: "work", tab: payload), anchor: anchor, session: { _ in "work" }))
+
+        #expect(main.tabOrder.contains(payload) && !detached.tabOrder.contains(payload))
+        #expect(manager.mainRequest?.target == anchor && manager.mainRequest?.action == .tab(payload))
+        #expect(closed == !keepSibling)
+        if let sibling {
+            #expect(manager.workspaces[group.id] === group)
+            #expect(!main.tabOrder.contains(sibling))
+            #expect(detached.openFileTabs.contains { .file($0.id) == sibling } || detached.openBrowserTabs.contains { .browser($0.id) == sibling })
+        } else {
+            #expect(manager.workspaces.isEmpty)
+        }
+    }
+
+    @Test(arguments: [nil, "viewer"] as [String?])
+    func returningATerminalLeavesItsResourceInTheSeparateWindow(host: String?) throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let group = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        let detached = group.tabs.tabs(hostID: host, session: "work")
+        let file = resource(.files, in: detached)
+
+        #expect(manager.returnToMain(.init(workspaceID: group.id, hostID: host, sessionName: "work", tab: .window("@1")), anchor: target, session: { _ in "work" }))
+
+        #expect(group.members.isEmpty && manager.workspaces[group.id] === group)
+        #expect(manager.owner(hostID: host, windowID: "@1") == nil)
+        #expect(detached.openFileTabs.contains { .file($0.id) == file })
+        #expect(manager.mainRequest?.action == .tab(.window("@1")))
+    }
+
+    @Test(arguments: ["host", "session", "stale", "main"])
+    func invalidReturnsKeepTheResourceAndDoNotSelectAnUnrelatedMainTab(_ invalid: String) throws {
+        let manager = DetachedTerminalWindows()
+        let main = manager.mainTabs.tabs(hostID: "host", session: "work")
+        let payload = resource(.files, in: main)
+        let anchor = try #require(DetachedTerminalTarget(hostID: "host", windowID: "@1"))
+        let group = try #require(manager.detach(.init(workspaceID: nil, hostID: "host", sessionName: "work", tab: payload), anchor: anchor, position: nil, session: { _ in "work" }))
+        let target = invalid == "host" ? try #require(DetachedTerminalTarget(hostID: "other", windowID: "@1")) : anchor
+        let workspaceID: UUID? = invalid == "main" ? nil : (invalid == "stale" ? UUID() : group.id)
+
+        #expect(!manager.returnToMain(.init(workspaceID: workspaceID, hostID: "host", sessionName: "work", tab: payload), anchor: target, session: { _ in invalid == "session" ? "other" : "work" }))
+
+        #expect(manager.mainRequest == nil && manager.workspaces[group.id] === group)
+        #expect(main.openFileTabs.isEmpty)
+        #expect(group.tabs.tabs(hostID: "host", session: "work").openFileTabs.count == 1)
+    }
 }

@@ -24,11 +24,16 @@ class WorkbenchTabDropUITests(unittest.TestCase):
             self.assertEqual(drag_source.count(marker), 1)
             drag = build / "WorkbenchTabDrag.swift"
             drag.write_text(drag_source.replace(marker, marker + "\n.background(TabDropNoticeAnchor())"))
+            return_button = build / "TabReturnToMainButton.swift"
+            return_source = (COMPONENTS / "TabReturnToMainButton.swift").read_text().replace("import CtrlxCommon\n", "")
+            return_marker = r'.accessibilityLabel("Return tab to main window: \(name)")'
+            self.assertEqual(return_source.count(return_marker), 1)
+            return_button.write_text(return_source.replace(return_marker, return_marker + '\n.background(TabDropNoticeAnchor(identifier: "rendered-return-button"))'))
             executable = build / "probe"
             result = subprocess.run(
                 ["xcrun", "swiftc", "-parse-as-library", "-swift-version", "6",
                  "-module-cache-path", str(build / "ModuleCache"), str(payload),
-                 str(drag), str(COMPONENTS / "WindowTabDragSource.swift"),
+                 str(drag), str(return_button), str(COMPONENTS / "WindowTabDragSource.swift"),
                  str(ROOT / "CtrlxPackage/Sources/CtrlxCommon/UI/StableContextMenu.swift"),
                  str(ROOT / "scripts/tests/fixtures/workbench_tab_drop_ui.swift"), "-o", str(executable)],
                 capture_output=True, text=True, timeout=90,
@@ -38,6 +43,7 @@ class WorkbenchTabDropUITests(unittest.TestCase):
             result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=25)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("PASS: native drop consumed, no tear-off", result.stdout)
+            self.assertIn("PASS: return button visibility and native action", result.stdout)
 
 
 if __name__ == "__main__":

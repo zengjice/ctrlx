@@ -214,6 +214,15 @@ public struct MainView: View {
             ids = tmuxService.windows.filter { $0.sessionName == session }.map(\.stableId)
         }
         if let anchor = ids.compactMap({ DetachedTerminalTarget(hostID: hostID, windowID: $0) }).first {
+            if detachedWorkspace != nil {
+                context.returnToMain = { drag in
+                    guard
+                        drag.workspaceID == detachedWorkspace?.id,
+                        coordinator.detachedWindows.returnToMain(drag, anchor: anchor, session: terminalSession) else { return }
+                    openWindow(id: "panes")
+                    coordinator.detachedWindows.focusNativeWindow(workspaceID: nil)
+                }
+            }
             context.detach = { drag, point in
                 guard
                     drag.workspaceID == detachedWorkspace?.id,
@@ -3944,6 +3953,30 @@ public struct MainView: View {
             selectedWindow = tmuxService.windows.first { $0.id == selection } ?? window
         }
         switch request.action {
+        case let .tab(tab):
+            let tabs = tabStore.tabs(hostID: target.hostID, session: sessionName)
+            switch tab {
+            case let .window(id):
+                if tabs.rightSide.contains(tab) {
+                    tabStore.userDidSelectTab(hostID: target.hostID, session: sessionName)
+                    tabs.selectedRight = tab
+                } else {
+                    selectTerminalWindow(stableId: id)
+                }
+            case let .file(id):
+                if let host = target.hostID {
+                    selectRemoteFileTab(id, hostID: host, sessionName: sessionName)
+                } else {
+                    selectFileTab(id, sessionName: sessionName, windowId: windowID)
+                }
+            case let .browser(id):
+                if let host = target.hostID {
+                    selectRemoteBrowserTab(id, hostId: host, sessionName: sessionName)
+                } else {
+                    selectBrowserTab(id, sessionName: sessionName, windowId: windowID)
+                }
+            default: break
+            }
         case .show:
             tabStore.userDidSelectTab(hostID: target.hostID, session: sessionName)
             if let host = target.hostID {
