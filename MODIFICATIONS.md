@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.112 — Detachable resource tabs
+
+- Let Mac Host and Viewer Files, Browser and Simulator tabs detach into separate
+  windows or open through **Open in Separate Window**, then merge or move back
+  within the same Host and session without restarting the underlying resource.
+- Preserve file, browser and simulator state while tabs move between windows,
+  keep source-pane ownership separate from display placement, and return tabs to
+  the main window through a dedicated control or when a detached window closes.
+- Replace the iOS linked-tab overflow menu with direct source-return and close
+  actions, and enlarge Mac workspace tab titles for clearer window identification.
+- Release validation: the complete serial Swift regression passed (4,084 tests).
+  `StopFinalityEvaluationSuite` and 11 hardware- or Apple Intelligence-dependent
+  tests were skipped because their prerequisites were unavailable on this Mac.
+  Both boundary checks, the 14-page website build, the signed Mac Release app
+  build and the iOS Simulator compile check passed. The new Swift files have no
+  SwiftFormat violations; four touched legacy files retain pre-existing
+  whole-file formatting deviations. Native cross-window drag/drop acceptance was
+  not rerun for this release.
+
 ## 3.0.111 — Hidden browser parking window
 
 - Keep background Agent Browser pages attached to a dedicated hidden parking

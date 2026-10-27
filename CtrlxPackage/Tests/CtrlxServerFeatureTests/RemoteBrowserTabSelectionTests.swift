@@ -35,7 +35,7 @@
         }
 
         @Test
-        func simulatorRemovalRestoresFileSelectionAndCannotTransferBetweenWorkbenches() {
+        func simulatorRemovalRestoresFileSelection() {
             let tabs = SessionFileTabsState()
             let file = OpenFileTab(path: "/tmp/test.txt", directoryPath: "/tmp")
             tabs.openFileTabs = [file]
@@ -45,13 +45,27 @@
             )
             tabs.syncHostSimulatorTabs([simulator], sessionWindowIDs: [])
             tabs.selectedBrowserTabId = simulator.id
-            let destination = SessionFileTabsState()
-            #expect(!tabs.move(.browser(simulator.id), to: destination))
-            #expect(tabs.remoteSimulatorTabs[simulator.id] == simulator)
-            #expect(destination.openBrowserTabs.isEmpty)
             tabs.syncHostSimulatorTabs([], sessionWindowIDs: [])
             #expect(tabs.selectedBrowserTabId == nil)
             #expect(tabs.selectedFileTabId == file.id)
+        }
+
+        @Test
+        func simulatorTabMovesWithNativeIdentity() {
+            let tabs = SessionFileTabsState()
+            let simulator = RemoteSimulatorTab(
+                id: UUID(), sessionName: "s", windowID: "@1", sourcePaneID: "%1",
+                title: "iPhone", runtime: "iOS 27", isPrimary: true
+            )
+            tabs.syncHostSimulatorTabs([simulator], sessionWindowIDs: [])
+            tabs.selectedBrowserTabId = simulator.id
+            let destination = SessionFileTabsState()
+
+            #expect(tabs.move(.browser(simulator.id), to: destination))
+            #expect(tabs.remoteSimulatorTabs[simulator.id] == nil)
+            #expect(destination.remoteSimulatorTabs[simulator.id] == simulator)
+            #expect(destination.openBrowserTabs.map(\.id) == [simulator.id])
+            #expect(destination.tabOrder == [.browser(simulator.id)])
         }
 
         private func page(_ title: String) -> RemoteBrowserTab {
