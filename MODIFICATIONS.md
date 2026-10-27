@@ -7,6 +7,22 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.111 — Hidden browser parking window
+
+- Keep background Agent Browser pages attached to a dedicated hidden parking
+  window instead of an ordinary borderless window. The parking window is excluded
+  from the Window menu, cannot become key or main, and refuses front, back,
+  unconditional-front and relative ordering requests.
+- Preserve the native parent, page and rendering size when a previously displayed
+  page is parked, preventing a deselected page from briefly appearing on the
+  desktop while keeping it alive for Viewers.
+- Release validation: the complete serial Swift regression passed (4,074 tests;
+  `StopFinalityEvaluationSuite` skipped because Apple Intelligence is
+  unavailable on this Mac), including 8 focused OTLP and parking-window tests.
+  Both boundary checks, the 14-page website build and the iOS Simulator compile
+  check passed, and the three changed Swift files require no formatting.
+  Real desktop visual acceptance of the parking-window behavior was not rerun.
+
 ## 3.0.110 — Native iPhone IPA installation
 
 - Install a local IPA on a USB-connected iPhone from the Mac File menu or the
