@@ -429,13 +429,20 @@ does it call `CefShutdown`. This uses CEF's
 not a fixed sleep or disabled cookie encryption.
 
 Host workspace unregistration retires its UI representations, then parks the same
-native views in an off-screen NSWindow. Pages remain alive for Viewers and are
+native views in a hidden NSWindow. Pages remain alive for Viewers and are
 adopted again when the matching workspace opens. Existing Viewer-local pages
 retain their old close-on-workspace-disposal behavior. Explicit tab close still
 closes the native page; quitting CtrlX closes all pages. For local installation
 acceptance, verify the running process's loaded executable and dylib paths/inodes
 as well as bundle hashes; replacing the App on disk does not replace a library
 already mapped by an older process.
+
+The background parent is a dedicated `AgentBrowserParkingWindow`, excluded from
+the Window menu. It refuses ordering onto the desktop and cannot become key or
+main, including explicit front/back and unconditional-front requests. This keeps
+the just-deselected page from appearing in a borderless window while preserving
+its native parent, document and rendering size. `AgentBrowserParkingWindowTests`
+covers presentation attempts and parking without starting Chromium.
 
 ## Viewer browser surface
 

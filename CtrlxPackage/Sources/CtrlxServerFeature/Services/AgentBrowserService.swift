@@ -52,12 +52,14 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     private let parkingID = UUID()
     private lazy var parkingWindow: NSWindow = {
         _ = NSApplication.shared
-        return NSWindow(
+        let window = AgentBrowserParkingWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 700),
             styleMask: .borderless,
             backing: .buffered,
             defer: false
         )
+        window.isExcludedFromWindowsMenu = true
+        return window
     }()
 
     var onTabsChanged: (() -> Void)?
