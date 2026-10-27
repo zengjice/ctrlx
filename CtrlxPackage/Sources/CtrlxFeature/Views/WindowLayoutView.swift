@@ -45,7 +45,7 @@
 
         private enum WindowShortcutScope {
             case terminal
-            case linkedTab(sourcePaneID: String, kind: WindowTabKind)
+            case linkedTab(sourcePaneID: String?, kind: WindowTabKind)
 
             var sourcePaneID: String? {
                 guard case let .linkedTab(sourcePaneID, _) = self else { return nil }
@@ -255,14 +255,15 @@
             return fileWorkspace.selectedID.map(PaneLinkedTabID.file)
         }
 
-        private var selectedLinkedTabSource: (paneID: String, window: TmuxWindow, kind: WindowTabKind)? {
-            guard let selectedLinkedTab, let source = linkedTabSource(selectedLinkedTab) else { return nil }
+        private var selectedLinkedTabShortcuts: (window: TmuxWindow?, scope: WindowShortcutScope)? {
+            guard let selectedLinkedTab else { return nil }
+            let source = linkedTabSource(selectedLinkedTab)
             let kind = switch selectedLinkedTab {
             case .file: WindowTabKind.files
             case .browser: WindowTabKind.browser
             case .simulator: WindowTabKind.simulator
             }
-            return (source.paneID, source.window, kind)
+            return (source?.window, .linkedTab(sourcePaneID: source?.paneID, kind: kind))
         }
 
         private func linkedTabSource(_ tab: PaneLinkedTabID) -> (paneID: String, window: TmuxWindow)? {
@@ -270,6 +271,11 @@
                 let paneID = linkedTabs.sourcePaneID(tab),
                 let window = linkedTabs.sourceWindow(for: tab) else { return nil }
             return (paneID, window)
+        }
+
+        private func returnToLinkedTabSource(_ tab: PaneLinkedTabID) {
+            guard let source = linkedTabSource(tab) else { return }
+            selectTerminalWindow(source.window, preferredPaneID: source.paneID)
         }
 
         private func selectAdjacentLinkedTab(_ source: PaneLinkedTabID, direction: Int) {
@@ -420,8 +426,8 @@
             .safeAreaInset(edge: .top, spacing: 0) {
                 if terminalIsVisible, let window {
                     windowShortcutBar(window)
-                } else if let source = selectedLinkedTabSource {
-                    windowShortcutBar(source.window, scope: .linkedTab(sourcePaneID: source.paneID, kind: source.kind))
+                } else if let shortcuts = selectedLinkedTabShortcuts {
+                    windowShortcutBar(shortcuts.window, scope: shortcuts.scope)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -974,11 +980,7 @@
                 }
             }
 
-            if let tab = selectedLinkedTab {
-                ToolbarItem(placement: .topBarTrailing) {
-                    linkedTabMenu(tab)
-                }
-            } else if terminalIsVisible, let window {
+            if terminalIsVisible, let window {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if
@@ -1057,42 +1059,18 @@
             }
         }
 
-        private func linkedTabMenu(_ tab: PaneLinkedTabID) -> some View {
-            let source = linkedTabSource(tab)
-            let isAgentSource = source.map {
-                sessionStore.paneState(for: $0.paneID, hostId: hostId)?.agentSession != nil
-            } ?? false
-            return Menu {
-                Button {
-                    if let source {
-                        selectTerminalWindow(source.window, preferredPaneID: source.paneID)
-                    }
-                } label: {
-                    Label(
-                        isAgentSource ? "Go to Agent Tab" : "Go to Terminal Tab",
-                        symbol: isAgentSource ? .sparkles : .terminal
-                    )
-                }
-                .disabled(source == nil)
-                Divider()
-                Button(role: .destructive) {
-                    switch tab {
-                    case let .file(id): performWindowTabAction(.closeFiles(id))
-                    case let .browser(id): performWindowTabAction(.closeBrowser(id))
-                    case let .simulator(id): performWindowTabAction(.closeSimulator(id))
-                    }
-                } label: {
-                    Label("Close Tab", symbol: .xmark)
-                }
-                .disabled(!canCloseLinkedTab(tab))
-                if case .simulator = tab, relayClient.isHostConnected, !relayClient.hostSupportsSimulatorClosing {
-                    Text("Update the Host Mac to close simulator tabs")
+        private func closeLinkedTabButton(_ tab: PaneLinkedTabID) -> some View {
+            Button(role: .destructive) {
+                switch tab {
+                case let .file(id): performWindowTabAction(.closeFiles(id))
+                case let .browser(id): performWindowTabAction(.closeBrowser(id))
+                case let .simulator(id): performWindowTabAction(.closeSimulator(id))
                 }
             } label: {
-                Label("More", symbol: .ellipsisCircle)
+                Label("Close Tab", symbol: .xmark)
             }
-            .menuOrder(.fixed)
-            .accessibilityIdentifier("linked-tab-actions")
+            .disabled(!canCloseLinkedTab(tab))
+            .accessibilityIdentifier("linked-tab-close")
         }
 
         private func canCloseLinkedTab(_ tab: PaneLinkedTabID) -> Bool {
@@ -1107,7 +1085,7 @@
             }
         }
 
-        private func windowShortcutBar(_ window: TmuxWindow, scope: WindowShortcutScope = .terminal) -> some View {
+        private func windowShortcutBar(_ window: TmuxWindow?, scope: WindowShortcutScope = .terminal) -> some View {
             ViewThatFits(in: .horizontal) {
                 windowShortcutButtons(window, scope: scope)
                 ScrollView(.horizontal) {
@@ -1122,10 +1100,19 @@
             .background(.bar)
         }
 
-        private func windowShortcutButtons(_ window: TmuxWindow, scope: WindowShortcutScope) -> some View {
+        private func windowShortcutButtons(_ window: TmuxWindow?, scope: WindowShortcutScope) -> some View {
             HStack(spacing: 8) {
                 Group {
-                    windowActions(window, scope: scope)
+                    if let paneID = scope.sourcePaneID {
+                        LinkedTabSourceButton(isAgentSource: sessionStore.paneState(for: paneID, hostId: hostId)?.agentSession != nil) {
+                            if let selectedLinkedTab {
+                                returnToLinkedTabSource(selectedLinkedTab)
+                            }
+                        }
+                    }
+                    if let window {
+                        windowActions(window, scope: scope)
+                    }
                     if case .terminal = scope {
                         Button(action: resizeWindowToFit) {
                             Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
@@ -1133,6 +1120,8 @@
                         .disabled(!relayClient.isHostConnected || isResizing || resizeToFitRequest == nil)
                         .accessibilityHint("Changes the window size on the Host and all Viewers")
                         .accessibilityIdentifier("terminal-fit-to-screen")
+                    } else if let selectedLinkedTab {
+                        closeLinkedTabButton(selectedLinkedTab)
                     }
                 }
                 .labelStyle(.iconOnly)

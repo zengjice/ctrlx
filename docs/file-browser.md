@@ -81,10 +81,10 @@ On iOS, a Files tab fills the session content area. The title opens a native
 medium/large tab-list sheet without a nested navigation stack. List selections are
 applied after dismissing the sheet; toolbar actions run directly for the current
 window, resolving its stable ID again before opening a sheet or alert.
-Files, Host Browser and iOS Simulator tabs also have a top-right **More** menu:
-**Go to Terminal Tab** returns to the bound source, and **Close Tab** closes the
-current resource using its stable tab ID. The source action is unavailable if
-that terminal is gone. The tab list keeps its per-resource close menus, including
+On iOS, Files, Host Browser and iOS Simulator tabs expose source navigation and
+**Close Tab** directly in the shortcut row, with no top-right **More** menu.
+Closing uses the current resource's stable tab ID. The source action is unavailable if
+that terminal is gone; Close stays in the row. The tab list keeps its per-resource close menus, including
 Simulator. Host-backed close actions require a connection; simulator closing also
 requires the Host's `supportsSimulatorClosing` capability. An older Host shows
 that close action disabled. Closing a shared resource removes it on the Host and
@@ -92,6 +92,13 @@ all Viewers; it does not close its source terminal. Simulator closure shuts down
 the device after recording cleanup. Terminal/Agent close menus and confirmations
 use **Close Tab** on both platforms; the final terminal tab still asks to close
 the entire session.
+On iOS, these three resource tabs also start their shortcut row with **Go to
+Agent Tab** or **Go to Terminal Tab**, based on the bound pane's current Agent
+state. The existing Agent/Terminal icon carries a small return-arrow badge.
+It focuses the exact bound pane and keeps the resource tab open. The source is
+resolved again when tapped. **Close Tab** sits at the other end of the row and
+uses the existing connection, capability and in-progress checks. Agent and
+Terminal tabs retain their top-right **More** menu.
 Files rows expose only their own selection/close actions, not terminal operations.
 
 ### Mac Git tab
