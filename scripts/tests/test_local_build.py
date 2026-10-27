@@ -24,7 +24,7 @@ class LocalBuildTests(unittest.TestCase):
         scripts = self.root / "scripts"
         scripts.mkdir()
         for name in ("local_build.py", "clean-build.py", "common.sh", "package-local-macos.sh", "package-local-ios.sh",
-                     "build-agent-browser.sh", "prepare-agent-browser-engine.sh"):
+                     "build-agent-browser.sh", "prepare-agent-browser-engine.sh", "build-device-installer.sh"):
             shutil.copy2(SCRIPTS / name, scripts / name)
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         self.helper = scripts / "local_build.py"
@@ -46,7 +46,7 @@ class LocalBuildTests(unittest.TestCase):
                 result = self.invoke("bash", self.root / f"scripts/package-local-{platform}.sh", "--app-only")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Another build", result.stderr)
-            for name in ("build-agent-browser.sh", "prepare-agent-browser-engine.sh"):
+            for name in ("build-agent-browser.sh", "prepare-agent-browser-engine.sh", "build-device-installer.sh"):
                 result = self.invoke("bash", self.root / "scripts" / name)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Another build", result.stderr)

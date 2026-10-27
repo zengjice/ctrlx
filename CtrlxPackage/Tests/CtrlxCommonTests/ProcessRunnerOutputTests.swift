@@ -8,14 +8,20 @@ import Testing
 
     @Suite("ProcessRunner output completeness", .serialized)
     struct ProcessRunnerOutputTests {
-        @Test func cancelledCommandDoesNotLaunch() async throws {
+        @Test(arguments: [false, true])
+        func cancelledCommandDoesNotLaunch(bounded: Bool) async throws {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let marker = directory.appendingPathComponent("launched")
             let gate = AsyncStream<Void>.makeStream()
             let task = Task {
-                for await _ in gate.stream { break }
+                for await _ in gate.stream {
+                    break
+                }
+                if bounded {
+                    return try await ProcessRunner.liveValue.runBoundedCancellable("/usr/bin/touch", [marker.path], nil, 5, 1_024)
+                }
                 return try await ProcessRunner.liveValue.runCancellable("/usr/bin/touch", [marker.path], nil, 5)
             }
             task.cancel()
@@ -24,7 +30,8 @@ import Testing
             #expect(!FileManager.default.fileExists(atPath: marker.path))
         }
 
-        @Test func cancellationStopsCommandAndChildBeforeReturning() async throws {
+        @Test(arguments: [false, true])
+        func cancellationStopsCommandAndChildBeforeReturning(bounded: Bool) async throws {
             try await withDependencies {
                 $0[LoginShellPath.self] = LoginShellPath(resolve: { "/usr/bin:/bin" })
                 $0.continuousClock = ContinuousClock()
@@ -34,9 +41,16 @@ import Testing
                 defer { try? FileManager.default.removeItem(at: directory) }
                 let ready = directory.appendingPathComponent("pids")
                 let task = Task {
-                    try await ProcessRunner.liveValue.runCancellable("/bin/sh", ["-c",
+                    let arguments = [
+                        "-c",
                         "trap '' TERM; sleep 20 & child=$!; printf '%s %s' \"$$\" \"$child\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; wait",
-                        "process-runner-test", ready.path], nil, 25)
+                        "process-runner-test",
+                        ready.path,
+                    ]
+                    if bounded {
+                        return try await ProcessRunner.liveValue.runBoundedCancellable("/bin/sh", arguments, nil, 25, 1_024)
+                    }
+                    return try await ProcessRunner.liveValue.runCancellable("/bin/sh", arguments, nil, 25)
                 }
                 defer { task.cancel() }
                 let deadline = ContinuousClock.now.advanced(by: .seconds(5))
@@ -70,19 +84,22 @@ import Testing
             }
         }
 
-        @Test func boundedOutputKeepsRecentBytesAndDrainsBothStreams() async throws {
+        @Test(arguments: [false, true])
+        func boundedOutputKeepsRecentBytesAndDrainsBothStreams(cancellable: Bool) async throws {
             try await withDependencies {
                 $0[LoginShellPath.self] = LoginShellPath(resolve: { "/usr/bin:/bin" })
                 $0.continuousClock = ContinuousClock()
             } operation: {
                 let script = "awk 'BEGIN { for (i=0; i<20000; i++) { print i; print i > \"/dev/stderr\" } }'"
-                let expected = Data((0..<20000).map { "\($0)\n" }.joined().utf8)
-                let result = try await ProcessRunner.liveValue.runBounded("/bin/sh", ["-c", script], nil, 10, 1024)
+                let expected = Data((0..<20_000).map { "\($0)\n" }.joined().utf8)
+                let runner = ProcessRunner.liveValue
+                let run = cancellable ? runner.runBoundedCancellable : runner.runBounded
+                let result = try await run("/bin/sh", ["-c", script], nil, 10, 1_024)
                 #expect(result.isSuccess)
-                #expect(result.stdout == expected.suffix(1024))
-                #expect(result.stderr == expected.suffix(1024))
+                #expect(result.stdout == expected.suffix(1_024))
+                #expect(result.stderr == expected.suffix(1_024))
                 #expect(result.outputTruncated)
-                let small = try await ProcessRunner.liveValue.runBounded("/bin/echo", ["测试 🙂"], nil, 10, 1024)
+                let small = try await run("/bin/echo", ["测试 🙂"], nil, 10, 1_024)
                 #expect(small.stdoutString == "测试 🙂\n")
                 #expect(!small.outputTruncated)
             }

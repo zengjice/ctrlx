@@ -45,6 +45,7 @@ private struct FileContextMenuModifier: ViewModifier {
 
     @Environment(AppSettings.self) private var settings
     @Environment(\.openSettings) private var openSettings
+    @State private var showsIPAInstaller = false
 
     func body(content: Content) -> some View {
         // Capture environment-derived values at view-construction time so the
@@ -60,7 +61,8 @@ private struct FileContextMenuModifier: ViewModifier {
                 settings: settings,
                 openSettings: openSettings,
                 onOpenFileInNewTab: onOpenFileInNewTab,
-                onShowInFileExplorer: onShowInFileExplorer
+                onShowInFileExplorer: onShowInFileExplorer,
+                onInstallIPA: { showsIPAInstaller = true }
             )
             if !additionalItems.isEmpty {
                 if !items.isEmpty {
@@ -69,6 +71,9 @@ private struct FileContextMenuModifier: ViewModifier {
                 items.append(contentsOf: additionalItems)
             }
             return items
+        }
+        .sheet(isPresented: $showsIPAInstaller) {
+            IPAInstallerView(initialURL: fullPath.map { URL(fileURLWithPath: $0) })
         }
     }
 }
@@ -91,11 +96,16 @@ func fileContextMenuItems(
     settings: AppSettings,
     openSettings: OpenSettingsAction,
     onOpenFileInNewTab: ((String) -> Void)?,
-    onShowInFileExplorer: ((String) -> Void)?
+    onShowInFileExplorer: ((String) -> Void)?,
+    onInstallIPA: (@MainActor @Sendable () -> Void)? = nil
 ) -> [ContextMenuItem] {
     guard let fullPath else { return [] }
 
     var items: [ContextMenuItem] = []
+
+    if !isDirectory, (fullPath as NSString).pathExtension.lowercased() == "ipa", let onInstallIPA {
+        items.append(.button(title: "Install on iPhone…", action: onInstallIPA))
+    }
 
     items.append(.button(title: "Open") {
         NSWorkspace.shared.open(URL(fileURLWithPath: fullPath))

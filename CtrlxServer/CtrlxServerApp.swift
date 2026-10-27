@@ -414,6 +414,7 @@ struct TmuxPaneMirrorApp: App {
 
     var body: some Scene {
         DetachedTerminalScene(coordinator: coordinator)
+        IPAInstallerScene()
 
         // Main sessions window - can be shown via menu bar "Show Sessions"
         Window("Sessions", id: "panes") {
@@ -466,6 +467,7 @@ struct TmuxPaneMirrorApp: App {
         }
         .commands {
             WorkbenchKeyboardCommands(settings: coordinator.settings)
+            IPAInstallerCommands()
             // App menu - custom About window
             CommandGroup(replacing: .appInfo) {
                 AboutMenuItem()

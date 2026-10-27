@@ -69,6 +69,7 @@ trap cleanup_macos_workspace EXIT
 
 invalidate_local_app macos Release
 CTRLX_AGENT_BROWSER_SIGN_IDENTITY="$SIGNING_IDENTITY" bash "$SCRIPT_DIR/build-agent-browser.sh"
+CTRLX_DEVICE_INSTALLER_SIGN_IDENTITY="$SIGNING_IDENTITY" bash "$SCRIPT_DIR/build-device-installer.sh"
 
 log_info "Building CtrlX $VERSION from $PROJECT_ROOT"
 /usr/bin/xcodebuild \

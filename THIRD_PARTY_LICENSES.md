@@ -89,6 +89,29 @@ the CLI are bundled in `Resources/AgentSimulator/simslim-NOTICES.txt`.
 `simslim-build.json` records the source hash, compiler, signed binary hash and
 each linked module's license classification and notice hashes.
 
+## IPA installation (macOS)
+
+The Mac Host and Mac Viewer bundle a local USB installer. No Apple Configurator,
+Xcode or Homebrew installation is needed at runtime. These components are built
+from the unmodified, SHA-256-pinned archives in
+[`sources.json`](CtrlxPackage/DeviceInstaller/ThirdParty/sources.json) using
+[`build_device_installer.py`](scripts/build_device_installer.py). The manifest
+records the corresponding upstream source URLs and versions. Full notices and
+the build manifest are included in `Resources/DeviceInstaller`; dynamically
+linked dependencies and the four tools are in `Helpers/DeviceInstaller`.
+
+| Project | License |
+|---|---|
+| [ideviceinstaller](https://github.com/libimobiledevice/ideviceinstaller) | GPL-2.0-or-later |
+| [libimobiledevice](https://github.com/libimobiledevice/libimobiledevice) | LGPL-2.1-or-later |
+| [libimobiledevice-glue](https://github.com/libimobiledevice/libimobiledevice-glue) | LGPL-2.1-or-later |
+| [libusbmuxd](https://github.com/libimobiledevice/libusbmuxd) | LGPL-2.1-or-later |
+| [libplist](https://github.com/libimobiledevice/libplist) | LGPL-2.1-or-later |
+| [libtatsu](https://github.com/libimobiledevice/libtatsu) | LGPL-2.1-or-later |
+| [libtasn1](https://www.gnu.org/software/libtasn1/) | LGPL-2.1-or-later |
+| [libzip](https://libzip.org/) | BSD-3-Clause |
+| [OpenSSL](https://github.com/openssl/openssl) | Apache-2.0 |
+
 ## Website
 
 | Project | License |

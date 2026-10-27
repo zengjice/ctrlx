@@ -576,6 +576,7 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
+            async let ipaShutdown: Void = IPAInstaller.shared.shutdown()
             agentWorkflowAgentService = nil
             await stopAgentWorkflows()
             paneActivationTask?.cancel()
@@ -605,6 +606,7 @@
                 }
             }
             await simulatorShutdown
+            await ipaShutdown
         }
 
         /// Resolves the tmux session name for a pane. Tries `paneStates` first

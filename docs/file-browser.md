@@ -1,5 +1,43 @@
 # Host-backed Files tabs
 
+## Mac 本机 IPA 安装
+
+Mac Host 和 Mac Viewer 均可从菜单「File → Install IPA on iPhone…」选择当前 Mac 的
+本地 IPA，并安装到当前 Mac 通过 USB 连接的设备。Mac 本机文件浏览器的 `.ipa` 右键菜单
+也有「Install on iPhone…」。Viewer 的安装器不使用远端 Host 路径或设备；这里不涉及
+Relay 或远端设备控制协议。
+
+安装窗口展示包名称、Bundle ID、版本、大小、USB 设备、持续输出和结果。范围为不超过
+2 GiB、含一个主 iPhone App、签名资源和 embedded.mobileprovision 的 IPA；设备负责最终
+校验签名与描述文件。设备需解锁、信任本机，并按分发类型满足 Developer Mode / 开发者
+信任要求。CtrlX 不登录 Apple ID 或重新签名。
+
+读取元数据仅提取有界的主 App Info.plist，识别 Simulator 包、多个主 App 和缺失签名资源。
+安装时创建私有副本并重新检查元数据和 SHA-256，随后重新查验选中的 USB UDID，并通过
+`idevicepair validate` 检查配对。配对不可用时尝试一次 `pair`；用户需在手机上完成解锁和
+信任确认，失败则在传输前停止；不执行 `unpair` 或自动重试安装。安装
+进程必须同时返回成功和设备的 `Install: Complete` 确认；不以退出码 0 单独判断成功。
+每台 Mac 同时运行一个安装任务。关闭窗口、正常退出应用或 Stop Waiting 会取消等待并回收本次子进程，
+设备可能继续完成安装，因此不自动重试或声称回滚。临时副本在任务收尾后清理。
+设备枚举、信息读取、配对校验和配对进程也支持取消并保留输出上限；校验返回后和启动
+配对前再次检查取消状态，避免停止等待后继续请求手机信任。
+
+原生组件由 `bash scripts/build-device-installer.sh` 从固定版本、SHA-256 校验的源码构建，
+Mac 打包脚本先构建组件，Xcode 的 Embed Device Installer 阶段复制四项工具、依赖库和
+许可证。用户运行时不需要 Xcode、Homebrew 或 Apple Configurator。首次直接 Mac
+workspace 构建前也需执行该脚本；源码构建另需 CMake 和 pkg-config。所有构建继续遵循
+本工作区的操作锁。
+
+2026-10-27 本机验证：取消修复后的 21 项安装/进程专项测试和 arm64 Mac Debug workspace
+构建通过。假设备命令覆盖四个准备阶段的取消，核对父子进程退出、无后续命令和输出上限。
+首次集成的 14 项构建锁测试通过；安装组件移至独立目录后，在仅系统 PATH、无有效 developer directory
+的环境下通过四项工具的加载、签名和 USB 枚举检查。实体 iPhone（iOS 27.2）已识别，
+菜单、窗口、设备选择、文件选择和包信息展示已验证。取消修复前的实机验收中，首次安装在传输前因 `Invalid HostID`
+停止；手机解锁后配对验证直接通过，未执行重新配对。通过安装窗口将签名的 CtrlX
+3.0.109 IPA 安装到该手机，收到 `InstallComplete (100%)` 和 `Install: Complete`，
+窗口显示安装成功；设备应用记录确认安装包已替换，随后启动成功。本轮取消修复未重复
+实机安装或原生 UI E2E。另一台无 Xcode 的 Mac 尚未进行实机验收。
+
 ## Viewer 剪贴板
 
 Mac / iOS Viewer 的 Copy Path、Copy Text、Copy Image 写入当前 Viewer 的系统剪贴板。

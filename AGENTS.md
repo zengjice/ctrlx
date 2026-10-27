@@ -109,6 +109,8 @@ the `.xcodeproj`, so local packages and shared schemes resolve consistently.
 
 - macOS scheme: `CtrlxServer`
 - iOS scheme: `Ctrlx`
+- Before direct Mac workspace builds, run `bash scripts/build-device-installer.sh`
+  to prepare the bundled IPA installer. Local Mac packaging runs it automatically.
 - Unit tests: `./scripts/unit-tests.sh` (pass filters after `--`). Uses Swift's
   `swiftbuild` backend without indexes; after success, prunes old native-backend
   outputs and test indexes. Do not alternate backends or build concurrently in

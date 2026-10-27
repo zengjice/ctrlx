@@ -90,6 +90,17 @@ public struct ProcessRunner: Sendable {
         throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Bounded process execution is not configured")
     }
 
+    /// Retains bounded output and stops the owned process group on task cancellation.
+    public var runBoundedCancellable: @Sendable (
+        _ executable: String,
+        _ arguments: [String],
+        _ environment: [String: String]?,
+        _ timeout: TimeInterval?,
+        _ maximumBytes: Int
+    ) async throws -> ProcessResult = { _, _, _, _, _ in
+        throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Cancellable bounded process execution is not configured")
+    }
+
     /// Cancelling the task stops the owned command and its subprocesses, then waits for exit.
     public var runCancellable: @Sendable (
         _ executable: String,
@@ -119,13 +130,16 @@ public extension ProcessRunner {
         runBounded: @Sendable @escaping (String, [String], [String: String]?, TimeInterval?, Int) async throws -> ProcessResult = { _, _, _, _, _ in
             throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Bounded process execution is not configured")
         },
+        runBoundedCancellable: @Sendable @escaping (String, [String], [String: String]?, TimeInterval?, Int) async throws -> ProcessResult = { _, _, _, _, _ in
+            throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Cancellable bounded process execution is not configured")
+        },
         runWithInput: @Sendable @escaping (String, [String], [String: String]?, TimeInterval?, Data) async throws -> ProcessResult = { _, _, _, _, _ in
             throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Process input is not configured")
         }
     ) {
         self.init(run: run, runWithLaunch: { _, _, _, _, _ in
             throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Guarded process launch is not configured")
-        }, runBounded: runBounded, runCancellable: run, runWithInput: runWithInput)
+        }, runBounded: runBounded, runBoundedCancellable: runBoundedCancellable, runCancellable: run, runWithInput: runWithInput)
     }
 }
 
@@ -196,6 +210,10 @@ extension ProcessRunner: DependencyKey {
                 runBounded: { executable, arguments, environment, timeout, maximumBytes in
                     guard maximumBytes > 0 else { throw ProcessRunnerError.invalidOutputLimit }
                     return try await execute(executable, arguments, environment, timeout, maximumBytes: maximumBytes)
+                },
+                runBoundedCancellable: { executable, arguments, environment, timeout, maximumBytes in
+                    guard maximumBytes > 0 else { throw ProcessRunnerError.invalidOutputLimit }
+                    return try await execute(executable, arguments, environment, timeout, maximumBytes: maximumBytes, cancelOnTaskCancellation: true)
                 },
                 runCancellable: { executable, arguments, environment, timeout in
                     try await execute(executable, arguments, environment, timeout, maximumBytes: nil, cancelOnTaskCancellation: true)
