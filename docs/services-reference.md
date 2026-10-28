@@ -825,8 +825,14 @@ uninstall the exact user-scoped `ctrlx@ctrlx` with `--keep-data`, then install
 and verify it. If the install fails after removal, the error explicitly reports
 the partial operation and settings re-queries the remaining state for retry.
 Other plugins, authentication and running Agent sessions are not removed or
-restarted. Successful changes display a reminder to restart the corresponding
-Agent sessions, not the CtrlX app. Older CLIs that reject these commands fail
+restarted. After a successful Codex install/reinstall, settings explains that
+new CtrlX-managed launches bypass trust checks for all enabled hooks and that
+existing sessions can resolve `hook approval required` through `/hooks` without
+exiting. Uninstall and other agents retain the reminder to restart the
+corresponding Agent sessions, not the CtrlX app. The notice tracks the last
+successful operation and clears when another operation starts, so a failed
+reinstall cannot leave stale success guidance. See [Codex launch behavior](plugins/codex.md#hook-trust-on-launch).
+Older CLIs that reject these commands fail
 visibly rather than falling back to editing agent configuration files.
 
 `PluginRegistry` owns enabled cores; `PluginRegistryStore.swift` persists

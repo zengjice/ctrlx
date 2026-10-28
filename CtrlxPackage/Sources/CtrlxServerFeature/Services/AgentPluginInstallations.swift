@@ -25,11 +25,16 @@
     }
 
     struct AgentPluginInstallation: Sendable {
+        enum Change: Sendable {
+            case installed
+            case uninstalled
+        }
+
         var status: PluginInstallStatus?
         var bundledVersion: String?
         var isBusy = false
         var error: String?
-        var needsSessionRestart = false
+        var lastChange: Change?
 
         var updateAvailable: Bool {
             guard case let .installed(version) = status, let bundledVersion else { return false }
@@ -122,6 +127,7 @@
             guard installations[location]?.isBusy != true else { return }
             installations[location, default: .init()].isBusy = true
             installations[location]?.error = nil
+            installations[location]?.lastChange = nil
             defer { installations[location]?.isBusy = false }
             guard let core = await core(location.pluginID) else {
                 installations[location]?.status = .agentUnavailable
@@ -133,7 +139,7 @@
                 } else {
                     _ = try await core.reinstall(configRoot: location.configRoot)
                 }
-                installations[location]?.needsSessionRestart = true
+                installations[location]?.lastChange = uninstall ? .uninstalled : .installed
             } catch {
                 installations[location]?.error = error.localizedDescription
             }

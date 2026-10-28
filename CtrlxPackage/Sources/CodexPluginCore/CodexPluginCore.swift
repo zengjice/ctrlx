@@ -451,6 +451,8 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     // MARK: - Auto-launch
 
+    private static let bypassHookTrustArgument = "--dangerously-bypass-hook-trust"
+
     public func commandForLaunch(projectPath _: String) async -> LaunchCommand? {
         try? await commandForLaunch(projectPath: "", providerID: nil)
     }
@@ -464,7 +466,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         let provider = try await providerConfiguration(providerID ?? settings.defaultProviderID)
         return LaunchCommand(
             command: settings.commandPath,
-            args: provider.arguments + terminalTelemetryArguments(),
+            args: provider.arguments + [Self.bypassHookTrustArgument] + terminalTelemetryArguments(),
             env: provider.environment
         )
     }
@@ -484,7 +486,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         environment["CODEX_HOME"] = root
         return AgentForkLaunch(command: LaunchCommand(
             command: settings.commandPath,
-            args: ["fork", sessionID, "-C", projectPath] + provider.arguments + terminalTelemetryArguments(),
+            args: ["fork", sessionID, "-C", projectPath] + provider.arguments + [Self.bypassHookTrustArgument] + terminalTelemetryArguments(),
             env: environment
         ))
     }
@@ -526,7 +528,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         return try AgentResumeArguments.capture(
             arguments,
             values: ["--model", "--profile", "--sandbox", "--ask-for-approval", "--add-dir", "--local-provider"],
-            flags: ["--oss", "--search", "--no-alt-screen", "--no-daemon", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--approve-for-me"],
+            flags: ["--oss", "--search", "--no-alt-screen", "--no-daemon", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--approve-for-me", bypassHookTrustArgument],
             ignoredValues: ["--cd", "--image"],
             ignoredFlags: ["--last", "--all", "--include-non-interactive", "--worktree"],
             aliases: ["-c": "--config", "-m": "--model", "-p": "--profile", "-s": "--sandbox", "-a": "--ask-for-approval", "-C": "--cd", "-i": "--image"],
@@ -553,6 +555,9 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             catalogCommand: descriptor.executable
         )
         var arguments = descriptor.providerID == nil ? descriptor.arguments : Self.removingProviderOverrides(descriptor.arguments)
+        if !arguments.contains(Self.bypassHookTrustArgument) {
+            arguments.append(Self.bypassHookTrustArgument)
+        }
         // A recovered TUI owns its process lifetime; no shared daemon keeps an
         // interrupted launch running after its pane disappears.
         if descriptor.cliVersion == Self.verifiedResumeVersion, !arguments.contains("--no-daemon") {

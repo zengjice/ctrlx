@@ -73,7 +73,9 @@
                 reinstalls += 1
                 reinstalledRoots.append(configRoot)
                 status = .notInstalled
-                if failReinstall { throw AgentPluginInstallError("Install failed; retry") }
+                if failReinstall {
+                    throw AgentPluginInstallError("Install failed; retry")
+                }
                 status = .installed(version: "1.1.0")
                 return status
             }
@@ -115,12 +117,29 @@
             await service.reinstall(location)
             #expect(service.installations[location]?.status == .notInstalled)
             #expect(service.installations[location]?.error != nil)
-            #expect(service.installations[location]?.needsSessionRestart == false)
+            #expect(service.installations[location]?.lastChange == nil)
             await core.configure(.notInstalled)
             await service.reinstall(location)
             #expect(service.installations[location]?.error == nil)
-            #expect(service.installations[location]?.needsSessionRestart == true)
+            #expect(service.installations[location]?.lastChange == .installed)
             #expect(service.installations[location]?.status == .installed(version: "1.1.0"))
+        }
+
+        @Test("Post-change notices distinguish reinstall from uninstall and clear on a failed operation", arguments: ["codex", "claude-code"])
+        func changeNotices(pluginID: String) async {
+            let core = Core()
+            let location = AgentPluginLocation(pluginID: pluginID, configRoot: nil)
+            let service = AgentPluginInstallations(reminders: .inMemory(channel: .plugin)) { _ in core }
+            await service.reinstall(location)
+            #expect(service.installations[location]?.lastChange == .installed)
+            await service.uninstall(location)
+            await service.refresh(location)
+            #expect(service.installations[location]?.status == .notInstalled)
+            #expect(service.installations[location]?.lastChange == .uninstalled)
+            await core.configure(.notInstalled, fail: true)
+            await service.reinstall(location)
+            #expect(service.installations[location]?.lastChange == nil)
+            #expect(service.installations[location]?.error != nil)
         }
 
         @Test("Overlapping checks and clicks do not launch a second operation")
@@ -170,9 +189,9 @@
             await service.reinstall(codexOther)
             #expect(await codex.reinstalledRoots == ["/isolated/other"])
             #expect(await claude.reinstalledRoots.isEmpty)
-            #expect(service.installations[codexOther]?.needsSessionRestart == true)
-            #expect(service.installations[codexDefault]?.needsSessionRestart == false)
-            #expect(service.installations[claudeDefault]?.needsSessionRestart == false)
+            #expect(service.installations[codexOther]?.lastChange == .installed)
+            #expect(service.installations[codexDefault]?.lastChange == nil)
+            #expect(service.installations[claudeDefault]?.lastChange == nil)
             #expect(service.updates == [claudeDefault])
         }
     }

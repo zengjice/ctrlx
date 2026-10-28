@@ -18,6 +18,27 @@ Code core; only the agent-specific differences are called out here. See
 | `providers` | array | `[]` |
 | `default_provider_id` | String? | `null` |
 
+## Hook trust on launch
+
+CtrlX-managed New Agent / project, Fork and recovery launches add
+`--dangerously-bypass-hook-trust`. Recovery accepts the flag in a recorded
+invocation and supplies it once if missing. It is independent of telemetry
+export and applies to **all enabled hooks** in that Codex process, not only
+CtrlX's plugin. It does not bypass command approvals or sandboxing, change
+`config.toml`, or write persisted hook trust.
+
+An already-running Codex process does not acquire this invocation flag. After a
+plugin update, if it reports `plugin contents changed; hook approval required`,
+use `/hooks` to review and trust the updated hooks in that session. This reloads
+hook configuration without requiring the user to exit the conversation. Settings
+shows this guidance after a successful Codex install/reinstall; uninstall and
+other agents retain the restart reminder.
+
+Maintenance commands (plugin installation, version/catalog queries) and manual
+`codex` commands are not given this flag. The manual terminal integration below
+only supplies telemetry defaults. Users launching Codex manually can pass
+`--dangerously-bypass-hook-trust` explicitly when desired.
+
 ## API Providers
 
 Configure Providers in **Settings → Agents → Codex → Providers**. The built-in
@@ -127,13 +148,13 @@ reconcile or remove each other's records when tmux pane numbers overlap. The
 default installed Host keeps the legacy location above.
 
 ## Ingress bridge (install)
-`install()` writes `codex-hook-bridge.py` into the plugin state dir and registers it
-in `~/.codex/hooks.json` (Codex's `{matcher: ".*", hooks: [{type, command, timeout}]}`
-shape) for Codex's event list (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse,
-PermissionRequest, PreCompact, PostCompact, SubagentStart, SubagentStop, Stop), baking
-in `plugin_id=codex` + the socket path. The bridge harvests `cwd` from the payload
-(Codex has no project-dir env var). This replaces the legacy
-`codex plugin marketplace add` install flow (deleted in Phase B).
+`install()` registers the bundled marketplace with `codex plugin marketplace add`
+and installs `ctrlx@ctrlx` through `codex plugin add`. `CodexCLIInstaller` validates
+the marketplace source and installed version; reinstall uses the native CLI to
+refresh the plugin cache, including same-version content changes. The Agent-side
+plugin under `plugin/codex/ctrlx/` owns the hook declarations and bridge. Updating
+any plugin content can invalidate Codex's saved hook trust; launch behavior and
+the in-session recovery instructions are described above.
 
 ## Raw hook → `PluginEvent`
 Codex routes through the same `HookAction.from` parse as Claude, so the mapping table is

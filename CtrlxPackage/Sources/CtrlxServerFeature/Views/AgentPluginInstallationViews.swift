@@ -50,7 +50,9 @@
                 HStack {
                     statusLabel
                     Spacer()
-                    if state.isBusy { ProgressView().controlSize(.small) }
+                    if state.isBusy {
+                        ProgressView().controlSize(.small)
+                    }
                     Button("Check") { Task { await installations.refresh(location) } }
                     Button(installLabel) { Task { await installations.reinstall(location) } }
                         .disabled(state.bundledVersion == nil || state.status == .agentUnavailable)
@@ -73,9 +75,15 @@
                 if let error = state.error {
                     Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
                 }
-                if state.needsSessionRestart {
-                    Text("Restart your \(agentName) sessions to load the changed CtrlX plugin. Running sessions have not been restarted.")
-                        .font(.caption).foregroundStyle(.orange)
+                if let change = state.lastChange {
+                    Group {
+                        if location.pluginID == "codex", change == .installed {
+                            Text("New Codex sessions launched by CtrlX skip trust checks for all enabled hooks. If an existing session reports “hook approval required”, run /hooks and trust the updated hooks to continue without restarting.")
+                        } else {
+                            Text("Restart your \(agentName) sessions to load the changed CtrlX plugin. Running sessions have not been restarted.")
+                        }
+                    }
+                    .font(.caption).foregroundStyle(.orange).textSelection(.enabled)
                 }
             }
             .accessibilityIdentifier("agentPluginInstallation-\(location.pluginID)-\(location.configRoot ?? "default")")
@@ -83,7 +91,9 @@
         }
 
         private var installLabel: String {
-            if case .notInstalled = state.status { return "Install" }
+            if case .notInstalled = state.status {
+                return "Install"
+            }
             return "Reinstall"
         }
 
