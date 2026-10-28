@@ -13,6 +13,12 @@ struct AgentWorkflowTerminalCapture: Sendable {
     let bracketedPaste: Bool
     let inCopyMode: Bool
     let foregroundCommand: String
+
+    var plainLines: [String] {
+        ansi.replacingOccurrences(of: "\u{1b}\\[[0-9;:]*m", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\u{a0}", with: " ")
+            .components(separatedBy: "\n")
+    }
 }
 
 @MainActor

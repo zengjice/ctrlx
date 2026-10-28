@@ -820,7 +820,8 @@ final public class ConnectedViewer: Identifiable {
                 return
             }
             let isFileRequest: Bool = switch command.command {
-            case .readDashboard,
+            case .agentModelControls,
+                 .readDashboard,
                  .checkCtrlXAppUpdate,
                  .installCtrlXAppUpdate,
                  .manageAgentWorkflows,

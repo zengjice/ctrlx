@@ -95,6 +95,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// Older Hosts ignore OpenPaneSimulator's explicit "new" request.
     public let supportsPaneSimulatorCreation: Bool?
     public let supportsSimulatorClosing: Bool?
+    public let supportsAgentModelControls: Bool?
     public let supportsDashboard: Bool?
     public let agentWorkflowVersion: Int?
     public let workflowAgentPluginIDs: [String]?
@@ -162,6 +163,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case supportsPaneSimulator
         case supportsPaneSimulatorCreation
         case supportsSimulatorClosing
+        case supportsAgentModelControls
         case supportsDashboard
         case agentWorkflowVersion
         case workflowAgentPluginIDs
@@ -205,6 +207,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsPaneSimulator: Bool? = nil,
         supportsPaneSimulatorCreation: Bool? = nil,
         supportsSimulatorClosing: Bool? = nil,
+        supportsAgentModelControls: Bool? = nil,
         supportsDashboard: Bool? = nil,
         agentWorkflowVersion: Int? = nil,
         workflowAgentPluginIDs: [String]? = nil,
@@ -259,6 +262,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsPaneSimulator = supportsPaneSimulator
         self.supportsPaneSimulatorCreation = supportsPaneSimulatorCreation
         self.supportsSimulatorClosing = supportsSimulatorClosing
+        self.supportsAgentModelControls = supportsAgentModelControls
         self.supportsDashboard = supportsDashboard
         self.agentWorkflowVersion = agentWorkflowVersion
         self.workflowAgentPluginIDs = workflowAgentPluginIDs
@@ -307,6 +311,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsPaneSimulator: supportsPaneSimulator,
             supportsPaneSimulatorCreation: supportsPaneSimulatorCreation,
             supportsSimulatorClosing: supportsSimulatorClosing,
+            supportsAgentModelControls: supportsAgentModelControls,
             supportsDashboard: supportsDashboard,
             agentWorkflowVersion: agentWorkflowVersion,
             workflowAgentPluginIDs: workflowAgentPluginIDs,

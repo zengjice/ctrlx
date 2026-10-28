@@ -18,7 +18,11 @@ struct TerminalWindowStatusBar: View {
     var body: some View {
         HStack(spacing: 0) {
             TerminalQuickActionStatusBarButtons(hostID: hostID, paneIDs: paneIDs, voiceSession: voiceSession)
-            Spacer(minLength: 0)
+            if let firstPane = paneIDs.first {
+                AgentModelStatusBar(hostID: hostID, paneID: firstPane)
+            } else {
+                Spacer(minLength: 0)
+            }
 
             ViewThatFits(in: .horizontal) {
                 HStack {

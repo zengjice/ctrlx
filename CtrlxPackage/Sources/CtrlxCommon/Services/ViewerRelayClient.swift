@@ -127,6 +127,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsPaneSimulator = false
     public private(set) var hostSupportsPaneSimulatorCreation = false
     public private(set) var hostSupportsSimulatorClosing = false
+    public private(set) var hostSupportsAgentModelControls = false
     public private(set) var hostSupportsDashboard = false
     public private(set) var hostAgentWorkflowVersion: Int?
     public private(set) var hostWorkflowAgentPluginIDs: Set<String> = []
@@ -580,6 +581,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to use independent resource tabs."))
         case .manageAgentWorkflows where hostAgentWorkflowVersion != AgentWorkflowWire.version:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage Agent workflows."))
+        case .agentModelControls where !hostSupportsAgentModelControls:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to use model shortcuts."))
         case .readDashboard where !hostSupportsDashboard:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to view its Dashboard"))
         case .checkCtrlXAppUpdate where !hostSupportsCtrlXAppUpdateCheck:
@@ -801,6 +804,8 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: "").get())?.success == true
         case let .manageAgentWorkflows(spec):
             return (try? await sendCommand(spec, paneId: "").get())?.success == true
+        case let .agentModelControls(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get())?.success == true
         case let .readDashboard(spec):
             return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .checkCtrlXAppUpdate(spec):
@@ -1267,6 +1272,7 @@ final public class ViewerRelayClient {
             hostSupportsPaneSimulator = sessionState.supportsPaneSimulator == true
             hostSupportsPaneSimulatorCreation = sessionState.supportsPaneSimulatorCreation == true
             hostSupportsSimulatorClosing = sessionState.supportsSimulatorClosing == true
+            hostSupportsAgentModelControls = sessionState.supportsAgentModelControls == true
             hostSupportsDashboard = sessionState.supportsDashboard == true
             hostAgentWorkflowVersion = sessionState.agentWorkflowVersion
             hostWorkflowAgentPluginIDs = Set(sessionState.workflowAgentPluginIDs ?? [])
@@ -1780,6 +1786,7 @@ final public class ViewerRelayClient {
         hostSupportsPaneSimulator = false
         hostSupportsPaneSimulatorCreation = false
         hostSupportsSimulatorClosing = false
+        hostSupportsAgentModelControls = false
         hostSupportsDashboard = false
         hostAgentWorkflowVersion = nil
         hostWorkflowAgentPluginIDs = []

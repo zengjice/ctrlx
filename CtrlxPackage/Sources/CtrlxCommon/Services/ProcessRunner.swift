@@ -122,6 +122,15 @@ public struct ProcessRunner: Sendable {
     ) async throws -> ProcessResult = { _, _, _, _, _ in
         throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Process input is not configured")
     }
+
+    /// Metadata probes reproduce the target process's environment without
+    /// inheriting a different account/provider from the Host app.
+    public var runWithExactEnvironment: @Sendable (
+        _ executable: String, _ arguments: [String], _ environment: [String: String],
+        _ timeout: TimeInterval, _ maximumBytes: Int, _ input: Data?
+    ) async throws -> ProcessResult = { _, _, _, _, _, _ in
+        throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Exact-environment process execution is not configured")
+    }
 }
 
 public extension ProcessRunner {
@@ -139,7 +148,9 @@ public extension ProcessRunner {
     ) {
         self.init(run: run, runWithLaunch: { _, _, _, _, _ in
             throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Guarded process launch is not configured")
-        }, runBounded: runBounded, runBoundedCancellable: runBoundedCancellable, runCancellable: run, runWithInput: runWithInput)
+        }, runBounded: runBounded, runBoundedCancellable: runBoundedCancellable, runCancellable: run, runWithInput: runWithInput, runWithExactEnvironment: { _, _, _, _, _, _ in
+            throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "Exact-environment process execution is not configured")
+        })
     }
 }
 
@@ -220,6 +231,10 @@ extension ProcessRunner: DependencyKey {
                 },
                 runWithInput: { executable, arguments, environment, timeout, input in
                     try await execute(executable, arguments, environment, timeout, maximumBytes: nil, input: input)
+                },
+                runWithExactEnvironment: { executable, arguments, environment, timeout, maximumBytes, input in
+                    guard maximumBytes > 0 else { throw ProcessRunnerError.invalidOutputLimit }
+                    return try await execute(executable, arguments, environment, timeout, maximumBytes: maximumBytes, cancelOnTaskCancellation: true, input: input, inheritEnvironment: false)
                 }
             )
         #else
@@ -242,7 +257,8 @@ extension ProcessRunner: DependencyKey {
             _ executable: String, _ arguments: [String], _ environment: [String: String]?,
             _ timeout: TimeInterval?, maximumBytes: Int?, cancelOnTaskCancellation: Bool = false,
             input: Data? = nil,
-            launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil
+            launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil,
+            inheritEnvironment: Bool = true
         ) async throws -> ProcessResult {
             if cancelOnTaskCancellation {
                 try Task.checkCancellation()
@@ -261,8 +277,10 @@ extension ProcessRunner: DependencyKey {
             // cached) before the caller's overrides — otherwise `/usr/bin/env
             // <cmd>` can't find CLIs in ~/.local/bin, Homebrew, mise/nvm, etc.
             @Dependency(LoginShellPath.self) var loginShellPath
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = effectivePath(resolved: loginShellPath.resolve(), inherited: env["PATH"])
+            var env = inheritEnvironment ? ProcessInfo.processInfo.environment : [:]
+            if inheritEnvironment {
+                env["PATH"] = effectivePath(resolved: loginShellPath.resolve(), inherited: env["PATH"])
+            }
             if let additionalEnv = environment {
                 for (key, value) in additionalEnv {
                     env[key] = value

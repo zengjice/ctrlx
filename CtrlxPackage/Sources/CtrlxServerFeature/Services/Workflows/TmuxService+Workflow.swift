@@ -5,12 +5,16 @@ import Foundation
 
 extension TmuxService {
     func captureWorkflowTerminal(_ instance: AgentWorkflowInstance) async throws -> AgentWorkflowTerminalCapture {
+        try await captureAgentTerminal(paneID: instance.paneID, identity: instance.workspacePane)
+    }
+
+    func captureAgentTerminal(paneID: String, identity: WorkspacePaneIdentity) async throws -> AgentWorkflowTerminalCapture {
         let fields = ["pane_width", "pane_height", "cursor_x", "cursor_y", "cursor_flag", "bracket_paste_flag", "pane_in_mode", "pane_current_command"]
         let metadata = fields.map { "#{\($0)}" }.joined(separator: "\u{1f}")
         let result = try await runWorkspaceCommand([
-            ["display-message", "-p", "-t", instance.paneID, metadata],
-            ["capture-pane", "-p", "-e", "-N", "-t", instance.paneID],
-        ], target: instance.paneID, identity: instance.workspacePane)
+            ["display-message", "-p", "-t", paneID, metadata],
+            ["capture-pane", "-p", "-e", "-N", "-t", paneID],
+        ], target: paneID, identity: identity)
         let output = result.stdoutString
         guard let newline = output.firstIndex(of: "\n") else { throw AgentWorkflowError("The terminal snapshot is incomplete.") }
         let values = output[..<newline].components(separatedBy: "\u{1f}")

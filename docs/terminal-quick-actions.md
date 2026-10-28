@@ -88,6 +88,50 @@ it never substitutes Control-C or forwards copy to an ordinary shell.
 
 ## Status bar
 
+Mac Host and Viewer status bars also show model and reasoning-effort shortcuts
+for the tab's **first pane by pane index**, independently of keyboard focus. Main,
+detached and split workspaces use the same horizontally scrolling, fixed-height
+strip. Every discovered model and the selected model's supported efforts is
+initially visible. The current choice has a tinted background and checkmark.
+Right-click a button to hide it, or use the adjacent customization menu to restore
+individual buttons or all defaults. These display preferences are in-memory,
+per-client and per-stable-window, survive split/detach, and expire when the tab
+closes. The current choice always remains visible. Restore defaults does not
+change the Agent's model.
+
+The optional `AgentModelProviding` plugin capability owns discovery, native input
+and confirmation. The first verified adapters are Codex CLI 0.164.0 and Claude
+Code 2.1.310. Codex reads `debug models` with the running process's configuration;
+Claude performs a metadata-only SDK initialize handshake with no prompt, tools,
+hooks or persisted conversation. Claude preserves both `--flag value` and
+`--flag=value` forms of model, effort and setting-source selectors, including
+an empty setting-source value. Both use the exact target process environment
+and directory; secrets stay on the Host. A Codex `--profile` launch currently
+requires native `/model` instead. Claude sessions with a forced
+`CLAUDE_CODE_EFFORT_LEVEL` or custom `--settings` also use their native controls. Unsupported versions
+show a reason rather than inventing a model list.
+
+Visible strips refresh current state every three seconds; **Refresh Models**
+reloads the capability catalog. Last-turn telemetry is never treated as current
+selection. Codex shortcuts require a readable model and effort in its native
+status line. If a custom status line hides them, the strip disables switching
+with an explanation; the Host rechecks before sending any command. Restore the
+status fields or use native `/model`. Claude can establish an unknown selection
+through its native picker. Native manual changes are reflected when their
+current state is visible.
+
+Only an idle Agent with an empty native composer can accept a switch. Questions,
+approvals, drafts and external editors prevent it. The Host checks stable pane
+and process identity, uses the same input queue as human typing, and abandons a
+sequence when human input intervenes. It never clears a draft, interrupts a task,
+or queues a model change for later. Codex uses session-only `/model ...
+--reasoning=...`; Claude selects in the native picker with **s**, not Enter, so it
+does not save a global default. Supported effort is retained when changing
+models; otherwise the target model's default applies. A successful response
+requires native readback. On failure, inspect the terminal before retrying.
+Viewer requests use the `supportsAgentModelControls` capability and existing
+encrypted command channel; old Hosts reject the feature, and Relay is unchanged.
+
 macOS offers **Commands** (`/`) and **Quick Phrases** as labeled, bordered buttons
 on the left side of the terminal's bottom status bar, for both local and Viewer
 windows. Commands, Quick Phrases and the wider voice input button share a

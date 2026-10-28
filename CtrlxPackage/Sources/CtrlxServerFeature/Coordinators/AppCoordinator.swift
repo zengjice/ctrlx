@@ -145,6 +145,9 @@
         /// `internal` (not `private`) so `@testable import` tests can inject a
         /// pre-configured `PluginRegistry` without calling `setupAllServices()`.
         @ObservationIgnored var pluginRegistry: PluginRegistry?
+        @ObservationIgnored var agentModelCatalogs: [String: AgentModelRuntimeCache] = [:]
+        @ObservationIgnored var agentModelRequests: Set<String> = []
+        let agentModelPreferences = AgentModelPreferences()
 
         @ObservationIgnored var agentWorkflowStore: AgentWorkflowStore?
 
@@ -3443,6 +3446,12 @@
                         return try await CommandResponseMessage(commandId: command.id, success: true, agentWorkflow: service.handle(spec))
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
+                if case let .agentModelControls(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        return try await CommandResponseMessage(commandId: command.id, success: true, agentModels: self.handleAgentModels(spec, paneID: command.paneId))
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case .readDashboard = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
                     do {
@@ -3958,6 +3967,7 @@
                     supportsPaneSimulator: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsPaneSimulatorCreation: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsSimulatorClosing: await self?.agentSimulator.supportsSimulatorViewing,
+                    supportsAgentModelControls: true,
                     supportsDashboard: true,
                     agentWorkflowVersion: workflowVersion,
                     workflowAgentPluginIDs: workflowVersion == nil ? nil : await self?.workflowAgentPluginIDs(),

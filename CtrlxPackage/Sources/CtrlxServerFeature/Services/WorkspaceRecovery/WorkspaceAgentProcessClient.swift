@@ -9,12 +9,15 @@ import Foundation
 struct WorkspaceAgentProcessClient: Sendable {
     var invocation: @Sendable (_ processID: String, _ runtimeID: String) async throws -> AgentResumeInvocation
     var version: @Sendable (_ executable: String) async -> String?
+    var modelContext: @Sendable (_ processID: String, _ runtimeID: String, _ directory: String) async throws -> AgentModelContext = { _, _, _ in
+        throw AgentModelError("The Agent's model discovery environment is unavailable.")
+    }
 }
 
 extension WorkspaceAgentProcessClient: DependencyKey {
     static let liveValue: Self = {
         let reader = WorkspaceAgentProcessReader()
-        return Self(invocation: { try await reader.invocation(processID: $0, runtimeID: $1) }, version: { await reader.version($0) })
+        return Self(invocation: { try await reader.invocation(processID: $0, runtimeID: $1) }, version: { await reader.version($0) }, modelContext: { try await reader.modelContext(processID: $0, runtimeID: $1, directory: $2) })
     }()
 }
 
@@ -41,6 +44,15 @@ private actor WorkspaceAgentProcessReader {
     }
 
     func invocation(processID: String, runtimeID: String) async throws -> AgentResumeInvocation {
+        try await snapshot(processID: processID, runtimeID: runtimeID).0
+    }
+
+    func modelContext(processID: String, runtimeID: String, directory: String) async throws -> AgentModelContext {
+        let (invocation, environment) = try await snapshot(processID: processID, runtimeID: runtimeID)
+        return AgentModelContext(invocation: invocation, environment: environment, directory: directory)
+    }
+
+    private func snapshot(processID: String, runtimeID: String) async throws -> (AgentResumeInvocation, [String: String]) {
         guard let pid = Int32(processID), AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID else {
             throw WorkspaceRecoveryError("The Agent process changed before its startup configuration could be recorded.")
         }
@@ -63,13 +75,13 @@ private actor WorkspaceAgentProcessReader {
         guard AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID else {
             throw WorkspaceRecoveryError("The Agent process changed while its startup configuration was being recorded.")
         }
-        return AgentResumeInvocation(
+        return (AgentResumeInvocation(
             executable: executable,
             arguments: Array(parsed.arguments.dropFirst()),
             configurationRoots: parsed.configurationRoots,
             providerID: parsed.providerID,
             version: cliVersion
-        )
+        ), parsed.environment)
     }
 }
 
@@ -78,6 +90,7 @@ enum WorkspaceAgentProcessArguments {
         var arguments: [String]
         var configurationRoots: [String: String]
         var providerID: String?
+        var environment: [String: String] = [:]
     }
 
     static func parse(_ data: Data) throws -> Parsed {
@@ -106,6 +119,7 @@ enum WorkspaceAgentProcessArguments {
         var roots: [String: String] = [:]
         var providerID: String?
         var hasEnvironment = false
+        var environment: [String: String] = [:]
         while offset < bytes.count {
             if bytes[offset] == 0 {
                 offset += 1
@@ -116,6 +130,7 @@ enum WorkspaceAgentProcessArguments {
             hasEnvironment = true
             let name = String(entry[..<equal])
             let value = String(entry[entry.index(after: equal)...])
+            environment[name] = value
             if name == AgentProviderEnvironment.markerKey {
                 guard !value.isEmpty, value.utf8.count <= 128, providerID == nil || providerID == value else {
                     throw WorkspaceRecoveryError("The Agent Provider identity is not unambiguous.")
@@ -132,6 +147,6 @@ enum WorkspaceAgentProcessArguments {
         // macOS may return only argv for protected processes. That is not
         // evidence that CODEX_HOME / CLAUDE_CONFIG_DIR was unset.
         guard hasEnvironment else { throw WorkspaceRecoveryError("The Agent process environment is unavailable; its configuration directory cannot be verified.") }
-        return Parsed(arguments: arguments, configurationRoots: roots, providerID: providerID)
+        return Parsed(arguments: arguments, configurationRoots: roots, providerID: providerID, environment: environment)
     }
 }

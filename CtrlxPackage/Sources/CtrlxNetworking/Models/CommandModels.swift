@@ -1158,6 +1158,7 @@ public struct PasteTerminalText: CommandSpec, Equatable {
 /// This enum is the wire format - it's what gets encoded and sent over the network.
 /// Each case holds its corresponding CommandSpec struct.
 public enum CommandType: Codable, Sendable, Equatable {
+    case agentModelControls(AgentModelControls)
     case readDashboard(ReadDashboard)
     /// Check the fixed Host-owned CtrlX app update feed now.
     case checkCtrlXAppUpdate(CheckCtrlXAppUpdate)
@@ -1481,6 +1482,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     /// Host-owned CtrlX app update state, when this command changed it.
     public let ctrlXAppUpdate: CtrlXAppUpdateState?
     public let agentWorkflow: AgentWorkflowResponse?
+    public let agentModels: AgentModelSnapshot?
     /// True only after the Host sent the opener or already handled this queue.
     /// Missing on older Hosts; a generic success is not an acknowledgement.
     public let codexQuestionsHandled: Bool?
@@ -1505,6 +1507,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         dashboard: DashboardSnapshot? = nil,
         ctrlXAppUpdate: CtrlXAppUpdateState? = nil,
         agentWorkflow: AgentWorkflowResponse? = nil,
+        agentModels: AgentModelSnapshot? = nil,
         codexQuestionsHandled: Bool? = nil
     ) {
         self.commandId = commandId
@@ -1526,6 +1529,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.dashboard = dashboard
         self.ctrlXAppUpdate = ctrlXAppUpdate
         self.agentWorkflow = agentWorkflow
+        self.agentModels = agentModels
         self.codexQuestionsHandled = codexQuestionsHandled
     }
 
