@@ -7,6 +7,65 @@ import Testing
 
 @MainActor
 struct AgentWindowTmuxTests {
+    @Test("Closing a resource session during terminal creation retires only the new terminal")
+    func resourceSessionClosesDuringCreation() async {
+        let calls = LockIsolated<[[String]]>([])
+        let service = LockIsolated<TmuxService?>(nil)
+        await withDependencies {
+            $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                calls.withValue { $0.append(arguments) }
+                if arguments.contains("new-session") {
+                    await MainActor.run { service.value?.resourceSessions = [] }
+                }
+                return ProcessResult(exitCode: 0, stdout: Data((arguments.contains("new-session") ? "123:456\u{1f}%42\n" : "").utf8), stderr: Data())
+            }
+        } operation: {
+            let tmux = TmuxService(tmuxPath: "/test/tmux")
+            service.setValue(tmux)
+            let id = UUID()
+            tmux.resourceSessions = [.init(id: id, name: "resources", directory: "/tmp")]
+            await #expect(throws: TmuxError.self) {
+                try await tmux.newWindow(sessionName: "resources", runCommand: "codex", resourceSessionID: id)
+            }
+        }
+        #expect(!calls.value.contains { $0.contains { $0.contains("send-keys") } })
+        #expect(calls.value.contains { $0.contains { $0.contains("kill-window") && $0.contains("%42") } })
+    }
+
+    @Test("Isolated tmux: resource-only session recreates a real terminal with the same UUID")
+    func resourceOnlySessionRecreatesTerminal() async throws {
+        let binary = try #require(TmuxBinaryLocator.liveValue.find())
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("resource-tmux-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let socket = root.appendingPathComponent("tmux.sock").path
+        let runner = ProcessRunner.liveValue
+        do {
+            try await withDependencies {
+                $0[ProcessRunner.self] = runner
+                $0.continuousClock = ContinuousClock()
+            } operation: {
+                let tmux = TmuxService(tmuxPath: binary, socketPath: socket)
+                tmux.zdotDirOverride = root.path
+                let id = UUID()
+                tmux.resourceSessions = [.init(id: id, name: "resources", directory: root.path)]
+                for _ in 0..<2 {
+                    _ = try await tmux.newWindow(sessionName: "resources", resourceSessionID: id)
+                    let identity = try await runner.run(binary, ["-S", socket, "show-option", "-v", "-t", "=resources:", WorkspaceTmuxRecovery.sessionKey], nil, nil)
+                    #expect(identity.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == id.uuidString)
+                    let panes = await tmux.refreshPanes()
+                    #expect(panes.count == 1)
+                    let stopped = try await runner.run(binary, ["-S", socket, "kill-server"], nil, nil)
+                    #expect(stopped.isSuccess)
+                    _ = await tmux.refreshPanes()
+                }
+            }
+        } catch {
+            _ = try? await runner.run(binary, ["-S", socket, "kill-server"], nil, nil)
+            throw error
+        }
+    }
+
     @Test("Agent launch targets only the returned pane and preserves per-window env/cwd/name")
     func launchArguments() async throws {
         let calls = LockIsolated<[[String]]>([])

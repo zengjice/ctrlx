@@ -264,10 +264,11 @@
             let second = try addTab(service, owner: "second")
             service.browserTabSelected(second.identifier)
             let child = UUID().uuidString
+            let sourcePaneID = try #require(first.paneID)
             runtime.onOpenExtension = { source in
                 #expect(source == first.identifier)
                 service.browserTabCreated(child, view: NSView(), route: [
-                    "workspace": first.workspaceID.uuidString, "pane": first.paneID,
+                    "workspace": first.workspaceID.uuidString, "pane": sourcePaneID,
                     "presentation": "extensionWindow",
                 ], owner: first.owner, parent: first.identifier)
                 return child

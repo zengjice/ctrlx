@@ -164,9 +164,10 @@ public enum FileBrowserTabOperation: Codable, Sendable, Equatable {
 /// A live Host resource, never restored by rebinding a saved tmux pane ID.
 public struct HostFileTab: Codable, Sendable, Equatable, Identifiable {
     public let id: UUID
+    public let resourceSessionID: UUID?
     public var sessionName: String
-    public var windowID: String
-    public let sourcePaneID: String
+    public var windowID: String?
+    public let sourcePaneID: String?
     public let group: PaneTabGroup
     public let isPrimary: Bool
     public let initialDirectory: String
@@ -174,13 +175,15 @@ public struct HostFileTab: Codable, Sendable, Equatable, Identifiable {
     public init(
         id: UUID = UUID(),
         sessionName: String,
-        windowID: String,
-        sourcePaneID: String,
+        windowID: String? = nil,
+        sourcePaneID: String? = nil,
         group: PaneTabGroup = .human,
         isPrimary: Bool = true,
-        initialDirectory: String
+        initialDirectory: String,
+        resourceSessionID: UUID? = nil
     ) {
         self.id = id
+        self.resourceSessionID = resourceSessionID
         self.sessionName = sessionName
         self.windowID = windowID
         self.sourcePaneID = sourcePaneID

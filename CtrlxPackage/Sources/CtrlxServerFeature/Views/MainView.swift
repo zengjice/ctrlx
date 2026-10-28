@@ -65,18 +65,19 @@ public struct MainView: View {
             ?? workspace.members.first ?? workspace.anchor
         guard let session = workspace.resolvedSession(using: terminalSession) else { return }
         workspace.sessionName = session
-        let tabs = tabStore.tabs(hostID: target.hostID, session: session)
-        if let host = target.hostID {
+        let tabs = tabStore.tabs(hostID: workspace.hostID, session: session)
+        if let host = workspace.hostID {
             selectedWindow = nil
             selectedRemoteSession = RemoteSessionSelection(
                 hostId: host,
                 hostName: settings.pairedHosts.first { $0.id == host }?.displayName ?? host,
                 sessionName: session
             )
-            selectedRemoteWindowId = coordinator.remoteSessionStore?.windows(for: host).first { $0.stableId == target.windowID }?.id
+            selectedRemoteWindowId = coordinator.remoteSessionStore?.windows(for: host).first { $0.stableId == target?.windowID }?.id
         } else {
             selectedRemoteSession = nil
-            selectedWindow = tmuxService.windows.first { $0.stableId == target.windowID }
+            selectedLocalSessionName = session
+            selectedWindow = tmuxService.windows.first { $0.stableId == target?.windowID }
         }
         if tabs.rightSide.contains(workspace.selection) {
             tabs.selectedRight = workspace.selection
@@ -213,7 +214,8 @@ public struct MainView: View {
         } else {
             ids = tmuxService.windows.filter { $0.sessionName == session }.map(\.stableId)
         }
-        if let anchor = ids.compactMap({ DetachedTerminalTarget(hostID: hostID, windowID: $0) }).first {
+        let anchor = ids.compactMap { DetachedTerminalTarget(hostID: hostID, windowID: $0) }.first
+        if anchor != nil || hasIndependentResources(hostID: hostID, sessionName: session) {
             if detachedWorkspace != nil {
                 context.returnToMain = { drag in
                     guard
@@ -243,7 +245,7 @@ public struct MainView: View {
 
     private func hasDetachedTabs(hostID: String?, session: String) -> Bool {
         coordinator.detachedWindows.workspaces.values.contains { workspace in
-            workspace.anchor.hostID == hostID && (
+            workspace.hostID == hostID && (
                 workspace.tabs.existing(hostID: hostID, session: session) != nil
                     || workspace.members.contains { terminalSession($0) == session }
             )
@@ -485,6 +487,7 @@ public struct MainView: View {
                 .fileBrowserCacheMaintenance()
         }
         .environment(\.browserAnnotationContext, browserAnnotationContext)
+        .environment(\.resourceTabActions, resourceTabActions)
         .background(settings.theme.workspaceBackgroundColor)
         .containerBackground(settings.theme.workspaceBackgroundColor, for: .window)
         .toolbarBackground(settings.theme.chromeBackgroundColor, for: .windowToolbar)
@@ -1677,6 +1680,7 @@ public struct MainView: View {
                         )
                     },
                     linkedTabActions: linkedTabActions(hostID: remote.hostId, sessionName: remote.sessionName),
+                    onNewResource: supportsIndependentResources(hostID: remote.hostId) ? { openIndependentResource($0, hostID: remote.hostId, sessionName: remote.sessionName) } : nil,
                     onViewWorkflow: { pane in openWorkflow(for: pane, hostID: remote.hostId) },
                     onDetachWindow: { sourceWindow, point in
                         detachTerminal(hostID: remote.hostId, windowID: sourceWindow.stableId, position: point)
@@ -1894,6 +1898,7 @@ public struct MainView: View {
                             )
                         },
                         linkedTabActions: linkedTabActions(hostID: nil, sessionName: session.sessionName),
+                        onNewResource: { openIndependentResource($0, hostID: nil, sessionName: session.sessionName) },
                         onViewWorkflow: { pane in openWorkflow(for: pane, hostID: nil) },
                         onDetachWindow: { sourceWindow, point in
                             detachTerminal(hostID: nil, windowID: sourceWindow.stableId, position: point)
@@ -3403,6 +3408,10 @@ public struct MainView: View {
     }
 
     private func requestCloseSession(_ sessionName: String) {
+        if let session = coordinator.resourceSessions.sessions.first(where: { $0.name == sessionName }) {
+            closeConfirmation = .init(target: .resourceSession(session, hostID: nil), runningProcesses: [])
+            return
+        }
         guard let identity = tmuxService.panes.first(where: { $0.sessionName == sessionName })?.workspaceIdentity else {
             attachError = "The terminal is still being discovered. Try again shortly."
             return
@@ -3432,7 +3441,7 @@ public struct MainView: View {
             let processes = await tmuxService.runningProcesses(inWindow: window.stableId)
             guard ownsTerminal(hostID: nil, windowID: window.stableId) else { return }
             let windows = tmuxService.windows.filter { $0.sessionName == window.sessionName }
-            let closesSession = windows.count == 1 && windows.first?.stableId == window.stableId
+            let closesSession = windows.count == 1 && windows.first?.stableId == window.stableId && !hasIndependentResources(hostID: nil, sessionName: window.sessionName)
             if processes.isEmpty, !closesSession {
                 performClose(target)
             } else {
@@ -3533,8 +3542,8 @@ public struct MainView: View {
     }
 
     private func adjacentTab(to current: TabDragPayload, in order: [TabDragPayload], direction: Int) -> TabDragPayload? {
-        if current.windowId != nil {
-            let terminals = order.filter { $0.windowId != nil }
+        if currentSessionTabs?.sourcePaneID(for: current) == nil {
+            let terminals = order.filter { currentSessionTabs?.sourcePaneID(for: $0) == nil }
             guard terminals.count > 1, let index = terminals.firstIndex(of: current) else { return nil }
             return terminals[(index + direction + terminals.count) % terminals.count]
         }
@@ -3693,12 +3702,14 @@ public struct MainView: View {
             do {
                 let newWindowID: String
                 if let hostID, let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient {
-                    let response = try await client.sendCommand(CreateTmuxWindow(sessionName: sessionName, workingDirectory: directory), paneId: "", inputBinding: remoteBinding).get()
+                    let response = try await client.sendCommand(CreateTmuxWindow(sessionName: sessionName, workingDirectory: directory, resourceSessionID: client.resourceSessions.first { $0.name == sessionName }?.id), paneId: "", inputBinding: remoteBinding).get()
                     guard let paneID = response.paneId else { throw ViewerRelayClientError.commandFailed("The Host did not return the new terminal.") }
                     await client.requestSessionState()
                     var found: String?
                     for _ in 0..<20 {
-                        _ = try remoteBinding.expectedPane(current: client.workspaceInputState.sessionBinding(name: sessionName))
+                        if client.resourceSessions.first(where: { $0.name == sessionName }) == nil {
+                            _ = try remoteBinding.expectedPane(current: client.workspaceInputState.sessionBinding(name: sessionName))
+                        }
                         found = coordinator.remoteSessionStore?.windows(for: hostID).first { $0.panes.contains { $0.paneId == paneID } }?.stableId
                         if found != nil {
                             break
@@ -3708,12 +3719,19 @@ public struct MainView: View {
                     guard let found else { throw ViewerRelayClientError.commandFailed("Terminal created but not visible yet. Select it from the tab bar.") }
                     newWindowID = found
                 } else if hostID == nil {
-                    guard let localIdentity else { throw ViewerRelayClientError.commandFailed("Session identity is not available yet. Try again after discovery.") }
-                    let paneID = try await tmuxService.newWindow(sessionName: sessionName, workingDirectory: directory, expectedWorkspacePane: localIdentity)
+                    let resourceID = coordinator.resourceSessions.sessions.first { $0.name == sessionName }?.id
+                    guard localIdentity != nil || resourceID != nil else { throw ViewerRelayClientError.commandFailed("Session identity is not available yet. Try again after discovery.") }
+                    let paneID = try await tmuxService.newWindow(sessionName: sessionName, workingDirectory: directory, expectedWorkspacePane: localIdentity, resourceSessionID: resourceID)
                     guard let window = await PaneSurfaceRetry.localWindow(containing: paneID, windows: { tmuxService.windows }, refresh: { _ = await tmuxService.refreshPanes() }) else {
                         throw ViewerRelayClientError.commandFailed("Terminal created but not visible yet. Select it from the tab bar.")
                     }
-                    guard window.panes.contains(where: { $0.workspaceIdentity?.isSameSession(as: localIdentity) == true }) else {
+                    guard
+                        window.panes.contains(where: { pane in
+                            if let localIdentity {
+                                return pane.workspaceIdentity?.isSameSession(as: localIdentity) == true
+                            }
+                            return pane.workspaceIdentity?.sessionID == resourceID
+                        }) else {
                         throw ViewerRelayClientError.commandFailed("The session changed while creating the terminal. Select the restored session.")
                     }
                     newWindowID = window.stableId
@@ -3797,6 +3815,16 @@ public struct MainView: View {
         }
     }
 
+    private var resourceTabActions: ResourceTabActions? {
+        if let remote = selectedRemoteSession {
+            guard
+                let client = coordinator.viewerConnectionManager?.connection(for: remote.hostId)?.relayClient,
+                client.hostSupportsIndependentResources else { return nil }
+            return .init { try await ResourceTabClient.request($0, client: client) }
+        }
+        return .init { try await coordinator.handleResourceTab($0) }
+    }
+
     private var browserAnnotationContext: BrowserAnnotationContext? {
         if let remote = selectedRemoteSession {
             guard let client = coordinator.viewerConnectionManager?.connection(for: remote.hostId)?.relayClient else { return nil }
@@ -3806,7 +3834,7 @@ public struct MainView: View {
                 revealAnnotationTarget(target, hostID: remote.hostId)
             }
         }
-        guard let sessionName = selectedWindow?.sessionName else { return nil }
+        guard let sessionName = currentLocalSession()?.sessionName else { return nil }
         let targets = windowManager.paneStates.values.filter { $0.sessionName == sessionName }
             .sorted { $0.target < $1.target }.compactMap(AgentImageTarget.init(pane:))
         return BrowserAnnotationContext(targets: targets) { image, target in
@@ -3896,7 +3924,7 @@ public struct MainView: View {
         guard
             let workspace = coordinator.detachedWindows.detachSession(
                 hostID: hostID, name: name, windowIDs: ids, selectedWindowID: selectedID,
-                position: position, session: terminalSession
+                position: position, allowsResourceOnly: hasIndependentResources(hostID: hostID, sessionName: name), session: terminalSession
             ) else { return }
         openWindow(id: "detached-terminal", value: workspace.id)
         coordinator.detachedWindows.focusNativeWindow(workspaceID: workspace.id)
@@ -4652,7 +4680,7 @@ public struct MainView: View {
         do {
             let destination = try await TerminalFileDestination.resolve(path: request.path, context: fileContext, source: source)
             let shouldPreview = request.prefersPreview && TerminalArtifactPreview.supports(path: destination.file)
-            let descriptor = shouldPreview ? nil : try await requestHostFileTab(hostID: request.hostID, sessionName: sessionName, paneID: request.paneID, inputBinding: inputBinding, expectedWorkspacePane: expectedWorkspacePane)
+            let descriptor = shouldPreview ? nil : try await requestHostFileTab(hostID: request.hostID, sessionName: sessionName, paneID: request.paneID, new: request.opensNewTab, inputBinding: inputBinding, expectedWorkspacePane: expectedWorkspacePane)
             try Task.checkCancellation()
             guard fileLinkIsCurrent(request, detachedRequestID: detachedRequestID) else { return }
             if let hostID = request.hostID {
@@ -4704,6 +4732,11 @@ public struct MainView: View {
 
     /// Captures a pane in the source window as the initial directory and return target.
     private func openDirectoryTab(sessionName: String, windowID: String, hostID: String?, paneIDs: [String], fallbackPaneID: String?, path: String? = nil, selectedFile: String? = nil, focusSearch: Bool = false, new: Bool = false) {
+        if supportsIndependentResources(hostID: hostID) {
+            let directory = path ?? (hostID == nil ? windowManager.paneStates[fallbackPaneID ?? ""]?.currentPath : nil)
+            openIndependentResource(.files, hostID: hostID, sessionName: sessionName, location: directory, selectedFile: selectedFile, focusSearch: focusSearch)
+            return
+        }
         tabStore.userDidSelectTab(hostID: hostID, session: sessionName)
         let localWindows = tmuxService.windows.filter { $0.sessionName == sessionName }
         let remoteWindows = hostID.map { remoteSessionWindows(hostId: $0, sessionName: sessionName) } ?? []
@@ -4744,6 +4777,15 @@ public struct MainView: View {
     }
 
     private func requestHostFileTab(hostID: String?, sessionName: String, paneID: String, new: Bool = false, inputBinding: ViewerWorkspaceInputBinding?, expectedWorkspacePane: WorkspacePaneIdentity?) async throws -> HostFileTab {
+        if supportsIndependentResources(hostID: hostID) {
+            let tabs = manualBrowserTabs(for: .init(hostID: hostID, sessionName: sessionName))
+            if !new, let reusable = tabs?.directoryTabs.values.filter({ $0.hostTab?.resourceSessionID != nil }).max(by: { $0.lastSelectedAt < $1.lastSelectedAt })?.hostTab {
+                return reusable
+            }
+            let result = try await requestIndependentResource(.files, hostID: hostID, sessionName: sessionName)
+            guard let file = result.file else { throw FileBrowserError.message("No Files tab was returned.") }
+            return file
+        }
         if let hostID {
             return try await HostFileTabClient.open(connection: coordinator.viewerConnectionManager?.connection(for: hostID), sessionName: sessionName, paneID: paneID, new: new, inputBinding: inputBinding)
         }
@@ -4754,7 +4796,7 @@ public struct MainView: View {
         return tab
     }
 
-    private func presentHostFileTab(_ descriptor: HostFileTab, hostID: String?, windowID: String) throws -> FileBrowserTab {
+    private func presentHostFileTab(_ descriptor: HostFileTab, hostID: String?, windowID: String?) throws -> FileBrowserTab {
         let catalog: [HostFileTab]
         if let hostID {
             catalog = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient.fileTabs ?? []
@@ -4765,7 +4807,8 @@ public struct MainView: View {
         coordinator.detachedWindows.claimFile(descriptor.id, hostID: hostID, session: descriptor.sessionName, workspaceID: detachedWorkspace?.id)
         let tabs = tabStore.tabs(hostID: hostID, session: descriptor.sessionName)
         guard let tab = tabs.directoryTabs[descriptor.id] else { throw FileBrowserError.message("The Host Files tab is no longer available.") }
-        if let index = tabs.openFileTabs.firstIndex(where: { $0.id == tab.id }) {
+        tab.lastSelectedAt = Date()
+        if let windowID, descriptor.resourceSessionID == nil, let index = tabs.openFileTabs.firstIndex(where: { $0.id == tab.id }) {
             tabs.openFileTabs[index].origin = .terminalWindow(windowID)
         }
         if tabs.rightSide.contains(.file(tab.id)) {
@@ -4886,7 +4929,7 @@ public struct MainView: View {
     /// content back on the left. Terminal-only sessions don't materialise a
     /// `SessionFileTabsState` until the first tab opens, so the state is
     /// created on demand for the very first split-toggle click.
-    private func toggleSplit(_ payload: TabDragPayload, sessionName: String, windowId: String) {
+    private func toggleSplit(_ payload: TabDragPayload, sessionName: String, windowId: String?) {
         if sessionFileTabsStates[sessionName] == nil {
             sessionFileTabsStates[sessionName] = SessionFileTabsState()
         }
@@ -4925,17 +4968,23 @@ public struct MainView: View {
                     selectedWindow = restored
                 }
             case .fileExplorer:
-                fileBrowserActiveWindowIds.insert(windowId)
+                if let windowId {
+                    fileBrowserActiveWindowIds.insert(windowId)
+                }
                 tabs.isGitSelected = false
             case .git:
-                fileBrowserActiveWindowIds.remove(windowId)
+                if let windowId {
+                    fileBrowserActiveWindowIds.remove(windowId)
+                }
                 tabs.selectLeftGit()
             case let .file(id):
                 tabs.selectLeftFileTab(id, windowID: windowId, legacyExplorerWindows: &fileBrowserActiveWindowIds)
             case let .browser(id):
                 tabs.selectedBrowserTabId = id
                 tabs.selectedFileTabId = nil
-                fileBrowserActiveWindowIds.remove(windowId)
+                if let windowId {
+                    fileBrowserActiveWindowIds.remove(windowId)
+                }
             }
         } else {
             // Moving to the right side — becomes the right pane's selection.
@@ -4944,7 +4993,9 @@ public struct MainView: View {
             switch payload {
             case .window: break // Reconcile both sides before choosing a new left terminal.
             case .fileExplorer:
-                fileBrowserActiveWindowIds.remove(windowId)
+                if let windowId {
+                    fileBrowserActiveWindowIds.remove(windowId)
+                }
             case .git:
                 tabs.isGitSelected = false
             case let .file(id):
@@ -5144,11 +5195,13 @@ public struct MainView: View {
 
     /// Selects an existing browser tab and ensures the file tree/file tab views
     /// don't render alongside it.
-    private func selectBrowserTab(_ tabId: UUID, sessionName: String, windowId: String) {
+    private func selectBrowserTab(_ tabId: UUID, sessionName: String, windowId: String?) {
         guard let tabs = sessionFileTabsStates[sessionName] else { return }
         tabStore.userDidSelectTab(hostID: nil, session: sessionName)
         if tabs.selectLinkedBrowserTab(tabId) {
-            fileBrowserActiveWindowIds.remove(windowId)
+            if let windowId {
+                fileBrowserActiveWindowIds.remove(windowId)
+            }
         }
     }
 
@@ -5377,6 +5430,66 @@ public struct MainView: View {
         showSourcePane(pane, hostID: hostID)
     }
 
+    private func hasIndependentResources(hostID: String?, sessionName: String) -> Bool {
+        if let hostID, let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient {
+            return client.fileTabs.contains { $0.sessionName == sessionName && $0.resourceSessionID != nil }
+                || client.browserTabs.contains { $0.sessionName == sessionName && $0.resourceSessionID != nil }
+                || client.simulatorTabs.contains { $0.sessionName == sessionName && $0.resourceSessionID != nil }
+        }
+        let catalog = coordinator.independentResourceCatalog
+        return catalog.files.contains { $0.sessionName == sessionName }
+            || catalog.browsers.contains { $0.sessionName == sessionName }
+            || catalog.simulators.contains { $0.sessionName == sessionName }
+    }
+
+    private func supportsIndependentResources(hostID: String?) -> Bool {
+        hostID == nil || hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.hostSupportsIndependentResources } == true
+    }
+
+    private func requestIndependentResource(_ kind: ResourceTabKind, hostID: String?, sessionName: String, location: String? = nil) async throws -> ResourceTabResponse {
+        if let hostID {
+            guard
+                let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient,
+                let session = client.resourceSessions.first(where: { $0.name == sessionName }) else {
+                throw FileBrowserError.message("Refresh the Host session list before opening a tab.")
+            }
+            return try await ResourceTabClient.request(.init(sessionID: session.id, operation: .open(kind: kind, location: location)), client: client)
+        }
+        guard let session = coordinator.resourceSessions.sessions.first(where: { $0.name == sessionName }) else {
+            throw FileBrowserError.message("The session is still being discovered. Try again shortly.")
+        }
+        return try await coordinator.handleResourceTab(.init(sessionID: session.id, operation: .open(kind: kind, location: location)))
+    }
+
+    private func openIndependentResource(_ kind: ResourceTabKind, hostID: String?, sessionName: String, location: String? = nil, selectedFile: String? = nil, focusSearch: Bool = false) {
+        let target = ManualBrowserTarget(hostID: hostID, sessionName: sessionName)
+        let selection = browserOpenSelection(for: target)
+        Task {
+            do {
+                let result = try await requestIndependentResource(kind, hostID: hostID, sessionName: sessionName, location: location)
+                guard browserOpenSelection(for: target) == selection else { return }
+                if let file = result.file {
+                    let tab = try presentHostFileTab(file, hostID: hostID, windowID: nil)
+                    tab.selectedFile = selectedFile
+                    if focusSearch {
+                        tab.searchMode = .content
+                        tab.searchFocusRequest += 1
+                    }
+                }
+                if let id = result.browser?.id ?? result.simulator?.id {
+                    claimBrowser(id, hostID: hostID, session: sessionName, windowID: nil)
+                    if let hostID, let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient {
+                        syncHostBrowserTabs(hostId: hostID, sessionName: sessionName, client: client)
+                        selectRemoteBrowserTab(id, hostId: hostID, sessionName: sessionName)
+                    } else {
+                        selectBrowserTab(id, sessionName: sessionName, windowId: nil)
+                    }
+                }
+            } catch is CancellationError { }
+            catch { attachError = error.localizedDescription }
+        }
+    }
+
     private func openLinkedFiles(paneID: String, hostID: String?, sessionName: String) {
         let windowID: String?
         if let hostID {
@@ -5405,6 +5518,10 @@ public struct MainView: View {
     }
 
     private func openLinkedSimulator(paneID: String, hostID: String?, sessionName: String) {
+        if supportsIndependentResources(hostID: hostID) {
+            openIndependentResource(.simulator, hostID: hostID, sessionName: sessionName)
+            return
+        }
         guard detachedWorkspace == nil else {
             attachError = "Open iOS Simulator from the main CtrlX window."
             return
@@ -5504,6 +5621,10 @@ public struct MainView: View {
     // MARK: - Embedded Agent Browser
 
     private func openPaneBrowser(hostID: String?, sessionName: String, paneID: String?, url: URL? = nil) {
+        if supportsIndependentResources(hostID: hostID) {
+            openIndependentResource(.browser, hostID: hostID, sessionName: sessionName, location: url?.absoluteString)
+            return
+        }
         guard let paneID else {
             attachError = "This window no longer has a source pane."
             return
@@ -5594,19 +5715,20 @@ public struct MainView: View {
             ))
             selectRemoteBrowserTab(state.id, hostId: hostID, sessionName: target.sessionName)
         } else {
-            guard let window = tmuxService.windows.first(where: { $0.sessionName == target.sessionName }) else { return }
+            let window = tmuxService.windows.first(where: { $0.sessionName == target.sessionName })
+            selectedLocalSessionName = target.sessionName
             selectedRemoteSession = nil
             selectedRemoteWindowId = nil
             if selectedWindow?.sessionName != target.sessionName {
                 selectedWindow = window
             }
-            selectBrowserTab(state.id, sessionName: target.sessionName, windowId: selectedWindow?.id ?? window.id)
+            selectBrowserTab(state.id, sessionName: target.sessionName, windowId: selectedWindow?.id ?? window?.id)
         }
         agentBrowserWorkspace.window?.makeKeyAndOrderFront(nil)
     }
 
     private func registerAgentBrowserWorkspace() {
-        agentBrowserWorkspace.acceptsSession = { session in detachedWorkspace == nil && tmuxService.windows.contains { $0.sessionName == session } }
+        agentBrowserWorkspace.acceptsSession = { session in detachedWorkspace == nil && tmuxService.sessions.contains { $0.sessionName == session } }
         agentBrowserWorkspace.acceptsTab = { tab in
             coordinator.detachedWindows.browserOwner(
                 hostID: nil,
@@ -5729,18 +5851,18 @@ public struct MainView: View {
     }
 
     private func registerSimulatorWorkspace() {
+        simulatorWorkspace.acceptsSession = { session in detachedWorkspace == nil && tmuxService.sessions.contains { $0.sessionName == session } }
         simulatorWorkspace.acceptsPane = { pane in
             tmuxService.windows.contains { $0.stableId == pane.stableWindowId && ownsTerminal(hostID: nil, windowID: $0.stableId) }
         }
         simulatorWorkspace.acceptsTab = { state in
             coordinator.detachedWindows.browserOwner(
-                hostID: nil, session: state.sourcePane.sessionName, id: state.id, windowID: state.sourcePane.stableWindowId
+                hostID: nil, session: state.sessionName, id: state.id, windowID: state.sourcePane?.stableWindowId
             ) == detachedWorkspace?.id
         }
         simulatorWorkspace.onCreate = { state in
-            let pane = state.sourcePane
-            let tabs = sessionFileTabsStates[pane.sessionName] ?? SessionFileTabsState()
-            sessionFileTabsStates[pane.sessionName] = tabs
+            let tabs = sessionFileTabsStates[state.sessionName] ?? SessionFileTabsState()
+            sessionFileTabsStates[state.sessionName] = tabs
             tabs.attachSimulator(state)
         }
         simulatorWorkspace.onSelect = { state, split in
@@ -5753,9 +5875,9 @@ public struct MainView: View {
                 selectedWindow = tmuxService.windows.first { $0.sessionName == session && !tabs.rightSide.contains(.window($0.id)) } ?? window
             }
             if split, !tabs.rightSide.contains(.browser(state.id)) {
-                toggleSplit(.browser(state.id), sessionName: session, windowId: state.sourcePane.windowId)
+                toggleSplit(.browser(state.id), sessionName: session, windowId: state.sourcePane?.windowId)
             }
-            selectBrowserTab(state.id, sessionName: session, windowId: state.sourcePane.windowId)
+            selectBrowserTab(state.id, sessionName: session, windowId: state.sourcePane?.windowId)
             simulatorWorkspace.window?.makeKeyAndOrderFront(nil)
         }
         simulatorWorkspace.onClose = { state in
@@ -6502,7 +6624,7 @@ public struct MainView: View {
             case let .success(response):
                 let processes = response.runningProcesses ?? []
                 let windows = remoteSessionWindows(hostId: hostId, sessionName: window.sessionName)
-                let closesSession = windows.count == 1 && windows.first?.stableId == window.stableId
+                let closesSession = windows.count == 1 && windows.first?.stableId == window.stableId && !hasIndependentResources(hostID: hostId, sessionName: window.sessionName)
                 if processes.isEmpty, !closesSession {
                     performClose(target)
                 } else {
@@ -6519,6 +6641,10 @@ public struct MainView: View {
     }
 
     private func requestCloseRemoteSession(_ sessionName: String, hostId: String) {
+        if let session = coordinator.viewerConnectionManager?.connection(for: hostId)?.relayClient.resourceSessions.first(where: { $0.name == sessionName }) {
+            closeConfirmation = .init(target: .resourceSession(session, hostID: hostId), runningProcesses: [])
+            return
+        }
         guard let manager = coordinator.viewerConnectionManager else { return }
         let binding = manager.connection(for: hostId)?.relayClient.workspaceInputState.sessionBinding(name: sessionName) ?? .unavailable
         let target = CloseConfirmation.Target.remoteSession(sessionName: sessionName, hostId: hostId, binding: binding)
@@ -6546,6 +6672,13 @@ public struct MainView: View {
         Task {
             do {
                 switch target {
+                case let .resourceSession(session, hostID):
+                    if let hostID, let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient {
+                        _ = try await ResourceTabClient.request(.init(sessionID: session.id, operation: .closeSession), client: client)
+                        await client.requestSessionState()
+                    } else if hostID == nil {
+                        try await coordinator.closeResourceSession(session)
+                    }
                 case let .session(sessionName, identity):
                     try await tmuxService.killSession(sessionName, expectedWorkspacePane: identity)
                     if selectedRemoteSession == nil, selectedLocalSessionName == sessionName {
@@ -6801,6 +6934,9 @@ public struct MainView: View {
     }
 
     private func createAgentTab(_ request: CreateTmuxWindow, hostID: String?, localIdentity: WorkspacePaneIdentity?, remoteBinding: ViewerWorkspaceInputBinding) async throws {
+        let resourceID = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.resourceSessions.first { $0.name == request.sessionName }?.id }
+            ?? (hostID == nil ? coordinator.resourceSessions.sessions.first { $0.name == request.sessionName }?.id : nil)
+        let request = request.inResourceSession(resourceID)
         guard !isCreatingAgentTab else {
             throw NewAgentTabConfiguration.LaunchError("An Agent tab is already being created. Please wait.")
         }
@@ -6825,7 +6961,9 @@ public struct MainView: View {
             }
             await connection.relayClient.requestSessionState()
             for _ in 0..<PaneSurfaceRetry.attempts {
-                _ = try remoteBinding.expectedPane(current: connection.relayClient.workspaceInputState.sessionBinding(name: request.sessionName))
+                if resourceID == nil {
+                    _ = try remoteBinding.expectedPane(current: connection.relayClient.workspaceInputState.sessionBinding(name: request.sessionName))
+                }
                 let windows = coordinator.remoteSessionStore?.windows(for: hostID) ?? []
                 if let window = windows.first(where: { $0.sessionName == request.sessionName && $0.panes.contains(where: { $0.paneId == paneID }) }) {
                     adoptCreatedWindow(hostID: hostID, windowID: window.stableId)
@@ -6837,7 +6975,7 @@ public struct MainView: View {
                 try await Task.sleep(for: PaneSurfaceRetry.delay)
             }
         } else {
-            guard let localIdentity else { throw NewAgentTabConfiguration.LaunchError("Session identity is not available yet. Reopen this dialog after discovery.") }
+            guard localIdentity != nil || resourceID != nil else { throw NewAgentTabConfiguration.LaunchError("Session identity is not available yet. Reopen this dialog after discovery.") }
             let paneID = try await TmuxWindowCreation.create(
                 request, core: coordinator.pluginRegistry?.core(pluginID), tmux: tmuxService, expectedWorkspacePane: localIdentity
             )
@@ -6847,7 +6985,13 @@ public struct MainView: View {
                 refresh: { _ = await tmuxService.refreshPanes() }
             )
             if let window {
-                guard window.panes.contains(where: { $0.workspaceIdentity?.isSameSession(as: localIdentity) == true }) else {
+                guard
+                    window.panes.contains(where: { pane in
+                        if let localIdentity {
+                            return pane.workspaceIdentity?.isSameSession(as: localIdentity) == true
+                        }
+                        return pane.workspaceIdentity?.sessionID == resourceID
+                    }) else {
                     throw NewAgentTabConfiguration.LaunchError("The session changed while creating the Agent. Select the restored session.")
                 }
                 adoptCreatedWindow(hostID: nil, windowID: window.stableId)

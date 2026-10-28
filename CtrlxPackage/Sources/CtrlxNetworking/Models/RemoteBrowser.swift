@@ -3,6 +3,8 @@ import Foundation
 /// A Host page. Selection and zoom are device-local; cookies and DOM stay on Host.
 public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
     public let id: UUID
+    public let resourceSessionID: UUID?
+    public let grant: ResourceTabGrant?
     public let sessionName: String
     public let windowID: String?
     public let parentID: UUID?
@@ -35,9 +37,13 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
         sourcePaneID: String? = nil,
         isExtensionWindow: Bool? = nil,
         externalApplicationNotice: BrowserExternalApplicationNotice? = nil,
-        networkPermission: BrowserNetworkPermission? = nil
+        networkPermission: BrowserNetworkPermission? = nil,
+        resourceSessionID: UUID? = nil,
+        grant: ResourceTabGrant? = nil
     ) {
         self.id = id
+        self.resourceSessionID = resourceSessionID
+        self.grant = grant
         self.sessionName = sessionName
         self.windowID = windowID
         self.parentID = parentID

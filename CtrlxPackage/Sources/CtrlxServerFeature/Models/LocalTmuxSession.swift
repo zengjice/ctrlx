@@ -12,6 +12,7 @@ public struct LocalTmuxSession: Identifiable, Sendable, Hashable {
 
     /// Windows in this session, sorted by window index
     public let windows: [LocalTmuxWindow]
+    public var resourceSession: ResourceSession? = nil
 
     public var id: String {
         sessionName
@@ -38,13 +39,17 @@ public struct LocalTmuxSession: Identifiable, Sendable, Hashable {
     }
 
     /// Groups windows by session and returns sorted sessions
-    public static func groupWindows(_ windows: [LocalTmuxWindow]) -> [LocalTmuxSession] {
-        let grouped = Dictionary(grouping: windows) { $0.sessionName }
+    public static func groupWindows(_ windows: [LocalTmuxWindow], resources: [ResourceSession] = []) -> [LocalTmuxSession] {
+        var grouped = Dictionary(grouping: windows) { $0.sessionName }
+        for session in resources where grouped[session.name] == nil {
+            grouped[session.name] = []
+        }
 
         return grouped.map { name, sessionWindows in
             LocalTmuxSession(
                 sessionName: name,
-                windows: sessionWindows.sorted { $0.windowIndex < $1.windowIndex }
+                windows: sessionWindows.sorted { $0.windowIndex < $1.windowIndex },
+                resourceSession: resources.first { $0.name == name }
             )
         }
         .sorted { $0.sessionName < $1.sessionName }

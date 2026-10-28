@@ -82,7 +82,7 @@ struct RemoteTerminalContainerView: View {
                 },
                 onFileDrop: { urls in
                     startFileDropUpload(urls)
-                },
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: settings.theme.palette.background.nativeColor))
@@ -95,7 +95,7 @@ struct RemoteTerminalContainerView: View {
                     ContentUnavailableView(
                         "Terminal Stream Error",
                         symbol: .exclamationmarkTriangle,
-                        description: message,
+                        description: message
                     ) {
                         Button("Retry") {
                             streamRetryGeneration &+= 1
@@ -165,7 +165,9 @@ struct RemoteTerminalContainerView: View {
                     maxBytes: SendDroppedFiles.maxRawBytes
                 )
             }.value
-            if Task.isCancelled { return }
+            if Task.isCancelled {
+                return
+            }
 
             guard let prepared else {
                 let message = String(
@@ -204,7 +206,9 @@ struct RemoteTerminalContainerView: View {
             // Treat cancellation as silent — the user already saw the popover
             // dismiss when they hit Cancel and we don't want a transient
             // "failed" flash to take its place.
-            if Task.isCancelled { return }
+            if Task.isCancelled {
+                return
+            }
             switch result {
             case .success:
                 upload = nil
@@ -256,7 +260,9 @@ struct RemoteTerminalContainerView: View {
                 }
             }.value
 
-            if Task.isCancelled { return }
+            if Task.isCancelled {
+                return
+            }
 
             switch readResult {
             case let .success((files, totalBytes)):
@@ -279,7 +285,9 @@ struct RemoteTerminalContainerView: View {
                     paneId: paneId,
                     timeout: 30
                 )
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    return
+                }
                 switch result {
                 case .success:
                     upload = nil
@@ -458,7 +466,9 @@ private enum UploadState {
     }
 
     var failureMessage: String? {
-        if case let .failed(_, _, _, message, _) = self { return message }
+        if case let .failed(_, _, _, message, _) = self {
+            return message
+        }
         return nil
     }
 
@@ -594,7 +604,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
-        return { path in openFileLink(.init(path: path, paneID: paneId, hostID: connection.id)) }
+        return { path in openFileLink(.init(path: path, paneID: paneId, hostID: connection.id, prefersPreview: !NSEvent.modifierFlags.contains(.option), opensNewTab: NSEvent.modifierFlags.contains(.option))) }
     }
 
     let paneId: String
@@ -634,7 +644,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             retryGeneration: retryGeneration,
             settings: settings,
             onStateChange: onStateChange,
-            onTitleChange: onTitleChange,
+            onTitleChange: onTitleChange
         )
         coordinator.terminalView.isEditorActive = isEditorActive
         coordinator.terminalView.onFocusRestored = { viewportInteraction?(connection.id, paneId) }
@@ -672,7 +682,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         context.coordinator.updateContainerSize(nsView.frame.size)
         context.coordinator.synchronizeStream(
             isHostConnected: isHostConnected,
-            retryGeneration: retryGeneration,
+            retryGeneration: retryGeneration
         )
 
         // Re-bind focus, paste and URL-click callbacks so closures captured
@@ -769,7 +779,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             retryGeneration: Int,
             settings: AppSettings,
             onStateChange: @MainActor @escaping (RemoteStreamState, Int, Int) -> Void,
-            onTitleChange: @MainActor @escaping (String) -> Void,
+            onTitleChange: @MainActor @escaping (String) -> Void
         ) {
             self.paneId = paneId
             connection = initialConnection
@@ -849,7 +859,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
 
             synchronizeStream(
                 isHostConnected: isHostConnected,
-                retryGeneration: retryGeneration,
+                retryGeneration: retryGeneration
             )
         }
 
@@ -969,7 +979,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                 if startMode == .replaceExisting, let previousLeaseId {
                     _ = await connection.relayClient.sendCommand(
                         StopTerminalStream(leaseId: previousLeaseId),
-                        paneId: paneId,
+                        paneId: paneId
                     )
 
                     guard
@@ -1101,9 +1111,10 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                     state.contentByteCount,
                     initialContent: data
                 )
-                guard bootstrapPolicy.receiveInitialState(
-                    snapshotIsComplete: expectedByteCount == nil
-                ) else { return }
+                guard
+                    bootstrapPolicy.receiveInitialState(
+                        snapshotIsComplete: expectedByteCount == nil
+                    ) else { return }
 
                 columns = state.width
                 rows = state.height
@@ -1139,10 +1150,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
                     state.scrollbackLineLimit ?? TerminalScrollbackPolicy.defaultLineLimit
                 )
                 bootstrapBuffer.appendDimensions(cols: columns, rows: rows)
-                if let expectedByteCount = validSnapshotByteCount(
-                    state.contentByteCount,
-                    initialContent: data
-                ) {
+                if
+                    let expectedByteCount = validSnapshotByteCount(
+                        state.contentByteCount,
+                        initialContent: data
+                    ) {
                     bootstrapPolicy.expectSnapshotCompletion()
                     beginBootstrapSnapshot(
                         expectedByteCount: expectedByteCount,

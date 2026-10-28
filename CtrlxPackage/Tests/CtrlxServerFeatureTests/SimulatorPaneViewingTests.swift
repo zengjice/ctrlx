@@ -184,8 +184,8 @@
                 service.updateSimulatorRoutes([pane])
                 workspace.onCreate = { [unowned self] state in
                     self.created.append(state)
-                    let tabs = self.sessionTabs[state.sourcePane.sessionName] ?? SessionFileTabsState()
-                    self.sessionTabs[state.sourcePane.sessionName] = tabs
+                    let tabs = self.sessionTabs[state.sessionName] ?? SessionFileTabsState()
+                    self.sessionTabs[state.sessionName] = tabs
                     tabs.attachSimulator(state)
                 }
                 workspace.onDetach = { [unowned self] state in
@@ -241,6 +241,35 @@
             var boots: Int {
                 probe.calls.withLock { $0.filter { $0.first == "on" }.count }
             }
+        }
+
+        @Test("Human simulator authorization never changes its owner and requires explicit return after takeover")
+        func independentAuthorization() async throws {
+            let fixture = try Fixture()
+            fixture.workspace.acceptsSession = { $0 == "work" }
+            let session = ResourceSession(id: UUID(), name: "work", directory: "/fixture")
+            let descriptor = try await fixture.service.openResourceSimulator(session: session, validateSession: { })
+            let state = try #require(fixture.created.first)
+            let parameters: [String: JSONValue] = ["device": .string(descriptor.id.uuidString)]
+            #expect(!(await fixture.action("status", parameters)).ok)
+            let owner = SimulatorOwner(pid: 10, uid: getuid(), startSeconds: 100, startMicros: 1)
+            let agent = ResourceAgent(id: owner.key, title: "dev · Codex", paneID: "%1")
+            try await fixture.service.setResourceGrant(tabID: state.id, sessionID: session.id, agent: agent, owner: owner)
+            #expect(state.owner == nil && state.sourcePane == nil)
+            #expect((await fixture.action("status", parameters)).ok)
+            #expect(!(await fixture.action("status", parameters, peer: 11)).ok)
+            #expect(!(await fixture.action("close", parameters)).ok)
+            #expect(!(await fixture.action("claim", parameters)).ok)
+            fixture.service.manualKey(state, usage: 4, down: true)
+            await state.manualInput?.value
+            #expect(state.grant?.canWrite == false && state.writer == nil)
+            #expect(!(await fixture.action("type", parameters.merging(["text": .string("no")]) { _, new in new })).ok)
+            try await fixture.service.setResourceGrant(tabID: state.id, sessionID: session.id, agent: agent, owner: owner)
+            #expect(state.grant?.canWrite == true && state.writer == owner)
+            try fixture.service.revokeResourceGrant(tabID: state.id, sessionID: session.id)
+            #expect(!(await fixture.action("status", parameters)).ok)
+            #expect(!state.isClosed && state.owner == nil)
+            await fixture.service.shutdown()
         }
 
         @Test
@@ -697,7 +726,7 @@
             fixture.pane = Fixture.pane(session: "moved", window: 2)
             fixture.service.updateSimulatorRoutes([fixture.pane])
             #expect(fixture.service.sharedSimulatorTabs.first?.sessionName == "moved")
-            #expect(state.sourcePane.windowIndex == 2 && !state.isClosed)
+            #expect(state.sourcePane?.windowIndex == 2 && !state.isClosed)
             await fixture.service.shutdown()
         }
 
@@ -923,7 +952,7 @@
             #expect(tabs.simulatorStates[state.id] === state && tabs.simulatorStates[extra.id] === extra)
             #expect(tabs.openBrowserTabs.map(\.id) == [state.id, extra.id])
             #expect(tabs.openBrowserTabs.allSatisfy { $0.originWindowId == "work:3" })
-            #expect(state.sourcePane.windowId == "work:3" && extra.sourcePane.windowId == "work:3")
+            #expect(state.sourcePane?.windowId == "work:3" && extra.sourcePane?.windowId == "work:3")
             #expect(tabs.tabOrder == originalOrder)
             #expect(tabs.selectedBrowserTabId == extra.id)
             #expect(tabs.selectedRight == .browser(state.id))

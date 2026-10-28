@@ -106,6 +106,9 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsSessionWorktrees = false
     public private(set) var hostSupportsFileBrowsing = false
     public private(set) var hostSupportsPaneFiles = false
+    public private(set) var resourceSessions: [ResourceSession] = []
+    public private(set) var hostSupportsIndependentResources = false
+    public private(set) var hostSupportsResourceAuthorization = false
     public private(set) var fileTabs: [HostFileTab] = []
     public private(set) var hostSupportsRepositoryFileLinks = false
     public private(set) var hostSupportsFileDownloads = false
@@ -393,6 +396,9 @@ final public class ViewerRelayClient {
         if self.pairId != pairId {
             simulatorTabs = []
             fileTabs = []
+            resourceSessions = []
+            hostSupportsIndependentResources = false
+            hostSupportsResourceAuthorization = false
         }
         self.serverURL = serverURL
         self.pairId = pairId
@@ -568,6 +574,10 @@ final public class ViewerRelayClient {
         }
 
         switch command.commandType {
+        case let .createTmuxWindow(spec) where spec.resourceSessionID != nil && !hostSupportsIndependentResources:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add a terminal to this session."))
+        case .resourceTab where !hostSupportsIndependentResources:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to use independent resource tabs."))
         case .manageAgentWorkflows where hostAgentWorkflowVersion != AgentWorkflowWire.version:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage Agent workflows."))
         case .readDashboard where !hostSupportsDashboard:
@@ -681,7 +691,7 @@ final public class ViewerRelayClient {
         case let .forkAgentSession(spec):
             targetBinding = workspaceInputState.binding(paneID: spec.source.paneID)
         case let .createTmuxWindow(spec):
-            targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+            targetBinding = spec.resourceSessionID == nil ? workspaceInputState.sessionBinding(name: spec.sessionName) : nil
         case let .moveTmuxWindows(spec):
             targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
         case let .setSharedTerminalLayout(spec):
@@ -786,6 +796,9 @@ final public class ViewerRelayClient {
     @discardableResult
     public func send(_ command: CommandType, paneId: String, inputBinding: ViewerWorkspaceInputBinding? = nil) async -> Bool {
         switch command {
+        case let .resourceTab(spec):
+            guard hostSupportsIndependentResources else { return false }
+            return (try? await sendCommand(spec, paneId: "").get())?.success == true
         case let .manageAgentWorkflows(spec):
             return (try? await sendCommand(spec, paneId: "").get())?.success == true
         case let .readDashboard(spec):
@@ -1236,6 +1249,9 @@ final public class ViewerRelayClient {
             hostSupportsFileBrowsing = sessionState.supportsFileBrowsing == true
             hostSupportsPaneFiles = sessionState.supportsPaneFiles == true
             fileTabs = sessionState.fileTabs ?? []
+            resourceSessions = sessionState.independentResources?.sessions ?? []
+            hostSupportsIndependentResources = sessionState.independentResources != nil
+            hostSupportsResourceAuthorization = sessionState.supportsResourceAuthorization == true
             hostSupportsRepositoryFileLinks = sessionState.supportsRepositoryFileLinks == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true

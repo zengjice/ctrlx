@@ -62,6 +62,7 @@ struct WindowTabBar: View {
     let onReorderBrowserTabs: ([UUID]) -> Void
     let onOpenFiles: (LocalTmuxWindow, Bool) -> Void
     let linkedTabActions: LinkedTabSourceActions
+    var onNewResource: ((ResourceTabKind) -> Void)?
     var onViewWorkflow: ((PaneState) -> Void)?
     var onDetachWindow: ((LocalTmuxWindow, CGPoint?) -> Void)?
 
@@ -344,7 +345,8 @@ struct WindowTabBar: View {
             helpText: "New agent or terminal in \(session.sessionName)",
             agentConfiguration: agentConfiguration,
             onNewTerminal: onNewWindow,
-            onOpenGit: onSelectGitBrowser
+            onOpenGit: onSelectGitBrowser,
+            onNewResource: onNewResource
         )
     }
 
@@ -808,7 +810,7 @@ struct WindowTabBar: View {
         if source.isLinkedContent {
             destination = (order.lastIndex { sessionTabs.canReorder(source, before: $0) } ?? -1) + 1
         } else if source.windowId != nil {
-            destination = (order.lastIndex { $0.windowId != nil } ?? -1) + 1
+            destination = (order.lastIndex { sessionTabs.sourcePaneID(for: $0) == nil } ?? -1) + 1
         } else {
             destination = insertIndex
         }

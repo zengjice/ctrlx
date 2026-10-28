@@ -56,7 +56,10 @@ actor WorkspaceRecoveryStorage {
         guard let directory else { return current }
         let file = directory.appendingPathComponent("workspace.json")
         if FileManager.default.fileExists(atPath: file.path) {
-            let snapshot = try JSONDecoder().decode(WorkspaceRecoverySnapshot.self, from: Data(contentsOf: file))
+            var snapshot = try JSONDecoder().decode(WorkspaceRecoverySnapshot.self, from: Data(contentsOf: file))
+            if snapshot.schemaVersion == 1 {
+                snapshot.schemaVersion = WorkspaceRecoverySnapshot.currentVersion
+            }
             try snapshot.validate()
             current = snapshot
         }

@@ -194,7 +194,7 @@ final public class RemoteBrowserSession {
                     stopAudio()
                     controlID = response.controlID
                 }
-                if first, !managesExtensions, !tab.isAgentOwned, !tab.isControlled, tab.isExtensionWindow != true {
+                if first, !managesExtensions, !tab.isAgentOwned, tab.grant == nil, !tab.isControlled, tab.isExtensionWindow != true {
                     await takeControl()
                 }
                 first = false

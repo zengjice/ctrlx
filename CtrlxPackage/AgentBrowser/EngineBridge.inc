@@ -1,7 +1,7 @@
 // Included in Bridge. Narrow, exact-page CDP transport for a managed engine.
 // Same-UID software remains trusted. Credentials never enter page JavaScript.
  private:
-  struct EngineGrant { std::string run, tab; };
+  struct EngineGrant { std::string run, tab; uint64_t authorization; };
   struct EnginePending { int connection; NSNumber* wireID; std::string token; uint64_t generation; Clock::time_point deadline; bool navigation; NSString* session; NSString* method; int tree = 0; int mobile = -1; };
   struct EngineFrameTree { EnginePending pending; NSMutableDictionary* root; NSMutableArray* children; size_t remaining; };
   std::map<std::pair<int, int>, EngineFrameTree> engineTrees_;
@@ -27,7 +27,7 @@
   bool EngineAlive(const std::string& token) {
     auto grant = engineGrants_.find(token);
     return grant != engineGrants_.end() && tabs_.contains(grant->second.tab) &&
-      ownership_.Owns(grant->second.run, grant->second.tab) && Alive(ownership_.runs.at(grant->second.run));
+      ownership_.CanWrite(grant->second.run, grant->second.tab) && ownership_.GrantRevision(grant->second.tab) == grant->second.authorization && Alive(ownership_.runs.at(grant->second.run));
   }
   void EngineSend(int connection, NSDictionary* value) {
     if (!engineServer_ || !engineConnections_.contains(connection)) return;
@@ -120,7 +120,7 @@
     NSString* tab = request[@"tab"];
     auto& client = clients_.at(id);
     if (![tab isKindOfClass:NSString.class] || !tabs_.contains(tab.UTF8String) ||
-        !ownership_.Owns(client.run, tab.UTF8String)) {
+        !ownership_.CanWrite(client.run, tab.UTF8String)) {
       Reply(id, nil, @"Engine target is not owned by this instance."); return true;
     }
     if (!engineServer_) { Reply(id, nil, @"Engine gateway is unavailable; no page action was sent."); return true; }
@@ -129,7 +129,7 @@
       if (grant.run == client.run && grant.tab == tab.UTF8String) { token = key; break; }
     if (token.empty()) {
       token = [NSUUID.UUID.UUIDString stringByAppendingString:NSUUID.UUID.UUIDString].UTF8String;
-      engineGrants_[token] = {client.run, tab.UTF8String};
+      engineGrants_[token] = {client.run, tab.UTF8String, ownership_.GrantRevision(tab.UTF8String)};
     }
     Reply(id, @{@"url": [NSString stringWithFormat:@"ws://%s/%s", engineServer_->GetAddress().ToString().c_str(), token.c_str()]});
     return true;

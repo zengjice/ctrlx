@@ -23,7 +23,7 @@
 
         private var sessionName: String? {
             if let reference {
-                return catalog?.resolve(reference)?.sessionName
+                return catalog?.sessionName(for: reference)
             }
             return destination.sessionName
         }
@@ -52,7 +52,7 @@
                 if
                     let reference, let previous, let current,
                     previous.scope == current.scope,
-                    previous.resolve(reference) != nil, current.resolve(reference) == nil {
+                    previous.sessionName(for: reference) != nil, current.sessionName(for: reference) == nil {
                     dismiss()
                     return
                 }

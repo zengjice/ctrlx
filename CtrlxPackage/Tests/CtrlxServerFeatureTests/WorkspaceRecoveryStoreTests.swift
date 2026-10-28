@@ -20,6 +20,19 @@ struct WorkspaceRecoveryStoreTests {
         return url
     }
 
+    @Test("Version one snapshots migrate explicitly without losing their terminals")
+    func migrateVersionOne() async throws {
+        let dir = try directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var old = Self.snapshot()
+        old.schemaVersion = 1
+        try JSONEncoder().encode(old).write(to: dir.appendingPathComponent("workspace.json"))
+        let loaded = try #require(await WorkspaceRecoveryStore.diskBacked(directory: dir).load())
+        #expect(loaded.schemaVersion == WorkspaceRecoverySnapshot.currentVersion)
+        #expect(loaded.sessions == old.sessions)
+        #expect(loaded.independentFileTabs == nil)
+    }
+
     @Test("Snapshots survive restart and keep the preceding complete generation")
     func backupAndDeduplication() async throws {
         let dir = try directory()

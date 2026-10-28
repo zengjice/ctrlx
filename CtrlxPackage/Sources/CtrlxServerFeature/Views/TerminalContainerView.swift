@@ -66,7 +66,7 @@ struct TerminalContainerView: NSViewRepresentable {
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
-        return { path in openFileLink(.init(path: path, paneID: paneState.paneId, hostID: nil)) }
+        return { path in openFileLink(.init(path: path, paneID: paneState.paneId, hostID: nil, prefersPreview: !NSEvent.modifierFlags.contains(.option), opensNewTab: NSEvent.modifierFlags.contains(.option))) }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -324,11 +324,12 @@ struct TerminalContainerView: NSViewRepresentable {
                 self.keyCoalescer.flushPending()
                 let generation = self.inputGeneration
                 await self.pendingKeyTask?.value
-                guard !Task.isCancelled, self.inputGeneration == generation,
-                      self.streamState == .connected,
-                      self.terminalView.canExpandCodexQuestions,
-                      self.terminalView.currentQuestionPrompt?.count == count,
-                      let paneID = self.paneState?.paneId, let tmux = self.tmuxService
+                guard
+                    !Task.isCancelled, self.inputGeneration == generation,
+                    self.streamState == .connected,
+                    self.terminalView.canExpandCodexQuestions,
+                    self.terminalView.currentQuestionPrompt?.count == count,
+                    let paneID = self.paneState?.paneId, let tmux = self.tmuxService
                 else { return false }
                 do {
                     return try await tmux.expandCodexQuestions(paneID: paneID, expectedCount: count, expectedQuestionID: questionID)

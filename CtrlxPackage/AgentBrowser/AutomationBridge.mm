@@ -113,6 +113,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     std::erase_if(tabs_, [&](const auto& entry) {
       if (!entry.second.browser->IsSame(browser)) return false;
       ownership_.owners.erase(entry.first);
+      ownership_.RemoveGrant(entry.first);
       return true;
     });
     callbacks_.changed();
@@ -222,10 +223,13 @@ class Bridge final : public CefDevToolsMessageObserver {
     for (auto& [id, run] : ownership_.runs) {
       if (run.active && !Alive(run)) { ownership_.Revoke(id); changed = true; }
     }
+    std::vector<std::string> expired;
+    for (const auto& [tab, grant] : ownership_.grants) if (!Alive(grant.process)) expired.push_back(tab);
+    for (const auto& tab : expired) { ownership_.RemoveGrant(tab); InvalidateGrant(tab); changed = true; }
     if (changed) {
       std::vector<int> cancelled;
       for (auto& [id, client] : clients_)
-        if (client.busy && ((!client.opening && !ownership_.Owns(client.run, client.tab)) ||
+        if (client.busy && ((!client.opening && !ownership_.CanUse(client.run, client.tab)) ||
             !ownership_.runs.at(client.run).active)) cancelled.push_back(id);
       for (int id : cancelled) Reply(id, nil, @"Agent instance ended; control revoked.");
       callbacks_.changed();
@@ -236,7 +240,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if (it == clients_.end() || !it->second.busy) return false;
     auto& client = it->second;
     auto tab = tabs_.find(client.tab);
-    if (humanControl_.contains(client.tab) || !ownership_.Owns(client.run, client.tab) || !Alive(ownership_.runs.at(client.run)) ||
+    if ((client.writes && (humanControl_.contains(client.tab) || !ownership_.CanWrite(client.run, client.tab))) || !ownership_.CanUse(client.run, client.tab) || !Alive(ownership_.runs.at(client.run)) ||
         tab == tabs_.end() || tab->second.generation != client.generation) {
       Reply(id, nil, @"Tab navigated, closed or changed owner; action cancelled, not retried.");
       return false;
@@ -271,6 +275,11 @@ class Bridge final : public CefDevToolsMessageObserver {
           @"title": String(tab.browser->GetMainFrame()->GetURL().ToString()),
           @"url": String(tab.browser->GetMainFrame()->GetURL().ToString()),
           @"loading": @(tab.browser->IsLoading())} mutableCopy];
+      auto grant = ownership_.grants.find(id);
+      if (grant != ownership_.grants.end()) {
+        entry[@"authorized"] = @YES;
+        entry[@"canWrite"] = @(grant->second.canWrite);
+      }
       if (callbacks_.presentation) entry[@"presentation"] = callbacks_.presentation(tab.browser);
       [result addObject:entry];
     }
@@ -293,6 +302,47 @@ class Bridge final : public CefDevToolsMessageObserver {
     if (!browser || humanControl_.contains(tab.UTF8String) || !ownership_.Assign(tab.UTF8String, run.UTF8String, Busy(browser))) return false;
     callbacks_.changed();
     return true;
+  }
+  void InvalidateGrant(const std::string& id) {
+    auto found = tabs_.find(id);
+    if (found == tabs_.end()) return;
+    ++found->second.generation;
+    std::vector<int> cancelled;
+    for (const auto& [key, client] : clients_) if (client.busy && client.tab == id) cancelled.push_back(key);
+    for (int key : cancelled) Reply(key, nil, @"Agent authorization changed; operation cancelled, not retried.");
+    ReapEngine();
+    if (callbacks_.grantChanged) {
+      auto grant = ownership_.grants.find(id);
+      callbacks_.grantChanged(String(id), grant == ownership_.grants.end() ? nil : @(grant->second.canWrite));
+    }
+    auto recording = recordings_.find(id);
+    if (recording != recordings_.end() && recording->second->Active()) StopRecording(recording->second, @"authorization-changed");
+    callbacks_.changed();
+  }
+  bool SetGrant(NSString* tab, NSDictionary* process) {
+    Reap();
+    std::string id = tab.UTF8String ?: "";
+    if (!tabs_.contains(id) || !ownership_.owners.at(id).empty()) return false;
+    if (!process) { ownership_.RemoveGrant(id); InvalidateGrant(id); return true; }
+    if (humanControl_.contains(id) || Busy(tabs_.at(id).browser)) return false;
+    BrowserRun identity;
+    identity.pid = [process[@"pid"] intValue];
+    identity.startSeconds = [process[@"startSeconds"] unsignedLongLongValue];
+    identity.startMicros = [process[@"startMicros"] unsignedLongLongValue];
+    if (!Alive(identity) || !ownership_.Delegate(id, identity)) return false;
+    AgentBrowserCancelHumanInput(tabs_.at(id).browser);
+    InvalidateGrant(id);
+    return true;
+  }
+  NSDictionary* GrantStatus(NSString* tab) {
+    Reap();
+    auto grant = ownership_.grants.find(tab.UTF8String ?: "");
+    if (grant == ownership_.grants.end()) return nil;
+    return @{@"pid": @(grant->second.process.pid), @"startSeconds": @(grant->second.process.startSeconds),
+        @"startMicros": @(grant->second.process.startMicros), @"canWrite": @(grant->second.canWrite)};
+  }
+  void HumanTakeover(CefRefPtr<CefBrowser> browser) {
+    for (const auto& [id, tab] : tabs_) if (tab.browser->IsSame(browser) && ownership_.Pause(id)) { InvalidateGrant(id); break; }
   }
   std::string Owner(CefRefPtr<CefBrowser> browser) {
     for (const auto& [id, tab] : tabs_)
@@ -326,6 +376,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     size_t sent = 0;
     bool busy = false;
     bool opening = false;
+    bool writes = true;
     CefRefPtr<CefBrowser> browser;
     bool waiting = false;
     bool completingClick = false;
@@ -524,7 +575,7 @@ class Bridge final : public CefDevToolsMessageObserver {
     if ([command isEqual:@"tabs"]) {
       NSMutableArray* tabs = [NSMutableArray array];
       for (NSDictionary* tab in Tabs())
-        if (ownership_.Owns(client.run, [tab[@"id"] UTF8String])) [tabs addObject:tab];
+        if (ownership_.CanUse(client.run, [tab[@"id"] UTF8String])) [tabs addObject:tab];
       Reply(id, tabs); return;
     }
     if ([command isEqual:@"open"]) {
@@ -564,10 +615,14 @@ class Bridge final : public CefDevToolsMessageObserver {
     if (![token isKindOfClass:NSString.class] || !tabs_.contains(token.UTF8String)) {
       Reply(id, nil, @"Unknown tab ID; list tabs again. No default-tab fallback."); return;
     }
-    if (!ownership_.Owns(client.run, token.UTF8String)) {
+    if (!ownership_.CanUse(client.run, token.UTF8String)) {
       Reply(id, nil, @"Tab belongs to another instance or is manual. Assign it explicitly in the browser UI."); return;
     }
-    if (humanControl_.contains(token.UTF8String)) {
+    client.writes = ![@[@"read", @"screenshot", @"wait"] containsObject:command];
+    if ([command isEqual:@"close"] && !ownership_.Owns(client.run, token.UTF8String)) {
+      Reply(id, nil, @"An authorized Agent cannot close a human tab."); return;
+    }
+    if (client.writes && (humanControl_.contains(token.UTF8String) || !ownership_.CanWrite(client.run, token.UTF8String))) {
       Reply(id, nil, @"A person is controlling this page. Wait for Return to Agent."); return;
     }
     for (auto& [otherID, other] : clients_) {
@@ -713,6 +768,9 @@ void AddAgentBrowserTab(CefRefPtr<CefBrowser> browser, const std::string& owner)
 void RemoveAgentBrowserTab(CefRefPtr<CefBrowser> browser) { if (bridge) bridge->Remove(browser); }
 void AgentBrowserNavigation(CefRefPtr<CefBrowser> browser) { if (bridge) bridge->Navigation(browser); }
 std::string AgentBrowserOwner(CefRefPtr<CefBrowser> browser) { return bridge ? bridge->Owner(browser) : ""; }
+bool SetAgentBrowserGrant(NSString* tab, NSDictionary* process) { return bridge && bridge->SetGrant(tab, process); }
+NSDictionary* AgentBrowserGrantStatus(NSString* tab) { return bridge ? bridge->GrantStatus(tab) : nil; }
+void AgentBrowserHumanTakeover(CefRefPtr<CefBrowser> browser) { if (bridge) bridge->HumanTakeover(browser); }
 NSArray* AgentBrowserGroups() { return bridge ? bridge->Groups() : @[]; }
 NSArray* AgentBrowserTabs() { return bridge ? bridge->Tabs() : @[]; }
 CefRefPtr<CefBrowser> AgentBrowserTarget(NSString* tab) { return bridge ? bridge->Target(tab) : nullptr; }

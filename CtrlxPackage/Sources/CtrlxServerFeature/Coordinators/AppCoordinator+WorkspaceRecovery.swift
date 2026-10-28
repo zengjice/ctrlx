@@ -85,7 +85,10 @@ extension AppCoordinator {
         let live = workspaceRecovery?.liveState ?? WorkspaceTmuxState(serverID: source.serverID, sessions: source.sessions)
         recoveredWorkspaceDrafts.updateLocalRoutes(live.sessions)
         snapshot.drafts = recoveredWorkspaceDrafts.capture(editors: editorSessionManager, sessions: live.sessions)
-        let captured = WorkspaceRecoveryPresentationMapper.captureLocal(windows: detachedWindows, sessions: live.sessions, mainID: detachedWindows.mainSceneID)
+        let presentationSessions = WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)
+        snapshot.resourceSessions = resourceSessions.sessions
+        snapshot.independentFileTabs = hostFileTabs.tabs.filter { $0.resourceSessionID != nil }
+        let captured = WorkspaceRecoveryPresentationMapper.captureLocal(windows: detachedWindows, sessions: presentationSessions, mainID: detachedWindows.mainSceneID)
         snapshot.scenes = WorkspaceRecoveryPresentationMapper.preservingUnavailable(captured: captured, source: source, live: live)
         snapshot.fileTabs = WorkspaceRecoveryPresentationMapper.captureFiles(hostFileTabs.tabs, sessions: live.sessions)
         if source.recovery != nil {
@@ -187,9 +190,14 @@ extension AppCoordinator {
         }
         windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
         recoveredWorkspaceDrafts.restore(snapshot.drafts, sessions: live.sessions)
+        updateResourceSessions(tmuxService.panes)
+        resourceSessions.restore(snapshot.resourceSessions ?? [])
+        hostFileTabs.restoreIndependent(snapshot.independentFileTabs ?? [], sessions: resourceSessions.sessions)
+        refreshResourceSessions()
         hostFileTabs.restore(snapshot.fileTabs, sessions: live.sessions, serverID: live.serverID)
+        hostFileTabs.migrateRestoredHumanTabs(snapshot.fileTabs, sessions: resourceSessions.sessions)
         let alreadyPresented = detachedWindows.mainTabs.restoredRecoveryWindowIDs
-        WorkspaceRecoveryPresentationMapper.restoreLocal(snapshot.scenes, live: live, windows: detachedWindows, files: hostFileTabs.tabs)
+        WorkspaceRecoveryPresentationMapper.restoreLocal(snapshot.scenes, live: .init(serverID: live.serverID, sessions: WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)), windows: detachedWindows, files: hostFileTabs.tabs)
         viewerWorkspaceRecovery.restore(snapshot.viewerScenes, windows: detachedWindows)
         for session in live.sessions {
             guard

@@ -46,10 +46,12 @@ extension AgentBrowserService {
             isAgentOwned: !tab.owner.isEmpty,
             isControlled: tab.isRemotelyControlled,
             sourceAgent: tab.sourceAgent,
-            sourcePaneID: tab.paneID.isEmpty ? nil : tab.paneID,
+            sourcePaneID: tab.paneID,
             isExtensionWindow: tab.isExtensionWindow ? true : nil,
             externalApplicationNotice: tab.externalApplicationNotice,
-            networkPermission: tab.networkPermission
+            networkPermission: tab.networkPermission,
+            resourceSessionID: tab.resourceSessionID,
+            grant: tab.grant
         )
     }
 

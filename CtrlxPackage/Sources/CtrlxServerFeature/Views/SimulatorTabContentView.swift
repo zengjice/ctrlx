@@ -6,6 +6,7 @@
     struct SimulatorTabContentView: View {
         @Bindable var state: SimulatorTabState
         let workspaceID: UUID
+        @Environment(\.resourceTabActions) private var resourceActions
         @Environment(\.browserAnnotationContext) private var annotationContext
         @State private var captureRequest: UUID?
         @State private var isAnnotating = false
@@ -13,6 +14,9 @@
         var body: some View {
             VStack(spacing: 0) {
                 HStack {
+                    if let sessionID = state.resourceSession?.id, let actions = resourceActions {
+                        ResourceAgentMenu(kind: .simulator, tabID: state.id, sessionID: sessionID, grant: state.grant, request: actions.request)
+                    }
                     Label(state.handle.name, symbol: .iphone)
                         .lineLimit(1)
                     Spacer()
@@ -95,22 +99,32 @@
             view.autoresizingMask = [.width, .height]
             host.addSubview(view)
         }
+
         static func dismantleNSView(_ host: NSView, coordinator: ()) {
-            for view in host.subviews { view.removeFromSuperview() }
+            for view in host.subviews {
+                view.removeFromSuperview()
+            }
         }
     }
 
     struct SimulatorWorkspaceAnchor: NSViewRepresentable {
         let workspace: SimulatorWorkspace
-        func makeNSView(context: Context) -> Anchor { Anchor(workspace: workspace) }
-        func updateNSView(_ view: Anchor, context: Context) {}
+        func makeNSView(context: Context) -> Anchor {
+            Anchor(workspace: workspace)
+        }
+
+        func updateNSView(_ view: Anchor, context: Context) { }
         final class Anchor: NSView {
             let workspace: SimulatorWorkspace
             init(workspace: SimulatorWorkspace) {
                 self.workspace = workspace
                 super.init(frame: .zero)
             }
-            required init?(coder: NSCoder) { nil }
+
+            required init?(coder: NSCoder) {
+                nil
+            }
+
             override func viewDidMoveToWindow() {
                 super.viewDidMoveToWindow()
                 workspace.window = window

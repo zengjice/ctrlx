@@ -10,6 +10,7 @@ struct BrowserCallbacks {
   std::function<void(CefRefPtr<CefBrowser>)> select;
   std::function<void()> changed;
   std::function<NSDictionary*(CefRefPtr<CefBrowser>)> presentation;
+  std::function<void(NSString*, NSNumber*)> grantChanged;
 };
 bool StartAgentBrowser(NSString* stateDirectory, BrowserCallbacks callbacks);
 void StopAgentBrowser();
@@ -24,6 +25,9 @@ std::string AgentBrowserOwner(CefRefPtr<CefBrowser> browser);
 NSArray* AgentBrowserGroups();
 NSArray* AgentBrowserTabs();
 CefRefPtr<CefBrowser> AgentBrowserTarget(NSString* tab);
+bool SetAgentBrowserGrant(NSString* tab, NSDictionary* process);
+NSDictionary* AgentBrowserGrantStatus(NSString* tab);
+void AgentBrowserHumanTakeover(CefRefPtr<CefBrowser> browser);
 bool AssignAgentBrowserTab(NSString* tab, NSString* run);
 bool AgentBrowserTabBusy(CefRefPtr<CefBrowser> browser);
 bool SetAgentBrowserHumanControl(NSString* tab, NSString* token);

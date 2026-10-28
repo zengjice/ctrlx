@@ -106,6 +106,7 @@ enum TerminalCursorTapNavigation {
         var onPasteText: (@MainActor (String) -> Void)?
         var onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         var onOpenPath: (@MainActor (String) -> Void)?
+        var onFileLinkActions: (@MainActor (String) -> Void)?
         var onOpenURL: (@MainActor (URL) -> Void)?
 
         @Dependency(ClipboardClient.self) private var clipboard
@@ -1119,15 +1120,16 @@ enum TerminalCursorTapNavigation {
         @objc
         private func handleURLLongPress(_ gesture: UILongPressGestureRecognizer) {
             cancelCursorNavigation()
-            // In mouse mode the remote terminal app owns presses, so the
-            // long-press action sheet shouldn't appear over interactive UI.
-            guard !isMouseModeActive else { return }
-
             switch gesture.state {
             case .began:
                 let point = gesture.location(in: self)
                 guard let pos = gridPosition(for: point) else { return }
-
+                if let onFileLinkActions, let link = currentFileLinks().first(where: { $0.contains(column: pos.col, row: pos.row) }) {
+                    onFileLinkActions(link.path)
+                    return
+                }
+                // Web links retain terminal-owned presses in mouse mode.
+                guard !isMouseModeActive else { return }
                 let terminal = getTerminal()
                 let closures = urlClosures(for: terminal)
                 let urls = TerminalURLDetector.detectURLs(

@@ -1022,17 +1022,24 @@ public struct CreateTmuxWindow: CommandSpec, Equatable {
 
     /// Optional Provider selected on the Host. `nil` uses the Host default.
     public let providerID: String?
+    public let resourceSessionID: UUID?
 
     public init(
         sessionName: String,
         workingDirectory: String? = nil,
         pluginID: String? = nil,
-        providerID: String? = nil
+        providerID: String? = nil,
+        resourceSessionID: UUID? = nil
     ) {
         self.sessionName = sessionName
         self.workingDirectory = workingDirectory
         self.pluginID = pluginID
         self.providerID = providerID
+        self.resourceSessionID = resourceSessionID
+    }
+
+    public func inResourceSession(_ id: UUID?) -> Self {
+        .init(sessionName: sessionName, workingDirectory: workingDirectory, pluginID: pluginID, providerID: providerID, resourceSessionID: id)
     }
 
     public var commandType: CommandType {
@@ -1179,6 +1186,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case browseBrowser(BrowseBrowser)
     case browseSimulator(BrowseSimulator)
     case controlSimulator(ControlSimulator)
+    case resourceTab(ResourceTabRequest)
     case openPaneSimulator(OpenPaneSimulator)
     case closeSimulator(CloseSimulator)
     /// Resize a tmux pane
@@ -1467,6 +1475,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let browser: RemoteBrowserResponse?
     public let simulator: RemoteSimulatorResponse?
     public let simulatorControl: RemoteSimulatorControlResponse?
+    public let resourceTab: ResourceTabResponse?
     public let simulatorTab: RemoteSimulatorTab?
     public let dashboard: DashboardSnapshot?
     /// Host-owned CtrlX app update state, when this command changed it.
@@ -1492,6 +1501,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         simulator: RemoteSimulatorResponse? = nil,
         simulatorControl: RemoteSimulatorControlResponse? = nil,
         simulatorTab: RemoteSimulatorTab? = nil,
+        resourceTab: ResourceTabResponse? = nil,
         dashboard: DashboardSnapshot? = nil,
         ctrlXAppUpdate: CtrlXAppUpdateState? = nil,
         agentWorkflow: AgentWorkflowResponse? = nil,
@@ -1512,6 +1522,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.simulator = simulator
         self.simulatorControl = simulatorControl
         self.simulatorTab = simulatorTab
+        self.resourceTab = resourceTab
         self.dashboard = dashboard
         self.ctrlXAppUpdate = ctrlXAppUpdate
         self.agentWorkflow = agentWorkflow

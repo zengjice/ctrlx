@@ -65,15 +65,19 @@ final class IOSFileBrowserWorkspaceStore {
         // incarnation gets fresh views and input endpoints.
         for key in workspaces.keys.filter({ $0.hostID == state.pairId }) {
             guard let workspace = workspaces[key] else { continue }
-            if workspace.recoveryScope != catalog?.scope {
+            let reference = workspace.recoveryReference
+            let retainedResource = reference.map { ref in
+                catalog?.scope.hostID == ref.hostID && catalog?.resourceSessions.contains(where: { $0.id == ref.sessionID }) == true
+            } ?? false
+            if workspace.recoveryScope != catalog?.scope && !retainedResource {
                 remove(key, save: false)
-            } else if
-                let reference = workspace.recoveryReference,
-                let route = catalog?.resolve(reference), route.sessionName != key.sessionName {
-                workspaces.removeValue(forKey: key)
-                workspaces[Key(hostID: key.hostID, sessionName: route.sessionName)] = workspace
-            } else if workspace.recoveryReference != catalog?.reference(sessionName: key.sessionName) {
-                // Do not retain a Files model from a replaced same-name session.
+            } else if let reference, let name = catalog?.sessionName(for: reference) {
+                workspace.recoveryScope = catalog?.scope
+                if name != key.sessionName {
+                    workspaces.removeValue(forKey: key)
+                    workspaces[Key(hostID: key.hostID, sessionName: name)] = workspace
+                }
+            } else if reference != catalog?.reference(sessionName: key.sessionName) {
                 remove(key, save: false)
             }
         }
@@ -84,7 +88,10 @@ final class IOSFileBrowserWorkspaceStore {
                 .flatMap(\.tabs).filter { $0.hostTab != nil }.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let sessions = Dictionary(grouping: TmuxWindow.groupPanes(Array(state.paneStates.values)), by: \.sessionName)
+        var sessions = Dictionary(grouping: TmuxWindow.groupPanes(Array(state.paneStates.values)), by: \.sessionName)
+        for session in state.independentResources?.sessions ?? [] where sessions[session.name] == nil {
+            sessions[session.name] = []
+        }
         for (sessionName, windows) in sessions where !sessionName.isEmpty {
             let key = Key(hostID: state.pairId, sessionName: sessionName)
             let workspace: IOSFileBrowserWorkspace
@@ -186,15 +193,16 @@ final class IOSFileBrowserWorkspaceStore {
     private func capture(_ workspace: IOSFileBrowserWorkspace, key: Key) {
         guard
             recoveryLoaded, let reference = workspace.recoveryReference, let catalog = catalogs[key.hostID],
-            workspace.recoveryScope == catalog.scope, catalog.resolve(reference) != nil else { return }
+            workspace.recoveryScope == catalog.scope, catalog.sessionName(for: reference) != nil else { return }
         let previous = recovery.sessions.first { $0.reference == reference }
         var record = previous ?? .init(reference: reference, name: key.sessionName)
         record.name = key.sessionName
         record.linkedTabOrder = workspace.linkedTabOrder
+        record.topLevelTabOrder = workspace.topLevelTabOrder
         let snapshots = workspace.tabs.compactMap { tab -> IOSWorkspaceRecoveryFile? in
             guard let snapshot = tab.snapshot else { return nil }
-            let source = tab.sourcePaneID.flatMap { catalog.reference(paneID: $0) }
-                ?? previous?.files.first(where: { $0.snapshot.id == tab.id })?.source
+            let source = tab.hostTab?.resourceSessionID != nil ? nil : (tab.sourcePaneID.flatMap { catalog.reference(paneID: $0) }
+                ?? previous?.files.first(where: { $0.snapshot.id == tab.id })?.source)
             return .init(snapshot: snapshot, source: source)
         }
         let ids = Set(snapshots.map { $0.snapshot.id })
@@ -222,6 +230,7 @@ final class IOSFileBrowserWorkspaceStore {
         guard let saved = recovery.sessions.first(where: { $0.reference == reference }) else { return }
         if !workspace.didRestoreLinkedTabOrder {
             workspace.linkedTabOrder = saved.linkedTabOrder ?? saved.files.map { .file($0.snapshot.id) }
+            workspace.topLevelTabOrder = saved.topLevelTabOrder ?? []
             workspace.didRestoreLinkedTabOrder = true
         }
         for file in saved.files {
@@ -239,7 +248,8 @@ final class IOSFileBrowserWorkspaceStore {
                 workspace.tabs.append(FileBrowserTab(snapshot: file.snapshot, sourcePaneID: source))
                 workspace.restoredFileIDs.insert(file.snapshot.id)
             }
-            if file.source != nil && source == nil {
+            let isIndependent = workspace.tabs.first(where: { $0.id == file.snapshot.id })?.hostTab?.resourceSessionID != nil
+            if !isIndependent && file.source != nil && source == nil {
                 workspace.unavailableFileSources.insert(file.snapshot.id)
             } else {
                 workspace.unavailableFileSources.remove(file.snapshot.id)
@@ -281,7 +291,7 @@ final class IOSFileBrowserWorkspaceStore {
             let reference = workspace.recoveryReference, let catalog = catalogs[reference.pairID],
             workspace.recoveryScope == catalog.scope,
             workspaces.values.contains(where: { $0 === workspace }) else { return }
-        let key = Key(hostID: reference.pairID, sessionName: catalog.resolve(reference)?.sessionName ?? "")
+        let key = Key(hostID: reference.pairID, sessionName: catalog.sessionName(for: reference) ?? "")
         capture(workspace, key: key)
         guard let index = recovery.sessions.firstIndex(where: { $0.reference == reference }) else { return }
         if !workspace.hasPendingTerminalSelection, let window, let window = catalog.reference(sessionName: key.sessionName, windowID: window.stableId) {

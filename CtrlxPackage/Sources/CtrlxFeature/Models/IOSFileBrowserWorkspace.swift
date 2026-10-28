@@ -28,8 +28,16 @@ final class IOSFileBrowserWorkspace {
     }
 
     var tabs: [FileBrowserTab] = []
-    var selectedID: UUID?
+    var selectedID: UUID? {
+        didSet {
+            if let id = selectedID, oldValue != id {
+                tabs.first { $0.id == id }?.lastSelectedAt = Date()
+            }
+        }
+    }
+
     var linkedTabOrder: [PaneLinkedTabID] = []
+    var topLevelTabOrder: [IOSTopLevelTabID] = []
     var didRestoreLinkedTabOrder = false
     let recoveryID = UUID()
     var recoveryReference: ViewerWorkspaceReference?

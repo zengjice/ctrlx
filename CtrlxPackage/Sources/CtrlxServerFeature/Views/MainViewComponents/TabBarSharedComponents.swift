@@ -113,6 +113,7 @@ struct NewTabMenuButton: View {
     var isTerminalDisabled = false
     let onNewTerminal: () -> Void
     var onOpenGit: (() -> Void)?
+    var onNewResource: ((ResourceTabKind) -> Void)?
     @State private var presentedAgents: NewAgentTabConfiguration?
 
     var body: some View {
@@ -129,6 +130,11 @@ struct NewTabMenuButton: View {
                 Label("New Terminal", symbol: .terminal)
             }
             .disabled(isTerminalDisabled)
+            if let onNewResource {
+                Button { onNewResource(.files) } label: { Label("New Files", symbol: .folder) }
+                Button { onNewResource(.browser) } label: { Label("New Browser", symbol: .globe) }
+                Button { onNewResource(.simulator) } label: { Label("New iOS Simulator", symbol: .iphone) }
+            }
             if let onOpenGit {
                 Divider()
                 Button(action: onOpenGit) {

@@ -3,9 +3,11 @@ import Foundation
 /// A live device on the Host. This descriptor grants no agent input authority.
 public struct RemoteSimulatorTab: Codable, Sendable, Equatable, Identifiable {
     public let id: UUID
+    public let resourceSessionID: UUID?
+    public let grant: ResourceTabGrant?
     public let sessionName: String
-    public let windowID: String
-    public let sourcePaneID: String
+    public let windowID: String?
+    public let sourcePaneID: String?
     public let title: String
     public let runtime: String
     public let isPrimary: Bool
@@ -13,13 +15,17 @@ public struct RemoteSimulatorTab: Codable, Sendable, Equatable, Identifiable {
     public init(
         id: UUID,
         sessionName: String,
-        windowID: String,
-        sourcePaneID: String,
+        windowID: String? = nil,
+        sourcePaneID: String? = nil,
         title: String,
         runtime: String,
-        isPrimary: Bool
+        isPrimary: Bool,
+        resourceSessionID: UUID? = nil,
+        grant: ResourceTabGrant? = nil
     ) {
         self.id = id
+        self.resourceSessionID = resourceSessionID
+        self.grant = grant
         self.sessionName = sessionName
         self.windowID = windowID
         self.sourcePaneID = sourcePaneID

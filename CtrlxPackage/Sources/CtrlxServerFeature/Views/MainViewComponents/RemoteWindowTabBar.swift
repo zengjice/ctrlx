@@ -57,6 +57,7 @@ struct RemoteWindowTabBar: View {
     var onCloseFileTab: ((UUID) -> Void)?
     let onOpenFiles: (TmuxWindow, Bool) -> Void
     let linkedTabActions: LinkedTabSourceActions
+    var onNewResource: ((ResourceTabKind) -> Void)?
     var onViewWorkflow: ((PaneState) -> Void)?
     var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
 
@@ -282,7 +283,8 @@ struct RemoteWindowTabBar: View {
             helpText: "New agent or terminal tab",
             agentConfiguration: agentConfiguration,
             isTerminalDisabled: !isHostConnected,
-            onNewTerminal: onNewWindow
+            onNewTerminal: onNewWindow,
+            onNewResource: onNewResource
         )
     }
 
@@ -518,7 +520,7 @@ struct RemoteWindowTabBar: View {
         if source.isLinkedContent {
             destination = (order.lastIndex { sessionTabs?.canReorder(source, before: $0) == true } ?? -1) + 1
         } else if source.windowId != nil {
-            destination = (order.lastIndex { $0.windowId != nil } ?? -1) + 1
+            destination = (order.lastIndex { sessionTabs?.sourcePaneID(for: $0) == nil } ?? -1) + 1
         } else {
             destination = insertIndex
         }

@@ -126,6 +126,7 @@
     if (humanControl_.contains(id) || Busy(found->second.browser)) return false;
     for (auto& [key, deadline] : engineCaptures_) if (key.first == found->second.browser->GetIdentifier()) return false;
     AgentBrowserCancelHumanInput(found->second.browser);
+    HumanTakeover(found->second.browser);
     humanControl_[id] = token.UTF8String;
     // Resume any earlier network interception before handing the page to a
     // person; an Agent cannot keep requests paused while its commands are gated.

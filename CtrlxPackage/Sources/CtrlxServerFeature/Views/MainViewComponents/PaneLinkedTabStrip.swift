@@ -9,7 +9,7 @@ extension SessionFileTabsState {
         case let .file(id): source = directoryTabs[id]?.sourcePaneID
         case let .browser(id):
             source = remoteSimulatorTabs[id]?.sourcePaneID ?? remoteBrowserTabs[id]?.sourcePaneID
-                ?? simulatorStates[id]?.sourcePane.paneId ?? agentBrowserStates[id]?.paneID
+                ?? simulatorStates[id]?.sourcePane?.paneId ?? agentBrowserStates[id]?.paneID
                 ?? openBrowserTabs.first(where: { $0.id == id })?.sourcePaneID
         default: source = nil
         }
@@ -17,8 +17,8 @@ extension SessionFileTabsState {
     }
 
     func groupedTabOrder(_ order: [TabDragPayload], paneOrder: [String]) -> [TabDragPayload] {
-        let children = order.filter(\.isLinkedContent)
-        return order.filter { $0.windowId != nil } + order.filter { !$0.isLinkedContent && $0.windowId == nil }
+        let children = order.filter { sourcePaneID(for: $0) != nil }
+        return order.filter { sourcePaneID(for: $0) == nil }
             + PaneLinkedTabs.groups(items: children, paneOrder: paneOrder, sourcePane: sourcePaneID).flatMap(\.items)
     }
 
@@ -43,13 +43,14 @@ extension SessionFileTabsState {
                  let .simulator(id): .browser(id)
             }
         }
-        let live = tabOrder.filter(\.isLinkedContent)
-        tabOrder = tabOrder.filter { !$0.isLinkedContent } + PaneLinkedTabs.ordered(children + live, stored: children)
+        let full = PaneLinkedTabs.ordered(tabOrder + children, stored: tabOrder)
+        var ordered = PaneLinkedTabs.ordered(full.filter(\.isLinkedContent), stored: children).makeIterator()
+        tabOrder = full.map { $0.isLinkedContent ? (ordered.next() ?? $0) : $0 }
     }
 
     func canReorder(_ source: TabDragPayload, before target: TabDragPayload) -> Bool {
-        if source.windowId != nil {
-            return target.windowId != nil
+        if sourcePaneID(for: source) == nil, sourcePaneID(for: target) == nil {
+            return true
         }
         guard source.isLinkedContent, target.isLinkedContent else { return source.kind == target.kind }
         return sourcePaneID(for: source) == sourcePaneID(for: target)
@@ -82,13 +83,13 @@ struct PaneLinkedTabStrip<Content: View>: View {
     @ViewBuilder let content: (TabDragPayload) -> Content
 
     private var groups: [PaneLinkedTabs.Group<TabDragPayload>] {
-        PaneLinkedTabs.groups(items: order.filter(\.isLinkedContent), paneOrder: panes.map(\.paneId)) {
+        PaneLinkedTabs.groups(items: order.filter { tabs?.sourcePaneID(for: $0) != nil }, paneOrder: panes.map(\.paneId)) {
             tabs?.sourcePaneID(for: $0)
         }
     }
 
     var body: some View {
-        ForEach(order.filter { !$0.isLinkedContent }, id: \.self) { content($0) }
+        ForEach(order.filter { tabs?.sourcePaneID(for: $0) == nil }, id: \.self) { content($0) }
         ForEach(groups) { group in
             let pane = panes.first { $0.paneId == group.id }
             let color = PaneTabGroupStyle.color(for: pane?.workspaceIdentity?.paneID.uuidString ?? group.id)

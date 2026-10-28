@@ -25,3 +25,8 @@ background MP4 supports up to 10 minutes while page interaction continues.
 If CtrlX is unavailable or an operation unsupported, report the actual blocker
 and ask before switching browser surfaces. Do not borrow another pane's identity
 or bypass CtrlX routing with a standalone browser client.
+
+Human resource tabs require explicit authorization to this running Agent. List
+tabs/devices before use, target the returned ID, and respect paused/revoked grants.
+Authorization is use only: do not close human tabs/devices or reclaim them. See
+[workflow](references/workflow.md) for ownership and Return Control rules.

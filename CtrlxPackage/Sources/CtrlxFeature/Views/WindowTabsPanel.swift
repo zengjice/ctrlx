@@ -13,10 +13,13 @@
         var selectedBrowserID: UUID?
         var selectedSimulatorID: UUID?
         var canCloseSimulator = false
+        var canCreateIndependentResources = false
         let isConnected: Bool
         let isCreatingWindow: Bool
         let onChoose: (WindowTabAction) -> Void
         let onReorderWindows: ([String]) async throws -> Void
+        var topLevelTabOrder: [IOSTopLevelTabID] = []
+        var onReorderTopLevel: ([IOSTopLevelTabID]) -> Void = { _ in }
         let linkedTabOrder: [PaneLinkedTabID]
         let onReorderLinkedTabs: ([PaneLinkedTabID]) -> Void
         @Environment(\.dismiss) private var dismiss
@@ -42,21 +45,40 @@
                 .padding()
 
                 List {
-                    Section("Windows") {
-                        ForEach(orderedWindows, id: \.stableId) { window in
-                            windowRow(window)
-                                .moveDisabled(!isConnected || pendingWindowOrder != nil)
-                        }
-                        .onMove { source, destination in
-                            guard isConnected, pendingWindowOrder == nil else { return }
-                            let ids = windows.map(\.stableId)
-                            let reordered = RemoteSessionOrder.moving(ids, fromOffsets: source, toOffset: destination)
-                            if reordered != ids {
-                                pendingWindowOrder = reordered
+                    if canCreateIndependentResources {
+                        Section("Tabs") {
+                            ForEach(linkedTabs.topLevel(stored: topLevelTabOrder), id: \.self) { item in
+                                switch item {
+                                case let .resource(id): linkedRow(id)
+                                default:
+                                    if let window = orderedWindows.first(where: { IOSTopLevelTabID(window: $0) == item }) {
+                                        windowRow(window)
+                                    }
+                                }
+                            }
+                            .onMove { source, destination in
+                                onReorderTopLevel(linkedTabs.movingTopLevel(source, to: destination, stored: topLevelTabOrder))
                             }
                         }
+                    } else {
+                        Section("Windows") {
+                            ForEach(orderedWindows, id: \.stableId) { window in
+                                windowRow(window).moveDisabled(!isConnected || pendingWindowOrder != nil)
+                            }
+                            .onMove { source, destination in
+                                guard isConnected, pendingWindowOrder == nil else { return }
+                                let ids = windows.map(\.stableId)
+                                let reordered = RemoteSessionOrder.moving(ids, fromOffsets: source, toOffset: destination)
+                                if reordered != ids {
+                                    pendingWindowOrder = reordered
+                                }
+                            }
+                        }
+                        if let independent = linkedTabs.groups.first(where: { $0.id == nil }) {
+                            Section("Resources") { ForEach(independent.items, id: \.self) { linkedRow($0) } }
+                        }
                     }
-                    ForEach(linkedTabs.groups) { group in
+                    ForEach(linkedTabs.groups.filter { $0.id != nil }) { group in
                         let color = PaneTabGroupStyle.color(for: linkedTabs.colorKey(for: group.id))
                         Section {
                             ForEach(group.items, id: \.self) { item in
@@ -84,6 +106,13 @@
                         }
                         .disabled(!isConnected || isCreatingWindow)
                         .accessibilityIdentifier("new-agent-window")
+                        if canCreateIndependentResources {
+                            Group {
+                                Button { choose(.newResource(.files)) } label: { Label("New Files", symbol: .folder) }
+                                Button { choose(.newResource(.browser)) } label: { Label("New Browser", symbol: .globe) }
+                                Button { choose(.newResource(.simulator)) } label: { Label("New iOS Simulator", symbol: .iphone) }
+                            }.disabled(!isConnected)
+                        }
                     }
                 }
             }

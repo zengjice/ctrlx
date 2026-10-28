@@ -67,6 +67,7 @@
 
         @State private var pendingSimulatorRequest: SimulatorOpenRequest?
         @State private var pendingFilesRequest: FilesOpenRequest?
+        @State private var pendingResourceRequest: ResourceTabRequest?
         @State private var pendingFilesCloseID: UUID?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
         @State private var browserSelection = IOSHostTabSelection()
@@ -280,6 +281,10 @@
 
         private func selectAdjacentLinkedTab(_ source: PaneLinkedTabID, direction: Int) {
             guard !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput else { return }
+            if linkedTabs.sourcePaneID(source) == nil {
+                selectAdjacentTopLevel(.resource(source), direction: direction)
+                return
+            }
             switch PaneLinkedTabs.adjacent(to: source, direction: direction, groups: linkedTabs.groups) {
             case let .tab(item):
                 fileWorkspace.selectedID = nil
@@ -298,6 +303,27 @@
                     Task { await sendCommand(.selectTmuxPane, paneId: id, inputBinding: binding) }
                 }
             case nil: break
+            }
+        }
+
+        private func selectAdjacentTopLevel(_ source: IOSTopLevelTabID, direction: Int) {
+            let items = linkedTabs.topLevel(stored: fileWorkspace.topLevelTabOrder)
+            guard let index = items.firstIndex(of: source), items.indices.contains(index + direction) else { return }
+            selectTopLevel(items[index + direction])
+        }
+
+        private func selectTopLevel(_ item: IOSTopLevelTabID) {
+            switch item {
+            case let .resource(resource):
+                switch resource {
+                case let .file(id): performWindowTabAction(.selectFiles(id))
+                case let .browser(id): performWindowTabAction(.selectBrowser(id))
+                case let .simulator(id): performWindowTabAction(.selectSimulator(id))
+                }
+            default:
+                if let target = sessionWindows.first(where: { IOSTopLevelTabID(window: $0) == item }) {
+                    selectTerminalWindow(target)
+                }
             }
         }
 
@@ -492,12 +518,15 @@
         private var fileLinkContent: some View {
             browserContent
                 .safeAreaInset(edge: .bottom) {
-                    if pendingSimulatorRequest != nil {
+                    if pendingSimulatorRequest != nil || pendingResourceRequest?.operation == .open(kind: .simulator, location: nil) {
                         HStack {
                             ProgressView()
                             Text("Opening iOS Simulator on Host…").font(.callout)
                             Spacer()
-                            Button("Cancel") { pendingSimulatorRequest = nil }
+                            Button("Cancel") {
+                                pendingSimulatorRequest = nil
+                                pendingResourceRequest = nil
+                            }
                         }
                         .padding()
                         .background(.regularMaterial)
@@ -521,6 +550,38 @@
                         guard pendingSimulatorRequest == request else { return }
                         pendingSimulatorRequest = nil
                         commandError = error.localizedDescription
+                    }
+                }
+                .task(id: pendingResourceRequest) {
+                    guard let request = pendingResourceRequest else { return }
+                    let origin = (window?.stableId, activePaneId, fileWorkspace.selectedID, browserSelection.selectedID, simulatorSelection.selectedID)
+                    do {
+                        let result = try await ResourceTabClient.request(request, client: relayClient)
+                        try Task.checkCancellation()
+                        guard
+                            pendingResourceRequest == request,
+                            origin == (window?.stableId, activePaneId, fileWorkspace.selectedID, browserSelection.selectedID, simulatorSelection.selectedID) else { return }
+                        pendingResourceRequest = nil
+                        fileWorkspace.selectedID = nil
+                        browserSelection.selectedID = nil
+                        simulatorSelection.selectedID = nil
+                        if let file = result.file {
+                            let tab = fileWorkspace.adopt(file)
+                            tab.lastSelectedAt = Date()
+                            fileWorkspace.selectedID = tab.id
+                        }
+                        if let browser = result.browser {
+                            browserSelection.selectedID = browser.id
+                        }
+                        if let simulator = result.simulator {
+                            simulatorSelection.selectedID = simulator.id
+                        }
+                    } catch is CancellationError { }
+                    catch {
+                        if pendingResourceRequest == request {
+                            pendingResourceRequest = nil
+                            commandError = error.localizedDescription
+                        }
                     }
                 }
                 .task(id: pendingFilesRequest) {
@@ -564,21 +625,26 @@
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
                     pendingSimulatorRequest = nil
+                    pendingResourceRequest = nil
                 }
+                .onChange(of: activePaneId) { pendingResourceRequest = nil }
                 .onChange(of: fileWorkspace.selectedID) { pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
                     pendingSimulatorRequest = nil
+                    pendingResourceRequest = nil
                 }
                 .onChange(of: browserSelection.selectedID) { pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
                     pendingSimulatorRequest = nil
+                    pendingResourceRequest = nil
                 }
                 .onChange(of: simulatorSelection.selectedID) { pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
                     pendingSimulatorRequest = nil
+                    pendingResourceRequest = nil
                 }
         }
 
@@ -627,6 +693,7 @@
                         selectedBrowserID: browserSelection.selectedID,
                         selectedSimulatorID: simulatorSelection.selectedID,
                         canCloseSimulator: relayClient.hostSupportsSimulatorClosing,
+                        canCreateIndependentResources: relayClient.hostSupportsIndependentResources,
                         isConnected: relayClient.isHostConnected,
                         isCreatingWindow: isCreatingWindow,
                         onChoose: { action in
@@ -635,6 +702,10 @@
                             }
                         },
                         onReorderWindows: reorderWindows,
+                        topLevelTabOrder: fileWorkspace.topLevelTabOrder,
+                        onReorderTopLevel: { fileWorkspace.topLevelTabOrder = $0
+                            fileWorkspace.save()
+                        },
                         linkedTabOrder: fileWorkspace.linkedTabOrder,
                         onReorderLinkedTabs: fileWorkspace.recordLinkedTabOrder
                     )
@@ -709,6 +780,39 @@
                 }
         }
 
+        private func resourceRequest(_ kind: ResourceTabKind, location: String? = nil) throws -> ResourceTabRequest {
+            guard let session = relayClient.resourceSessions.first(where: { $0.name == sessionName }) else {
+                throw FileBrowserError.message("Refresh the Host session list before opening a tab.")
+            }
+            return .init(sessionID: session.id, operation: .open(kind: kind, location: location))
+        }
+
+        private func openResource(_ kind: ResourceTabKind) {
+            do {
+                let request = try resourceRequest(kind, location: kind == .files && newWindowDirectory.hasPrefix("/") ? newWindowDirectory : nil)
+                pendingFileLink = nil
+                pendingBrowserLink = nil
+                pendingFilesRequest = nil
+                pendingSimulatorRequest = nil
+                cancelCreationFollowUp()
+                isKeyboardActive = false
+                quickActionPresentation.dismiss()
+                pendingResourceRequest = request
+            } catch { commandError = error.localizedDescription }
+        }
+
+        private func fileTabForTerminalLink(paneID: String, new: Bool = false, inputBinding: ViewerWorkspaceInputBinding) async throws -> HostFileTab {
+            if relayClient.hostSupportsIndependentResources {
+                if !new, let reusable = fileWorkspace.tabs.filter({ $0.hostTab?.resourceSessionID != nil }).max(by: { $0.lastSelectedAt < $1.lastSelectedAt })?.hostTab {
+                    return reusable
+                }
+                let result = try await ResourceTabClient.request(resourceRequest(.files), client: relayClient)
+                guard let file = result.file else { throw FileBrowserError.message("No Files tab was returned.") }
+                return file
+            }
+            return try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: paneID, new: new, inputBinding: inputBinding)
+        }
+
         private func openTerminalFile(_ request: TerminalFileLinkRequest) async {
             guard
                 request.hostID == hostId, let origin = window,
@@ -728,7 +832,7 @@
                     path: request.path, context: fileContext, source: source
                 )
                 let shouldPreview = request.prefersPreview && TerminalArtifactPreview.supports(path: destination.file)
-                let descriptor = shouldPreview ? nil : try await HostFileTabClient.open(connection: connectionManager.connection(for: hostId), sessionName: sessionName, paneID: request.paneID, inputBinding: inputBinding)
+                let descriptor = shouldPreview ? nil : try await fileTabForTerminalLink(paneID: request.paneID, new: request.opensNewTab, inputBinding: inputBinding)
                 try Task.checkCancellation()
                 guard
                     pendingFileLink == request, window?.id == origin.id,
@@ -745,6 +849,7 @@
                 } else if let descriptor {
                     previewKeyboardRestore.discard()
                     let tab = fileWorkspace.adopt(descriptor)
+                    tab.lastSelectedAt = Date()
                     tab.openTerminalFile(destination, paneID: request.paneID)
                     fileWorkspace.selectedID = tab.id
                     cancelCreationFollowUp()
@@ -777,12 +882,14 @@
                 sessionWindows.contains(where: { $0.panes.contains { $0.paneId == request.paneID } }) else { return }
             let originWindowID = window?.id
             do {
-                let tab = try await RemoteBrowserSession.open(
-                    sessionName: sessionName,
-                    sourcePaneID: request.paneID,
-                    url: request.url,
-                    client: relayClient
-                )
+                let tab: RemoteBrowserTab
+                if relayClient.hostSupportsIndependentResources {
+                    let result = try await ResourceTabClient.request(resourceRequest(.browser, location: request.url?.absoluteString), client: relayClient)
+                    guard let browser = result.browser else { throw FileBrowserError.message("No browser tab was returned.") }
+                    tab = browser
+                } else {
+                    tab = try await RemoteBrowserSession.open(sessionName: sessionName, sourcePaneID: request.paneID, url: request.url, client: relayClient)
+                }
                 try Task.checkCancellation()
                 guard pendingBrowserLink == request, window?.id == originWindowID else { return }
                 browserSelection.selectedID = tab.id
@@ -841,6 +948,7 @@
                 }
                 .onChange(of: relayClient.isHostConnected) {
                     if !relayClient.isHostConnected {
+                        pendingResourceRequest = nil
                         pendingBrowserLink = nil
                         browserSelection.cancelPendingCloses()
                         simulatorSelection.cancelPendingCloses()
@@ -857,6 +965,7 @@
 
         var body: some View {
             terminalLifecycleContent
+                .environment(\.resourceTabActions, relayClient.hostSupportsIndependentResources ? ResourceTabActions { try await ResourceTabClient.request($0, client: relayClient) } : nil)
                 .onChange(of: annotationSource) {
                     if let request = annotationHandoff.request, annotationSource != request.source {
                         annotationHandoff.cancel()
@@ -867,6 +976,7 @@
                         wasBackgrounded = true
                     }
                     if scenePhase != .active {
+                        pendingResourceRequest = nil
                         browserSelection.cancelPendingCloses()
                         simulatorSelection.cancelPendingCloses()
                         annotationHandoff.cancel()
@@ -890,6 +1000,7 @@
                     wasBackgrounded = false
                     annotationHandoff.cancel()
                     pendingWindowTabAction = nil
+                    pendingResourceRequest = nil
                     pendingBrowserLink = nil
                     pendingFileLink = nil
                     showsWindowTabs = false
@@ -1112,6 +1223,12 @@
                     }
                     if let window {
                         windowActions(window, scope: scope)
+                    } else if relayClient.hostSupportsIndependentResources {
+                        Button { performWindowTabAction(.newAgent) } label: { Label("New Agent", symbol: .sparkles) }
+                        Button { performWindowTabAction(.newTerminal) } label: { Label("New Terminal", symbol: .terminal) }
+                        Button { openResource(.files) } label: { Label("New Files", symbol: .folder) }
+                        Button { openResource(.browser) } label: { Label("New Browser", symbol: .globe) }
+                        Button { openResource(.simulator) } label: { Label("New iOS Simulator", symbol: .iphone) }
                     }
                     if case .terminal = scope {
                         Button(action: resizeWindowToFit) {
@@ -1202,7 +1319,10 @@
 
         private func performWindowTabAction(_ action: WindowTabAction, preferredPaneID: String? = nil) {
             pendingSimulatorRequest = nil
+            pendingResourceRequest = nil
             switch action {
+            case let .newResource(kind):
+                openResource(kind)
             case let .window(_, operation):
                 guard let target = action.targetWindow(in: sessionWindows) else {
                     commandError = "This window has been closed. Reopen the tab list."
@@ -1217,6 +1337,10 @@
                     selectTerminalWindow(target)
                 case .openFiles,
                      .openAnotherFiles:
+                    if relayClient.hostSupportsIndependentResources {
+                        openResource(.files)
+                        return
+                    }
                     guard
                         relayClient.hostSupportsPaneFiles,
                         let paneID = actionPaneID(in: target, preferredPaneID: preferredPaneID) else {
@@ -1229,6 +1353,10 @@
                     pendingFilesRequest = .init(paneID: paneID, new: operation == .openAnotherFiles, inputBinding: relayClient.workspaceInputState.binding(paneID: paneID))
                 case .openSimulator,
                      .openNewSimulator:
+                    if relayClient.hostSupportsIndependentResources {
+                        openResource(.simulator)
+                        return
+                    }
                     guard
                         relayClient.hostSupportsPaneSimulator,
                         let paneID = actionPaneID(in: target, preferredPaneID: preferredPaneID) else {
@@ -1251,6 +1379,10 @@
                         inputBinding: relayClient.workspaceInputState.binding(paneID: paneID)
                     )
                 case .openBrowser:
+                    if relayClient.hostSupportsIndependentResources {
+                        openResource(.browser)
+                        return
+                    }
                     guard let paneID = actionPaneID(in: target, preferredPaneID: preferredPaneID) else {
                         commandError = "This window no longer has a source pane."
                         return
@@ -1278,6 +1410,7 @@
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
+                fileWorkspace.tabs.first { $0.id == id }?.lastSelectedAt = Date()
                 fileWorkspace.selectedID = id
             case let .closeFiles(id):
                 guard canCloseLinkedTab(.file(id)) else { return }
@@ -1382,6 +1515,7 @@
 
         private func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String? = nil) {
             pendingSimulatorRequest = nil
+            pendingResourceRequest = nil
             fileWorkspace.hasPendingTerminalSelection = false
             browserSelection.selectedID = nil
             simulatorSelection.selectedID = nil
@@ -1400,20 +1534,16 @@
 
         private func selectAdjacentWindow(from sourceWindowID: String, direction: TerminalWindowSwipePolicy.Direction) {
             guard
-                window?.id == sourceWindowID, fileWorkspace.selectedID == nil, browserSelection.selectedID == nil && simulatorSelection.selectedID == nil,
-                !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput,
-                let targetID = WindowSelectionReconciliation.adjacentWindowID(
-                    from: sourceWindowID, direction: direction, in: windowSelectionCandidates
-                ),
-                let target = sessionWindows.first(where: { $0.id == targetID }) else { return }
-            selectTerminalWindow(target)
+                let window, window.id == sourceWindowID, terminalIsVisible,
+                !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput else { return }
+            selectAdjacentTopLevel(IOSTopLevelTabID(window: window), direction: direction == .next ? 1 : -1)
         }
 
         /// Inherit the pane the iPhone is actually controlling, which may not
         /// yet match the Host's active-pane flag during a state round trip.
         private var newWindowDirectory: String {
             let pane = window?.panes.first(where: { $0.paneId == activePaneId }) ?? window?.activePane
-            return pane?.currentPath.flatMap { SessionDirectoryPath.isValid($0) ? $0 : nil } ?? "~/"
+            return pane?.currentPath.flatMap { SessionDirectoryPath.isValid($0) ? $0 : nil } ?? relayClient.resourceSessions.first(where: { $0.name == sessionName })?.directory ?? "~/"
         }
 
         private func agentTabConfiguration() -> NewAgentTabConfiguration {
@@ -1508,6 +1638,8 @@
         }
 
         private func createWindow(_ request: CreateTmuxWindow, binding: ViewerWorkspaceInputBinding) async throws {
+            let resourceID = relayClient.resourceSessions.first { $0.name == request.sessionName }?.id
+            let request = request.inResourceSession(resourceID)
             automaticTabFit.cancel()
             guard !isCreatingWindow else {
                 throw NewAgentTabConfiguration.LaunchError("A window is already being created. Please wait.")
@@ -1523,7 +1655,7 @@
             }
             isCreatingWindow = true
             initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
-            let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit, sessionBinding: binding)
+            let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit, sessionBinding: resourceID == nil ? binding : nil)
             defer {
                 isCreatingWindow = false
                 if windowCreation.revision == revision, windowCreation.paneID == nil {
@@ -1531,7 +1663,11 @@
                 }
             }
             let response = try await relayClient.sendCommand(request, paneId: "", inputBinding: binding).get()
-            _ = try binding.expectedPane(current: relayClient.workspaceInputState.sessionBinding(name: sessionName))
+            if resourceID == nil {
+                _ = try binding.expectedPane(current: relayClient.workspaceInputState.sessionBinding(name: sessionName))
+            } else if !relayClient.resourceSessions.contains(where: { $0.id == resourceID }) {
+                throw CancellationError()
+            }
             guard let paneId = response.paneId else {
                 throw NewAgentTabConfiguration.LaunchError("Host returned no new pane. Check its windows before retrying.")
             }
@@ -1549,6 +1685,11 @@
                 initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
             }
             guard !fileWorkspace.hasPendingTerminalSelection else { return }
+            if
+                candidates.isEmpty, selectedLinkedTab == nil,
+                let first = linkedTabs.topLevel(stored: fileWorkspace.topLevelTabOrder).first {
+                selectTopLevel(first)
+            }
             if
                 let restored = fileWorkspace.restoredWindowID,
                 selectedWindowId == nil || (selectedWindowId == restored && activePaneId == nil),
@@ -2176,7 +2317,10 @@
                 let result = await relayClient.sendCommand(spec, paneId: "", inputBinding: binding)
                 if case let .success(response) = result {
                     let processes = response.runningProcesses ?? []
-                    let closesSession = sessionWindows.count == 1 && sessionWindows.first?.stableId == window.stableId
+                    let hasResources = fileWorkspace.tabs.contains { $0.hostTab?.resourceSessionID != nil }
+                        || sessionBrowsers.contains { $0.resourceSessionID != nil }
+                        || sessionSimulators.contains { $0.resourceSessionID != nil }
+                    let closesSession = sessionWindows.count == 1 && sessionWindows.first?.stableId == window.stableId && !hasResources
                     if processes.isEmpty, !closesSession {
                         performCloseWindow(window, inputBinding: binding)
                     } else {

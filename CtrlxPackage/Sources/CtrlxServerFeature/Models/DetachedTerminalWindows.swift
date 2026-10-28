@@ -95,11 +95,17 @@ final class DetachedTerminalWindows {
     }
 
     func detach(
-        _ drag: WorkbenchTabDrag, anchor: DetachedTerminalTarget, position: CGPoint?,
+        _ drag: WorkbenchTabDrag, anchor: DetachedTerminalTarget?, position: CGPoint?,
         session: (DetachedTerminalTarget) -> String?
     ) -> DetachedTerminalWorkspace? {
-        guard drag.tab.canDetach, anchor.hostID == drag.hostID, session(anchor) == drag.sessionName else { return nil }
-        let destination = DetachedTerminalWorkspace(target: anchor, sessionName: drag.sessionName)
+        guard drag.tab.canDetach else { return nil }
+        if let anchor {
+            guard anchor.hostID == drag.hostID, session(anchor) == drag.sessionName else { return nil }
+        } else {
+            guard drag.tab.windowId == nil, store(for: drag.workspaceID)?.existing(hostID: drag.hostID, session: drag.sessionName) != nil else { return nil }
+        }
+        let destination = DetachedTerminalWorkspace(hostID: drag.hostID, sessionName: drag.sessionName, selection: drag.tab)
+        destination.anchor = anchor
         destination.members = []
         workspaces[destination.id] = destination
         positions[destination.id] = position
@@ -113,11 +119,26 @@ final class DetachedTerminalWindows {
 
     func detachSession(
         hostID: String?, name: String, windowIDs: [String], selectedWindowID: String?, position: CGPoint?,
-        session: (DetachedTerminalTarget) -> String?
+        allowsResourceOnly: Bool = false, session: (DetachedTerminalTarget) -> String?
     ) -> DetachedTerminalWorkspace? {
+        if windowIDs.isEmpty, allowsResourceOnly {
+            if let existing = workspaces.values.first(where: { $0.isSessionWindow && $0.hostID == hostID && $0.sessionName == name }) {
+                return existing
+            }
+            guard
+                let tabs = mainTabs.existing(hostID: hostID, session: name),
+                let selection = tabs.tabOrder.first(where: { $0.canDetach && $0.windowId == nil }) else { return nil }
+            let destination = DetachedTerminalWorkspace(hostID: hostID, sessionName: name, selection: selection)
+            destination.isSessionWindow = true
+            workspaces[destination.id] = destination
+            positions[destination.id] = position
+            mainTabs.moveSession(hostID: hostID, session: name, to: destination.tabs, selection: .init(hostID: hostID, sessionName: name, windowID: nil))
+            presentationRevision += 1
+            return destination
+        }
         let live = windowIDs.compactMap { DetachedTerminalTarget(hostID: hostID, windowID: $0) }
         guard !live.isEmpty, live.count == windowIDs.count, live.allSatisfy({ session($0) == name }) else { return nil }
-        if let existing = workspaces.values.first(where: { $0.isSessionWindow && $0.anchor.hostID == hostID && $0.resolvedSession(using: session) == name }) {
+        if let existing = workspaces.values.first(where: { $0.isSessionWindow && $0.hostID == hostID && $0.resolvedSession(using: session) == name }) {
             return existing
         }
         let members = live.filter { workspace(containing: $0) == nil }
@@ -149,7 +170,7 @@ final class DetachedTerminalWindows {
         session: (DetachedTerminalTarget) -> String?
     ) -> Bool {
         guard
-            let destination = workspaces[workspaceID], target.hostID == destination.anchor.hostID,
+            let destination = workspaces[workspaceID], target.hostID == destination.hostID,
             let sourceSession = session(target),
             destination.resolvedSession(using: session) == sourceSession else { return false }
         destination.sessionName = sourceSession
@@ -172,14 +193,19 @@ final class DetachedTerminalWindows {
 
     @discardableResult
     func returnToMain(
-        _ drag: WorkbenchTabDrag, anchor: DetachedTerminalTarget,
+        _ drag: WorkbenchTabDrag, anchor: DetachedTerminalTarget?,
         session: (DetachedTerminalTarget) -> String?
     ) -> Bool {
         guard
             drag.workspaceID != nil, drag.tab.canDetach,
-            anchor.hostID == drag.hostID, session(anchor) == drag.sessionName,
+            anchor.map({ $0.hostID == drag.hostID && session($0) == drag.sessionName }) ?? (drag.tab.windowId == nil),
             transfer(drag, to: nil, session: session) else { return false }
-        request(.tab(drag.tab), from: anchor)
+        if let anchor {
+            request(.tab(drag.tab), from: anchor)
+        } else {
+            mainTabs.restoredSelection = .init(hostID: drag.hostID, sessionName: drag.sessionName, windowID: nil)
+            mainTabs.restorationRevision += 1
+        }
         return true
     }
 
@@ -228,7 +254,7 @@ final class DetachedTerminalWindows {
             if let existing, old?.sessionName == descriptor.sessionName, old?.windowID == descriptor.windowID {
                 destinationStore = existing.0
             } else {
-                destinationStore = store(for: owner(hostID: hostID, windowID: descriptor.windowID)) ?? mainTabs
+                destinationStore = store(for: descriptor.windowID.flatMap { owner(hostID: hostID, windowID: $0) }) ?? mainTabs
             }
             let destination = destinationStore.tabs(hostID: hostID, session: descriptor.sessionName)
             if let existing, existing.2 !== destination {
@@ -272,7 +298,7 @@ final class DetachedTerminalWindows {
     }
 
     func browserOwner(hostID: String?, session: String, id: UUID, windowID: String?) -> UUID? {
-        for workspace in workspaces.values where workspace.anchor.hostID == hostID {
+        for workspace in workspaces.values where workspace.hostID == hostID {
             if workspace.tabs.existing(hostID: hostID, session: session)?.openBrowserTabs.contains(where: { $0.id == id }) == true {
                 return workspace.id
             }
@@ -297,7 +323,7 @@ final class DetachedTerminalWindows {
             let sourceStore = store(for: drag.workspaceID), let destinationStore = store(for: destinationID) else { return false }
         if let destinationID {
             guard
-                let group = workspaces[destinationID], group.anchor.hostID == drag.hostID,
+                let group = workspaces[destinationID], group.hostID == drag.hostID,
                 group.resolvedSession(using: session) == drag.sessionName else { return false }
             group.sessionName = drag.sessionName
         }
@@ -510,12 +536,14 @@ final class DetachedTerminalWindows {
         windows[workspaceID]?.frame ?? restoredFrames[workspaceID]
     }
 
-    func restoreWorkspace(id: UUID, members: [DetachedTerminalTarget], session: String, frame: CGRect?, fallbackAnchor: DetachedTerminalTarget? = nil) -> DetachedTerminalWorkspace? {
+    func restoreWorkspace(id: UUID, members: [DetachedTerminalTarget], session: String, frame: CGRect?, fallbackAnchor: DetachedTerminalTarget? = nil, hostID: String? = nil) -> DetachedTerminalWorkspace? {
         if let existing = workspaces[id] {
             return existing
         }
-        guard let anchor = members.first ?? fallbackAnchor, members.allSatisfy({ !targets.contains($0) }) else { return nil }
-        let workspace = DetachedTerminalWorkspace(id: id, target: anchor, sessionName: session)
+        guard members.allSatisfy({ !targets.contains($0) }) else { return nil }
+        let anchor = members.first ?? fallbackAnchor
+        let workspace = DetachedTerminalWorkspace(id: id, hostID: anchor?.hostID ?? hostID, sessionName: session, selection: anchor.map { .window($0.windowID) } ?? .fileExplorer)
+        workspace.anchor = anchor
         workspace.members = members
         workspaces[id] = workspace
         restoredFrames[id] = frame

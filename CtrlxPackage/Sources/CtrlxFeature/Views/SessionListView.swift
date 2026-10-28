@@ -142,7 +142,7 @@
             )) {
                 if let confirmation = closeConfirmation {
                     Button("Close Anyway", role: .destructive) {
-                        confirmCloseSession(confirmation.target, inputBinding: confirmation.inputBinding)
+                        confirmCloseSession(confirmation.target, inputBinding: confirmation.inputBinding, resourceSessionID: confirmation.resourceSessionID)
                     }
                 }
                 Button("Cancel", role: .cancel) { closeConfirmation = nil }
@@ -272,6 +272,10 @@
         private func requestCloseSession(_ target: SessionNavigation) {
             guard !isClosingSession else { return }
             let binding = connectionManager.connection(for: target.hostId)?.relayClient.workspaceInputState.sessionBinding(name: target.sessionName) ?? .unavailable
+            if let session = connectionManager.connection(for: target.hostId)?.relayClient.resourceSessions.first(where: { $0.name == target.sessionName }) {
+                closeConfirmation = .init(target: target, runningProcesses: [], inputBinding: binding, closesSession: true, resourceSessionID: session.id)
+                return
+            }
             isClosingSession = true
             Task {
                 defer { isClosingSession = false }
@@ -295,13 +299,18 @@
             }
         }
 
-        private func confirmCloseSession(_ target: SessionNavigation, inputBinding: ViewerWorkspaceInputBinding) {
+        private func confirmCloseSession(_ target: SessionNavigation, inputBinding: ViewerWorkspaceInputBinding, resourceSessionID: UUID? = nil) {
             guard !isClosingSession else { return }
             isClosingSession = true
             closeConfirmation = nil
             Task {
                 defer { isClosingSession = false }
-                await performCloseSession(target, inputBinding: inputBinding)
+                if let resourceSessionID, let client = connectionManager.connection(for: target.hostId)?.relayClient {
+                    do { _ = try await ResourceTabClient.request(.init(sessionID: resourceSessionID, operation: .closeSession), client: client) }
+                    catch { closeError = error.localizedDescription }
+                } else {
+                    await performCloseSession(target, inputBinding: inputBinding)
+                }
             }
         }
 

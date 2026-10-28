@@ -1,5 +1,32 @@
 # Host-backed Files tabs
 
+## Independent human resource tabs
+
+Capable Hosts publish `independentResources` separately from the legacy pane
+catalog. Human **New Files**, **New Browser** and **New iOS Simulator** each create
+a new tab belonging to a stable Host/session UUID, without a source pane. Agent
+resources retain their pane/process ownership. Human tabs participate in the
+top-level order; Agent resources retain their source groups. Mac split, detach,
+return and whole-session windows also accept resource-only workspaces.
+
+File references resolve against the captured source terminal on the Host, then
+reuse the most recently selected human Files tab in this client window/session.
+They never rebind that tab to the source terminal. Explicit New and artifact
+preview **Open in New Files Tab** create another tab; Mac Option-click on a
+terminal file reference requests this directly; on iOS, long-press a file
+reference and choose **Open in New Files Tab**. URL links create a new human
+Browser page. Files offers **Send Path to Agent…**, with an explicit live
+same-session recipient and no Return key.
+
+Closing the last terminal keeps a session with independent resources. New
+Agent/Terminal recreates tmux under the same stable session UUID; a reused name
+cannot inherit resources. Explicit Close Session confirms and closes both
+terminals and resources. The final resource removes an otherwise empty session.
+Recovery schema 2 retains independent Files identities and migrates version 1;
+Browser/Simulator runtime restoration and authorization are not persisted.
+Older Viewers see only the legacy pane catalog; older Host entry points retain
+their former pane behavior. The pane rules below describe that compatibility path.
+
 ## Mac 本机 IPA 安装
 
 Mac Host 和 Mac Viewer 均可从菜单「File → Install IPA on iPhone…」选择当前 Mac 的
@@ -66,14 +93,14 @@ The top-right **More** menu combines terminal copy/session controls and per-pane
 **Touch Mode** with rename, close and the open/Fork actions, including **Open
 Another Files Tab**. Fit retains its existing Host-wide resize behavior; moving
 the control does not change the resize command.
-The simulator shortcut opens an existing simulator belonging to the current
-window, offers a picker when there are several, and creates the source pane's
-default device on the Host when none exists. Creation requires the Host's
-`supportsPaneSimulator` capability; older Hosts can still expose existing
-devices. The Viewer shows opening progress and can stop waiting without closing
+On an independent-resource Host, the simulator shortcut creates a new human
+device in the session. With an older Host it uses the existing pane picker/default
+under `supportsPaneSimulator`; Hosts without creation support can still expose
+existing devices. The Viewer shows opening progress and can stop waiting without closing
 the shared Host device.
 New Terminal / Agent are available directly in the iOS icon row and remain at
-the bottom of the Tabs list; the Mac `+` menu does not create Files.
+the bottom of the Tabs list. Mac `+` and iOS Tabs also offer New Files, Browser
+and Simulator when the Host advertises independent resources.
 Each session can keep multiple independent Files tabs alongside terminals and
 web browsers. On Mac, these are ordinary reorderable, closable, splittable tabs.
 Mac Host and Viewer also support dragging Files, Browser and Simulator tabs out
@@ -85,16 +112,17 @@ Detached Agent/Terminal, Files, Browser and Simulator tabs also expose a **−**
 (**Return to Main Window**) button. It returns only that tab and selects it in
 the main window; the last returned tab closes the empty detached window.
 Mac tab titles use the system body size for better readability.
-Normal **Open Files** and terminal file links reuse the source pane's human
-default tab. **Open Another Files Tab** explicitly creates an extra without
-replacing that default. Tab identity and source routing belong to the Host;
+On updated Hosts, **Open Files** always creates an independent tab; terminal
+file links reuse the most recently selected independent Files in this window.
+Older Hosts retain pane-default reuse and **Open Another Files Tab**. Tab identity and source routing belong to the Host;
 directory, preview, ordering, split placement and selection belong to each client.
 On iOS, a Files tab fills the session content area. The title opens a native
 medium/large tab-list sheet without a nested navigation stack. List selections are
 applied after dismissing the sheet; toolbar actions run directly for the current
 window, resolving its stable ID again before opening a sheet or alert.
-On iOS, Files, Host Browser and iOS Simulator tabs expose source navigation and
-**Close Tab** directly in the shortcut row, with no top-right **More** menu.
+On iOS, Files, Host Browser and iOS Simulator tabs expose **Close Tab** directly
+in the shortcut row, with no top-right **More** menu. Only pane-bound resources
+show source navigation; independent human resources have no source button.
 Closing uses the current resource's stable tab ID. The source action is unavailable if
 that terminal is gone; Close stays in the row. The tab list keeps its per-resource close menus, including
 Simulator. Host-backed close actions require a connection; simulator closing also
@@ -126,13 +154,15 @@ that Git tab is still open.
 
 ### Pane-linked tab groups
 
-Files, Host browser pages and iOS Simulator tabs are grouped by their actual
-source pane within one Host/session. Children from different panes never share
+Agent-created Browser/Simulator tabs and compatibility pane-bound resources
+are grouped by their actual source pane within one Host/session. Independent
+human resources remain in the top-level order. Children from different panes never share
 a group, even when they belong to the same tmux window or directory. Groups
 follow terminal order; children retain their client-private mixed-type order,
 and new children append to their group. Reordering does not rebind a source.
 
-Mac keeps terminal tabs and session-wide Git before the child groups. Each group
+Mac keeps the mixed top-level terminal/human-resource order and session Git
+before the child groups. Each group
 has a thin colored outline and source name; multi-pane windows add the pane
 number. iOS uses the same names/colors in its Tabs list, with native long-press
 reordering within each group. Selection still uses the ordinary underline or
@@ -143,7 +173,8 @@ offers **Open Files**, **Open Browser** and **Open iOS Simulator** for that
 child's captured source pane. The actions are disabled when that pane is gone or
 the Host does not advertise the corresponding capability.
 
-Previous/next from a terminal visits only terminal tabs. From a child it visits
+Previous/next from a top-level tab visits the mixed terminal/human-resource
+order in its current layout. From a child it visits
 only its group's visible children; either boundary returns to the exact source
 pane. Mac operates within the focused split and can reveal the source in another
 split or native workbench. On iOS, horizontal swipes over the top tab title switch
@@ -158,7 +189,8 @@ visible members in the saved order; missing IDs and other groups keep their slot
 
 ## Directories and lifetime
 
-- A new tab captures a pane inside the window whose action was used: prefer the
+- Independent Files uses an explicitly supplied directory or the session directory.
+  The older pane-bound creation path captures a pane in the action's window: prefer the
   focused pane only if it belongs to that window, then its active/first pane.
   Focus in another window can never redirect the initial directory. iOS captures
   the stable window ID and resolves the target again before the action; a
@@ -169,7 +201,8 @@ visible members in the saved order; missing IDs and other groups keep their slot
 - Once opened, its directory does not follow later `cd` operations. **Source Pane
   Directory** explicitly resolves it again. Up, Home and the path field navigate
   independently in each tab.
-- `HostFileTabService` allocates UUIDs and coalesces normal opens by source pane
+- The compatibility pane-bound path in `HostFileTabService` allocates UUIDs and
+  coalesces normal opens by source pane
   and human group, not by directory, window or requesting Viewer. It validates
   fresh pane membership before lookup/creation; reuse remains possible at the
   30-tab session limit. Source moves/renames update descriptors without changing
@@ -344,8 +377,8 @@ chosen KISS boundary, rather than a per-output provenance registry.
 
 Click/tap an underlined marker to open Files in the same session. A directory
 opens directly; a file selects its existing inline preview. Video still waits
-for Play. Links and manual **Open Files** use the same pane's human default tab.
-Two panes in one window remain separate even when they reference the same path;
+for Play. On older Hosts, links and **Open Files** use the same pane's human default tab.
+Under that compatibility path, two panes in one window remain separate even when they reference the same path;
 moving the same pane to another window preserves its tab. Clicking Agent output
 is a human action, not creation of an Agent Files group (there is no Agent Files
 API). Explicit extras and legacy tabs never become defaults by directory matching.

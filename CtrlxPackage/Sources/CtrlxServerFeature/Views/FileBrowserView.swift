@@ -313,14 +313,16 @@ final class SessionFileTabsState {
 
     func attachSimulator(_ state: SimulatorTabState) {
         let pane = state.sourcePane
-        var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), displayTitle: state.handle.name, originWindowId: pane.windowId)
+        var tab = BrowserTab(id: state.id, url: URL(staticString: "about:blank"), displayTitle: state.handle.name, originWindowId: pane?.windowId)
         tab.isSimulator = true
         let isNewTab = !openBrowserTabs.contains(where: { $0.id == state.id })
         if isNewTab {
             openBrowserTabs.append(tab)
         }
         simulatorStates[state.id] = state
-        placeNewLinkedBrowserTab(state.id, sourceWindowID: pane.windowId, isNew: isNewTab)
+        if let pane {
+            placeNewLinkedBrowserTab(state.id, sourceWindowID: pane.windowId, isNew: isNewTab)
+        }
     }
 
     /// Files opened as their own tabs via the "Open in New Tab" context menu.
@@ -384,6 +386,9 @@ final class SessionFileTabsState {
     /// or terminal. Refers to a tab on the *left* side when split is active.
     var selectedFileTabId: UUID? {
         didSet {
+            if let id = selectedFileTabId, oldValue != id {
+                directoryTabs[id]?.lastSelectedAt = Date()
+            }
             if selectedFileTabId != nil {
                 isGitSelected = false
             }
@@ -417,12 +422,15 @@ final class SessionFileTabsState {
     }
 
     /// Directory tabs own their content; only editor tabs need the legacy tree underneath.
-    func selectLeftFileTab(_ id: UUID, windowID: String, legacyExplorerWindows: inout Set<String>) {
-        if directoryTabs[id] != nil {
-            legacyExplorerWindows.remove(windowID)
-        } else {
-            legacyExplorerWindows.insert(windowID)
+    func selectLeftFileTab(_ id: UUID, windowID: String?, legacyExplorerWindows: inout Set<String>) {
+        if let windowID {
+            if directoryTabs[id] != nil {
+                legacyExplorerWindows.remove(windowID)
+            } else {
+                legacyExplorerWindows.insert(windowID)
+            }
         }
+        directoryTabs[id]?.lastSelectedAt = Date()
         selectedFileTabId = id
         selectedBrowserTabId = nil
     }
@@ -676,7 +684,14 @@ final class SessionFileTabsState {
     /// The single right-pane entry currently rendered, or `nil` when the
     /// pane should show the "No Tab Selected" placeholder. Always points
     /// at a member of `rightSide` once `reconcileRightPaneSelection` has run.
-    var selectedRight: TabDragPayload?
+    var selectedRight: TabDragPayload? {
+        didSet {
+            if selectedRight != oldValue, case let .file(id) = selectedRight {
+                directoryTabs[id]?.lastSelectedAt = Date()
+            }
+        }
+    }
+
     /// Width fraction occupied by the left pane. Clamped to
     /// `[SplitLayout.minRatio, SplitLayout.maxRatio]` (0.15…0.85) by the
     /// resize gesture. Default 0.5 puts the divider in the middle. Persisted

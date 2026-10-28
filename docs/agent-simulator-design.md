@@ -2,6 +2,22 @@
 
 当前源码的对外入口为 `ctrlx ios`，配套技能为 `ctrlx:agent-ios`（`plugin/ctrlx/skills/agent-ios/`）。运行与控制仍由 Host Mac 上的 iOS Simulator 提供；配对 Mac / iOS Viewer 支持画面查看，以及显式接管后的触摸和剪贴板操作，真机及 Android 支持留待后续。内部 `Simulator*` 类型、`simulator.action` 协议和设备存储目录继续沿用。旧 CLI 名称不保留别名，调用脚本与 Skill 应随新版本一同更新；下文历史证据中的 `ctrlx simulator` / `agent-simulator` 保留当时名称，不代表本次改名已经过同样的设备验收。
 
+## 人工独立标签与临时授权
+
+人工 New iOS Simulator 每次创建独立活动设备，以 Host 的稳定会话 UUID
+归属，不依赖 pane。Agent 自建设备保留原 pane/进程实例规则。人工标签支持
+现有分屏、独立窗口和归还操作；关闭最后一个终端不影响人工设备。
+
+人工可以选择本会话中可验证的运行中 Agent，临时允许其观察、输入、安装和
+启动应用。`devices` 以 `ownership: authorized` 标识获授权的人建设备；
+授权不改变 owner，Agent 不能 close、erase、delete 或自行 claim。
+真实人工输入暂停 Agent，需显式交还；Viewer 释放租约不会自动交还。
+撤销、退出或离开来源会话会取消旧操作并收尾录制，保留人工设备。
+授权不恢复，不由同 pane 的下一进程、PID 复用或子 Agent 继承。
+
+人工独立设备不按 Agent 的十分钟闲置策略关闭，仍受现有容量预算约束。
+Files 只提供明确接收者的路径发送；Browser 的对应授权由原生边界校验。
+
 ## Mac 展示位置
 
 Host 和 Mac Viewer 的 Simulator 标签可单独拖出为独立窗口，或通过右键菜单打开；

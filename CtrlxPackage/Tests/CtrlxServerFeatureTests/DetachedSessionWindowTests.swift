@@ -107,7 +107,7 @@ struct DetachedSessionWindowTests {
         #expect(manager.detachSession(hostID: nil, name: "work", windowIDs: ["@1"], selectedWindowID: nil, position: nil, session: { _ in "replaced" }) == nil)
         for host: String? in [nil, "one", "two"] {
             let group = try #require(manager.detachSession(hostID: host, name: "work", windowIDs: ["@1"], selectedWindowID: nil, position: nil, session: { _ in "work" }))
-            #expect(group.anchor.hostID == host)
+            #expect(group.hostID == host)
         }
         #expect(manager.workspaces.count == 3)
     }

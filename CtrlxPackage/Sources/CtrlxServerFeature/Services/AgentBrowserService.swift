@@ -49,6 +49,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     var extensionCleanupTask: Task<Void, Never>?
     private var workspaces: [UUID: AgentBrowserWorkspace] = [:]
     private(set) var tabs: [String: AgentBrowserTabState] = [:]
+    var resolveResourceSession: ((UUID) throws -> ResourceSession)?
     private let parkingID = UUID()
     private lazy var parkingWindow: NSWindow = {
         _ = NSApplication.shared
@@ -222,6 +223,12 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     /// Display ownership follows the source pane, independently of native page lifetime.
     private func reconcileWorkspaces() {
         for tab in tabs.values where tab.manualTarget?.hostID == nil {
+            if tab.resourceSessionID != nil {
+                let workspace = workspaces.values.first { $0.acceptsTab?(tab) == true }
+                    ?? workspaces.values.first { $0.acceptsTab == nil && $0.acceptsSession(tab.sessionName) }
+                movePresentation(tab, to: workspace)
+                continue
+            }
             guard let pane = routePanes.first(where: { $0.paneId == tab.paneID }) else { continue }
             movePresentation(tab, to: displayWorkspace(for: tab, pane: pane))
         }
@@ -324,6 +331,14 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }
 
     func updateBrowserRoutes(_ panes: [PaneInfo]) {
+        for tab in tabs.values {
+            if
+                let grant = tab.grant, let session = tab.resourceSessionID,
+                !panes.contains(where: { $0.paneId == grant.agent.paneID && $0.workspaceIdentity?.sessionID == session }) {
+                _ = runtime?.setAgentGrant?(nil, forTab: tab.identifier)
+                tab.grant = nil
+            }
+        }
         for rename in SessionRenameMapping.detect(from: routePanes, to: panes) {
             renameHostSession(from: rename.oldName, to: rename.newName)
         }
@@ -434,8 +449,9 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
             runtime?.closeTab(identifier)
             return
         }
-        let paneID = parent.flatMap { tabs[$0]?.paneID } ?? route["pane"] ?? ""
-        guard !paneID.isEmpty else { runtime?.closeTab(identifier)
+        let paneID = parent.flatMap { tabs[$0]?.paneID } ?? route["pane"]
+        let resourceSessionID = parent.flatMap { tabs[$0]?.resourceSessionID } ?? route["resourceSession"].flatMap(UUID.init(uuidString:))
+        guard paneID?.isEmpty == false || (owner.isEmpty && resourceSessionID != nil) else { runtime?.closeTab(identifier)
             return
         }
         let workspaceID = parent.flatMap { tabs[$0]?.workspaceID } ?? routedWorkspaceID
@@ -448,10 +464,11 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
             owner: owner,
             service: self,
             manualTarget: manualTarget,
-            manualRouteID: manualRouteID
+            manualRouteID: manualRouteID,
+            resourceSessionID: resourceSessionID
         )
         state.sessionName = manualTarget?.sessionName ?? parent.flatMap { tabs[$0]?.sessionName } ?? route["session"] ?? ""
-        state.sourceAgent = parent.flatMap { tabs[$0]?.sourceAgent } ?? imageTargetForPane(paneID)
+        state.sourceAgent = parent.flatMap { tabs[$0]?.sourceAgent } ?? (resourceSessionID == nil ? paneID.flatMap(imageTargetForPane) : nil)
         state.windowID = parent.flatMap { tabs[$0]?.windowID } ?? route["window"]
         state.parentID = parent.flatMap(UUID.init(uuidString:))
         state.isExtensionWindow = route["presentation"] == "extensionWindow"
@@ -462,6 +479,16 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
                 || parent.flatMap { tabs[$0]?.isRemotelyControlled } == true)
         tabs[identifier] = state
         workspaces[workspaceID]?.onCreate(state, state.parentID)
+        publishBrowserTabs()
+    }
+
+    public func browserTab(_ identifier: String, agentGrantCanWrite canWrite: NSNumber?) {
+        guard let tab = tabs[identifier], tab.grant != nil else { return }
+        if let canWrite {
+            tab.grant?.canWrite = canWrite.boolValue
+        } else {
+            tab.grant = nil
+        }
         publishBrowserTabs()
     }
 
@@ -728,17 +755,55 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         manualRoutes.removeAll()
     }
 
+    func openResourceBrowser(session: ResourceSession, url: URL? = nil) async throws -> AgentBrowserTabState {
+        if let url, !BrowserWebURL.isSupported(url) {
+            throw ManualBrowserError.creation("Only HTTP and HTTPS links without embedded usernames or passwords can open in the Host browser.")
+        }
+        try await ensureStarted()
+        let tab = try await createManualTab(sessionName: session.name, pane: nil, resourceSessionID: session.id)
+        if let url {
+            tab.requestsInitialAddressFocus = false
+            runtime?.navigateTab(tab.identifier, url: url.absoluteString)
+        }
+        return tab
+    }
+
+    func updateResourceSessions(_ sessions: [ResourceSession]) {
+        for tab in tabs.values {
+            guard let id = tab.resourceSessionID, let session = sessions.first(where: { $0.id == id }) else { continue }
+            if tab.sessionName != session.name {
+                tab.sessionName = session.name
+                tab.manualTarget = ManualBrowserTarget(sessionName: session.name)
+                if let route = tab.manualRouteID, let previous = manualRoutes[route] {
+                    manualRoutes[route] = (previous.workspaceID, ManualBrowserTarget(sessionName: session.name))
+                }
+                workspaces[tab.workspaceID]?.onChange(tab)
+            }
+        }
+        reconcileWorkspaces()
+    }
+
+    func closeResourceSession(_ id: UUID, including tabIDs: Set<UUID> = []) {
+        for tab in Array(tabs.values) where tab.resourceSessionID == id || tabIDs.contains(tab.id) {
+            runtime?.closeTab(tab.identifier)
+        }
+    }
+
     private func createPaneTab(_ pane: PaneInfo) async throws -> AgentBrowserTabState {
+        try await createManualTab(sessionName: pane.sessionName, pane: pane, resourceSessionID: nil)
+    }
+
+    private func createManualTab(sessionName: String, pane: PaneInfo?, resourceSessionID: UUID?) async throws -> AgentBrowserTabState {
         guard !closing, let runtime else { throw ManualBrowserError.unavailable }
-        let sessionName = pane.sessionName
-        let workspaceID = (workspaces.values.first { $0.acceptsPane(pane) }
+        let workspaceID = (pane.flatMap { pane in workspaces.values.first { $0.acceptsPane(pane) } }
             ?? workspaces.values.first { $0.acceptsTab == nil && $0.acceptsSession(sessionName) })?.id ?? parkingID
         let target = ManualBrowserTarget(sessionName: sessionName)
         let routeID = UUID().uuidString
         manualRoutes[routeID] = (workspaceID, target)
         var route = target.route(workspaceID: workspaceID)
-        route["pane"] = pane.paneId
-        route["window"] = pane.windowId
+        route["pane"] = pane?.paneId
+        route["window"] = pane?.windowId
+        route["resourceSession"] = resourceSessionID?.uuidString
         route["manualRoute"] = routeID
         route["remote"] = "true"
         do {
@@ -794,7 +859,9 @@ final class AgentBrowserTabState {
     let identifier: String
     let view: NSView
     var workspaceID: UUID
-    let paneID: String
+    let paneID: String?
+    let resourceSessionID: UUID?
+    var grant: ResourceTabGrant?
     let owner: String
     let service: AgentBrowserService
     var manualTarget: ManualBrowserTarget?
@@ -819,17 +886,19 @@ final class AgentBrowserTabState {
         identifier: String,
         view: NSView,
         workspaceID: UUID,
-        paneID: String,
+        paneID: String?,
         owner: String,
         service: AgentBrowserService,
         manualTarget: ManualBrowserTarget? = nil,
-        manualRouteID: String? = nil
+        manualRouteID: String? = nil,
+        resourceSessionID: UUID? = nil
     ) {
         self.id = id
         self.identifier = identifier
         self.view = view
         self.workspaceID = workspaceID
         self.paneID = paneID
+        self.resourceSessionID = resourceSessionID
         self.owner = owner
         self.service = service
         self.manualTarget = manualTarget

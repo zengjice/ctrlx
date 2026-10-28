@@ -20,6 +20,20 @@ struct IOSWorkspaceRecoveryTests {
         )], supportsPaneFiles: true, fileTabs: includeFiles ? [.init(id: file, sessionName: name, windowID: windowRuntime, sourcePaneID: runtime, initialDirectory: "/Host/project")] : [], workspaceIdentity: .init(hostID: root ?? host, serverID: server))
     }
 
+    @Test("Legacy disk snapshots explicitly upgrade before writing independent tab order")
+    func upgradesVersionOne() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("resource-recovery-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var old = IOSWorkspaceRecoverySnapshot()
+        old.version = 1
+        try JSONEncoder().encode(old).write(to: root.appendingPathComponent("ios-workspace.json"))
+        let store = IOSWorkspaceRecoveryStore.diskBacked(directory: root)
+        let migrated = try #require(await store.load())
+        #expect(migrated.version == 2)
+        try await store.save(migrated)
+    }
+
     @Test("Mixed child order survives cold restore and delayed browser/simulator catalogs")
     func linkedTabOrder() async throws {
         let disk = IOSWorkspaceRecoveryStore.inMemory()

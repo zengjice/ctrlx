@@ -14,6 +14,7 @@ public struct ViewerWorkspaceCatalog: Equatable, Sendable {
     public let pairID: String
     public let scope: WorkspaceIdentityScope
     public let routes: [UUID: Route]
+    public let resourceSessions: [ResourceSession]
 
     public init?(state: SessionStateMessage) {
         guard let scope = state.workspaceIdentity else { return nil }
@@ -38,6 +39,11 @@ public struct ViewerWorkspaceCatalog: Equatable, Sendable {
             windows[identity.windowID] = window
             windowIDs[window] = identity.windowID
         }
+        let resources = state.independentResources?.sessions ?? []
+        guard
+            Set(resources.map(\.id)).count == resources.count, Set(resources.map(\.name)).count == resources.count,
+            resources.allSatisfy({ (sessionNames[$0.id] == nil || sessionNames[$0.id] == $0.name) && (sessionIDs[$0.name] == nil || sessionIDs[$0.name] == $0.id) }) else { return nil }
+        self.resourceSessions = resources
         self.pairID = state.pairId
         self.scope = scope
         self.routes = routes
@@ -55,6 +61,9 @@ public struct ViewerWorkspaceCatalog: Equatable, Sendable {
     }
 
     public func reference(sessionName: String, windowID: String? = nil) -> ViewerWorkspaceReference? {
+        if windowID == nil, let resource = resourceSessions.first(where: { $0.name == sessionName }) {
+            return .init(pairID: pairID, hostID: scope.hostID, sessionID: resource.id)
+        }
         guard let route = routes.values.first(where: { $0.sessionName == sessionName && (windowID == nil || $0.windowID == windowID) }) else { return nil }
         return .init(
             pairID: pairID,
@@ -62,6 +71,16 @@ public struct ViewerWorkspaceCatalog: Equatable, Sendable {
             sessionID: route.identity.sessionID,
             windowID: windowID == nil ? nil : route.identity.windowID
         )
+    }
+
+    public func sessionName(for reference: ViewerWorkspaceReference) -> String? {
+        guard reference.pairID == pairID, reference.hostID == scope.hostID else { return nil }
+        if
+            reference.windowID == nil, reference.paneID == nil,
+            let resource = resourceSessions.first(where: { $0.id == reference.sessionID }) {
+            return resource.name
+        }
+        return resolve(reference)?.sessionName
     }
 
     public func resolve(_ reference: ViewerWorkspaceReference) -> Route? {

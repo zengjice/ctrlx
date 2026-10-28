@@ -6,12 +6,14 @@ public struct TerminalFileLinkRequest: Hashable, Sendable {
     public let paneID: String
     public let hostID: String?
     public let prefersPreview: Bool
+    public let opensNewTab: Bool
 
-    public init(path: String, paneID: String, hostID: String?, prefersPreview: Bool = true) {
+    public init(path: String, paneID: String, hostID: String?, prefersPreview: Bool = true, opensNewTab: Bool = false) {
         self.path = path
         self.paneID = paneID
         self.hostID = hostID
         self.prefersPreview = prefersPreview
+        self.opensNewTab = opensNewTab
     }
 }
 

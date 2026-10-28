@@ -112,6 +112,16 @@
             return { path in openFileLink(.init(path: path, paneID: paneId, hostID: hostId)) }
         }
 
+        private struct FileLinkActions {
+            let path: String
+            let binding: ViewerWorkspaceInputBinding
+        }
+
+        @State private var fileLinkActions: FileLinkActions?
+        private var canOpenFileLinkActions: Bool {
+            isConnected && fileLinkActions?.binding == relayClient.workspaceInputState.binding(paneID: paneId)
+        }
+
         @State private var coordinator: StreamCoordinator
         @State private var presentedTerminal: TerminalState?
 
@@ -345,6 +355,27 @@
             }
             .sheet(item: $linkPresentation.item, onDismiss: { linkPresentation.didDismiss() }) { item in
                 TerminalLinkSheet(url: item.url, isHostConnected: isConnected, openHostURL: openHostURLAction)
+            }
+            .confirmationDialog("File Reference", isPresented: .init(get: { fileLinkActions != nil }, set: {
+                if !$0 {
+                    fileLinkActions = nil
+                }
+            }), titleVisibility: .visible) {
+                if let selection = fileLinkActions, let openFileLink {
+                    Button("Open in Files") {
+                        guard isConnected, selection.binding == relayClient.workspaceInputState.binding(paneID: paneId) else { return }
+                        openFileLink(.init(path: selection.path, paneID: paneId, hostID: hostId, prefersPreview: false))
+                    }.disabled(!canOpenFileLinkActions)
+                    if relayClient.hostSupportsIndependentResources {
+                        Button("Open in New Files Tab") {
+                            guard isConnected, selection.binding == relayClient.workspaceInputState.binding(paneID: paneId) else { return }
+                            openFileLink(.init(path: selection.path, paneID: paneId, hostID: hostId, prefersPreview: false, opensNewTab: true))
+                        }.disabled(!canOpenFileLinkActions)
+                    }
+                }
+                Button("Cancel", role: .cancel) { fileLinkActions = nil }
+            } message: {
+                Text(canOpenFileLinkActions ? (fileLinkActions?.path ?? "") : "The source terminal changed or disconnected. Open the link again.")
             }
             .alert("No Terminal Text", isPresented: $showsEmptySnapshotAlert) {
                 Button("OK", role: .cancel) { }
@@ -634,6 +665,7 @@
                             presentedTerminal = state
                         },
                         onOpenPath: openPathAction,
+                        onFileLinkActions: { fileLinkActions = .init(path: $0, binding: relayClient.workspaceInputState.binding(paneID: paneId)) },
                         onOpenURL: presentLink,
                         onSwitchWindow: isActive && !inputSuspension.suspendsInput && textSnapshot == nil
                             && !linkPresentation.suspendsTerminalInput && scenePhase == .active
@@ -1554,6 +1586,7 @@
         let onInitialPresentation: @MainActor () -> Void
 
         var onOpenPath: (@MainActor (String) -> Void)?
+        var onFileLinkActions: (@MainActor (String) -> Void)?
         var onOpenURL: (@MainActor (URL) -> Void)?
         var onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
 
@@ -1592,6 +1625,7 @@
             terminalView.onPasteText = onPasteText
             terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
+            terminalView.onFileLinkActions = onFileLinkActions
             terminalView.onOpenURL = onOpenURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.codexQuestionID = codexQuestionID
@@ -1777,6 +1811,7 @@
             terminalView.onPasteText = onPasteText
             terminalView.onPasteImage = onPasteImage
             terminalView.onOpenPath = onOpenPath
+            terminalView.onFileLinkActions = onFileLinkActions
             terminalView.onOpenURL = onOpenURL
             terminalView.onExpandCodexQuestions = onExpandCodexQuestions
             terminalView.codexQuestionID = codexQuestionID
@@ -1802,6 +1837,8 @@
             coordinator.presentationTask?.cancel()
             coordinator.windowSwipe?.onSwitchWindow = nil
             coordinator.terminalView?.onOpenURL = nil
+            coordinator.terminalView?.onOpenPath = nil
+            coordinator.terminalView?.onFileLinkActions = nil
             coordinator.terminalView?.onKeyboardRequest = nil
             coordinator.terminalView?.invalidateInput()
         }

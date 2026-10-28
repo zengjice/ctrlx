@@ -14,6 +14,51 @@ final class HostFileTabService {
     @ObservationIgnored private var routes: [String: [PaneInfo]] = [:]
     @ObservationIgnored private var routeRevision: UInt64 = 0
 
+    func open(session: ResourceSession, directory: String? = nil) throws -> HostFileTab {
+        guard tabs.filter({ $0.sessionName == session.name }).count < 30 else {
+            throw FileBrowserError.message("Close a Files tab before opening another folder.")
+        }
+        let path = directory ?? session.directory
+        guard path.hasPrefix("/"), !path.contains("\0") else {
+            throw FileBrowserError.message("Choose an absolute directory on the Host.")
+        }
+        let tab = HostFileTab(sessionName: session.name, isPrimary: false, initialDirectory: path, resourceSessionID: session.id)
+        tabs.append(tab)
+        onChange?()
+        return tab
+    }
+
+    func restoreIndependent(_ saved: [HostFileTab], sessions: [ResourceSession]) {
+        for var tab in saved where !tabs.contains(where: { $0.id == tab.id }) {
+            guard
+                let session = sessions.first(where: { $0.id == tab.resourceSessionID }),
+                tab.group == .human, tab.sourcePaneID == nil, tab.windowID == nil,
+                tab.initialDirectory.hasPrefix("/") else { continue }
+            tab.sessionName = session.name
+            tabs.append(tab)
+        }
+        onChange?()
+    }
+
+    func updateResourceSessions(_ sessions: [ResourceSession]) {
+        let previous = tabs
+        for index in tabs.indices {
+            if let id = tabs[index].resourceSessionID, let session = sessions.first(where: { $0.id == id }) {
+                tabs[index].sessionName = session.name
+            }
+        }
+        if tabs != previous {
+            onChange?()
+        }
+    }
+
+    func closeSession(_ id: UUID) {
+        let removed = tabs.filter { $0.resourceSessionID == id }.map(\.id)
+        for id in removed {
+            close(id)
+        }
+    }
+
     func open(sessionName: String, paneID: String, new: Bool = false, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> HostFileTab {
         guard let resolvePane else { throw FileBrowserError.message("Host Files is unavailable.") }
         let revision = routeRevision
@@ -97,14 +142,32 @@ final class HostFileTabService {
         }
     }
 
+    /// Files has no Agent creation API: old pane-linked Files were human tabs.
+    func migrateRestoredHumanTabs(_ saved: [WorkspaceRecoveryFileTab], sessions: [ResourceSession]) {
+        let ids = Dictionary(uniqueKeysWithValues: saved.map { ($0.id, $0.sessionID) })
+        var changed = false
+        tabs = tabs.map { tab in
+            guard let id = ids[tab.id], let session = sessions.first(where: { $0.id == id }) else { return tab }
+            changed = true
+            sourceIdentities.removeValue(forKey: tab.id)
+            return HostFileTab(id: tab.id, sessionName: session.name, isPrimary: false, initialDirectory: tab.initialDirectory, resourceSessionID: id)
+        }
+        if changed {
+            onChange?()
+        }
+    }
+
     func updateRoutes(_ panes: [PaneInfo]) {
         let previous = tabs
         let byPane = Dictionary(grouping: panes, by: \.paneId)
         routes = byPane
         routeRevision &+= 1
         tabs = tabs.compactMap { tab in
+            if tab.resourceSessionID != nil {
+                return tab
+            }
             // Linked-session ambiguity must not route a tab into an arbitrary session.
-            guard let matches = byPane[tab.sourcePaneID], matches.count == 1, let pane = matches.first else { return nil }
+            guard let source = tab.sourcePaneID, let matches = byPane[source], matches.count == 1, let pane = matches.first else { return nil }
             if let identity = sourceIdentities[tab.id], !identity.isSamePane(as: pane.workspaceIdentity) {
                 return nil
             }

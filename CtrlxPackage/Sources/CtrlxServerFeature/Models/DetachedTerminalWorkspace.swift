@@ -182,7 +182,8 @@ final class WorkbenchTabStore {
 @MainActor @Observable
 final class DetachedTerminalWorkspace {
     let id: UUID
-    var anchor: DetachedTerminalTarget
+    var anchor: DetachedTerminalTarget?
+    let hostID: String?
     var sessionName: String?
     var isSessionWindow = false
     var members: [DetachedTerminalTarget]
@@ -194,18 +195,27 @@ final class DetachedTerminalWorkspace {
     init(id: UUID = UUID(), target: DetachedTerminalTarget, sessionName: String? = nil) {
         self.id = id
         self.anchor = target
+        self.hostID = target.hostID
         self.sessionName = sessionName
         self.members = [target]
         self.selection = .window(target.windowID)
     }
 
+    init(id: UUID = UUID(), hostID: String?, sessionName: String, selection: TabDragPayload) {
+        self.id = id
+        self.hostID = hostID
+        self.sessionName = sessionName
+        self.members = []
+        self.selection = selection
+    }
+
     /// Keep the workbench's session after its last terminal exits or moves away.
     func resolvedSession(using session: (DetachedTerminalTarget) -> String?) -> String? {
-        members.compactMap(session).first ?? sessionName ?? session(anchor)
+        members.compactMap(session).first ?? sessionName ?? anchor.flatMap(session)
     }
 
     func renameSession(hostID: String?, from oldName: String, to newName: String, windowIDs: [String: String]) {
-        guard anchor.hostID == hostID, sessionName == oldName else { return }
+        guard self.hostID == hostID, sessionName == oldName else { return }
         tabs.renameSession(hostID: hostID, from: oldName, to: newName, windowIDs: windowIDs)
         sessionName = newName
     }

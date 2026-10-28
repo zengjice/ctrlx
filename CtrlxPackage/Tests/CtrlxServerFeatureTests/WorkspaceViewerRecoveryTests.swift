@@ -481,8 +481,8 @@ struct WorkspaceViewerRecoveryTests {
         #expect(pending.layout.tabOrder == [.window(index: 0), .file(id: fileID), .window(index: 1)])
         if closeWindow {
             let native = NSWindow(contentRect: .init(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: true)
-            owner.attach(native, to: partial.anchor)
-            owner.didClose(partial.anchor, window: native)
+            try owner.attach(native, to: #require(partial.anchor))
+            try owner.didClose(#require(partial.anchor), window: native)
             _ = restored.capture(windows: owner)
         }
         restored.update(state(server: "200:2", offset: 20), windows: owner)

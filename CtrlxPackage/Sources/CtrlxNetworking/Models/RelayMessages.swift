@@ -25,6 +25,8 @@ public struct PeerHelloMessage: Codable, Sendable {
 
 /// Complete session state for sync between host and viewer
 public struct SessionStateMessage: Codable, Sendable {
+    public let independentResources: IndependentResourceCatalog?
+    public let supportsResourceAuthorization: Bool?
     public let pairId: String
     /// Absent on older Hosts. Presence enables persistent workspace references.
     public let workspaceIdentity: WorkspaceIdentityScope?
@@ -62,7 +64,7 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsSessionWorktrees: Bool?
     public let supportsFileBrowsing: Bool?
     public let supportsPaneFiles: Bool?
-    public let fileTabs: [HostFileTab]?
+    private let legacyFileTabs: [HostFileTab]?
     public let supportsFileDownloads: Bool?
     public let supportsFileUploads: Bool?
     public let supportsRepositoryFileLinks: Bool?
@@ -87,7 +89,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// press behind. New Viewers retain the lease only when cleanup is explicit.
     public let supportsBrowserStalePointerCleanup: Bool?
     public let supportsAgentImageInput: Bool?
-    public let browserTabs: [RemoteBrowserTab]?
+    private let legacyBrowserTabs: [RemoteBrowserTab]?
     public let supportsSimulatorViewing: Bool?
     public let supportsPaneSimulator: Bool?
     /// Older Hosts ignore OpenPaneSimulator's explicit "new" request.
@@ -96,13 +98,78 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsDashboard: Bool?
     public let agentWorkflowVersion: Int?
     public let workflowAgentPluginIDs: [String]?
-    public let simulatorTabs: [RemoteSimulatorTab]?
+    private let legacySimulatorTabs: [RemoteSimulatorTab]?
     /// Host supports inspecting and installing a macOS CtrlX app update.
     public let supportsCtrlXAppUpdate: Bool?
     /// Host accepts a Viewer-triggered refresh of its app update feed.
     public let supportsCtrlXAppUpdateCheck: Bool?
     /// Latest Host-owned update state. Absent on older Hosts.
     public let ctrlXAppUpdate: CtrlXAppUpdateState?
+
+    public var fileTabs: [HostFileTab]? {
+        guard legacyFileTabs != nil || independentResources != nil else { return nil }
+        return (legacyFileTabs ?? []) + (independentResources?.files ?? [])
+    }
+
+    public var browserTabs: [RemoteBrowserTab]? {
+        guard legacyBrowserTabs != nil || independentResources != nil else { return nil }
+        return (legacyBrowserTabs ?? []) + (independentResources?.browsers ?? [])
+    }
+
+    public var simulatorTabs: [RemoteSimulatorTab]? {
+        guard legacySimulatorTabs != nil || independentResources != nil else { return nil }
+        return (legacySimulatorTabs ?? []) + (independentResources?.simulators ?? [])
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case independentResources
+        case supportsResourceAuthorization
+        case pairId
+        case workspaceIdentity
+        case supportsWorkspaceInputIdentity
+        case supportsTerminalStreamIdentity
+        case paneStates
+        case agentProjects
+        case homeDirectory
+        case usageOverview
+        case sidebarSortMode
+        case sharedTerminalLayouts
+        case worktreeRepositories
+        case supportsDirectoryBrowsing
+        case supportsDirectoryCreation
+        case supportsSessionWorktrees
+        case supportsFileBrowsing
+        case supportsPaneFiles
+        case legacyFileTabs = "fileTabs"
+        case supportsFileDownloads
+        case supportsFileUploads
+        case supportsRepositoryFileLinks
+        case supportsAgentWindowLaunch
+        case supportsAgentFork
+        case supportsAgentForkDirectory
+        case supportsTerminalPaste
+        case supportsCodexQuestionAcknowledgement
+        case supportsTerminalFit
+        case supportsWorkspaceClipboard
+        case supportsBrowserAudio
+        case supportsBrowserSharing
+        case supportsBrowserExtensions
+        case supportsPaneBrowser
+        case supportsBrowserStalePointerCleanup
+        case supportsAgentImageInput
+        case legacyBrowserTabs = "browserTabs"
+        case supportsSimulatorViewing
+        case supportsPaneSimulator
+        case supportsPaneSimulatorCreation
+        case supportsSimulatorClosing
+        case supportsDashboard
+        case agentWorkflowVersion
+        case workflowAgentPluginIDs
+        case legacySimulatorTabs = "simulatorTabs"
+        case supportsCtrlXAppUpdate
+        case supportsCtrlXAppUpdateCheck
+        case ctrlXAppUpdate
+    }
 
     public init(
         pairId: String,
@@ -148,8 +215,12 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsTerminalStreamIdentity: Bool? = nil,
         supportsCtrlXAppUpdate: Bool? = nil,
         supportsCtrlXAppUpdateCheck: Bool? = nil,
-        ctrlXAppUpdate: CtrlXAppUpdateState? = nil
+        ctrlXAppUpdate: CtrlXAppUpdateState? = nil,
+        independentResources: IndependentResourceCatalog? = nil,
+        supportsResourceAuthorization: Bool? = nil
     ) {
+        self.independentResources = independentResources
+        self.supportsResourceAuthorization = supportsResourceAuthorization
         self.pairId = pairId
         self.workspaceIdentity = workspaceIdentity
         self.supportsWorkspaceInputIdentity = supportsWorkspaceInputIdentity
@@ -166,7 +237,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsSessionWorktrees = supportsSessionWorktrees
         self.supportsFileBrowsing = supportsFileBrowsing
         self.supportsPaneFiles = supportsPaneFiles
-        self.fileTabs = fileTabs
+        self.legacyFileTabs = fileTabs
         self.supportsFileDownloads = supportsFileDownloads
         self.supportsFileUploads = supportsFileUploads
         self.supportsRepositoryFileLinks = supportsRepositoryFileLinks
@@ -183,7 +254,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsPaneBrowser = supportsPaneBrowser
         self.supportsBrowserStalePointerCleanup = supportsBrowserStalePointerCleanup
         self.supportsAgentImageInput = supportsAgentImageInput
-        self.browserTabs = browserTabs
+        self.legacyBrowserTabs = browserTabs
         self.supportsSimulatorViewing = supportsSimulatorViewing
         self.supportsPaneSimulator = supportsPaneSimulator
         self.supportsPaneSimulatorCreation = supportsPaneSimulatorCreation
@@ -191,7 +262,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsDashboard = supportsDashboard
         self.agentWorkflowVersion = agentWorkflowVersion
         self.workflowAgentPluginIDs = workflowAgentPluginIDs
-        self.simulatorTabs = simulatorTabs
+        self.legacySimulatorTabs = simulatorTabs
         self.supportsCtrlXAppUpdate = supportsCtrlXAppUpdate
         self.supportsCtrlXAppUpdateCheck = supportsCtrlXAppUpdateCheck
         self.ctrlXAppUpdate = ctrlXAppUpdate
@@ -231,7 +302,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsPaneBrowser: supportsPaneBrowser,
             supportsBrowserStalePointerCleanup: supportsBrowserStalePointerCleanup,
             supportsAgentImageInput: supportsAgentImageInput,
-            browserTabs: browserTabs,
+            browserTabs: legacyBrowserTabs,
             supportsSimulatorViewing: supportsSimulatorViewing,
             supportsPaneSimulator: supportsPaneSimulator,
             supportsPaneSimulatorCreation: supportsPaneSimulatorCreation,
@@ -239,14 +310,16 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsDashboard: supportsDashboard,
             agentWorkflowVersion: agentWorkflowVersion,
             workflowAgentPluginIDs: workflowAgentPluginIDs,
-            simulatorTabs: simulatorTabs,
-            supportsPaneFiles: supportsPaneFiles, fileTabs: fileTabs,
+            simulatorTabs: legacySimulatorTabs,
+            supportsPaneFiles: supportsPaneFiles, fileTabs: legacyFileTabs,
             workspaceIdentity: workspaceIdentity,
             supportsWorkspaceInputIdentity: supportsWorkspaceInputIdentity,
             supportsTerminalStreamIdentity: supportsTerminalStreamIdentity,
             supportsCtrlXAppUpdate: supportsCtrlXAppUpdate,
             supportsCtrlXAppUpdateCheck: supportsCtrlXAppUpdateCheck,
-            ctrlXAppUpdate: ctrlXAppUpdate
+            ctrlXAppUpdate: ctrlXAppUpdate,
+            independentResources: independentResources,
+            supportsResourceAuthorization: supportsResourceAuthorization
         )
     }
 }

@@ -1,5 +1,29 @@
 # Agent Browser
 
+## Independent human pages and temporary Agent access
+
+Human New Browser and terminal URL links create independent pages in the stable
+Host session, without a pane dependency. Agent opens retain their existing owner
+and source group. Human pages can be split, detached and returned like terminals.
+Closing their former source terminal does not close them.
+
+**Allow Agent to Use…** selects one verified live process in the same session.
+Ownership remains human; `tabs` includes explicitly authorized pages. The native
+boundary checks PID/start identity, grant revision and writer state for both
+`ctrlx` requests and Vercel/CDP connections. A delegate cannot close a human page.
+Human input pauses writing; releasing a Viewer lease does not resume it. Native
+read/screenshot remains available while paused; the Vercel connection is closed
+and must reconnect after control is returned. Explicit
+**Return Control to Agent** revalidates the recipient. Revocation, process exit,
+session move or Host restart invalidate access, outstanding results, old engine
+connections and Agent recordings without closing the human page. Child human
+pages require separate authorization. Existing shared-profile semantics remain.
+
+`supportsResourceAuthorization` is advertised only with a native runtime exposing
+the grant API. It requires rebuilding the AgentBrowser native component against
+the existing CEF SDK, not recompiling Chromium. This change's native CEF build
+and live acceptance are pending because the configured external SDK is offline.
+
 ## 浏览器后台录屏
 
 Agent 可通过 `ctrlx browser record-start/record-status/record-stop` 对自己的
@@ -81,10 +105,11 @@ Each human **Open Browser** or terminal-link **Host Browser** action creates a
 new page, including repeated opens of the same URL. Mac Host, Mac Viewer and iOS
 Viewer use this same Host behavior. Concurrent requests create separate pages;
 opening never navigates an existing page or takes its Viewer control lease.
-The new page belongs to the source pane, alongside that pane's other linked tabs.
+With independent-resource support, the new human page belongs to the stable
+session UUID without a pane binding. Older Hosts retain their pane-bound route.
 URLs with embedded usernames or passwords are rejected before page creation.
-Pane membership is validated against fresh tmux state before opening/navigating,
-including linked-session ambiguity; session/window moves update the association.
+Agent and compatibility pane routes still validate fresh tmux membership;
+independent pages instead validate the stable resource session.
 Agent pages and popup children retain their own control grants and parent routes.
 Cancelled/obsolete UI requests do not switch selection, including a switch from
 the terminal to Git/Files within the same Mac window.
@@ -219,7 +244,8 @@ Regression coverage: `PaneBrowserOpeningTests`, `AgentBrowserRoutingTests`,
 `RemoteBrowserProtocolTests` and the connection capability test cover distinct opens,
 plain panes, source revalidation, ownership/leases, cancellation, parking and
 old-Host gating. `LayoutSnapshotMapperTests` protects WebKit restoration. Native
-`tests/ownership.cc` rejects empty-owner human pages for Agent commands. The new
+`tests/ownership.cc` rejects ungranted human pages and verifies explicit grants,
+process identity, pause, revocation and generation changes. The new
 Window-menu and URL-picker flows still require isolated Mac / real-iPhone UI
 acceptance; older E2E scenarios that assume global New Browser and Viewer-local
 WebKit do not validate the new contract.
@@ -448,7 +474,8 @@ covers presentation attempts and parking without starting Chromium.
 
 Mac Viewer tabs marked **Host** and iOS **Tabs → Browsers on Host** show the same
 Host Chromium pages, including manual, Agent and popup tabs. Open Browser on Host
-creates a new human page bound to its source pane. Existing Viewer-local tabs are
+creates a new independent human page on updated Hosts (pane-bound on older
+Hosts). Existing Viewer-local tabs are
 marked **Local** and are not migrated. WebKit remains device-local. Page DOM,
 login state, local network access and localhost resolution all stay on the Host;
 the Viewer does not load a second copy of the URL or receive browser credentials.
@@ -592,11 +619,11 @@ control takeover.
 The page/Agent can continue running elsewhere; this device's annotation gestures
 never become remote pointer input. Cancel returns to the live view.
 
-Agent-created pages capture their source recipient; manual pages remember the
-source Agent when available, and child pages inherit it. A source-less page can
-default to the only recognized Codex/Claude Code in the same session; otherwise
-the inline recipient menu requires a choice. A stale source never silently falls
-back to another Agent. Restored legacy WebKit pages use the source-less rule.
+Agent-created pages capture their source recipient and child pages inherit it.
+Independent human pages have no implicit recipient: the inline recipient menu
+requires a choice even when only one Agent is running. A stale source never
+silently falls back to another Agent. Restored legacy WebKit pages also require
+an explicit choice when there is no verified source.
 The current recipient is captured before editing and explicitly reselectable.
 
 **Add to Input** uses the existing bounded encrypted image/drop transport, with
@@ -654,10 +681,9 @@ file capture does not require or open a browser tab.
 - Login cookies/site storage are shared across groups. Account changes and
   logout therefore affect other groups. System Chrome's profile is never used.
 - Human-created Chromium tabs carry an explicit workspace/session/viewer-host
-  route and an empty control owner. They are not exposed to agents through this
-  protocol, even when opened in an agent's session; neither focus nor a shared
-  profile grants control. WebKit tabs remain outside the protocol as well. The
-  embedded UI does not offer ownership transfers. Child tabs inherit their
+  route and an empty control owner. They are exposed only after explicit temporary
+  authorization; neither focus nor a shared profile grants control. WebKit tabs
+  remain outside the protocol. The embedded UI does not transfer ownership. Child tabs inherit their
   parent's owner and exact display route (including human-only ownership).
 - Page input actions reveal and focus their explicitly authorized native tab before
   dispatching real input. They never use the currently selected tab as a target.

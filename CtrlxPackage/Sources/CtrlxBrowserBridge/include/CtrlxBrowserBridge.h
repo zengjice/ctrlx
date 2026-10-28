@@ -25,6 +25,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)browserTabSelected:(NSString *)identifier;
 - (void)browserTabClosed:(NSString *)identifier;
 @optional
+- (void)browserTab:(NSString *)identifier agentGrantCanWrite:(nullable NSNumber *)canWrite;
 - (void)browserTab:(NSString *)identifier networkPermissionChanged:(nullable NSDictionary<NSString *, id> *)permission;
 // Human navigation from the trusted extension manager, scoped to its source tab.
 // A nil token confirms no native control grant remains (including Host takeover).
@@ -51,6 +52,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)beginShutdown;
 - (BOOL)finishShutdown;
 @optional
+- (BOOL)setAgentGrant:(nullable NSDictionary<NSString *, NSNumber *> *)process forTab:(NSString *)identifier;
+- (nullable NSDictionary<NSString *, NSNumber *> *)agentGrantForTab:(NSString *)identifier;
 - (BOOL)setBrowserAudioForTab:(NSString *)identifier controlToken:(NSString *)token enabled:(BOOL)enabled;
 - (void)readBrowserAudioForTab:(NSString *)identifier controlToken:(NSString *)token completion:(void (^)(NSData * _Nullable pcm, NSString * _Nullable error))completion;
 - (void)respondToNetworkPermission:(NSString *)permissionID forTab:(NSString *)identifier allow:(BOOL)allow controlToken:(nullable NSString *)controlToken completion:(void (^)(NSString * _Nullable error))completion;

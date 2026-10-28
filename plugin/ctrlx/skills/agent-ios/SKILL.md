@@ -28,3 +28,8 @@ Codex uses `ctrlx ios run -- codex` for a new session; native Claude Code runs
 directly as `claude` in the CtrlX terminal. Never launch a nested agent to repair
 the current session. Observe before input, verify visible results, and respect
 human takeover as described in the workflow.
+
+Human resource tabs require explicit authorization to this running Agent. List
+tabs/devices before use, target the returned ID, and respect paused/revoked grants.
+Authorization is use only: do not close human tabs/devices or reclaim them. See
+[workflow](references/workflow.md) for ownership and Return Control rules.

@@ -573,7 +573,15 @@ void RecordBrowserDiagnostic(NSDictionary* event) {
   // CDP input bypasses NSApplication. Physical Host input must not race the
   // remote controller, including a CEF field that was already first responder.
   if (runtime.started && extensionInputDepth == 0) for (auto& [id, browser] : browsers) {
-    if (!AgentBrowserHumanControlled(browser)) continue;
+    if (!AgentBrowserHumanControlled(browser)) {
+      NSView *view = (__bridge NSView*)browser->GetHost()->GetWindowHandle();
+      BOOL keyboard = event.type == NSEventTypeKeyDown || event.type == NSEventTypeKeyUp;
+      BOOL pointer = event.type == NSEventTypeLeftMouseDown || event.type == NSEventTypeRightMouseDown || event.type == NSEventTypeScrollWheel;
+      if (!view.isHiddenOrHasHiddenAncestor && event.window == view.window &&
+          ((keyboard && [view.window.firstResponder isKindOfClass:NSView.class] && [(NSView*)view.window.firstResponder isDescendantOf:view]) ||
+           (pointer && NSPointInRect([view convertPoint:event.locationInWindow fromView:nil], view.bounds)))) AgentBrowserHumanTakeover(browser);
+      continue;
+    }
     NSView *view = (__bridge NSView*)browser->GetHost()->GetWindowHandle();
     if (event.window != view.window) continue;
     BOOL keyboard = event.type == NSEventTypeKeyDown || event.type == NSEventTypeKeyUp || event.type == NSEventTypeFlagsChanged;
@@ -691,6 +699,9 @@ void RecordBrowserDiagnostic(NSDictionary* event) {
     if (it != identifiers.end()) [runtime.delegate browserTabSelected:it->second];
   }, [] {}, [](auto browser) {
     return static_cast<EmbeddedClient*>(browser->GetHost()->GetClient().get())->Presentation();
+  }, [](NSString* tab, NSNumber* canWrite) {
+    if ([runtime.delegate respondsToSelector:@selector(browserTab:agentGrantCanWrite:)])
+      [runtime.delegate browserTab:tab agentGrantCanWrite:canWrite];
   }});
   if (!self.endpointReady) NSLog(@"CtrlX embedded browser control endpoint could not start.");
 }
@@ -710,11 +721,11 @@ void RecordBrowserDiagnostic(NSDictionary* event) {
 }
 - (void)navigateTab:(NSString *)identifier url:(NSString *)url {
   auto browser = AgentBrowserTarget(identifier);
-  if (browser && WebURL(url.UTF8String)) { AgentBrowserCancelHumanInput(browser); browser->GetMainFrame()->LoadURL(url.UTF8String); }
+  if (browser && WebURL(url.UTF8String)) { AgentBrowserHumanTakeover(browser); AgentBrowserCancelHumanInput(browser); browser->GetMainFrame()->LoadURL(url.UTF8String); }
 }
-- (void)goBack:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserCancelHumanInput(browser); browser->GoBack(); } }
-- (void)goForward:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserCancelHumanInput(browser); browser->GoForward(); } }
-- (void)reloadTab:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserCancelHumanInput(browser); browser->Reload(); } }
+- (void)goBack:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserHumanTakeover(browser); AgentBrowserCancelHumanInput(browser); browser->GoBack(); } }
+- (void)goForward:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserHumanTakeover(browser); AgentBrowserCancelHumanInput(browser); browser->GoForward(); } }
+- (void)reloadTab:(NSString *)identifier { auto browser = AgentBrowserTarget(identifier); if (browser) { AgentBrowserHumanTakeover(browser); AgentBrowserCancelHumanInput(browser); browser->Reload(); } }
 - (void)showDevTools:(NSString *)identifier {
   if (!self.started || self.closing) return;
   // Creating native Chromium windows must not reenter a Swift main-actor job.
@@ -892,6 +903,12 @@ void RecordBrowserDiagnostic(NSDictionary* event) {
 - (void)closeTab:(NSString *)identifier {
   auto browser = AgentBrowserTarget(identifier);
   if (browser) { CloseDevToolsFor(browser); browser->GetHost()->CloseBrowser(true); }
+}
+- (BOOL)setAgentGrant:(NSDictionary<NSString *, NSNumber *> *)process forTab:(NSString *)identifier {
+  return self.started && !self.closing && SetAgentBrowserGrant(identifier, process);
+}
+- (NSDictionary<NSString *, NSNumber *> *)agentGrantForTab:(NSString *)identifier {
+  return self.started && !self.closing ? AgentBrowserGrantStatus(identifier) : nil;
 }
 - (BOOL)setHumanControl:(NSString *)token forTab:(NSString *)identifier {
   if (extensionSurface && extensionSurface->Active() &&

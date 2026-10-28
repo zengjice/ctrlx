@@ -45,7 +45,7 @@ final class WorkspaceViewerRecovery {
 
     func allowsRendering(hostID: String, session: String, store: WorkbenchTabStore) -> Bool {
         guard let expected = store.remoteRecoveryReferences[.init(hostId: hostID, sessionName: session)] else { return true }
-        return catalogs[hostID]?.resolve(expected)?.sessionName == session
+        return catalogs[hostID]?.sessionName(for: expected) == session
     }
 
     func selectSession(hostID: String, session: String, store: WorkbenchTabStore) {
@@ -78,7 +78,7 @@ final class WorkspaceViewerRecovery {
     func capture(windows: DetachedTerminalWindows) -> [WorkspaceRecoveryScene] {
         guard loaded else { return scenes }
         let stores = [(windows.mainSceneID, true, windows.mainTabs, windows.mainFrame)]
-            + windows.workspaces.values.filter { $0.anchor.hostID != nil }.map { ($0.id, false, $0.tabs, windows.frame(for: $0.id)) }
+            + windows.workspaces.values.filter { $0.hostID != nil }.map { ($0.id, false, $0.tabs, windows.frame(for: $0.id)) }
         let visibleScenes = Set(stores.map { $0.0 })
         for closed in scenes where materializedScenes.contains(closed.id) && !visibleScenes.contains(closed.id) {
             returnPendingToMain(closed, mainID: windows.mainSceneID)
@@ -137,7 +137,7 @@ final class WorkspaceViewerRecovery {
                 appliedWindows[id, default: []].formUnion(owned.compactMap { windowIDs[$0.windowIndex] })
                 let fileIDs = Set(layout.fileTabs.map(\.id))
                 let sources = Dictionary(uniqueKeysWithValues: tabs.directoryTabs.values.compactMap { tab -> (UUID, ViewerWorkspaceReference)? in
-                    guard fileIDs.contains(tab.id) else { return nil }
+                    guard fileIDs.contains(tab.id), tab.hostTab?.resourceSessionID == nil else { return nil }
                     let live = tab.sourcePaneID.flatMap { catalog.reference(paneID: $0) }
                     let source = live?.sessionReference == reference ? live : previous?.fileSources?[tab.id]
                     return source.map { (tab.id, $0) }
@@ -256,8 +256,8 @@ final class WorkspaceViewerRecovery {
         if let catalog, catalogs[state.pairId]?.scope == catalog.scope {
             for store in [windows.mainTabs] + windows.workspaces.values.map(\.tabs) {
                 for (key, reference) in store.remoteRecoveryReferences where key.hostId == state.pairId {
-                    if let route = catalog.resolve(reference), route.sessionName != key.sessionName {
-                        windows.renameSession(hostID: state.pairId, from: key.sessionName, to: route.sessionName, windowIDs: [:])
+                    if let name = catalog.sessionName(for: reference), name != key.sessionName {
+                        windows.renameSession(hostID: state.pairId, from: key.sessionName, to: name, windowIDs: [:])
                     } else if catalog.reference(sessionName: key.sessionName) != reference {
                         store.remote[key]?.cancelActiveBrowserDownloads()
                         store.remote.removeValue(forKey: key)
@@ -283,7 +283,7 @@ final class WorkspaceViewerRecovery {
                     store.remote.removeValue(forKey: key)
                 }
             }
-            for workspace in windows.workspaces.values where workspace.anchor.hostID == state.pairId {
+            for workspace in windows.workspaces.values where workspace.hostID == state.pairId {
                 workspace.members = []
             }
             for id in applied.keys {
@@ -330,7 +330,7 @@ final class WorkspaceViewerRecovery {
         guard let catalog = catalogs[hostID], let state = states[hostID] else { return }
         for scene in scenes.sorted(by: { !$0.isMain && $1.isMain }) {
             for saved in scene.sessions where saved.hostID == hostID {
-                guard let reference = saved.remoteReference, let route = catalog.resolve(reference) else { continue }
+                guard let reference = saved.remoteReference, let sessionName = catalog.sessionName(for: reference) else { continue }
                 let runtime: (Int) -> String? = { index in
                     guard let id = saved.windowIDs[index] else { return nil }
                     var window = reference
@@ -346,12 +346,12 @@ final class WorkspaceViewerRecovery {
                 if scene.isMain {
                     store = windows.mainTabs
                 } else {
-                    let fallback = DetachedTerminalTarget(hostID: hostID, windowID: route.windowID)
-                    guard let workspace = windows.restoreWorkspace(id: scene.id, members: members, session: route.sessionName, frame: scene.frame, fallbackAnchor: fallback) else { continue }
+                    let fallback = catalog.resolve(reference).flatMap { DetachedTerminalTarget(hostID: hostID, windowID: $0.windowID) }
+                    guard let workspace = windows.restoreWorkspace(id: scene.id, members: members, session: sessionName, frame: scene.frame, fallbackAnchor: fallback, hostID: hostID) else { continue }
                     workspace.isSessionWindow = scene.isSessionWindow == true
                     if !(applied[scene.id] ?? []).contains(reference) {
                         workspace.members = members
-                        workspace.sessionName = route.sessionName
+                        workspace.sessionName = sessionName
                         if let anchor = members.first ?? fallback {
                             workspace.anchor = anchor
                         }
@@ -362,14 +362,14 @@ final class WorkspaceViewerRecovery {
                     }
                     store = workspace.tabs
                 }
-                let key = RemoteSessionTabsKey(hostId: hostID, sessionName: route.sessionName)
+                let key = RemoteSessionTabsKey(hostId: hostID, sessionName: sessionName)
                 rememberSelectionRevisions(scene, store: store)
-                let restoreTabSelection = canRestoreTabSelection(reference, session: route.sessionName, sceneID: scene.id, store: store)
+                let restoreTabSelection = canRestoreTabSelection(reference, session: sessionName, sceneID: scene.id, store: store)
                 let firstApplication = !(applied[scene.id] ?? []).contains(reference)
                 store.remoteRecoveryReferences[key] = reference
-                let tabs = store.tabs(hostID: hostID, session: route.sessionName)
+                let tabs = store.tabs(hostID: hostID, session: sessionName)
                 store.restoredRemoteSessions.insert(key)
-                let descriptors = (state.fileTabs ?? []).filter { $0.sessionName == route.sessionName }
+                let descriptors = (state.fileTabs ?? []).filter { $0.sessionName == sessionName }
                 var layout = saved.layout
                 layout.fileTabs.removeAll { file in file.browser?.hostOwned == true && !descriptors.contains { $0.id == file.id } }
                 let mappedOrder = layout.tabOrder.compactMap {
@@ -455,10 +455,10 @@ final class WorkspaceViewerRecovery {
                     firstApplication || selectedWindowArrived, selectionRevisions[scene.id] == store.userSelectionRevision,
                     scene.selectedHostID == hostID, scene.selectedSessionID == reference.sessionID {
                     var windowID = resolvedWindowID
-                    if scene.isMain, let shared = state.sharedTerminalLayouts?[route.sessionName], members.contains(where: { $0.windowID == shared.leftWindowId }) {
+                    if scene.isMain, let shared = state.sharedTerminalLayouts?[sessionName], members.contains(where: { $0.windowID == shared.leftWindowId }) {
                         windowID = shared.leftWindowId
                     }
-                    store.restoredSelection = .init(hostID: hostID, sessionName: route.sessionName, windowID: windowID)
+                    store.restoredSelection = .init(hostID: hostID, sessionName: sessionName, windowID: windowID)
                     if restoreTabSelection, !saved.focusedRight {
                         tabs.isRightPaneFocused = false
                     }
@@ -472,20 +472,20 @@ final class WorkspaceViewerRecovery {
                 for (id, source) in saved.fileSources ?? [:] {
                     let pane = catalog.resolve(source)?.paneID
                     tabs.directoryTabs[id]?.restoreSourcePane(pane)
-                    if pane == nil {
+                    if pane == nil, tabs.directoryTabs[id]?.hostTab?.resourceSessionID == nil {
                         store.unavailableRemoteFileIDs.insert(id)
                     } else {
                         store.unavailableRemoteFileIDs.remove(id)
                     }
                 }
-                if scene.isMain, let shared = state.sharedTerminalLayouts?[route.sessionName] {
-                    let ids = Set(catalog.routes.values.filter { $0.sessionName == route.sessionName && !windows.contains(hostID: hostID, windowID: $0.windowID) }.map(\.windowID))
+                if scene.isMain, let shared = state.sharedTerminalLayouts?[sessionName] {
+                    let ids = Set(catalog.routes.values.filter { $0.sessionName == sessionName && !windows.contains(hostID: hostID, windowID: $0.windowID) }.map(\.windowID))
                     if ids.contains(shared.leftWindowId) {
                         tabs.applySharedTerminalLayout(shared, liveWindowIds: ids)
                     }
                 }
                 appliedFiles[scene.id, default: []].formUnion(layout.fileTabs.map(\.id))
-                appliedWindows[scene.id, default: []].formUnion(members.compactMap { catalog.reference(sessionName: route.sessionName, windowID: $0.windowID)?.windowID })
+                appliedWindows[scene.id, default: []].formUnion(members.compactMap { catalog.reference(sessionName: sessionName, windowID: $0.windowID)?.windowID })
                 materializedScenes.insert(scene.id)
             }
         }

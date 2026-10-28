@@ -30,7 +30,8 @@ enum TmuxWindowCreation {
             windowName: name,
             runCommand: agentLaunch?.command,
             launchPayload: agentLaunch?.payload,
-            expectedWorkspacePane: identity
+            expectedWorkspacePane: identity,
+            resourceSessionID: request.resourceSessionID
         )
     }
 }

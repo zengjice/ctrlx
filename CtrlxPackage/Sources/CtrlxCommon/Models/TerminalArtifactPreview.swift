@@ -21,6 +21,10 @@ public struct TerminalArtifactPreview: Identifiable {
         .init(path: link.path, paneID: link.paneID, hostID: link.hostID, prefersPreview: false)
     }
 
+    public var newFilesLink: TerminalFileLinkRequest {
+        .init(path: link.path, paneID: link.paneID, hostID: link.hostID, prefersPreview: false, opensNewTab: true)
+    }
+
     public static func supports(path: String?) -> Bool {
         guard let path else { return false }
         return isMermaid(path: path) || isMarkdown(path: path) || isImage(path: path)

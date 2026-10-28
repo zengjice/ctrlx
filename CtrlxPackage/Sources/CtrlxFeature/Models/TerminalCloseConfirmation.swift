@@ -8,6 +8,7 @@ struct TerminalCloseConfirmation<Target>: Identifiable {
     let runningProcesses: [RunningProcessInfo]
     let inputBinding: ViewerWorkspaceInputBinding
     var closesSession = false
+    var resourceSessionID: UUID? = nil
 
     var title: String {
         closesSession ? "Close Session?" : "Close Tab?"
@@ -18,6 +19,9 @@ struct TerminalCloseConfirmation<Target>: Identifiable {
     }
 
     var message: String {
+        if resourceSessionID != nil {
+            return "Close this session and all of its terminal, Files, Browser and iOS Simulator tabs?"
+        }
         let grouped = Dictionary(grouping: runningProcesses) { $0.paneIndex }
         let descriptions = grouped.sorted(by: { $0.key < $1.key }).map { paneIndex, processes in
             let names = Set(processes.map(\.name)).sorted().joined(separator: ", ")

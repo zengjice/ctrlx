@@ -26,6 +26,7 @@ final public class FileBrowserTab: Identifiable {
     public var searchMode = FileBrowserSearchMode.name
     public var expanded: Set<String> = []
     public var selectedFile: String?
+    public var lastSelectedAt = Date.distantPast
     public var refresh = 0
     public var searchFocusRequest = 0
     public private(set) var homeDirectory = "~/"
@@ -157,7 +158,9 @@ final public class FileBrowserTab: Identifiable {
     }
 
     public func openTerminalFile(_ destination: TerminalFileDestination, paneID: String) {
-        sourcePaneID = paneID
+        if hostTab?.resourceSessionID == nil {
+            sourcePaneID = paneID
+        }
         navigate(destination.directory)
         selectedFile = destination.file
     }

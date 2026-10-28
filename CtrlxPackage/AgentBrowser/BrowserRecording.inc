@@ -107,7 +107,7 @@
         RecordingDiagnostic(recording, @"recording-progress");
       if ([recording->state isEqual:@"stopping"]) continue;
       if (!tabs_.contains(id)) { StopRecording(recording, @"tab-closed"); continue; }
-      if (!ownership_.Owns(recording->owner, id)) { StopRecording(recording, @"owner-ended"); continue; }
+      if (!ownership_.CanWrite(recording->owner, id)) { StopRecording(recording, @"owner-ended"); continue; }
       auto now = Clock::now();
       if (now - recording->started >= std::chrono::seconds(recording->seconds)) {
         StopRecording(recording, @"duration-limit"); continue;
@@ -124,7 +124,7 @@
       RemoteCall(id, "Page.captureScreenshot", @{@"format": @"jpeg", @"quality": @80,
         @"fromSurface": @YES, @"captureBeyondViewport": @NO},
         [self, recording](NSDictionary* result, NSString* error) {
-          if (!self->ownership_.Owns(recording->owner, recording->tab)) self->StopRecording(recording, @"owner-ended");
+          if (!self->ownership_.CanWrite(recording->owner, recording->tab)) self->StopRecording(recording, @"owner-ended");
           if (error || [recording->state isEqual:@"stopping"]) {
             if (error) ++recording->captureFailures;
             // Navigation invalidates an old frame, not the recording. The next
@@ -174,7 +174,7 @@
     auto found = recordings_.find(tabID);
     auto tab = tabs_.find(tabID);
     if ([command isEqual:@"record-start"]) {
-      if (tab == tabs_.end() || !ownership_.Owns(client.run, tabID) || humanControl_.contains(tabID)) {
+      if (tab == tabs_.end() || !ownership_.CanWrite(client.run, tabID) || humanControl_.contains(tabID)) {
         Reply(clientID, nil, @"Recording requires a live page owned by this Agent, with control returned by the Viewer."); return true;
       }
       bool busy = RecordingActive(tabID) || engineCaptureAttaching_.contains(tab->second.browser->GetIdentifier());
@@ -219,12 +219,12 @@
       Reply(clientID, recording->Status()); return true;
     }
     if (found == recordings_.end()) {
-      if (tab != tabs_.end() && ownership_.Owns(client.run, tabID)) Reply(clientID, @{@"state": @"idle"});
+      if (tab != tabs_.end() && ownership_.CanUse(client.run, tabID)) Reply(clientID, @{@"state": @"idle"});
       else Reply(clientID, nil, @"Unknown or unowned recording.");
       return true;
     }
     auto recording = found->second;
-    if (recording->owner != client.run || (tab != tabs_.end() && !ownership_.Owns(client.run, tabID))) {
+    if (recording->owner != client.run || (tab != tabs_.end() && !ownership_.CanUse(client.run, tabID))) {
       Reply(clientID, nil, @"Recording belongs to another Agent instance."); return true;
     }
     if (request[@"recording"] && ![request[@"recording"] isEqual:recording->identifier]) {

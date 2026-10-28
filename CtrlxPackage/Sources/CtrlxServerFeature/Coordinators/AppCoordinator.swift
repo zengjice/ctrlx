@@ -66,6 +66,7 @@
         }
 
         let hostFileTabs = HostFileTabService()
+        let resourceSessions = HostResourceSessionStore()
         var workspaceRecovery: WorkspaceRecoveryController?
         let recoveredWorkspaceDrafts = WorkspaceRecoveryDrafts()
         let viewerWorkspaceRecovery = WorkspaceViewerRecovery()
@@ -3331,16 +3332,23 @@
                 connectionManager: connectionManager,
                 paneStreamManager: paneStreamManager
             )
-            agentBrowser.onTabsChanged = { [weak connectionManager] in
+            agentBrowser.resolveResourceSession = { [weak self] id in
+                guard let self else { throw CancellationError() }
+                return try self.resourceSessions.resolve(id)
+            }
+            agentBrowser.onTabsChanged = { [weak self, weak connectionManager] in
+                self?.refreshResourceSessions()
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
             agentBrowser.sendBrowserAudio = { [weak connectionManager] viewerID, message in
                 await connectionManager?.connection(for: viewerID)?.sendBrowserAudio(message)
             }
-            hostFileTabs.onChange = { [weak connectionManager] in
+            hostFileTabs.onChange = { [weak self, weak connectionManager] in
+                self?.refreshResourceSessions()
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
-            agentSimulator.onTabsChanged = { [weak connectionManager] in
+            agentSimulator.onTabsChanged = { [weak self, weak connectionManager] in
+                self?.refreshResourceSessions()
                 Task { await connectionManager?.pushSessionStateToAll() }
             }
             connectionManager.onViewerUnavailable = { [weak terminalStreamService, weak self] viewerId in
@@ -3372,6 +3380,7 @@
 
             // Start notification-only readers for all discovered panes
             let initialPanes = await tmuxService.refreshPanes()
+            updateResourceSessions(initialPanes)
             agentBrowser.updateBrowserRoutes(initialPanes)
             hostFileTabs.updateRoutes(initialPanes)
             agentSimulator.updateSimulatorRoutes(initialPanes)
@@ -3397,6 +3406,7 @@
             controlClientManager.setOnPanesChanged { [weak self] in
                 Task {
                     let panes = await tmuxForCleanup.refreshPanes()
+                    self?.updateResourceSessions(panes)
                     self?.agentBrowser.updateBrowserRoutes(panes)
                     self?.hostFileTabs.updateRoutes(panes)
                     self?.agentSimulator.updateSimulatorRoutes(panes)
@@ -3419,6 +3429,12 @@
             let tmux = tmuxService
             let editorManager = editorSessionManager
             connectionManager.onCommand = { [weak self, executor, streamService, tmux, winManager, editorManager, paneStreaming, weak connectionManager] viewerId, command in
+                if case let .resourceTab(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        return try CommandResponseMessage(commandId: command.id, success: true, resourceTab: await self.handleResourceTab(spec))
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .manageAgentWorkflows(spec) = command.command {
                     guard let service = self?.agentWorkflowService else {
                         return .failure(for: command.id, error: "Workflows are unavailable on this Host.")
@@ -3468,7 +3484,7 @@
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .browseSimulator(spec) = command.command {
-                    guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
+                    guard let self, self.resourceSessions.sessions.contains(where: { $0.name == spec.sessionName }) else {
                         return .failure(for: command.id, error: "Session no longer exists.")
                     }
                     do {
@@ -3491,7 +3507,7 @@
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .browseBrowser(spec) = command.command {
-                    guard let self, tmux.windows.contains(where: { $0.sessionName == spec.sessionName }) else {
+                    guard let self, self.resourceSessions.sessions.contains(where: { $0.name == spec.sessionName }) else {
                         return .failure(for: command.id, error: "Session no longer exists.")
                     }
                     do {
@@ -3937,7 +3953,7 @@
                     supportsPaneBrowser: await self?.agentBrowser.supportsBrowserSharing,
                     supportsBrowserStalePointerCleanup: true,
                     supportsAgentImageInput: true,
-                    browserTabs: await self?.agentBrowser.sharedBrowserTabs,
+                    browserTabs: await self?.agentBrowser.sharedBrowserTabs.filter { $0.resourceSessionID == nil },
                     supportsSimulatorViewing: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsPaneSimulator: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsPaneSimulatorCreation: await self?.agentSimulator.supportsSimulatorViewing,
@@ -3945,14 +3961,16 @@
                     supportsDashboard: true,
                     agentWorkflowVersion: workflowVersion,
                     workflowAgentPluginIDs: workflowVersion == nil ? nil : await self?.workflowAgentPluginIDs(),
-                    simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs,
-                    supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs,
+                    simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs.filter { $0.resourceSessionID == nil },
+                    supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs.filter { $0.resourceSessionID == nil },
                     workspaceIdentity: workspaceIdentity,
                     supportsWorkspaceInputIdentity: recoveryHostID != nil,
                     supportsTerminalStreamIdentity: true,
                     supportsCtrlXAppUpdate: await self?.ctrlXAppUpdateService.isConfigured == true,
                     supportsCtrlXAppUpdateCheck: await self?.ctrlXAppUpdateService.isConfigured == true,
-                    ctrlXAppUpdate: await self?.ctrlXAppUpdateService.state
+                    ctrlXAppUpdate: await self?.ctrlXAppUpdateService.state,
+                    independentResources: await self?.independentResourceCatalog,
+                    supportsResourceAuthorization: await self?.agentBrowser.supportsResourceGrants
                 )
             }
 
@@ -3981,7 +3999,7 @@
                 self.settings.removePairing(id: pairId)
             }
 
-            Self.wirePaneRefresh(tmuxService: tmuxService, windowManager: windowManager, agentSimulator: agentSimulator, files: hostFileTabs, browser: agentBrowser, editors: editorSessionManager) { [weak connectionManager] in
+            Self.wirePaneRefresh(tmuxService: tmuxService, windowManager: windowManager, agentSimulator: agentSimulator, files: hostFileTabs, browser: agentBrowser, editors: editorSessionManager, updateResources: { [weak self] in self?.updateResourceSessions($0) }) { [weak connectionManager] in
                 await connectionManager?.pushSessionStateToAll()
             }
 
@@ -4025,6 +4043,7 @@
             files: HostFileTabService? = nil,
             browser: AgentBrowserService? = nil,
             editors: EditorSessionManager? = nil,
+            updateResources: @escaping @MainActor ([PaneInfo]) -> Void = { _ in },
             pushSessionState: @escaping @MainActor @Sendable () async -> Void
         ) {
             tmuxService.setPanesChangedHandler { @MainActor [weak tmuxService, weak windowManager, weak agentSimulator, weak files, weak browser, weak editors] in
@@ -4032,6 +4051,7 @@
                 if let tmuxService {
                     // Publish from this discovery result, not a UI observer or
                     // periodic caller that may resume after the broadcast.
+                    updateResources(tmuxService.panes)
                     editors?.reconcilePaneIdentities()
                     windowManager?.updatePaneStates(from: tmuxService.panes)
                     agentSimulator?.updateSimulatorRoutes(tmuxService.panes)

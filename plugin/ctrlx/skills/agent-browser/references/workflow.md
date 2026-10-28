@@ -32,11 +32,17 @@ ctrlx browser action navigate --tab <id> --url https://example.com
 ctrlx browser action show --tab <id>
 ```
 
-Human menu/link opens also create new pages bound to their source pane.
-Opening never transfers grants. Each instance sees only its own group. Human
-pages use Host Chromium, not Agent grants; WebKit/system-browser tabs are outside
-this CLI. Groups share logins, not control grants. Never log out or switch
-accounts without the user's intent.
+Human menu/link opens create independent tabs in their Host session. They do not
+belong to an Agent merely because their link came from its terminal. `tabs` lists
+your own pages plus human pages explicitly authorized to this running Agent;
+authorized entries have `authorized: true`. Use their exact returned IDs.
+Authorization never transfers ownership: do not close an authorized human tab.
+Human input pauses your access to writing; ask for **Return Control to Agent**,
+never claim or retry around takeover. Revocation, Agent exit/restart and Host
+restart invalidate access and old engine connections; do not reuse them. Human
+popups need their own authorization. Browser groups share logins, not grants;
+never log out or switch accounts without the user's intent. WebKit/system-browser
+tabs remain outside this CLI.
 
 Read the current page before acting; use returned selectors, not invented ones.
 `type` inserts at the caret; `fill` replaces (empty text clears). Neither submits.

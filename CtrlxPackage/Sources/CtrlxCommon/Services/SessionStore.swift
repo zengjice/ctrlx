@@ -31,6 +31,7 @@ final public class SessionStore {
 
     /// Per-pane state keyed by `(pairId, paneId)` to disambiguate panes
     /// whose IDs collide across hosts.
+    public private(set) var resourceSessionsByHost: [String: [ResourceSession]] = [:]
     public private(set) var paneStates: [PaneKey: PaneState] = [:]
     public private(set) var workspaceCatalogsByHost: [String: ViewerWorkspaceCatalog] = [:]
     private var lastWorkspaceScopeByHost: [String: WorkspaceIdentityScope] = [:]
@@ -109,7 +110,7 @@ final public class SessionStore {
 
     /// Whether there are any sessions or panes to display
     public var hasSessions: Bool {
-        !paneStates.isEmpty
+        !paneStates.isEmpty || resourceSessionsByHost.values.contains { !$0.isEmpty }
     }
 
     /// Total number of agent sessions
@@ -154,7 +155,7 @@ final public class SessionStore {
 
     /// Get all pane states for a specific host grouped by tmux session
     public func sessions(for hostId: String) -> [TmuxSession] {
-        TmuxSession.groupWindows(windows(for: hostId))
+        TmuxSession.groupWindows(windows(for: hostId), resources: resourceSessionsByHost[hostId] ?? [])
     }
 
     /// Get a single window by ID for a specific host, without grouping all panes
@@ -256,6 +257,7 @@ final public class SessionStore {
     /// Handle a full session state update from a host
     public func handleStateUpdate(_ state: SessionStateMessage) {
         let hostId = state.pairId
+        resourceSessionsByHost[hostId] = state.independentResources?.sessions ?? []
         let catalog = ViewerWorkspaceCatalog(state: state)
         let previousScope = lastWorkspaceScopeByHost[hostId]
         let workspaceChanged = catalog.map { previousScope != nil && previousScope != $0.scope } ?? false
@@ -370,6 +372,7 @@ final public class SessionStore {
 
     /// Clear all sessions and panes for a specific host
     public func clearSessions(for hostId: String) {
+        resourceSessionsByHost.removeValue(forKey: hostId)
         workspaceCatalogsByHost.removeValue(forKey: hostId)
         paneStates = paneStates.filter { $0.key.pairId != hostId }
         lastTurnSummaryByPane = lastTurnSummaryByPane.filter { $0.key.pairId != hostId }

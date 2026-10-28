@@ -4,6 +4,13 @@ import CtrlxNetworking
 
 @MainActor
 enum WorkspaceRecoveryPresentationMapper {
+    /// Presentation metadata only; resource sessions are never sent to tmux reconstruction.
+    static func includingResources(_ resources: [ResourceSession], in sessions: [WorkspaceRecoverySession]) -> [WorkspaceRecoverySession] {
+        sessions + resources.filter { resource in !sessions.contains { $0.id == resource.id } }.map {
+            .init(id: $0.id, runtimeID: "", name: $0.name, windows: [])
+        }
+    }
+
     static func captureLocal(windows: DetachedTerminalWindows, sessions: [WorkspaceRecoverySession], mainID: UUID) -> [WorkspaceRecoveryScene] {
         let main = scene(
             id: mainID,
@@ -13,7 +20,7 @@ enum WorkspaceRecoveryPresentationMapper {
             sessions: sessions,
             owns: { !windows.contains(hostID: nil, windowID: $0) }
         )
-        let detached = windows.workspaces.values.filter { $0.anchor.hostID == nil }.sorted { $0.id.uuidString < $1.id.uuidString }.map { workspace in
+        let detached = windows.workspaces.values.filter { $0.hostID == nil }.sorted { $0.id.uuidString < $1.id.uuidString }.map { workspace in
             scene(
                 id: workspace.id,
                 main: false,

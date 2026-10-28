@@ -170,6 +170,7 @@
                                 }
                                 Divider()
                                 Button { onOpenFiles(preview.filesLink) } label: { Label("Open in Files", symbol: .folder) }
+                                Button { onOpenFiles(preview.newFilesLink) } label: { Label("Open in New Files Tab", symbol: .folderBadgePlus) }
                             } label: { Label("More", symbol: .ellipsisCircle) }
                         }
                     }

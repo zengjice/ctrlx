@@ -9,6 +9,7 @@ import SwiftUI
 struct AgentBrowserTabContentView: View {
     let state: AgentBrowserTabState
     let workspaceID: UUID
+    @Environment(\.resourceTabActions) private var resourceActions
     @Environment(\.browserAnnotationContext) private var annotationContext
     @State private var address = ""
     @State private var captureRequest: UUID?
@@ -25,6 +26,9 @@ struct AgentBrowserTabContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
+                if let sessionID = state.resourceSessionID, let actions = resourceActions {
+                    ResourceAgentMenu(kind: .browser, tabID: state.id, sessionID: sessionID, grant: state.grant, request: actions.request)
+                }
                 Button { state.service.back(state) } label: { Label("Back", symbol: .chevronLeft) }
                     .disabled(state.isRemotelyControlled)
                 Button { state.service.forward(state) } label: { Label("Forward", symbol: .chevronRight) }
@@ -123,7 +127,7 @@ struct AgentBrowserTabContentView: View {
             } else {
                 BrowserAnnotationSurface(
                     preferredTarget: state.sourceAgent,
-                    requiresRecipientSelection: !state.owner.isEmpty && state.sourceAgent == nil,
+                    requiresRecipientSelection: state.sourceAgent == nil,
                     capture: { try await state.service.annotationScreenshot(state) },
                     onEditingChanged: { editing in
                         isAnnotating = editing

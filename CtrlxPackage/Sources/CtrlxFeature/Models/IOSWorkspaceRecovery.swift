@@ -5,13 +5,13 @@ import DependenciesMacros
 import Foundation
 
 struct IOSWorkspaceRecoverySnapshot: Codable, Equatable, Sendable {
-    var version = 1
+    var version = 2
     var selectedSession: ViewerWorkspaceReference?
     var sessions: [IOSWorkspaceRecoverySession] = []
     var drafts: [IOSWorkspaceRecoveryDraft] = []
 
     func validate() throws {
-        guard version == 1 else { throw IOSWorkspaceRecoveryError("Unsupported workspace recovery version. The saved file has been kept.") }
+        guard version == 2 else { throw IOSWorkspaceRecoveryError("Unsupported workspace recovery version. The saved file has been kept.") }
         guard Set(sessions.map(\.reference)).count == sessions.count, Set(drafts.map(\.id)).count == drafts.count else {
             throw IOSWorkspaceRecoveryError("Duplicate saved workspace identity. The saved file has been kept.")
         }
@@ -40,6 +40,7 @@ struct IOSWorkspaceRecoverySession: Codable, Equatable, Sendable {
     var selectedFileID: UUID?
     var files: [IOSWorkspaceRecoveryFile] = []
     var linkedTabOrder: [PaneLinkedTabID]?
+    var topLevelTabOrder: [IOSTopLevelTabID]?
 }
 
 struct IOSWorkspaceRecoveryFile: Codable, Equatable, Sendable {
@@ -117,7 +118,10 @@ actor IOSWorkspaceRecoveryStorage {
         guard !loaded, let directory else { return current }
         let file = directory.appendingPathComponent("ios-workspace.json")
         if FileManager.default.fileExists(atPath: file.path) {
-            let snapshot = try JSONDecoder().decode(IOSWorkspaceRecoverySnapshot.self, from: Data(contentsOf: file))
+            var snapshot = try JSONDecoder().decode(IOSWorkspaceRecoverySnapshot.self, from: Data(contentsOf: file))
+            if snapshot.version == 1 {
+                snapshot.version = 2
+            }
             try snapshot.validate()
             current = snapshot
         }

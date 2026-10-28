@@ -5,6 +5,7 @@ import Foundation
 struct CloseConfirmation: Identifiable {
     let id = UUID()
     enum Target {
+        case resourceSession(ResourceSession, hostID: String?)
         case session(String, identity: WorkspacePaneIdentity)
         case window(LocalTmuxWindow, identity: WorkspacePaneIdentity)
         case remoteWindow(TmuxWindow, hostId: String, binding: ViewerWorkspaceInputBinding)
@@ -33,7 +34,8 @@ struct CloseConfirmation: Identifiable {
 
     var title: String {
         switch target {
-        case .session,
+        case .resourceSession,
+             .session,
              .remoteSession: "Close Session?"
         case .window,
              .remoteWindow: "Close Tab?"
@@ -42,6 +44,7 @@ struct CloseConfirmation: Identifiable {
 
     var targetName: String {
         switch target {
+        case let .resourceSession(session, _): session.name
         case let .session(name, _): name
         case let .window(window, _): windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
         case let .remoteWindow(window, _, _): windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
@@ -50,6 +53,9 @@ struct CloseConfirmation: Identifiable {
     }
 
     var message: String {
+        if case .resourceSession = target {
+            return "Close this session and all of its terminal, Files, Browser and iOS Simulator tabs?"
+        }
         let grouped = Dictionary(grouping: runningProcesses) { $0.paneIndex }
         let descriptions = grouped.sorted(by: { $0.key < $1.key }).map { paneIndex, processes in
             let names = Set(processes.map(\.name)).sorted().joined(separator: ", ")

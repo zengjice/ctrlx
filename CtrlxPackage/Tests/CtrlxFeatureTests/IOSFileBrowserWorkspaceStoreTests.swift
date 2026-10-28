@@ -7,6 +7,58 @@ import Testing
 
 @MainActor @Suite("iOS Files workspace lifetime")
 struct IOSFileBrowserWorkspaceStoreTests {
+    @Test("Independent Files keeps live navigation when the last terminal server disappears")
+    func independentSessionLifetime() throws {
+        let store = IOSFileBrowserWorkspaceStore(), client = ViewerRelayClient()
+        let hostID = UUID(), sessionID = UUID()
+        let session = ResourceSession(id: sessionID, name: "work", directory: "/host/project")
+        let file = HostFileTab(sessionName: session.name, initialDirectory: session.directory, resourceSessionID: sessionID)
+        let catalog = IndependentResourceCatalog(sessions: [session], files: [file])
+        let before = SessionStateMessage(pairId: "office", paneStates: [:], workspaceIdentity: .init(hostID: hostID, serverID: "old"), independentResources: catalog)
+        store.update(before, client: client)
+        let original = try #require(store.workspace(hostID: "office", sessionName: "work"))
+        original.tabs.first?.navigate("/host/other")
+        original.selectedID = file.id
+        let after = SessionStateMessage(pairId: "office", paneStates: [:], workspaceIdentity: .init(hostID: hostID, serverID: nil), independentResources: catalog)
+        store.update(after, client: client)
+        let retained = try #require(store.workspace(hostID: "office", sessionName: "work"))
+        #expect(retained === original)
+        #expect(retained.selected?.path == "/host/other")
+        let replaced = SessionStateMessage(pairId: "office", paneStates: [:], workspaceIdentity: .init(hostID: UUID(), serverID: nil), independentResources: catalog)
+        store.update(replaced, client: client)
+        #expect(store.workspace(hostID: "office", sessionName: "work") !== original)
+    }
+
+    @Test("Independent Files ignores a migrated source reference to a closed terminal")
+    func migratedSourceDoesNotDisableFiles() async throws {
+        let hostID = UUID(), sessionID = UUID()
+        let reference = ViewerWorkspaceReference(pairID: "office", hostID: hostID, sessionID: sessionID)
+        var oldSource = reference
+        oldSource.windowID = UUID()
+        oldSource.paneID = UUID()
+        let file = HostFileTab(sessionName: "work", initialDirectory: "/host/project", resourceSessionID: sessionID)
+        let savedTab = FileBrowserTab(hostTab: file)
+        savedTab.navigate("/host/nested")
+        let snapshot = try #require(savedTab.snapshot)
+        let saved = IOSWorkspaceRecoverySnapshot(sessions: [.init(reference: reference, name: "work", files: [.init(snapshot: snapshot, source: oldSource)])])
+        try await withDependencies {
+            $0[IOSWorkspaceRecoveryStore.self] = .inMemory(saved)
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let store = IOSFileBrowserWorkspaceStore(), client = ViewerRelayClient()
+            await store.prepareRecovery()
+            let state = SessionStateMessage(pairId: "office", paneStates: [:], workspaceIdentity: .init(hostID: hostID, serverID: nil), independentResources: .init(sessions: [.init(id: sessionID, name: "work", directory: "/host/project")], files: [file]))
+            store.update(state, client: client)
+            let workspace = try #require(store.workspace(hostID: "office", sessionName: "work"))
+            #expect(workspace.tabs.first?.path == "/host/nested")
+            #expect(workspace.tabs.first?.sourcePaneID == nil)
+            #expect(workspace.unavailableFileSources.isEmpty)
+            workspace.save()
+            await store.flushRecovery()
+            #expect(store.recovery.sessions.first?.files.first?.source == nil)
+        }
+    }
+
     @Test("A Host catalog arriving before first entry cannot overwrite saved private tabs")
     func restorePrivateTabsAfterHostCatalog() throws {
         try withDependencies { $0[PreferencesService.self] = .inMemory() } operation: {
@@ -47,12 +99,13 @@ struct IOSFileBrowserWorkspaceStoreTests {
     }
 
     private func state(_ tabs: [HostFileTab], host: String = "office") -> SessionStateMessage {
-        let panes = tabs.map {
-            PaneState(
-                paneId: $0.sourcePaneID,
-                sessionName: $0.sessionName,
+        let panes = tabs.compactMap { tab -> PaneState? in
+            guard let paneID = tab.sourcePaneID else { return nil }
+            return PaneState(
+                paneId: paneID,
+                sessionName: tab.sessionName,
                 windowIndex: 1,
-                tmuxWindowId: $0.windowID,
+                tmuxWindowId: tab.windowID,
                 currentPath: "/host/project",
                 isActive: true,
                 isWindowActive: true

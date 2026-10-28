@@ -36,6 +36,11 @@ public struct RemoteSimulatorView: View {
             HStack {
                 Label(tab.title, symbol: .iphone).lineLimit(1)
                 Spacer()
+                if client.hostSupportsResourceAuthorization, let sessionID = tab.resourceSessionID {
+                    ResourceAgentMenu(kind: .simulator, tabID: tab.id, sessionID: sessionID, grant: tab.grant) {
+                        try await ResourceTabClient.request($0, client: client)
+                    }
+                }
                 if session.supportsClipboard {
                     if session.controlID != nil {
                         RemoteControlButton(title: "Release Control", isControlled: true) {
@@ -59,7 +64,7 @@ public struct RemoteSimulatorView: View {
                         ) {
                             Task { await session.takeControl() }
                         }
-                            .accessibilityIdentifier("simulator-take-control")
+                        .accessibilityIdentifier("simulator-take-control")
                     }
                 } else {
                     Text("Host · Read only").font(.caption).foregroundStyle(.secondary)
@@ -90,7 +95,7 @@ public struct RemoteSimulatorView: View {
                     }
                 },
                 captureRequest: annotation?.id,
-                identifierPrefix: "simulator",
+                identifierPrefix: "simulator"
             ) {
                 GeometryReader { geometry in
                     ZStack {
@@ -102,13 +107,13 @@ public struct RemoteSimulatorView: View {
                                     jpeg: displayed.response.frame.jpeg,
                                     width: Double(displayed.response.frame.width),
                                     height: Double(displayed.response.frame.height),
-                                    generation: UInt64(max(0, displayed.response.generation ?? 0)),
+                                    generation: UInt64(max(0, displayed.response.generation ?? 0))
                                 ),
                                 acceptsInput: session.controlID != nil && client.isHostConnected && annotation == nil,
                                 keyboardRequested: false,
                                 isSimulator: true,
                                 onCopy: session.copy,
-                                onPaste: session.paste,
+                                onPaste: session.paste
                             ) { operation in
                                 session.send(operation, displayed: displayed.response)
                             }
@@ -165,7 +170,7 @@ public struct RemoteSimulatorView: View {
             let jpeg = try session.annotationScreenshot(from: displayed.response)
             annotation = AnnotationRequest(
                 jpeg: jpeg,
-                target: context.targets.first { $0.paneID == displayed.response.tab.sourcePaneID },
+                target: context.targets.first { $0.paneID == displayed.response.tab.sourcePaneID }
             )
             decodingError = nil
         } catch {
@@ -179,7 +184,7 @@ public struct RemoteSimulatorView: View {
             let dimension = RemoteBrowserGeometry.frameMaxDimension(
                 viewSize: size,
                 pageSize: CGSize(width: frame.width, height: frame.height),
-                displayScale: displayScale,
+                displayScale: displayScale
             ) {
             session.frameMaxDimension = dimension
         }

@@ -11,7 +11,7 @@
     import QuartzCore
 
     @MainActor
-    public final class AgentSimulatorService {
+    final public class AgentSimulatorService {
         private var coordinator: SimulatorCoordinator?
         private var workspaces: [UUID: SimulatorWorkspace] = [:]
         private var tabs: [UUID: SimulatorTabState] = [:]
@@ -44,7 +44,8 @@
             coordinator = SimulatorCoordinator(
                 root: root.appendingPathComponent("agent-simulator", isDirectory: true),
                 helper: Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/CtrlxSimulatorHost"), runner: runner, system: system,
-                resources: resources)
+                resources: resources
+            )
             ownerMonitor = Task { [weak self] in
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .seconds(5)) } catch { return }
@@ -55,13 +56,19 @@
 
         private func expireInactiveDevices() {
             for state in Array(tabs.values) {
-                if let lease = state.remoteControl, lease.expires <= .now { releaseSimulatorControl(state) }
+                if let lease = state.remoteControl, lease.expires <= .now {
+                    releaseSimulatorControl(state)
+                }
+                if let delegated = state.delegatedOwner, (try? system.inspect(delegated.pid).owner) != delegated {
+                    revokeResourceGrant(state)
+                }
                 let ownerEnded = state.owner.map { (try? system.inspect($0.pid).owner) != $0 } ?? false
-                let idle = !state.visible && !state.writing && state.lastActivity.duration(to: .now) > .seconds(600)
+                let idle = state.resourceSession == nil && !state.visible && !state.writing && state.lastActivity.duration(to: .now) > .seconds(600)
                 if ownerEnded || idle {
                     close(state)
-                } else if !state.visible, !state.writing, state.lastActivity.duration(to: .now) > .seconds(60),
-                          state.displayIdleTask == nil {
+                } else if
+                    !state.visible, !state.writing, state.lastActivity.duration(to: .now) > .seconds(60),
+                    state.displayIdleTask == nil {
                     suspendIdleDisplay(state)
                 }
             }
@@ -71,13 +78,18 @@
             let previous = state.visibilityTask
             state.displayIdleTask = Task { [weak state] in
                 await previous?.value
-                guard let state, !Task.isCancelled, !state.isClosed, !state.visible, !state.writing,
-                      state.lastActivity.duration(to: .now) > .seconds(60) else { return }
+                guard
+                    let state, !Task.isCancelled, !state.isClosed, !state.visible, !state.writing,
+                    state.lastActivity.duration(to: .now) > .seconds(60) else { return }
                 do {
                     let result = try await state.handle.worker.request(["command": .string("suspend-display")])
-                    if !Task.isCancelled, result["suspended"]?.boolValue != true { state.displayIdleTask = nil }
+                    if !Task.isCancelled, result["suspended"]?.boolValue != true {
+                        state.displayIdleTask = nil
+                    }
                 } catch {
-                    if !Task.isCancelled { state.error = error.localizedDescription }
+                    if !Task.isCancelled {
+                        state.error = error.localizedDescription
+                    }
                 }
             }
         }
@@ -115,10 +127,21 @@
         }
 
         func updateSimulatorRoutes(_ panes: [PaneInfo]) {
+            for state in tabs.values {
+                if
+                    let grant = state.grant, let session = state.resourceSession,
+                    !panes.contains(where: { $0.paneId == grant.agent.paneID && $0.workspaceIdentity?.sessionID == session.id }) {
+                    revokeResourceGrant(state)
+                }
+            }
             routeRevision &+= 1
             let renames = SessionRenameMapping.detect(from: routePanes, to: panes)
             routePanes = panes
             for state in Array(tabs.values) {
+                if state.resourceSession != nil {
+                    attach(state)
+                    continue
+                }
                 let matches = panes.filter { $0.paneId == state.paneID }
                 guard matches.count == 1, let pane = matches.first else {
                     if state.owner == nil {
@@ -126,14 +149,14 @@
                     }
                     continue
                 }
-                if let identity = state.sourcePane.workspaceIdentity, !identity.isSamePane(as: pane.workspaceIdentity) {
+                if let identity = state.sourcePane?.workspaceIdentity, !identity.isSamePane(as: pane.workspaceIdentity) {
                     close(state)
                     continue
                 }
-                if renames.contains(where: { $0.oldName == state.sourcePane.sessionName && $0.newName == pane.sessionName }) {
+                if renames.contains(where: { $0.oldName == state.sessionName && $0.newName == pane.sessionName }) {
                     // MainView migrates the whole session collection. Detaching here
                     // would remove its tabs before that migration and lose selection.
-                    state.sourcePane = pane
+                    state.source = .pane(pane)
                     onTabsChanged?()
                 } else {
                     updateRoute(state, pane: pane)
@@ -144,16 +167,16 @@
 
         private func updateRoute(_ state: SimulatorTabState, pane: PaneInfo) {
             guard
-                pane.sessionName != state.sourcePane.sessionName || pane.windowId != state.sourcePane.windowId
-                || pane.stableWindowId != state.sourcePane.stableWindowId else { return }
+                pane.sessionName != state.sessionName || pane.windowId != state.sourcePane?.windowId
+                || pane.stableWindowId != state.sourcePane?.stableWindowId else { return }
             // Reindexing the same window preserves its tab selection and split placement.
-            if pane.sessionName != state.sourcePane.sessionName || pane.stableWindowId != state.sourcePane.stableWindowId {
+            if pane.sessionName != state.sessionName || pane.stableWindowId != state.sourcePane?.stableWindowId {
                 workspaces[state.workspaceID]?.onDetach(state)
                 state.view.removeFromSuperview()
                 visibility(state, visible: false)
                 state.workspaceID = detachedWorkspaceID
             }
-            state.sourcePane = pane
+            state.source = .pane(pane)
             attach(state)
             onTabsChanged?()
         }
@@ -209,8 +232,12 @@
             }
         }
 
-        private func performAction(_ parameters: [String: JSONValue], peer: Int32, coordinator: SimulatorCoordinator,
-                                   owner: SimulatorOwner? = nil) async throws -> [String: JSONValue] {
+        private func performAction(
+            _ parameters: [String: JSONValue],
+            peer: Int32,
+            coordinator: SimulatorCoordinator,
+            owner: SimulatorOwner? = nil
+        ) async throws -> [String: JSONValue] {
             let command = parameters["command"]?.stringValue ?? ""
             if ["inventory", "config", "resources"].contains(command) {
                 guard try system.inspect(peer).owner.uid == getuid() else {
@@ -221,29 +248,48 @@
                     let value = try await coordinator.configuration(
                         maximumDevices: parameters["maximumDevices"]?.intValue,
                         memoryReserveMiB: parameters["memoryReserveMiB"]?.intValue,
-                        diskReserveMiB: parameters["diskReserveMiB"]?.intValue)
-                    return ["configuration": try JSONValue(encoding: value), "open": .int(tabs.count),
-                            "opening": .int(opening), "closing": .int(closeTasks.count)]
-                case "resources": return ["system": try JSONValue(encoding: await coordinator.resourceSnapshot())]
+                        diskReserveMiB: parameters["diskReserveMiB"]?.intValue
+                    )
+                    return try [
+                        "configuration": JSONValue(encoding: value),
+                        "open": .int(tabs.count),
+                        "opening": .int(opening),
+                        "closing": .int(closeTasks.count),
+                    ]
+                case "resources": return try ["system": JSONValue(encoding: await coordinator.resourceSnapshot())]
                 default: return try await coordinator.inventory()
                 }
             }
             let owner = try owner ?? callingAgent(peer: peer)
-            return try await perform(command, parameters: parameters, owner: owner, coordinator: coordinator)
+            let target = parameters["device"]?.stringValue.flatMap(UUID.init(uuidString:)).flatMap { tabs[$0] }
+            let revision = target?.grantRevision
+            let result = try await perform(command, parameters: parameters, owner: owner, coordinator: coordinator)
+            if let target, target.owner != owner {
+                try validate(owner)
+                guard target.delegatedOwner == owner, !target.isClosed, target.grantRevision == revision else {
+                    throw SimulatorFailure("Authorization changed; the obsolete result was discarded")
+                }
+            }
+            return result
         }
 
-        private func performBatch(_ parameters: [String: JSONValue], peer: Int32,
-                                  coordinator: SimulatorCoordinator) async throws -> [String: JSONValue] {
-            guard case let .array(values)? = parameters["actions"],
-                  (1...SimulatorBatchLimits.maximumActions).contains(values.count),
-                  try JSONEncoder().encode(parameters).count <= SimulatorBatchLimits.maximumRequestBytes else {
+        private func performBatch(
+            _ parameters: [String: JSONValue],
+            peer: Int32,
+            coordinator: SimulatorCoordinator
+        ) async throws -> [String: JSONValue] {
+            guard
+                case let .array(values)? = parameters["actions"],
+                (1...SimulatorBatchLimits.maximumActions).contains(values.count),
+                try JSONEncoder().encode(parameters).count <= SimulatorBatchLimits.maximumRequestBytes else {
                 throw SimulatorFailure("Batch requires 1...16 actions and at most 64 KB")
             }
             let actions = try values.enumerated().map { index, value -> [String: JSONValue] in
-                guard case let .object(action) = value, let command = action["command"]?.stringValue,
-                      SimulatorOperation(rawValue: command) != nil,
-                      !action.keys.contains(where: { $0.hasPrefix("_") }),
-                      action["output"] == nil || command == "record-start" else {
+                guard
+                    case let .object(action) = value, let command = action["command"]?.stringValue,
+                    SimulatorOperation(rawValue: command) != nil,
+                    !action.keys.contains(where: { $0.hasPrefix("_") }),
+                    action["output"] == nil || command == "record-start" else {
                     throw SimulatorFailure("Batch actions must be simulator operations without authority fields; only record-start accepts output")
                 }
                 guard command != "screenshot" || index == values.count - 1 else {
@@ -269,10 +315,14 @@
                     let result = try await performAction(action, peer: peer, coordinator: coordinator, owner: owner)
                     let row: JSONValue = .object(["index": .int(index), "command": command, "ok": .bool(true), "result": .object(result)])
                     let bytes = try JSONEncoder().encode(row).count
-                    guard retainedBytes + bytes <= SimulatorBatchLimits.maximumResponseBytes - 65536 else {
-                        rows.append(.object(["index": .int(index), "command": command, "ok": .bool(false),
+                    guard retainedBytes + bytes <= SimulatorBatchLimits.maximumResponseBytes - 65_536 else {
+                        rows.append(.object([
+                            "index": .int(index),
+                            "command": command,
+                            "ok": .bool(false),
                             "outcome": .string("action-completed-result-omitted"),
-                            "error": .object(["code": .string("result_limit"), "message": .string("Batch result limit exceeded; this action completed and was not retried")])]))
+                            "error": .object(["code": .string("result_limit"), "message": .string("Batch result limit exceeded; this action completed and was not retried")]),
+                        ]))
                         stoppedAt = index
                         break
                     }
@@ -280,20 +330,87 @@
                     retainedBytes += bytes
                     completed += 1
                 } catch {
-                    rows.append(.object(["index": .int(index), "command": command, "ok": .bool(false),
-                        "error": .object(["code": .string("simulator_error"), "message": .string(error.localizedDescription)])]))
+                    rows.append(.object([
+                        "index": .int(index),
+                        "command": command,
+                        "ok": .bool(false),
+                        "error": .object(["code": .string("simulator_error"), "message": .string(error.localizedDescription)]),
+                    ]))
                     stoppedAt = index
                     break
                 }
             }
-            var result: [String: JSONValue] = ["success": .bool(stoppedAt == nil), "planned": .int(actions.count),
-                "completed": .int(completed), "results": .array(rows)]
-            if let stoppedAt { result["stoppedAt"] = .int(stoppedAt) }
+            var result: [String: JSONValue] = [
+                "success": .bool(stoppedAt == nil),
+                "planned": .int(actions.count),
+                "completed": .int(completed),
+                "results": .array(rows),
+            ]
+            if let stoppedAt {
+                result["stoppedAt"] = .int(stoppedAt)
+            }
             return result
         }
 
         var supportsSimulatorViewing: Bool {
             coordinator != nil && !closing
+        }
+
+        func setResourceGrant(tabID: UUID, sessionID: UUID, agent: ResourceAgent, owner: SimulatorOwner) async throws {
+            guard
+                let state = tabs[tabID], state.resourceSession?.id == sessionID, state.owner == nil,
+                !state.isClosed, state.remoteControl == nil, !state.writing else {
+                throw SimulatorFailure("The human simulator is unavailable, busy, or controlled by a Viewer. Release control before authorizing an Agent")
+            }
+            try validate(owner)
+            if state.grant != nil {
+                revokeResourceGrant(state)
+            }
+            let generation = state.generation
+            let revision = state.manualInputRevision
+            await state.grantCleanup?.value
+            await state.manualInput?.value
+            _ = try await state.handle.worker.request(["command": .string("cancel")])
+            try validate(owner)
+            guard
+                !state.isClosed, state.generation == generation, state.manualInputRevision == revision,
+                state.remoteControl == nil, !state.writing else { throw SimulatorFailure("Simulator changed during authorization") }
+            state.delegatedOwner = owner
+            state.grant = .init(agent: agent, canWrite: true)
+            state.grantRevision += 1
+            state.generation += 1
+            state.writer = owner
+            onTabsChanged?()
+        }
+
+        func revokeResourceGrant(tabID: UUID, sessionID: UUID) throws {
+            guard let state = tabs[tabID], state.resourceSession?.id == sessionID else { throw SimulatorFailure("Human simulator no longer exists in this session") }
+            revokeResourceGrant(state)
+        }
+
+        private func revokeResourceGrant(_ state: SimulatorTabState) {
+            guard state.grant != nil else { return }
+            state.writer = nil
+            state.delegatedOwner = nil
+            state.grant = nil
+            state.grantRevision += 1
+            state.generation += 1
+            cancelManualInput(state)
+            onTabsChanged?()
+        }
+
+        func delegatedWriterChanged(_ state: SimulatorTabState) {
+            guard let owner = state.delegatedOwner, state.grant != nil else { return }
+            state.grant?.canWrite = state.writer == owner
+            state.grantRevision += 1
+            if state.writer != owner, let coordinator {
+                let previous = state.grantCleanup
+                state.grantCleanup = Task {
+                    await previous?.value
+                    _ = await coordinator.stopRecording(state.handle)
+                }
+            }
+            onTabsChanged?()
         }
 
         var sharedSimulatorTabs: [RemoteSimulatorTab] {
@@ -303,12 +420,14 @@
         private func remoteDescriptor(_ state: SimulatorTabState) -> RemoteSimulatorTab {
             RemoteSimulatorTab(
                 id: state.id,
-                sessionName: state.sourcePane.sessionName,
-                windowID: state.sourcePane.stableWindowId,
+                sessionName: state.sessionName,
+                windowID: state.sourcePane?.stableWindowId,
                 sourcePaneID: state.paneID,
                 title: String(state.handle.name.prefix(256)),
                 runtime: state.handle.runtime,
-                isPrimary: primaryDevices[state.paneID] == state.id
+                isPrimary: state.paneID.map { primaryDevices[$0] == state.id } == true,
+                resourceSessionID: state.resourceSession?.id,
+                grant: state.grant
             )
         }
 
@@ -327,7 +446,7 @@
         func handleSimulator(_ request: BrowseSimulator, viewerID: String? = nil) async throws -> RemoteSimulatorResponse {
             guard
                 supportsSimulatorViewing, let state = tabs[request.tabID], !state.isClosed,
-                state.sourcePane.sessionName == request.sessionName else {
+                state.sessionName == request.sessionName else {
                 throw SimulatorFailure("This Host simulator is no longer available in the session")
             }
             guard (256...RemoteSimulatorFrame.maximumDimension).contains(request.frameMaxDimension) else {
@@ -375,7 +494,7 @@
             }
             try Task.checkCancellation()
             try validate(state.owner)
-            guard !closing, !state.isClosed, state.sourcePane.sessionName == request.sessionName else {
+            guard !closing, !state.isClosed, state.sessionName == request.sessionName else {
                 throw SimulatorFailure("Simulator changed session or closed during preview")
             }
             state.markActivity()
@@ -412,7 +531,7 @@
         func controlSimulator(_ request: ControlSimulator, viewerID: String) async throws -> RemoteSimulatorControlResponse {
             guard
                 let state = tabs[request.tabID], !state.isClosed, !closing,
-                state.sourcePane.sessionName == request.sessionName, let coordinator else {
+                state.sessionName == request.sessionName, let coordinator else {
                 throw SimulatorFailure("This Host simulator is no longer available")
             }
             try validate(state.owner)
@@ -458,7 +577,7 @@
                 try Task.checkCancellation()
                 try validate(state.owner)
                 guard
-                    !closing, !state.isClosed, state.sourcePane.sessionName == request.sessionName,
+                    !closing, !state.isClosed, state.sessionName == request.sessionName,
                     let lease = state.remoteControl, lease.viewerID == viewerID, lease.surfaceID == request.surfaceID,
                     lease.id == request.controlID, lease.expires > .now, request.generation == state.generation else {
                     throw SimulatorFailure("Simulator control changed. Take Control again")
@@ -566,7 +685,7 @@
         func closeSimulator(_ request: CloseSimulator) async throws {
             guard
                 !closing, let state = tabs[request.tabID], !state.isClosed,
-                state.sourcePane.sessionName == request.sessionName else {
+                state.sessionName == request.sessionName else {
                 throw SimulatorFailure("This Host simulator is no longer available in the session")
             }
             try validate(state.owner)
@@ -574,6 +693,40 @@
             await closeTasks[state.id]?.value
             if let error = state.error {
                 throw SimulatorFailure("Tab closed; device cleanup failed: \(error)")
+            }
+        }
+
+        func openResourceSimulator(session: ResourceSession, validateSession: @escaping @MainActor () throws -> Void) async throws -> RemoteSimulatorTab {
+            guard let coordinator, !closing else { throw SimulatorFailure("Simulator host is unavailable") }
+            let state = try await createDevice(
+                parameters: ["new": .bool(true)],
+                owner: nil,
+                sourcePane: nil,
+                resourceSession: session,
+                coordinator: coordinator,
+                resolve: {
+                    try validateSession()
+                    return nil
+                }
+            )
+            return remoteDescriptor(state)
+        }
+
+        func updateResourceSessions(_ sessions: [ResourceSession]) {
+            for state in tabs.values {
+                guard let id = state.resourceSession?.id, let session = sessions.first(where: { $0.id == id }) else { continue }
+                state.source = .session(session)
+                attach(state)
+            }
+        }
+
+        func closeResourceSession(_ id: UUID, including tabIDs: Set<UUID> = []) async {
+            let states = tabs.values.filter { $0.resourceSession?.id == id || tabIDs.contains($0.id) }
+            for state in states {
+                close(state)
+            }
+            for state in states {
+                await closeTasks[state.id]?.value
             }
         }
 
@@ -662,7 +815,7 @@
             guard
                 current.paneId == state.paneID, !state.isClosed, !closing,
                 owner == nil || state.owner == owner,
-                state.sourcePane.workspaceIdentity.map({ $0.isSamePane(as: current.workspaceIdentity) }) ?? true else {
+                state.sourcePane?.workspaceIdentity.map({ $0.isSamePane(as: current.workspaceIdentity) }) ?? true else {
                 throw SimulatorFailure("The source pane changed while opening the simulator")
             }
             try validate(owner)
@@ -676,9 +829,10 @@
         private func createDevice(
             parameters: [String: JSONValue],
             owner: SimulatorOwner?,
-            sourcePane: PaneInfo,
+            sourcePane: PaneInfo?,
+            resourceSession: ResourceSession? = nil,
             coordinator: SimulatorCoordinator,
-            resolve: @escaping @MainActor () async throws -> PaneInfo
+            resolve: @escaping @MainActor () async throws -> PaneInfo?
         ) async throws -> SimulatorTabState {
             let configuration = try await coordinator.configuration()
             guard !closing, tabs.count + opening + closeTasks.count < configuration.maximumDevices else {
@@ -714,7 +868,7 @@
             )
             do {
                 pane = try await resolve()
-                guard pane.paneId == sourcePane.paneId, sourcePane.workspaceIdentity.map({ $0.isSamePane(as: pane.workspaceIdentity) }) ?? true else { throw SimulatorFailure("The agent moved to another pane while opening the simulator") }
+                guard pane?.paneId == sourcePane?.paneId, sourcePane?.workspaceIdentity.map({ $0.isSamePane(as: pane?.workspaceIdentity) }) ?? true else { throw SimulatorFailure("The agent moved to another pane while opening the simulator") }
                 try validate(owner)
             } catch {
                 try await coordinator.close(handle, shutdown: true)
@@ -724,8 +878,17 @@
                 try await coordinator.close(handle, shutdown: true)
                 throw SimulatorFailure("The simulator host closed while the device was booting")
             }
+            let source: SimulatorTabSource
+            if let resourceSession {
+                source = .session(resourceSession)
+            } else if let pane {
+                source = .pane(pane)
+            } else {
+                try await coordinator.close(handle, shutdown: true)
+                throw SimulatorFailure("Simulator source is no longer available")
+            }
             let state = SimulatorTabState(
-                handle: handle, owner: owner, sourcePane: pane, workspaceID: detachedWorkspaceID, view: view, service: self
+                handle: handle, owner: owner, source: source, workspaceID: detachedWorkspaceID, view: view, service: self
             )
             tabs[state.id] = state
             view.onFirstFrame = { [weak state] in state?.hasPresentedFrame = true }
@@ -751,7 +914,7 @@
                 state.writer = nil
                 state.generation += 1
             }
-            if parameters["new"]?.boolValue != true {
+            if let pane, parameters["new"]?.boolValue != true {
                 primaryDevices[pane.paneId] = state.id
             }
             attach(state)
@@ -764,25 +927,34 @@
         }
 
         private func perform(_ command: String, parameters: [String: JSONValue], owner: SimulatorOwner, coordinator: SimulatorCoordinator)
-            async throws -> [String: JSONValue]
-        {
+            async throws -> [String: JSONValue] {
             let traceTap = command == "tap" && CommandLine.arguments.contains("--e2e-test")
             let actionStartedAt = traceTap ? ProcessInfo.processInfo.systemUptime : 0
             try validate(owner)
-            if parameters["scale"] != nil, command != "pinch" { throw SimulatorFailure("scale requires pinch") }
-            if parameters["seconds"] != nil, command != "record-start" { throw SimulatorFailure("seconds requires record-start") }
-            if parameters["output"] != nil, command != "record-start" { throw SimulatorFailure("output requires record-start") }
+            if parameters["scale"] != nil, command != "pinch" {
+                throw SimulatorFailure("scale requires pinch")
+            }
+            if parameters["seconds"] != nil, command != "record-start" {
+                throw SimulatorFailure("seconds requires record-start")
+            }
+            if parameters["output"] != nil, command != "record-start" {
+                throw SimulatorFailure("output requires record-start")
+            }
             if let udid = parameters["udid"] {
-                guard ["open", "erase", "delete"].contains(command),
-                      let value = udid.stringValue, UUID(uuidString: value) != nil,
-                      parameters["device"] == nil, parameters["runtime"] == nil, parameters["deviceType"] == nil else {
+                guard
+                    ["open", "erase", "delete"].contains(command),
+                    let value = udid.stringValue, UUID(uuidString: value) != nil,
+                    parameters["device"] == nil, parameters["runtime"] == nil, parameters["deviceType"] == nil else {
                     throw SimulatorFailure("udid requires open, erase or delete and one UUID without device, runtime or deviceType")
                 }
             }
-            if command == "storage" { return try await coordinator.storage() }
+            if command == "storage" {
+                return try await coordinator.storage()
+            }
             if command == "erase" || command == "delete" {
-                guard let udid = parameters["udid"]?.stringValue,
-                      let operation = SimulatorOperation(rawValue: command) else {
+                guard
+                    let udid = parameters["udid"]?.stringValue,
+                    let operation = SimulatorOperation(rawValue: command) else {
                     throw SimulatorFailure("\(command) requires one private device UDID from storage; close the device first")
                 }
                 return try await coordinator.modifyStorage(operation, udid: udid, owner: owner)
@@ -796,10 +968,14 @@
                     throw SimulatorFailure("edge requires swipe and top, left, bottom or right")
                 }
                 edge = parsed
-            } else { edge = nil }
-            if command == "identity" { return ["owner": try JSONValue(encoding: owner)] }
+            } else {
+                edge = nil
+            }
+            if command == "identity" {
+                return try ["owner": JSONValue(encoding: owner)]
+            }
             if command == "devices" {
-                return ["devices": .array(try tabs.values.filter { $0.owner == owner }.map { .object(try describe($0)) })]
+                return try ["devices": .array(tabs.values.filter { $0.owner == owner || $0.delegatedOwner == owner }.map { try .object(describe($0)) })]
             }
             if let value = parameters["new"], command != "open" || value.boolValue == nil {
                 throw SimulatorFailure("new requires open and a boolean value")
@@ -809,8 +985,9 @@
                 workspaces[state.workspaceID]?.onSelect(state, false)
                 return try describe(state)
             }
-            guard let rawID = parameters["device"]?.stringValue, let id = UUID(uuidString: rawID),
-                let state = tabs[id], state.owner == owner, !state.isClosed
+            guard
+                let rawID = parameters["device"]?.stringValue, let id = UUID(uuidString: rawID),
+                let state = tabs[id], state.owner == owner || state.delegatedOwner == owner, !state.isClosed
             else { throw SimulatorFailure("Device does not belong to this agent process") }
             state.markActivity()
             if command == "status" {
@@ -827,9 +1004,12 @@
                 return try describe(state)
             }
             if command == "close" {
+                guard state.owner == owner else { throw SimulatorFailure("An authorized Agent cannot close a human simulator") }
                 close(state)
                 await closeTasks[state.id]?.value
-                if let error = state.error { throw SimulatorFailure("Tab closed; device cleanup failed: \(error)") }
+                if let error = state.error {
+                    throw SimulatorFailure("Tab closed; device cleanup failed: \(error)")
+                }
                 return ["closed": .bool(true)]
             }
             if command == "screenshot" {
@@ -844,23 +1024,36 @@
                 guard !state.isClosed, !closing else { throw SimulatorFailure("Simulator closed during screenshot") }
                 return try await coordinator.screenshot(state.handle)
             }
-            if command == "record-status" { return await coordinator.recordingStatus(state.handle) }
+            if command == "record-status" {
+                return await coordinator.recordingStatus(state.handle)
+            }
             if command == "record-stop" {
                 let result = await coordinator.stopRecording(state.handle)
-                if let error = result["error"]?.stringValue { throw SimulatorFailure(error) }
+                if let error = result["error"]?.stringValue {
+                    throw SimulatorFailure(error)
+                }
                 return result
             }
-            if command == "metrics" { return try await coordinator.metrics(state.handle) }
+            if command == "metrics" {
+                return try await coordinator.metrics(state.handle)
+            }
             if command == "logs" {
                 guard let bundle = parameters["bundle"]?.stringValue else { throw SimulatorFailure("logs requires a bundle identifier") }
-                let request = try SimulatorLogRequest(bundle: bundle, lastSeconds: parameters["lastSeconds"]?.intValue ?? 30,
-                    maximumBytes: parameters["maximumBytes"]?.intValue ?? 65536)
+                let request = try SimulatorLogRequest(
+                    bundle: bundle,
+                    lastSeconds: parameters["lastSeconds"]?.intValue ?? 30,
+                    maximumBytes: parameters["maximumBytes"]?.intValue ?? 65_536
+                )
                 return try await coordinator.logs(state.handle, request: request)
             }
             if command == "crashes" {
                 guard let bundle = parameters["bundle"]?.stringValue else { throw SimulatorFailure("crashes requires a bundle identifier") }
-                let request = try SimulatorCrashRequest(bundle: bundle, lastSeconds: parameters["lastSeconds"]?.intValue ?? 3600,
-                    limit: parameters["limit"]?.intValue ?? 5, maximumBytes: parameters["maximumBytes"]?.intValue ?? 65536)
+                let request = try SimulatorCrashRequest(
+                    bundle: bundle,
+                    lastSeconds: parameters["lastSeconds"]?.intValue ?? 3_600,
+                    limit: parameters["limit"]?.intValue ?? 5,
+                    maximumBytes: parameters["maximumBytes"]?.intValue ?? 65_536
+                )
                 return try await coordinator.crashes(state.handle, request: request)
             }
             if command == "snapshot" {
@@ -870,12 +1063,12 @@
                 guard parameters["ref"] == nil else { throw SimulatorFailure("wait requires a semantic selector rather than a snapshot reference") }
                 let query = try elementQuery(parameters)
                 let wanted = parameters["state"]?.stringValue ?? "visible"
-                let timeout = parameters["timeoutMs"]?.intValue ?? 5000
+                let timeout = parameters["timeoutMs"]?.intValue ?? 5_000
                 let limit = parameters["limit"]?.intValue ?? 200
-                guard ["visible", "absent"].contains(wanted), (1...60000).contains(timeout) else {
+                guard ["visible", "absent"].contains(wanted), (1...60_000).contains(timeout) else {
                     throw SimulatorFailure("wait accepts visible or absent and a timeout of 1...60000 ms")
                 }
-                guard (1...1000).contains(limit) else { throw SimulatorFailure("Snapshot limit must be 1...1000") }
+                guard (1...1_000).contains(limit) else { throw SimulatorFailure("Snapshot limit must be 1...1000") }
                 let start = ContinuousClock.now
                 let deadline = start.advanced(by: .milliseconds(timeout))
                 var partial = false
@@ -883,10 +1076,14 @@
                 while ContinuousClock.now < deadline {
                     try Task.checkCancellation()
                     try validate(owner)
-                    guard !state.isClosed else { throw SimulatorFailure("The simulator closed while waiting") }
+                    guard !state.isClosed, state.owner == owner || state.delegatedOwner == owner else { throw SimulatorFailure("The simulator closed or authorization was revoked while waiting") }
                     do {
-                        let observed = try await observe(state, coordinator: coordinator,
-                            limit: limit, deadline: deadline)
+                        let observed = try await observe(
+                            state,
+                            coordinator: coordinator,
+                            limit: limit,
+                            deadline: deadline
+                        )
                         partial = observed.snapshot["partial"]?.boolValue == true
                         lastError = nil
                         guard let geometry = state.observation?.geometry else { throw SimulatorFailure("The observation geometry is unavailable") }
@@ -897,16 +1094,21 @@
                         }
                     } catch {
                         try Task.checkCancellation()
-                        guard !state.isClosed else { throw SimulatorFailure("The simulator closed while waiting") }
+                        guard !state.isClosed, state.owner == owner || state.delegatedOwner == owner else { throw SimulatorFailure("The simulator closed or authorization was revoked while waiting") }
                         lastError = error.localizedDescription
                     }
                     let remaining = ContinuousClock.now.duration(to: deadline)
-                    if remaining > .zero { try await Task.sleep(for: min(.milliseconds(100), remaining)) }
+                    if remaining > .zero {
+                        try await Task.sleep(for: min(.milliseconds(100), remaining))
+                    }
                 }
-                if let lastError { throw SimulatorFailure("Wait timed out without a valid observation: \(lastError)") }
+                if let lastError {
+                    throw SimulatorFailure("Wait timed out without a valid observation: \(lastError)")
+                }
                 throw SimulatorFailure(partial ? "Wait timed out; an incomplete AX tree cannot prove absence" : "Wait timed out before the requested element state appeared")
             }
             if command == "claim" {
+                guard state.owner == owner else { throw SimulatorFailure("Ask the person to Return Control; an authorized Agent cannot claim a human simulator") }
                 try await claimWriter(state) {
                     _ = try await state.handle.worker.request(["command": .string("cancel")])
                 }
@@ -929,8 +1131,9 @@
                 var result: [String: JSONValue] = ["accepted": .bool(true)]
                 switch command {
                 case "record-start":
-                    guard let output = parameters["output"]?.stringValue,
-                          parameters["seconds"] == nil || parameters["seconds"]?.intValue != nil else {
+                    guard
+                        let output = parameters["output"]?.stringValue,
+                        parameters["seconds"] == nil || parameters["seconds"]?.intValue != nil else {
                         throw SimulatorFailure("record-start requires an output path and an integer duration")
                     }
                     let options = try SimulatorRecordingOptions(output: output, seconds: parameters["seconds"]?.intValue ?? 60)
@@ -955,13 +1158,14 @@
                     guard let bundle = parameters["bundle"]?.stringValue else { throw SimulatorFailure("uninstall requires a bundle identifier") }
                     state.observation = nil
                     try await coordinator.uninstall(state.handle, bundle: bundle)
-                case "launch", "terminate":
+                case "launch",
+                     "terminate":
                     state.observation = nil
                     guard let bundle = parameters["bundle"]?.stringValue, !bundle.isEmpty, bundle.utf8.count <= 255, !bundle.hasPrefix("-")
                     else { throw SimulatorFailure("Provide a bundle identifier") }
-                    let activationTimeoutMs = parameters["timeoutMs"]?.intValue ?? 30000
+                    let activationTimeoutMs = parameters["timeoutMs"]?.intValue ?? 30_000
                     if command == "launch" {
-                        guard (1...60000).contains(activationTimeoutMs) else {
+                        guard (1...60_000).contains(activationTimeoutMs) else {
                             throw SimulatorFailure("launch accepts a timeout of 1...60000 ms")
                         }
                         // Inspector startup has its own budget; the Scene deadline starts after launch.
@@ -976,15 +1180,24 @@
                         let deadline = ContinuousClock.now.advanced(by: .milliseconds(activationTimeoutMs))
                         var confirmed = false
                         if activationTrace {
-                            FileHandle.standardError.write(Data(String(format:
+                            FileHandle.standardError.write(Data(String(
+                                format:
                                 "SimulatorActivation stage=service-begin device=%@ pid=%d at=%.9f\n",
-                                state.handle.udid, processID, ProcessInfo.processInfo.systemUptime).utf8))
+                                state.handle.udid,
+                                processID,
+                                ProcessInfo.processInfo.systemUptime
+                            ).utf8))
                         }
                         defer {
                             if activationTrace {
-                                FileHandle.standardError.write(Data(String(format:
+                                FileHandle.standardError.write(Data(String(
+                                    format:
                                     "SimulatorActivation stage=service-end device=%@ pid=%d at=%.9f confirmed=%d\n",
-                                    state.handle.udid, processID, ProcessInfo.processInfo.systemUptime, confirmed ? 1 : 0).utf8))
+                                    state.handle.udid,
+                                    processID,
+                                    ProcessInfo.processInfo.systemUptime,
+                                    confirmed ? 1 : 0
+                                ).utf8))
                             }
                         }
                         try checkWriter()
@@ -996,11 +1209,13 @@
                     }
                 case "open-url":
                     state.observation = nil
-                    guard let text = parameters["url"]?.stringValue, text.utf8.count <= 8192, let url = URL(string: text), url.scheme != nil
+                    guard let text = parameters["url"]?.stringValue, text.utf8.count <= 8_192, let url = URL(string: text), url.scheme != nil
                     else { throw SimulatorFailure("Provide an absolute URL") }
                     _ = try await coordinator.simctl(["openurl", state.handle.udid, url.absoluteString])
                 case "location":
-                    if let clear = parameters["clear"], clear.boolValue == nil { throw SimulatorFailure("clear must be a boolean") }
+                    if let clear = parameters["clear"], clear.boolValue == nil {
+                        throw SimulatorFailure("clear must be a boolean")
+                    }
                     if parameters["clear"]?.boolValue == true {
                         guard parameters["latitude"] == nil, parameters["longitude"] == nil else {
                             throw SimulatorFailure("Choose coordinates or clear")
@@ -1035,9 +1250,10 @@
                     guard SimulatorAppearance(rawValue: style) != nil else { throw SimulatorFailure("Appearance unavailable: \(style)") }
                     result["style"] = .string(style)
                 case "privacy":
-                    guard let rawAction = parameters["action"]?.stringValue, let action = SimulatorPrivacyAction(rawValue: rawAction),
-                          let rawService = parameters["service"]?.stringValue, let service = SimulatorPrivacyService(rawValue: rawService),
-                          let bundle = parameters["bundle"]?.stringValue else {
+                    guard
+                        let rawAction = parameters["action"]?.stringValue, let action = SimulatorPrivacyAction(rawValue: rawAction),
+                        let rawService = parameters["service"]?.stringValue, let service = SimulatorPrivacyService(rawValue: rawService),
+                        let bundle = parameters["bundle"]?.stringValue else {
                         throw SimulatorFailure("privacy requires an action, permission service and bundle identifier")
                     }
                     let request = try SimulatorPrivacyRequest(action: action, service: service, bundle: bundle)
@@ -1065,8 +1281,11 @@
                     try checkWriter()
                     let settlingDuration: Duration
                     switch (initialGeometry.orientation, orientation) {
-                    case (1, 2), (2, 1), (3, 4), (4, 3):
-                        settlingDuration = .milliseconds(1250)
+                    case (1, 2),
+                         (2, 1),
+                         (3, 4),
+                         (4, 3):
+                        settlingDuration = .milliseconds(1_250)
                     default:
                         settlingDuration = .milliseconds(750)
                     }
@@ -1077,7 +1296,7 @@
                     while ContinuousClock.now < deadline {
                         try checkWriter()
                         let parts = ContinuousClock.now.duration(to: deadline).components
-                        let remaining = Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+                        let remaining = Double(parts.seconds) + Double(parts.attoseconds) / 1E18
                         guard remaining >= 0.001 else { break }
                         let geometry: SimulatorGeometry
                         do {
@@ -1087,7 +1306,9 @@
                             matchedGeometry = nil
                             settledAt = nil
                             let delay = ContinuousClock.now.duration(to: deadline)
-                            if delay > .zero { try await Task.sleep(for: min(.milliseconds(50), delay)) }
+                            if delay > .zero {
+                                try await Task.sleep(for: min(.milliseconds(50), delay))
+                            }
                             continue
                         }
                         if geometry.orientation == orientation {
@@ -1098,7 +1319,7 @@
                                 settledAt = ContinuousClock.now.advanced(by: settlingDuration)
                             }
                             if let settledAt, ContinuousClock.now >= settledAt {
-                                return ["accepted": .bool(true), "geometry": try JSONValue(encoding: geometry)]
+                                return try ["accepted": .bool(true), "geometry": JSONValue(encoding: geometry)]
                             }
                         } else {
                             matchedGeometry = nil
@@ -1107,14 +1328,20 @@
                         try await Task.sleep(for: .milliseconds(50))
                     }
                     throw SimulatorFailure("Orientation event was sent, but the interface did not rotate; the app may lock its orientation")
-                case "tap", "swipe", "long-press", "drag", "pinch":
+                case "tap",
+                     "swipe",
+                     "long-press",
+                     "drag",
+                     "pinch":
                     let selected: SimulatorPoint?
                     if parameters["ref"] != nil || parameters["identifier"] != nil || parameters["label"] != nil || parameters["role"] != nil {
                         guard command != "pinch", parameters["x"] == nil, parameters["y"] == nil else {
                             throw SimulatorFailure("Choose an element selector or start coordinates")
                         }
                         selected = try await resolveElement(parameters, state: state, coordinator: coordinator)
-                    } else { selected = nil }
+                    } else {
+                        selected = nil
+                    }
                     let observedGeometry = traceTap ? state.observation?.geometry : nil
                     let geometryRequestedAt = traceTap ? ProcessInfo.processInfo.systemUptime : 0
                     let geometry = try await coordinator.geometry(state.handle)
@@ -1123,39 +1350,47 @@
                     let nativeEdge = try edge?.digitizerValue(in: geometry) ?? 0
                     func number(_ name: String) throws -> Double {
                         switch parameters[name] {
-                        case .double(let value): return value
-                        case .int(let value): return Double(value)
+                        case let .double(value): return value
+                        case let .int(value): return Double(value)
                         default: throw SimulatorFailure("Missing coordinate \(name)")
                         }
                     }
                     let duration = parameters["durationMs"]?.intValue ?? (command == "tap" ? 20 : command == "long-press" ? 650 : command == "pinch" ? 500 : 300)
-                    guard (20...5000).contains(duration) else { throw SimulatorFailure("Gesture duration must be 20...5000 ms") }
+                    guard (20...5_000).contains(duration) else { throw SimulatorFailure("Gesture duration must be 20...5000 ms") }
                     let first: [SimulatorPoint], last: [SimulatorPoint]
                     if command == "pinch" {
-                        guard parameters["endX"] == nil, parameters["endY"] == nil, parameters["holdMs"] == nil,
-                              parameters["durationMs"] == nil || parameters["durationMs"]?.intValue != nil else {
+                        guard
+                            parameters["endX"] == nil, parameters["endY"] == nil, parameters["holdMs"] == nil,
+                            parameters["durationMs"] == nil || parameters["durationMs"]?.intValue != nil else {
                             throw SimulatorFailure("pinch accepts a center, scale and integer duration, without endpoint or hold options")
                         }
-                        let gesture = try SimulatorPinch(center: SimulatorPoint(x: number("x"), y: number("y")),
-                            scale: number("scale"), durationMs: duration)
+                        let gesture = try SimulatorPinch(
+                            center: SimulatorPoint(x: number("x"), y: number("y")),
+                            scale: number("scale"),
+                            durationMs: duration
+                        )
                         (first, last) = try gesture.contacts(in: geometry)
                     } else {
-                        first = [try geometry.normalizedDevicePoint(selected ?? SimulatorPoint(x: number("x"), y: number("y")))]
-                        last = command == "swipe" || command == "drag"
-                            ? [try geometry.normalizedDevicePoint(SimulatorPoint(x: number("endX"), y: number("endY")))] : first
+                        first = try [geometry.normalizedDevicePoint(selected ?? SimulatorPoint(x: number("x"), y: number("y")))]
+                        last = try command == "swipe" || command == "drag"
+                            ? [geometry.normalizedDevicePoint(SimulatorPoint(x: number("endX"), y: number("endY")))] : first
                     }
                     let hold = parameters["holdMs"]?.intValue ?? (command == "drag" ? 500 : 0)
-                    guard (0...5000).contains(hold) else { throw SimulatorFailure("Gesture hold must be 0...5000 ms") }
+                    guard (0...5_000).contains(hold) else { throw SimulatorFailure("Gesture hold must be 0...5000 ms") }
                     state.observation = nil
                     let downRequestedAt = traceTap ? ProcessInfo.processInfo.systemUptime : 0
                     try await touch(state, points: first, phase: 0, geometry: geometry, edge: nativeEdge)
                     let downReturnedAt = traceTap ? ProcessInfo.processInfo.systemUptime : 0
-                    if hold > 0 { try await Task.sleep(for: .milliseconds(hold)); try checkWriter() }
+                    if hold > 0 {
+                        try await Task.sleep(for: .milliseconds(hold))
+                        try checkWriter()
+                    }
                     let steps = command == "tap" || command == "long-press" ? 1 : max(2, duration / 16)
                     let movementStarted = ContinuousClock.now
                     for index in 1...steps {
                         try await Task.sleep(
-                            until: movementStarted.advanced(by: .milliseconds(duration * index / steps)), clock: .continuous)
+                            until: movementStarted.advanced(by: .milliseconds(duration * index / steps)), clock: .continuous
+                        )
                         try checkWriter()
                         let fraction = Double(index) / Double(steps)
                         let points = zip(first, last).map { start, end in
@@ -1191,7 +1426,7 @@
                     }
                     var modifiers: [String] = []
                     if let value = parameters["modifiers"] {
-                        guard case .array(let values) = value else { throw SimulatorFailure("modifiers must be an array of names") }
+                        guard case let .array(values) = value else { throw SimulatorFailure("modifiers must be an array of names") }
                         modifiers = try values.map {
                             guard let name = $0.stringValue else { throw SimulatorFailure("modifiers must be an array of names") }
                             return name
@@ -1207,15 +1442,15 @@
                     switch parameters["button"]?.stringValue {
                     case "home": usage = 0x40
                     case "lock": usage = 0x30
-                    case "volume-up": usage = 0xe9
-                    case "volume-down": usage = 0xea
+                    case "volume-up": usage = 0xE9
+                    case "volume-down": usage = 0xEA
                     default: throw SimulatorFailure("button accepts home, lock, volume-up, volume-down")
                     }
                     _ = try await state.handle.worker.request(["command": .string("button"), "usage": .int(usage), "down": .bool(true)])
                     try checkWriter()
                     _ = try await state.handle.worker.request(["command": .string("button"), "usage": .int(usage), "down": .bool(false)])
                 case "paste":
-                    guard let text = parameters["text"]?.stringValue, text.utf8.count <= 16000 else {
+                    guard let text = parameters["text"]?.stringValue, text.utf8.count <= 16_000 else {
                         throw SimulatorFailure("paste accepts UTF-8 text up to 16 KB")
                     }
                     if let mode = parameters["viaMenu"], mode.boolValue == nil {
@@ -1223,7 +1458,8 @@
                     }
                     if parameters["viaMenu"]?.boolValue == true {
                         try await pasteViaMenu(
-                            text, parameters: parameters, state: state, coordinator: coordinator, checkWriter: checkWriter)
+                            text, parameters: parameters, state: state, coordinator: coordinator, checkWriter: checkWriter
+                        )
                         break
                     }
                     try await coordinator.paste(state.handle, text: text)
@@ -1248,17 +1484,24 @@
         }
 
         private func elementQuery(_ parameters: [String: JSONValue]) throws -> SimulatorElementQuery {
-            try SimulatorElementQuery(identifier: parameters["identifier"]?.stringValue,
-                label: parameters["label"]?.stringValue, role: parameters["role"]?.stringValue)
+            try SimulatorElementQuery(
+                identifier: parameters["identifier"]?.stringValue,
+                label: parameters["label"]?.stringValue,
+                role: parameters["role"]?.stringValue
+            )
         }
 
-        private func observe(_ state: SimulatorTabState, coordinator: SimulatorCoordinator, limit: Int,
-            deadline: ContinuousClock.Instant? = nil) async throws
+        private func observe(
+            _ state: SimulatorTabState,
+            coordinator: SimulatorCoordinator,
+            limit: Int,
+            deadline: ContinuousClock.Instant? = nil
+        ) async throws
             -> (snapshot: [String: JSONValue], elements: [SimulatorElement]) {
             func budget(_ maximum: Double) throws -> Double {
                 guard let deadline else { return maximum }
                 let parts = ContinuousClock.now.duration(to: deadline).components
-                let remaining = Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+                let remaining = Double(parts.seconds) + Double(parts.attoseconds) / 1E18
                 guard remaining >= 0.001 else { throw SimulatorFailure("Observation deadline expired") }
                 return min(maximum, remaining)
             }
@@ -1274,8 +1517,9 @@
                 state.observation = nil
                 throw SimulatorFailure("Geometry or control changed while observing; observe again")
             }
-            guard let pid = snapshot["applicationPID"]?.intValue, let processID = Int32(exactly: pid), processID > 0,
-                case .array(let nodes) = snapshot["nodes"] else {
+            guard
+                let pid = snapshot["applicationPID"]?.intValue, let processID = Int32(exactly: pid), processID > 0,
+                case let .array(nodes) = snapshot["nodes"] else {
                 throw SimulatorFailure("AX did not report an application identity or element tree")
             }
             let application = try system.inspect(processID).owner
@@ -1307,19 +1551,21 @@
 
         private func resolveTarget(_ parameters: [String: JSONValue], state: SimulatorTabState, coordinator: SimulatorCoordinator)
             async throws
-            -> SimulatorElement
-        {
+            -> SimulatorElement {
             let reference = parameters["ref"]?.stringValue
             let previous = state.observation
             let target: SimulatorElement?
             if let reference {
-                guard parameters["identifier"] == nil, parameters["label"] == nil, parameters["role"] == nil,
+                guard
+                    parameters["identifier"] == nil, parameters["label"] == nil, parameters["role"] == nil,
                     let previous, previous.generation == state.generation, let element = previous.references[reference] else {
                     throw SimulatorFailure("Stale or conflicting element reference; take a fresh snapshot")
                 }
                 target = element
-            } else { target = nil }
-            let observed = try await observe(state, coordinator: coordinator, limit: 1000)
+            } else {
+                target = nil
+            }
+            let observed = try await observe(state, coordinator: coordinator, limit: 1_000)
             guard observed.snapshot["partial"]?.boolValue == false else {
                 let reason = observed.snapshot["partialReason"]?.stringValue.map { " (\($0))" } ?? ""
                 throw SimulatorFailure("An incomplete AX tree cannot prove that the target is unique\(reason)")
@@ -1334,7 +1580,8 @@
                 let query = try elementQuery(parameters)
                 matches = observed.elements.filter { query.matches($0) }
             }
-            guard matches.count == 1, let element = matches.first, let geometry = state.observation?.geometry,
+            guard
+                matches.count == 1, let element = matches.first, let geometry = state.observation?.geometry,
                 element.interactionPoint(in: geometry) != nil
             else {
                 throw SimulatorFailure(matches.isEmpty ? "The target element disappeared" : "The target element is ambiguous or not visible")
@@ -1358,7 +1605,7 @@
                 }
             } else {
                 target = nil
-                _ = try await observe(state, coordinator: coordinator, limit: 1000)
+                _ = try await observe(state, coordinator: coordinator, limit: 1_000)
             }
             guard let observation = state.observation else {
                 throw SimulatorFailure("Menu paste requires a current application observation")
@@ -1366,8 +1613,8 @@
             let geometry = observation.geometry
             func coordinate(_ name: String) throws -> Double {
                 switch parameters[name] {
-                case .double(let value): return value
-                case .int(let value): return Double(value)
+                case let .double(value): return value
+                case let .int(value): return Double(value)
                 default: throw SimulatorFailure("Menu paste requires an element target or both x and y coordinates")
                 }
             }
@@ -1390,14 +1637,15 @@
             try checkWriter()
             try await coordinator.paste(state.handle, text: text)
             try checkWriter()
-            let refreshed = try await observe(state, coordinator: coordinator, limit: 1000)
+            let refreshed = try await observe(state, coordinator: coordinator, limit: 1_000)
             guard let current = state.observation, current.application == observation.application, current.geometry == geometry else {
                 throw SimulatorFailure("The application or geometry changed before the paste menu was opened")
             }
             let menuTarget: SimulatorPoint
             if let target {
                 let matches = refreshed.elements.filter { $0.hasSameIdentity(as: target) }
-                guard refreshed.snapshot["partial"]?.boolValue == false, matches.count == 1,
+                guard
+                    refreshed.snapshot["partial"]?.boolValue == false, matches.count == 1,
                     let center = matches.first?.interactionPoint(in: geometry)
                 else {
                     throw SimulatorFailure("The menu paste target disappeared, became ambiguous or could not be observed completely")
@@ -1407,13 +1655,13 @@
                 menuTarget = point
             }
             try await press(menuTarget, duration: .milliseconds(800))
-            let labels: Set<String> = ["Paste", "粘贴", "貼上", "ペースト", "붙여넣기", "Einfügen", "Coller", "Pegar", "Incolla"]
+            let labels: Set = ["Paste", "粘贴", "貼上", "ペースト", "붙여넣기", "Einfügen", "Coller", "Pegar", "Incolla"]
             let deadline = ContinuousClock.now.advanced(by: .seconds(5))
             while ContinuousClock.now < deadline {
                 try checkWriter()
                 let menu: (snapshot: [String: JSONValue], elements: [SimulatorElement])
                 do {
-                    menu = try await observe(state, coordinator: coordinator, limit: 1000, deadline: deadline)
+                    menu = try await observe(state, coordinator: coordinator, limit: 1_000, deadline: deadline)
                 } catch {
                     throw SimulatorFailure(
                         "The clipboard was written, but the Paste menu could not be observed: \(error.localizedDescription). No Paste tap was sent"
@@ -1434,20 +1682,23 @@
                     }
                 }
                 let remaining = ContinuousClock.now.duration(to: deadline)
-                if remaining > .zero { try await Task.sleep(for: min(.milliseconds(120), remaining)) }
+                if remaining > .zero {
+                    try await Task.sleep(for: min(.milliseconds(120), remaining))
+                }
             }
             throw SimulatorFailure("The iOS Paste menu did not appear; the clipboard was written but no Paste tap was sent")
         }
 
         private func describe(_ state: SimulatorTabState) throws -> [String: JSONValue] {
-            var result: [String: JSONValue] = [
+            var result: [String: JSONValue] = try [
                 "device": .string(state.id.uuidString), "udid": .string(state.handle.udid), "name": .string(state.handle.name),
                 "runtime": .string(state.handle.runtime), "writer": .string(state.writer == nil ? "human" : "agent"),
                 "profile": .string(state.handle.profile.rawValue),
-                "isPrimary": .bool(primaryDevices[state.paneID] == state.id),
+                "ownership": .string(state.owner == nil ? "authorized" : "owned"),
+                "isPrimary": .bool(state.paneID.map { primaryDevices[$0] == state.id } == true),
                 "displayMode": .string(state.displayMode.rawValue),
                 "requiredFeatures": .array(state.handle.requiredFeatures.map(JSONValue.string)),
-                "geometry": try state.view.geometry.map { try JSONValue(encoding: $0) } ?? .null,
+                "geometry": state.view.geometry.map { try JSONValue(encoding: $0) } ?? .null,
                 "error": state.error.map(JSONValue.string) ?? .null,
             ]
             if CommandLine.arguments.contains("--e2e-test") {
@@ -1478,11 +1729,14 @@
                     "elapsedSeconds": .double(sample.elapsed(at: sampledAt)),
                     "uniqueFPS": .double(sample.uniqueFPS(at: sampledAt)),
                     "sourceToPresentP95Ms": .double(
-                        latencies.isEmpty ? 0 : latencies[min(latencies.count - 1, Int(Double(latencies.count) * 0.95))]),
+                        latencies.isEmpty ? 0 : latencies[min(latencies.count - 1, Int(Double(latencies.count) * 0.95))]
+                    ),
                     "sourceToPresentP99Ms": .double(
-                        latencies.isEmpty ? 0 : latencies[min(latencies.count - 1, Int(Double(latencies.count) * 0.99))]),
+                        latencies.isEmpty ? 0 : latencies[min(latencies.count - 1, Int(Double(latencies.count) * 0.99))]
+                    ),
                     "drawableWaitP95Ms": .double(
-                        drawableWaits.isEmpty ? 0 : drawableWaits[min(drawableWaits.count - 1, Int(Double(drawableWaits.count) * 0.95))]),
+                        drawableWaits.isEmpty ? 0 : drawableWaits[min(drawableWaits.count - 1, Int(Double(drawableWaits.count) * 0.95))]
+                    ),
                     "drawableWaitMaxMs": .double(drawableWaits.last ?? 0),
                     "copyStageSamples": .int(sample.copyRecords),
                     "renderedDrawableSamples": .int(sample.renderRecords),
@@ -1506,7 +1760,9 @@
                     return .double(values.isEmpty ? 0 : values[min(values.count - 1, Int(Double(values.count) * 0.95))])
                 })
                 if !steadyPresentation {
-                    for key in ["stageP95Ms", "copyStageP95Ms", "renderStageP95Ms"] { result[key] = .null }
+                    for key in ["stageP95Ms", "copyStageP95Ms", "renderStageP95Ms"] {
+                        result[key] = .null
+                    }
                 }
                 let render = state.view.renderState
                 let display = state.view.displayCondition
@@ -1609,8 +1865,16 @@
             _ state: SimulatorTabState, point: SimulatorPoint, phase: Int, geometry: SimulatorGeometry,
             edge: Int = 0, receivedAt: Double = 0, cancelBeforeTouch: Bool = false, taskStartedAt: Double = 0
         ) async throws {
-            try await touch(state, points: [point], phase: phase, geometry: geometry, edge: edge,
-                receivedAt: receivedAt, cancelBeforeTouch: cancelBeforeTouch, taskStartedAt: taskStartedAt)
+            try await touch(
+                state,
+                points: [point],
+                phase: phase,
+                geometry: geometry,
+                edge: edge,
+                receivedAt: receivedAt,
+                cancelBeforeTouch: cancelBeforeTouch,
+                taskStartedAt: taskStartedAt
+            )
         }
 
         private func touch(
@@ -1624,18 +1888,28 @@
                 "epoch": .string(geometry.epoch), "geometryVersion": .int(Int(geometry.geometryVersion)),
                 "points": .array(points.map { .object(["x": .double($0.x), "y": .double($0.y)]) }),
             ])
-            if CommandLine.arguments.contains("--e2e-test"), case .double(let submittedAt)? = result["submittedAt"],
-                case .double(let enqueuedAt)? = result["enqueuedAt"]
-            {
-                if phase == 0 { state.inputDownSubmittedAt = submittedAt }
-                if phase == 2 { state.inputUpSubmittedAt = submittedAt }
-                state.lastInputSubmissionMs = (enqueuedAt - submittedAt) * 1000
+            if
+                CommandLine.arguments.contains("--e2e-test"), case let .double(submittedAt)? = result["submittedAt"],
+                case let .double(enqueuedAt)? = result["enqueuedAt"] {
+                if phase == 0 {
+                    state.inputDownSubmittedAt = submittedAt
+                }
+                if phase == 2 {
+                    state.inputUpSubmittedAt = submittedAt
+                }
+                state.lastInputSubmissionMs = (enqueuedAt - submittedAt) * 1_000
                 if receivedAt > 0, enqueuedAt >= receivedAt {
                     var stages = ["taskStartedAt": taskStartedAt, "requestStartedAt": requestStartedAt]
-                    if case .double(let workerReceivedAt)? = result["receivedAt"] { stages["workerReceivedAt"] = workerReceivedAt }
-                    if case .double(let workerStartedAt)? = result["startedAt"] { stages["workerStartedAt"] = workerStartedAt }
+                    if case let .double(workerReceivedAt)? = result["receivedAt"] {
+                        stages["workerReceivedAt"] = workerReceivedAt
+                    }
+                    if case let .double(workerStartedAt)? = result["startedAt"] {
+                        stages["workerStartedAt"] = workerStartedAt
+                    }
                     for key in ["transportEnteredAt", "clientEnteredAt", "nativeInputStartedAt", "nativeInputValidatedAt"] {
-                        if case .double(let timestamp)? = result[key] { stages[key] = timestamp }
+                        if case let .double(timestamp)? = result[key] {
+                            stages[key] = timestamp
+                        }
                     }
                     if phase == 0 {
                         state.manualDownReceivedAt = receivedAt
@@ -1652,13 +1926,17 @@
         }
 
         func manualTouch(_ state: SimulatorTabState, point: SimulatorPoint, phase: Int, receivedAt: Double) {
-            if phase == 0 { releaseSimulatorControl(state) }
+            if phase == 0 {
+                releaseSimulatorControl(state)
+            }
             state.markActivity()
             state.manualInputRevision += 1
             let takeover = phase == 0 && state.writer != nil
             if phase == 0 {
                 state.writer = nil
-                if takeover { state.generation += 1 }
+                if takeover {
+                    state.generation += 1
+                }
             }
             let generation = state.generation
             let move: SimulatorPendingMove?
@@ -1690,8 +1968,15 @@
                         return
                     }
                     guard let geometry = state.view.geometry else { return }
-                    try await self.touch(state, point: geometry.normalizedDevicePoint(deliveredPoint), phase: phase, geometry: geometry,
-                        receivedAt: receivedAt, cancelBeforeTouch: takeover, taskStartedAt: taskStartedAt)
+                    try await self.touch(
+                        state,
+                        point: geometry.normalizedDevicePoint(deliveredPoint),
+                        phase: phase,
+                        geometry: geometry,
+                        receivedAt: receivedAt,
+                        cancelBeforeTouch: takeover,
+                        taskStartedAt: taskStartedAt
+                    )
                 } catch { state.error = error.localizedDescription }
             }
         }
@@ -1730,13 +2015,17 @@
             state.pendingMove = nil
             let takeover = state.writer != nil
             state.writer = nil
-            if takeover { state.generation += 1 }
+            if takeover {
+                state.generation += 1
+            }
             let previous = state.manualInput
             state.manualInput = Task { [weak state] in
                 await previous?.value
                 guard let state, !state.isClosed else { return }
                 do {
-                    if takeover { _ = try await state.handle.worker.request(["command": .string("cancel")]) }
+                    if takeover {
+                        _ = try await state.handle.worker.request(["command": .string("cancel")])
+                    }
                     _ = try await state.handle.worker.request(["command": .string("key"), "usage": .int(usage), "down": .bool(down)])
                 } catch { state.error = error.localizedDescription }
             }
@@ -1793,8 +2082,8 @@
             state.generation += 1
             state.writer = nil
             tabs.removeValue(forKey: state.id)
-            if primaryDevices[state.paneID] == state.id {
-                primaryDevices.removeValue(forKey: state.paneID)
+            if let paneID = state.paneID, primaryDevices[paneID] == state.id {
+                primaryDevices.removeValue(forKey: paneID)
             }
             frameCaptures[state.id]?.task.cancel()
             onTabsChanged?()
@@ -1830,7 +2119,9 @@
             while let pending = pendingOpens.values.first {
                 _ = await pending.task.result
             }
-            while let cleanup = closeTasks.values.first { await cleanup.value }
+            while let cleanup = closeTasks.values.first {
+                await cleanup.value
+            }
             await coordinator?.shutdown()
         }
     }
@@ -1840,6 +2131,7 @@
         let id = UUID()
         weak var window: NSWindow?
         var acceptsPane: (PaneInfo) -> Bool = { _ in false }
+        var acceptsSession: (String) -> Bool = { _ in false }
         var acceptsTab: ((SimulatorTabState) -> Bool)?
         var onCreate: (SimulatorTabState) -> Void = { _ in }
         var onSelect: (SimulatorTabState, Bool) -> Void = { _, _ in }
@@ -1847,16 +2139,23 @@
         var onDetach: (SimulatorTabState) -> Void = { _ in }
 
         func accepts(_ state: SimulatorTabState) -> Bool {
-            acceptsTab?(state) ?? acceptsPane(state.sourcePane)
+            acceptsTab?(state) ?? state.sourcePane.map(acceptsPane) ?? acceptsSession(state.sessionName)
         }
     }
 
-    // Each queued run owns its coordinates; later clicks or keys end coalescing without discarding it.
+    /// Each queued run owns its coordinates; later clicks or keys end coalescing without discarding it.
     @MainActor
     final class SimulatorPendingMove {
         var point: SimulatorPoint
 
-        init(point: SimulatorPoint) { self.point = point }
+        init(point: SimulatorPoint) {
+            self.point = point
+        }
+    }
+
+    enum SimulatorTabSource {
+        case pane(PaneInfo)
+        case session(ResourceSession)
     }
 
     @MainActor @Observable
@@ -1867,15 +2166,51 @@
         }
 
         let owner: SimulatorOwner?
-        var sourcePane: PaneInfo
-        var paneID: String { sourcePane.paneId }
+        var source: SimulatorTabSource
+        var sourcePane: PaneInfo? {
+            if case let .pane(pane) = source {
+                pane
+            } else {
+                nil
+            }
+        }
+
+        var resourceSession: ResourceSession? {
+            if case let .session(session) = source {
+                session
+            } else {
+                nil
+            }
+        }
+
+        var sessionName: String {
+            switch source { case let .pane(pane): pane.sessionName
+            case let .session(session): session.name }
+        }
+
+        var paneID: String? {
+            sourcePane?.paneId
+        }
+
+        var grant: ResourceTabGrant?
+        var delegatedOwner: SimulatorOwner?
+        var grantRevision = 0
+        @ObservationIgnored var grantCleanup: Task<Void, Never>?
         var workspaceID: UUID
         let view: SimulatorMetalView
         let service: AgentSimulatorService
-        var writer: SimulatorOwner?
+        var writer: SimulatorOwner? {
+            didSet {
+                if oldValue != writer {
+                    service.delegatedWriterChanged(self)
+                }
+            }
+        }
+
         var displayMode: SimulatorDisplayMode = .synchronized {
             didSet { view.setDisplayMode(displayMode) }
         }
+
         var error: String?
         var hasPresentedFrame = false
         var isClosed = false
@@ -1907,14 +2242,21 @@
             displayIdleTask = nil
         }
 
-        init(
+        convenience init(
             handle: SimulatorDeviceHandle, owner: SimulatorOwner?, sourcePane: PaneInfo, workspaceID: UUID, view: SimulatorMetalView,
+            service: AgentSimulatorService
+        ) {
+            self.init(handle: handle, owner: owner, source: .pane(sourcePane), workspaceID: workspaceID, view: view, service: service)
+        }
+
+        init(
+            handle: SimulatorDeviceHandle, owner: SimulatorOwner?, source: SimulatorTabSource, workspaceID: UUID, view: SimulatorMetalView,
             service: AgentSimulatorService
         ) {
             self.handle = handle
             self.owner = owner
             self.writer = owner
-            self.sourcePane = sourcePane
+            self.source = source
             self.workspaceID = workspaceID
             self.view = view
             self.service = service

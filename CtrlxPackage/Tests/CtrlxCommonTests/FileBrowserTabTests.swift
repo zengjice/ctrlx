@@ -53,6 +53,28 @@ struct FileBrowserTabTests {
         #expect(tab.previewError != nil)
     }
 
+    @Test("Terminal file links preserve independent Files identity and legacy pane routing", arguments: [false, true])
+    func terminalFileLinkNavigation(independent: Bool) {
+        let descriptor = HostFileTab(
+            sessionName: "work",
+            windowID: independent ? nil : "@1",
+            sourcePaneID: independent ? nil : "%1",
+            isPrimary: false,
+            initialDirectory: "/host",
+            resourceSessionID: independent ? UUID() : nil
+        )
+        let tab = FileBrowserTab(hostTab: descriptor)
+        tab.openTerminalFile(.init(directory: "/host/output", file: "/host/output/report.md"), paneID: "%7")
+        #expect(tab.sourcePaneID == (independent ? nil : "%7"))
+        #expect(tab.hostTab == descriptor)
+        #expect(tab.path == "/host/output")
+        #expect(tab.selectedFile == "/host/output/report.md")
+        tab.openTerminalFile(.init(directory: "/host/other", file: nil), paneID: "%8")
+        #expect(tab.sourcePaneID == (independent ? nil : "%8"))
+        #expect(tab.path == "/host/other")
+        #expect(tab.selectedFile == nil)
+    }
+
     @Test("Files source stays inside the window whose menu was used")
     func scopedSourcePane() {
         let panes = ["%1", "%2"]
@@ -62,17 +84,25 @@ struct FileBrowserTabTests {
         #expect(FileBrowserTab.sourcePaneID(in: [], focusedPaneID: "%other-window", activePaneID: "%stale") == nil)
     }
 
-    @Test func localMoviePreviewUsesNativeURLWithoutReadingOrApplyingTransferLimit() async {
+    @Test
+    func localMoviePreviewUsesNativeURLWithoutReadingOrApplyingTransferLimit() async {
         let tab = FileBrowserTab(path: "/host")
-        let info = FileBrowserEntry(path: "/host/movie.mp4", name: "movie.mp4", kind: .unsupported,
-                                    size: FileBrowserLimits.maximumDownloadBytes + 1, revision: "1")
+        let info = FileBrowserEntry(
+            path: "/host/movie.mp4",
+            name: "movie.mp4",
+            kind: .unsupported,
+            size: FileBrowserLimits.maximumDownloadBytes + 1,
+            revision: "1"
+        )
         tab.selectedFile = info.path
         var reads = 0
         let source = FileBrowserSource(id: "local", paneID: nil, localFileURL: { item in
             #expect(item == info)
             return URL(fileURLWithPath: item.path)
         }, localPreview: { _ in throw FileBrowserError.message("Media must not load preview bytes") }) { operation in
-            if case .info = operation { return .info(info) }
+            if case .info = operation {
+                return .info(info)
+            }
             reads += 1
             throw FileBrowserError.message("A local movie must not be transferred")
         }
@@ -85,13 +115,16 @@ struct FileBrowserTabTests {
         #expect(tab.previewURL == nil)
     }
 
-    @Test func remoteMovieSelectionDoesNotReadOrConstructALocalURL() async {
+    @Test
+    func remoteMovieSelectionDoesNotReadOrConstructALocalURL() async {
         let tab = FileBrowserTab(path: "/host")
         let info = FileBrowserEntry(path: "/host/movie.mp4", name: "movie.mp4", kind: .unsupported, size: 3, revision: "1")
         tab.selectedFile = info.path
         var reads = 0
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
-            if case .info = operation { return .info(info) }
+            if case .info = operation {
+                return .info(info)
+            }
             reads += 1
             throw FileBrowserError.message("Selection must not download")
         }
@@ -106,7 +139,8 @@ struct FileBrowserTabTests {
         .init(id: path, paneID: nil) { _ in .listing(.init(directory: path, homeDirectory: "/Host", entries: [], nextOffset: nil, revision: "1")) }
     }
 
-    @Test func sourceDirectoryFreezesUntilExplicitFollow() async {
+    @Test
+    func sourceDirectoryFreezesUntilExplicitFollow() async {
         let tab = FileBrowserTab(sourcePaneID: "%42")
         var paths: [String?] = []
         let source = FileBrowserSource(id: "Host", paneID: "%42") { request in
@@ -126,27 +160,35 @@ struct FileBrowserTabTests {
         #expect(paths[2] == nil)
     }
 
-    @Test func lateReplyCannotOverwriteNewHostOrPath() async {
+    @Test
+    func lateReplyCannotOverwriteNewHostOrPath() async {
         let tab = FileBrowserTab()
         let (gate, release) = AsyncStream<Void>.makeStream()
         let (started, notify) = AsyncStream<Void>.makeStream()
         let old = FileBrowserSource(id: "office", paneID: "%1") { _ in
             notify.yield()
-            for await _ in gate { break }
+            for await _ in gate {
+                break
+            }
             return .listing(.init(directory: "/office", homeDirectory: "/office", entries: [], nextOffset: nil, revision: "old"))
         }
         let task = Task { await tab.load(source: old) }
-        for await _ in started { break }
+        for await _ in started {
+            break
+        }
         tab.navigate("/home")
         await tab.load(source: source("/home"))
-        release.yield(); release.finish(); notify.finish()
+        release.yield()
+        release.finish()
+        notify.finish()
         await task.value
         #expect(tab.path == "/home")
         #expect(tab.listing?.revision == "1")
         #expect(tab.error == nil)
     }
 
-    @Test func independentTabsAndUnavailableSource() async {
+    @Test
+    func independentTabsAndUnavailableSource() async {
         let first = FileBrowserTab(sourcePaneID: "%1"), second = FileBrowserTab(sourcePaneID: "%2")
         await first.load(source: source("/one"))
         await second.load(source: source("/two"))
@@ -157,7 +199,8 @@ struct FileBrowserTabTests {
         #expect(first.listing == nil)
     }
 
-    @Test func invalidAndChangedChunksAreNotDisplayed() async {
+    @Test
+    func invalidAndChangedChunksAreNotDisplayed() async {
         let tab = FileBrowserTab(path: "/host")
         tab.selectedFile = "/host/file"
         let info = FileBrowserEntry(path: "/host/file", name: "file", kind: .text, size: 3, revision: "1")
@@ -174,13 +217,16 @@ struct FileBrowserTabTests {
         #expect(!tab.isPreviewLoading)
     }
 
-    @Test func binaryTextIsRejectedAndEmptyTextIsSupported() async {
+    @Test
+    func binaryTextIsRejectedAndEmptyTextIsSupported() async {
         for data in [Data([0]), Data()] {
             let tab = FileBrowserTab(path: "/host")
             tab.selectedFile = "/host/file"
             let info = FileBrowserEntry(path: "/host/file", name: "file", kind: .text, size: data.count, revision: "1")
             let source = FileBrowserSource(id: "host", paneID: nil) { request in
-                if case .info = request { return .info(info) }
+                if case .info = request {
+                    return .info(info)
+                }
                 return .chunk(.init(path: info.path, revision: "1", offset: 0, data: data))
             }
             await tab.loadPreview(source: source)
@@ -189,13 +235,19 @@ struct FileBrowserTabTests {
         }
     }
 
-    @Test func changedDirectoryPagesCannotMixRevisions() async {
+    @Test
+    func changedDirectoryPagesCannotMixRevisions() async {
         let tab = FileBrowserTab(path: "/host")
         let entry = FileBrowserEntry(path: "/host/a", name: "a", kind: .text, size: 1, revision: "1")
         let source = FileBrowserSource(id: "host", paneID: nil) { operation in
             guard case let .list(_, offset, _) = operation else { throw FileBrowserError.message("Unexpected request") }
-            return .listing(.init(directory: "/host", homeDirectory: "/host", entries: [entry],
-                                  nextOffset: offset == 0 ? 1 : nil, revision: offset == 0 ? "old" : "new"))
+            return .listing(.init(
+                directory: "/host",
+                homeDirectory: "/host",
+                entries: [entry],
+                nextOffset: offset == 0 ? 1 : nil,
+                revision: offset == 0 ? "old" : "new"
+            ))
         }
         await tab.load(source: source)
         await tab.loadDirectory("/host", more: true, source: source)
@@ -219,34 +271,47 @@ struct FileBrowserTabTests {
             return Data("a".utf8)
         }
         let source = FileBrowserSource(id: "host", paneID: nil, localPreview: direct ? localRead : nil) { operation in
-            if case .info = operation { return .info(entry) }
+            if case .info = operation {
+                return .info(entry)
+            }
             notify.yield()
-            for await _ in gate { break }
+            for await _ in gate {
+                break
+            }
             return .chunk(.init(path: entry.path, revision: "1", offset: 0, data: Data("a".utf8)))
         }
         let task = Task { await tab.loadPreview(source: source) }
-        for await _ in started { break }
+        for await _ in started {
+            break
+        }
         tab.releasePreview()
-        release.yield(); release.finish(); notify.finish()
+        release.yield()
+        release.finish()
+        notify.finish()
         await task.value
         #expect(tab.previewData == nil)
         #expect(!tab.isPreviewLoading)
     }
 
     @Test(arguments: [true, false], [true, false])
-    func searchEditsDismissOnlySingleColumnPreviews(singleColumn: Bool, changesMode: Bool) async throws {
+    func searchEditsDismissOnlySingleColumnPreviews(singleColumn: Bool, changesMode: Bool) async {
         let tab = FileBrowserTab(path: "/host")
         tab.query = "old"
         tab.selectedFile = "/host/file"
         let entry = FileBrowserEntry(path: "/host/file", name: "file", kind: .text, size: 1, revision: "1")
         let source = FileBrowserSource(id: "host", paneID: nil) { operation in
-            if case .info = operation { return .info(entry) }
+            if case .info = operation {
+                return .info(entry)
+            }
             return .chunk(.init(path: entry.path, revision: "1", offset: 0, data: Data("a".utf8)))
         }
         await tab.loadPreview(source: source)
         #expect(tab.previewData != nil)
-        tab.updateSearch(query: changesMode ? "old" : "new", mode: changesMode ? .content : .name,
-                         dismissPreview: singleColumn)
+        tab.updateSearch(
+            query: changesMode ? "old" : "new",
+            mode: changesMode ? .content : .name,
+            dismissPreview: singleColumn
+        )
         #expect(tab.selectedFile == (singleColumn ? nil : entry.path))
         #expect((tab.previewData == nil) == singleColumn)
 
@@ -262,7 +327,8 @@ struct FileBrowserTabTests {
         }
     }
 
-    @Test func unchangedSearchDoesNotDismissAChosenResult() {
+    @Test
+    func unchangedSearchDoesNotDismissAChosenResult() {
         let tab = FileBrowserTab(path: "/host")
         tab.query = "needle"
         tab.selectedFile = "/host/result"

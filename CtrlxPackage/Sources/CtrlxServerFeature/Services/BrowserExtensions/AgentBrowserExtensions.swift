@@ -37,7 +37,14 @@
             if let control {
                 _ = try await extensionSurfaceRequest(control, payload: ["action": "ping"])
             }
-            let opened = try await openPaneBrowser(sessionName: source.sessionName, paneID: source.paneID, url: destination)
+            let opened: AgentBrowserTabState
+            if let id = source.resourceSessionID, let resolveResourceSession {
+                opened = try await openResourceBrowser(session: resolveResourceSession(id), url: destination)
+            } else if let paneID = source.paneID {
+                opened = try await openPaneBrowser(sessionName: source.sessionName, paneID: paneID, url: destination)
+            } else {
+                throw RemoteBrowserError.message("The source session is no longer available.")
+            }
             do {
                 try Task.checkCancellation()
                 _ = try extensionRuntime(for: source, controlID: controlID)

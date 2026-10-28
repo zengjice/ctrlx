@@ -408,8 +408,10 @@ final public class TmuxService {
     }
 
     /// Windows grouped by tmux session (derived from windows)
+    public var resourceSessions: [ResourceSession] = []
+
     public var sessions: [LocalTmuxSession] {
-        LocalTmuxSession.groupWindows(windows)
+        LocalTmuxSession.groupWindows(windows, resources: resourceSessions)
     }
 
     /// Handler called when the pane list changes (after refreshPanes detects a change)
@@ -2550,9 +2552,31 @@ final public class TmuxService {
         launchPayload: String? = nil,
         forceLoginShell: Bool = false,
         expectedWorkspacePane: WorkspacePaneIdentity? = nil,
-        expectedSourcePaneID: String? = nil
+        expectedSourcePaneID: String? = nil,
+        resourceSessionID: UUID? = nil
     ) async throws -> String {
         let identity = expectedWorkspacePane ?? panes.first { $0.sessionName == sessionName }?.workspaceIdentity
+        if let resourceSessionID {
+            guard
+                let resource = resourceSessions.first(where: { $0.id == resourceSessionID && $0.name == sessionName }),
+                identity == nil || identity?.sessionID == resourceSessionID else {
+                throw TmuxError.commandFailed(message: "The resource session changed. Select it again.")
+            }
+            if identity == nil {
+                let created = try await createSession(
+                    baseName: resource.name,
+                    width: 120,
+                    height: 40,
+                    workingDirectory: workingDirectory ?? resource.directory,
+                    runCommand: runCommand,
+                    extraEnvironment: extraEnvironment,
+                    launchPayload: launchPayload,
+                    firstWindowName: windowName ?? "terminal 1",
+                    resourceSessionID: resource.id
+                )
+                return created.paneId
+            }
+        }
         // Trailing colon tells tmux "target session with window unspecified" so it auto-picks
         // the next free index. Without it, tmux fills the target from the best-attached
         // client's current window and new-window then tries that exact index — which fails
@@ -3345,13 +3369,19 @@ final public class TmuxService {
         runCommand: String? = nil,
         extraEnvironment: [String] = [],
         launchPayload: String? = nil,
-        firstWindowName: String = "terminal 1"
+        firstWindowName: String = "terminal 1",
+        resourceSessionID: UUID? = nil
     ) async throws -> CreatedSession {
         // Get existing session names
         let existingNames = await getExistingSessionNames()
 
+        if let resourceSessionID {
+            guard resourceSessions.contains(where: { $0.id == resourceSessionID && $0.name == baseName }), !existingNames.contains(baseName) else {
+                throw TmuxError.commandFailed(message: "The session changed while opening the terminal. Refresh and try again.")
+            }
+        }
         // Find a unique name
-        let sessionName = findUniqueSessionName(baseName: baseName, existingNames: existingNames)
+        let sessionName = resourceSessionID == nil ? findUniqueSessionName(baseName: baseName, existingNames: existingNames) : baseName
 
         // Build command arguments
         // -d: detached, -x: width, -y: height, -c: working directory
@@ -3395,6 +3425,12 @@ final public class TmuxService {
             args.append(command)
         }
 
+        if let resourceSessionID {
+            guard resourceSessions.contains(where: { $0.id == resourceSessionID && $0.name == sessionName }) else {
+                throw TmuxError.commandFailed(message: "The resource session closed while preparing the terminal.")
+            }
+            args += [";", "set-option", "-t", Self.sessionTarget(sessionName), WorkspaceTmuxRecovery.sessionKey, resourceSessionID.uuidString]
+        }
         // Create the session with specified dimensions
         let result = try await runTmuxCommand(args)
 
@@ -3414,16 +3450,24 @@ final public class TmuxService {
         let paneId = created.paneID
 
         do {
+            if let resourceSessionID, !resourceSessions.contains(where: { $0.id == resourceSessionID }) {
+                throw TmuxError.commandFailed(message: "The resource session closed while opening the terminal.")
+            }
             try await setLaunchPayload(launchPayload, paneID: created.paneID)
             try await runInitialCommand(runCommand, in: created)
+            await refreshPanes()
+            try await runCreatedPaneCommand([["display-message", "-p", "-t", paneId, "#{pane_id}"]], created: created)
+            if let resourceSessionID, !resourceSessions.contains(where: { $0.id == resourceSessionID }) {
+                throw TmuxError.commandFailed(message: "The resource session closed while opening the terminal.")
+            }
         } catch {
             await clearLaunchPayload(paneID: created.paneID)
+            if let resourceSessionID, !resourceSessions.contains(where: { $0.id == resourceSessionID }) {
+                do { try await runCreatedPaneCommand([["kill-window", "-t", paneId]], created: created) }
+                catch { logger.warning("Could not retire the terminal created for a closed resource session: \(error)") }
+            }
             throw error
         }
-
-        // Refresh panes to include the new session
-        await refreshPanes()
-        try await runCreatedPaneCommand([["display-message", "-p", "-t", paneId, "#{pane_id}"]], created: created)
 
         return CreatedSession(sessionName: sessionName, paneId: paneId, serverID: created.serverID)
     }

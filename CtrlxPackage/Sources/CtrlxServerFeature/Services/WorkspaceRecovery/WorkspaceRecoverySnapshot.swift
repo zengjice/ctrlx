@@ -10,7 +10,7 @@ enum WorkspaceRecoveryMode: String, Codable, CaseIterable, Sendable {
 }
 
 struct WorkspaceRecoverySnapshot: Codable, Equatable, Sendable {
-    static let currentVersion = 1
+    static let currentVersion = 2
     var schemaVersion = currentVersion
     var generation: UInt64 = 0
     var savedAt = Date()
@@ -24,6 +24,8 @@ struct WorkspaceRecoverySnapshot: Codable, Equatable, Sendable {
     var fileTabs: [WorkspaceRecoveryFileTab] = []
     var recovery: WorkspaceRecoveryAttempt?
     var viewerScenes: [WorkspaceRecoveryScene]?
+    var resourceSessions: [ResourceSession]?
+    var independentFileTabs: [HostFileTab]?
 
     /// Metadata changes alone must not turn the two-second capture into disk churn.
     func hasSameContents(as other: Self) -> Bool {
@@ -42,6 +44,20 @@ struct WorkspaceRecoverySnapshot: Codable, Equatable, Sendable {
             Set(sessions.map(\.name)).count == sessions.count else {
             throw WorkspaceRecoveryError("Invalid or duplicate workspace session identity.")
         }
+        let resources = resourceSessions ?? []
+        let files = independentFileTabs ?? []
+        guard
+            Set(resources.map(\.id)).count == resources.count,
+            Set(resources.map(\.name)).count == resources.count,
+            resources.allSatisfy({ resource in
+                !resource.name.isEmpty && resource.directory.hasPrefix("/") &&
+                    sessions.allSatisfy { ($0.id != resource.id && $0.name != resource.name) || ($0.id == resource.id && $0.name == resource.name) }
+            }),
+            Set(files.map(\.id)).count == files.count,
+            files.allSatisfy({ file in
+                file.sourcePaneID == nil && file.windowID == nil && file.initialDirectory.hasPrefix("/") &&
+                    resources.contains { $0.id == file.resourceSessionID && $0.name == file.sessionName }
+            }) else { throw WorkspaceRecoveryError("Invalid independent resource identity.") }
         var sharedWindows: [UUID: WorkspaceRecoveryWindow] = [:]
         var paneWindows: [UUID: UUID] = [:]
         for session in sessions {

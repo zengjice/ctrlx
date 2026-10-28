@@ -1,4 +1,5 @@
 import CtrlxCommon
+import CtrlxNetworking
 import Foundation
 
 enum WindowTabAction: Equatable, Sendable {
@@ -21,6 +22,7 @@ enum WindowTabAction: Equatable, Sendable {
     case closeSimulator(UUID)
     case selectBrowser(UUID)
     case closeBrowser(UUID)
+    case newResource(ResourceTabKind)
     case newTerminal
     case newAgent
 

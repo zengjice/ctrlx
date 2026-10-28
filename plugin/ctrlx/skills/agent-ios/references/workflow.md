@@ -37,12 +37,22 @@ ctrlx ios screenshot --device <id> --output /tmp/new-simulator.png
 ctrlx ios close --device <id>
 ```
 
+Human **New iOS Simulator** creates an independent session tab. A person may
+explicitly authorize one live Agent to use it. `devices` then includes it with
+`ownership: authorized`; continue using its exact device ID. It remains human
+owned: do not close, erase, or delete it. Human input pauses your writer; only a
+person's **Return Control to Agent** resumes it. `claim` cannot reclaim an
+authorized human device. Revocation or Agent exit removes access and stops its
+Agent recording without closing the device. New Agent processes and subagents
+do not inherit authorization. Grants never survive a Host restart.
+
 `open` returns the live agent's CtrlX device ID and its UDID.
 CtrlX has a private device set and defaults to two open devices; change the limit
 with `config --max-devices 8`. `resources` reports pressure, reclaimable memory,
 swap and free disk. Boot requires normal pressure and the configured reserves.
 `close`, agent exit or ten idle minutes without local display/viewer activity
-shuts down the device, keeping data. Opening a closed guest assigns a new ID.
+shuts down Agent-owned devices, keeping data. Independent human devices remain
+until explicitly closed or the Host shuts down. Opening a closed guest assigns a new ID.
 Closing the Host workbench only detaches its view. Paired Mac/iOS Viewers can
 observe it, or explicitly Take Control for touch and clipboard operations when
 the Host advertises workspace clipboard support. Viewer control prevents agent
