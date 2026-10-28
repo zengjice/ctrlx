@@ -5,14 +5,24 @@ import SwiftUI
 // callbacks and Files routing method are extracted from WindowLayoutView.
 struct ResourceTabRequest: Equatable { let id = UUID() }
 enum ResourceTabKind { case files }
-struct ViewerWorkspaceInputBinding {}
-struct HostFileTab: Equatable { let id: UUID; var resourceSessionID: UUID? }
-struct ResourceResult { var file: HostFileTab?; var browser: HostFileTab?; var simulator: HostFileTab? }
+struct ViewerWorkspaceInputBinding { }
+struct HostFileTab: Equatable { let id: UUID
+    var resourceSessionID: UUID?
+}
+
+struct ResourceResult { var file: HostFileTab?
+    var browser: HostFileTab?
+    var simulator: HostFileTab?
+}
+
 enum FileBrowserError: Error { case message(String) }
-struct Window { let id: String; var stableId: String {
-    id
-} }
-struct ConnectionManager { func connection(for _: String) {} }
+struct Window { let id: String
+    var stableId: String {
+        id
+    }
+}
+
+struct ConnectionManager { func connection(for _: String) { } }
 
 @MainActor @Observable
 final class Selection { var selectedID: UUID? }
@@ -25,7 +35,7 @@ final class FileTab {
 
     var lastSelectedAt = Date()
     init(_ tab: HostFileTab) {
-        hostTab = tab
+        self.hostTab = tab
     }
 }
 
@@ -61,7 +71,8 @@ final class FixtureState {
 }
 
 enum ResourceTabClient {
-    @MainActor static func request(_ request: ResourceTabRequest, client: FixtureState) async throws -> ResourceResult {
+    @MainActor
+    static func request(_ request: ResourceTabRequest, client: FixtureState) async throws -> ResourceResult {
         // Deliberately ignore cancellation: a Host may finish after the Viewer switches tabs.
         try await withCheckedThrowingContinuation { client.continuations[request.id] = $0 }
     }
@@ -69,9 +80,14 @@ enum ResourceTabClient {
 
 enum HostFileTabClient {
     @MainActor static let existing = HostFileTab(id: UUID())
-    @MainActor static func open(connection _: Void, sessionName _: String, paneID _: String,
-                                new: Bool = false, inputBinding _: ViewerWorkspaceInputBinding) async throws -> HostFileTab
-    {
+    @MainActor
+    static func open(
+        connection _: Void,
+        sessionName _: String,
+        paneID _: String,
+        new: Bool = false,
+        inputBinding _: ViewerWorkspaceInputBinding
+    ) async throws -> HostFileTab {
         new ? HostFileTab(id: UUID()) : existing
     }
 }
@@ -149,7 +165,7 @@ func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
 
 @MainActor
 func waitUntil(_ message: String, _ condition: () -> Bool) async throws {
-    for _ in 0 ..< 150 {
+    for _ in 0..<150 {
         if condition() {
             return
         }
@@ -164,15 +180,19 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         let state = FixtureState()
         let view = FixtureView(state: state)
         let host = NSHostingView(rootView: view)
-        let window = NSWindow(contentRect: .init(x: -10000, y: -10000, width: 400, height: 200),
-                              styleMask: [.titled], backing: .buffered, defer: false)
+        let window = NSWindow(
+            contentRect: .init(x: -10_000, y: -10_000, width: 400, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFront(nil)
         Task { @MainActor in
             do {
                 try await Task.sleep(for: .milliseconds(200))
-                for selection in 0 ..< 5 {
+                for selection in 0..<5 {
                     let request = ResourceTabRequest()
                     state.pending = request
                     try await waitUntil("request started") { state.continuations[request.id] != nil }
@@ -197,8 +217,10 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
                 try await waitUntil("unchanged request started") { state.continuations[request.id] != nil }
                 state.continuations.removeValue(forKey: request.id)?.resume(returning: .init(simulator: newTab))
                 try await waitUntil("new tab selected") { state.simulator.selectedID == newTab.id }
-                try require(state.pending == nil && state.files.selectedID == nil && state.browser.selectedID == nil,
-                            "Successful open left another resource selected")
+                try require(
+                    state.pending == nil && state.files.selectedID == nil && state.browser.selectedID == nil,
+                    "Successful open left another resource selected"
+                )
                 print("PASS: unchanged selection opens the resource")
                 let reused = try await view.fileTabForTerminalLink(paneID: "%1", inputBinding: .init())
                 let created = try await view.fileTabForTerminalLink(paneID: "%1", new: true, inputBinding: .init())
@@ -216,12 +238,13 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
 
 @main
 struct ResourceSelectionProbe {
-    @MainActor static func main() {
+    @MainActor
+    static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
         let delegate = FixtureDelegate()
         app.delegate = delegate
         app.run()
-        withExtendedLifetime(delegate) {}
+        withExtendedLifetime(delegate) { }
     }
 }
