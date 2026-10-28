@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.113 — Clearer installation and control status
+
+- Show an explicit success or failure alert after a Mac-to-iPhone IPA install,
+  keep result text fully visible, and disable repeated installation after success
+  until the installer is reopened.
+- Distinguish read-only viewing from active remote control with eye and hand
+  icons, status colors, tooltips and accessibility values across Browser,
+  Simulator and extension controls.
+- Include legacy caches directly under `.build-local/DerivedData/` in idle
+  cleanup while preserving applications, build records and the only dependency
+  copy when no populated shared cache exists.
+- Release validation: the serial Swift regression passed (4,084 tests).
+  `StopFinalityEvaluationSuite` was excluded because this Mac is not eligible
+  for Apple Intelligence; 11 opt-in or hardware-dependent tests were skipped.
+  All 86 cleanup/build-helper tests and 110 publisher, COS and installer tests
+  passed, together with both boundary checks, the 14-page website build and
+  the arm64/x86_64 iOS Simulator compile check. Five changed Swift files pass
+  SwiftFormat; `RemoteBrowserView.swift` retains only its existing formatting
+  deviations from `v3.0.112`. Physical iPhone installation and native
+  remote-control UI acceptance were not rerun.
+
 ## 3.0.112 — Detachable resource tabs
 
 - Let Mac Host and Viewer Files, Browser and Simulator tabs detach into separate
