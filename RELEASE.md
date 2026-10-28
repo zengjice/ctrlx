@@ -289,7 +289,8 @@ python3 scripts/clean-build.py idle --yes  # Stop this worktree's builds/install
 ```
 
 It removes package/platform compilation caches, indexes and redundant Xcode
-dependency copies, and applies the same completed-artifact/public-download
+dependency copies, including the legacy layout directly under
+`.build-local/DerivedData/`, and applies the same completed-artifact/public-download
 retention as packaging. Signed apps in DerivedData, Swift Build products, IPA/DMG
 files, dependency downloads, Chromium SDKs and signing configuration remain.
 It does not scan other worktrees or automatically decide which ones are idle.

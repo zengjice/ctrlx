@@ -423,18 +423,59 @@ class BuildCleanupTests(unittest.TestCase):
         self.assertEqual(storage.idle_targets(self.root), [])
 
     def test_idle_cleanup_keeps_only_dependency_copy_without_shared_cache(self):
-        kept = self.file(".build-local/DerivedData/iOS/SourcePackages/checkouts/dependency.swift")
+        kept = [self.file(f".build-local/DerivedData/{layout}SourcePackages/checkouts/dependency.swift")
+                for layout in ("", "iOS/")]
         self.clean(storage.idle_targets(self.root))
-        self.assertTrue(kept.exists())
+        self.assertTrue(all(path.exists() for path in kept))
 
     def test_empty_shared_cache_does_not_make_derived_dependencies_redundant(self):
-        kept = self.file(".build-local/DerivedData/iOS/SourcePackages/checkouts/dependency.swift")
+        kept = [self.file(f".build-local/DerivedData/{layout}SourcePackages/checkouts/dependency.swift")
+                for layout in ("", "iOS/")]
         (self.root / ".build-local/SourcePackages/checkouts").mkdir(parents=True)
         self.clean(storage.idle_targets(self.root))
-        self.assertTrue(kept.exists())
+        self.assertTrue(all(path.exists() for path in kept))
         current = self.artifact("3.0.3")
         self.clean(storage.packaging_cache_targets(self.root, current))
-        self.assertTrue(kept.exists())
+        self.assertTrue(all(path.exists() for path in kept))
+
+    def test_idle_cleanup_handles_mixed_legacy_and_platform_derived_data(self):
+        removed = [self.file(f".build-local/DerivedData/{name}") for name in (
+            "Build/Intermediates.noindex/object.o",
+            "CompilationCache.noindex/cached.bin",
+            "ModuleCache.noindex/module.pcm",
+            "SDKExplicitPrecompiledModules/module.pcm",
+            "SDKStatCaches.noindex/cache",
+            "Index.noindex/index",
+            "Index.noindex/ModuleCache.noindex/nested.pcm",
+            "SourcePackages/checkouts/dependency.swift",
+            "macOS/Build/Intermediates.noindex/object.o",
+            "iOS-Simulator/ModuleCache.noindex/module.pcm",
+        )]
+        kept = [self.file(name) for name in (
+            ".build-local/SourcePackages/checkouts/dependency.swift",
+            ".build-local/DerivedData/Build/Products/Release/CtrlX.app/executable",
+            ".build-local/DerivedData/Build/Products/Release/CtrlX.app.build.json",
+            ".build-local/DerivedData/macOS/Build/Products/Release/CtrlX.app/executable",
+            ".build-local/DerivedData/Logs/build.log",
+            ".build-local/DerivedData/evidence/result.json",
+        )]
+        outside = self.file(".build-local/DerivedData/Build/Intermediates.noindex/object.o", self.other)
+        targets = storage.idle_targets(self.root)
+        self.assertIn("Preview only", self.clean(targets, apply=False))
+        self.assertTrue(all(path.exists() for path in removed))
+        self.clean(targets)
+        self.assertTrue(all(not path.exists() for path in removed))
+        self.assertTrue(all(path.exists() for path in kept + [outside]))
+        self.assertEqual(storage.idle_targets(self.root), [])
+
+    def test_idle_legacy_cache_symlink_rejected_before_any_deletion(self):
+        existing = self.file(".build-local/DerivedData/Build/Intermediates.noindex/object.o")
+        outside = self.file("modules/fixture", self.other)
+        (self.root / ".build-local/DerivedData/ModuleCache.noindex").symlink_to(outside.parent)
+        with self.assertRaises(ValueError):
+            storage.idle_targets(self.root)
+        self.assertTrue(existing.exists())
+        self.assertTrue(outside.exists())
 
     def test_test_cache_symlink_and_backend_marker_symlink_rejected(self):
         outside = self.file("outside/fixture", self.other)

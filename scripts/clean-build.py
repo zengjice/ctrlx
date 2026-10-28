@@ -266,9 +266,10 @@ def idle_targets(root):
     derived = root / ".build-local/DerivedData"
     validate_path(root, derived)
     if derived.is_dir():
+        targets += derived_cache_targets(root, derived, save_space=True)
         for platform in sorted(derived.iterdir()):
             validate_path(root, platform)
-            if platform.is_dir():
+            if platform.is_dir() and platform not in targets:
                 targets += derived_cache_targets(root, platform, save_space=True)
     return targets
 
