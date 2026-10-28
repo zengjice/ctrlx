@@ -33,6 +33,12 @@ argument-aware Agent commands, Agent-side CtrlX plugin update/reinstall UX, and
 file-browser playback cache cleanup. Implemented behavior and deferred acceptance
 are tracked separately; release contents are recorded in [MODIFICATIONS.md](../MODIFICATIONS.md).
 
+The [single-pane terminal-tab proposal](single-pane-terminal-tabs-design.md)
+records the deferred option of one pane per Agent/Terminal tab while retaining
+Mac workbench splits and detached windows. It is not implemented or scheduled;
+compatibility and migration decisions remain open. Its isolated tmux check does
+not establish end-to-end CtrlX migration acceptance.
+
 The [multi-agent collaboration design](multi-agent-design.md) includes preset-content
 nodes that join upstream outputs and forward them without an Agent, alongside manual
 single-Host workflows managed from Mac Host, Mac Viewer and iOS. Users choose
