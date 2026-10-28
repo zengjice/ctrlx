@@ -14,6 +14,7 @@ enum CtrlxAppEntry {
 }
 
 struct TmuxPaneMirrorApp: App {
+    @State private var ipaFiles: IPAFileIntegration
     @State private var coordinator: AppCoordinator
     @State private var showingTmuxInstallGuide: Bool
     @State private var showingLaunchAtLoginPrompt = false
@@ -400,8 +401,11 @@ struct TmuxPaneMirrorApp: App {
             #endif
         }
 
+        let ipaFiles = IPAFileIntegration()
+        _ipaFiles = State(initialValue: ipaFiles)
         let coord = AppCoordinator()
         _coordinator = State(initialValue: coord)
+        shutdownDelegate.onOpenFiles = { ipaFiles.receive($0) }
         // Wire cleanup before any delegate calls can fire. applicationShouldTerminate
         // returns .terminateNow when onShouldTerminate is nil; setting it here (in
         // @MainActor init) ensures it is never nil when the delegate is invoked —
@@ -453,6 +457,8 @@ struct TmuxPaneMirrorApp: App {
                     LaunchAtLoginPromptView()
                         .environment(coordinator.settings)
                 }
+                .suggestDefaultIPAApplication(ipaFiles, isReady: !showingTmuxInstallGuide && !showingLaunchAtLoginPrompt && coordinator.settings.hasAskedAboutLaunchAtLogin)
+                .environment(coordinator.settings)
         }
         .defaultLaunchBehavior(
             (coordinator.settings.openPanesWindowOnLaunch || showingTmuxInstallGuide) ? .presented : .suppressed
@@ -565,6 +571,7 @@ struct TmuxPaneMirrorApp: App {
                 .environment(coordinator)
         } label: {
             MenuBarLabel(pendingCount: totalPendingSessionCount, lowQuotaCount: coordinator.dashboardStore.quotaSummaries().filter(\.isLow).count)
+                .handleIPAFileRequests(ipaFiles)
                 .task {
                     coordinator.settings.applyAppearance()
                     // Capture the Settings-opening action once at launch so a

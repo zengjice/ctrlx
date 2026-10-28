@@ -470,6 +470,10 @@ final public class AppSettings {
         didSet { preferences.setBool(hasAskedAboutLaunchAtLogin, Keys.hasAskedAboutLaunchAtLogin) }
     }
 
+    public var askToHandleIPAFiles = true {
+        didSet { preferences.setBool(askToHandleIPAFiles, Keys.askToHandleIPAFiles) }
+    }
+
     // MARK: - Initialization
 
     public init() {
@@ -563,6 +567,7 @@ final public class AppSettings {
         self.workspaceRecoveryMode = WorkspaceRecoveryMode(rawValue: preferences.string(Keys.workspaceRecoveryMode) ?? "") ?? .layoutAndAgents
         self.launchAtLogin = preferences.optionalBool(Keys.launchAtLogin) ?? Defaults.launchAtLogin
         self.hasAskedAboutLaunchAtLogin = preferences.optionalBool(Keys.hasAskedAboutLaunchAtLogin) ?? Defaults.hasAskedAboutLaunchAtLogin
+        self.askToHandleIPAFiles = preferences.optionalBool(Keys.askToHandleIPAFiles) ?? true
         self.quickPhrasePairingsLoaded = true
         updateQuickPhraseSyncPairings()
     }
@@ -639,6 +644,7 @@ final public class AppSettings {
         // Launch at Login
         case launchAtLogin
         case hasAskedAboutLaunchAtLogin
+        case askToHandleIPAFiles
     }
 
     // MARK: - Defaults

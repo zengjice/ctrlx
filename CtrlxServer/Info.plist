@@ -20,6 +20,37 @@
 	<key>SUPublicEDKey</key>
 	<string>$(CTRLX_SPARKLE_PUBLIC_KEY)</string>
 
+	<!-- Offer IPA installation without taking over the user's current association. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>iOS App Archive</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array><string>com.apple.itunes.ipa</string></array>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.apple.itunes.ipa</string>
+			<key>UTTypeDescription</key>
+			<string>iOS App Archive</string>
+			<key>UTTypeConformsTo</key>
+			<array><string>public.zip-archive</string></array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array><string>ipa</string></array>
+			</dict>
+		</dict>
+	</array>
+
 	<!-- Custom drag types must be registered for native drop destinations. -->
 	<key>UTExportedTypeDeclarations</key>
 	<array>

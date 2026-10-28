@@ -19,6 +19,12 @@
     /// before exit, which terminates the `cat` subprocesses immediately.
     @MainActor
     final public class AppShutdownDelegate: NSObject, NSApplicationDelegate, @preconcurrency CXBrowserTerminationDelegate {
+        public var onOpenFiles: (@MainActor ([URL]) -> Void)?
+
+        public func application(_: NSApplication, open urls: [URL]) {
+            onOpenFiles?(urls)
+        }
+
         /// Async cleanup to run before the app terminates. Set this once at
         /// startup; if `nil` at quit time, AppKit terminates immediately.
         public var onShouldTerminate: (@MainActor () async -> Void)?

@@ -203,6 +203,8 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            IPAFileAssociationSettingsSection()
+
             Section("Workspace Recovery") {
                 Picker("Restore at startup", selection: $settings.workspaceRecoveryMode) {
                     Text("Layout, terminals and Agent conversations").tag(WorkspaceRecoveryMode.layoutAndAgents)

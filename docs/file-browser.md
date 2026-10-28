@@ -34,6 +34,19 @@ Mac Host 和 Mac Viewer 均可从菜单「File → Install IPA on iPhone…」�
 也有「Install on iPhone…」。Viewer 的安装器不使用远端 Host 路径或设备；这里不涉及
 Relay 或远端设备控制协议。
 
+CtrlX 注册为 `.ipa` 文件的可选打开应用。每次运行首次显示 Sessions、完成 tmux 和登录启动
+引导后，检查当前默认应用；已是 CtrlX 或关闭提醒时静默结束。提示提供 Set as Default、
+Not Now 和 Don't Ask Again；Not Now 仅跳过本次运行，Settings → General → IPA Files
+可以查看当前默认应用、手动设置及恢复提醒。后台启动不抢占前台弹窗。
+设置使用 macOS 的文件类型关联接口，可能需要系统再次确认；完成后重新读取关联，
+只有确认为 CtrlX 才算成功。仅关联 `com.apple.itunes.ipa`，不改变 ZIP 或其他文件类型。
+
+Finder 双击、Open With，以及 Files 的 Download and Open 均遵循系统关联。
+收到本机 IPA 打开事件后（包括冷启动）显示安装器并选中该文件；不同文件使用各自窗口，
+不会覆盖正在安装的文件，同一文件复用已有窗口。这里只准备安装，仍需用户选择本机
+USB 设备并点击 Install。Files 的下载流程不增加 IPA 分支，Viewer 不会转到远端 Host 安装。
+E2E 模式禁止真实关联写入，不自动显示默认应用提示。
+
 安装窗口展示包名称、Bundle ID、版本、大小、USB 设备、持续输出和结果。
 安装成功或失败后会弹出结果提示；成功时包含 App 和设备名称，失败时显示错误原因。
 确认提示后保留窗口内结果和日志；Stop Waiting 继续显示取消等待的说明，不弹安装成功提示。

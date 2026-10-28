@@ -7,11 +7,19 @@
 
     public struct IPAInstallerScene: Scene {
         public static let windowID = "ipa-installer"
+        static let fileWindowID = "ipa-installer-file"
         public init() { }
 
         public var body: some Scene {
             Window("Install IPA on iPhone", id: Self.windowID) {
                 IPAInstallerView()
+            }
+            .defaultSize(width: 580, height: 530)
+            .defaultLaunchBehavior(.suppressed)
+            .restorationBehavior(.disabled)
+
+            WindowGroup("Install IPA on iPhone", id: Self.fileWindowID, for: URL.self) { file in
+                IPAInstallerView(initialURL: file.wrappedValue, onChooseFile: { file.wrappedValue = $0 })
             }
             .defaultSize(width: 580, height: 530)
             .defaultLaunchBehavior(.suppressed)
@@ -38,6 +46,7 @@
     @MainActor
     struct IPAInstallerView: View {
         @Dependency(IPAInstallerClient.self) private var client
+        private let onChooseFile: (URL) -> Void
         @State private var file: URL?
         @State private var package: IPAInstallationPackage?
         @State private var devices: [IPAInstallationDevice] = []
@@ -61,8 +70,9 @@
             let device: IPAInstallationDevice
         }
 
-        init(initialURL: URL? = nil) {
+        init(initialURL: URL? = nil, onChooseFile: @escaping (URL) -> Void = { _ in }) {
             _file = State(initialValue: initialURL)
+            self.onChooseFile = onChooseFile
         }
 
         var body: some View {
@@ -164,7 +174,9 @@
             .frame(minWidth: 520, minHeight: 470)
             .fileImporter(isPresented: $showsImporter, allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .archive]) { result in
                 switch result {
-                case let .success(url): file = url
+                case let .success(url):
+                    file = url
+                    onChooseFile(url)
                 case let .failure(error): message = error.localizedDescription
                 }
             }
