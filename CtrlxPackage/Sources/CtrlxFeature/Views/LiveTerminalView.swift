@@ -54,6 +54,7 @@
         /// Used in multi-pane layouts where only the selected pane accepts input.
         let isActive: Bool
         let isInputSuspended: Bool
+        let isQuickActionInputSuspended: Bool
 
         /// Whether a parent-managed multi-pane layout wants the software keyboard.
         /// The selected pane keeps its shortcut bar available even when this is false.
@@ -154,6 +155,7 @@
             showCopyButton: Bool = true,
             isActive: Bool = true,
             isInputSuspended: Bool = false,
+            isQuickActionInputSuspended: Bool = false,
             parentKeyboardRequested: Bool = false,
             mouseReportingEnabled: Bool = false,
             onKeyboardRequest: (@MainActor (Bool) -> Void)? = nil,
@@ -193,6 +195,7 @@
             self.showCopyButton = showCopyButton
             self.isActive = isActive
             self.isInputSuspended = isInputSuspended
+            self.isQuickActionInputSuspended = isQuickActionInputSuspended
             self.parentKeyboardRequested = parentKeyboardRequested
             self.mouseReportingEnabled = mouseReportingEnabled
             self.onKeyboardRequest = onKeyboardRequest
@@ -278,11 +281,11 @@
             ))
             .modifier(TerminalVoiceInputOverlay(
                 session: voiceSession, context: phraseContext,
-                isSuspended: !canSendTerminalInput || isInputSuspended || textSnapshot != nil
+                isSuspended: !canSendTerminalInput || inputSuspension.suspendsInput || textSnapshot != nil
                     || linkPresentation.suspendsTerminalInput || quickActionPresentation.isPresented,
                 insert: insertVoiceTranscript
             ))
-            .onChange(of: isInputSuspended || textSnapshot != nil || linkPresentation.suspendsTerminalInput) { _, suspended in
+            .onChange(of: inputSuspension.invalidatesQuickActions || textSnapshot != nil || linkPresentation.suspendsTerminalInput) { _, suspended in
                 if suspended, isActive {
                     // The parent toolbar owns dictation for embedded panes.
                     // A child sheet must invalidate that capture as well.
@@ -519,7 +522,7 @@
 
         private func presentLink(_ url: URL) {
             guard
-                isActive, !isInputSuspended, textSnapshot == nil,
+                isActive, !inputSuspension.suspendsInput, textSnapshot == nil,
                 !quickActionPresentation.isPresented, linkPresentation.present(url) else { return }
             coordinator.terminalState?.cancelCursorNavigation?()
             UIApplication.shared.sendAction(
@@ -592,7 +595,7 @@
                         keyboardRequested: inputPresentation.keyboardRequested,
                         onKeyboardRequest: settings.terminalKeyboardControlPosition == .bottomBar ? setKeyboardRequested : nil,
                         keyboardIsTransitioning: keyboardIsTransitioning,
-                        questionExpansionEnabled: scenePhase == .active && isConnected && !isInputSuspended
+                        questionExpansionEnabled: scenePhase == .active && isConnected && !inputSuspension.suspendsInput
                             && relayClient.hostSupportsCodexQuestionAcknowledgement
                             && !linkPresentation.suspendsTerminalInput
                             && coordinator.isReadyForToolbarInput && responseState?.request.isBlocking != true,
@@ -632,7 +635,7 @@
                         },
                         onOpenPath: openPathAction,
                         onOpenURL: presentLink,
-                        onSwitchWindow: isActive && !isInputSuspended && textSnapshot == nil
+                        onSwitchWindow: isActive && !inputSuspension.suspendsInput && textSnapshot == nil
                             && !linkPresentation.suspendsTerminalInput && scenePhase == .active
                             ? onSwitchWindow : nil
                     )
@@ -697,6 +700,13 @@
             isConnected && coordinator.streamState == .streaming
         }
 
+        private var inputSuspension: TerminalInputSuspension {
+            TerminalInputSuspension(
+                external: isInputSuspended,
+                quickActionEditor: isQuickActionInputSuspended || quickActionPresentation.suspendsTerminalInput
+            )
+        }
+
         private func terminalInputPresentation(
             isCopyPresented: Bool
         ) -> TerminalInputPresentation.State {
@@ -704,7 +714,7 @@
                 keyboardRequested: showKeyboardButton ? isInteractive : parentKeyboardRequested,
                 isActive: isActive,
                 isCopyPresented: isCopyPresented,
-                isInputSuspended: isInputSuspended || quickActionPresentation.suspendsTerminalInput
+                isInputSuspended: inputSuspension.suspendsInput
                     || linkPresentation.suspendsTerminalInput
             )
         }
@@ -717,7 +727,7 @@
 
         private func insertVoiceTranscript(_ text: String) -> Bool {
             guard
-                phraseContext.canSend, canSendTerminalInput, !isInputSuspended, textSnapshot == nil,
+                phraseContext.canSend, canSendTerminalInput, !inputSuspension.suspendsInput, textSnapshot == nil,
                 !linkPresentation.suspendsTerminalInput, !quickActionPresentation.isPresented else { return false }
             coordinator.terminalState?.prepareForExternalInput?()
             enqueueTerminalKeys([.text(text)])
@@ -758,7 +768,7 @@
 
         private func sendCustomButton(_ request: TerminalCustomButtonRequest) -> Bool {
             guard
-                !isInputSuspended, !quickActionPresentation.suspendsTerminalInput,
+                !inputSuspension.suspendsInput,
                 request.isValid(in: phraseContext, savedButtons: settings.customButtons.buttons) else { return false }
             coordinator.terminalState?.prepareForExternalInput?()
             let keys = request.button.action.keys

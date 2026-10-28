@@ -188,6 +188,10 @@ directly. Panel toggles remain usable in **Add/Edit Phrase**, while terminal-key
 buttons stay disabled. Only entering **Add/Edit Phrase** borrows input focus for its native editor;
 returning restores the terminal's existing keyboard intent. Both tiled windows
 and standalone terminal views use the same presentation state and target checks.
+Embedded panes receive editor focus suspension separately from external suspension.
+Entering Add/Edit therefore does not advance the captured input revision or close
+its own panel. Real queued input, target changes, and external copy/link/preview
+surfaces still invalidate captured actions.
 The overlay uses plain headers and local state for its phrase editor, with no
 nested navigation stack, navigation destinations or environment dismiss action.
 Closing a panel or cancelling/saving its editor cannot pop the session route.

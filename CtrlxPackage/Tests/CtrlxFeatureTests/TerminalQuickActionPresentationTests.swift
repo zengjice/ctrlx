@@ -209,6 +209,47 @@ struct TerminalQuickActionPresentationTests {
         #expect(!presentation.suspendsTerminalInput)
     }
 
+    @Test("Embedded editors borrow the keyboard without invalidating their captured panel", arguments: [false, true], [false, true])
+    func embeddedEditorKeepsItsCapture(keyboardRequested: Bool, customButton: Bool) {
+        var presentation = TerminalQuickActionPresentation()
+        presentation.show(customButton ? .addCustomButton(phrase()) : .phrases(phrase()))
+        presentation.isEditingPhrase = !customButton
+        let captured = presentation.panel
+        let suspension = TerminalInputSuspension(external: false, quickActionEditor: presentation.suspendsTerminalInput)
+
+        let revision: UInt64 = suspension.invalidatesQuickActions ? 1 : 0
+        presentation.validate(phraseContext: phrase(revision: revision), commandContext: nil)
+
+        #expect(presentation.panel == captured)
+        #expect(suspension.suspendsInput)
+        #expect(TerminalInputPresentation.resolve(
+            keyboardRequested: keyboardRequested, isActive: true, isCopyPresented: false,
+            isInputSuspended: suspension.suspendsInput
+        ) == .init(inputEnabled: false, keyboardRequested: false))
+
+        presentation.dismiss()
+        let restored = TerminalInputSuspension(external: false, quickActionEditor: presentation.suspendsTerminalInput)
+        #expect(TerminalInputPresentation.resolve(
+            keyboardRequested: keyboardRequested, isActive: true, isCopyPresented: false,
+            isInputSuspended: restored.suspendsInput
+        ) == .init(inputEnabled: true, keyboardRequested: keyboardRequested))
+    }
+
+    @Test("External suspension still invalidates an editor that has already borrowed focus")
+    func externalSuspensionInvalidatesEditingCapture() {
+        var presentation = TerminalQuickActionPresentation()
+        presentation.show(.phrases(phrase()))
+        presentation.isEditingPhrase = true
+        let editing = TerminalInputSuspension(external: false, quickActionEditor: true)
+        let external = TerminalInputSuspension(external: true, quickActionEditor: true)
+
+        #expect(editing.suspendsInput == external.suspendsInput)
+        #expect(editing.invalidatesQuickActions != external.invalidatesQuickActions)
+        let revision: UInt64 = external.invalidatesQuickActions ? 1 : 0
+        presentation.validate(phraseContext: phrase(revision: revision), commandContext: nil)
+        #expect(!presentation.isPresented && !presentation.isEditingPhrase)
+    }
+
     @Test("Availability changes keep panels open, preserving their captured targets")
     func availability() throws {
         for panel in [TerminalQuickActionPresentation.Panel.commands(try command()), .phrases(phrase())] {

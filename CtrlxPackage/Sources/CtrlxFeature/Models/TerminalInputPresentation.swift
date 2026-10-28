@@ -17,6 +17,20 @@ enum TerminalInputPresentation {
     }
 }
 
+/// An editor borrows focus without making its own captured terminal input stale.
+struct TerminalInputSuspension: Equatable {
+    let external: Bool
+    let quickActionEditor: Bool
+
+    var suspendsInput: Bool {
+        external || quickActionEditor
+    }
+
+    var invalidatesQuickActions: Bool {
+        external
+    }
+}
+
 /// Defers the one-time initial tail reveal until UIKit has attached the native
 /// terminal hierarchy and assigned it a real viewport. A run-loop yield is not
 /// a layout-completion signal: input accessories can change the viewport again
