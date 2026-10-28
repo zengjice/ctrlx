@@ -21,8 +21,12 @@ pages require separate authorization. Existing shared-profile semantics remain.
 
 `supportsResourceAuthorization` is advertised only with a native runtime exposing
 the grant API. It requires rebuilding the AgentBrowser native component against
-the existing CEF SDK, not recompiling Chromium. This change's native CEF build
-and live acceptance are pending because the configured external SDK is offline.
+the existing CEF SDK, not recompiling Chromium. For 3.0.114, the native component
+and signed Mac app were rebuilt against the retained patched CEF runtime.
+Isolated production-engine regressions and actual human UI authorization/revocation
+passed with native identity fixtures, including denial of delegate close and of
+both engines after revocation. These are not real-Codex tests; human-input
+pause/return-control UI and paired Viewer combinations were not rerun.
 
 ## 浏览器后台录屏
 

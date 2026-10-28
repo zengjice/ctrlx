@@ -7,6 +7,36 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.114 — Independent resource tabs and explicit Agent access
+
+- Open human Files, Browser and iOS Simulator tabs independently of terminals,
+  with stable session identity, ordering, split and detached-window placement,
+  and retention when the last terminal closes. Agent resources keep their
+  existing pane and process ownership; older peers retain their compatible path.
+- Let users temporarily authorize one verified same-session Agent to use a
+  human Browser page or Simulator. Human input pauses Agent writes; returning
+  control is explicit. Revocation and process/session changes invalidate access
+  without closing the human resource. Files offers an explicit path recipient.
+- Keep file-link navigation in independent Files tabs and support explicitly
+  opening a new Files tab. Ignore late iOS resource-creation results after the
+  user changes the selected workspace or tab.
+- Keep iOS quick-phrase editors open while editing, including the input panel's
+  presentation state.
+- Refresh bundled Agent guidance for independent resources and explicit
+  Browser/Simulator authorization.
+- Release validation: the serial Swift regression passed (4,106 tests), with
+  `StopFinalityEvaluationSuite` excluded because Apple Intelligence is unavailable
+  on this Mac and 11 opt-in or hardware-dependent tests skipped. All 110
+  cleanup/build-helper, skill and resource-selection script tests passed, as did
+  both boundary checks, the 14-page website build, the arm64/x86_64 iOS Simulator
+  compile check, the native browser rebuild and the signed Mac Release build.
+  An isolated production-runtime app passed both browser-engine regressions and
+  actual human UI authorization/revocation, including refusal to close a human
+  page and loss of access through both engines after revocation. These use native
+  identity fixtures, not real Codex. Human pause/return-control and Simulator
+  authorization UI were not rerun. New Swift formatting violations are resolved;
+  four touched legacy files retain only their pre-existing deviations.
+
 ## 3.0.113 — Clearer installation and control status
 
 - Show an explicit success or failure alert after a Mac-to-iPhone IPA install,
