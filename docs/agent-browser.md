@@ -615,13 +615,20 @@ batches on the existing E2EE connection. The native ring holds at most 8192
 frames (171 ms); each wire batch holds up to 8 packets/16 KiB. Audio is skipped
 while the send queue is congested; Viewer decode and playback buffers are bounded
 and replace old samples rather than accumulating a delayed playback history.
+The Viewer counts only audio awaiting player rendering toward its 12,288-frame
+(256 ms) playback limit. Render-completion callbacks release that budget;
+downstream device latency, including Bluetooth output, must not trigger queue
+resets. Unrendered overflow still clears stale buffers, and callbacks from a
+retired playback epoch cannot affect the current queue.
 Screenshots still use the existing polling path: this adds page sound, not a
 synchronized high-frame-rate video transport or audio tracks to recordings.
 
 `tests/browser_audio.py` exercises capture, playback takeover, mute, release,
 bounded buffering, page isolation and closing a playing page in the signed
 isolated probe App. Swift `BrowserAudio` tests cover AAC, wire/control identity
-and playback lifecycle. On a Mac with a working audio output device, set
+and playback lifecycle. Offline-engine regressions verify queue draining without
+device-playback callbacks and bounded unrendered overflow; codec tests also
+check stereo pitch and duration. On a Mac with a working audio output device, set
 `CTRLX_BROWSER_AUDIO_PLAYBACK_TEST=1` to include the native output test; it
 decodes and schedules encoded silence. The default suite keeps this device
 check disabled. These checks do not establish physical-iPhone listening or

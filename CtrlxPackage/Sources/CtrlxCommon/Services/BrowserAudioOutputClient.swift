@@ -24,7 +24,7 @@
 
     /// Shared across Hosts and windows: only the most recently controlled page speaks.
     @MainActor
-    final private class BrowserAudioOutput {
+    final class BrowserAudioOutput {
         static let shared = BrowserAudioOutput()
         private var owner: UUID?
         private var onStop: (@MainActor @Sendable (String?) -> Void)?
@@ -34,9 +34,14 @@
         private var task: Task<Void, Never>?
         private var observers: [NSObjectProtocol] = []
         private var audioSessionActive = false
-        private var queuedFrames = 0
+        private(set) var queuedFrames = 0
         private var playbackEpoch = UUID()
+        private let makeEngine: () -> AVAudioEngine
         @Dependency(FileBrowserVideoAudioClient.self) private var audioSession
+
+        init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() }) {
+            self.makeEngine = makeEngine
+        }
 
         func start(_ id: UUID, onStop: @escaping @MainActor @Sendable (String?) -> Void) throws {
             if let previous = owner {
@@ -66,7 +71,7 @@
         private func prepareOutput(_ id: UUID) throws {
             try audioSession.acquire(id)
             audioSessionActive = true
-            let engine = AVAudioEngine()
+            let engine = makeEngine()
             let player = AVAudioPlayerNode()
             engine.attach(player)
             engine.connect(player, to: engine.mainMixerNode, format: Self.format)
@@ -157,7 +162,8 @@
             }
             queuedFrames += frames
             let epoch = playbackEpoch
-            player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            // Bound unrendered audio, not Bluetooth/device output latency.
+            player.scheduleBuffer(buffer, completionCallbackType: .dataRendered) { [weak self] _ in
                 Task { @MainActor in
                     guard let self, self.owner == id, self.playbackEpoch == epoch else { return }
                     self.queuedFrames = max(0, self.queuedFrames - frames)

@@ -7,6 +7,60 @@ import Testing
 
 @Suite("Browser audio", .serialized)
 struct BrowserAudioTests {
+    @Test @MainActor
+    func renderedAudioLeavesTheQueueWithoutWaitingForTheOutputDevice() async throws {
+        let engine = AVAudioEngine()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2))
+        // Offline rendering has no device-playback completion. It must still
+        // drain the queue instead of counting downstream latency as backlog.
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
+        let output = BrowserAudioOutput(makeEngine: { engine })
+        let owner = UUID()
+        var failure: String?
+        try output.start(owner) { failure = $0 }
+        defer { output.stop(owner) }
+        let encoder = BrowserAudioCodec()
+        let pcm = [Float](repeating: 0, count: 2_048 * 2).withUnsafeBytes { Data($0) }
+        let rendered = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_096))
+        for sequence in 1...32 {
+            let encoded = try await encoder.encode(pcm)
+            output.receive(owner, message: .init(
+                tabID: UUID(), surfaceID: UUID(), controlID: UUID(), streamID: owner,
+                sequence: UInt64(sequence), packets: encoded.packets, magicCookie: encoded.cookie
+            ))
+            try await RemoteBrowserSessionTests().wait { output.queuedFrames > 0 || failure != nil }
+            try #require(failure == nil)
+            #expect(try engine.renderOffline(AVAudioFrameCount(output.queuedFrames + 1_024), to: rendered) == .success)
+            try await RemoteBrowserSessionTests().wait { output.queuedFrames == 0 }
+        }
+    }
+
+    @Test @MainActor
+    func unrenderedAudioStillClearsWhenTheQueueExceedsItsLimit() async throws {
+        let engine = AVAudioEngine()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2))
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
+        let output = BrowserAudioOutput(makeEngine: { engine })
+        let owner = UUID()
+        var failure: String?
+        try output.start(owner) { failure = $0 }
+        defer { output.stop(owner) }
+        let encoder = BrowserAudioCodec()
+        let pcm = [Float](repeating: 0, count: 2_048 * 2).withUnsafeBytes { Data($0) }
+        for sequence in 1...7 {
+            let encoded = try await encoder.encode(pcm)
+            output.receive(owner, message: .init(
+                tabID: UUID(), surfaceID: UUID(), controlID: UUID(), streamID: owner,
+                sequence: UInt64(sequence), packets: encoded.packets, magicCookie: encoded.cookie
+            ))
+            let expected = sequence <= 6 ? sequence * 2_048 : 2_048
+            try await RemoteBrowserSessionTests().wait { output.queuedFrames == expected || failure != nil }
+            try #require(failure == nil)
+        }
+        output.stop(owner)
+        #expect(output.queuedFrames == 0)
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CTRLX_BROWSER_AUDIO_PLAYBACK_TEST"] == "1"))
     @MainActor
     func aacBatchesCanBeScheduledOnTheNativeOutputDevice() async throws {
@@ -82,6 +136,17 @@ struct BrowserAudioTests {
         #expect(decoded.count > 48_000 * 8)
         let samples = decoded.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
         #expect(samples.allSatisfy { $0.isFinite })
+        let frames = samples.count / 2
+        #expect(abs(frames - 20 * 4_096) <= 2_048)
+        // Ignore codec priming and check both channel pitches, not just energy.
+        let start = 8_192
+        for (channel, expected) in [440.0, 880.0].enumerated() {
+            let crossings = (start..<frames).count { frame in
+                samples[frame * 2 + channel] > 0 && samples[(frame - 1) * 2 + channel] <= 0
+            }
+            let frequency = Double(crossings) * 48_000 / Double(frames - start)
+            #expect(abs(frequency - expected) < 2)
+        }
         let energy = samples.reduce(0.0) { $0 + Double($1 * $1) } / Double(samples.count)
         #expect(energy > 0.01 && energy < 0.1)
     }
