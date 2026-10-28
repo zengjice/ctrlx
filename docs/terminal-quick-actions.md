@@ -89,9 +89,14 @@ it never substitutes Control-C or forwards copy to an ordinary shell.
 ## Status bar
 
 Mac Host and Viewer status bars also show model and reasoning-effort shortcuts
-for the tab's **first pane by pane index**, independently of keyboard focus. Main,
-detached and split workspaces use the same horizontally scrolling, fixed-height
-strip. Every discovered model and the selected model's supported efforts is
+for the tab's **locally focused pane**, scoped by Host and the current native
+window's focus router. Without a visible, mounted focus target belonging to this
+tab, the strip uses the tab's active pane. It never borrows another tab or Host's
+focus, or searches sibling panes for an Agent when the selected pane is a shell.
+Main, detached and split workspaces use the same horizontally scrolling,
+fixed-height strip. Switching the target recreates the strip's transient state,
+so an old pane's async result cannot replace the new pane's model list or error.
+Every discovered model and the selected model's supported efforts is
 initially visible. The current choice has a tinted background and checkmark.
 Right-click a button to hide it, or use the adjacent customization menu to restore
 individual buttons or all defaults. These display preferences are in-memory,

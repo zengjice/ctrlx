@@ -59,7 +59,7 @@ struct AgentModelStatusBar: View {
                 Text(refreshing ? "Reading models…" : "Model shortcuts unavailable")
                     .font(.caption).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .help(error ?? "Identify the Agent in the first pane to show its models.")
+                    .help(error ?? "Identify the Agent in the selected pane to show its models.")
             }
             Menu {
                 if let reason = unavailableReason {
@@ -95,7 +95,7 @@ struct AgentModelStatusBar: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help(unavailableReason ?? "Customize model shortcuts for this tab · first pane")
+            .help(unavailableReason ?? "Customize model shortcuts for this tab · selected pane")
             .accessibilityLabel("Customize Model Shortcuts")
         }
         .frame(minWidth: 0, maxWidth: .infinity)
@@ -271,7 +271,7 @@ struct AgentModelChoices: View {
         }
         .buttonStyle(.plain)
         .disabled(unavailableReason != nil || selected)
-        .help(unavailableReason ?? "Switch this tab's first pane to \(title)")
+        .help(unavailableReason ?? "Switch the selected pane to \(title)")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

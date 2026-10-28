@@ -91,7 +91,7 @@ struct TerminalQuickActionLayoutTests {
                                         measurements.frames["\(id)-terminal"] = $0
                                     }
                                 TerminalWindowStatusBar(
-                                    hostID: hostID, paneIDs: [id], sessionName: name, windowIndex: 1,
+                                    hostID: hostID, paneIDs: [id], activePaneID: id, sessionName: name, windowIndex: 1,
                                     terminalSize: "175x59", telemetry: hasTelemetry ? telemetry : nil,
                                     permissionMode: hasTelemetry ? "bypassPermissions" : nil
                                 )

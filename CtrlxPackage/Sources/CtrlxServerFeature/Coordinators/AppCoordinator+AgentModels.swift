@@ -25,7 +25,7 @@ extension AppCoordinator {
             let candidate = detected[paneID], candidate.processIDs.count == 1,
             let pid = candidate.processIDs.first, let runtime = identityClient.runtimeID(pid),
             let provider = registry.core(candidate.pluginID) as? any AgentModelProviding else {
-            throw AgentModelError("No supported Agent is running in this tab's first pane.")
+            throw AgentModelError("No supported Agent is running in the selected pane.")
         }
         let captured = try await tmuxService.captureWorkspacePane(target: paneID)
         guard captured.identity.isSamePane(as: request.workspacePane) else { throw AgentModelError("The terminal changed. Reopen this tab's model controls.") }

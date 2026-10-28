@@ -225,6 +225,7 @@ struct WindowPaneLayoutView: View {
         TerminalWindowStatusBar(
             hostID: nil,
             paneIDs: window.panes.map(\.paneId),
+            activePaneID: window.activePane?.paneId,
             sessionName: window.sessionName,
             windowIndex: window.windowIndex,
             terminalSize: window.activePane.map { "\($0.width)x\($0.height)" },
