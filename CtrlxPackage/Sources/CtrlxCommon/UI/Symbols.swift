@@ -28,6 +28,9 @@ public enum Symbols: String {
     case bellFill = "bell.fill"
     case bolt
     case boltFill = "bolt.fill"
+
+    case bookmark = "bookmark"
+    case bookmarkFill = "bookmark.fill"
     case bubbleLeftAndExclamationmarkBubbleRight = "bubble.left.and.exclamationmark.bubble.right"
     case calendar
     case camera

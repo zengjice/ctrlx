@@ -118,6 +118,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsWorkspaceClipboard = false
     public private(set) var hostSupportsBrowserAudio = false
     public private(set) var hostSupportsBrowserSharing = false
+    public private(set) var hostSupportsBrowserBookmarks = false
     public private(set) var hostSupportsBrowserExtensions = false
     public private(set) var hostSupportsPaneBrowser = false
     public private(set) var hostSupportsBrowserStalePointerCleanup = false
@@ -609,6 +610,9 @@ final public class ViewerRelayClient {
         case .browseBrowser where !hostSupportsBrowserSharing:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share Chromium browsers"))
         case let .browseBrowser(spec):
+            if case .bookmarks = spec.operation, !hostSupportsBrowserBookmarks {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to use browser bookmarks"))
+            }
             if case .audio = spec.operation, !hostSupportsBrowserAudio {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to receive page sound"))
             }
@@ -1263,6 +1267,7 @@ final public class ViewerRelayClient {
             hostSupportsWorkspaceClipboard = sessionState.supportsWorkspaceClipboard == true
             hostSupportsBrowserAudio = sessionState.supportsBrowserAudio == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
+            hostSupportsBrowserBookmarks = sessionState.supportsBrowserBookmarks == true
             hostSupportsBrowserExtensions = sessionState.supportsBrowserExtensions == true
             hostSupportsPaneBrowser = sessionState.supportsPaneBrowser == true
             hostSupportsBrowserStalePointerCleanup = sessionState.supportsBrowserStalePointerCleanup == true
@@ -1780,6 +1785,7 @@ final public class ViewerRelayClient {
         browserAudioHandlers.removeAll()
         hostSupportsWorkspaceClipboard = false
         hostSupportsBrowserSharing = false
+        hostSupportsBrowserBookmarks = false
         hostSupportsBrowserExtensions = false
         hostSupportsBrowserStalePointerCleanup = false
         hostSupportsSimulatorViewing = false

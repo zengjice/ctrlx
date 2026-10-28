@@ -144,6 +144,7 @@ public enum RemoteBrowserOperation: Codable, Sendable, Equatable {
     case key(RemoteBrowserKey)
     case pointer(RemoteBrowserPointer)
     case extensions(RemoteBrowserExtensionOperation)
+    case bookmarks(BrowserBookmarkOperation)
     case networkPermission(id: UUID, allow: Bool)
 
     public var isClipboardPaste: Bool {
@@ -305,17 +306,20 @@ public struct RemoteBrowserResponse: Codable, Sendable, Equatable {
     public let controlID: UUID?
     public let extensions: RemoteBrowserExtensionResult?
     public let clipboard: WorkspaceClipboardContent?
+    public let bookmarks: [BrowserBookmark]?
     public init(
         tab: RemoteBrowserTab? = nil,
         frame: RemoteBrowserFrame? = nil,
         controlID: UUID? = nil,
         extensions: RemoteBrowserExtensionResult? = nil,
-        clipboard: WorkspaceClipboardContent? = nil
+        clipboard: WorkspaceClipboardContent? = nil,
+        bookmarks: [BrowserBookmark]? = nil
     ) {
         self.tab = tab
         self.frame = frame
         self.controlID = controlID
         self.extensions = extensions
         self.clipboard = clipboard
+        self.bookmarks = bookmarks
     }
 }

@@ -3958,6 +3958,7 @@
                     supportsWorkspaceClipboard: true,
                     supportsBrowserAudio: await self?.agentBrowser.supportsBrowserAudio,
                     supportsBrowserSharing: await self?.agentBrowser.supportsBrowserSharing,
+                    supportsBrowserBookmarks: true,
                     supportsBrowserExtensions: await self?.agentBrowser.supportsBrowserExtensions,
                     supportsPaneBrowser: await self?.agentBrowser.supportsBrowserSharing,
                     supportsBrowserStalePointerCleanup: true,

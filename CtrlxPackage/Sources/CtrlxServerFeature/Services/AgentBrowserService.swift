@@ -49,6 +49,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     var extensionCleanupTask: Task<Void, Never>?
     private var workspaces: [UUID: AgentBrowserWorkspace] = [:]
     private(set) var tabs: [String: AgentBrowserTabState] = [:]
+    lazy var bookmarks = BrowserBookmarkStore()
     var resolveResourceSession: ((UUID) throws -> ResourceSession)?
     private let parkingID = UUID()
     private lazy var parkingWindow: NSWindow = {

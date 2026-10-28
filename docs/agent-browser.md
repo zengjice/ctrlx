@@ -1,5 +1,35 @@
 # Agent Browser
 
+## Host bookmarks
+
+The browser toolbar's **Bookmarks** button opens a Mac popover or an iOS sheet.
+**Save Current Page** uses the Host page's actual title and HTTP(S) URL, including
+its path, query and fragment; editing the address field does not change what is
+saved. The filled bookmark icon marks a saved URL. Duplicate normalized URLs are
+not added again. Entries show the title and domain, newest first. Select an entry
+to navigate the current tab; delete with the Mac context menu or iOS swipe action.
+
+One persistent list belongs to the Host and is shared across its sessions and
+paired Mac/iOS Viewers. It is independent of panes, Agent ownership and Chromium
+profiles. Each device refreshes on page navigation and whenever the list opens;
+there is no background bookmark polling or cross-Host synchronization. Storage
+uses the Host's `PreferencesService` key `browserBookmarks`, bounded to 256 entries
+and 128 KiB encoded JSON. Read/decode failures are reported without replacing the
+saved list.
+
+Bookmark management needs no page control lease. Navigation still uses the
+existing Host/Viewer control checks; read-only users see a Take Control hint and
+can save/delete entries without navigating. The optional `supportsBrowserBookmarks`
+capability gates `.bookmarks` requests and the Viewer entry point. Responses travel
+separately from frame/input polling, so a bookmark reply cannot release page
+control. Older Hosts hide the entry point; older Viewers ignore the capability.
+No Chromium rebuild or Relay deployment is required.
+
+Validation: 58 focused tests passed, including native Mac popover save/open and
+read-only interaction, persistence, protocol compatibility and control leases.
+Mac Debug and iOS Simulator builds passed. Physical-iPhone and paired-device UI
+acceptance have not been run; no app was installed.
+
 ## Independent human pages and temporary Agent access
 
 Human New Browser and terminal URL links create independent pages in the stable

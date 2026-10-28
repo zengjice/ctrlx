@@ -127,6 +127,8 @@ extension AgentBrowserService {
             throw RemoteBrowserError.message("This Host browser tab is no longer available in the session.")
         }
         switch request.operation {
+        case let .bookmarks(operation):
+            return try RemoteBrowserResponse(bookmarks: await handleBookmarks(operation, tab: tab))
         case let .audio(streamID, revision, enabled):
             guard !tab.isExtensionWindow, let lease = renewBrowserControl(request, viewerID: viewerID) else {
                 throw RemoteBrowserError.message("Take Control of the page before receiving sound.")
@@ -234,6 +236,13 @@ extension AgentBrowserService {
         lease.expires = .now.advanced(by: .seconds(20))
         remoteControls[id] = lease
         return lease
+    }
+
+    func handleBookmarks(_ operation: BrowserBookmarkOperation, tab: AgentBrowserTabState) async throws -> [BrowserBookmark] {
+        guard !tab.isClosed, tab.manualTarget?.hostID == nil else {
+            throw RemoteBrowserError.message("This Host browser tab is no longer available.")
+        }
+        return try await bookmarks.perform(operation, url: tab.url, title: tab.title)
     }
 
     func annotationScreenshot(_ tab: AgentBrowserTabState) async throws -> Data {

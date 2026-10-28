@@ -39,28 +39,44 @@
         public var body: some View {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    Button { session.submit(.back) } label: { Label("Back", symbol: .chevronLeft) }
-                    Button { session.submit(.forward) } label: { Label("Forward", symbol: .chevronRight) }
-                    Button { session.submit(.reload) } label: { Label("Reload", symbol: .arrowClockwise) }
-                    TextField("Search Google or enter address", text: $address)
-                        .focused($editingAddress)
-                        .onSubmit(navigate)
-                        .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                    #endif
-                    Button {
-                        session.submit(.fit(
-                            width: Int(max(240, min(viewport.width, 2_560))),
-                            height: Int(max(240, min(viewport.height, 2_560)))
-                        ))
-                    } label: { Label("Fit to This Device", symbol: .arrowUpLeftAndArrowDownRight) }
-                        .help("Changes the page viewport on the Host and all Viewers")
+                    HStack(spacing: 12) {
+                        Button { session.submit(.back) } label: { Label("Back", symbol: .chevronLeft) }
+                        Button { session.submit(.forward) } label: { Label("Forward", symbol: .chevronRight) }
+                        Button { session.submit(.reload) } label: { Label("Reload", symbol: .arrowClockwise) }
+                        TextField("Search Google or enter address", text: $address)
+                            .focused($editingAddress)
+                            .onSubmit(navigate)
+                            .textFieldStyle(.roundedBorder)
+                        #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                        #endif
+                        Button {
+                            session.submit(.fit(
+                                width: Int(max(240, min(viewport.width, 2_560))),
+                                height: Int(max(240, min(viewport.height, 2_560)))
+                            ))
+                        } label: { Label("Fit to This Device", symbol: .arrowUpLeftAndArrowDownRight) }
+                            .help("Changes the page viewport on the Host and all Viewers")
+                    }
+                    .disabled(session.controlID == nil)
+                    if client.hostSupportsBrowserBookmarks {
+                        BrowserBookmarksButton(
+                            url: session.tab.url,
+                            navigationUnavailableReason: session.controlID == nil ? "Take Control to open a bookmark." : nil,
+                            request: bookmarkRequest,
+                            navigate: { url in
+                                guard session.controlID != nil else { return }
+                                session.submit(.navigate(url))
+                                editingAddress = false
+                                inputFocusRequest = UUID()
+                            }
+                        )
+                    }
                 }
                 .labelStyle(.iconOnly)
-                .disabled(session.controlID == nil || isAnnotating)
+                .disabled(isAnnotating)
                 .padding(8)
                 HStack {
                     Label("Host · Chromium", symbol: .globe).font(.caption).foregroundStyle(.secondary)
@@ -262,6 +278,20 @@
                     onOpenBrowser: onOpenBrowser
                 )
             }
+        }
+
+        private func bookmarkRequest(_ operation: BrowserBookmarkOperation) async throws -> [BrowserBookmark] {
+            let request = BrowseBrowser(
+                sessionName: session.tab.sessionName,
+                tabID: session.tab.id,
+                surfaceID: UUID(),
+                operation: .bookmarks(operation)
+            )
+            let response = try await client.sendCommand(request, paneId: "", timeout: 8).get()
+            guard response.success, let bookmarks = response.browser?.bookmarks else {
+                throw ViewerRelayClientError.commandFailed(response.error ?? "Could not load Host bookmarks.")
+            }
+            return bookmarks
         }
 
         private func navigate() {

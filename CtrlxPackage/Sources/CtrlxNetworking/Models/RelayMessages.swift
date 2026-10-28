@@ -83,6 +83,7 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsWorkspaceClipboard: Bool?
     public let supportsBrowserAudio: Bool?
     public let supportsBrowserSharing: Bool?
+    public let supportsBrowserBookmarks: Bool?
     public let supportsBrowserExtensions: Bool?
     public let supportsPaneBrowser: Bool?
     /// A stale browser input from an older Host leaves an unfinished pointer
@@ -154,6 +155,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case supportsWorkspaceClipboard
         case supportsBrowserAudio
         case supportsBrowserSharing
+        case supportsBrowserBookmarks
         case supportsBrowserExtensions
         case supportsPaneBrowser
         case supportsBrowserStalePointerCleanup
@@ -198,6 +200,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsWorkspaceClipboard: Bool? = nil,
         supportsBrowserAudio: Bool? = nil,
         supportsBrowserSharing: Bool? = nil,
+        supportsBrowserBookmarks: Bool? = nil,
         supportsBrowserExtensions: Bool? = nil,
         supportsPaneBrowser: Bool? = nil,
         supportsBrowserStalePointerCleanup: Bool? = nil,
@@ -253,6 +256,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsWorkspaceClipboard = supportsWorkspaceClipboard
         self.supportsBrowserAudio = supportsBrowserAudio
         self.supportsBrowserSharing = supportsBrowserSharing
+        self.supportsBrowserBookmarks = supportsBrowserBookmarks
         self.supportsBrowserExtensions = supportsBrowserExtensions
         self.supportsPaneBrowser = supportsPaneBrowser
         self.supportsBrowserStalePointerCleanup = supportsBrowserStalePointerCleanup
@@ -302,6 +306,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsWorkspaceClipboard: supportsWorkspaceClipboard,
             supportsBrowserAudio: supportsBrowserAudio,
             supportsBrowserSharing: supportsBrowserSharing,
+            supportsBrowserBookmarks: supportsBrowserBookmarks,
             supportsBrowserExtensions: supportsBrowserExtensions,
             supportsPaneBrowser: supportsPaneBrowser,
             supportsBrowserStalePointerCleanup: supportsBrowserStalePointerCleanup,

@@ -40,6 +40,17 @@ struct AgentBrowserTabContentView: View {
                     .onSubmit(navigate)
                     .accessibilityIdentifier("agent-browser-address")
                     .disabled(state.isRemotelyControlled)
+                BrowserBookmarksButton(
+                    url: state.url,
+                    navigationUnavailableReason: state.isRemotelyControlled ? "Take Back Control to open a bookmark." : nil,
+                    request: { try await state.service.handleBookmarks($0, tab: state) },
+                    navigate: { url in
+                        guard !state.isRemotelyControlled, !state.isClosed else { return }
+                        state.service.navigate(state, url: url)
+                        editingAddress = false
+                    }
+                )
+                .disabled(state.isClosed)
                 if state.isRemotelyControlled {
                     Button { state.service.releaseBrowserControl(state.id) } label: {
                         Label("Take Back Control", symbol: .eye)
