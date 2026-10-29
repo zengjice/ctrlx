@@ -102,6 +102,8 @@ fixed-height strip. Switching the target recreates the strip's transient state,
 so an old pane's async result cannot replace the new pane's model list or error.
 Without Provider defaults, every discovered model and the selected model's
 supported efforts is initially visible. The current choice has a tinted background and checkmark.
+Model and effort buttons use the same regular bordered controls, callout font and
+minimum label height as Commands and Quick Phrases; the selected choice keeps its accent color.
 Right-click a button to hide it, or open the adjacent customization popover to
 change several checkboxes without reopening it. Changes apply immediately; Done,
 Escape or clicking outside closes the popover. It scrolls vertically when needed.

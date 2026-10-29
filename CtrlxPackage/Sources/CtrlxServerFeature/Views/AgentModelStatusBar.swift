@@ -281,17 +281,17 @@ struct AgentModelChoices: View {
         Button(action: action) {
             HStack(spacing: 3) {
                 if selected {
-                    Symbols.checkmark.image.font(.caption2.bold())
+                    Symbols.checkmark.image
                 }
                 Text(title).lineLimit(1)
             }
-            .font(.caption.weight(selected ? .semibold : .regular))
-            .padding(.horizontal, 8)
-            .frame(height: 28)
+            .font(.callout.weight(selected ? .semibold : .regular))
+            .frame(minWidth: 16, minHeight: 24)
             .foregroundStyle(selected ? settings.theme.workspaceAccentColor : settings.theme.workspaceSecondaryTextColor)
-            .background(settings.theme.workspaceAccentColor.opacity(selected ? 0.2 : 0.06), in: RoundedRectangle(cornerRadius: 6))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .tint(selected ? settings.theme.workspaceAccentColor : settings.theme.workspaceSecondaryTextColor)
         .disabled(unavailableReason != nil || selected)
         .help(unavailableReason ?? "Switch the selected pane to \(title)")
         .accessibilityAddTraits(selected ? .isSelected : [])
