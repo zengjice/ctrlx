@@ -2,6 +2,18 @@
 
 CtrlX releases bind each binary to an immutable source commit.
 
+Choose the workflow that matches the task:
+
+| Task | Entrypoint |
+|---|---|
+| Install a development build on this Mac or an iPhone | [Local overwrite installation](#local-overwrite-installation) |
+| Build a signed App or local IPA/DMG without installing | [Local build storage](#local-build-storage) |
+| Publish the macOS package to the private channel | [Publish only the macOS package](#publish-only-the-macos-package) |
+| Publish the hosted Relay and macOS package together | [Combined publication](#publish-the-hosted-relay-and-macos-package-together) |
+| Produce a notarized macOS release and appcast | [Formal macOS release](#formal-macos-release) |
+
+## Formal macOS release
+
 1. Update `Config/Shared-Base.xcconfig`, version docs and `MODIFICATIONS.md`.
    Increment `CURRENT_PROJECT_VERSION` for each newly distributed build, even
    when `MARKETING_VERSION` changes; do not reset it to 1. Keep the app and
@@ -126,7 +138,7 @@ worktree's ignored local signing config before building. Local development
 packaging keeps its existing uncommitted-build workflow; formal releases and
 the COS publisher still require clean, exactly tagged source.
 
-### Local overwrite installation
+## Local overwrite installation
 
 Use one entrypoint for both platforms rather than handwritten copy/install steps:
 
@@ -177,7 +189,7 @@ compiler-cache removal until install/launch succeeds; failure keeps those caches
 and diagnostic backups. The nested App build defers retention to this outer success
 boundary, so cleanup runs once, after installation and launch.
 Local packaging, formal release, native-browser preparation, package tests,
-installation and destructive cleanup share `.build-local/operation.lock`; a
+installation and worktree cleanup share `.build-local/operation.lock`; a
 conflicting operation fails before writing or deleting. Nested script calls borrow
 the same lock, while separate worktrees remain independent. Installation also locks
 its destination (the Mac App or explicit iPhone UUID) across worktrees.
@@ -187,7 +199,7 @@ stop them before cleanup, or wrap them in
 during builds. Neither installation command commits,
 publishes, deploys the Relay, or changes the external public installer.
 
-### Local build storage
+## Local build storage
 
 Keep the existing entrypoints: two platform packaging scripts, one local installer,
 one cleaner. `local_build.py` and `common.sh` are internal shared helpers, not a
@@ -198,6 +210,22 @@ second build/signing implementation. To compile/sign without installing or packa
 ./scripts/package-local-ios.sh --app-only
 ./scripts/package-local-ios.sh --app-only --configuration Debug
 ```
+
+For manual cleanup, run `python3 scripts/clean-build.py <mode>`. The modes below
+preview candidates by default; inspect the preview before adding `--yes`.
+Stop affected builds, tests and installs before deletion. Worktree modes never
+scan another worktree; `system-temp` has a separate current-user scope and lock.
+
+| Mode | Removes | Preserves |
+|---|---|---|
+| `housekeeping` | Explicitly completed backups/diagnostics and verified public-download copies | Build caches and unmarked evidence |
+| `retained` | Older completed verification copies and install backups | Two completed inactive copies per kind; active, failed and unmarked copies |
+| `receipts` | Public-download copies with a successful receipt and matching hash | Distribution packages, reports and unmatched copies |
+| `idle` | Compilation caches, indexes, redundant dependencies, older managed copies and verified downloads | Signed apps, Swift Build products, packages and shared downloads |
+| `deep` | Known worktree build/cache directories, including built apps and downloaded build dependencies | `dist/`, signing config, installed apps, browser profiles and `.build-local/cef-sdk/` |
+| `system-temp` | Allowlisted stale macOS signing clones and legacy E2E compilation caches | Active/recent clones, two inactive clones per bundle ID, products and unrelated temporary data |
+
+### Packaging and test cleanup
 
 Without `--app-only`, local scripts create the package and its integrity sidecars
 in a temporary worktree directory, validate them, then replace the final files.
@@ -281,7 +309,9 @@ compilation caches, but keeps test products and downloaded dependencies. Failed
 tests perform no cleanup. The E2E sidecar build uses the same backend and indexing
 policy. Do not build or clean the same package cache concurrently.
 
-For an inactive worktree, prefer this narrower cleanup over `deep`:
+### Inactive worktrees
+
+Prefer `idle` when a worktree is no longer being built or tested:
 
 ```bash
 python3 scripts/clean-build.py idle        # Preview only
@@ -295,6 +325,49 @@ retention as packaging. Signed apps in DerivedData, Swift Build products, IPA/DM
 files, dependency downloads, Chromium SDKs and signing configuration remain.
 It does not scan other worktrees or automatically decide which ones are idle.
 The next build recompiles; the kept dependency caches remain reusable.
+
+### macOS user temporary caches
+
+This explicit mode handles the current macOS user's temporary caches across
+worktrees. Packaging, `idle` and `housekeeping` never invoke it:
+
+```bash
+python3 scripts/clean-build.py system-temp        # Preview only
+python3 scripts/clean-build.py system-temp --yes  # Apply after stopping E2E builds/tests
+```
+
+It locates `/private/var/folders/.../T` through `getconf DARWIN_USER_TEMP_DIR`;
+the inherited `TMPDIR` may instead point into a live updater's staging directory.
+Only these two kinds of data are eligible:
+
+- Sibling `X/<bundle-id>.code_sign_clone/code_sign_clone.<six characters>`
+  directories for `com.jicezeng.ctrlx.macos`, `com.ctrlx.embedded-acceptance`,
+  `com.ctrlx.extensions-acceptance`, and `com.ctrlx.experimental.browser-probe`.
+  A copy must contain exactly one `.app.bundle` with a matching
+  `CFBundleIdentifier`. Keep all active copies and the two most recently modified
+  inactive copies per bundle ID. Delete an older inactive copy only if its
+  directory modification time is more than 24 hours old; recent inactive copies
+  count toward the retained two.
+- Legacy `T/ctrlx-e2e-derived-data` compilation/module/SDK caches and indexes.
+  The directory and selected cache trees must be older than 24 hours, including
+  nested cache files. Keep `Build/Products`, `SourcePackages` and logs.
+
+E2E builds default to worktree-local `.build-local/DerivedData/E2E`, whose
+compilation caches are covered by `idle`. `REPORT_DERIVED_DATA` takes precedence
+over `SANDBOX_DERIVED_DATA`, then the default. After moving to the new default,
+build once without `--skip-build` before reusing its artifacts.
+
+Cleanup checks process arguments and open files, including mapped binaries and
+working directories. A process/open-file inspection failure aborts cleanup;
+unreadable or unrecognized bundle identities are kept. Applying it takes a
+per-user lock and rechecks candidates before deletion. Symlinked targets and paths
+owned by another user are rejected. The lock serializes this cleanup mode only;
+it does not prevent Xcode or macOS from creating or using caches. Stop E2E builds
+and tests first, and do not use `sudo`.
+
+Excluded: other bundle IDs, `cx-upstream-*` evidence, updater staging, simulators,
+SDKs, `/tmp`, `/var/tmp` and other apps' caches. `du` can overstate reclaimed space
+for APFS clones; compare actual free space before and after cleanup.
 
 ### Verification copies and local install backups
 
@@ -340,11 +413,14 @@ python3 scripts/clean-build.py retained --yes
 
 The preview also lists matching legacy directories with no completion record.
 Do not bulk mark those as successful: audit them individually before adopting or
-removing them. No sweep follows symlinks or reaches another worktree, `/tmp`, global
-Xcode caches, simulator devices/profiles, or arbitrary acceptance/evidence folders.
+removing them. This worktree retention never follows symlinks or reaches another
+worktree, `/tmp`, global Xcode caches, simulator devices/profiles, or arbitrary
+acceptance/evidence folders.
 Those need their owning workflow's explicit shutdown and cleanup, not a directory-name
 guess. Prefer keeping incremental caches while actively developing, then run `idle`
 from that worktree after its builds and installs stop.
+
+### Public download copies
 
 Packaging also removes `dist/qcloud-release/<version>/public-CtrlX-<version>.dmg`
 copies whose latest publication report records success and whose SHA-256 still
@@ -358,8 +434,10 @@ To preview cleanup of these verified copies without building:
 python3 scripts/clean-build.py receipts
 ```
 
-Incremental build caches, shared downloaded dependencies and Chromium SDKs are kept
-to avoid repeated downloads and full rebuilds. For manual deep cleanup:
+### Deep cleanup
+
+Use `deep` only when removing built apps and downloaded build dependencies is
+intended; prefer `idle` to retain them:
 
 ```bash
 python3 scripts/clean-build.py deep        # Preview only
@@ -370,7 +448,7 @@ Stop builds, packaging and device installs in that worktree first. Deep cleanup
 also removes built installable apps and legacy `package-ios`/`package-macos`
 copies, but preserves `dist/`, signing configuration, installed apps and browser
 profiles. It does not touch other worktrees, Xcode's global caches or simulators.
-The next build must download dependencies/SDKs and compile again.
+The next build recompiles and may need to download dependencies/SDKs again.
 
 Keep an original custom CEF binary SDK under `.build-local/cef-sdk/` and point
 `CTRLX_CEF_SDK_ROOT` in ignored `Config/Local-macOS.xcconfig` at that SDK directory.
