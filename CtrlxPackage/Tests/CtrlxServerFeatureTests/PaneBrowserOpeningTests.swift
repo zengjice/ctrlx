@@ -3,6 +3,7 @@
     import ConcurrencyExtras
     import CtrlxBrowserBridge
     import CtrlxCommon
+    import CtrlxEncryption
     import CtrlxNetworking
     import Dependencies
     import Testing
@@ -106,6 +107,53 @@
                 return Self.pane(id)
             }
             return (service, runtime)
+        }
+
+        @Test("Independent browser opens load the homepage or explicit URL with the intended address focus", arguments: [
+            String?.none, "https://www.google.com/", "http://localhost:3000/page?mode=preview#section",
+        ])
+        func independentHomepage(location: String?) async throws {
+            let (service, runtime) = fixture()
+            let session = ResourceSession(id: UUID(), name: "work", directory: "/tmp")
+            let url = location.flatMap { URL(string: $0) }
+            let page = try await service.openResourceBrowser(session: session, url: url)
+            let expected = location ?? BrowserWebURL.homepage.absoluteString
+            #expect(runtime.requests.count == 1)
+            #expect(runtime.navigations.map { $0.1 } == [expected])
+            #expect(page.url == expected)
+            #expect(page.requestsInitialAddressFocus == (location == nil))
+            #expect(page.resourceSessionID == session.id)
+            #expect(service.descriptor(page).sourcePaneID == nil)
+            await service.shutdown()
+        }
+
+        @Test("The shared Host resource entry opens a fresh homepage for each no-URL request")
+        func resourceEntryHomepage() async throws {
+            try await withDependencies {
+                $0[PreferencesService.self] = .inMemory()
+                $0[SecretsService.self] = .inMemory()
+                $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+            } operation: {
+                let (service, runtime) = fixture()
+                let coordinator = AppCoordinator(agentBrowser: service)
+                let session = ResourceSession(id: UUID(), name: "work", directory: "/tmp")
+                coordinator.resourceSessions.restore([session])
+                coordinator.resourceSessions.retainResources(in: [session.id])
+                let locations: [String?] = [nil, "https://example.com/source-link", nil]
+                var ids: [UUID] = []
+                for location in locations {
+                    let response = try await coordinator.handleResourceTab(.init(sessionID: session.id, operation: .open(kind: .browser, location: location)))
+                    let browser = try #require(response.browser)
+                    #expect(browser.url == (location ?? BrowserWebURL.homepage.absoluteString))
+                    #expect(browser.sourcePaneID == nil && browser.resourceSessionID == session.id)
+                    ids.append(browser.id)
+                }
+                #expect(Set(ids).count == 3)
+                #expect(runtime.requests.count == 3)
+                #expect(runtime.navigations.map { $0.0 } == ids.map(\.uuidString))
+                #expect(service.sharedBrowserTabs.first { $0.id == ids[1] }?.url == locations[1])
+                await service.shutdown()
+            }
         }
 
         @Test("A terminal link's new independent page attaches to the source native window")

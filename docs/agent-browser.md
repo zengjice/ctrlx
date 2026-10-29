@@ -155,7 +155,10 @@ Cancelled/obsolete UI requests do not switch selection, including a switch from
 the terminal to Git/Files within the same Mac window.
 
 Opening Browser without a link loads `https://www.google.com/` as the default
-homepage on Mac and iOS. Address fields treat explicit HTTP(S) URLs and
+homepage on Mac and iOS. The Host applies this default to independent resource
+tabs too; a no-URL open keeps initial address focus, while an explicit link opens
+its requested address without requesting initial address focus.
+Address fields treat explicit HTTP(S) URLs and
 host-like input (for example `example.com` or `localhost:3000`) as navigation,
 and send other text to Google search.
 

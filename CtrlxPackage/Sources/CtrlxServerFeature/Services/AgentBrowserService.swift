@@ -784,10 +784,8 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         }
         try await ensureStarted()
         let tab = try await createManualTab(sessionName: session.name, pane: nil, resourceSessionID: session.id)
-        if let url {
-            tab.requestsInitialAddressFocus = false
-            runtime?.navigateTab(tab.identifier, url: url.absoluteString)
-        }
+        tab.requestsInitialAddressFocus = url == nil
+        runtime?.navigateTab(tab.identifier, url: (url ?? BrowserWebURL.homepage).absoluteString)
         return tab
     }
 
