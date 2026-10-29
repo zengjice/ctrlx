@@ -4797,6 +4797,7 @@ public struct MainView: View {
             }
             let result = try await requestIndependentResource(.files, hostID: hostID, sessionName: sessionName)
             guard let file = result.file else { throw FileBrowserError.message("No Files tab was returned.") }
+            _ = try claimHostFileTab(file, hostID: hostID)
             return file
         }
         if let hostID {
@@ -4810,16 +4811,8 @@ public struct MainView: View {
     }
 
     private func presentHostFileTab(_ descriptor: HostFileTab, hostID: String?, windowID: String?) throws -> FileBrowserTab {
-        let catalog: [HostFileTab]
-        if let hostID {
-            catalog = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient.fileTabs ?? []
-        } else {
-            catalog = coordinator.hostFileTabs.tabs
-        }
-        syncHostFiles(hostID: hostID, descriptors: catalog.filter { $0.id != descriptor.id } + [descriptor])
-        coordinator.detachedWindows.claimFile(descriptor.id, hostID: hostID, session: descriptor.sessionName, workspaceID: detachedWorkspace?.id)
+        let tab = try claimHostFileTab(descriptor, hostID: hostID)
         let tabs = tabStore.tabs(hostID: hostID, session: descriptor.sessionName)
-        guard let tab = tabs.directoryTabs[descriptor.id] else { throw FileBrowserError.message("The Host Files tab is no longer available.") }
         tab.lastSelectedAt = Date()
         if let windowID, descriptor.resourceSessionID == nil, let index = tabs.openFileTabs.firstIndex(where: { $0.id == tab.id }) {
             tabs.openFileTabs[index].origin = .terminalWindow(windowID)
@@ -4836,6 +4829,21 @@ public struct MainView: View {
                 tabs.selectedBrowserTabId = nil
             }
         }
+        return tab
+    }
+
+    private func claimHostFileTab(_ descriptor: HostFileTab, hostID: String?) throws -> FileBrowserTab {
+        guard coordinator.detachedWindows.store(for: detachedWorkspace?.id) === tabStore else { throw CancellationError() }
+        let catalog: [HostFileTab]
+        if let hostID {
+            catalog = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient.fileTabs ?? []
+        } else {
+            catalog = coordinator.hostFileTabs.tabs
+        }
+        syncHostFiles(hostID: hostID, descriptors: catalog.filter { $0.id != descriptor.id } + [descriptor])
+        coordinator.detachedWindows.claimFile(descriptor.id, hostID: hostID, session: descriptor.sessionName, workspaceID: detachedWorkspace?.id)
+        let tabs = tabStore.tabs(hostID: hostID, session: descriptor.sessionName)
+        guard let tab = tabs.directoryTabs[descriptor.id] else { throw FileBrowserError.message("The Host Files tab is no longer available.") }
         return tab
     }
 
@@ -5480,8 +5488,9 @@ public struct MainView: View {
         Task {
             do {
                 let result = try await requestIndependentResource(kind, hostID: hostID, sessionName: sessionName, location: location)
-                guard browserOpenSelection(for: target) == selection else { return }
                 if let file = result.file {
+                    _ = try claimHostFileTab(file, hostID: hostID)
+                    guard browserOpenSelection(for: target) == selection else { return }
                     let tab = try presentHostFileTab(file, hostID: hostID, windowID: nil)
                     tab.selectedFile = selectedFile
                     if focusSearch {
@@ -5490,11 +5499,28 @@ public struct MainView: View {
                     }
                 }
                 if let id = result.browser?.id ?? result.simulator?.id {
-                    claimBrowser(id, hostID: hostID, session: sessionName, windowID: nil)
+                    var tab = BrowserTab(
+                        id: id,
+                        url: result.browser.flatMap { URL(string: $0.url) } ?? URL(staticString: "about:blank"),
+                        displayTitle: result.browser?.title ?? result.simulator?.title
+                    )
+                    tab.isAgentBrowser = result.browser != nil
+                    tab.isSimulator = result.simulator != nil
+                    guard
+                        coordinator.detachedWindows.claimOpenedBrowser(
+                            tab, hostID: hostID, session: sessionName, workspaceID: detachedWorkspace?.id, resolveSession: terminalSession
+                        ) else { return }
                     if let hostID, let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient {
                         syncHostBrowserTabs(hostId: hostID, sessionName: sessionName, client: client)
+                        guard browserOpenSelection(for: target) == selection else { return }
                         selectRemoteBrowserTab(id, hostId: hostID, sessionName: sessionName)
                     } else {
+                        coordinator.agentBrowser.register(agentBrowserWorkspace)
+                        coordinator.agentSimulator.register(simulatorWorkspace)
+                        guard browserOpenSelection(for: target) == selection else { return }
+                        if location == nil {
+                            manualBrowserTabs(for: target)?.agentBrowserStates[id]?.requestsInitialAddressFocus = true
+                        }
                         selectBrowserTab(id, sessionName: sessionName, windowId: nil)
                     }
                 }
@@ -5761,6 +5787,7 @@ public struct MainView: View {
                     sessionFileTabsStates[target.sessionName] = SessionFileTabsState()
                 }
                 guard let tabs = manualBrowserTabs(for: target) else { return }
+                tabs.agentBrowserStates[state.id] = state
                 guard !tabs.openBrowserTabs.contains(where: { $0.id == state.id }) else { return }
                 var tab = BrowserTab(
                     id: state.id,
@@ -5772,7 +5799,6 @@ public struct MainView: View {
                 // WebKit or implicitly give a future agent control of a page.
                 tab.isAgentBrowser = true
                 tabs.openBrowserTabs.append(tab)
-                tabs.agentBrowserStates[state.id] = state
                 state.requestsInitialAddressFocus = parent == nil
                 let sourceWindow = tmuxService.windows.first { $0.panes.contains { $0.paneId == state.paneID } }
                 if

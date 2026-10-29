@@ -309,6 +309,36 @@ final class DetachedTerminalWindows {
         return windowID.flatMap { owner(hostID: hostID, windowID: $0) }
     }
 
+    /// A creation reply can arrive before the catalog is projected into any window.
+    /// Record its placement without selecting it; the caller separately validates focus.
+    @discardableResult
+    func claimOpenedBrowser(_ tab: BrowserTab, hostID: String?, session: String, workspaceID: UUID?, resolveSession: (DetachedTerminalTarget) -> String?) -> Bool {
+        guard let destinationStore = store(for: workspaceID) else { return false }
+        if let workspaceID {
+            guard
+                let group = workspaces[workspaceID], group.hostID == hostID,
+                group.resolvedSession(using: resolveSession) == session else { return false }
+        }
+        let destination = destinationStore.tabs(hostID: hostID, session: session)
+        if destination.openBrowserTabs.contains(where: { $0.id == tab.id }) {
+            return true
+        }
+        if
+            let source = ([mainTabs] + workspaces.values.map(\.tabs))
+                .compactMap({ $0.existing(hostID: hostID, session: session) })
+                .first(where: { $0.openBrowserTabs.contains { $0.id == tab.id } }) {
+            guard source.move(.browser(tab.id), to: destination) else { return false }
+        } else {
+            destination.openBrowserTabs.append(tab)
+            if !destination.tabOrder.contains(.browser(tab.id)) {
+                destination.tabOrder.append(.browser(tab.id))
+            }
+        }
+        presentationRevision += 1
+        closeEmptyWorkspaces()
+        return true
+    }
+
     /// Existing placement wins; a new tab initially follows its source terminal.
     func simulatorTabs(_ catalog: [RemoteSimulatorTab], hostID: String, session: String, workspaceID: UUID?) -> [RemoteSimulatorTab] {
         catalog.filter {

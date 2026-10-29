@@ -139,6 +139,11 @@ the main window; the last returned tab closes the empty detached window.
 Mac tab titles use the system body size for better readability.
 On updated Hosts, **Open Files** always creates an independent tab; terminal
 file links reuse the most recently selected independent Files in this window.
+New Files and Browser tabs opened from terminal links stay in the source native
+window, including detached windows, on both Mac Host and Viewer. Creation replies
+establish that placement before catalog synchronization; a late reply does not
+select its tab if the user has already switched away. This placement does not
+bind an independent resource back to the source pane.
 Older Hosts retain pane-default reuse and **Open Another Files Tab**. Tab identity and source routing belong to the Host;
 directory, preview, ordering, split placement and selection belong to each client.
 On iOS, a Files tab fills the session content area. The title opens a native

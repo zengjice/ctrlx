@@ -36,6 +36,10 @@ Human New Browser and terminal URL links create independent pages in the stable
 Host session, without a pane dependency. Agent opens retain their existing owner
 and source group. Human pages can be split, detached and returned like terminals.
 Closing their former source terminal does not close them.
+On Mac Host and Viewer, a terminal URL opens in the native window containing the
+source terminal. The creation reply records this placement before the browser
+catalog is projected, so detached-window links do not fall back to the main
+window. Selection still requires the initiating view to remain current.
 
 **Allow Agent to Use…** selects one verified live process in the same session.
 Ownership remains human; `tabs` includes explicitly authorized pages. The native

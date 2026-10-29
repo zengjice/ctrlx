@@ -13,6 +13,120 @@ struct DetachedResourceTabsTests {
         case simulator
     }
 
+    @Test(arguments: [nil, "viewer"] as [String?], [false, true])
+    func creationReplyClaimsSourceWindowBeforeCatalogProjection(host: String?, simulator: Bool) throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let group = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        let tabs = group.tabs.tabs(hostID: host, session: "work")
+        let main = manager.mainTabs.tabs(hostID: host, session: "work")
+        let selection = group.selection
+        let selectionRevision = group.selectionRevision
+        var tab = BrowserTab(url: URL(staticString: "https://example.com"))
+        tab.isAgentBrowser = !simulator
+        tab.isSimulator = simulator
+
+        #expect(manager.claimOpenedBrowser(tab, hostID: host, session: "work", workspaceID: group.id, resolveSession: { _ in "work" }))
+        #expect(manager.browserOwner(hostID: host, session: "work", id: tab.id, windowID: nil) == group.id)
+        #expect(main.openBrowserTabs.isEmpty)
+        #expect(tabs.openBrowserTabs == [tab])
+        #expect(group.selection == selection && group.selectionRevision == selectionRevision)
+        #expect(tabs.selectedBrowserTabId == nil)
+
+        // The later Host catalog must update the adopted tab, not create one in main.
+        if simulator {
+            let descriptor = RemoteSimulatorTab(id: tab.id, sessionName: "work", title: "Phone", runtime: "iOS", isPrimary: false, resourceSessionID: UUID())
+            for (id, state) in [(nil, main), (group.id, tabs)] as [(UUID?, SessionFileTabsState)] {
+                state.syncHostSimulatorTabs([descriptor].filter {
+                    manager.browserOwner(hostID: host, session: "work", id: $0.id, windowID: $0.windowID) == id
+                }, sessionWindowIDs: ["@1"])
+            }
+        } else {
+            let descriptor = RemoteBrowserTab(id: tab.id, sessionName: "work", title: "Page", url: tab.url.absoluteString, isLoading: false, isAgentOwned: false, resourceSessionID: UUID())
+            for (id, state) in [(nil, main), (group.id, tabs)] as [(UUID?, SessionFileTabsState)] {
+                state.syncHostBrowserTabs([descriptor].filter {
+                    manager.browserOwner(hostID: host, session: "work", id: $0.id, windowID: $0.windowID) == id
+                }, sessionWindowIDs: ["@1"])
+            }
+        }
+        let revision = manager.presentationRevision
+        #expect(manager.claimOpenedBrowser(tab, hostID: host, session: "work", workspaceID: group.id, resolveSession: { _ in "work" }))
+        #expect(manager.presentationRevision == revision)
+        #expect(main.openBrowserTabs.isEmpty && tabs.openBrowserTabs.map(\.id) == [tab.id])
+        #expect(tabs.openBrowserTabs.first?.originWindowId == nil)
+        #expect(tabs.openBrowserTabs.first?.isSimulator == simulator)
+        #expect(tabs.selectedBrowserTabId == nil)
+    }
+
+    @Test(arguments: [nil, "viewer"] as [String?], [Kind.browser, .simulator])
+    func creationReplyMovesAlreadyProjectedResourceWithoutChangingSelection(host: String?, kind: Kind) throws {
+        let manager = DetachedTerminalWindows()
+        let main = manager.mainTabs.tabs(hostID: host, session: "work")
+        let payload = resource(kind, in: main)
+        let tab = try #require(main.openBrowserTabs.first)
+        let target = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let group = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        let destination = group.tabs.tabs(hostID: host, session: "work")
+        let selection = group.selection
+        main.selectedBrowserTabId = tab.id
+        main.rightSide = [payload]
+        main.selectedRight = payload
+        let browserState = main.remoteBrowserTabs[tab.id]
+        let simulatorState = main.remoteSimulatorTabs[tab.id]
+
+        #expect(manager.claimOpenedBrowser(tab, hostID: host, session: "work", workspaceID: group.id, resolveSession: { _ in "work" }))
+
+        #expect(main.openBrowserTabs.isEmpty && main.selectedBrowserTabId == nil && main.selectedRight == nil)
+        #expect(destination.openBrowserTabs.map(\.id) == [tab.id])
+        #expect(destination.remoteBrowserTabs[tab.id] == browserState)
+        #expect(destination.remoteSimulatorTabs[tab.id] == simulatorState)
+        #expect(group.selection == selection && destination.selectedBrowserTabId == nil)
+    }
+
+    @Test(arguments: ["host", "session", "closed"])
+    func creationReplyRejectsUnrelatedOrClosedWindow(_ reason: String) throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: "viewer", windowID: "@1"))
+        let group = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        let tab = BrowserTab(url: URL(staticString: "about:blank"))
+
+        #expect(!manager.claimOpenedBrowser(
+            tab, hostID: reason == "host" ? "other" : "viewer", session: reason == "session" ? "other" : "work",
+            workspaceID: reason == "closed" ? UUID() : group.id, resolveSession: { _ in "work" }
+        ))
+        #expect(group.tabs.tabs(hostID: "viewer", session: "work").openBrowserTabs.isEmpty)
+        #expect(manager.mainTabs.tabs(hostID: "viewer", session: "work").openBrowserTabs.isEmpty)
+        #expect(group.tabs.existing(hostID: "other", session: "work") == nil)
+        #expect(group.tabs.existing(hostID: "viewer", session: "other") == nil)
+    }
+
+    @Test(arguments: [nil, "viewer"] as [String?])
+    func independentFileLinkKeepsSourceWindowAndMainFilesNavigation(host: String?) throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let group = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        let existing = HostFileTab(sessionName: "work", initialDirectory: "/main", resourceSessionID: UUID())
+        let created = HostFileTab(sessionName: "work", initialDirectory: "/source", resourceSessionID: existing.resourceSessionID)
+        let windows = ["work": ["@1", "@2"]]
+        manager.syncFileTabs(hostID: host, descriptors: [existing, created], sessionWindows: windows)
+        let main = manager.mainTabs.tabs(hostID: host, session: "work")
+        let mainFile = try #require(main.directoryTabs[existing.id])
+        mainFile.navigate("/main/retained")
+        main.selectedFileTabId = existing.id
+
+        manager.claimFile(created.id, hostID: host, session: "work", workspaceID: group.id)
+        let detached = group.tabs.tabs(hostID: host, session: "work")
+        let file = try #require(detached.directoryTabs[created.id])
+        file.navigate("/source/child")
+        manager.syncFileTabs(hostID: host, descriptors: [existing, created], sessionWindows: windows)
+
+        #expect(detached.directoryTabs[created.id] === file && file.path == "/source/child")
+        #expect(file.sourcePaneID == nil)
+        #expect(main.openFileTabs.map(\.id) == [existing.id])
+        #expect(main.directoryTabs[existing.id] === mainFile && mainFile.path == "/main/retained")
+        #expect(main.selectedFileTabId == existing.id && detached.selectedFileTabId == nil)
+    }
+
     private func resource(_ kind: Kind, in tabs: SessionFileTabsState) -> TabDragPayload {
         if kind == .files {
             let file = FileBrowserTab(path: "/fixture", sourcePaneID: "%1")

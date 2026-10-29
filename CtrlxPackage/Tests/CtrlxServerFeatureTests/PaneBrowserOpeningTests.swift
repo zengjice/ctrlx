@@ -108,6 +108,43 @@
             return (service, runtime)
         }
 
+        @Test("A terminal link's new independent page attaches to the source native window")
+        func independentLinkFollowsClaimedWindow() async throws {
+            let (service, runtime) = fixture()
+            let manager = DetachedTerminalWindows()
+            let target = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@1"))
+            let group = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+            let main = AgentBrowserWorkspace()
+            let detached = AgentBrowserWorkspace()
+            main.acceptsTab = { manager.browserOwner(hostID: nil, session: "work", id: $0.id, windowID: nil) == nil }
+            detached.acceptsTab = { manager.browserOwner(hostID: nil, session: "work", id: $0.id, windowID: nil) == group.id }
+            var created: AgentBrowserTabState?
+            var selections = 0
+            detached.onCreate = { state, _ in created = state }
+            detached.onSelect = { _ in selections += 1 }
+            service.register(main)
+            service.register(detached)
+            defer {
+                service.unregister(detached)
+                service.unregister(main)
+            }
+
+            let url = URL(staticString: "https://example.com/source-link")
+            let page = try await service.openResourceBrowser(session: .init(id: UUID(), name: "work", directory: "/tmp"), url: url)
+            let view = page.view
+            var tab = BrowserTab(id: page.id, url: url)
+            tab.isAgentBrowser = true
+            #expect(manager.claimOpenedBrowser(tab, hostID: nil, session: "work", workspaceID: group.id, resolveSession: { _ in "work" }))
+            service.register(detached)
+
+            #expect(created === page && page.workspaceID == detached.id)
+            #expect(page.view === view && !page.isClosed)
+            #expect(page.url == url.absoluteString && !page.requestsInitialAddressFocus)
+            #expect(selections == 0 && runtime.closed.isEmpty)
+            #expect(manager.mainTabs.tabs(hostID: nil, session: "work").openBrowserTabs.isEmpty)
+            service.browserTabClosed(page.identifier)
+        }
+
         @Test
         func linkPreferencesSurviveRetiredEngineSetting() {
             let preferences = PreferencesService.inMemory()
