@@ -20,6 +20,10 @@
             ["                              ⚠ weekly limit: 8% left · /status"],
             ["⚠ weekly limit: only 1% left"],
             ["⚠ weekly limit:", "8% left ·", "/status"],
+            ["⚠ weekly limit: 13% left · resets at 14:43 on 4 Nov · /status"],
+            ["⚠ weekly limit: only 1% left · resets at 09:05 · /status"],
+            ["⚠ weekly limit: 13% left · resets at 2:43 PM on 4 Nov · /status"],
+            ["⚠ weekly limit: 13% left · resets at", "14:43 on 4 Nov · /status"],
         ]
 
         private nonisolated static func screen(

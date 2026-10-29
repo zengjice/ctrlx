@@ -92,7 +92,16 @@ public struct CodexQuestionPrompt: Equatable, Sendable {
             let remaining = Int(digits), (0...100).contains(remaining)
         else { return false }
         let tail = suffix.dropFirst()
-        return tail.elementsEqual(["left"]) || tail.elementsEqual(["left", "·", "/status"])
+        if tail.elementsEqual(["left"]) || tail.elementsEqual(["left", "·", "/status"]) {
+            return true
+        }
+        // Codex uses the system's 12/24-hour clock and adds a date for another day.
+        let time = #"(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]|(?:[1-9]|1[0-2]):[0-5][0-9] (?:AM|PM))"#
+        let date = #"(?: on (?:[1-9]|[12][0-9]|3[01]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))?"#
+        return tail.joined(separator: " ").range(
+            of: "^left · resets at \(time)\(date) · /status$",
+            options: .regularExpression
+        ) != nil
     }
 
     private static func isAnswerHint(_ text: String) -> Bool {

@@ -148,6 +148,9 @@ order is not arbitrary, and other keys or additional modifiers are rejected.
 The known `⚠ weekly limit: N% left · /status` and
 `⚠ weekly limit: only N% left` warnings may follow the answer hint before the
 composer, including word wrapping within the same eight preceding live rows.
+The optional `· resets at TIME` segment before `· /status` accepts Codex's
+24-hour (`14:43`) and 12-hour (`2:43 PM`) clocks, with an optional `on 4 Nov`
+date. Reset-time and date changes do not change question identity.
 Only a complete weekly-limit suffix is accepted; unknown warnings, incomplete
 suffixes and intervening output still fail closed. Warning changes are
 presentation-only and cannot re-arm a dismissed question.

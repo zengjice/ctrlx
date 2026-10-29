@@ -34,6 +34,17 @@ struct CodexQuestionTerminalTests {
         #expect(terminal.buffer.x == 2 && terminal.buffer.y == 6)
     }
 
+    @Test("The current reset notice is recognized after native terminal wrapping", arguments: [69, 48])
+    func resetNotice(columns: Int) throws {
+        let delegate = Delegate()
+        defer { withExtendedLifetime(delegate) { } }
+        let terminal = Terminal(delegate: delegate, options: .init(cols: columns, rows: 12))
+        drawPrompt(terminal)
+        terminal.feed(text: "\u{1B}[5;1H⚠ weekly limit: 13% left · resets at 14:43 on 4 Nov · /status\u{1B}[7;3H")
+        #expect(try CodexQuestionPrompt(terminal: terminal).count == 1)
+        #expect(terminal.buffer.x == 2 && terminal.buffer.y == 6)
+    }
+
     @Test("Blank-cell conversion preserves drafts and does not join text fragments", arguments: [
         "draft", "你好", "🧑‍💻", "As\u{1B}[1Ck Codex to do anything", "Ask Codex to do anything draft",
     ])

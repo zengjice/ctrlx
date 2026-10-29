@@ -20,6 +20,12 @@ struct CodexQuestionPromptUsageWarningTests {
         ["⚠ weekly limit: 8% left", "  · /status"],
         ["⚠ weekly limit:", "  only 1% left"],
         ["⚠ weekly limit:", "8% left ·", "/status"],
+        ["⚠ weekly limit: 13% left · resets at 14:43 on 4 Nov · /status"],
+        ["⚠ weekly limit: only 1% left · resets at 09:05 · /status"],
+        ["⚠ weekly limit: 13% left · resets at 2:43 PM on 4 Nov · /status"],
+        ["⚠ weekly limit: only 1% left · resets at 12:05 AM · /status"],
+        ["⚠ weekly limit: 13% left · resets at", "14:43 on 4 Nov · /status"],
+        ["⚠ weekly limit:", "only 13% left · resets at 14:43 on 4 Nov", "· /status"],
     ])
     func knownWarning(warning: [String]) {
         #expect(prompt(warning: warning)?.count == 1)
@@ -36,6 +42,8 @@ struct CodexQuestionPromptUsageWarningTests {
             ["⚠ weekly limit: 8% left · /status"],
             ["⚠ weekly limit: only 1% left"],
             ["⚠ weekly limit: only", "1% left"],
+            ["⚠ weekly limit: 13% left · resets at 14:43 on 4 Nov · /status"],
+            ["⚠ weekly limit: 13% left · resets at", "14:44 on 4 Nov · /status"],
             [],
         ] {
             let updated = try #require(prompt(warning: warning))
@@ -51,6 +59,19 @@ struct CodexQuestionPromptUsageWarningTests {
         "⚠ weekly limit: -1% left", "⚠ weekly limit: 101% left", "⚠ weekly limit: 1.5% left",
         "⚠ weekly limit: １% left", "⚠ weekly limit: +1% left", "⚠ weekly limit: % left",
         "⚠ weekly limit: 8 left", "⚠ daily limit: 8% left", "⚠ unrelated warning",
+        "⚠ weekly limit: 13% left · resets at",
+        "⚠ weekly limit: 13% left · resets at · /status",
+        "⚠ weekly limit: 13% left · resets at 14:43 on · /status",
+        "⚠ weekly limit: 13% left · resets at 14:43 on 4 Nov ·",
+        "⚠ weekly limit: 13% left · resets at 14:43 on 4 Nov · /unknown",
+        "⚠ weekly limit: 13% left · resets at 14:43 on 4 Nov · /status extra output",
+        "⚠ weekly limit: 13% left · resets at 24:00 · /status",
+        "⚠ weekly limit: 13% left · resets at 14:60 · /status",
+        "⚠ weekly limit: 13% left · resets at 0:05 AM · /status",
+        "⚠ weekly limit: 13% left · resets at 14:43 PM · /status",
+        "⚠ weekly limit: 13% left · resets at 14:43 on 0 Nov · /status",
+        "⚠ weekly limit: 13% left · resets at 14:43 on 32 Nov · /status",
+        "⚠ weekly limit: 13% left · resets at 14:43 on 4 unknown · /status",
         "⚠ Heads up, you have less than 10% of your weekly limit left. Run /status for a breakdown.",
     ])
     func unknownWarning(warning: String) {
@@ -62,14 +83,19 @@ struct CodexQuestionPromptUsageWarningTests {
         ["⚠ weekly limit: 8% left · /status", "extra output"],
         ["⚠ weekly limit: 8% left", "↳ draft", "· /status"],
         ["⚠ weekly limit: 8% left", "⚠ weekly limit: only 1% left"],
+        ["⚠ weekly limit: 13% left · resets at 14:43", "↳ draft", "on 4 Nov · /status"],
+        ["⚠ weekly limit: 13% left · resets at 14:43 on 4 Nov · /status", "extra output"],
     ])
     func unrelatedOutput(warning: [String]) {
         #expect(prompt(warning: warning) == nil)
     }
 
-    @Test("Known warnings do not relax draft, cursor or answer-hint checks")
-    func guards() {
-        let warning = ["⚠ weekly limit: only 1% left"]
+    @Test("Known warnings do not relax draft, cursor or answer-hint checks", arguments: [
+        "⚠ weekly limit: only 1% left",
+        "⚠ weekly limit: 13% left · resets at 14:43 on 4 Nov · /status",
+    ])
+    func guards(text: String) {
+        let warning = [text]
         #expect(prompt(warning: warning, composer: "› draft") == nil)
         #expect(prompt(warning: warning, cursorColumn: 3) == nil)
         #expect(prompt(warning: warning, hint: "⇧→ to answer") == nil)
