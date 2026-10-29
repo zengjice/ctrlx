@@ -44,6 +44,10 @@ Local, remote Viewer and detached workspaces share this behavior. Vertical
 scrolling and the tab strip's own overflow scrolling remain unchanged. Hold
 Option while scrolling to use the content's existing horizontal scrolling
 instead. Short or cancelled swipes and momentum do not switch tabs.
+The entire terminal status bar is excluded using its actual layout bounds,
+including Commands, Quick Phrases, voice, model/effort buttons and session details.
+Horizontal scrolling there scrolls the model strip; its customization button stays
+fixed at the trailing edge. This also applies to each split and detached window.
 
 Closing the selected terminal tab on Mac or iOS selects the first remaining
 terminal tab in that strip, ahead of any interleaved Files or browser tabs.
@@ -98,8 +102,11 @@ fixed-height strip. Switching the target recreates the strip's transient state,
 so an old pane's async result cannot replace the new pane's model list or error.
 Every discovered model and the selected model's supported efforts is
 initially visible. The current choice has a tinted background and checkmark.
-Right-click a button to hide it, or use the adjacent customization menu to restore
-individual buttons or all defaults. These display preferences are in-memory,
+Right-click a button to hide it, or open the adjacent customization popover to
+change several checkboxes without reopening it. Changes apply immediately; Done,
+Escape or clicking outside closes the popover. It scrolls vertically when needed.
+The current choices are labelled Current and cannot be hidden. Display settings
+remain editable while the Agent is working. Restore Defaults shows every button. These display preferences are in-memory,
 per-client and per-stable-window, survive split/detach, and expire when the tab
 closes. The current choice always remains visible. Restore defaults does not
 change the Agent's model.
@@ -117,7 +124,18 @@ requires native `/model` instead. Claude sessions with a forced
 show a reason rather than inventing a model list.
 
 Visible strips refresh current state every three seconds; **Refresh Models**
-reloads the capability catalog. Last-turn telemetry is never treated as current
+reloads the capability catalog. Host and Viewer reads for the same pane share
+in-flight work, and ordinary polling reuses the short-lived process snapshot.
+Catalogs (including unsupported-runtime reasons) are cached per running Agent;
+a later terminal-read failure does not discard a discovered catalog. Actual
+model changes still require fresh process detection and all input checks.
+The client retains the last confirmed buttons during refresh and transient errors,
+including when returning to a tab, but rechecks before enabling changes. Failures
+show their reason in the strip/popover and retry after 15 seconds; manual refresh
+remains available. A replacement pane or plugin cannot inherit another target's
+confirmed state. Debug Mode logs identification, catalog, terminal and Viewer
+response durations/errors under `com.jicezeng.ctrlx.agent-models`, without process
+environments or terminal contents. Last-turn telemetry is never treated as current
 selection. Codex shortcuts require a readable model and effort in its native
 status line. If a custom status line hides them, the strip disables switching
 with an explanation; the Host rechecks before sending any command. Restore the

@@ -13,6 +13,13 @@ struct AgentModelStatusBar: View {
     @State private var error: String?
     @State private var changing = false
     @State private var refreshing = false
+    @State private var confirmed = false
+    @State private var showsCustomization = false
+
+    private var displayKey: AgentModelDisplayCache.Key? {
+        guard let identity = pane?.workspaceIdentity, let pluginID = pane?.agentSession?.pluginID else { return nil }
+        return .init(hostID: hostID ?? "local", pane: identity, pluginID: pluginID)
+    }
 
     private var pane: PaneState? {
         if let hostID {
@@ -34,13 +41,19 @@ struct AgentModelStatusBar: View {
         if changing {
             return "Waiting for the Agent to confirm the change…"
         }
+        if let error {
+            return error
+        }
+        if !confirmed {
+            return "Refreshing the current model selection…"
+        }
         if pane?.agentSession?.state.isActiveWorking == true {
             return "Wait for the Agent to finish before switching models."
         }
         if pane?.agentSession?.state.openForm != nil {
             return "Answer the Agent's request first."
         }
-        return error ?? snapshot?.unavailableReason
+        return snapshot?.unavailableReason
     }
 
     var body: some View {
@@ -53,62 +66,56 @@ struct AgentModelStatusBar: View {
 
     private var content: some View {
         HStack(spacing: 4) {
-            if let snapshot {
+            if let snapshot, !snapshot.models.isEmpty {
                 AgentModelChoices(snapshot: snapshot, hidden: hidden, unavailableReason: unavailableReason, change: change, hide: { model, effort in hide(model: model, effort: effort) })
+                    .disabled(refreshing)
             } else {
-                Text(refreshing ? "Reading models…" : "Model shortcuts unavailable")
+                Text(error ?? snapshot?.unavailableReason ?? (refreshing ? "Reading models…" : "Model shortcuts unavailable"))
                     .font(.caption).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .help(error ?? "Identify the Agent in the selected pane to show its models.")
             }
-            Menu {
-                if let reason = unavailableReason {
-                    Text(reason)
-                }
-                Button("Refresh Models") { Task { await refresh(force: true) } }
-                    .disabled(refreshing || changing)
-                if let snapshot {
-                    Section("Models in This Tab") {
-                        ForEach(snapshot.models) { model in
-                            Toggle(model.name, isOn: Binding(get: {
-                                hidden.shows(model: model, selection: snapshot.selection)
-                            }, set: { visible in setHidden(model: model.id, visible: visible) }))
-                                .disabled(model.id == snapshot.selection?.model)
-                        }
-                    }
-                    Section("Effort in This Tab") {
-                        ForEach(Array(Set(snapshot.models.flatMap(\.efforts))).sorted(), id: \.self) { effort in
-                            Toggle(effort, isOn: Binding(get: {
-                                hidden.shows(effort: effort, selection: snapshot.selection)
-                            }, set: { visible in setHidden(effort: effort, visible: visible) }))
-                                .disabled(effort == snapshot.selection?.effort)
-                        }
-                    }
-                    Button("Restore Default Buttons") {
-                        if let key = preferenceKey {
-                            coordinator.agentModelPreferences.tabs[key] = nil
-                        }
-                    }
-                }
-            } label: {
+            if refreshing {
+                ProgressView().controlSize(.mini).help("Refreshing models")
+            } else if error != nil, snapshot?.models.isEmpty == false {
+                Symbols.exclamationmarkTriangle.image
+                    .foregroundStyle(.secondary).help(error ?? "")
+            }
+            Button { showsCustomization = true } label: {
                 Symbols.ellipsisCircle.image
             }
-            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
             .fixedSize()
             .help(unavailableReason ?? "Customize model shortcuts for this tab · selected pane")
             .accessibilityLabel("Customize Model Shortcuts")
+            .accessibilityIdentifier("model-shortcuts-customize")
+            .popover(isPresented: $showsCustomization, arrowEdge: .bottom) {
+                AgentModelCustomization(
+                    snapshot: snapshot,
+                    hidden: Binding(get: { hidden }, set: { value in
+                        if let key = preferenceKey {
+                            coordinator.agentModelPreferences.tabs[key] = value
+                        }
+                    }),
+                    unavailableReason: unavailableReason,
+                    refreshing: refreshing || changing,
+                    refresh: { Task { await refresh(force: true) } },
+                    done: { showsCustomization = false }
+                )
+            }
         }
         .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: 32)
         .padding(.horizontal, 8)
-        .task(id: "\(hostID ?? "local"):\(paneID):\(pane?.agentSession?.pluginID ?? "")") {
-            snapshot = nil
+        .task(id: displayKey) {
+            snapshot = displayKey.flatMap { coordinator.agentModelDisplayCache.snapshots[$0] }
             error = nil
+            confirmed = false
             while !Task.isCancelled {
                 if !changing {
                     await refresh()
                 }
-                do { try await Task.sleep(for: .seconds(3)) }
+                do { try await Task.sleep(for: .seconds(error == nil ? 3 : 15)) }
                 catch { break }
             }
         }
@@ -139,15 +146,18 @@ struct AgentModelStatusBar: View {
     }
 
     private func refresh(force: Bool = false) async {
-        guard !refreshing, !changing, pane?.agentSession != nil, let identity = pane?.workspaceIdentity else { return }
+        guard !refreshing, !changing, let key = displayKey else { return }
+        let identity = key.pane
         refreshing = true
         defer { refreshing = false }
         do {
             let value = try await request(.init(workspacePane: identity, refresh: force))
             try Task.checkCancellation()
-            guard identity.isSamePane(as: pane?.workspaceIdentity), !changing else { return }
+            guard key == displayKey, !changing else { return }
             snapshot = value
             error = nil
+            confirmed = true
+            coordinator.agentModelDisplayCache.snapshots[key] = value
             let identities: [WorkspacePaneIdentity]
             if let hostID {
                 identities = coordinator.remoteSessionStore?.paneStates.compactMap { key, pane in
@@ -157,34 +167,45 @@ struct AgentModelStatusBar: View {
                 identities = windowManager.paneStates.values.compactMap(\.workspaceIdentity)
             }
             coordinator.agentModelPreferences.prune(hostID: hostID ?? "local", identities: identities)
+            coordinator.agentModelDisplayCache.prune(hostID: hostID ?? "local", identities: identities)
         } catch is CancellationError {
             return
         } catch {
-            snapshot = nil
+            guard !Task.isCancelled, key == displayKey, !changing else { return }
+            confirmed = false
             self.error = error.localizedDescription
         }
     }
 
     private func change(_ selection: AgentModelSelection) {
-        guard !changing, let identity = pane?.workspaceIdentity, let snapshot else { return }
+        guard !changing, !refreshing, unavailableReason == nil, let key = displayKey, let snapshot else { return }
+        let identity = key.pane
         changing = true
         error = nil
         Task {
             defer { changing = false }
             do {
                 let value = try await request(.init(workspacePane: identity, runtimeID: snapshot.runtimeID, selection: selection, expectedSelection: snapshot.selection))
-                guard identity.isSamePane(as: pane?.workspaceIdentity) else { return }
+                guard key == displayKey else { return }
                 self.snapshot = value
-            } catch { self.error = error.localizedDescription }
+                confirmed = true
+                coordinator.agentModelDisplayCache.snapshots[key] = value
+            } catch {
+                guard key == displayKey else { return }
+                confirmed = false
+                self.error = error.localizedDescription
+            }
         }
     }
 
     private func request(_ spec: AgentModelControls) async throws -> AgentModelSnapshot {
         if let hostID {
+            let start = ContinuousClock.now
             guard let connection = coordinator.viewerConnectionManager?.connection(for: hostID) else {
                 throw ModelControlError("The Host is disconnected.")
             }
             let response = try await connection.sendCommand(spec, paneId: paneID, timeout: 25).get()
+            coordinator.recordAgentModelDiagnostic(paneID: paneID, phase: "viewer-response", since: start, failure: response.error)
             guard response.success, let value = response.agentModels else { throw ModelControlError(response.error ?? "Model controls are unavailable on this Host.") }
             return value
         }

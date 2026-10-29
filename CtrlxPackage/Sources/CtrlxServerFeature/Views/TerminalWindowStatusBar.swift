@@ -79,6 +79,7 @@ struct TerminalWindowStatusBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(settings.theme.chromeBackgroundColor)
+        .anchorPreference(key: WorkbenchTabSwipeExclusionKey.self, value: .bounds) { [$0] }
         .modifier(MacVoiceInputOverlay(session: voiceSession))
     }
 }

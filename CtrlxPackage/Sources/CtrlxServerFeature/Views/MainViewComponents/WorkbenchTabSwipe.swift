@@ -1,6 +1,16 @@
 import AppKit
 import SwiftUI
 
+struct WorkbenchTabSwipeExclusionKey: PreferenceKey {
+    static var defaultValue: [Anchor<CGRect>] {
+        []
+    }
+
+    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
+        value += nextValue()
+    }
+}
+
 /// A physical scroll gesture owns one axis until lift-off; its momentum never
 /// starts another tab switch or scrolls the newly selected tab.
 struct WorkbenchTabSwipeGesture {
@@ -60,6 +70,7 @@ struct WorkbenchTabSwipeGesture {
 struct WorkbenchTabSwipe: NSViewRepresentable {
     let tabs: SessionFileTabsState
     let isEnabled: Bool
+    var excludedRects: [CGRect] = []
     let allowsSwipe: @MainActor (_ onRight: Bool) -> Bool
     let onSwipe: @MainActor (_ direction: Int, _ onRight: Bool) -> Void
 
@@ -70,6 +81,7 @@ struct WorkbenchTabSwipe: NSViewRepresentable {
     func updateNSView(_ view: WorkbenchTabSwipeView, context: Context) {
         view.tabs = tabs
         view.isEnabled = isEnabled
+        view.excludedRects = excludedRects
         view.allowsSwipe = allowsSwipe
         view.onSwipe = onSwipe
     }
@@ -102,6 +114,7 @@ final class WorkbenchTabSwipeView: NSView {
     weak var tabs: SessionFileTabsState?
     var onSwipe: (@MainActor (_ direction: Int, _ onRight: Bool) -> Void)?
     var allowsSwipe: (@MainActor (_ onRight: Bool) -> Bool)?
+    var excludedRects: [CGRect] = []
     var isEnabled = true {
         didSet {
             if !isEnabled {
@@ -113,6 +126,10 @@ final class WorkbenchTabSwipeView: NSView {
     private var gesture = WorkbenchTabSwipeGesture()
     private var startsOnRight = false
     private var monitor: Any?
+
+    override var isFlipped: Bool {
+        true
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
@@ -142,7 +159,7 @@ final class WorkbenchTabSwipeView: NSView {
         }
         if event.phase.contains(.began) {
             let point = convert(event.locationInWindow, from: nil)
-            guard bounds.contains(point) else {
+            guard bounds.contains(point), !excludedRects.contains(where: { $0.contains(point) }) else {
                 gesture.reset()
                 return event
             }

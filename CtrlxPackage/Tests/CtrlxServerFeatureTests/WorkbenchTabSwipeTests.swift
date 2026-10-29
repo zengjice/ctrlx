@@ -62,6 +62,27 @@ struct WorkbenchTabSwipeGestureTests {
 @MainActor
 @Suite(.serialized)
 struct WorkbenchTabSwipeRoutingTests {
+    @Test("Status bars pass through the whole gesture, including momentum and movement into content")
+    func statusBars() {
+        let fixture = SwipeFixture()
+        defer { fixture.close() }
+        fixture.view.excludedRects = [CGRect(x: 0, y: 450, width: 680, height: 50), CGRect(x: 680, y: 420, width: 120, height: 80)]
+        for x in [120.0, 880.0] {
+            // The representable uses SwiftUI's top-down coordinates.
+            #expect(fixture.send(x: x, y: 70, dx: -80, phase: .began) != nil)
+            #expect(fixture.send(x: x, y: 200, dx: -80, phase: .changed) != nil)
+            #expect(fixture.send(x: x, y: 200, phase: .ended) != nil)
+            #expect(fixture.send(x: x, y: 200, dx: -80, phase: [], momentum: .began) != nil)
+        }
+        #expect(fixture.switches.isEmpty)
+        fixture.view.excludedRects = [CGRect(x: 0, y: 300, width: 800, height: 200)]
+        #expect(fixture.send(x: 200, y: 200, dx: -80, phase: .began) != nil)
+        fixture.view.excludedRects = []
+        #expect(fixture.send(x: 200, y: 200, dx: -80, phase: .began) == nil)
+        _ = fixture.send(phase: .ended)
+        #expect(fixture.switches.count == 1)
+    }
+
     @Test("Physical left selects previous and right selects next in the starting split, with natural scrolling on or off", arguments: [true, false])
     func splitAndDirection(natural: Bool) {
         let fixture = SwipeFixture()

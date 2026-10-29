@@ -1695,14 +1695,17 @@ public struct MainView: View {
                     sessionTabs: remoteTabs,
                     selectedBrowserTab: selectedBrowserTab
                 )
-                .background {
+                .backgroundPreferenceValue(WorkbenchTabSwipeExclusionKey.self) { exclusions in
                     if let remoteTabs {
-                        WorkbenchTabSwipe(
-                            tabs: remoteTabs,
-                            isEnabled: !isPresentingSessionPicker,
-                            allowsSwipe: { remoteTabs.allowsTabSwipe(onRight: $0) },
-                            onSwipe: selectSwipedTab
-                        )
+                        GeometryReader { geometry in
+                            WorkbenchTabSwipe(
+                                tabs: remoteTabs,
+                                isEnabled: !isPresentingSessionPicker,
+                                excludedRects: exclusions.map { geometry[$0] },
+                                allowsSwipe: { remoteTabs.allowsTabSwipe(onRight: $0) },
+                                onSwipe: selectSwipedTab
+                            )
+                        }
                     }
                 }
             }
@@ -1917,14 +1920,17 @@ public struct MainView: View {
                     sessionTabs: sessionFileTabsStates[session.sessionName],
                     selectedBrowserTab: selectedBrowserTab
                 )
-                .background {
+                .backgroundPreferenceValue(WorkbenchTabSwipeExclusionKey.self) { exclusions in
                     if let sessionTabs {
-                        WorkbenchTabSwipe(
-                            tabs: sessionTabs,
-                            isEnabled: !isPresentingSessionPicker,
-                            allowsSwipe: { sessionTabs.allowsTabSwipe(onRight: $0, leftFileBrowserActive: isFileBrowserActive) },
-                            onSwipe: selectSwipedTab
-                        )
+                        GeometryReader { geometry in
+                            WorkbenchTabSwipe(
+                                tabs: sessionTabs,
+                                isEnabled: !isPresentingSessionPicker,
+                                excludedRects: exclusions.map { geometry[$0] },
+                                allowsSwipe: { sessionTabs.allowsTabSwipe(onRight: $0, leftFileBrowserActive: isFileBrowserActive) },
+                                onSwipe: selectSwipedTab
+                            )
+                        }
                     }
                 }
             }

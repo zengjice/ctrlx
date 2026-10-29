@@ -3,48 +3,96 @@ import CtrlxNetworking
 import CtrlxPluginProtocol
 import Dependencies
 import Foundation
+import Logging
+
+private let modelLogger = Logger(label: "com.jicezeng.ctrlx.agent-models")
 
 struct AgentModelRuntimeCache {
     let runtimeID: String
     let models: [AgentModelOption]
     var selection: AgentModelSelection?
     var inputGeneration: UInt64?
+    var unavailableReason: String?
 }
 
 extension AppCoordinator {
     func handleAgentModels(_ request: AgentModelControls, paneID: String) async throws -> AgentModelSnapshot {
+        let start = ContinuousClock.now
+        do {
+            let value: AgentModelSnapshot
+            if request.selection == nil {
+                value = try await agentModelReads.read(paneID: paneID, identity: request.workspacePane, refresh: request.refresh) { [self] in
+                    try await performAgentModels(request, paneID: paneID)
+                }
+            } else {
+                value = try await performAgentModels(request, paneID: paneID)
+            }
+            recordAgentModelDiagnostic(paneID: paneID, phase: request.selection == nil ? "read" : "switch", since: start)
+            return value
+        } catch {
+            recordAgentModelDiagnostic(paneID: paneID, phase: "request-failed", since: start, failure: error.localizedDescription)
+            throw error
+        }
+    }
+
+    func recordAgentModelDiagnostic(paneID: String, phase: String, since start: ContinuousClock.Instant, failure: String? = nil) {
+        guard settings.debugModeEnabled else { return }
+        modelLogger.info("Model controls", metadata: [
+            "pane": "\(paneID)", "phase": "\(phase)",
+            "elapsed": "\(ContinuousClock.now - start)", "error": "\(failure ?? "none")",
+        ])
+    }
+
+    private func performAgentModels(_ request: AgentModelControls, paneID: String) async throws -> AgentModelSnapshot {
         @Dependency(AgentSessionIdentityClient.self) var identities
         let identityClient = identities
         @Dependency(WorkspaceAgentProcessClient.self) var processes
         guard !agentModelRequests.contains(paneID) else { throw AgentModelError("Model controls are refreshing. Try again shortly.") }
         agentModelRequests.insert(paneID)
         defer { agentModelRequests.remove(paneID) }
+        let identifyStart = ContinuousClock.now
         guard
             let registry = pluginRegistry,
-            let detected = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true),
+            let detected = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: request.selection != nil || request.refresh),
             let candidate = detected[paneID], candidate.processIDs.count == 1,
             let pid = candidate.processIDs.first, let runtime = identityClient.runtimeID(pid),
             let provider = registry.core(candidate.pluginID) as? any AgentModelProviding else {
             throw AgentModelError("No supported Agent is running in the selected pane.")
         }
         let captured = try await tmuxService.captureWorkspacePane(target: paneID)
+        recordAgentModelDiagnostic(paneID: paneID, phase: "identify", since: identifyStart)
         guard captured.identity.isSamePane(as: request.workspacePane) else { throw AgentModelError("The terminal changed. Reopen this tab's model controls.") }
         if request.selection != nil, request.runtimeID != runtime {
             throw AgentModelError("The Agent restarted. Refresh its model controls.")
         }
         var cache = agentModelCatalogs[paneID]
         if cache?.runtimeID != runtime || request.refresh {
+            let catalogStart = ContinuousClock.now
             let context = try await processes.modelContext(pid, runtime, captured.info.currentPath)
             if let issue = provider.modelRuntimeIssue(context) {
-                throw AgentModelError(issue)
+                cache = AgentModelRuntimeCache(runtimeID: runtime, models: [], unavailableReason: issue)
+            } else {
+                let models = try await provider.modelOptions(context)
+                cache = AgentModelRuntimeCache(runtimeID: runtime, models: models)
             }
-            let models = try await provider.modelOptions(context)
             guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent restarted during model discovery.") }
-            cache = AgentModelRuntimeCache(runtimeID: runtime, models: models)
+            // Keep a successful catalog even if the following terminal read fails.
+            agentModelCatalogs = agentModelCatalogs.filter { windowManager.paneStates[$0.key] != nil }
+            agentModelCatalogs[paneID] = cache
+            recordAgentModelDiagnostic(paneID: paneID, phase: "catalog", since: catalogStart)
         }
         guard var cache else { throw AgentModelError("Model discovery did not finish.") }
+        if let reason = cache.unavailableReason {
+            if request.selection != nil {
+                throw AgentModelError(reason)
+            }
+            return AgentModelSnapshot(runtimeID: runtime, models: [], selection: nil, unavailableReason: reason)
+        }
         let models = cache.models
+        let captureStart = ContinuousClock.now
         let screen = try await tmuxService.captureAgentTerminal(paneID: paneID, identity: request.workspacePane)
+        guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent restarted while reading its model selection.") }
+        recordAgentModelDiagnostic(paneID: paneID, phase: "terminal", since: captureStart)
         let generation = tmuxService.workflowInputGate?.claim(paneID: paneID).generation
         if cache.inputGeneration != generation {
             cache.selection = nil

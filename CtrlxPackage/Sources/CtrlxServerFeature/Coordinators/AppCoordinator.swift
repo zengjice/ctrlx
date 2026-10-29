@@ -147,6 +147,8 @@
         @ObservationIgnored var pluginRegistry: PluginRegistry?
         @ObservationIgnored var agentModelCatalogs: [String: AgentModelRuntimeCache] = [:]
         @ObservationIgnored var agentModelRequests: Set<String> = []
+        @ObservationIgnored let agentModelReads = AgentModelReadRequests()
+        @ObservationIgnored let agentModelDisplayCache = AgentModelDisplayCache()
         let agentModelPreferences = AgentModelPreferences()
 
         @ObservationIgnored var agentWorkflowStore: AgentWorkflowStore?
