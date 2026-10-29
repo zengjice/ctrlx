@@ -7,6 +7,18 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.117 — Codex CLI update compatibility
+
+- Discover compatible Codex model catalogs across CLI updates instead of
+  requiring version 0.164.0. Failed discovery and incompatible catalogs report
+  the detected CLI version and offer the terminal's native `/model` command.
+- Explain how to restore integration when a CLI upgrade removes the executable
+  of an already-running Agent: restart the Agent and resume its conversation.
+  Reading this status leaves the running conversation active.
+- Release validation: focused model and process regressions passed with 32 tests
+  reported; the opt-in native CLI switching test was skipped. All four changed
+  Swift files pass SwiftFormat, and both repository boundary checks pass.
+
 ## 3.0.116 — Resource continuity and Mac interaction fixes
 
 - Preserve Agent browser pages and Simulator ownership across a verified resume
