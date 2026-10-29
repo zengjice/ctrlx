@@ -9,6 +9,7 @@
     import Dependencies
     import Foundation
     import Logging
+    import os
 
     /// A pending selection set by the menu bar to be consumed by MainView.
     public enum PendingMenuBarSelection: Equatable {
@@ -341,6 +342,7 @@
         @Dependency(DeviceNameClient.self) private var deviceNameClient
 
         private let logger = Logger(label: "com.jicezeng.ctrlx.coordinator")
+        private let shutdownLogger = os.Logger(subsystem: "com.jicezeng.ctrlx", category: "shutdown")
 
         // MARK: - Initialization
 
@@ -584,37 +586,43 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
-            async let ipaShutdown: Void = IPAInstaller.shared.shutdown()
+            async let ipaShutdown: Void = shutdownStage("ipa-installer") { await IPAInstaller.shared.shutdown() }
             agentWorkflowAgentService = nil
-            await stopAgentWorkflows()
+            await shutdownStage("agent-workflows") { await stopAgentWorkflows() }
             paneActivationTask?.cancel()
             paneActivationTask = nil
-            await workspaceRecovery?.stop()
-            await hostDashboard.stop()
+            await shutdownStage("workspace-recovery") { await workspaceRecovery?.stop() }
+            await shutdownStage("host-dashboard") { await hostDashboard.stop() }
             agentPluginCheckTask?.cancel()
-            await agentCLIInstallations?.stop()
+            await shutdownStage("agent-cli-installations") { await agentCLIInstallations?.stop() }
             agentPluginCheckTask = nil
-            await apiSocketServer.stop()
+            await shutdownStage("api-socket") { await apiSocketServer.stop() }
             // Simulator commands must not consume the quit deadline before independent cleanup runs.
-            async let simulatorShutdown: Void = agentSimulator.shutdown()
-            logger.info("App shutdown: disconnecting pane streams and control clients")
+            async let simulatorShutdown: Void = shutdownStage("simulator") { await agentSimulator.shutdown() }
             windowManager.stopPeriodicSessionValidation()
             windowManager.stopPeriodicAgentReconciliation()
-            await paneStreamManager.disconnectAll()
-            await controlClientManager.disconnectAll()
-            await agentBrowser.shutdown()
+            await shutdownStage("pane-streams") { await paneStreamManager.disconnectAll() }
+            await shutdownStage("tmux-control-clients") { await controlClientManager.disconnectAll() }
+            await shutdownStage("browser") { await agentBrowser.shutdown() }
 
             // Tear down the in-process plugin runtime: stop accepting ingress
             // frames, then `shutdown()` each active core via the registry.
-            await ingressSocketServer?.stop()
-            await otlpReceiver?.stop()
+            await shutdownStage("plugin-ingress") { await ingressSocketServer?.stop() }
+            await shutdownStage("telemetry-receiver") { await otlpReceiver?.stop() }
             if let registry = pluginRegistry {
                 for id in Array(registry.active.keys) {
-                    await registry.disable(id)
+                    await shutdownStage("plugin-runtime") { await registry.disable(id) }
                 }
             }
             await simulatorShutdown
             await ipaShutdown
+        }
+
+        private func shutdownStage(_ name: String, operation: @MainActor () async -> Void) async {
+            let started = ContinuousClock.now
+            shutdownLogger.notice("Shutdown stage started: \(name, privacy: .public)")
+            await operation()
+            shutdownLogger.notice("Shutdown stage completed: \(name, privacy: .public); elapsed=\(String(describing: started.duration(to: .now)), privacy: .public)")
         }
 
         /// Resolves the tmux session name for a pane. Tries `paneStates` first

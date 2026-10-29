@@ -1270,6 +1270,12 @@ exposed to the Mac app, Viewer, and iOS clients.
 - The installer preserves Relay settings for existing installations and reinstalls
   with saved preferences. Only a first installation without Relay preferences
   initializes the distribution's default connection.
+- The installer waits up to 45 seconds for the old process to exit after its Quit
+  request returns, covering the app's 30-second cleanup deadline. A timeout keeps
+  the running app intact. Quit command results remain in the installer log;
+  the app's unified-log `shutdown` category records request receipt, stage
+  start/completion and elapsed time, plus cleanup completion or deadline-based
+  termination. These lifecycle records do not require `LOG_LEVEL=info`.
 
 ### PluginUpdateManager (`CtrlxServerFeature/Distribution/PluginUpdateManager.swift`)
 

@@ -3,7 +3,9 @@
     import CtrlxBrowserBridge
     import Dependencies
     import Foundation
-    import Logging
+    import os
+
+    // swiftformat:options --self-required notice
 
     /// NSApplicationDelegate that runs async cleanup before the app terminates.
     ///
@@ -35,7 +37,7 @@
         private var didReply = false
         private var isCleaningUp = false
         private var usesModalReply = true
-        private let logger = Logger(label: "com.jicezeng.ctrlx.shutdown")
+        private let logger = os.Logger(subsystem: "com.jicezeng.ctrlx", category: "shutdown")
 
         @Dependency(\.continuousClock) private var clock
 
@@ -68,6 +70,7 @@
         }
 
         public func tryToTerminateWithoutModalLoop() -> Bool {
+            logger.notice("Quit requested via native event loop; cleanupStarted=\(self.isCleaningUp), replied=\(self.didReply)")
             guard !didReply, let cleanup = onShouldTerminate else { return false }
             if !isCleaningUp {
                 usesModalReply = false
@@ -79,6 +82,7 @@
         public func applicationShouldTerminate(
             _: NSApplication
         ) -> NSApplication.TerminateReply {
+            logger.notice("Quit requested via AppKit; cleanupStarted=\(self.isCleaningUp), replied=\(self.didReply)")
             guard !didReply else { return .terminateNow }
             guard let cleanup = onShouldTerminate else { return .terminateNow }
             if !isCleaningUp {
@@ -90,7 +94,8 @@
 
         private func beginCleanup(_ cleanup: @escaping @MainActor () async -> Void) {
             isCleaningUp = true
-            logger.info("applicationShouldTerminate: running async cleanup")
+            let started = ContinuousClock.now
+            logger.notice("Shutdown cleanup started; deadline=\(String(describing: self.shutdownTimeout), privacy: .public)")
             // Race the cleanup against a hard deadline. Whichever finishes
             // first calls `replyOnce()`; the second call is a no-op. This
             // guarantees the app eventually terminates even if a tmux IPC
@@ -98,21 +103,24 @@
             let timeout = shutdownTimeout
             Task { @MainActor [weak self] in
                 await cleanup()
-                self?.replyOnce()
+                guard let self else { return }
+                self.logger.notice("Shutdown cleanup completed; elapsed=\(String(describing: started.duration(to: .now)), privacy: .public)")
+                self.replyOnce(reason: "cleanup completed")
             }
             Task { @MainActor [weak self] in
                 try? await self?.clock.sleep(for: timeout)
                 guard let self else { return }
                 if !self.didReply {
-                    self.logger.warning("Shutdown cleanup exceeded \(timeout); terminating anyway")
+                    self.logger.warning("Shutdown cleanup exceeded \(String(describing: timeout), privacy: .public); terminating anyway")
                 }
-                self.replyOnce()
+                self.replyOnce(reason: "cleanup deadline")
             }
         }
 
-        private func replyOnce() {
+        private func replyOnce(reason: String) {
             guard !didReply else { return }
             didReply = true
+            logger.notice("Authorizing termination; reason=\(reason, privacy: .public), modalReply=\(self.usesModalReply)")
             if usesModalReply {
                 replyHandler()
             } else {

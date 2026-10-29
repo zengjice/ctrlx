@@ -116,6 +116,15 @@ preferences; only a first install with no Relay preferences initializes the
 distribution defaults. Installer regressions live alongside the private template
 in `test-ctrlx-installer.py` and must pass before publishing its signed bytes.
 
+The public installer polls for process exit for up to 45 seconds after the Quit
+request returns; the local development installer allows 45 seconds for the Quit request
+and process exit together. Both cover the app's 30-second cleanup deadline and
+never force-kill or replace a still-running app. The private
+installer log retains the Quit command result and process-exit confirmation.
+The app records Quit receipt, cleanup stages and durations, and termination
+authorization in the macOS unified log (`com.jicezeng.ctrlx`, category `shutdown`),
+independently of `LOG_LEVEL`.
+
 Installer promotion uses a COS lock object created with overwrite forbidden.
 While holding it, the publisher rechecks the previous installer, saves an immutable
 backup, replaces `mac.sh` and `mac.sh.sig`, and verifies the anonymous public

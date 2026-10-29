@@ -333,7 +333,15 @@ class MacLifecycleTests(unittest.TestCase):
                 mock.patch.object(installer.time, "sleep") as sleep:
             installer.quit_mac(app)
         self.assertEqual(run.call_args.args[0], ["/usr/bin/osascript", "-e", f'tell application "{app}" to quit'])
+        self.assertEqual(run.call_args.kwargs["timeout"], 45)
         sleep.assert_called_once_with(0.25)
+
+    def test_quit_accepts_cleanup_longer_than_old_fifteen_second_limit(self):
+        with mock.patch.object(installer, "app_processes", side_effect=[[12], [12], []]), \
+                mock.patch.object(installer.subprocess, "run"), \
+                mock.patch.object(installer.time, "monotonic", side_effect=[0, 31]), \
+                mock.patch.object(installer.time, "sleep"):
+            installer.quit_mac(Path("/Applications/CtrlX.app"))
 
     def test_no_installed_process_does_not_send_quit(self):
         with mock.patch.object(installer, "app_processes", return_value=[]), \
@@ -341,10 +349,17 @@ class MacLifecycleTests(unittest.TestCase):
             installer.quit_mac(Path("/Applications/CtrlX.app"))
         run.assert_not_called()
 
+    def test_quit_request_timeout_never_force_kills(self):
+        with mock.patch.object(installer, "app_processes", return_value=[12]), \
+                mock.patch.object(installer.subprocess, "run", side_effect=subprocess.TimeoutExpired("osascript", 45)) as run:
+            with self.assertRaisesRegex(RuntimeError, "45 seconds; existing App was not replaced"):
+                installer.quit_mac(Path("/Applications/CtrlX.app"))
+        self.assertEqual(run.call_count, 1)
+
     def test_quit_timeout_never_force_kills(self):
         with mock.patch.object(installer, "app_processes", return_value=[12]), \
                 mock.patch.object(installer.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stderr="timeout")) as run, \
-                mock.patch.object(installer.time, "monotonic", side_effect=[0, 16]):
+                mock.patch.object(installer.time, "monotonic", side_effect=[0, 46]):
             with self.assertRaisesRegex(RuntimeError, "not replaced"):
                 installer.quit_mac(Path("/Applications/CtrlX.app"))
         self.assertEqual(run.call_count, 1)
