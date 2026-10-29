@@ -1,15 +1,37 @@
 import AppKit
+import ConcurrencyExtras
 import CtrlxCommon
 import CtrlxEncryption
 import CtrlxNetworking
 import Dependencies
 import Foundation
+import Observation
 import SwiftUI
 import Testing
 @testable import CtrlxServerFeature
 
 @MainActor
 struct AgentModelPreferencesTests {
+    @Test("Pruning unchanged model preferences does not invalidate observers")
+    func unchangedPruneDoesNotPublish() {
+        let store = AgentModelPreferences()
+        let invalidations = LockIsolated(0)
+        withObservationTracking { _ = store.tabs } onChange: { invalidations.withValue { $0 += 1 } }
+        store.prune(hostID: "local", identities: [])
+        #expect(invalidations.value == 0)
+
+        let identity = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let key = AgentModelPreferences.Key(hostID: "local", serverID: identity.serverID, windowID: identity.windowID)
+        store.tabs[key] = .init(models: ["hidden"])
+        invalidations.setValue(0)
+        withObservationTracking { _ = store.tabs } onChange: { invalidations.withValue { $0 += 1 } }
+        store.prune(hostID: "local", identities: [identity])
+        #expect(invalidations.value == 0)
+        store.prune(hostID: "local", identities: [])
+        #expect(invalidations.value == 1)
+        #expect(store.tabs.isEmpty)
+    }
+
     @Test(arguments: [120.0, 260.0, 1_000.0], [false, true])
     func expandedButtonsKeepTheirHeightAndScrollWithinNarrowSplits(_ width: Double, _ dark: Bool) throws {
         try withDependencies {

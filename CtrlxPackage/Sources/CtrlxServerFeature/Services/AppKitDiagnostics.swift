@@ -70,6 +70,7 @@ final class AppKitDiagnostics: NSObject, @preconcurrency CXApplicationDiagnostic
     }
 
     func setDebugMode(_ enabled: Bool) {
+        HostPerformanceMetrics.shared.setEnabled(enabled)
         guard enabled != debugEnabled else { return }
         if !enabled {
             recordBrowserDiagnostic(["event": "debug-disabled"])

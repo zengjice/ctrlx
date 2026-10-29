@@ -108,7 +108,8 @@ Escape or clicking outside closes the popover. It scrolls vertically when needed
 The current choices are labelled Current and cannot be hidden. Display settings
 remain editable while the Agent is working. Restore Defaults shows every button. These display preferences are in-memory,
 per-client and per-stable-window, survive split/detach, and expire when the tab
-closes. The current choice always remains visible. Restore defaults does not
+closes. Successful refresh prunes closed tabs without publishing an observation
+change when no entries were removed. The current choice always remains visible. Restore defaults does not
 change the Agent's model.
 
 The optional `AgentModelProviding` plugin capability owns discovery, native input

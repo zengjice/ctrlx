@@ -403,7 +403,8 @@ public struct MainView: View {
     }
 
     private var fileLinkWorkspace: some View {
-        workspaceContent
+        let tabs = currentSessionTabs
+        return workspaceContent
             .background(WorkbenchWindowRegistration(
                 workspaceID: detachedWorkspace?.id,
                 windows: coordinator.detachedWindows,
@@ -412,14 +413,14 @@ public struct MainView: View {
                     connection: coordinator.connectedViewerManager?.combinedState ?? .disconnected,
                     paired: settings.isPaired,
                     remote: selectedRemoteSession != nil,
-                    split: currentSessionTabs?.isSplit == true,
-                    browserSelected: currentSessionTabs?.selectedBrowserTabId != nil,
-                    fileSelected: currentSessionTabs?.selectedFileTabId != nil,
-                    rightPaneFocused: currentSessionTabs?.isRightPaneFocused == true,
-                    rightBrowserSelected: currentSessionTabs?.selectedRight?.kind == .browser,
-                    orderedTabCount: currentSessionTabs?.tabOrder.count ?? 0,
-                    browserTabCount: currentSessionTabs?.openBrowserTabs.count ?? 0,
-                    fileTabCount: currentSessionTabs?.openFileTabs.count ?? 0
+                    split: tabs?.isSplit == true,
+                    browserSelected: tabs?.selectedBrowserTabId != nil,
+                    fileSelected: tabs?.selectedFileTabId != nil,
+                    rightPaneFocused: tabs?.isRightPaneFocused == true,
+                    rightBrowserSelected: tabs?.selectedRight?.kind == .browser,
+                    orderedTabCount: tabs?.tabOrder.count ?? 0,
+                    browserTabCount: tabs?.openBrowserTabs.count ?? 0,
+                    fileTabCount: tabs?.openFileTabs.count ?? 0
                 )
             ))
             .environment(\.workbenchWindowID, detachedWorkspace?.id)
@@ -1167,10 +1168,16 @@ public struct MainView: View {
     /// cycling, and ⌘⌥F content search so they all resolve it the same
     /// way.
     private func currentLocalSession() -> LocalTmuxSession? {
+        guard let name = currentLocalSessionName else { return nil }
+        return tmuxService.sessions.first { $0.sessionName == name }
+    }
+
+    private var currentLocalSessionName: String? {
         guard selectedRemoteSession == nil else { return nil }
         let name = detachedWorkspace?.resolvedSession(using: terminalSession)
             ?? selectedWindow?.sessionName ?? selectedLocalSessionName
-        return tmuxService.sessions.first { $0.sessionName == name }
+        guard let name, tmuxService.containsSession(named: name) else { return nil }
+        return name
     }
 
     /// Primary label for the currently selected session, used as the navigation title.
@@ -3486,7 +3493,7 @@ public struct MainView: View {
         if let remote = selectedRemoteSession {
             return remoteSessionTabsStates[remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName)]
         }
-        return currentLocalSession().flatMap { sessionFileTabsStates[$0.sessionName] }
+        return currentLocalSessionName.flatMap { sessionFileTabsStates[$0] }
     }
 
     private var targetsRightPane: Bool {

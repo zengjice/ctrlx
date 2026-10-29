@@ -21,13 +21,16 @@ struct BrowserDiagnosticsTests {
             let recorder = AppKitDiagnostics(windows: { [] })
             recorder.bind(to: settings)
             #expect(!settings.debugModeEnabled)
+            #expect(HostPerformanceMetrics.shared.begin() == nil)
             recorder.recordBrowserDiagnostic(["event": "recording-start"])
             #expect(reports.withLock { $0.isEmpty })
 
             settings.debugModeEnabled = true
+            #expect(HostPerformanceMetrics.shared.begin() != nil)
             recorder.recordBrowserDiagnostic(["event": "recording-progress"])
             #expect(AppSettings().debugModeEnabled)
             settings.debugModeEnabled = false
+            #expect(HostPerformanceMetrics.shared.begin() == nil)
             let count = reports.withLock { $0.count }
             recorder.recordBrowserDiagnostic(["event": "recording-finished"])
             #expect(reports.withLock { $0.count } == count)

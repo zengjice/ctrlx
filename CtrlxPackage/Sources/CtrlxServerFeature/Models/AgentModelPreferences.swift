@@ -28,6 +28,8 @@ final class AgentModelPreferences {
 
     func prune(hostID: String, identities: [WorkspacePaneIdentity]) {
         let live = Set(identities.map { Key(hostID: hostID, serverID: $0.serverID, windowID: $0.windowID) })
-        tabs = tabs.filter { $0.key.hostID != hostID || live.contains($0.key) }
+        let retained = tabs.filter { $0.key.hostID != hostID || live.contains($0.key) }
+        guard retained.count != tabs.count else { return }
+        tabs = retained
     }
 }

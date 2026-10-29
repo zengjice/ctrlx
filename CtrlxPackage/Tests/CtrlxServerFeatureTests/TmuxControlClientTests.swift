@@ -484,10 +484,12 @@
             #expect(await client.testPendingCommandCount == 0)
         }
 
-        @Test("A capture transaction marks its boundary only after its final response")
+        @Test("A capture transaction marks its boundary only after its final response", arguments: [false, true])
         @MainActor
-        func commandListBoundaryFollowsAllResponses() async throws {
-            let client = TmuxControlClient()
+        func commandListBoundaryFollowsAllResponses(diagnostics: Bool) async throws {
+            let metrics = HostPerformanceMetrics()
+            metrics.setEnabled(diagnostics)
+            let client = TmuxControlClient(performanceMetrics: metrics)
             await client.testMarkInitialAttachHandled()
             let capture = CapturingControlOutput()
             await client.setOnOutput { _, _ in capture.events.append("live") }
@@ -520,6 +522,9 @@
             #expect(responses.map(\.output) == ["history", "screen", "5,8,1"])
             #expect(capture.events == ["boundary", "live"])
             #expect(await client.testPendingCommandCount == 0)
+            #expect(metrics.snapshot().timings[.responseMainActorWait]?.count ?? 0 == (diagnostics ? 1 : 0))
+            #expect(metrics.snapshot().timings[.outputMainActorWait]?.count ?? 0 == (diagnostics ? 1 : 0))
+            #expect(metrics.snapshot().timings[.outputCallback]?.count ?? 0 == (diagnostics ? 1 : 0))
         }
 
         /// Regression: `%error` used to only set a flag without resolving the queued

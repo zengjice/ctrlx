@@ -1,7 +1,7 @@
 #if os(macOS)
+    import ConcurrencyExtras
     import CtrlxCommon
     import CtrlxNetworking
-    import ConcurrencyExtras
     import Dependencies
     import Foundation
     import Observation
@@ -125,7 +125,14 @@
                 }
             } operation: {
                 let service = TmuxService(tmuxPath: "/usr/bin/true")
+                #expect(!service.containsSession(named: "work"))
                 _ = await service.refreshPanes()
+                #expect(service.containsSession(named: "work"))
+                #expect(!service.containsSession(named: "missing"))
+                service.resourceSessions = [.init(id: UUID(), name: "resources", directory: "/tmp")]
+                #expect(service.containsSession(named: "resources"))
+                service.resourceSessions = []
+                #expect(!service.containsSession(named: "resources"))
                 let invalidations = LockIsolated(0)
                 withObservationTracking {
                     _ = service.panes

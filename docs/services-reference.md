@@ -112,6 +112,12 @@ See [Host-backed Files tabs](file-browser.md) for capabilities, bounds and tests
 
 **Config:** `tmuxPath` (default: `/opt/homebrew/bin/tmux`), optional `socketPath`, `overrideVisualInShellPanes` (mirrors `AppSettings.editorOverrideMode`)
 
+Selection-only lookups use `containsSession(named:)` against panes and resource-only
+sessions rather than constructing the full grouped session list. Main-window
+diagnostic context reads the current tab state once per view evaluation. Complete
+`windows`/`sessions` getters still derive current values; their Debug Mode counts
+and costs are described in [Host scheduling diagnostics](streaming-architecture.md#host-scheduling-diagnostics).
+
 **Modified arrows:** Mac Host and Viewer share `InteractiveTerminalView`. The
 SwiftTerm fork encodes Shift+arrows as legacy `ESC [ 1 ; modifier A/B/C/D`
 without requiring Kitty negotiation. `TmuxKey.from(bytes:)` preserves these

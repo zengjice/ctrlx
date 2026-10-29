@@ -139,6 +139,7 @@ actor TmuxControlClient {
     private let tmuxPath: String
     private let socketPath: String?
     private let logger = Logger(label: "com.jicezeng.ctrlx.tmuxcontrol")
+    private let performanceMetrics: HostPerformanceMetrics
 
     // Connection state
     private var process: Process?
@@ -153,7 +154,7 @@ actor TmuxControlClient {
     private static let forcedTerminationTimeout = Duration.seconds(1)
     private static let terminationPollInterval = Duration.milliseconds(20)
 
-    // Cached dimensions for change detection
+    /// Cached dimensions for change detection
     private var cachedDimensions: [String: (width: Int, height: Int)] = [:]
 
     // Callbacks for notifications
@@ -167,12 +168,12 @@ actor TmuxControlClient {
     private var outputFramers: [String: TerminalOutputTokenFramer] = [:]
     private var outputSanitizers: [String: TerminalOutputSanitizer] = [:]
 
-    // FIFO queue of pending command continuations, in the order commands were written to stdin.
-    // tmux processes commands in FIFO order, so the front of this queue always corresponds
-    // to the next %begin/%end response from tmux for a CLIENT command.
-    //
-    // A command list is one queue entry with one response per command. tmux
-    // skips the rest of that list after an error, which also completes the entry.
+    /// FIFO queue of pending command continuations, in the order commands were written to stdin.
+    /// tmux processes commands in FIFO order, so the front of this queue always corresponds
+    /// to the next %begin/%end response from tmux for a CLIENT command.
+    ///
+    /// A command list is one queue entry with one response per command. tmux
+    /// skips the rest of that list after an error, which also completes the entry.
     private struct PendingCommand {
         let id: Int
         let responseCount: Int
@@ -194,21 +195,28 @@ actor TmuxControlClient {
     private var skippingInitialBlock = false
     private var receivedInitialResponse = false
 
-    // AsyncStream for ordered data processing from readabilityHandler.
-    // Same pattern as PipePaneReader: yield from dispatch queue, consume in single task.
-    private var dataContinuation: AsyncStream<Data>.Continuation?
-    private var consumerTask: Task<Void, Never>?
+    /// AsyncStream for ordered data processing from readabilityHandler.
+    /// Same pattern as PipePaneReader: yield from dispatch queue, consume in single task.
+    private struct Input: Sendable {
+        let data: Data
+        let sample: HostPerformanceMetrics.Sample?
+    }
 
-    // Byte buffer for incomplete lines (handles chunk splitting at line boundaries)
+    private var dataContinuation: AsyncStream<Input>.Continuation?
+    private var consumerTask: Task<Void, Never>?
+    private var ingressID: UUID?
+
+    /// Byte buffer for incomplete lines (handles chunk splitting at line boundaries)
     private var byteBuffer = Data()
 
     var isConnected: Bool {
         process?.isRunning == true
     }
 
-    init(tmuxPath: String = "/opt/homebrew/bin/tmux", socketPath: String? = nil) {
+    init(tmuxPath: String = "/opt/homebrew/bin/tmux", socketPath: String? = nil, performanceMetrics: HostPerformanceMetrics = .shared) {
         self.tmuxPath = tmuxPath
         self.socketPath = socketPath
+        self.performanceMetrics = performanceMetrics
     }
 
     // MARK: - Callback Setters
@@ -309,18 +317,28 @@ actor TmuxControlClient {
         // is synchronous and non-blocking. A single consumer task drains the stream
         // in order, preventing reordering of control messages.
         let handle = stdoutPipe.fileHandleForReading
-        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let metrics = performanceMetrics
+        if let ingressID {
+            metrics.closeStream(ingressID)
+        }
+        let ingressID = UUID()
+        self.ingressID = ingressID
+        metrics.openStream(ingressID)
+        let (stream, continuation) = AsyncStream<Input>.makeStream()
         dataContinuation = continuation
 
         handle.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            continuation.yield(data)
+            let sample = metrics.enqueue(ingressID, bytes: data.count)
+            continuation.yield(Input(data: data, sample: sample))
         }
 
         consumerTask = Task { [weak self] in
-            for await data in stream {
-                await self?.processIncomingData(data)
+            defer { metrics.closeStream(ingressID) }
+            for await input in stream {
+                metrics.dequeue(ingressID, bytes: input.data.count, sample: input.sample)
+                await self?.processIncomingData(input.data)
             }
         }
 
@@ -339,6 +357,10 @@ actor TmuxControlClient {
         dataContinuation = nil
         consumerTask?.cancel()
         consumerTask = nil
+        if let ingressID {
+            performanceMetrics.closeStream(ingressID)
+        }
+        ingressID = nil
 
         // Pending commands may already have executed. `notConnected` is reserved
         // for the pre-write guard; returning it here would allow input callers
@@ -359,10 +381,11 @@ actor TmuxControlClient {
 
         if let processToStop, processToStop.isRunning {
             processToStop.terminate()
-            if !(await waitForTermination(
-                of: processToStop,
-                timeout: Self.gracefulTerminationTimeout
-            )) {
+            if
+                !(await waitForTermination(
+                    of: processToStop,
+                    timeout: Self.gracefulTerminationTimeout
+                )) {
                 let pid = processToStop.processIdentifier
                 logger.warning("tmux control client ignored SIGTERM; sending SIGKILL", metadata: [
                     "pid": "\(pid)",
@@ -373,10 +396,11 @@ actor TmuxControlClient {
                         "errno": "\(errno)",
                     ])
                 }
-                if !(await waitForTermination(
-                    of: processToStop,
-                    timeout: Self.forcedTerminationTimeout
-                )) {
+                if
+                    !(await waitForTermination(
+                        of: processToStop,
+                        timeout: Self.forcedTerminationTimeout
+                    )) {
                     logger.error("tmux control client remained alive after SIGKILL", metadata: [
                         "pid": "\(pid)",
                     ])
@@ -522,8 +546,9 @@ actor TmuxControlClient {
         // A notification never occurs inside a command output block. Treat all
         // non-terminator lines there as command text, even if captured pane text
         // itself begins with a control-looking `%output` prefix.
-        if currentCommandNumber == nil,
-           let output = TmuxControlOutputDecoder.decode(lineData) {
+        if
+            currentCommandNumber == nil,
+            let output = TmuxControlOutputDecoder.decode(lineData) {
             await handleOutput(output)
             return
         }
@@ -568,7 +593,15 @@ actor TmuxControlClient {
         let data = sanitizer.sanitize(framedData)
         outputSanitizers[output.paneId] = sanitizer
         guard !data.isEmpty else { return }
-        await _onOutput?(output.paneId, data)
+        guard let onOutput = _onOutput else { return }
+        let metrics = performanceMetrics
+        let waiting = metrics.begin()
+        await MainActor.run {
+            metrics.record(.outputMainActorWait, since: waiting)
+            let delivering = metrics.begin()
+            defer { metrics.record(.outputCallback, since: delivering) }
+            onOutput(output.paneId, data)
+        }
     }
 
     // MARK: - Layout Change Handling
@@ -745,7 +778,14 @@ actor TmuxControlClient {
             if isError || pendingCommandQueue[0].responses.count == pendingCommandQueue[0].responseCount {
                 let entry = pendingCommandQueue.removeFirst()
                 if let continuation = entry.continuation {
-                    await entry.onResponse?(response)
+                    if let onResponse = entry.onResponse {
+                        let metrics = performanceMetrics
+                        let waiting = metrics.begin()
+                        await MainActor.run {
+                            metrics.record(.responseMainActorWait, since: waiting)
+                            onResponse(response)
+                        }
+                    }
                     continuation.resume(returning: entry.responses)
                 }
             }
@@ -803,6 +843,10 @@ actor TmuxControlClient {
         _onExit?("Process terminated with code \(exitCode)")
 
         // Clean up
+        if let ingressID {
+            performanceMetrics.closeStream(ingressID)
+        }
+        ingressID = nil
         process = nil
         stdin = nil
         stdoutPipe = nil

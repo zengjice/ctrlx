@@ -146,6 +146,36 @@ in the system temporary directory for normal temporary-file cleanup.
 
 `TmuxControlClientManager` coalesces concurrent connection creation per owning session. A stable pane target such as `%7` is **not** a session lookup key: subscription, capture and unsubscribe all use the reader's `sessionName`. An on-demand reader resolves the session from tmux before connecting. This prevents separate snapshot/output connections and leftover enabled sources when a pane is reopened.
 
+### Host scheduling diagnostics
+
+Mac **Settings → General → Diagnostics → Debug Mode** enables content-free
+`HostPerformanceMetrics`. Active work emits at most one aggregate report every
+10 seconds to the system log (`com.jicezeng.ctrlx`, category `host-performance`).
+This uses the system logger directly and does not require `LOG_LEVEL=debug`.
+Turning the setting off clears measurements; pending samples from an earlier
+enable cycle cannot contaminate a later one. No pane text, titles, paths or
+session names are recorded.
+
+- `ingress`: total chunks/bytes waiting in the control connection's `AsyncStream`,
+  plus their interval maxima. This excludes the chunk already being parsed and
+  incomplete protocol bytes in the parser. Collection starts when Debug Mode is
+  enabled; already-queued chunks are not counted retroactively.
+- `controlIngressWait`: time from enqueue to the single consumer taking a chunk.
+- `outputMainActorWait` and `responseMainActorWait`: time from the parser requesting
+  its main-actor callback to entry into that callback, separated for live bytes
+  and command/snapshot boundaries.
+- `outputCallback`: synchronous output callback execution time, including local
+  subscriber dispatch, separately from actor scheduling wait.
+- `windowGrouping` and `sessionGrouping`: getter calls, total and maximum grouping
+  durations. Session timing excludes its preceding window grouping to avoid
+  counting the same work twice. All timing fields use `count/total us/max us`.
+
+These measurements preserve the existing ordered delivery and snapshot barriers.
+They do not move forwarding off MainActor, bound the upstream control stream,
+or change the downstream 16ms batching and 512KiB resync threshold. High actor
+wait with low grouping totals calls for investigating other main-thread work;
+high grouping totals identify repeated view computation worth reducing.
+
 ### 2. Local Stream Management (Mac)
 
 **PaneStreamManager** owns one scan-only `PipePaneReader` per known pane and multiplexes control-mode terminal output to subscribers. It conforms to `PipePaneReaderDelegate` only for OSC side effects.

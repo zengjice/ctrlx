@@ -404,14 +404,24 @@ final public class TmuxService {
 
     /// Panes grouped by tmux window (derived from panes)
     public var windows: [LocalTmuxWindow] {
-        LocalTmuxWindow.groupPanes(panes)
+        let sample = HostPerformanceMetrics.shared.begin()
+        defer { HostPerformanceMetrics.shared.record(.windowGrouping, since: sample) }
+        return LocalTmuxWindow.groupPanes(panes)
     }
 
     /// Windows grouped by tmux session (derived from windows)
     public var resourceSessions: [ResourceSession] = []
 
     public var sessions: [LocalTmuxSession] {
-        LocalTmuxSession.groupWindows(windows, resources: resourceSessions)
+        let windows = windows
+        let sample = HostPerformanceMetrics.shared.begin()
+        defer { HostPerformanceMetrics.shared.record(.sessionGrouping, since: sample) }
+        return LocalTmuxSession.groupWindows(windows, resources: resourceSessions)
+    }
+
+    /// Selection-only lookups do not need to construct every window and session.
+    func containsSession(named name: String) -> Bool {
+        panes.contains { $0.sessionName == name } || resourceSessions.contains { $0.name == name }
     }
 
     /// Handler called when the pane list changes (after refreshPanes detects a change)
