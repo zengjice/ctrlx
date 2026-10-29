@@ -194,7 +194,10 @@ extension AppCoordinator {
         guard !result.stdoutString.contains("ctrlx-model-input-changed") else { throw AgentModelError("The terminal input changed. Nothing was sent.") }
     }
 
-    private func agentModelInputIssue(paneID: String, screen: AgentWorkflowTerminalCapture, provider: any AgentModelProviding, models: [AgentModelOption]) -> String? {
+    func agentModelInputIssue(paneID: String, screen: AgentWorkflowTerminalCapture, provider: any AgentModelProviding, models: [AgentModelOption]) -> String? {
+        guard screen.bracketedPaste != nil else {
+            return "Model switching requires tmux 3.7 or newer on the Host. Upgrade the running tmux server, or use /model in this terminal."
+        }
         guard let pane = windowManager.paneStates[paneID], pane.agentSession != nil else { return "The Agent is not ready." }
         if pane.agentSession?.state.openForm != nil {
             return "Answer the Agent's question or permission request first."

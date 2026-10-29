@@ -152,6 +152,13 @@ status fields or use native `/model`. Claude can establish an unknown selection
 through its native picker. Native manual changes are reflected when their
 current state is visible.
 
+Safe shortcut switching also requires the running Host tmux server to expose
+`bracket_paste_flag` (tmux 3.7+). On older servers, including 3.6a, the model list
+and any readable current selection still appear, while switching is disabled
+with an upgrade explanation. A missing field remains unknown and cannot enable
+automatic terminal input. Updating the tmux executable or resuming an Agent does
+not upgrade an already-running tmux server.
+
 Only an idle Agent with an empty native composer can accept a switch. Questions,
 approvals, drafts and external editors prevent it. The Host checks stable pane
 and process identity, uses the same input queue as human typing, and abandons a

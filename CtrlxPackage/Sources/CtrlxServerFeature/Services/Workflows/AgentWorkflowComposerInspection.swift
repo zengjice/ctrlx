@@ -10,9 +10,27 @@ struct AgentWorkflowTerminalCapture: Sendable {
     let cursorX: Int
     let cursorY: Int
     let cursorVisible: Bool
-    let bracketedPaste: Bool
+    /// Nil when the tmux server cannot report this mode.
+    let bracketedPaste: Bool?
     let inCopyMode: Bool
     let foregroundCommand: String
+
+    static func parse(_ output: String) throws -> Self {
+        guard let newline = output.firstIndex(of: "\n") else { throw AgentWorkflowError("The terminal snapshot is incomplete.") }
+        let values = output[..<newline].components(separatedBy: "\u{1f}")
+        guard
+            values.count == 8,
+            let width = Int(values[0]), let height = Int(values[1]), let x = Int(values[2]), let y = Int(values[3]),
+            [values[4], values[6]].allSatisfy({ $0 == "0" || $0 == "1" }),
+            ["", "0", "1"].contains(values[5]) else {
+            throw AgentWorkflowError("Cannot inspect this tmux terminal's input mode.")
+        }
+        return .init(
+            ansi: String(output[output.index(after: newline)...]), width: width, height: height, cursorX: x, cursorY: y,
+            cursorVisible: values[4] == "1", bracketedPaste: values[5].isEmpty ? nil : values[5] == "1",
+            inCopyMode: values[6] == "1", foregroundCommand: values[7]
+        )
+    }
 
     var plainLines: [String] {
         ansi.replacingOccurrences(of: "\u{1b}\\[[0-9;:]*m", with: "", options: .regularExpression)
@@ -33,7 +51,7 @@ enum AgentWorkflowComposerInspection {
             capture.height > 0, capture.height <= 512,
             capture.cursorY >= 0, capture.cursorY < capture.height,
             capture.cursorX == composer.prompt.count,
-            capture.bracketedPaste, !capture.inCopyMode else { return .unavailable }
+            capture.bracketedPaste == true, !capture.inCopyMode else { return .unavailable }
         let rows = capture.ansi.components(separatedBy: "\n")
         guard rows.count >= capture.height else { return .unavailable }
         let delegate = Delegate()
