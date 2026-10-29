@@ -7,6 +7,40 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.115 — Host bookmarks and Agent model shortcuts
+
+- Save, open and delete browser bookmarks in one persistent Host-owned list,
+  shared across its sessions and paired Mac/iOS Viewers. Read-only users can
+  manage bookmarks; opening one still requires page control. Older Hosts hide
+  the capability-gated entry point.
+- Switch supported Codex and Claude models and reasoning effort from Mac Host
+  and Viewer terminal status bars. Controls follow the locally focused pane,
+  require an idle Agent with an empty composer, and confirm native state without
+  changing global defaults.
+- Let users choose CtrlX as the default IPA application and route Finder file
+  opens, including cold starts, to separate local installer windows. Device
+  selection and installation remain explicit user actions.
+- Add the hook-trust bypass flag to CtrlX-managed Codex launches, Fork and
+  recovery. It applies to all enabled hooks in that process; existing sessions
+  can review updated hooks through `/hooks` without restarting.
+- Count only unrendered browser audio toward the Viewer playback limit so
+  Bluetooth/device output latency does not repeatedly reset the audio queue.
+- Add local pinch zoom and panning to iOS read-only Browser and Simulator
+  previews, image zoom and text/Markdown reading-size controls to Files previews,
+  while preserving remote input and annotation behavior.
+- Release validation: the serial Swift regression covered 4,147 tests. Its two
+  browser-window fixture failures were corrected with isolated bookmark
+  preferences, and all four tests in that suite passed on rerun.
+  `StopFinalityEvaluationSuite` was excluded because Apple Intelligence is
+  unavailable on this Mac; 12 opt-in or hardware-dependent tests were skipped.
+  All 146 build-helper, installer-helper, skill, resource-selection and isolated
+  IPA file-open tests passed, together with 110 publisher/COS/installer tests,
+  both boundary checks, the 14-page website build, the arm64/x86_64 iOS
+  Simulator compile check and the signed Mac Release app build using the original
+  custom CEF SDK. The new IPA fixture passes SwiftFormat; three touched
+  legacy files retain only pre-existing formatting deviations. Real Agent model
+  switching, paired-device UI and physical-iPhone/audio acceptance were not rerun.
+
 ## 3.0.114 — Independent resource tabs and explicit Agent access
 
 - Open human Files, Browser and iOS Simulator tabs independently of terminals,

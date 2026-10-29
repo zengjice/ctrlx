@@ -22,19 +22,21 @@ struct IPAFileAssociationClient {
     }
 }
 
-@propertyWrapper struct Dependency {
+@propertyWrapper
+struct Dependency {
     var wrappedValue = IPAFileAssociationClient()
-    init(_: IPAFileAssociationClient.Type) {}
+    init(_: IPAFileAssociationClient.Type) { }
 }
 
 struct Logger {
-    init(label _: String) {}
+    init(label _: String) { }
     func warning(_ message: String) {
         record("warning\t" + message)
     }
 }
 
-@MainActor @Observable final class AppSettings { var askToHandleIPAFiles = true }
+@MainActor @Observable
+final class AppSettings { var askToHandleIPAFiles = true }
 
 func record(_ line: String) {
     let path = Bundle.main.object(forInfoDictionaryKey: "CtrlXProbeLog") as! String
@@ -61,14 +63,16 @@ struct IPAInstallerView: View {
     }
 }
 
-@MainActor final class ProbeDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class ProbeDelegate: NSObject, NSApplicationDelegate {
     /// PRODUCTION_DELEGATE
     func applicationDidFinishLaunching(_: Notification) {
         record("pid\t\(ProcessInfo.processInfo.processIdentifier)")
     }
 }
 
-@main struct IPAFileOpenProbe: App {
+@main
+struct IPAFileOpenProbe: App {
     @NSApplicationDelegateAdaptor private var delegate: ProbeDelegate
     @State private var integration: IPAFileIntegration
     init() {

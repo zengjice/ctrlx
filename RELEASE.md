@@ -372,6 +372,11 @@ copies, but preserves `dist/`, signing configuration, installed apps and browser
 profiles. It does not touch other worktrees, Xcode's global caches or simulators.
 The next build must download dependencies/SDKs and compile again.
 
+Keep an original custom CEF binary SDK under `.build-local/cef-sdk/` and point
+`CTRLX_CEF_SDK_ROOT` in ignored `Config/Local-macOS.xcconfig` at that SDK directory.
+Both `idle` and `deep` preserve this location. Keep a backup and the full Chromium
+source/build tree on external storage; do not commit the SDK to Git.
+
 Mac-only packaging does not require a local Docker engine or OrbStack. A change
 confined to Apple-only dependencies, such as the SwiftTerm revision, does not
 make Linux lock generation a prerequisite for this path. Refresh and validate

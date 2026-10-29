@@ -3,5 +3,6 @@
 CTRLX_MAC_DEVELOPMENT_TEAM = YOUR_TEAM_ID
 // Verifies the signed Qcloud installer script (mac.sh.sig).
 CTRLX_SPARKLE_PUBLIC_KEY = YOUR_SPARKLE_ED25519_PUBLIC_KEY
-// Optional matching full-source CEF SDK for scripts/build-agent-browser.sh.
+// Optional matching custom CEF binary SDK for scripts/build-agent-browser.sh.
+// Keep a local custom SDK under .build-local/cef-sdk/; idle/deep preserve it.
 CTRLX_CEF_SDK_ROOT =

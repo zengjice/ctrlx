@@ -1,11 +1,13 @@
 #if os(macOS)
     import AppKit
+    import CtrlxCommon
+    import DependenciesTestSupport
     import SwiftUI
     import Testing
     @testable import CtrlxServerFeature
 
     @MainActor
-    @Suite("Agent Browser background parent")
+    @Suite("Agent Browser background parent", .dependency(PreferencesService.inMemory()))
     struct AgentBrowserParkingWindowTests {
         enum Presentation: CaseIterable {
             case front
