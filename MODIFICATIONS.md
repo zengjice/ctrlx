@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.118 — Model shortcut defaults and compatibility fixes
+
+- Configure model and reasoning-effort shortcut visibility per Codex or Claude
+  Provider. New Agent tabs inherit those defaults once; existing tabs retain
+  their choices, and Restore Defaults uses the tab's creation snapshot. These
+  display settings do not change the Agent's model or reasoning effort.
+- Keep model catalogs and readable selections visible on older tmux servers.
+  Safe shortcut switching requires a running Host tmux server at version 3.7 or
+  newer; older servers explain the requirement and retain native `/model` access.
+- Match model shortcut button sizing and styling to Commands and Quick Phrases.
+- Recognize Codex questions whose usage-warning footer includes a reset time or
+  date, including wrapped lines, while retaining draft and cursor checks.
+- Load the default homepage when opening an independent browser tab without a
+  URL, and preserve the requested address and focus behavior for explicit links.
+- Release validation: focused model, settings, question and browser-opening
+  regressions passed with 154 tests reported. A separate isolated tmux 3.7b
+  capture/input-guard test also passed; native CLI model switching was not rerun.
+  All 24 changed Swift files pass SwiftFormat, and both boundary checks pass.
+
 ## 3.0.117 — Codex CLI update compatibility
 
 - Discover compatible Codex model catalogs across CLI updates instead of
