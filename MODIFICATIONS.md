@@ -7,6 +7,36 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.116 — Resource continuity and Mac interaction fixes
+
+- Preserve Agent browser pages and Simulator ownership across a verified resume
+  in the same Host, pane and conversation. Fresh process credentials are required;
+  old tokens, forks, other panes and changed conversations cannot inherit access.
+- Open terminal-linked resources in their source Mac window, including detached
+  windows, and restore a resizable directory/preview divider in Files.
+- Improve Mac Agent model controls and refresh scheduling, reduce repeated
+  session lookups, and add timing diagnostics for terminal delivery and UI work.
+- Extend the existing Codex hook-trust bypass to manual interactive launches in
+  new CtrlX zsh terminals. It affects all enabled hooks, preserves explicit
+  command options, and does not change command approvals or sandboxing.
+- Report default IPA application changes only after verification, with clearer
+  pending, cancelled and failure states.
+- Add a dedicated iOS resource-tab navigation bar for returning to the source
+  pane, switching within its group and opening the tab picker without stealing
+  preview gestures.
+- Add explicit macOS user temporary-cache cleanup with ownership, identity,
+  retention and active-use checks. Keep new E2E build caches inside their
+  worktree so the existing idle cleanup can manage them.
+- Release validation: the serial Swift regression passed with 4,183 tests
+  reported. `StopFinalityEvaluationSuite` was excluded because Apple Intelligence
+  is unavailable on this Mac; 12 opt-in or hardware-dependent tests were skipped.
+  All 162 cleanup/build/install/skill script tests and 110 publisher/COS/installer
+  tests passed, as did native ownership checks, ten asynchronous browser-opening
+  cases, both boundary checks, the 14-page website build and the arm64/x86_64 iOS
+  Simulator compile check. SwiftFormat passes for 50 of 52 touched Swift files;
+  two existing files retain formatting violations. Real Codex resumes,
+  paired-device UI and physical-iPhone acceptance were not rerun.
+
 ## 3.0.115 — Host bookmarks and Agent model shortcuts
 
 - Save, open and delete browser bookmarks in one persistent Host-owned list,
