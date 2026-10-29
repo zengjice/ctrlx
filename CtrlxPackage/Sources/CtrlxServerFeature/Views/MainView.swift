@@ -6998,6 +6998,9 @@ public struct MainView: View {
             guard let paneID = response.paneId else {
                 throw NewAgentTabConfiguration.LaunchError("Host returned no new pane. Check its tabs before retrying.")
             }
+            if let initialization = response.agentModelShortcuts {
+                coordinator.agentModelPreferences.initialize(initialization, hostID: hostID)
+            }
             await connection.relayClient.requestSessionState()
             for _ in 0..<PaneSurfaceRetry.attempts {
                 if resourceID == nil {
@@ -7015,9 +7018,13 @@ public struct MainView: View {
             }
         } else {
             guard localIdentity != nil || resourceID != nil else { throw NewAgentTabConfiguration.LaunchError("Session identity is not available yet. Reopen this dialog after discovery.") }
+            let shortcutDefaults = coordinator.newAgentModelShortcuts(pluginID: pluginID, providerID: request.providerID)
             let paneID = try await TmuxWindowCreation.create(
                 request, core: coordinator.pluginRegistry?.core(pluginID), tmux: tmuxService, expectedWorkspacePane: localIdentity
             )
+            if let captured = try? await tmuxService.captureWorkspacePane(target: paneID) {
+                coordinator.agentModelPreferences.initialize(.init(pane: captured.identity, defaults: shortcutDefaults), hostID: "local")
+            }
             let window = await PaneSurfaceRetry.localWindow(
                 containing: paneID,
                 windows: { tmuxService.windows },
@@ -7431,6 +7438,7 @@ public struct MainView: View {
             do {
                 // Determine session name and working directory
                 let sessionName = project?.name ?? "terminal"
+                let shortcutDefaults = project.map { coordinator.newAgentModelShortcuts(pluginID: $0.pluginID, providerID: request.providerID) }
 
                 // Resolve the launch command from the project's owning plugin core
                 // (`commandForLaunch`, gated on the plugin's auto-run setting). A
@@ -7475,6 +7483,12 @@ public struct MainView: View {
                     launchPayload: agentLaunch?.payload,
                     firstWindowName: request.worktree?.name ?? firstWindowName
                 )
+                if
+                    launch.launch != nil, let shortcutDefaults,
+                    let captured = try? await tmuxService.captureWorkspacePane(target: created.paneId),
+                    captured.identity.serverID == created.serverID {
+                    coordinator.agentModelPreferences.initialize(.init(pane: captured.identity, defaults: shortcutDefaults), hostID: "local")
+                }
 
                 // Find the window containing the new pane and select it.
                 //
@@ -7619,6 +7633,9 @@ public struct MainView: View {
         switch result {
         case let .success(response):
             // Request a refresh to update the remote session list
+            if let initialization = response.agentModelShortcuts {
+                coordinator.agentModelPreferences.initialize(initialization, hostID: host.id)
+            }
             await manager.requestSessionState(for: host.id)
 
             guard let paneId = response.paneId else { return }

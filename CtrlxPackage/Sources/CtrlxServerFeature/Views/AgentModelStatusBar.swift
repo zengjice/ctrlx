@@ -100,7 +100,8 @@ struct AgentModelStatusBar: View {
                     unavailableReason: unavailableReason,
                     refreshing: refreshing || changing,
                     refresh: { Task { await refresh(force: true) } },
-                    done: { showsCustomization = false }
+                    done: { showsCustomization = false },
+                    defaults: preferenceKey.flatMap { coordinator.agentModelPreferences.defaults[$0] } ?? .init()
                 )
             }
         }

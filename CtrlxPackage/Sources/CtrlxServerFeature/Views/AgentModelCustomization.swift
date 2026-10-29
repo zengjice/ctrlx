@@ -9,6 +9,11 @@ struct AgentModelCustomization: View {
     let refreshing: Bool
     let refresh: () -> Void
     let done: () -> Void
+    var defaults = AgentModelShortcuts()
+    var title = "Model Shortcuts"
+    var modelsTitle = "Models in This Tab"
+    var effortsTitle = "Effort in This Tab"
+    var explanation = "The current model and effort always stay visible."
 
     private var efforts: [String] {
         var seen: Set<String> = []
@@ -18,7 +23,7 @@ struct AgentModelCustomization: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Model Shortcuts").font(.headline)
+                Text(title).font(.headline)
                 Spacer()
                 Button("Done", action: done).keyboardShortcut(.cancelAction)
             }
@@ -29,7 +34,7 @@ struct AgentModelCustomization: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if let snapshot, !snapshot.models.isEmpty {
-                        Text("Models in This Tab").font(.subheadline.weight(.semibold))
+                        Text(modelsTitle).font(.subheadline.weight(.semibold))
                         ForEach(snapshot.models) { model in
                             Toggle(isOn: Binding(get: {
                                 hidden.shows(model: model, selection: snapshot.selection)
@@ -45,7 +50,7 @@ struct AgentModelCustomization: View {
                         }
                         if !efforts.isEmpty {
                             Divider()
-                            Text("Effort in This Tab").font(.subheadline.weight(.semibold))
+                            Text(effortsTitle).font(.subheadline.weight(.semibold))
                             ForEach(efforts, id: \.self) { effort in
                                 Toggle(isOn: Binding(get: {
                                     hidden.shows(effort: effort, selection: snapshot.selection)
@@ -60,7 +65,7 @@ struct AgentModelCustomization: View {
                                     .accessibilityIdentifier("model-effort-visible-\(effort)")
                             }
                         }
-                        Text("The current model and effort always stay visible.")
+                        Text(explanation)
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -73,7 +78,7 @@ struct AgentModelCustomization: View {
             HStack {
                 Button("Refresh Models", action: refresh).disabled(refreshing)
                 Spacer()
-                Button("Restore Defaults") { hidden = .init() }
+                Button("Restore Defaults") { hidden = defaults }
                     .disabled(snapshot?.models.isEmpty != false)
             }
         }

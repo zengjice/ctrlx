@@ -1483,6 +1483,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let ctrlXAppUpdate: CtrlXAppUpdateState?
     public let agentWorkflow: AgentWorkflowResponse?
     public let agentModels: AgentModelSnapshot?
+    public let agentModelShortcuts: AgentModelShortcutInitialization?
     /// True only after the Host sent the opener or already handled this queue.
     /// Missing on older Hosts; a generic success is not an acknowledgement.
     public let codexQuestionsHandled: Bool?
@@ -1508,6 +1509,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         ctrlXAppUpdate: CtrlXAppUpdateState? = nil,
         agentWorkflow: AgentWorkflowResponse? = nil,
         agentModels: AgentModelSnapshot? = nil,
+        agentModelShortcuts: AgentModelShortcutInitialization? = nil,
         codexQuestionsHandled: Bool? = nil
     ) {
         self.commandId = commandId
@@ -1530,6 +1532,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.ctrlXAppUpdate = ctrlXAppUpdate
         self.agentWorkflow = agentWorkflow
         self.agentModels = agentModels
+        self.agentModelShortcuts = agentModelShortcuts
         self.codexQuestionsHandled = codexQuestionsHandled
     }
 

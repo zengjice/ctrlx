@@ -18,6 +18,7 @@ populates.
 | `additional_config_folders` | [String] | `[]` | extra `.claude` roots to scan |
 | `providers` | array | `[]` | custom Anthropic-compatible API Providers |
 | `default_provider_id` | String? | `null` | new-session Provider; `null` follows the CLI |
+| `model_shortcut_defaults` | object | `{}` | hidden shortcut IDs by Provider; empty key means current CLI configuration |
 
 ## API Providers
 

@@ -100,17 +100,34 @@ focus, or searches sibling panes for an Agent when the selected pane is a shell.
 Main, detached and split workspaces use the same horizontally scrolling,
 fixed-height strip. Switching the target recreates the strip's transient state,
 so an old pane's async result cannot replace the new pane's model list or error.
-Every discovered model and the selected model's supported efforts is
-initially visible. The current choice has a tinted background and checkmark.
+Without Provider defaults, every discovered model and the selected model's
+supported efforts is initially visible. The current choice has a tinted background and checkmark.
 Right-click a button to hide it, or open the adjacent customization popover to
 change several checkboxes without reopening it. Changes apply immediately; Done,
 Escape or clicking outside closes the popover. It scrolls vertically when needed.
 The current choices are labelled Current and cannot be hidden. Display settings
-remain editable while the Agent is working. Restore Defaults shows every button. These display preferences are in-memory,
+remain editable while the Agent is working. These display preferences are in-memory,
 per-client and per-stable-window, survive split/detach, and expire when the tab
 closes. Successful refresh prunes closed tabs without publishing an observation
-change when no entries were removed. The current choice always remains visible. Restore defaults does not
-change the Agent's model.
+change when no entries were removed. The current choice always remains visible.
+
+**Provider defaults:** Settings → Agents → Codex/Claude Code → Providers has a
+Model Shortcuts button for the current CLI configuration, official login and each
+custom Provider. It reads the native CLI's model catalog without opening a
+conversation. Checkboxes persist hidden model/effort IDs on the Host; newly
+discovered IDs remain visible. The setting affects the shortcut strip's display,
+not the Agent's launch model or reasoning effort.
+New Agent tabs and the first Agent tab in a new session copy the actual selected
+Provider's defaults once. An omitted Provider uses the Host's configured default;
+when that also follows the CLI, it uses the current CLI configuration's defaults.
+Later Provider edits affect future tabs only. Each tab keeps its own creation
+snapshot for Restore Defaults (all buttons when no defaults were configured).
+Fork, resume and existing tabs keep their existing display behavior.
+The Host applies defaults locally and includes an optional, stable-pane-scoped
+snapshot in the creation response for the creating Mac Viewer. Preferences are
+never polled or broadcast with terminal state; other clients retain their own tab
+preferences. Old Hosts/clients omit or ignore the snapshot and show all buttons.
+Restore Defaults never changes the Agent's model.
 
 The optional `AgentModelProviding` plugin capability owns discovery, native input
 and confirmation. Codex CLI compatibility is checked by querying and decoding

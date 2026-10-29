@@ -7,11 +7,12 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct AgentModelCustomizationTests {
-    @Test("Native checkboxes apply multiple changes without dismissing the popover")
-    func continuousCustomization() async throws {
+    @Test("Native checkboxes apply multiple changes and restore the tab's creation defaults", arguments: [false, true])
+    func continuousCustomization(inherited: Bool) async throws {
         _ = NSApplication.shared
         NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
         let state = CustomizationState()
+        let defaults = inherited ? AgentModelShortcuts(models: ["second"], efforts: ["low"]) : .init()
         let snapshot = AgentModelSnapshot(runtimeID: "test", models: [
             .init(id: "current", name: "Current Model", efforts: ["low", "high"], defaultEffort: "high"),
             .init(id: "second", name: "Second Model", efforts: ["low", "high"], defaultEffort: "high"),
@@ -27,7 +28,7 @@ struct AgentModelCustomizationTests {
             snapshot: snapshot,
             hidden: Binding(get: { state.hidden }, set: { state.hidden = $0 }),
             unavailableReason: "Wait for the Agent to finish before switching models.",
-            refreshing: false, refresh: { state.refreshes += 1 }, done: { popover.close() }
+            refreshing: false, refresh: { state.refreshes += 1 }, done: { popover.close() }, defaults: defaults
         ))
         defer { popover.close()
             window.close()
@@ -49,7 +50,7 @@ struct AgentModelCustomizationTests {
         #expect(!action("isAccessibilityEnabled", on: current))
         let restore = try await element(in: content, label: "Restore Defaults")
         #expect(action("accessibilityPerformPress", on: restore))
-        #expect(state.hidden.models.isEmpty && state.hidden.efforts.isEmpty)
+        #expect(state.hidden == defaults)
         #expect(popover.isShown)
         let refresh = try await element(in: content, label: "Refresh Models")
         #expect(action("accessibilityPerformPress", on: refresh))

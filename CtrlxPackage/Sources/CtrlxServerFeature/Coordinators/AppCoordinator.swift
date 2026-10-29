@@ -3613,6 +3613,8 @@
                             spec: spec,
                             preparation: preparation,
                             defaultCommand: self?.pluginRegistry?.manifest(spec.pluginID)?.processNames.first,
+                            modelShortcutDefaults: preparation.launch == nil ? nil : self?.newAgentModelShortcuts(pluginID: spec.pluginID, providerID: spec.providerID),
+                            modelPreferences: self?.agentModelPreferences,
                             hostID: self?.workspaceRecovery?.hostID,
                             tmuxService: tmux
                         )
@@ -3834,6 +3836,8 @@
                         command: command,
                         spec: spec,
                         core: spec.pluginID.flatMap { self?.pluginRegistry?.core($0) },
+                        modelShortcutDefaults: spec.pluginID.flatMap { self?.newAgentModelShortcuts(pluginID: $0, providerID: spec.providerID) },
+                        modelPreferences: self?.agentModelPreferences,
                         tmuxService: tmux,
                         windowManager: winManager,
                         connectionManager: connectionManager
@@ -4267,6 +4271,8 @@
             spec: CreateTmuxSession,
             preparation: SessionLaunchPreparation,
             defaultCommand: String?,
+            modelShortcutDefaults: AgentModelShortcuts?,
+            modelPreferences: AgentModelPreferences?,
             hostID: UUID?,
             tmuxService: TmuxService
         ) async -> CommandResponseMessage {
@@ -4306,11 +4312,22 @@
 
                 try? await Task.sleep(for: .milliseconds(500))
 
+                var initialization: AgentModelShortcutInitialization?
+                if
+                    let modelShortcutDefaults,
+                    let captured = try? await tmuxService.captureWorkspacePane(target: created.paneId),
+                    captured.identity.serverID == created.serverID {
+                    initialization = .init(pane: captured.identity, defaults: modelShortcutDefaults)
+                }
+                if let initialization {
+                    modelPreferences?.initialize(initialization, hostID: "local")
+                }
                 return CommandResponseMessage(
                     commandId: command.id,
                     success: true,
                     paneId: created.paneId,
-                    createdPaneScope: hostID.map { .init(hostID: $0, serverID: created.serverID) }
+                    createdPaneScope: hostID.map { .init(hostID: $0, serverID: created.serverID) },
+                    agentModelShortcuts: initialization
                 )
             } catch {
                 return .failure(for: command.id, error: preparation.failureDescription(error))
@@ -4370,6 +4387,8 @@
             command: CommandMessage,
             spec: CreateTmuxWindow,
             core: (any PluginCore)?,
+            modelShortcutDefaults: AgentModelShortcuts?,
+            modelPreferences: AgentModelPreferences?,
             tmuxService: TmuxService,
             windowManager: MirrorWindowManager,
             connectionManager: ConnectedViewerManager?
@@ -4397,7 +4416,14 @@
                 }
                 await connectionManager?.pushSessionStateToAll()
 
-                return .success(for: command.id, paneId: paneId)
+                var initialization: AgentModelShortcutInitialization?
+                if let modelShortcutDefaults, let captured = try? await tmuxService.captureWorkspacePane(target: paneId) {
+                    initialization = .init(pane: captured.identity, defaults: modelShortcutDefaults)
+                }
+                if let initialization {
+                    modelPreferences?.initialize(initialization, hostID: "local")
+                }
+                return CommandResponseMessage(commandId: command.id, success: true, paneId: paneId, agentModelShortcuts: initialization)
             } catch {
                 return .failure(for: command.id, error: error.localizedDescription)
             }

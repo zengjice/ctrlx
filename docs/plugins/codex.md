@@ -17,6 +17,7 @@ Code core; only the agent-specific differences are called out here. See
 | `export_telemetry` | Bool | `true` |
 | `providers` | array | `[]` |
 | `default_provider_id` | String? | `null` |
+| `model_shortcut_defaults` | object | `{}` (hidden shortcut IDs by Provider; empty key means current CLI configuration) |
 
 ## Hook trust on launch
 

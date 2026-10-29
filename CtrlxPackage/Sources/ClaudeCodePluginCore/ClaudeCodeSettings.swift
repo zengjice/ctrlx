@@ -107,6 +107,8 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
     public var providers: [ClaudeProviderProfile]
     /// Default for new sessions. `nil` follows Claude's current configuration.
     public var defaultProviderID: String?
+    /// Per-Provider hidden shortcut IDs. The empty key follows CLI configuration.
+    public var modelShortcutDefaults: [String: AgentModelShortcuts]
 
     public static let builtInProviderID = "anthropic"
     public static let builtInProvider = AgentProviderOption(
@@ -122,7 +124,8 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
         closePaneOnSessionEnd: Bool = false,
         detectFalseStops: Bool = true,
         providers: [ClaudeProviderProfile] = [],
-        defaultProviderID: String? = nil
+        defaultProviderID: String? = nil,
+        modelShortcutDefaults: [String: AgentModelShortcuts] = [:]
     ) {
         self.commandPath = commandPath
         self.autoRun = autoRun
@@ -132,6 +135,7 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
         self.detectFalseStops = detectFalseStops
         self.providers = providers
         self.defaultProviderID = defaultProviderID
+        self.modelShortcutDefaults = modelShortcutDefaults
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -143,6 +147,7 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
         case detectFalseStops = "detect_false_stops"
         case providers
         case defaultProviderID = "default_provider_id"
+        case modelShortcutDefaults = "model_shortcut_defaults"
     }
 
     public init(from decoder: Decoder) throws {
@@ -158,6 +163,7 @@ public struct ClaudeCodeSettings: Codable, Sendable, Equatable {
             .decodeIfPresent(Bool.self, forKey: .detectFalseStops) ?? true
         self.providers = try container.decodeIfPresent([ClaudeProviderProfile].self, forKey: .providers) ?? []
         self.defaultProviderID = try container.decodeIfPresent(String.self, forKey: .defaultProviderID)
+        self.modelShortcutDefaults = try container.decodeIfPresent([String: AgentModelShortcuts].self, forKey: .modelShortcutDefaults) ?? [:]
     }
 
     public var providerOptions: [AgentProviderOption] {

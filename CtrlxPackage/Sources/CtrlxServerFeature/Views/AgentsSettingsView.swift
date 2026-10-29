@@ -291,6 +291,8 @@
         @State private var providers: [AgentProviderDraft] = []
         @State private var defaultProviderID: String?
         @State private var providerEditor: AgentProviderEditorPresentation?
+        @State private var modelShortcutDefaults: [String: AgentModelShortcuts] = [:]
+        @State private var modelShortcutProvider: AgentProviderModelShortcutPresentation?
         // Codex-only: point Codex's OTLP export at the loopback receiver (#602).
         @State private var exportTelemetry = true
         // Claude-only: verify Stop hooks with Apple Intelligence (#644).
@@ -559,6 +561,15 @@
                     onSave: { draft in saveProvider(draft) }
                 )
             }
+            .sheet(item: $modelShortcutProvider) { provider in
+                AgentProviderModelShortcuts(
+                    pluginID: pluginID, provider: provider,
+                    hidden: Binding(get: { modelShortcutDefaults[provider.providerID ?? ""] ?? .init() }, set: { value in
+                        modelShortcutDefaults[provider.providerID ?? ""] = value
+                        persist()
+                    })
+                )
+            }
         }
 
         // MARK: - Computed helpers
@@ -576,7 +587,15 @@
                 .onChange(of: defaultProviderID) { persist() }
                 .accessibilityIdentifier("agentDefaultProvider-\(pluginID)")
 
-                LabeledContent("Built in", value: builtInProviderName)
+                LabeledContent("Current CLI configuration") {
+                    modelShortcutsButton(providerID: nil, name: "Current CLI configuration")
+                }
+                LabeledContent("Built in") {
+                    HStack {
+                        Text(builtInProviderName)
+                        modelShortcutsButton(providerID: builtInProviderID, name: builtInProviderName)
+                    }
+                }
 
                 ForEach(providers) { provider in
                     HStack(alignment: .top, spacing: 12) {
@@ -595,6 +614,7 @@
                             }
                         }
                         Spacer()
+                        modelShortcutsButton(providerID: provider.providerID, name: provider.name)
                         Button("Edit") {
                             providerEditor = AgentProviderEditorPresentation(
                                 pluginID: pluginID,
@@ -646,6 +666,14 @@
                 + providers.map { AgentProviderOption(id: $0.providerID, name: $0.name) }
         }
 
+        private func modelShortcutsButton(providerID: String?, name: String) -> some View {
+            Button("Model Shortcuts…") {
+                modelShortcutProvider = .init(providerID: providerID, name: name)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Default model shortcuts for \(name)")
+        }
+
         private func providerSummary(_ provider: AgentProviderDraft) -> String {
             let effort = pluginID == ClaudeCodePluginCore.pluginID
                 ? provider.claudeReasoningEffort?.displayName
@@ -672,6 +700,7 @@
 
         private func deleteProvider(_ provider: AgentProviderDraft) {
             providers.removeAll { $0.providerID == provider.providerID }
+            modelShortcutDefaults.removeValue(forKey: provider.providerID)
             if defaultProviderID == provider.providerID {
                 defaultProviderID = nil
             }
@@ -791,6 +820,7 @@
                 detectFalseStops = s.detectFalseStops
                 providers = s.providers.map { AgentProviderDraft(profile: $0, pluginID: pluginID) }
                 defaultProviderID = s.resolvedDefaultProviderID
+                modelShortcutDefaults = s.modelShortcutDefaults
                 detectFalseStopsAvailability = stopFinalityClassifier.availability()
             case "codex":
                 let s = CodexSettings.decode(from: data)
@@ -803,6 +833,7 @@
                 detectFalseStops = true
                 providers = s.providers.map { AgentProviderDraft(profile: $0, pluginID: pluginID) }
                 defaultProviderID = s.resolvedDefaultProviderID
+                modelShortcutDefaults = s.modelShortcutDefaults
             default:
                 // Any non-bundled sidecar: generic settings that persist + reach
                 // the sidecar via apply_settings.
@@ -816,6 +847,7 @@
                 detectFalseStops = true
                 providers = []
                 defaultProviderID = nil
+                modelShortcutDefaults = [:]
             }
 
             // Check agent availability for the default root
@@ -860,7 +892,8 @@
                     closePaneOnSessionEnd: closePaneOnSessionEnd,
                     detectFalseStops: detectFalseStops,
                     providers: providers.map { $0.claudeProfile() },
-                    defaultProviderID: defaultProviderID
+                    defaultProviderID: defaultProviderID,
+                    modelShortcutDefaults: modelShortcutDefaults
                 )
                 return (try? encoder.encode(s)) ?? Data()
             case "codex":
@@ -872,7 +905,8 @@
                     additionalConfigFolders: additionalConfigFolders,
                     exportTelemetry: exportTelemetry,
                     providers: providers.map { $0.codexProfile() },
-                    defaultProviderID: defaultProviderID
+                    defaultProviderID: defaultProviderID,
+                    modelShortcutDefaults: modelShortcutDefaults
                 )
                 return (try? encoder.encode(s)) ?? Data()
             default:
