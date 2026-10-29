@@ -10,13 +10,19 @@ extension CodexPluginCore: AgentModelProviding {
     }
 
     public nonisolated func modelRuntimeIssue(_ context: AgentModelContext) -> String? {
-        guard context.invocation.version == "codex-cli 0.164.0" else {
-            return "Model shortcuts require a verified Codex CLI version (0.164.0)."
+        guard let version = context.invocation.version, !version.isEmpty else {
+            return "The Codex CLI version could not be read. Restart the Agent and resume this conversation, or use /model in this terminal."
+        }
+        guard version.hasPrefix("codex-cli "), version != "codex-cli " else {
+            return "Unrecognized Codex CLI version (\(version)). Use /model in this terminal."
         }
         return nil
     }
 
     public func modelOptions(_ context: AgentModelContext) async throws -> [AgentModelOption] {
+        if let issue = modelRuntimeIssue(context) {
+            throw AgentModelError(issue)
+        }
         @Dependency(ProcessRunner.self) var runner
         var args = ["-C", context.directory, context.invocation.executable, "debug", "models"]
         // Copy configuration selectors, never the original prompt/resume action.
@@ -36,11 +42,22 @@ extension CodexPluginCore: AgentModelProviding {
                 index += 1
             }
         }
-        let result = try await runner.runWithExactEnvironment("/usr/bin/env", args, context.environment, 15, 8 * 1_024 * 1_024, nil)
-        guard result.isSuccess, !result.outputTruncated else {
-            throw AgentModelError("Codex could not return its model catalog. Use /model in this terminal.")
+        let result: ProcessResult
+        do {
+            result = try await runner.runWithExactEnvironment("/usr/bin/env", args, context.environment, 15, 8 * 1_024 * 1_024, nil)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw AgentModelError("Codex model discovery failed (\(context.invocation.version ?? "unknown version")). Use /model in this terminal.")
         }
-        return try CodexModelCatalog.parse(result.stdout)
+        guard result.isSuccess, !result.outputTruncated else {
+            throw AgentModelError("Codex model discovery failed (\(context.invocation.version ?? "unknown version")). Use /model in this terminal.")
+        }
+        do {
+            return try CodexModelCatalog.parse(result.stdout)
+        } catch {
+            throw AgentModelError("Codex returned an incompatible model catalog (\(context.invocation.version ?? "unknown version")). Use /model in this terminal.")
+        }
     }
 
     public nonisolated func modelSelection(lines: [String], models: [AgentModelOption]) -> AgentModelSelection? {

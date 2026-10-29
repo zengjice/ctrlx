@@ -1,10 +1,99 @@
+import CtrlxCommon
 import CtrlxNetworking
 import CtrlxPluginProtocol
+import Dependencies
 import Foundation
 import Testing
 @testable import CodexPluginCore
 
 struct CodexModelControlsTests {
+    private func context(version: String?) -> AgentModelContext {
+        .init(invocation: .init(executable: "/fixture/codex", arguments: [], version: version), environment: [:], directory: "/fixture/project")
+    }
+
+    @Test(arguments: ["codex-cli 0.164.0", "codex-cli 0.165.0", "codex-cli 0.166.0", "codex-cli 0.166.0-alpha.1"])
+    func compatibleCatalogIsDiscoveredAcrossCLIVersions(_ version: String) async throws {
+        let core = CodexPluginCore()
+        let context = context(version: version)
+        #expect(core.modelRuntimeIssue(context) == nil)
+        try await withDependencies {
+            $0[ProcessRunner.self].runWithExactEnvironment = { executable, arguments, _, _, _, _ in
+                #expect(executable == "/usr/bin/env")
+                #expect(arguments == ["-C", "/fixture/project", "/fixture/codex", "debug", "models"])
+                return ProcessResult(exitCode: 0, stdout: Data(#"{"models":[{"slug":"test-model","display_name":"Test Model","visibility":"list","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]}]}"#.utf8), stderr: Data())
+            }
+        } operation: {
+            let discovered = try await core.modelOptions(context)
+            #expect(discovered == models)
+        }
+    }
+
+    @Test(arguments: [nil, "", "2.1.310 (Claude Code)", "codex-cli "] as [String?])
+    func missingAndUnrecognizedVersionsDoNotStartDiscovery(_ version: String?) async throws {
+        let core = CodexPluginCore()
+        let context = context(version: version)
+        let issue = try #require(core.modelRuntimeIssue(context))
+        if let version, !version.isEmpty {
+            #expect(issue.contains(version))
+        } else {
+            #expect(issue.contains("could not be read"))
+        }
+        await withDependencies {
+            $0[ProcessRunner.self].runWithExactEnvironment = { _, _, _, _, _, _ in
+                Issue.record("Unverified CLI was invoked")
+                return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
+            }
+        } operation: {
+            await #expect(throws: AgentModelError.self) { try await core.modelOptions(context) }
+        }
+    }
+
+    @Test(arguments: [
+        ProcessResult(exitCode: 1, stdout: Data(), stderr: Data()),
+        ProcessResult(exitCode: 0, stdout: Data(), stderr: Data(), outputTruncated: true),
+        ProcessResult(exitCode: 0, stdout: Data("{\"models\":[]}".utf8), stderr: Data()),
+        ProcessResult(exitCode: 0, stdout: Data("different protocol".utf8), stderr: Data()),
+    ])
+    func unsupportedDiscoveryReportsActualVersion(_ result: ProcessResult) async throws {
+        try await withDependencies {
+            $0[ProcessRunner.self].runWithExactEnvironment = { _, _, _, _, _, _ in result }
+        } operation: {
+            do {
+                _ = try await CodexPluginCore().modelOptions(context(version: "codex-cli 0.165.0"))
+                Issue.record("Unsupported catalog was accepted")
+            } catch let error as AgentModelError {
+                #expect(error.message.contains("codex-cli 0.165.0"))
+                #expect(error.message.contains(result.isSuccess && !result.outputTruncated ? "incompatible model catalog" : "model discovery failed"))
+            }
+        }
+    }
+
+    @Test
+    func failedProbeReportsActualVersion() async throws {
+        try await withDependencies {
+            $0[ProcessRunner.self].runWithExactEnvironment = { _, _, _, _, _, _ in throw ProcessRunnerError.timeout }
+        } operation: {
+            do {
+                _ = try await CodexPluginCore().modelOptions(context(version: "codex-cli 0.165.0"))
+                Issue.record("Failed discovery was accepted")
+            } catch let error as AgentModelError {
+                #expect(error.message.contains("codex-cli 0.165.0"))
+                #expect(error.message.contains("model discovery failed"))
+            }
+        }
+    }
+
+    @Test
+    func cancelledDiscoveryRemainsCancelled() async {
+        await withDependencies {
+            $0[ProcessRunner.self].runWithExactEnvironment = { _, _, _, _, _, _ in throw CancellationError() }
+        } operation: {
+            await #expect(throws: CancellationError.self) {
+                try await CodexPluginCore().modelOptions(context(version: "codex-cli 0.165.0"))
+            }
+        }
+    }
+
     @Test
     func modelInputRejectsControlCharactersAndOtherCommands() throws {
         #expect(throws: AgentModelError.self) { try AgentModelTerminal.commandBytes("/model a\nrm -rf") }

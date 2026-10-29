@@ -58,6 +58,9 @@ private actor WorkspaceAgentProcessReader {
         }
         var path = [UInt8](repeating: 0, count: 4_096)
         let count = proc_pidpath(pid, &path, UInt32(path.count))
+        if count <= 0, errno == ENOENT {
+            throw WorkspaceRecoveryError("The Agent CLI was updated or removed while this session was running. Restart the Agent and resume this conversation.")
+        }
         guard count > 0, let executable = String(bytes: path.prefix { $0 != 0 }, encoding: .utf8), executable.hasPrefix("/") else {
             throw WorkspaceRecoveryError("The Agent executable could not be identified.")
         }

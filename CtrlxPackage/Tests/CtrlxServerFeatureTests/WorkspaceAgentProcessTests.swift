@@ -6,6 +6,56 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct WorkspaceAgentProcessTests {
+    @Test("A running Agent whose executable was removed explains how to restore CLI integration")
+    func removedExecutable() async throws {
+        try await withDependencies {
+            $0[ProcessRunner.self] = .liveValue
+            $0.continuousClock = ContinuousClock()
+        } operation: {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let source = directory.appendingPathComponent("agent.c")
+            let executable = directory.appendingPathComponent("agent")
+            try "#include <unistd.h>\n#include <stdio.h>\nint main(int argc, char **argv) { if (argc > 1) { puts(\"fixture-cli 1\"); return 0; } sleep(30); return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+            let result = try await ProcessRunner.liveValue.run("/usr/bin/clang", [source.path, "-o", executable.path], nil, 15)
+            try #require(result.isSuccess, "\(result.stderrString)")
+            let process = Process()
+            process.executableURL = executable
+            process.environment = ["PATH": "/usr/bin"]
+            let exits = AsyncStream<Int32> { continuation in
+                process.terminationHandler = { process in
+                    continuation.yield(process.terminationStatus)
+                    continuation.finish()
+                }
+            }
+            try process.run()
+            func stopProcess() async {
+                if process.isRunning {
+                    process.terminate()
+                }
+                var exit = exits.makeAsyncIterator()
+                _ = await exit.next()
+            }
+            do {
+                let pid = String(process.processIdentifier)
+                let runtime = try #require(AgentSessionIdentityClient.processRuntimeID(pid))
+                let client = WorkspaceAgentProcessClient.liveValue
+                let invocation = try await client.invocation(pid, runtime)
+                #expect(invocation.version == "fixture-cli 1")
+                try FileManager.default.removeItem(at: executable)
+                let expected = WorkspaceRecoveryError("The Agent CLI was updated or removed while this session was running. Restart the Agent and resume this conversation.")
+                await #expect(throws: expected) { try await client.invocation(pid, runtime) }
+                await #expect(throws: expected) { try await client.modelContext(pid, runtime, directory.path) }
+                #expect(process.isRunning)
+            } catch {
+                await stopProcess()
+                throw error
+            }
+            await stopProcess()
+        }
+    }
+
     @Test("Live process provenance reads only the owned PID instance and recorded configuration roots")
     func liveProcess() async throws {
         let process = Process()

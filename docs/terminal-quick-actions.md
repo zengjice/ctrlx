@@ -113,14 +113,22 @@ change when no entries were removed. The current choice always remains visible. 
 change the Agent's model.
 
 The optional `AgentModelProviding` plugin capability owns discovery, native input
-and confirmation. The first verified adapters are Codex CLI 0.164.0 and Claude
-Code 2.1.310. Codex reads `debug models` with the running process's configuration;
+and confirmation. Codex CLI compatibility is checked by querying and decoding
+its `debug models` catalog, rather than requiring an exact CLI release number.
+Unknown version output, failed discovery and incompatible catalogs report distinct
+reasons; discovery errors include the detected CLI version. Isolated native
+checks cover catalog discovery and session-only model/effort switching in Codex CLI
+0.164.0 and 0.165.0. Claude Code's verified adapter is 2.1.310.
+Codex reads `debug models` with the running process's configuration;
 Claude performs a metadata-only SDK initialize handshake with no prompt, tools,
 hooks or persisted conversation. Claude preserves both `--flag value` and
 `--flag=value` forms of model, effort and setting-source selectors, including
 an empty setting-source value. Both use the exact target process environment
 and directory; secrets stay on the Host. A Codex `--profile` launch currently
-requires native `/model` instead. Claude sessions with a forced
+requires native `/model` instead. If a CLI update removes the executable of a
+still-running Agent, model shortcuts explain that restarting the Agent and resuming
+the conversation restores integration. The running conversation is not interrupted.
+Claude sessions with a forced
 `CLAUDE_CODE_EFFORT_LEVEL` or custom `--settings` also use their native controls. Unsupported versions
 show a reason rather than inventing a model list.
 
