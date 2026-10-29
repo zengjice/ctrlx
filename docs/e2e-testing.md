@@ -101,6 +101,15 @@ its caller's main run loop advances.
 
 ### Storage isolation
 
+`scripts/e2e-test.sh` keeps its default Xcode build cache in this worktree's
+`.build-local/DerivedData/E2E`. `REPORT_DERIVED_DATA` and `SANDBOX_DERIVED_DATA`
+still override that default. After stopping builds/tests, `clean-build.py idle`
+can remove its compilation caches while retaining products and dependencies.
+For older builds in the system temporary directory, use the separate
+`clean-build.py system-temp` preview described in [RELEASE.md](../RELEASE.md).
+The old cache is not moved automatically; rebuild before using `--skip-build`
+with the new default location.
+
 Both apps accept `--e2e-test` as a launch argument. When present, `prepareDependencies` (swift-dependencies) overrides `PreferencesService` and `SecretsService` with in-memory implementations. This prevents E2E tests from writing to real UserDefaults or Keychain.
 
 Restart scenarios can opt into the `persistent-e2e-storage` tag. The runner

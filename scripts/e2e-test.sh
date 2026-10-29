@@ -22,7 +22,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 WORKSPACE="$PROJECT_ROOT/Ctrlx.xcworkspace"
-_E2E_DD_DEFAULT="${TMPDIR:-/tmp}/ctrlx-e2e-derived-data"
+_E2E_DD_DEFAULT="$PROJECT_ROOT/.build-local/DerivedData/E2E"
 DERIVED_DATA="${REPORT_DERIVED_DATA:-${SANDBOX_DERIVED_DATA:-$_E2E_DD_DEFAULT}}"
 SIM_NAME="iPhone 17 Pro"
 E2E_TMPDIR="${TMPDIR:-/tmp}/ctrlx-e2e"

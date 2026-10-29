@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Worktree-local cleanup (preview by default) and managed artifact execution."""
+"""Build cleanup (preview by default); system temp cleanup requires its own mode."""
 import argparse
 import contextlib
 import fcntl
@@ -7,10 +7,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
 import subprocess
 import sys
+import time
+from xml.parsers.expat import ExpatError
 from local_build import inherited_lock, run_child, validate_path, worktree_lock
 
 
@@ -49,6 +52,155 @@ DEEP_CACHE_DIRS = (
     ".build",
     "CtrlxPackage/.build",
 )
+SIGNING_CLONE_IDS = (
+    "com.jicezeng.ctrlx.macos",
+    "com.ctrlx.embedded-acceptance",
+    "com.ctrlx.extensions-acceptance",
+    "com.ctrlx.experimental.browser-probe",
+)
+SIGNING_CLONE_NAME = re.compile(r"code_sign_clone\.[A-Za-z0-9]{6}")
+SYSTEM_TEMP_MIN_AGE = 24 * 60 * 60
+
+
+def validate_system_temp_path(root, path):
+    validate_path(root, path)
+    if root.is_symlink() or root.stat().st_uid != os.getuid():
+        raise ValueError(f"Not a current-user temporary directory: {root}")
+    relative = path.relative_to(root)
+    for count in range(1, len(relative.parts) + 1):
+        child = root.joinpath(*relative.parts[:count])
+        if child.exists() and child.stat().st_uid != os.getuid():
+            raise ValueError(f"Not owned by the current user: {child}")
+
+
+def system_temp_root():
+    if sys.platform != "darwin" or os.getuid() == 0:
+        raise ValueError("system-temp requires macOS and a non-root user")
+    # TMPDIR may be inherited from an updater and point inside its staging copy.
+    temporary = Path(subprocess.check_output(
+        ["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], text=True, timeout=10,
+    ).strip()).resolve(strict=True)
+    root = temporary.parent
+    if temporary.name != "T" or root.parent.parent != Path("/private/var/folders"):
+        raise ValueError(f"Unrecognized macOS user temporary directory: {temporary}")
+    validate_system_temp_path(root, temporary)
+    return root
+
+
+def temp_path_alias(value):
+    return re.sub(r"(?<!/private)/var/folders/", "/private/var/folders/", value)
+
+
+def system_temp_activity():
+    """Inspection failure must abort cleanup, never look like an idle machine."""
+    commands = subprocess.check_output(
+        ["/bin/ps", "-ww", "-axo", "pid=,command="], text=True, timeout=10,
+    )
+    opened = subprocess.run(
+        ["/usr/sbin/lsof", "-nP", "-Fpn"], text=True, capture_output=True, timeout=40,
+    )
+    if opened.returncode or opened.stderr.strip() or not opened.stdout.startswith("p"):
+        raise ValueError(f"Cannot inspect open temporary files; keeping caches: {opened.stderr.strip()}")
+    if not commands.strip():
+        raise ValueError("Cannot inspect running processes; keeping temporary caches")
+    paths = [temp_path_alias(row[1:]) for row in opened.stdout.splitlines() if row.startswith("n/")]
+    paths.extend(temp_path_alias(str(Path(value).absolute())) for value in
+                 (os.getcwd(), os.environ.get("TMPDIR", "/tmp")))
+    return paths, [temp_path_alias(row) for row in commands.splitlines()]
+
+
+def temp_path_in_use(path, activity):
+    opened, commands = activity
+    prefix = str(path)
+    return any(value == prefix or value.startswith(prefix + "/") for value in opened) \
+        or any(prefix in command for command in commands)
+
+
+def temp_tree_is_old(path, cutoff):
+    if path.lstat().st_mtime >= cutoff:
+        return False
+    if path.is_dir() and not path.is_symlink():
+        return all(temp_tree_is_old(child, cutoff) for child in path.iterdir())
+    return True
+
+
+def system_temp_targets(root, activity, now):
+    cutoff = now - SYSTEM_TEMP_MIN_AGE
+    targets = []
+    for identifier in SIGNING_CLONE_IDS:
+        parent = root / "X" / f"{identifier}.code_sign_clone"
+        validate_system_temp_path(root, parent)
+        if not parent.is_dir():
+            continue
+        inactive = []
+        for path in sorted(parent.iterdir()):
+            if not SIGNING_CLONE_NAME.fullmatch(path.name):
+                continue
+            validate_system_temp_path(root, path)
+            if not path.is_dir():
+                continue
+            children = list(path.iterdir())
+            if len(children) != 1 or not children[0].name.endswith(".app.bundle"):
+                print(f"Keeping unrecognized signing clone: {path}")
+                continue
+            info = children[0] / "Contents/Info.plist"
+            validate_system_temp_path(root, info)
+            try:
+                with info.open("rb") as source:
+                    identity = plistlib.load(source)
+            except (OSError, ValueError, plistlib.InvalidFileException, ExpatError) as error:
+                print(f"Keeping unreadable signing clone {path}: {error}", file=sys.stderr)
+                continue
+            if not isinstance(identity, dict) or identity.get("CFBundleIdentifier") != identifier:
+                print(f"Keeping signing clone with unexpected identity: {path}")
+                continue
+            if temp_path_in_use(path, activity):
+                print(f"Skipping active system temporary directory: {path}")
+                continue
+            inactive.append((path.stat().st_mtime_ns, path))
+        # Active clones are extra; always keep two other recent copies per ID.
+        for modified, path in sorted(inactive, reverse=True)[RETAINED_COUNT:]:
+            if modified / 1e9 < cutoff:
+                targets.append(path)
+
+    derived = root / "T/ctrlx-e2e-derived-data"
+    validate_system_temp_path(root, derived)
+    if derived.is_dir():
+        if temp_path_in_use(derived, activity):
+            print(f"Skipping active system temporary directory: {derived}")
+        elif derived.stat().st_mtime < cutoff:
+            # Preserve installable products, dependency downloads and test logs.
+            for name in (*COMPILATION_CACHE_DIRS, "Index.noindex"):
+                path = derived / name
+                validate_system_temp_path(root, path)
+                if path.is_dir() and temp_tree_is_old(path, cutoff):
+                    targets.append(path)
+    return targets
+
+
+def clean_system_temp(apply):
+    root = system_temp_root()
+    print(f"Current-user system temporary root: {root}")
+    print("Keep active directories, copies newer than 24 hours and two inactive signing clones per bundle ID.")
+    print("Stop E2E builds/tests before applying cleanup of their legacy temporary compilation caches.")
+    with contextlib.ExitStack() as locks:
+        if apply:
+            # This scope is shared across worktrees, so its cleanup lock is too.
+            path = root / "T/ctrlx-system-temp-cleanup.lock"
+            validate_system_temp_path(root, path)
+            lock = locks.enter_context(path.open("a+"))
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise ValueError("Another system-temp cleanup is running") from error
+        targets = system_temp_targets(root, system_temp_activity(), time.time())
+        if apply and targets:
+            # Recheck after inspecting the clone bundles, immediately before deletion.
+            current = set(system_temp_targets(root, system_temp_activity(), time.time()))
+            targets = [path for path in targets if path in current]
+        for path in targets:
+            validate_system_temp_path(root, path)
+        clean(root, targets, apply)
 
 
 def check_space(path):
@@ -394,6 +546,8 @@ def main():
     tests.add_argument("--yes", action="store_true", help="Delete the listed test caches")
     idle = modes.add_parser("idle", help="Remove compilation caches in an idle worktree; keep signed apps, packages and downloads")
     idle.add_argument("--yes", action="store_true", help="Delete the listed caches after stopping this worktree's builds and installs")
+    temporary = modes.add_parser("system-temp", help="Clean stale CtrlX signing clones and legacy E2E compilation caches in macOS user temp")
+    temporary.add_argument("--yes", action="store_true", help="Delete the listed inactive, allowlisted system temporary caches")
     space = modes.add_parser("check-space", help="Warn when less than 20 GiB is available; never delete anything")
     space.add_argument("--path", required=True, type=Path, help="Existing build-volume directory to check")
     args = parser.parse_args()
@@ -406,6 +560,9 @@ def main():
         raise ValueError("Cleanup script must live in a Git worktree root's scripts directory")
     if args.mode == "check-space":
         check_space(args.path)
+        return
+    if args.mode == "system-temp":
+        clean_system_temp(args.yes)
         return
     if args.mode == "use-artifact":
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -450,6 +607,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)
