@@ -810,7 +810,7 @@
             let registry = PluginRegistry()
             pluginRegistry = registry
             tmuxService.terminalCodexArguments = { [weak registry] in
-                await registry?.terminalCodexTelemetryArguments() ?? []
+                await registry?.terminalCodexLaunchArguments() ?? []
             }
 
             // Provide paths to the registry before enabling any sidecar (needed to

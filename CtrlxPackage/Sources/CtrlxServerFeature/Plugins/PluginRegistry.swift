@@ -1,9 +1,9 @@
 #if os(macOS)
     import ClaudeCodePluginCore
-    import CtrlxNetworking
     import CodexPluginCore
-    import Foundation
+    import CtrlxNetworking
     import CtrlxPluginProtocol
+    import Foundation
     import Logging
 
     /// Owns the agent-blind plugin runtime's compile-time factory table, the
@@ -212,9 +212,9 @@
 
         /// Keep concrete-agent knowledge at the registry boundary. A disabled
         /// plugin never instruments newly created interactive shells.
-        func terminalCodexTelemetryArguments() async -> [String] {
+        func terminalCodexLaunchArguments() async -> [String] {
             guard let codex = active[CodexPluginCore.pluginID] as? CodexPluginCore else { return [] }
-            return await codex.terminalTelemetryArguments()
+            return await codex.terminalLaunchArguments()
         }
 
         /// The core for `id`, if enabled (used by the ingress router).

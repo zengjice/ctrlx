@@ -11,7 +11,63 @@ struct TerminalAgentShellIntegrationTests {
     private let defaults = [
         "-c", #"otel.exporter.otlp-http.endpoint="http://127.0.0.1:54321/v1/logs""#,
         "-c", #"otel.log_user_prompt=false"#,
+        "--dangerously-bypass-hook-trust",
     ]
+
+    @Test("Interactive manual launches receive hook trust once", arguments: [
+        "", "resume exact-session", "fork exact-session", "resume --last", "fork login",
+        "-m login resume exact-session", "--profile=login fork exact-session",
+        "--config 'model=\"login\"' resume exact-session", "'a task with spaces'",
+        "-- 'login'", "resume exact-session --dangerously-bypass-hook-trust",
+        "--dangerously-bypass-hook-trust resume exact-session",
+        "resume exact-session --config 'otel.exporter=\"none\"'",
+    ])
+    func manualHookTrust(arguments: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex; codex \(arguments)")
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.components(separatedBy: "<--dangerously-bypass-hook-trust>").count == 2)
+    }
+
+    @Test("Maintenance and noninteractive commands do not receive hook trust", arguments: [
+        "--help", "--version", "-h", "-V", "resume --help", "fork --help",
+        "login", "login status", "logout", "plugin list", "mcp list", "features list",
+        "exec 'a task'", "e 'a task'", "review", "app-server", "remote-control", "agents",
+        "app", "completion zsh", "update", "doctor", "sandbox", "debug", "apply", "a",
+        "queue", "archive", "delete", "migrate-rollouts", "migrate-nfs-db", "unarchive", "cloud", "exec-server", "help resume",
+        "--model resume login status", "-C /tmp plugin list", "-c 'model=\"resume\"' exec task",
+        "--config='otel.exporter=\"none\"' plugin list",
+    ])
+    func maintenanceHookTrust(arguments: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex; codex \(arguments)")
+        #expect(result.isSuccess)
+        #expect(!result.stdoutString.contains("<--dangerously-bypass-hook-trust>"))
+    }
+
+    @Test("Hook flag values and literal prompt text do not suppress launch policy", arguments: [
+        "--model --dangerously-bypass-hook-trust resume exact-session",
+        "resume exact-session -- '--dangerously-bypass-hook-trust'",
+    ])
+    func hookTextIsNotAnOption(arguments: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex; codex \(arguments)")
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.components(separatedBy: "<--dangerously-bypass-hook-trust>").count == 3)
+    }
+
+    @Test("Hook trust works without telemetry defaults")
+    func hookTrustWithoutTelemetry() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let result = try await fixture.run(defaults: ["--dangerously-bypass-hook-trust"], command: "__ctrlx_install_codex; codex resume exact-session")
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.contains("<--dangerously-bypass-hook-trust>\n<resume>\n<exact-session>"))
+        #expect(!result.stdoutString.contains("otel"))
+    }
 
     @Test("Only supported shells receive the zsh integration")
     func supportedShells() {
@@ -27,16 +83,17 @@ struct TerminalAgentShellIntegrationTests {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let result = try await fixture.run(defaults: defaults, command: #"""
-        __ctrlx_install_codex_telemetry
+        __ctrlx_install_codex
         CODEX_FIXTURE_EXIT=37 codex resume --last --model 'model with spaces' -- 'literal $(touch SHOULD_NOT_EXIST); "quotes"'
         print -r -- "EXIT=$?"
         print -r -- "RC=$RC_ORDER;ZD=$ZDOTDIR;PWD=$PWD"
         print -r -- "HOOKS=${precmd_functions[*]}"
-        print -r -- "INIT=${+functions[__ctrlx_install_codex_telemetry]}"
+        print -r -- "INIT=${+functions[__ctrlx_install_codex]}"
         """#)
         #expect(result.isSuccess)
         let output = result.stdoutString
         #expect(output.contains("<\(defaults[1])>"))
+        #expect(output.contains("<--dangerously-bypass-hook-trust>"))
         #expect(output.contains("<resume>\n<--last>\n<--model>\n<model with spaces>"))
         #expect(output.contains(#"<literal $(touch SHOULD_NOT_EXIST); "quotes">"#))
         #expect(output.contains("EXIT=37"))
@@ -46,7 +103,7 @@ struct TerminalAgentShellIntegrationTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("SHOULD_NOT_EXIST").path))
     }
 
-    @Test("Explicit OTEL arguments and UI launches bypass defaults", arguments: [
+    @Test("Explicit OTEL arguments bypass telemetry defaults while retaining hook trust", arguments: [
         #"-c 'otel.exporter="none"'"#,
         #"--config 'otel.log_user_prompt=false'"#,
         #"--config='otel.exporter="none"'"#,
@@ -58,10 +115,11 @@ struct TerminalAgentShellIntegrationTests {
     func explicitConfig(arguments: String) async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex_telemetry; codex \(arguments)")
+        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex; codex \(arguments)")
         #expect(result.isSuccess)
         #expect(!result.stdoutString.contains("54321"))
         #expect(result.stdoutString.contains("otel"))
+        #expect(result.stdoutString.components(separatedBy: "<--dangerously-bypass-hook-trust>").count == 2)
     }
 
     @Test("UI-supplied defaults appear exactly once")
@@ -69,10 +127,11 @@ struct TerminalAgentShellIntegrationTests {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let quoted = defaults.map(\.posixSingleQuoted).joined(separator: " ")
-        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex_telemetry; codex \(quoted)")
+        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex; codex \(quoted)")
         #expect(result.isSuccess)
         #expect(result.stdoutString.components(separatedBy: "54321").count == 2)
         #expect(result.stdoutString.components(separatedBy: "<-c>").count == 3)
+        #expect(result.stdoutString.components(separatedBy: "<--dangerously-bypass-hook-trust>").count == 2)
     }
 
     @Test("Fork config overrides survive rc, preserve shell commands/telemetry and do not leak into the prompt", arguments: [
@@ -93,7 +152,7 @@ struct TerminalAgentShellIntegrationTests {
         try tmux.install(launch)
         #expect(!launch.command.contains(root))
         let result = try await fixture.run(defaults: defaults, command: """
-        __ctrlx_install_codex_telemetry
+        __ctrlx_install_codex
         \(launch.command)
         print -r -- "FORK_EXIT=$?"
         print -r -- "AFTER_ROOT=$CODEX_HOME"
@@ -203,7 +262,7 @@ struct TerminalAgentShellIntegrationTests {
     func promptIsNotConfig() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let result = try await fixture.run(defaults: defaults, command: #"__ctrlx_install_codex_telemetry; codex -- '-c' 'otel.exporter=none'"#)
+        let result = try await fixture.run(defaults: defaults, command: #"__ctrlx_install_codex; codex -- '-c' 'otel.exporter=none'"#)
         #expect(result.isSuccess)
         #expect(result.stdoutString.contains("54321"))
         #expect(result.stdoutString.contains("<-->\n<-c>\n<otel.exporter=none>"))
@@ -217,7 +276,7 @@ struct TerminalAgentShellIntegrationTests {
         let fixture = try Fixture(extraRC: rc)
         defer { fixture.cleanup() }
         // Separate parse units: the alias must expand after initialization.
-        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex_telemetry\ncodex hello")
+        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex\ncodex hello")
         #expect(result.isSuccess)
         #expect(result.stdoutString.contains("USER_"))
         #expect(!result.stdoutString.contains("54321"))
@@ -228,7 +287,7 @@ struct TerminalAgentShellIntegrationTests {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let result = try await fixture.run(defaults: defaults, command: """
-        __ctrlx_install_codex_telemetry
+        __ctrlx_install_codex
         \(fixture.executable.path.posixSingleQuoted) --version
         command codex --help
         """)
@@ -256,7 +315,7 @@ struct TerminalAgentShellIntegrationTests {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let value = #"argument with 'single quotes', "double quotes"; $(touch SHOULD_NOT_EXIST)"#
-        let result = try await fixture.run(defaults: [value], command: "__ctrlx_install_codex_telemetry; codex hello")
+        let result = try await fixture.run(defaults: [value], command: "__ctrlx_install_codex; codex hello")
         #expect(result.isSuccess)
         #expect(result.stdoutString.contains("<\(value)>"))
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("SHOULD_NOT_EXIST").path))
@@ -274,9 +333,9 @@ struct TerminalAgentShellIntegrationTests {
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
 
-    @Test("Isolated tmux: local/iOS/Viewer New Terminal instruments plain codex, not the existing pane", arguments: [false, true])
+    @Test("Isolated tmux: local/iOS/Viewer New Terminal instruments plain codex, not the existing pane", arguments: [false, true], [false, true])
     @MainActor
-    func liveNewTerminal(viewerRequest: Bool) async throws {
+    func liveNewTerminal(viewerRequest: Bool, telemetry: Bool) async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let binary = try #require(TmuxBinaryLocator.liveValue.find())
@@ -292,7 +351,7 @@ struct TerminalAgentShellIntegrationTests {
                 let tmux = TmuxService(tmuxPath: binary, socketPath: socket)
                 tmux.zdotDirOverride = fixture.dotfiles.path
                 let original = try await tmux.createSession(baseName: "shell-test", width: 200, height: 32)
-                tmux.terminalCodexArguments = { defaults }
+                tmux.terminalCodexArguments = { telemetry ? defaults : ["--dangerously-bypass-hook-trust"] }
                 let pane = if viewerRequest {
                     // The same Host handler used by iOS and Mac Viewer. No
                     // agent ID, exporter endpoint or startup keystrokes in the request.
@@ -319,7 +378,8 @@ struct TerminalAgentShellIntegrationTests {
                     }
                     try await Task.sleep(for: .milliseconds(100))
                 }
-                #expect(screen.contains("<\(defaults[1])>"))
+                #expect(screen.contains("<\(defaults[1])>") == telemetry)
+                #expect(screen.contains("<--dangerously-bypass-hook-trust>"))
                 #expect(screen.contains("<resume>"))
                 #expect(screen.contains("<--last>"))
                 let originalScreen = try await tmux.capturePaneText(original.paneId)
@@ -333,7 +393,7 @@ struct TerminalAgentShellIntegrationTests {
         #expect(cleanup.isSuccess)
     }
 
-    @Test("New shells use current arguments; explicit split commands and disabled telemetry are untouched")
+    @Test("New shells use current arguments; explicit split commands and disabled integration are untouched")
     @MainActor
     func tmuxWiring() async throws {
         let calls = LockIsolated<[[String]]>([])

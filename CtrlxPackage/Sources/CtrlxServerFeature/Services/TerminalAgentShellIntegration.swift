@@ -36,15 +36,15 @@ enum TerminalAgentShellIntegration {
         fi
 
         if [[ -o interactive ]]; then
-            function __ctrlx_install_codex_telemetry() {
+            function __ctrlx_install_codex() {
                 # Preserve all user prompt hooks, and run only once per shell.
-                precmd_functions=("${(@)precmd_functions:#__ctrlx_install_codex_telemetry}")
+                precmd_functions=("${(@)precmd_functions:#__ctrlx_install_codex}")
                 if (( ! ${+aliases[codex]} && ! ${+functions[codex]} )); then
                     function codex() {
-                        # Explicit OTEL config (including UI launches) wins as
-                        # a whole: never duplicate defaults or partially merge
-                        # a user's own exporter with CtrlX's local endpoint.
+                        local -a ctrlx_defaults=(\#(defaults))
                         local ctrlx_arg ctrlx_key ctrlx_previous=''
+                        local ctrlx_skip_value=0 ctrlx_positional=0 ctrlx_interactive=1
+                        local ctrlx_hook_supplied=0 ctrlx_otel_supplied=0
                         for ctrlx_arg in "$@"; do
                             [[ "$ctrlx_arg" == -- ]] && break
                             ctrlx_key=''
@@ -60,18 +60,46 @@ enum TerminalAgentShellIntegration {
                             ctrlx_key="${ctrlx_key//[[:space:]]/}"
                             case "$ctrlx_key" in
                                 otel|otel.*|\"otel\"|\"otel\".*|\'otel\'|\'otel\'.*)
-                                    command codex "$@"
-                                    return $? ;;
+                                    ctrlx_otel_supplied=1 ;;
                             esac
+                            # Skip option values before classifying a subcommand
+                            # or a flag (a model/profile can itself be named "login").
+                            if (( ctrlx_skip_value )); then
+                                ctrlx_skip_value=0
+                            else
+                                case "$ctrlx_arg" in
+                                    --dangerously-bypass-hook-trust) ctrlx_hook_supplied=1 ;;
+                                    -h|--help|-V|--version) ctrlx_interactive=0 ;;
+                                    -c|--config|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|-i|--image|--add-dir|--local-provider|--enable|--disable|--remote|--remote-auth-token-env)
+                                        ctrlx_skip_value=1 ;;
+                                    -*) ;;
+                                    *)
+                                        if (( ! ctrlx_positional )); then
+                                            ctrlx_positional=1
+                                            case "$ctrlx_arg" in
+                                                agents|exec|e|review|login|logout|mcp|plugin|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|queue|archive|delete|migrate-rollouts|migrate-nfs-db|unarchive|cloud|exec-server|features|help)
+                                                    ctrlx_interactive=0 ;;
+                                            esac
+                                        fi ;;
+                                esac
+                            fi
                             ctrlx_previous="$ctrlx_arg"
                         done
-                        command codex \#(defaults) "$@"
+                        # Explicit OTEL settings replace telemetry defaults, but
+                        # do not opt out of the independent hook launch policy.
+                        if (( ctrlx_otel_supplied )); then
+                            ctrlx_defaults=("${(@M)ctrlx_defaults:#--dangerously-bypass-hook-trust}")
+                        fi
+                        if (( ! ctrlx_interactive || ctrlx_hook_supplied )); then
+                            ctrlx_defaults=("${(@)ctrlx_defaults:#--dangerously-bypass-hook-trust}")
+                        fi
+                        command codex "${ctrlx_defaults[@]}" "$@"
                     }
                 fi
-                unfunction __ctrlx_install_codex_telemetry
+                unfunction __ctrlx_install_codex
             }
             typeset -ga precmd_functions
-            precmd_functions+=(__ctrlx_install_codex_telemetry)
+            precmd_functions+=(__ctrlx_install_codex)
         fi
         """# + "\n"
     }
@@ -95,7 +123,9 @@ actor TerminalAgentShellFileStore {
     )
     private let root: URL
 
-    init(root: URL) { self.root = root }
+    init(root: URL) {
+        self.root = root
+    }
 
     func prepare(_ arguments: [String]) throws -> String {
         let content = Data(TerminalAgentShellIntegration.zshEnvironment(arguments: arguments).utf8)

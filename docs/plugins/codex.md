@@ -25,7 +25,9 @@ CtrlX-managed New Agent / project, Fork and recovery launches add
 invocation and supplies it once if missing. It is independent of telemetry
 export and applies to **all enabled hooks** in that Codex process, not only
 CtrlX's plugin. It does not bypass command approvals or sandboxing, change
-`config.toml`, or write persisted hook trust.
+`config.toml`, or write persisted hook trust. New CtrlX zsh terminals apply the
+same policy to manual interactive `codex`, `codex resume` and `codex fork`
+launches through the shell integration described below.
 
 An already-running Codex process does not acquire this invocation flag. After a
 plugin update, if it reports `plugin contents changed; hook approval required`,
@@ -34,10 +36,9 @@ hook configuration without requiring the user to exit the conversation. Settings
 shows this guidance after a successful Codex install/reinstall; uninstall and
 other agents retain the restart reminder.
 
-Maintenance commands (plugin installation, version/catalog queries) and manual
-`codex` commands are not given this flag. The manual terminal integration below
-only supplies telemetry defaults. Users launching Codex manually can pass
-`--dangerously-bypass-hook-trust` explicitly when desired.
+Maintenance commands (plugin installation, version/catalog queries), `exec` and
+`review` are not automatically given this flag. Outside the supported shell
+integration, users can pass `--dangerously-bypass-hook-trust` explicitly when desired.
 
 ## API Providers
 
@@ -101,15 +102,19 @@ written to recovery snapshots.
 
 In a newly created **zsh** terminal, type `codex` normally. The Host installs a
 shell-local function after user startup configuration and adds the same ephemeral
-OTEL arguments as New Agent / project launch (`terminalTelemetryArguments`).
+interactive launch defaults as New Agent / project launch (`terminalLaunchArguments`):
+hook trust bypass plus optional OTEL arguments. `resume` and `fork` receive the
+hook flag too; an explicit flag is retained without duplication. Help, version,
+maintenance and noninteractive subcommands receive no automatic hook bypass.
 `auto_run` only governs UI auto-launch, not an explicit manual command.
 
 - Applies to new sessions, New Terminal and ordinary split panes, including those
   created from a Mac Viewer or iOS. This requires updating the **target Host Mac**
   and creating a new terminal there; an iOS-only update cannot retrofit an old
   Host or existing shell. No initialization keystrokes are sent to existing panes.
-- Only active when the Host's Codex plugin is enabled, telemetry is opted in, and
-  its receiver endpoint is available. Settings/endpoint are snapshotted at shell
+- Active when the Host's Codex plugin is enabled. Hook trust is independent of
+  telemetry; OTEL defaults additionally require telemetry opt-in and an available
+  receiver endpoint. Settings/endpoint are snapshotted at shell
   creation; open a new terminal after changing them or restarting the Host on a
   different port. Existing shells and running agents are not rewritten.
 - Preserves the user's original `ZDOTDIR`, login startup files, PATH, command
@@ -117,11 +122,12 @@ OTEL arguments as New Agent / project launch (`terminalTelemetryArguments`).
   authentication/session/skill locations are unchanged.
 - Existing `codex` aliases/functions win. `command codex` or an absolute executable
   path explicitly bypasses the function. Such launches must supply their own
-  telemetry config if desired. The manual command uses the shell's normal Codex
+  hook trust/telemetry options if desired. The manual command uses the shell's normal Codex
   executable; Settings' command-path override still governs UI launches.
 - An explicit `-c`/`--config` for `otel` or `otel.*` bypasses **all** injected
-  defaults, avoiding duplicate UI overrides or mixing a user's exporter with the
-  local endpoint. Arguments after `--` are treated as positional text.
+  telemetry defaults, avoiding duplicate UI overrides or mixing a user's exporter
+  with the local endpoint. It does not disable hook trust bypass for interactive
+  launches. Arguments after `--` are treated as positional text.
 - Unsupported shells (bash/fish/etc.) and explicit custom split commands retain
   their original startup behavior. Use New Agent for instrumented Codex launches
   in those shells. Claude retains its existing environment-variable integration.

@@ -466,7 +466,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         let provider = try await providerConfiguration(providerID ?? settings.defaultProviderID)
         return LaunchCommand(
             command: settings.commandPath,
-            args: provider.arguments + [Self.bypassHookTrustArgument] + terminalTelemetryArguments(),
+            args: provider.arguments + terminalLaunchArguments(),
             env: provider.environment
         )
     }
@@ -486,7 +486,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         environment["CODEX_HOME"] = root
         return AgentForkLaunch(command: LaunchCommand(
             command: settings.commandPath,
-            args: ["fork", sessionID, "-C", projectPath] + provider.arguments + [Self.bypassHookTrustArgument] + terminalTelemetryArguments(),
+            args: ["fork", sessionID, "-C", projectPath] + provider.arguments + terminalLaunchArguments(),
             env: environment
         ))
     }
@@ -723,8 +723,12 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             || value.hasPrefix("model_catalog_json=")
     }
 
-    /// Manual launches opt into the same telemetry as UI launches, independently
-    /// of Auto-run (typing `codex` is already an explicit launch request).
+    /// The shell wrapper applies hook trust only to interactive launches and
+    /// preserves explicit telemetry options. Auto-run does not govern manual input.
+    public func terminalLaunchArguments() -> [String] {
+        [Self.bypassHookTrustArgument] + terminalTelemetryArguments()
+    }
+
     public func terminalTelemetryArguments() -> [String] {
         // Point Codex's OTLP log export at the Mac-local receiver via `-c`
         // overrides (issue #602). Gated on the per-agent `exportTelemetry`

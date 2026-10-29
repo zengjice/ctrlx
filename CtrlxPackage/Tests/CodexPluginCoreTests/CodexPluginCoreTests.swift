@@ -478,18 +478,19 @@ struct CodexPluginCoreTests {
         #expect(launch == nil)
     }
 
-    @Test("Manual telemetry shares UI defaults but is independent of Auto-run")
+    @Test("Manual launch shares UI defaults; hook trust is independent of Auto-run and telemetry")
     func terminalTelemetry() async throws {
         let core = makeCore()
         let endpoint = URL(string: "http://127.0.0.1:54321")
         try await core.initialize(makeEnv(otlpEndpoint: endpoint), host: MockPluginHost())
         let automatic = await core.commandForLaunch(projectPath: "/fixture")
-        #expect(await ["--dangerously-bypass-hook-trust"] + core.terminalTelemetryArguments() == automatic?.args)
+        #expect(await core.terminalLaunchArguments() == automatic?.args)
         _ = try await core.applySettings(JSONEncoder().encode(CodexSettings(autoRun: false)))
         #expect(await core.commandForLaunch(projectPath: "/fixture") == nil)
-        #expect(await ["--dangerously-bypass-hook-trust"] + core.terminalTelemetryArguments() == automatic?.args)
+        #expect(await core.terminalLaunchArguments() == automatic?.args)
         _ = try await core.applySettings(JSONEncoder().encode(CodexSettings(exportTelemetry: false)))
         #expect(await core.terminalTelemetryArguments().isEmpty)
+        #expect(await core.terminalLaunchArguments() == ["--dangerously-bypass-hook-trust"])
         await core.shutdown()
     }
 

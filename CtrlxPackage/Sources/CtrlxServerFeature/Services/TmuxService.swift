@@ -269,9 +269,9 @@ final public class TmuxService {
             let directory = try await terminalAgentShellFiles.prepare(arguments)
             return TerminalAgentShellIntegration.launchPrefix(directory: directory) + defaultCommandWrapper
         } catch {
-            // Telemetry is optional; a disk-full or unwritable temp directory
+            // Integration is optional; a disk-full or unwritable temp directory
             // must not prevent the user from opening a normal terminal.
-            logger.warning("Could not prepare terminal telemetry integration: \(error)")
+            logger.warning("Could not prepare terminal Agent integration: \(error)")
             return nil
         }
     }
