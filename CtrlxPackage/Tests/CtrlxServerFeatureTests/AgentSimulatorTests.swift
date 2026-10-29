@@ -456,6 +456,80 @@
             case unchanged, home, touchDown, keyDown, keyUp, modifierDown, modifierUp, close, ownerEnded, competingClaim, cancellationFailed
         }
 
+        @Test(arguments: [false, true], ["resume", "paused", "fork", "other-pane", "old-alive", "human-input", "closed", "unknown", "session-moved", "identity-lost", "same-pid", "unknown-session-moved"])
+        func resumedConversationKeepsItsDeviceAndHumanControl(_ delegated: Bool, _ scenario: String) async throws {
+            let old = process(10, name: "codex").owner
+            let next = scenario == "unknown-session-moved" ? old : process(scenario == "same-pid" ? old.pid : 20, name: "codex", start: 200).owner
+            let service = withDependencies {
+                var system = SimulatorSystemClient()
+                system.inspect = { pid in
+                    if scenario == "same-pid" {
+                        return SimulatorProcess(owner: next, parentPID: 1, executable: "/fixture/codex")
+                    }
+                    if pid == old.pid && !["old-alive", "unknown-session-moved"].contains(scenario) {
+                        throw SimulatorFailure("Old process exited")
+                    }
+                    return SimulatorProcess(owner: pid == old.pid ? old : next, parentPID: 1, executable: "/fixture/codex")
+                }
+                $0[SimulatorSystemClient.self] = system
+            } operation: { AgentSimulatorService() }
+            let state = try inputState(service: service, owner: old, connection: TestSimulatorConnection())
+            let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            let host = UUID()
+            let identity = AgentResourceIdentity(hostID: host, pane: pane, pluginID: "codex", conversationID: "conversation")
+            state.conversation = ["unknown", "unknown-session-moved"].contains(scenario) ? nil : identity
+            if delegated {
+                state.owner = nil
+                state.source = .session(.init(id: pane.sessionID, name: "test", directory: "/tmp"))
+                state.delegatedOwner = old
+                state.grant = .init(agent: .init(id: old.key, title: "dev", paneID: "%1"), canWrite: true)
+            }
+            if scenario == "paused" {
+                state.writer = nil
+            }
+            var resumedPane = pane
+            if scenario == "other-pane" {
+                resumedPane.paneID = UUID()
+            }
+            if ["session-moved", "unknown-session-moved"].contains(scenario) {
+                resumedPane.sessionID = UUID()
+            }
+            let resumed = AgentResourceIdentity(
+                hostID: host,
+                pane: resumedPane,
+                pluginID: "codex",
+                conversationID: scenario == "fork" ? "fork" : "conversation"
+            )
+            service.resolveResourceIdentity = { _ in
+                if scenario == "human-input" {
+                    service.manualKey(state, usage: 4, down: false)
+                }
+                if scenario == "closed" {
+                    state.isClosed = true
+                }
+                return scenario == "identity-lost" ? nil : resumed
+            }
+            let id = state.id
+            try await service.resumeResource(state, for: next, identity: resumed)
+            #expect(state.id == id)
+            let succeeds = ["resume", "paused", "human-input", "same-pid"].contains(scenario) || (scenario == "session-moved" && !delegated)
+            let revoked = ["session-moved", "unknown-session-moved"].contains(scenario) && delegated
+            #expect((state.owner ?? state.delegatedOwner) == (revoked ? nil : succeeds ? next : old))
+            if succeeds {
+                let writable = !["paused", "human-input"].contains(scenario)
+                #expect(state.writer == (writable ? next : nil))
+                if delegated {
+                    #expect(state.owner == nil)
+                    #expect(state.grant?.agent.id == next.key)
+                    #expect(state.grant?.canWrite == writable)
+                }
+            }
+            try await state.grantCleanup?.value
+            await state.manualInput?.value
+            state.view.close()
+            await service.shutdown()
+        }
+
         private func inputState(
             service: AgentSimulatorService, owner: SimulatorOwner, connection: TestSimulatorConnection
         ) throws -> SimulatorTabState {

@@ -18,6 +18,8 @@
         let requests = Mutex<[[String: JSONValue]]>([])
         let hold = Mutex(false)
         let holdClipboard = Mutex(false)
+        let holdKey = Mutex(false)
+        let keyReplies = Mutex<[CXSimulatorDataReply]>([])
         let failCancel = Mutex(false)
         let readClipboard = Mutex<(@Sendable ([String: JSONValue]) throws -> [String: JSONValue])?>(nil)
         let clipboardReplies = Mutex<[CXSimulatorDataReply]>([])
@@ -31,7 +33,13 @@
                 requests.withLock { $0.append(request) }
             }
             if command == "cancel", failCancel.withLock({ $0 }) {
-                reply(nil, NSError(domain: "ClipboardTests", code: 1))
+                reply(Data(#"{"accepted":true}"#.utf8), NSError(
+                    domain: "ClipboardTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Input drain failed; outcome is unknown"]
+                ))
+            } else if command == "key", holdKey.withLock({ $0 }) {
+                keyReplies.withLock { $0.append(reply) }
             } else if command == "clipboard-write", holdClipboard.withLock({ $0 }) {
                 clipboardReplies.withLock { $0.append(reply) }
             } else if command == "clipboard-read", let request, let read = readClipboard.withLock({ $0 }) {
@@ -70,6 +78,7 @@
         let holdBoot = Mutex(false)
         let alive = Mutex(true)
         let agentUnavailable = Mutex(false)
+        let exitedPID = Mutex<Int32?>(nil)
     }
 
     @Suite("Simulator pane reuse and remote viewing", .serialized) @MainActor
@@ -85,7 +94,7 @@
             var created: [SimulatorTabState] = []
             var detached: [UUID] = []
             var sessionTabs: [String: SessionFileTabsState] = [:]
-            init(attach: Bool = true) throws {
+            init(attach: Bool = true, recording: SimulatorRecordingClient = .testValue) throws {
                 _ = NSApplication.shared
                 self.pane = Self.pane(session: "work", window: 0)
                 let connection = PreviewTestConnection()
@@ -139,6 +148,9 @@
                 system.write = { _, _ in }
                 system.remove = { _ in }
                 system.inspect = { pid in
+                    if probe.exitedPID.withLock({ $0 }) == pid {
+                        throw SimulatorFailure("Owner exited")
+                    }
                     if pid != getpid(), probe.agentUnavailable.withLock({ $0 }) {
                         throw SimulatorFailure("No agent process")
                     }
@@ -151,6 +163,7 @@
                 }
                 system.connect = { _, _, _ in SimulatorTransport(connection: connection) }
                 self.service = withDependencies {
+                    $0[SimulatorRecordingClient.self] = recording
                     $0[ProcessRunner.self] = runner
                     $0[SimulatorSystemClient.self] = system
                     $0[SimulatorResourceClient.self] = SimulatorResourceClient(read: { _ in
@@ -164,6 +177,7 @@
                     })
                 } operation: { AgentSimulatorService() }
                 withDependencies {
+                    $0[SimulatorRecordingClient.self] = recording
                     $0[ProcessRunner.self] = runner
                     $0[SimulatorSystemClient.self] = system
                     $0[SimulatorResourceClient.self] = SimulatorResourceClient(read: { _ in
@@ -241,6 +255,198 @@
             var boots: Int {
                 probe.calls.withLock { $0.filter { $0.first == "on" }.count }
             }
+        }
+
+        @Test("Losing native identity stops recording and invalidates an in-flight key press")
+        func unavailableConversationSuspendsInput() async throws {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let stopped = root.appendingPathComponent("stopped")
+            let script = """
+            import signal, sys, time
+            def stop(*_):
+                open(sys.argv[1], 'w').close()
+                sys.exit(0)
+            signal.signal(signal.SIGINT, stop)
+            with open(sys.argv[2], 'wb') as f: f.write(b'frames')
+            print('Recording started', file=sys.stderr, flush=True)
+            while True: time.sleep(.02)
+            """
+            let fixture = try Fixture(recording: .init(make: { _, _, options in
+                withDependencies {
+                    $0.continuousClock = ContinuousClock()
+                } operation: {
+                    SimulatorRecorder(options: options, executable: "/usr/bin/python3", arguments: ["-c", script, stopped.path])
+                }
+            }))
+            let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            let identity = AgentResourceIdentity(hostID: UUID(), pane: pane, pluginID: "codex", conversationID: "a")
+            fixture.service.resolveResourceIdentity = { _ in identity }
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            let device: JSONValue = .string(state.id.uuidString)
+            let recording = await fixture.action("record-start", ["device": device, "output": .string(root.appendingPathComponent("video.mp4").path)])
+            #expect(recording.ok)
+            fixture.connection.holdKey.withLock { $0 = true }
+            let pressing = Task { await fixture.action("key", ["device": device, "usage": .int(4)]) }
+            for _ in 0..<200 {
+                if fixture.connection.keyReplies.withLock({ !$0.isEmpty }) {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            #expect(fixture.connection.keyReplies.withLock { $0.count } == 1)
+            let generation = state.generation
+            fixture.service.resolveResourceIdentity = { _ in nil }
+            #expect(!(await fixture.action("status", ["device": device])).ok)
+            #expect(state.suspendedOwner == state.owner && state.suspendedOwner != nil)
+            #expect(state.generation > generation)
+            try await state.grantCleanup?.value
+            #expect(FileManager.default.fileExists(atPath: stopped.path))
+            #expect(fixture.connection.commands.withLock { $0.contains("cancel") })
+            fixture.connection.holdKey.withLock { $0 = false }
+            let replies = fixture.connection.keyReplies.withLock { let replies = $0
+                $0.removeAll()
+                return replies
+            }
+            for reply in replies {
+                reply(Data("{}".utf8), nil)
+            }
+            #expect(!(await pressing.value).ok)
+            #expect(fixture.connection.commands.withLock { $0.filter { $0 == "key" }.count } == 1)
+            await fixture.service.shutdown()
+        }
+
+        @Test("Unknown input drain outcome cannot restore the old or a resumed process", arguments: [false, true])
+        func failedSuspensionCannotResume(_ newProcess: Bool) async throws {
+            let fixture = try Fixture()
+            let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            let identity = AgentResourceIdentity(hostID: UUID(), pane: pane, pluginID: "codex", conversationID: "a")
+            fixture.service.resolveResourceIdentity = { _ in identity }
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            let owner = state.owner
+            let device: JSONValue = .string(state.id.uuidString)
+            fixture.connection.failCancel.withLock { $0 = true }
+            if newProcess {
+                fixture.probe.exitedPID.withLock { $0 = 10 }
+            } else {
+                fixture.service.resolveResourceIdentity = { _ in nil }
+                #expect(!(await fixture.action("status", ["device": device])).ok)
+                fixture.service.resolveResourceIdentity = { _ in identity }
+            }
+            let response = await fixture.action("status", ["device": device], peer: newProcess ? 20 : 10)
+            #expect(!response.ok)
+            #expect(state.owner == owner && state.suspendedOwner == owner)
+            await #expect(throws: (any Error).self) { try await state.grantCleanup?.value }
+            let keys = fixture.connection.commands.withLock { $0.filter { $0 == "key" }.count }
+            #expect(!(await fixture.action("key", ["device": device, "usage": .int(4)], peer: newProcess ? 20 : 10)).ok)
+            #expect(fixture.connection.commands.withLock { $0.filter { $0 == "key" }.count } == keys)
+            fixture.connection.failCancel.withLock { $0 = false }
+            await fixture.service.shutdown()
+        }
+
+        @Test(
+            "Booting devices retain their request identity and revalidate before publishing",
+            arguments: [false, true],
+            ["changed-cache", "lost-cache", "changed-native", "lost-native", "discovered", "unchanged", "unknown"]
+        )
+        func bootDoesNotAdoptAnotherConversation(_ newDevice: Bool, _ change: String) async throws {
+            let fixture = try Fixture()
+            #expect((await fixture.action("config", ["maximumDevices": .int(1)])).ok)
+            let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            let identity = AgentResourceIdentity(hostID: UUID(), pane: pane, pluginID: "codex", conversationID: "a")
+            let next = AgentResourceIdentity(hostID: identity.hostID, pane: pane, pluginID: "codex", conversationID: "b")
+            let current = Mutex<AgentResourceIdentity?>(["discovered", "unknown"].contains(change) ? nil : identity)
+            fixture.service.resolveResourceIdentity = { _ in current.withLock { $0 } }
+            fixture.probe.holdBoot.withLock { $0 = true }
+            let parameters: [String: JSONValue] = newDevice ? ["new": .bool(true)] : [:]
+            let opening = Task { await fixture.action("open", parameters) }
+            try await wait { fixture.boots == 1 }
+            if change.hasPrefix("changed") || change == "discovered" {
+                current.withLock { $0 = next }
+            } else if change.hasPrefix("lost") {
+                current.withLock { $0 = nil }
+            }
+            if !change.hasSuffix("native") {
+                #expect((await fixture.action("devices")).ok)
+            }
+            fixture.probe.holdBoot.withLock { $0 = false }
+            let response = await opening.value
+            let unchanged = ["unchanged", "unknown"].contains(change)
+            #expect(response.ok == unchanged)
+            if !unchanged {
+                #expect(response.error?.message.contains("conversation changed") == true)
+                #expect(fixture.created.isEmpty && fixture.service.sharedSimulatorTabs.isEmpty)
+                #expect(fixture.probe.calls.withLock { $0.contains { $0.contains("shutdown") } })
+                // The rejected boot must release capacity, including the default-device slot.
+                #expect((await fixture.action("open", parameters)).ok)
+            }
+            let state = try #require(fixture.created.first)
+            #expect(state.conversation == current.withLock { $0 })
+            #expect(fixture.created.count == 1)
+            await fixture.service.shutdown()
+        }
+
+        @Test("Viewer can close a retained simulator after the owning Agent exits")
+        func viewerClosesRetainedDevice() async throws {
+            let fixture = try Fixture()
+            #expect((await fixture.action("config", ["maximumDevices": .int(1)])).ok)
+            let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            let identity = AgentResourceIdentity(hostID: UUID(), pane: pane, pluginID: "codex", conversationID: "a")
+            fixture.service.resolveResourceIdentity = { _ in identity }
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            fixture.probe.exitedPID.withLock { $0 = 10 }
+            await #expect(throws: SimulatorFailure.self) {
+                try await fixture.service.closeSimulator(.init(sessionName: "other", tabID: state.id))
+            }
+            #expect(!state.isClosed)
+            try await fixture.service.closeSimulator(.init(sessionName: "work", tabID: state.id))
+            #expect(state.isClosed && fixture.service.sharedSimulatorTabs.isEmpty)
+            #expect(fixture.probe.calls.withLock { $0.contains { $0.suffix(2) == ["shutdown", state.handle.udid] } })
+            #expect((await fixture.action("open", peer: 20)).ok)
+            #expect(fixture.created.last?.id != state.id)
+            await fixture.service.shutdown()
+        }
+
+        @Test("One failed input drain cannot block other devices or new opens", arguments: [false, true])
+        func failedDeviceDoesNotBlockOthers(_ newProcess: Bool) async throws {
+            let fixture = try Fixture()
+            #expect((await fixture.action("config", ["maximumDevices": .int(4)])).ok)
+            let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            let identity = AgentResourceIdentity(hostID: UUID(), pane: pane, pluginID: "codex", conversationID: "a")
+            fixture.service.resolveResourceIdentity = { _ in identity }
+            #expect((await fixture.action("open")).ok)
+            let failed = try #require(fixture.created.first)
+            #expect((await fixture.action("open", ["new": .bool(true)])).ok)
+            let healthy = try #require(fixture.created.last)
+            let owner = try #require(failed.owner)
+            fixture.connection.failCancel.withLock { $0 = true }
+            try await fixture.service.resumeResource(failed, for: owner, identity: nil)
+            await #expect(throws: SimulatorFailure.self) { try await failed.grantCleanup?.value }
+            fixture.connection.failCancel.withLock { $0 = false }
+            if newProcess {
+                fixture.probe.exitedPID.withLock { $0 = 10 }
+            }
+            let peer = newProcess ? 20 : 10
+            for _ in 0..<2 {
+                let devices = await fixture.action("devices", peer: peer)
+                #expect(devices.ok)
+                guard case let .array(entries)? = devices.result?["devices"] else { throw SimulatorFailure("Missing device list") }
+                #expect(entries.count == 1 && entries.first?.objectValue?["device"] == .string(healthy.id.uuidString))
+                #expect((await fixture.action("key", ["device": .string(healthy.id.uuidString), "usage": .int(4)], peer: peer)).ok)
+                let denied = await fixture.action("status", ["device": .string(failed.id.uuidString)], peer: peer)
+                #expect(!denied.ok && denied.error?.message.contains("Input drain failed") == true)
+                #expect(failed.owner == owner && failed.suspendedOwner == owner)
+                #expect(failed.error?.contains("Input drain failed") == true)
+                let opened = await fixture.action("open", ["new": .bool(true)], peer: peer)
+                #expect(opened.ok)
+                let id = try #require(opened.result?["device"])
+                #expect((await fixture.action("close", ["device": id], peer: peer)).ok)
+            }
+            await fixture.service.shutdown()
         }
 
         @Test("Human simulator authorization never changes its owner and requires explicit return after takeover")

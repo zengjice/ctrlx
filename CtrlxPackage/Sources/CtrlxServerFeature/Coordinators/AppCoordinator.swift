@@ -480,6 +480,8 @@
             agentBrowser.configure { [tmuxService] pid in
                 try await tmuxService.agentBrowserPane(processID: pid)
             }
+            agentBrowser.resolveResourceIdentity = { [weak self] owner in await self?.resourceIdentity(for: owner) }
+            agentSimulator.resolveResourceIdentity = agentBrowser.resolveResourceIdentity
             agentSimulator.start(root: CtrlxPaths(stateRootOverride: Self.parseCtrlxStateRoot()).stateRoot) { [tmuxService] pid in
                 @Dependency(SimulatorSystemClient.self) var system
                 return try await tmuxService.agentPaneRoute(processID: pid, ancestorPIDs: system.ancestors(of: pid))

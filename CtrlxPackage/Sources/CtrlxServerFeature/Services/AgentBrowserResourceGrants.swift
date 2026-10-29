@@ -9,7 +9,7 @@ extension AgentBrowserService {
         runtime?.responds(to: #selector(CXBrowserRuntime.setAgentGrant(_:forTab:))) == true
     }
 
-    func setResourceGrant(tabID: UUID, sessionID: UUID, agent: ResourceAgent, owner: SimulatorOwner) throws {
+    func setResourceGrant(tabID: UUID, sessionID: UUID, agent: ResourceAgent, owner: SimulatorOwner, conversation: AgentResourceIdentity? = nil) throws {
         guard
             let tab = tabs[tabID.uuidString], tab.resourceSessionID == sessionID, tab.owner.isEmpty, !tab.isClosed,
             let runtime, supportsResourceGrants else {
@@ -18,7 +18,9 @@ extension AgentBrowserService {
         guard remoteControls[tabID] == nil else {
             throw RemoteBrowserError.message("Release Viewer control before authorizing an Agent.")
         }
-        let identity: [String: NSNumber] = ["pid": NSNumber(value: owner.pid), "startSeconds": NSNumber(value: owner.startSeconds), "startMicros": NSNumber(value: owner.startMicros)]
+        var identity: [String: Any] = ["pid": NSNumber(value: owner.pid), "startSeconds": NSNumber(value: owner.startSeconds), "startMicros": NSNumber(value: owner.startMicros)]
+        identity["conversation"] = conversation?.key
+        identity["session"] = sessionID.uuidString
         guard runtime.setAgentGrant?(identity, forTab: tab.identifier) == true else {
             throw RemoteBrowserError.message("The page is busy or the Agent exited. No authorization was granted.")
         }

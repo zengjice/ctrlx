@@ -1,6 +1,7 @@
 import AppKit
 import CtrlxBrowserBridge
 import CtrlxNetworking
+import CtrlxSimulatorProtocol
 import Dependencies
 import Foundation
 import Logging
@@ -67,6 +68,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     var onTabsChanged: (() -> Void)?
     var imageTargetForPane: (String) -> AgentImageTarget? = { _ in nil }
     var resolveSourcePane: (@MainActor (String, String) async throws -> PaneInfo)?
+    var resolveResourceIdentity: (@MainActor (SimulatorOwner) async -> AgentResourceIdentity?)?
     private var detachingTabs: Set<String> = []
     private var publishTask: Task<Void, Never>?
     private var routePanes: [PaneInfo] = []
@@ -426,6 +428,20 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         }
     }
 
+    public func resolveBrowserAgentIdentity(_ pid: Int32, completion: @escaping ([String: String]?) -> Void) {
+        Task { @MainActor [weak self] in
+            @Dependency(SimulatorSystemClient.self) var system
+            guard let self, !closing, let owner = try? system.inspect(pid).owner else { completion(nil)
+                return
+            }
+            let identity = await resolveResourceIdentity?(owner)
+            guard !closing, (try? system.inspect(pid).owner) == owner else { completion(nil)
+                return
+            }
+            completion(identity.map { ["key": $0.key, "session": $0.authorizationSessionID.uuidString] })
+        }
+    }
+
     public func browserContainer(forRoute route: [String: String]) -> NSView? {
         guard !closing, route["session"] != nil, let root = parkingWindow.contentView else { return nil }
         // CEF requires a real native parent at creation. SwiftUI reparents this
@@ -487,6 +503,12 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         guard let tab = tabs[identifier], tab.grant != nil else { return }
         if let canWrite {
             tab.grant?.canWrite = canWrite.boolValue
+            if
+                let process = runtime?.agentGrant?(forTab: identifier), let grant = tab.grant,
+                let pid = process["pid"], let seconds = process["startSeconds"], let micros = process["startMicros"] {
+                let owner = SimulatorOwner(pid: pid.int32Value, uid: getuid(), startSeconds: seconds.uint64Value, startMicros: micros.uint64Value)
+                tab.grant = .init(agent: ResourceAgent(id: owner.key, title: grant.agent.title, paneID: grant.agent.paneID), canWrite: canWrite.boolValue)
+            }
         } else {
             tab.grant = nil
         }

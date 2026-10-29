@@ -204,6 +204,15 @@ class Probe:
         self.runs = []
         for name in ('upstream-alpha', 'upstream-beta'):
             await self.control('new-session', '--name', name, '--path', str(self.root))
+            # The suites address :1 explicitly; don't inherit the user's base-index.
+            windows = subprocess.check_output(['/opt/homebrew/bin/tmux', '-S', self.socket,
+                'list-windows', '-t', name, '-F', '#{window_id} #{window_index}'], text=True).splitlines()
+            assert len(windows) == 1, windows
+            window, index = windows[0].split()
+            if index != '1':
+                subprocess.run(['/opt/homebrew/bin/tmux', '-S', self.socket, 'move-window',
+                    '-s', window, '-t', name + ':1'], check=True)
+                print('Fixture window index normalized:', name, index, '-> 1', flush=True)
             async def first_pane():
                 panes = (await self.control('list-panes', '--window', name + ':1'))['panes']
                 return panes[0]['id'] if panes else None
