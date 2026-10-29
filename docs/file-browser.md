@@ -9,6 +9,12 @@ resources retain their pane/process ownership. Human tabs participate in the
 top-level order; Agent resources retain their source groups. Mac split, detach,
 return and whole-session windows also accept resource-only workspaces.
 
+On Mac Host and Viewer, the directory/preview divider has an 8-point drag area.
+The directory starts at 280 points; its chosen width is local to the view and
+survives file selection and preview refreshes. Window resizing clamps both
+columns to the available space without replacing the chosen width. The divider
+also supports accessibility increment/decrement actions.
+
 File references resolve against the captured source terminal on the Host, then
 reuse the most recently selected human Files tab in this client window/session.
 They never rebind that tab to the source terminal. Explicit New and artifact

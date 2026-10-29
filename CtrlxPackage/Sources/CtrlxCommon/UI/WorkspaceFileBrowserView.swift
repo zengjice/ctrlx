@@ -88,9 +88,10 @@
                 }
                 Divider()
                 #if os(macOS)
-                    HSplitView {
-                        directory.disabled(isAnnotating).frame(minWidth: 200, idealWidth: 280)
-                        preview.frame(minWidth: 200, maxWidth: .infinity)
+                    FileBrowserSplitView {
+                        directory.disabled(isAnnotating)
+                    } preview: {
+                        preview
                     }
                 #else
                     if tab.selectedFile == nil {
