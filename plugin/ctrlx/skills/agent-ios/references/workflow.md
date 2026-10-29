@@ -43,15 +43,21 @@ explicitly authorize one live Agent to use it. `devices` then includes it with
 owned: do not close, erase, or delete it. Human input pauses your writer; only a
 person's **Return Control to Agent** resumes it. `claim` cannot reclaim an
 authorized human device. Revocation or Agent exit removes access and stops its
-Agent recording without closing the device. New Agent processes and subagents
-do not inherit authorization. Grants never survive a Host restart.
+Agent recording without closing the device. After resuming the same native
+conversation in the same pane, run `identity` and `devices` again: an updated Host
+can verify the new process and reconnect its resources. Plugin/CLI versions are
+not identity. Human pause, revocation and the original session scope still apply;
+forks, other conversations/panes and subagents do not inherit authorization.
+Grants never survive a Host restart.
 
 `open` returns the live agent's CtrlX device ID and its UDID.
 CtrlX has a private device set and defaults to two open devices; change the limit
 with `config --max-devices 8`. `resources` reports pressure, reclaimable memory,
 swap and free disk. Boot requires normal pressure and the configured reserves.
-`close`, agent exit or ten idle minutes without local display/viewer activity
-shuts down Agent-owned devices, keeping data. Independent human devices remain
+`close` or ten idle minutes without local display/viewer activity shuts down
+Agent-owned devices, keeping data. When the owning process exits, devices with a
+verified native conversation remain available for human use and same-conversation
+resume until that idle limit. Devices without verified identity still close on exit. Independent human devices remain
 until explicitly closed or the Host shuts down. Opening a closed guest assigns a new ID.
 Closing the Host workbench only detaches its view. Paired Mac/iOS Viewers can
 observe it, or explicitly Take Control for touch and clipboard operations when

@@ -135,9 +135,10 @@ extension AppCoordinator {
         guard let target = try await resourceAgents(in: sessionID).first(where: { $0.agent.id == agentID }) else {
             throw FileBrowserError.message("The chosen Agent is no longer running in this session.")
         }
+        let conversation = await resourceIdentity(for: target.owner)
         switch kind {
-        case .browser: try agentBrowser.setResourceGrant(tabID: tabID, sessionID: sessionID, agent: target.agent, owner: target.owner)
-        case .simulator: try await agentSimulator.setResourceGrant(tabID: tabID, sessionID: sessionID, agent: target.agent, owner: target.owner)
+        case .browser: try agentBrowser.setResourceGrant(tabID: tabID, sessionID: sessionID, agent: target.agent, owner: target.owner, conversation: conversation)
+        case .simulator: try await agentSimulator.setResourceGrant(tabID: tabID, sessionID: sessionID, agent: target.agent, owner: target.owner, conversation: conversation)
         case .files: throw FileBrowserError.message("Files supports sending paths, not Agent control.")
         }
         do {

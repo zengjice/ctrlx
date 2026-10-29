@@ -6,11 +6,12 @@
 #include "include/cef_jsdialog_handler.h"
 
 struct BrowserCallbacks {
-  std::function<void(const std::string&, int, const std::string&, std::function<bool()>, std::function<void(CefRefPtr<CefBrowser>, NSString*)>)> open;
+  std::function<void(const std::string&, int, const std::string&, const std::string&, std::function<bool()>, std::function<void(CefRefPtr<CefBrowser>, NSString*)>)> open;
   std::function<void(CefRefPtr<CefBrowser>)> select;
   std::function<void()> changed;
   std::function<NSDictionary*(CefRefPtr<CefBrowser>)> presentation;
   std::function<void(NSString*, NSNumber*)> grantChanged;
+  std::function<void(int, std::function<void(std::string, std::string)>)> identity;
 };
 bool StartAgentBrowser(NSString* stateDirectory, BrowserCallbacks callbacks);
 void StopAgentBrowser();
@@ -18,10 +19,11 @@ bool AgentBrowserTransportsStopped();
 // Accessed only on the native AppKit/CEF UI thread.
 bool AgentBrowserDebugMode();
 void RecordBrowserDiagnostic(NSDictionary* event);
-void AddAgentBrowserTab(CefRefPtr<CefBrowser> browser, const std::string& owner);
+void AddAgentBrowserTab(CefRefPtr<CefBrowser> browser, const std::string& owner, const std::string& conversation);
 void RemoveAgentBrowserTab(CefRefPtr<CefBrowser> browser);
 void AgentBrowserNavigation(CefRefPtr<CefBrowser> browser);
 std::string AgentBrowserOwner(CefRefPtr<CefBrowser> browser);
+std::string AgentBrowserConversation(CefRefPtr<CefBrowser> browser);
 NSArray* AgentBrowserGroups();
 NSArray* AgentBrowserTabs();
 CefRefPtr<CefBrowser> AgentBrowserTarget(NSString* tab);

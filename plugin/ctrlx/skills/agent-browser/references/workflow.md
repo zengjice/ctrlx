@@ -38,8 +38,12 @@ your own pages plus human pages explicitly authorized to this running Agent;
 authorized entries have `authorized: true`. Use their exact returned IDs.
 Authorization never transfers ownership: do not close an authorized human tab.
 Human input pauses your access to writing; ask for **Return Control to Agent**,
-never claim or retry around takeover. Revocation, Agent exit/restart and Host
-restart invalidate access and old engine connections; do not reuse them. Human
+never claim or retry around takeover. Agent exit invalidates old credentials and
+engine connections. After resuming the same native conversation in the same pane,
+run `action tabs` again: an updated Host can verify and reconnect the original
+resources with fresh credentials, preserving human pauses. Plugin/CLI upgrades do
+not change conversation identity. Forks, other panes, explicit revocation and Host
+restart do not inherit access. Never copy or edit old context credentials. Human
 popups need their own authorization. Browser groups share logins, not grants;
 never log out or switch accounts without the user's intent. WebKit/system-browser
 tabs remain outside this CLI.

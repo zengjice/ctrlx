@@ -49,8 +49,10 @@ Human input pauses writing; releasing a Viewer lease does not resume it. Native
 read/screenshot remains available while paused; the Vercel connection is closed
 and must reconnect after control is returned. Explicit
 **Return Control to Agent** revalidates the recipient. Revocation, process exit,
-session move or Host restart invalidate access, outstanding results, old engine
-connections and Agent recordings without closing the human page. Child human
+session move or Host restart invalidate outstanding results, old engine connections
+and Agent recordings without closing the human page. A verified resume in the same
+Host/pane/conversation can reconnect using fresh process credentials; explicit
+revocation, human pause and the original authorization session still apply. Child human
 pages require separate authorization. Existing shared-profile semantics remain.
 
 `supportsResourceAuthorization` is advertised only with a native runtime exposing
@@ -457,9 +459,24 @@ Routing reads pane metadata and shell PIDs in one live tmux query; it does not
 reuse the UI refresh cache, which may still be loading or have deduplicated
 linked sessions. The process tree is then matched against that live snapshot.
 
-The control owner is the **agent process instance**; the display location is the
-**source session and split side**. Multiple agents in one session share its tab
-strip, not control grants. Children inherit their opener's owner and location.
+Resource ownership records the Host, stable pane, plugin ID and verified native
+conversation ID; execution still authenticates the current PID and start time.
+Plugin/CLI versions, tab names and directories are not identity. The Host resolves
+this evidence independently of Agent JSON, using the existing native identity
+store and fresh process/pane checks. New runs can inherit only the matching exited
+run's pages; live competitors, forks, new conversations and other panes cannot.
+Old tokens, engine connections and pending operations are never revived or replayed.
+An Agent open captures its initially verified conversation. After asynchronous
+pane routing, the Host resolves that identity again before creating the page;
+a changed or lost verified identity cancels the open. Registration uses only the
+captured identity, never the current run cache. Another request observing a
+conversation change also cancels pending opens from the old conversation.
+Without verified conversation evidence, only the existing process-scoped authority
+is available; resume cannot guess from a pane or label. Host restart persistence is
+outside this path. The display location remains the **source session and split side**. Multiple agents in one session share its tab
+strip, not control grants. Children capture their opener's owner, conversation and
+location when requested; a later conversation switch in the same process cannot
+assign an old page's children to the new conversation.
 Switching tabs reparents the existing native view; it does not reload Chromium.
 Transient Chromium tabs are excluded from WKWebView layout persistence. Browser
 tabs are available to paired Mac/iOS Viewers through the typed remote surface below.
@@ -861,6 +878,17 @@ The build script uses the verified prebuilt SDK by default; a matching
 full-source SDK can be selected with `CTRLX_CEF_SDK_ROOT` or the ignored
 `Config/Local-macOS.xcconfig`. Overrides validate the pinned CEF version, commit
 and required SDK layout before building.
+`tests/prepare_upstream_probe.sh` also accepts `CTRLX_CEF_SDK_ROOT` for its
+isolated signed copy. `tests/resource_resume.py <app> <engine> <codex-fixture>`
+checks process replacement, original-page preservation through both engines,
+old-credential rejection, other-pane/Fork rejection, same-process conversation
+changes and delayed children retaining their parent conversation. Its `engine_identity.cc` fixture holds a writable native rollout file;
+it exercises production identity discovery, not a real Codex conversation.
+`browser_opening_tests` is a standalone native CMake target: it executes the
+production asynchronous routing/identity flow with delayed Host callbacks and
+the real ownership store, while replacing CEF scheduling and page creation. It
+covers changed/missing identities with and without a cache refresh, expiry,
+process exit, unchanged identities and process-only compatibility.
 The standalone acceptance recorded below is **historical** and does not prove
 the new embedded UI. Embedded acceptance uses a separate signed CtrlX test copy,
 an isolated tmux server, private profile and the repository's E2E API socket.

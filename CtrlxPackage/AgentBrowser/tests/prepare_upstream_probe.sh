@@ -3,7 +3,7 @@
 set -euo pipefail
 PROBE_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PROBE_SOURCE="${1:?Usage: bash prepare_upstream_probe.sh /path/to/current/CtrlX.app}"
-PROBE_SDK="$PROBE_REPO/.build-local/cef-browser-probe/sdk/cef_binary_152.0.8+g1ce985c+chromium-152.0.7977.134_macosarm64_minimal"
+PROBE_SDK="${CTRLX_CEF_SDK_ROOT:-$PROBE_REPO/.build-local/cef-browser-probe/sdk/cef_binary_152.0.8+g1ce985c+chromium-152.0.7977.134_macosarm64_minimal}"
 PROBE_WRAPPER="$PROBE_REPO/.build-local/agent-browser/libcef_dll_wrapper/libcef_dll_wrapper.a"
 PROBE_SHA='2e61287259053ea964d39e77002c6a34af0e589e55ccff25e659efae7e892e0d'
 [[ "$(uname -m)" == arm64 ]] || { echo 'Apple Silicon required.' >&2; exit 1; }

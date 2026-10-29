@@ -18,6 +18,8 @@
         private var routePanes: [PaneInfo] = []
         private var routeRevision: UInt64 = 0
         var resolveSourcePane: (@MainActor (String, String) async throws -> PaneInfo)?
+        var resolveResourceIdentity: (@MainActor (SimulatorOwner) async -> AgentResourceIdentity?)?
+        private var resourceIdentities: [SimulatorOwner: AgentResourceIdentity] = [:]
         private var resolveRoute: (@MainActor (Int32) async throws -> AgentPaneRoute)?
         private var opening = 0
         private var primaryDevices: [String: UUID] = [:]
@@ -60,11 +62,18 @@
                     releaseSimulatorControl(state)
                 }
                 if let delegated = state.delegatedOwner, (try? system.inspect(delegated.pid).owner) != delegated {
-                    revokeResourceGrant(state)
+                    if state.conversation != nil {
+                        suspendResource(state, owner: delegated)
+                    } else {
+                        revokeResourceGrant(state)
+                    }
                 }
                 let ownerEnded = state.owner.map { (try? system.inspect($0.pid).owner) != $0 } ?? false
+                if ownerEnded, state.conversation != nil, let owner = state.owner {
+                    suspendResource(state, owner: owner)
+                }
                 let idle = state.resourceSession == nil && !state.visible && !state.writing && state.lastActivity.duration(to: .now) > .seconds(600)
-                if ownerEnded || idle {
+                if (ownerEnded && state.conversation == nil) || idle {
                     close(state)
                 } else if
                     !state.visible, !state.writing, state.lastActivity.duration(to: .now) > .seconds(60),
@@ -214,6 +223,113 @@
             }
         }
 
+        private func suspendResource(_ state: SimulatorTabState, owner: SimulatorOwner) {
+            guard state.suspendedOwner != owner else { return }
+            state.suspendedOwner = owner
+            state.generation += 1
+            state.grantRevision += 1
+            state.observation = nil
+            state.grant?.canWrite = false
+            let previous = state.grantCleanup
+            state.grantCleanup = Task {
+                _ = await previous?.result
+                let recording = await self.coordinator?.stopRecording(state.handle)
+                guard !state.isClosed else { return }
+                do {
+                    _ = try await state.handle.worker.request(["command": .string("cancel")])
+                    if let error = recording?["error"]?.stringValue {
+                        throw SimulatorFailure(error)
+                    }
+                } catch {
+                    state.error = error.localizedDescription
+                    throw error
+                }
+            }
+            onTabsChanged?()
+        }
+
+        private func validateResourceForHuman(_ state: SimulatorTabState) throws {
+            if let owner = state.owner, state.conversation != nil, (try? system.inspect(owner.pid).owner) != owner {
+                suspendResource(state, owner: owner)
+            } else {
+                try validate(state.owner)
+            }
+        }
+
+        private func resumeResources(for owner: SimulatorOwner, targetID: UUID?) async throws -> AgentResourceIdentity? {
+            guard let resolveResourceIdentity else { return nil }
+            let identity = await resolveResourceIdentity(owner)
+            try validate(owner)
+            resourceIdentities[owner] = identity
+            for state in Array(tabs.values) {
+                do {
+                    try await resumeResource(state, for: owner, identity: identity)
+                } catch {
+                    state.error = error.localizedDescription
+                    if state.id == targetID {
+                        throw error
+                    }
+                }
+            }
+            try validate(owner)
+            return identity
+        }
+
+        func resumeResource(_ state: SimulatorTabState, for owner: SimulatorOwner, identity: AgentResourceIdentity?) async throws {
+            guard !state.isClosed, let previous = state.owner ?? state.delegatedOwner else { return }
+            guard let identity else {
+                if previous == owner, state.conversation != nil {
+                    suspendResource(state, owner: owner)
+                }
+                return
+            }
+            if
+                state.owner == nil, state.resourceSession?.id != identity.authorizationSessionID,
+                state.conversation == identity || previous == owner {
+                revokeResourceGrant(state)
+                return
+            }
+            if previous == owner {
+                if state.conversation == nil {
+                    state.conversation = identity
+                }
+                if state.conversation != identity {
+                    suspendResource(state, owner: owner)
+                    return
+                }
+                guard state.suspendedOwner != nil else { return }
+            } else {
+                guard state.conversation == identity, (try? system.inspect(previous.pid).owner) != previous else { return }
+                suspendResource(state, owner: previous)
+            }
+            try await state.grantCleanup?.value
+            let verified = await resolveResourceIdentity?(owner)
+            try validate(owner)
+            guard
+                verified == identity, state.owner != nil || verified?.authorizationSessionID == state.resourceSession?.id,
+                !closing, !state.isClosed, state.conversation == identity,
+                (state.owner ?? state.delegatedOwner) == previous else { return }
+            let wasWriter = state.writer == previous && state.remoteControl == nil
+            if state.owner != nil {
+                state.owner = owner
+            } else {
+                state.delegatedOwner = owner
+                if let grant = state.grant {
+                    state.grant = .init(agent: .init(id: owner.key, title: grant.agent.title, paneID: grant.agent.paneID), canWrite: wasWriter)
+                }
+            }
+            state.suspendedOwner = nil
+            state.writer = wasWriter ? owner : nil
+            state.grantRevision += 1
+            state.generation += 1
+            onTabsChanged?()
+        }
+
+        private func canUse(_ state: SimulatorTabState, owner: SimulatorOwner) -> Bool {
+            !state.isClosed && state.suspendedOwner == nil && (state.owner == owner || state.delegatedOwner == owner)
+                && (state.conversation == nil || state.conversation == resourceIdentities[owner])
+        }
+
         func handle(_ request: JSONRPCRequest) async -> JSONRPCResponse {
             do {
                 guard let peer = request.params["_peerPID"]?.intValue, let pid = Int32(exactly: peer) else {
@@ -261,12 +377,14 @@
                 }
             }
             let owner = try owner ?? callingAgent(peer: peer)
-            let target = parameters["device"]?.stringValue.flatMap(UUID.init(uuidString:)).flatMap { tabs[$0] }
+            let targetID = parameters["device"]?.stringValue.flatMap(UUID.init(uuidString:))
+            let conversation = try await resumeResources(for: owner, targetID: targetID)
+            let target = targetID.flatMap { tabs[$0] }
             let revision = target?.grantRevision
-            let result = try await perform(command, parameters: parameters, owner: owner, coordinator: coordinator)
-            if let target, target.owner != owner {
+            let result = try await perform(command, parameters: parameters, owner: owner, conversation: conversation, coordinator: coordinator)
+            if let target, command != "close" {
                 try validate(owner)
-                guard target.delegatedOwner == owner, !target.isClosed, target.grantRevision == revision else {
+                guard canUse(target, owner: owner), target.grantRevision == revision else {
                     throw SimulatorFailure("Authorization changed; the obsolete result was discarded")
                 }
             }
@@ -356,7 +474,7 @@
             coordinator != nil && !closing
         }
 
-        func setResourceGrant(tabID: UUID, sessionID: UUID, agent: ResourceAgent, owner: SimulatorOwner) async throws {
+        func setResourceGrant(tabID: UUID, sessionID: UUID, agent: ResourceAgent, owner: SimulatorOwner, conversation: AgentResourceIdentity? = nil) async throws {
             guard
                 let state = tabs[tabID], state.resourceSession?.id == sessionID, state.owner == nil,
                 !state.isClosed, state.remoteControl == nil, !state.writing else {
@@ -368,7 +486,7 @@
             }
             let generation = state.generation
             let revision = state.manualInputRevision
-            await state.grantCleanup?.value
+            try await state.grantCleanup?.value
             await state.manualInput?.value
             _ = try await state.handle.worker.request(["command": .string("cancel")])
             try validate(owner)
@@ -376,6 +494,8 @@
                 !state.isClosed, state.generation == generation, state.manualInputRevision == revision,
                 state.remoteControl == nil, !state.writing else { throw SimulatorFailure("Simulator changed during authorization") }
             state.delegatedOwner = owner
+            state.conversation = conversation
+            state.suspendedOwner = nil
             state.grant = .init(agent: agent, canWrite: true)
             state.grantRevision += 1
             state.generation += 1
@@ -392,6 +512,8 @@
             guard state.grant != nil else { return }
             state.writer = nil
             state.delegatedOwner = nil
+            state.conversation = nil
+            state.suspendedOwner = nil
             state.grant = nil
             state.grantRevision += 1
             state.generation += 1
@@ -406,7 +528,7 @@
             if state.writer != owner, let coordinator {
                 let previous = state.grantCleanup
                 state.grantCleanup = Task {
-                    await previous?.value
+                    try await previous?.value
                     _ = await coordinator.stopRecording(state.handle)
                 }
             }
@@ -453,7 +575,7 @@
                 throw SimulatorFailure("Unsupported simulator frame size")
             }
             try Task.checkCancellation()
-            try validate(state.owner)
+            try validateResourceForHuman(state)
             guard frameRequests < 4, !screenshots.contains(state.id) else { throw SimulatorFailure("Simulator preview is busy. Try again shortly") }
             frameRequests += 1
             defer { frameRequests -= 1 }
@@ -493,7 +615,7 @@
                 frame = try await task.value
             }
             try Task.checkCancellation()
-            try validate(state.owner)
+            try validateResourceForHuman(state)
             guard !closing, !state.isClosed, state.sessionName == request.sessionName else {
                 throw SimulatorFailure("Simulator changed session or closed during preview")
             }
@@ -534,7 +656,7 @@
                 state.sessionName == request.sessionName, let coordinator else {
                 throw SimulatorFailure("This Host simulator is no longer available")
             }
-            try validate(state.owner)
+            try validateResourceForHuman(state)
             if let lease = state.remoteControl, lease.expires <= .now {
                 releaseSimulatorControl(state)
             }
@@ -575,7 +697,7 @@
             }
             func checkControl() throws {
                 try Task.checkCancellation()
-                try validate(state.owner)
+                try validateResourceForHuman(state)
                 guard
                     !closing, !state.isClosed, state.sessionName == request.sessionName,
                     let lease = state.remoteControl, lease.viewerID == viewerID, lease.surfaceID == request.surfaceID,
@@ -669,6 +791,7 @@
         private func openDevice(
             parameters: [String: JSONValue],
             owner: SimulatorOwner,
+            conversation: AgentResourceIdentity?,
             coordinator: SimulatorCoordinator
         ) async throws -> SimulatorTabState {
             let pane: PaneInfo
@@ -677,7 +800,7 @@
                     "Cannot route this agent to a CtrlX pane: \(error.localizedDescription). Run the agent in a local CtrlX terminal. For Codex, use ctrlx ios run -- codex"
                 )
             }
-            return try await openDevice(parameters: parameters, owner: owner, pane: pane, coordinator: coordinator) {
+            return try await openDevice(parameters: parameters, owner: owner, conversation: conversation, pane: pane, coordinator: coordinator) {
                 try await self.resolvePane(for: owner)
             }
         }
@@ -688,7 +811,6 @@
                 state.sessionName == request.sessionName else {
                 throw SimulatorFailure("This Host simulator is no longer available in the session")
             }
-            try validate(state.owner)
             close(state)
             await closeTasks[state.id]?.value
             if let error = state.error {
@@ -701,6 +823,7 @@
             let state = try await createDevice(
                 parameters: ["new": .bool(true)],
                 owner: nil,
+                conversation: nil,
                 sourcePane: nil,
                 resourceSession: session,
                 coordinator: coordinator,
@@ -739,7 +862,7 @@
             }
             let pane = try await resolve()
             let parameters: [String: JSONValue] = request.createsNew ? ["new": .bool(true)] : [:]
-            let state = try await openDevice(parameters: parameters, owner: nil, pane: pane, coordinator: coordinator, resolve: resolve)
+            let state = try await openDevice(parameters: parameters, owner: nil, conversation: nil, pane: pane, coordinator: coordinator, resolve: resolve)
             return remoteDescriptor(state)
         }
 
@@ -766,13 +889,13 @@
         }
 
         private func openDevice(
-            parameters: [String: JSONValue], owner: SimulatorOwner?, pane: PaneInfo,
+            parameters: [String: JSONValue], owner: SimulatorOwner?, conversation: AgentResourceIdentity?, pane: PaneInfo,
             coordinator: SimulatorCoordinator, resolve: @escaping @MainActor () async throws -> PaneInfo
         ) async throws -> SimulatorTabState {
             try validate(owner)
             guard !closing else { throw SimulatorFailure("Simulator host is closing") }
             if parameters["new"]?.boolValue == true {
-                return try await createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator, resolve: resolve)
+                return try await createDevice(parameters: parameters, owner: owner, conversation: conversation, sourcePane: pane, coordinator: coordinator, resolve: resolve)
             }
             let state: SimulatorTabState
             if let id = primaryDevices[pane.paneId], let existing = tabs[id], !existing.isClosed {
@@ -785,14 +908,14 @@
             } else {
                 let task = Task { @MainActor in
                     defer { self.pendingOpens.removeValue(forKey: pane.paneId) }
-                    return try await self.createDevice(parameters: parameters, owner: owner, sourcePane: pane, coordinator: coordinator, resolve: resolve)
+                    return try await self.createDevice(parameters: parameters, owner: owner, conversation: conversation, sourcePane: pane, coordinator: coordinator, resolve: resolve)
                 }
                 pendingOpens[pane.paneId] = (owner, task)
                 state = try await task.value
             }
             try Task.checkCancellation()
             try validate(owner)
-            guard !state.isClosed, !closing, owner == nil || state.owner == owner else {
+            guard !state.isClosed, !closing, owner.map { state.owner == $0 && state.conversation == conversation && canUse(state, owner: $0) } ?? true else {
                 throw SimulatorFailure("This pane's default simulator is unavailable or was created by a human or another agent. Use open --new to create your own device")
             }
             for (key, actual) in [
@@ -814,7 +937,7 @@
             let current = try await resolve()
             guard
                 current.paneId == state.paneID, !state.isClosed, !closing,
-                owner == nil || state.owner == owner,
+                owner.map { state.owner == $0 && state.conversation == conversation && canUse(state, owner: $0) } ?? true,
                 state.sourcePane?.workspaceIdentity.map({ $0.isSamePane(as: current.workspaceIdentity) }) ?? true else {
                 throw SimulatorFailure("The source pane changed while opening the simulator")
             }
@@ -829,6 +952,7 @@
         private func createDevice(
             parameters: [String: JSONValue],
             owner: SimulatorOwner?,
+            conversation: AgentResourceIdentity?,
             sourcePane: PaneInfo?,
             resourceSession: ResourceSession? = nil,
             coordinator: SimulatorCoordinator,
@@ -869,6 +993,12 @@
             do {
                 pane = try await resolve()
                 guard pane?.paneId == sourcePane?.paneId, sourcePane?.workspaceIdentity.map({ $0.isSamePane(as: pane?.workspaceIdentity) }) ?? true else { throw SimulatorFailure("The agent moved to another pane while opening the simulator") }
+                if let owner {
+                    let current = await resolveResourceIdentity?(owner)
+                    guard current == conversation else {
+                        throw SimulatorFailure("The agent conversation changed while opening the simulator; the new device was closed")
+                    }
+                }
                 try validate(owner)
             } catch {
                 try await coordinator.close(handle, shutdown: true)
@@ -890,6 +1020,7 @@
             let state = SimulatorTabState(
                 handle: handle, owner: owner, source: source, workspaceID: detachedWorkspaceID, view: view, service: self
             )
+            state.conversation = conversation
             tabs[state.id] = state
             view.onFirstFrame = { [weak state] in state?.hasPresentedFrame = true }
             view.onTouch = { [weak self, weak state] point, phase in
@@ -926,7 +1057,7 @@
             return state
         }
 
-        private func perform(_ command: String, parameters: [String: JSONValue], owner: SimulatorOwner, coordinator: SimulatorCoordinator)
+        private func perform(_ command: String, parameters: [String: JSONValue], owner: SimulatorOwner, conversation: AgentResourceIdentity?, coordinator: SimulatorCoordinator)
             async throws -> [String: JSONValue] {
             let traceTap = command == "tap" && CommandLine.arguments.contains("--e2e-test")
             let actionStartedAt = traceTap ? ProcessInfo.processInfo.systemUptime : 0
@@ -975,19 +1106,19 @@
                 return try ["owner": JSONValue(encoding: owner)]
             }
             if command == "devices" {
-                return try ["devices": .array(tabs.values.filter { $0.owner == owner || $0.delegatedOwner == owner }.map { try .object(describe($0)) })]
+                return try ["devices": .array(tabs.values.filter { canUse($0, owner: owner) }.map { try .object(describe($0)) })]
             }
             if let value = parameters["new"], command != "open" || value.boolValue == nil {
                 throw SimulatorFailure("new requires open and a boolean value")
             }
             if command == "open" {
-                let state = try await openDevice(parameters: parameters, owner: owner, coordinator: coordinator)
+                let state = try await openDevice(parameters: parameters, owner: owner, conversation: conversation, coordinator: coordinator)
                 workspaces[state.workspaceID]?.onSelect(state, false)
                 return try describe(state)
             }
             guard
                 let rawID = parameters["device"]?.stringValue, let id = UUID(uuidString: rawID),
-                let state = tabs[id], state.owner == owner || state.delegatedOwner == owner, !state.isClosed
+                let state = tabs[id], canUse(state, owner: owner), !state.isClosed
             else { throw SimulatorFailure("Device does not belong to this agent process") }
             state.markActivity()
             if command == "status" {
@@ -2165,7 +2296,9 @@
             handle.id
         }
 
-        let owner: SimulatorOwner?
+        var owner: SimulatorOwner?
+        var conversation: AgentResourceIdentity?
+        var suspendedOwner: SimulatorOwner?
         var source: SimulatorTabSource
         var sourcePane: PaneInfo? {
             if case let .pane(pane) = source {
@@ -2195,7 +2328,7 @@
         var grant: ResourceTabGrant?
         var delegatedOwner: SimulatorOwner?
         var grantRevision = 0
-        @ObservationIgnored var grantCleanup: Task<Void, Never>?
+        @ObservationIgnored var grantCleanup: Task<Void, Error>?
         var workspaceID: UUID
         let view: SimulatorMetalView
         let service: AgentSimulatorService
