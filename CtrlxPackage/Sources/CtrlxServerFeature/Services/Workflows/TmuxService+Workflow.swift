@@ -15,19 +15,7 @@ extension TmuxService {
             ["display-message", "-p", "-t", paneID, metadata],
             ["capture-pane", "-p", "-e", "-N", "-t", paneID],
         ], target: paneID, identity: identity)
-        let output = result.stdoutString
-        guard let newline = output.firstIndex(of: "\n") else { throw AgentWorkflowError("The terminal snapshot is incomplete.") }
-        let values = output[..<newline].components(separatedBy: "\u{1f}")
-        guard
-            values.count == 8,
-            let width = Int(values[0]), let height = Int(values[1]), let x = Int(values[2]), let y = Int(values[3]),
-            [values[4], values[5], values[6]].allSatisfy({ $0 == "0" || $0 == "1" }) else {
-            throw AgentWorkflowError("Cannot inspect this tmux terminal's input mode.")
-        }
-        return .init(
-            ansi: String(output[output.index(after: newline)...]), width: width, height: height, cursorX: x, cursorY: y,
-            cursorVisible: values[4] == "1", bracketedPaste: values[5] == "1", inCopyMode: values[6] == "1", foregroundCommand: values[7]
-        )
+        return try AgentWorkflowTerminalCapture.parse(result.stdoutString)
     }
 
     func submitWorkflowInput(
