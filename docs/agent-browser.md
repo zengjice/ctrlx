@@ -583,6 +583,18 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   System/CEF popup UI and file chooser, video streaming and remote DevTools are
   not included. Page audio has its own bounded stream below.
 
+On iOS, read-only page previews support local pinch zoom from fit to 4x and
+one-finger panning while enlarged. Double-tap zooms to 3x or restores fit.
+These gestures neither acquire control nor send page input or change the Host
+viewport. Incoming frames and thumbnail-resolution changes retain the viewing
+position; a new page identity, orientation/view-size change or control takeover
+restores fit. Remote input gestures are enabled only with control; temporarily
+disabling input to edit the address does not enable read-only zoom. Annotation
+continues to use its own frozen screenshot surface.
+Thumbnail-ratio tolerance is measured against the last actual layout so gradual
+Host resizing cannot accumulate drift. With control, every ratio change relayouts
+the image to keep display and input mapping aligned.
+
 ### Viewer page sound
 
 Mac and iOS Viewers automatically receive sound when controlling a regular

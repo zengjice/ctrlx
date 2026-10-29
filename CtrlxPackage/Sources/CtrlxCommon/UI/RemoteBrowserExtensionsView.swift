@@ -307,7 +307,9 @@
                     image: image,
                     frame: displayedFrame,
                     acceptsInput: session.controlID != nil,
-                    keyboardRequested: keyboard
+                    keyboardRequested: keyboard,
+                    allowsLocalZoom: session.controlID == nil,
+                    zoomIdentity: "extensions"
                 ) { input in
                     if let displayedFrame {
                         session.submit(input, generation: displayedFrame.generation)

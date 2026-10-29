@@ -208,6 +208,8 @@
                         frame: displayedFrame,
                         acceptsInput: session.controlID != nil && !editingAddress && !isAnnotating,
                         keyboardRequested: keyboardRequested,
+                        allowsLocalZoom: session.controlID == nil,
+                        zoomIdentity: session.tab.id.uuidString + session.tab.url,
                         focusRequest: inputFocusRequest,
                         onCopy: session.copy,
                         onPaste: session.paste
@@ -414,6 +416,8 @@
             let frame: RemoteBrowserFrame?
             let acceptsInput: Bool
             let keyboardRequested: Bool
+            var allowsLocalZoom = false
+            var zoomIdentity = ""
             var focusRequest: UUID? = nil
             var isSimulator = false
             var onCopy: (() -> Void)?
@@ -672,6 +676,8 @@
             let frame: RemoteBrowserFrame?
             let acceptsInput: Bool
             let keyboardRequested: Bool
+            var allowsLocalZoom = false
+            var zoomIdentity = ""
             var focusRequest: UUID? = nil
             var isSimulator = false
             var onCopy: (() -> Void)?
@@ -682,7 +688,8 @@
             }
 
             func updateUIView(_ view: BrowserCanvasUIView, context: Context) {
-                view.picture.image = image.map { UIImage(cgImage: $0) }
+                view.preview.update(image: image, identity: zoomIdentity)
+                view.allowsLocalZoom = allowsLocalZoom
                 view.pageSize = frame.map { CGSize(width: $0.width, height: $0.height) } ?? .zero
                 view.acceptsInput = acceptsInput
                 view.send = send
@@ -706,18 +713,33 @@
 
         final class BrowserCanvasUIView: UIView {
             var isSimulator = false
-            let picture = UIImageView()
+            let preview = LocalImageScrollView()
             fileprivate let keyboard = BrowserKeyboardInput()
             var pageSize = CGSize.zero
-            var acceptsInput = false
+            var allowsLocalZoom = false {
+                didSet {
+                    if allowsLocalZoom != oldValue {
+                        updateGestures()
+                    }
+                }
+            }
+
+            var acceptsInput = false {
+                didSet {
+                    if acceptsInput != oldValue {
+                        updateGestures()
+                    }
+                }
+            }
+
+            private var inputGestures: [UIGestureRecognizer] = []
             var send: (RemoteBrowserOperation) -> Void = { _ in }
             private var previous = CGPoint.zero
             override init(frame: CGRect) {
                 super.init(frame: frame)
                 backgroundColor = .black
-                picture.contentMode = .scaleAspectFit
-                picture.isUserInteractionEnabled = false
-                addSubview(picture)
+                preview.zoomEnabled = false
+                addSubview(preview)
                 keyboard.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
                 keyboard.alpha = 0.01
                 addSubview(keyboard)
@@ -730,10 +752,11 @@
                 let hold = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
                 hold.minimumPressDuration = 0.3
                 tap.require(toFail: hold)
-                addGestureRecognizer(tap)
-                addGestureRecognizer(pan)
-                addGestureRecognizer(drag)
-                addGestureRecognizer(hold)
+                self.inputGestures = [tap, pan, drag, hold]
+                for gesture in inputGestures {
+                    addGestureRecognizer(gesture)
+                }
+                updateGestures()
             }
 
             required init?(coder: NSCoder) {
@@ -742,7 +765,14 @@
 
             override func layoutSubviews() {
                 super.layoutSubviews()
-                picture.frame = bounds
+                preview.frame = bounds
+            }
+
+            private func updateGestures() {
+                preview.zoomEnabled = allowsLocalZoom && !acceptsInput
+                for gesture in inputGestures {
+                    gesture.isEnabled = acceptsInput
+                }
             }
 
             private func point(_ gesture: UIGestureRecognizer, clamped: Bool = false) -> CGPoint? {

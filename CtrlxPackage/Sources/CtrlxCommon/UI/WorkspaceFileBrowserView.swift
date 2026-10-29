@@ -616,13 +616,21 @@
         }
     }
 
-    private struct FileBrowserPreview: View {
+    struct FileBrowserPreview: View {
         let data: Data
         let kind: FileBrowserKind
         let capture: FilePreviewCapture
         @State private var image: CGImage?
         @State private var imageFailed = false
         @FocusState private var imageFocused: Bool
+        #if os(iOS)
+            @State private var readingScale: CGFloat = 1
+            @GestureState private var magnification: CGFloat = 1
+            @ScaledMetric(relativeTo: .body) private var bodySize = 17.0
+            private var displayedReadingScale: CGFloat {
+                min(3, max(1, readingScale * magnification))
+            }
+        #endif
         var body: some View {
             Group {
                 switch kind {
@@ -632,6 +640,9 @@
                         ScrollView([.vertical, .horizontal]) {
                             if kind == .markdown {
                                 StructuredText(markdown: String(decoding: data, as: UTF8.self))
+                                #if os(iOS)
+                                    .textual.fontScale(displayedReadingScale)
+                                #endif
                                     .textual.imageAttachmentLoader(FilePreviewAttachments())
                                     .textual.emojiAttachmentLoader(FilePreviewAttachments())
                                     .padding()
@@ -639,31 +650,45 @@
                                     .background(MarkdownScrollSupport())
                                 #endif
                             } else {
-                                Text(String(decoding: data, as: UTF8.self)).font(.system(.body, design: .monospaced))
+                                Text(String(decoding: data, as: UTF8.self))
+                                #if os(iOS)
+                                    .font(.system(size: bodySize * displayedReadingScale, design: .monospaced))
+                                #else
+                                    .font(.system(.body, design: .monospaced))
+                                #endif
                                     .textSelection(.enabled).padding().frame(maxWidth: .infinity, alignment: .topLeading)
                             }
                         }
+                        #if os(iOS)
+                        .simultaneousGesture(MagnifyGesture()
+                            .updating($magnification) { value, scale, _ in scale = value.magnification }
+                            .onEnded { value in readingScale = min(3, max(1, readingScale * value.magnification)) })
+                        .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in readingScale = 1 }
+                        .onDisappear { readingScale = 1 }
+                        #endif
                     }
                 case .image:
                     if let image {
                         FilePreviewSnapshotView(capture: capture) {
-                            Image(decorative: image, scale: 1).resizable().scaledToFit().padding()
-                            #if os(macOS)
-                                .focusable()
-                                .focused($imageFocused)
-                                .onTapGesture { imageFocused = true }
-                                .onCopyCommand {
-                                    guard let content = try? WorkspaceClipboard.image(data) else { return [] }
-                                    let provider = NSItemProvider()
-                                    provider.registerDataRepresentation(
-                                        forTypeIdentifier: content.kind == .png ? UTType.png.identifier : UTType.jpeg.identifier,
-                                        visibility: .all
-                                    ) { completion in
-                                        completion(content.data, nil)
-                                        return nil
+                            #if os(iOS)
+                                LocalImagePreview(image: image).padding()
+                            #else
+                                Image(decorative: image, scale: 1).resizable().scaledToFit().padding()
+                                    .focusable()
+                                    .focused($imageFocused)
+                                    .onTapGesture { imageFocused = true }
+                                    .onCopyCommand {
+                                        guard let content = try? WorkspaceClipboard.image(data) else { return [] }
+                                        let provider = NSItemProvider()
+                                        provider.registerDataRepresentation(
+                                            forTypeIdentifier: content.kind == .png ? UTType.png.identifier : UTType.jpeg.identifier,
+                                            visibility: .all
+                                        ) { completion in
+                                            completion(content.data, nil)
+                                            return nil
+                                        }
+                                        return [provider]
                                     }
-                                    return [provider]
-                                }
                             #endif
                         }
                     } else if imageFailed {

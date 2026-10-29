@@ -111,6 +111,8 @@ public struct RemoteSimulatorView: View {
                                 ),
                                 acceptsInput: session.controlID != nil && client.isHostConnected && annotation == nil,
                                 keyboardRequested: false,
+                                allowsLocalZoom: session.controlID == nil,
+                                zoomIdentity: tab.id.uuidString + (displayed.response.frame.inputGeometry?.epoch ?? ""),
                                 isSimulator: true,
                                 onCopy: session.copy,
                                 onPaste: session.paste
