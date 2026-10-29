@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import CoreServices
     import Dependencies
     import DependenciesMacros
     import UniformTypeIdentifiers
@@ -19,7 +20,20 @@
 
         @MainActor
         func setDefaultAndVerify() async throws -> IPAFileAssociation {
-            try await setDefault()
+            try Task.checkCancellation()
+            do {
+                try await setDefault()
+            } catch {
+                let systemError = error as NSError
+                if
+                    (systemError.domain == NSCocoaErrorDomain && systemError.code == NSUserCancelledError)
+                    || (systemError.domain == NSOSStatusErrorDomain && systemError.code == Int(userCanceledErr)) {
+                    throw CancellationError()
+                }
+                throw error
+            }
+            // Closing the SwiftUI prompt stops waiting here, not the system request.
+            try Task.checkCancellation()
             let result = try current()
             guard result.isCtrlX else {
                 throw IPAInstallationError(message: "macOS has not changed the default IPA application. Please try again.")

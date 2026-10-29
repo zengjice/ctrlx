@@ -48,53 +48,95 @@
         }
     }
 
-    private struct IPADefaultApplicationPrompt: View {
+    private enum IPAFileAssociationFeedback: Equatable {
+        case success
+        case cancelled
+        case failure(String)
+
+        var message: String {
+            switch self {
+            case .success: "CtrlX is now the default application for IPA files."
+            case .cancelled: "Setting the default application was cancelled."
+            case let .failure(message): message
+            }
+        }
+
+        var color: Color {
+            if case .failure = self {
+                .red
+            } else {
+                .secondary
+            }
+        }
+    }
+
+    struct IPADefaultApplicationPrompt: View {
         let current: IPAFileAssociation
         @Environment(AppSettings.self) private var settings
         @Environment(\.dismiss) private var dismiss
         @Dependency(IPAFileAssociationClient.self) private var association
         @State private var isSettingDefault = false
-        @State private var error: String?
+        @State private var feedback: IPAFileAssociationFeedback?
 
         var body: some View {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Open IPA Files with CtrlX?").font(.title2.bold())
-                Text("Current default: \(current.applicationName)")
-                Text("Open IPA files in CtrlX to install them on an iPhone connected to this Mac. You choose the device and confirm before installation.")
-                    .foregroundStyle(.secondary)
-                if let error {
-                    Text(error).foregroundStyle(.red).textSelection(.enabled)
+                Text(feedback == .success ? "Default Application Updated" : "Open IPA Files with CtrlX?")
+                    .font(.title2.bold())
+                if feedback != .success {
+                    Text("Current default: \(current.applicationName)")
+                    Text("Open IPA files in CtrlX to install them on an iPhone connected to this Mac. You choose the device and confirm before installation.")
+                        .foregroundStyle(.secondary)
+                    Text("macOS may ask you to confirm this change.")
+                        .foregroundStyle(.secondary)
                 }
-                HStack {
-                    Button("Don't Ask Again") {
-                        settings.askToHandleIPAFiles = false
-                        dismiss()
-                    }
-                    Spacer()
-                    Button("Not Now") { dismiss() }
-                        .keyboardShortcut(.cancelAction)
-                    Button("Set as Default") { isSettingDefault = true }
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction)
-                        .accessibilityIdentifier("ipa-set-default-prompt")
+                if let feedback {
+                    Text(feedback.message).foregroundStyle(feedback.color).textSelection(.enabled)
+                        .accessibilityIdentifier("ipa-default-feedback")
                 }
-                .disabled(isSettingDefault)
                 if isSettingDefault {
                     ProgressView("Waiting for macOS…")
+                    Text("You can close this prompt and check the result later in Settings → General → IPA Files.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                HStack {
+                    if feedback != .success {
+                        Button("Don't Ask Again") {
+                            settings.askToHandleIPAFiles = false
+                            dismiss()
+                        }
+                        .disabled(isSettingDefault)
+                    }
+                    Spacer()
+                    if feedback == .success {
+                        Button("Done") { dismiss() }
+                            .buttonStyle(.borderedProminent)
+                            .keyboardShortcut(.defaultAction)
+                    } else {
+                        Button(isSettingDefault ? "Close" : "Not Now") { dismiss() }
+                            .keyboardShortcut(.cancelAction)
+                            .accessibilityIdentifier("ipa-close-default-prompt")
+                        Button("Set as Default") { isSettingDefault = true }
+                            .buttonStyle(.borderedProminent)
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(isSettingDefault)
+                            .accessibilityIdentifier("ipa-set-default-prompt")
+                    }
                 }
             }
             .padding(24)
             .frame(width: 480)
             .fixedSize(horizontal: false, vertical: true)
-            .interactiveDismissDisabled(isSettingDefault)
             .task(id: isSettingDefault) {
                 guard isSettingDefault else { return }
-                error = nil
+                feedback = nil
                 defer { isSettingDefault = false }
                 do {
                     _ = try await association.setDefaultAndVerify()
-                    dismiss()
-                } catch { self.error = error.localizedDescription }
+                    feedback = .success
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    feedback = error is CancellationError ? .cancelled : .failure(error.localizedDescription)
+                }
             }
         }
     }
@@ -105,7 +147,7 @@
         @Dependency(IPAFileAssociationClient.self) private var association
         @State private var current: IPAFileAssociation?
         @State private var isSettingDefault = false
-        @State private var error: String?
+        @State private var feedback: IPAFileAssociationFeedback?
 
         var body: some View {
             @Bindable var settings = settings
@@ -114,25 +156,35 @@
                 Button("Set CtrlX as Default…") { isSettingDefault = true }
                     .disabled(current?.isCtrlX == true || isSettingDefault)
                     .accessibilityIdentifier("ipa-set-default-settings")
+                Text("macOS may ask you to confirm this change.")
+                    .font(.callout).foregroundStyle(.secondary)
                 Toggle("Ask at startup when CtrlX is not the default", isOn: $settings.askToHandleIPAFiles)
                 if isSettingDefault {
                     ProgressView("Waiting for macOS…")
                 }
-                if let error {
-                    Text(error).foregroundStyle(.red).textSelection(.enabled)
+                if let feedback {
+                    Text(feedback.message).foregroundStyle(feedback.color).textSelection(.enabled)
                 }
             }
             .task(id: scenePhase) {
-                error = nil
-                do { current = try association.current() }
-                catch { self.error = error.localizedDescription }
+                do {
+                    current = try association.current()
+                    if feedback == .success, current?.isCtrlX != true {
+                        feedback = nil
+                    }
+                } catch { feedback = .failure(error.localizedDescription) }
             }
             .task(id: isSettingDefault) {
                 guard isSettingDefault else { return }
-                error = nil
+                feedback = nil
                 defer { isSettingDefault = false }
-                do { current = try await association.setDefaultAndVerify() }
-                catch { self.error = error.localizedDescription }
+                do {
+                    current = try await association.setDefaultAndVerify()
+                    feedback = .success
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    feedback = error is CancellationError ? .cancelled : .failure(error.localizedDescription)
+                }
             }
         }
     }

@@ -67,6 +67,65 @@
             #expect(reads == 0)
         }
 
+        @Test(arguments: [
+            NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError),
+            NSError(domain: NSOSStatusErrorDomain, code: -128),
+        ])
+        func systemCancellationIsNotASettingFailure(_ error: NSError) async {
+            let client = IPAFileAssociationClient(current: {
+                Issue.record("Cancelled changes must not be reported as verified")
+                return ctrlx
+            }, setDefault: { throw error })
+            await #expect(throws: CancellationError.self) { try await client.setDefaultAndVerify() }
+        }
+
+        @Test
+        func unrelatedErrorsKeepTheirOriginalDetails() async {
+            let error = NSError(domain: "IPAFileAssociationTests", code: NSUserCancelledError)
+            let client = IPAFileAssociationClient(current: { other }, setDefault: { throw error })
+            do {
+                _ = try await client.setDefaultAndVerify()
+                Issue.record("The system failure must be reported")
+            } catch let actual {
+                #expect(actual as NSError == error)
+            }
+        }
+
+        @Test
+        func dismissedWaitIgnoresLateSystemCompletion() async throws {
+            let started = AsyncStream<Void>.makeStream()
+            var completion: CheckedContinuation<Void, Never>?
+            var reads = 0
+            let client = IPAFileAssociationClient(current: {
+                reads += 1
+                return ctrlx
+            }, setDefault: {
+                await withCheckedContinuation {
+                    completion = $0
+                    started.continuation.yield(())
+                }
+            })
+            let request = Task { try await client.setDefaultAndVerify() }
+            var iterator = started.stream.makeAsyncIterator()
+            _ = await iterator.next()
+            request.cancel()
+            try #require(completion).resume()
+            await #expect(throws: CancellationError.self) { try await request.value }
+            #expect(reads == 0)
+        }
+
+        @Test
+        func cancelledTaskDoesNotStartASettingRequest() async {
+            let client = IPAFileAssociationClient(current: { other }, setDefault: {
+                Issue.record("A cancelled task must not start the system request")
+            })
+            let request = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return try await client.setDefaultAndVerify()
+            }
+            await #expect(throws: CancellationError.self) { try await request.value }
+        }
+
         @Test
         func reminderPreferencePersistsAndDefaultsToEnabled() {
             withDependencies { $0[PreferencesService.self] = .inMemory() } operation: {

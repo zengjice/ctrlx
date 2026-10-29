@@ -44,8 +44,10 @@ CtrlX 注册为 `.ipa` 文件的可选打开应用。每次运行首次显示 Se
 引导后，检查当前默认应用；已是 CtrlX 或关闭提醒时静默结束。提示提供 Set as Default、
 Not Now 和 Don't Ask Again；Not Now 仅跳过本次运行，Settings → General → IPA Files
 可以查看当前默认应用、手动设置及恢复提醒。后台启动不抢占前台弹窗。
-设置使用 macOS 的文件类型关联接口，可能需要系统再次确认；完成后重新读取关联，
-只有确认为 CtrlX 才算成功。仅关联 `com.apple.itunes.ipa`，不改变 ZIP 或其他文件类型。
+设置前说明 macOS 可能再次确认；等待时可以 Close 关闭 CtrlX 提示，不撤销已发出的系统请求，
+结果可稍后在设置页查看。系统取消只显示普通说明，真正失败才显示错误并允许重试。
+完成后重新读取关联，只有确认为 CtrlX 才显示成功；启动提示保留成功信息，点击 Done 关闭，
+设置页同步显示结果。仅关联 `com.apple.itunes.ipa`，不改变 ZIP 或其他文件类型。
 
 Finder 双击、Open With，以及 Files 的 Download and Open 均遵循系统关联。
 收到本机 IPA 打开事件后（包括冷启动）显示安装器并选中该文件；不同文件使用各自窗口，
