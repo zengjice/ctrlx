@@ -7,6 +7,20 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.119 — Installer quit timing and shutdown diagnostics
+
+- Allow the public installer to wait up to 45 seconds for process exit after
+  its Quit request returns. The local installer allows 45 seconds for the Quit
+  request and exit together, covering the app's 30-second cleanup deadline.
+  Neither installer force-kills or replaces an app that is still running.
+- Record Quit receipt, cleanup stages and durations, and termination
+  authorization in the macOS unified log independently of `LOG_LEVEL`.
+  The public installer also retains the Quit result and exit confirmation.
+- Release validation: all 10 focused shutdown tests, 32 local-installer tests
+  and 112 publisher/COS/public-installer tests passed. All three changed Swift
+  files pass SwiftFormat, and both repository boundary checks pass. An actual
+  overwrite installation of the running app was not performed.
+
 ## 3.0.118 — Model shortcut defaults and compatibility fixes
 
 - Configure model and reasoning-effort shortcut visibility per Codex or Claude
