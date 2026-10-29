@@ -73,6 +73,8 @@
         @State private var browserSelection = IOSHostTabSelection()
         @State private var simulatorSelection = IOSHostTabSelection()
         @State private var annotationHandoff = AnnotationTerminalHandoff()
+        @State private var isResourceAnnotating = false
+        @State private var resourceNavigationFeedback = 0
         @State private var showsWindowTabs = false
         @State private var pendingWindowTabAction: WindowTabAction?
 
@@ -447,8 +449,12 @@
                         showsTerminalControls: settings.terminalKeyboardControlPosition == .bottomBar
                     )
                     .gesture(terminalBarSwipe)
+                } else if let tab = selectedLinkedTab {
+                    resourceNavigationBar(tab)
                 }
             }
+            .onPreferenceChange(BrowserAnnotationEditingPreference.self) { isResourceAnnotating = $0 }
+            .sensoryFeedback(.selection, trigger: resourceNavigationFeedback)
             .safeAreaInset(edge: .top, spacing: 0) {
                 if terminalIsVisible, let window {
                     windowShortcutBar(window)
@@ -1292,6 +1298,34 @@
         private func openWindowTabs() {
             pendingWindowTabAction = nil
             showsWindowTabs = true
+        }
+
+        private var resourceNavigationEnabled: Bool {
+            scenePhase == .active && !isResourceAnnotating && !showsWindowTabs && !creationSheetIsPresented
+                && !quickActionPresentation.suspendsTerminalInput && !voiceSession.isPresented
+        }
+
+        private func resourceNavigationBar(_ tab: PaneLinkedTabID) -> some View {
+            let source = linkedTabSource(tab)
+            return ResourceTabNavigationBar(
+                sourceName: source.map { linkedTabs.title(for: $0.paneID) },
+                isAgentSource: source.map { sessionStore.paneState(for: $0.paneID, hostId: hostId)?.agentSession != nil } ?? false,
+                isEnabled: resourceNavigationEnabled
+            ) { action in
+                guard resourceNavigationEnabled, selectedLinkedTab == tab else { return }
+                switch action {
+                case .source: returnToLinkedTabSource(tab)
+                case .previous,
+                     .next:
+                    guard linkedTabSource(tab) != nil else { return }
+                    selectAdjacentLinkedTab(tab, direction: action == .next ? 1 : -1)
+                case .tabs: openWindowTabs()
+                }
+                if selectedLinkedTab != tab || showsWindowTabs {
+                    resourceNavigationFeedback += 1
+                }
+            }
+            .id(tab)
         }
 
         private var terminalBarSwipe: TerminalBarSwipeGesture {

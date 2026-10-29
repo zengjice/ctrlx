@@ -228,6 +228,7 @@ public struct BrowserAnnotationSurface<Content: View>: View {
                 }
             }
             .onChange(of: captureRequest) { _, request in if request != nil { beginCapture() } }
+            .preference(key: BrowserAnnotationEditingPreference.self, value: image != nil || operation != nil)
             .onChange(of: image != nil || operation != nil) { _, editing in onEditingChanged(editing) }
             .onChange(of: context?.isAvailable) { _, available in if available != true { operation = nil } }
             .onChange(of: scenePhase) { _, phase in if phase != .active { operation = nil } }

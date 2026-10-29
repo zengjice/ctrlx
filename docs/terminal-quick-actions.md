@@ -203,6 +203,18 @@ moves show an error. Files ordering is viewer-local and saved with its workspace
 Recovery applies that order to matching Host tab UUIDs as their catalog arrives;
 new tabs follow the saved tabs without resetting live reorders.
 
+On iOS, Files, Browser and Simulator tabs have a fixed bottom navigation bar,
+separate from their content gestures. Tap the source Agent/Terminal name to return
+to its exact pane, swipe horizontally to follow the existing group order (left:
+next, right: previous), or swipe up / tap Tabs to open the existing tab picker.
+Moving past either group edge returns to the source. Independent tabs offer only
+Tabs; they never join an arbitrary source group. The original top controls remain.
+The bar keeps its space during control/readonly changes and annotation; annotation
+and modal presentation suspend its actions. It sits above the keyboard and system
+Home area. Completed single-finger swipes cancel the touched button; short,
+diagonal, reversed and cancelled gestures do not navigate. Content pinch, pan,
+selection and remote input remain inside the preview, outside this bar.
+
 On iOS, swipe up from the native session/window status row (for example `cm:1`)
 or the first input-control row to open that same **Tabs** sheet. Swipe down from
 either row to hide the keyboard; an already hidden keyboard stays hidden. The
