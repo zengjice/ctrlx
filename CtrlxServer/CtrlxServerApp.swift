@@ -419,6 +419,7 @@ struct TmuxPaneMirrorApp: App {
     var body: some Scene {
         DetachedTerminalScene(coordinator: coordinator)
         IPAInstallerScene()
+        IPADefaultApplicationPromptScene(settings: coordinator.settings)
 
         // Main sessions window - can be shown via menu bar "Show Sessions"
         Window("Sessions", id: "panes") {

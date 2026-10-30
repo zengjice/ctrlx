@@ -24,7 +24,7 @@
                     try await withCheckedThrowingContinuation { completion = $0 }
                 })
             } operation: {
-                IPADefaultApplicationPrompt(current: .init(applicationName: "Other App", isCtrlX: false))
+                IPADefaultApplicationPrompt(currentApplicationName: "Other App")
                     .environment(AppSettings())
             }
             let presented = PromptPresentation()

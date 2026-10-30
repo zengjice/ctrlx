@@ -14,6 +14,29 @@
         }
     }
 
+    public struct IPADefaultApplicationPromptScene: Scene {
+        static let windowID = "ipa-default-application"
+        private let settings: AppSettings
+
+        public init(settings: AppSettings) {
+            self.settings = settings
+        }
+
+        public var body: some Scene {
+            WindowGroup("IPA Files", id: Self.windowID, for: String.self) { applicationName in
+                if let applicationName = applicationName.wrappedValue {
+                    IPADefaultApplicationPrompt(currentApplicationName: applicationName)
+                        .environment(settings)
+                }
+            }
+            .windowResizability(.contentSize)
+            .defaultPosition(.center)
+            .defaultLaunchBehavior(.suppressed)
+            .restorationBehavior(.disabled)
+            .commandsRemoved()
+        }
+    }
+
     private struct IPAFileRequestHandler: ViewModifier {
         let integration: IPAFileIntegration
         @Environment(\.openWindow) private var openWindow
@@ -31,20 +54,26 @@
     }
 
     private struct IPADefaultApplicationSuggestion: ViewModifier {
-        @Bindable var integration: IPAFileIntegration
+        let integration: IPAFileIntegration
         let isReady: Bool
         @Environment(AppSettings.self) private var settings
+        @Environment(\.openWindow) private var openWindow
 
         func body(content: Content) -> some View {
             content
                 .task(id: isReady) {
                     guard isReady else { return }
                     integration.checkDefaultApplication(remind: settings.askToHandleIPAFiles)
+                    presentIfNeeded()
                 }
-                .sheet(item: $integration.defaultApplicationPrompt) { current in
-                    IPADefaultApplicationPrompt(current: current)
-                        .environment(settings)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    presentIfNeeded()
                 }
+        }
+
+        private func presentIfNeeded() {
+            guard isReady, let current = integration.takeDefaultApplicationPrompt(isActive: NSApp.isActive) else { return }
+            openWindow(id: IPADefaultApplicationPromptScene.windowID, value: current.applicationName)
         }
     }
 
@@ -71,7 +100,7 @@
     }
 
     struct IPADefaultApplicationPrompt: View {
-        let current: IPAFileAssociation
+        let currentApplicationName: String
         @Environment(AppSettings.self) private var settings
         @Environment(\.dismiss) private var dismiss
         @Dependency(IPAFileAssociationClient.self) private var association
@@ -83,7 +112,7 @@
                 Text(feedback == .success ? "Default Application Updated" : "Open IPA Files with CtrlX?")
                     .font(.title2.bold())
                 if feedback != .success {
-                    Text("Current default: \(current.applicationName)")
+                    Text("Current default: \(currentApplicationName)")
                     Text("Open IPA files in CtrlX to install them on an iPhone connected to this Mac. You choose the device and confirm before installation.")
                         .foregroundStyle(.secondary)
                     Text("macOS may ask you to confirm this change.")

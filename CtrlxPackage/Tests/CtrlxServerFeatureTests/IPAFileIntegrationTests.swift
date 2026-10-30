@@ -46,6 +46,29 @@
         }
 
         @Test
+        func backgroundSuggestionWaitsForActivationAndIsConsumedOnce() {
+            var reads = 0
+            withDependencies {
+                $0[IPAFileAssociationClient.self] = .init(current: {
+                    reads += 1
+                    return other
+                }, setDefault: {
+                    Issue.record("Presenting the reminder must not change the association")
+                })
+            } operation: {
+                let integration = IPAFileIntegration()
+                integration.checkDefaultApplication(remind: true)
+                #expect(integration.takeDefaultApplicationPrompt(isActive: false) == nil)
+                #expect(integration.defaultApplicationPrompt == other)
+                #expect(integration.takeDefaultApplicationPrompt(isActive: true) == other)
+                #expect(integration.defaultApplicationPrompt == nil)
+                integration.checkDefaultApplication(remind: true)
+                #expect(integration.takeDefaultApplicationPrompt(isActive: true) == nil)
+                #expect(reads == 1)
+            }
+        }
+
+        @Test
         func successfulSettingReadsBackTheNewHandler() async throws {
             var changed = false
             let client = IPAFileAssociationClient(current: { changed ? ctrlx : other }, setDefault: { changed = true })

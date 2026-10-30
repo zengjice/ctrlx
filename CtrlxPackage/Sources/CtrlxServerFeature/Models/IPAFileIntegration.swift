@@ -43,5 +43,12 @@
                 logger.warning("Could not check the default IPA application: \(error.localizedDescription)")
             }
         }
+
+        func takeDefaultApplicationPrompt(isActive: Bool) -> IPAFileAssociation? {
+            guard isActive else { return nil }
+            let current = defaultApplicationPrompt
+            defaultApplicationPrompt = nil
+            return current
+        }
     }
 #endif
