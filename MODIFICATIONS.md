@@ -7,6 +7,19 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.120 — iOS session entry selection
+
+- On ordinary iOS session entry, select a valid terminal instead of reopening
+  cached Files selection. Explicit workspace recovery retains the saved choice,
+  and later catalog updates preserve the user's current tab.
+- Select the first resource automatically only after a complete Host snapshot
+  confirms that the session has no terminals. This also handles stale terminal
+  recovery markers after the last terminal closes.
+- Release validation: all 32 focused Swift tests, two iOS selection script tests
+  and 112 publisher/COS/installer tests passed. The iOS Simulator arm64/x86_64
+  compile check, all eight Swift file format checks and both boundary checks
+  passed. Live iPhone UI acceptance was not rerun.
+
 ## 3.0.119 — Installer quit timing and shutdown diagnostics
 
 - Allow the public installer to wait up to 45 seconds for process exit after
