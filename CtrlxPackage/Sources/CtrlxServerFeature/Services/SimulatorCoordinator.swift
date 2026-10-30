@@ -12,6 +12,7 @@
     struct SimulatorProcess: Sendable {
         let owner: SimulatorOwner
         let parentPID: Int32
+        /// Absolute path, or an exact kernel executable name after its file is removed.
         let executable: String
     }
 
@@ -61,20 +62,29 @@
                 }
                 let before = try info()
                 var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-                guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else {
-                    throw SimulatorFailure("Cannot read process \(pid) executable")
-                }
+                let count = proc_pidpath(pid, &path, UInt32(path.count))
+                let pathError = count > 0 ? 0 : errno
+                let kernelName = withUnsafeBytes(of: before.pbi_name) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
                 let after = try info()
-                guard before.pbi_uid == after.pbi_uid, before.pbi_start_tvsec == after.pbi_start_tvsec,
-                    before.pbi_start_tvusec == after.pbi_start_tvusec
+                guard
+                    before.pbi_uid == after.pbi_uid, before.pbi_start_tvsec == after.pbi_start_tvsec,
+                    before.pbi_start_tvusec == after.pbi_start_tvusec, before.pbi_ppid == after.pbi_ppid,
+                    before.pbi_status != SZOMB, after.pbi_status != SZOMB,
+                    withUnsafeBytes(of: after.pbi_name, { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }) == kernelName
                 else {
                     throw SimulatorFailure("Process identity changed during inspection")
                 }
+                let executablePath = count > 0 ? String(bytes: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, encoding: .utf8) : nil
+                guard let executable = AgentExecutableIdentity.resolve(path: executablePath, errorCode: pathError, kernelName: kernelName) else {
+                    throw SimulatorFailure("Cannot read process \(pid) executable (errno \(pathError))")
+                }
                 return SimulatorProcess(
                     owner: SimulatorOwner(
-                        pid: pid, uid: after.pbi_uid, startSeconds: after.pbi_start_tvsec, startMicros: after.pbi_start_tvusec),
+                        pid: pid, uid: after.pbi_uid, startSeconds: after.pbi_start_tvsec, startMicros: after.pbi_start_tvusec
+                    ),
                     parentPID: Int32(after.pbi_ppid),
-                    executable: String(decoding: path.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self))
+                    executable: executable
+                )
             },
             createDirectory: {
                 try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
