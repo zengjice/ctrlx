@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.121 — Update diagnostics and Agent resource continuity
+
+- Detect modal dialogs and attached sheets that prevent the Host Mac from
+  quitting before starting an update. Report the dialog and installer failure
+  reason with its log path, and recheck availability before retrying.
+- Keep a running Agent's browser access and simulator caller identity valid
+  when a CLI update unlinks its executable. Only a missing-file error permits
+  exact supported kernel names; process, conversation and authorization checks
+  remain in force, including refusal of unrelated Agents.
+- On iOS, open the keyboard when tapping the focused answer and its blank
+  padding in Codex asynchronous questions, including promptless and custom-option
+  answers. Prose, choices and footer hints retain their existing behavior.
+- Release validation: all 58 focused Swift tests, 112 publisher/COS/installer
+  tests, the arm64/x86_64 iOS Simulator compile and both boundary checks passed.
+  SwiftFormat passes for nine of eleven changed Swift files; the other two
+  retain existing violations with no added rule counts. Full Swift regression,
+  real-Codex and physical-iPhone UI acceptance were not rerun.
+
 ## 3.0.120 — iOS session entry selection
 
 - On ordinary iOS session entry, select a valid terminal instead of reopening
