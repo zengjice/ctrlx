@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.122 — Tab switching and model control responsiveness
+
+- Cache Host and Viewer session grouping until its source data changes, and
+  share sidebar display aggregates so unchanged rows avoid repeated work while
+  status, progress, theme and configured fields remain live.
+- Show cached model buttons immediately when switching tabs, defer discovery
+  for briefly visited tabs and pause polling in hidden or minimized windows.
+  Ordinary refreshes keep controls steady; model switches still wait for pending
+  reads and perform fresh process, pane and input validation.
+- Discover model metadata through an installed CLI when an upgrade removes a
+  running Agent's executable, preserving its original environment and settings.
+  Failed refreshes retain a valid catalog with a warning; successful refreshes
+  clear it. Claude compatibility follows available metadata and native controls.
+- Move process-tree parsing off the main actor.
+- Release validation: focused model, process, grouping and native sidebar
+  regressions passed with 87 tests reported; the opt-in real CLI switching
+  fixture was skipped. All 112 publisher/COS/installer tests, arm64/x86_64 iOS
+  Simulator compilation and both boundary checks passed. SwiftFormat passes for
+  32 of 33 changed Swift files; the remaining sidebar file retains nine existing
+  violations. Full Swift regression and physical-iPhone UI were not rerun.
+
 ## 3.0.121 — Update diagnostics and Agent resource continuity
 
 - Detect modal dialogs and attached sheets that prevent the Host Mac from
