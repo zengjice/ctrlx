@@ -1,4 +1,5 @@
 #if os(macOS)
+    import AppKit
     import CryptoKit
     import CtrlxCommon
     import CtrlxNetworking
@@ -297,6 +298,9 @@
                 guard isNewer(release) else {
                     throw CtrlXAppUpdateError.updateUnavailable
                 }
+                if let reason = installationPreflight() {
+                    throw CtrlXAppUpdateError.installationUnavailable(reason)
+                }
 
                 let scriptURL = try persistInstallerScript(installer.script.body, release: release)
                 let logURL = try makeInstallerLogURL(release: release)
@@ -375,7 +379,8 @@
 
                     self.installerMonitorTask = nil
                     self.downloadProgress = nil
-                    let message = "The CtrlX installer stopped before completing. Review the installer log at \(logURL.path)."
+                    let preflight = self.installationPreflight()
+                    let message = Self.installerFailureMessage(logURL: logURL, preflight: preflight)
                     self.installationError = message
                     self.setState(
                         phase: .available,
@@ -383,7 +388,7 @@
                         latestBuild: self.state.latestBuild,
                         latestBuildStamp: self.state.latestBuildStamp,
                         checkedAt: self.state.checkedAt,
-                        canInstall: true,
+                        canInstall: preflight == nil,
                         error: message
                     )
                     return
@@ -706,7 +711,55 @@
             guard FileManager.default.isWritableFile(atPath: "/Applications") else {
                 return "Administrator permission is required to update CtrlX in /Applications."
             }
-            return nil
+            return blockingDialogReason(modalWindow: NSApp.modalWindow, windows: NSApp.windows)
+        }
+
+        static func blockingDialogReason(modalWindow: NSWindow?, windows: [NSWindow]) -> String? {
+            let parent = windows.first { $0.attachedSheet != nil }
+            guard let dialog = modalWindow ?? parent?.attachedSheet else { return nil }
+            let title = dialog.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let dialogParent = modalWindow == nil ? parent : dialog.sheetParent
+            let parentTitle = dialogParent?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let location = if !title.isEmpty {
+                " “\(title)”"
+            } else if !parentTitle.isEmpty {
+                " in “\(parentTitle)”"
+            } else {
+                ""
+            }
+            return "CtrlX cannot quit because a dialog\(location) is open on the Host Mac. Close it, then check for updates again."
+        }
+
+        static func installerFailureMessage(logURL: URL, preflight: String?) -> String {
+            let log = (try? installerLogTail(at: logURL)) ?? ""
+            let lines = log.split(whereSeparator: \.isNewline).map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }
+            let reason: String? = if lines.contains(where: { $0.contains("execution error:") && $0.contains("(-128)") }) {
+                "macOS cancelled CtrlX's quit request. Close any open dialogs on the Host Mac, then check for updates again."
+            } else if let error = lines.last(where: { $0.hasPrefix("Error:") }) {
+                String(error.dropFirst("Error:".count)).trimmingCharacters(in: .whitespaces)
+            } else {
+                lines.last { $0.hasPrefix("curl:") || $0.contains("execution error:") }
+            }
+            var message = if let reason, !reason.isEmpty {
+                "CtrlX update failed: \(String(reason.prefix(1_024)))"
+            } else {
+                "The CtrlX installer stopped before completing."
+            }
+            if let preflight {
+                message += "\n\(preflight)"
+            }
+            return message + "\nReview the installer log at \(logURL.path)."
+        }
+
+        private static func installerLogTail(at url: URL) throws -> String {
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            let end = try file.seekToEnd()
+            let limit: UInt64 = 64 * 1_024
+            try file.seek(toOffset: end > limit ? end - limit : 0)
+            return try String(decoding: file.read(upToCount: Int(limit)) ?? Data(), as: UTF8.self)
         }
 
         private static func processIsRunning(_ pid: Int32) -> Bool {

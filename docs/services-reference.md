@@ -1257,6 +1257,11 @@ exposed to the Mac app, Viewer, and iOS clients.
 - Re-fetches and re-verifies the installer immediately before launching it.
   Sparkle supplies the signing key and release signing tools; there is no
   in-process Sparkle updater.
+- Installation preflight checks for Host modal windows and attached sheets,
+  including another check after installer verification. A blocking dialog is
+  reported to local and remote clients with its title (or parent window title
+  when available), before starting the installer. Close it on the Host and use
+  **Check Again** to restore installation availability.
 - Gives the detached installer a private `TMPDIR` and follows the DMG file's
   actual growth against the HTTPS `Content-Length` so the foreground update
   window and General settings show determinate download progress. If either
@@ -1276,6 +1281,12 @@ exposed to the Mac app, Viewer, and iOS clients.
   the app's unified-log `shutdown` category records request receipt, stage
   start/completion and elapsed time, plus cleanup completion or deadline-based
   termination. These lifecycle records do not require `LOG_LEVEL=info`.
+- If the installer exits while CtrlX is still running, the error includes its
+  explicit failure reason and the log path. AppleScript cancellation (`-128`)
+  points users to open Host dialogs. The reader examines at most the last
+  64 KiB of the log and limits the displayed reason to 1,024 characters; missing
+  or unrecognized logs keep the generic failure message and log path. Retry
+  availability is rechecked against the Host's current installation preflight.
 
 ### PluginUpdateManager (`CtrlxServerFeature/Distribution/PluginUpdateManager.swift`)
 

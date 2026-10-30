@@ -1,4 +1,5 @@
 #if os(macOS)
+    import AppKit
     import ConcurrencyExtras
     import CryptoKit
     import CtrlxCommon
@@ -224,6 +225,126 @@
             #expect(service.state.error == reason.value)
         }
 
+        @Test(arguments: [false, true])
+        func openDialogPreventsInstallAndAllowsRetryAfterClosing(opensDuringVerification: Bool) async throws {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-app-dialog-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let key = Curve25519.Signing.PrivateKey()
+            let script = manifest(version: "3.0.99", build: "32")
+            var loads = 0
+            var launches = 0
+            var dialogIsOpen = false
+            let reason = "Close the dialog on the Host Mac, then check for updates again."
+            let service = CtrlXAppUpdateService(
+                buildInfo: buildInfo(version: "3.0.98", build: "31"), signingKey: key.publicKey,
+                loadScript: { _ in
+                    loads += 1
+                    if opensDuringVerification, loads == 2 {
+                        dialogIsOpen = true
+                    }
+                    return try signedInstaller(script, using: key)
+                },
+                installationPreflight: { dialogIsOpen ? reason : nil },
+                launchInstaller: { _, _, _ in launches += 1
+                    return nil
+                },
+                updateDirectory: root.appendingPathComponent("Updates"), logDirectory: root.appendingPathComponent("Logs")
+            )
+            await service.refresh()
+            #expect(service.state.canInstall)
+            if !opensDuringVerification {
+                dialogIsOpen = true
+            }
+            await #expect(throws: CtrlXAppUpdateError.installationUnavailable(reason)) {
+                try await service.install(version: "3.0.99", build: "32")
+            }
+            #expect(launches == 0)
+            #expect(!service.state.canInstall)
+            #expect(service.state.error == reason)
+            #expect(!FileManager.default.fileExists(atPath: root.path))
+
+            dialogIsOpen = false
+            await service.refresh()
+            #expect(service.state.canInstall)
+            #expect(service.state.error == nil)
+            try await service.install(version: "3.0.99", build: "32")
+            #expect(launches == 1)
+        }
+
+        @Test(arguments: ["Choose IPA", ""])
+        func detectsModalDialogWithoutClosingIt(title: String) throws {
+            _ = NSApplication.shared
+            let dialog = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+            dialog.isReleasedWhenClosed = false
+            defer { dialog.close() }
+            dialog.title = title
+            let reason = try #require(CtrlXAppUpdateService.blockingDialogReason(modalWindow: dialog, windows: []))
+            #expect(reason.contains("Host Mac"))
+            #expect(reason.contains("Close it"))
+            if !title.isEmpty {
+                #expect(reason.contains(title))
+            }
+        }
+
+        @Test(arguments: ["New Agent", ""])
+        func detectsAttachedSheetWithoutModalWindow(title: String) throws {
+            _ = NSApplication.shared
+            let parent = UpdateDialogTestWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+            let sheet = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+            parent.isReleasedWhenClosed = false
+            sheet.isReleasedWhenClosed = false
+            defer { parent.close()
+                sheet.close()
+            }
+            parent.title = "Sessions"
+            sheet.title = title
+            parent.testSheet = sheet
+            let reason = try #require(CtrlXAppUpdateService.blockingDialogReason(modalWindow: nil, windows: [parent]))
+            #expect(reason.contains(title.isEmpty ? "Sessions" : title))
+            #expect(parent.attachedSheet === sheet)
+
+            parent.testSheet = nil
+            #expect(CtrlXAppUpdateService.blockingDialogReason(modalWindow: nil, windows: [parent]) == nil)
+        }
+
+        @Test(arguments: [
+            ("Downloading...\nError: DMG checksum mismatch\nInstallation details:\n+ cleanup\n", "DMG checksum mismatch"),
+            ("curl: (6) Could not resolve host: updates.example.com\n", "Could not resolve host"),
+            ("Error: CtrlX did not finish its cleanup; existing app was not replaced\nInstallation details:\n46:50: execution error: 用户已取消。 (-128)\n+ cleanup\n", "macOS cancelled CtrlX's quit request"),
+            ("46:50: execution error: Not authorized. (-1743)\n", "Not authorized"),
+            ("Downloading...\n+ cleanup\n", "installer stopped before completing"),
+            ("", "installer stopped before completing"),
+        ])
+        func installerFailureIncludesCauseAndLogPath(log: String, expected: String) throws {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-installer-log-\(UUID()).log")
+            defer { try? FileManager.default.removeItem(at: url) }
+            try log.write(to: url, atomically: true, encoding: .utf8)
+            let message = CtrlXAppUpdateService.installerFailureMessage(logURL: url, preflight: nil)
+            #expect(message.contains(expected))
+            #expect(message.contains(url.path))
+            #expect(!message.contains("+ cleanup"))
+        }
+
+        @Test
+        func installerFailureBoundsLogReadingAndHandlesMissingLog() throws {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-installer-log-\(UUID()).log")
+            let missing = CtrlXAppUpdateService.installerFailureMessage(logURL: url, preflight: nil)
+            #expect(missing.contains("installer stopped before completing"))
+            #expect(missing.contains(url.path))
+
+            defer { try? FileManager.default.removeItem(at: url) }
+            let log = "46:50: execution error: old cancellation (-128)\n"
+                + String(repeating: "old output\n", count: 10_000)
+                + "Error: " + String(repeating: "x", count: 4_096)
+            try log.write(to: url, atomically: true, encoding: .utf8)
+            let reason = "Close the New Agent dialog on the Host Mac."
+            let message = CtrlXAppUpdateService.installerFailureMessage(logURL: url, preflight: reason)
+            #expect(message.contains(reason))
+            #expect(message.contains("CtrlX update failed: " + String(repeating: "x", count: 1_024)))
+            #expect(!message.contains(String(repeating: "x", count: 1_025)))
+            #expect(!message.contains("cancelled"))
+        }
+
         @Test
         func refreshRejectsTamperedInstaller() async throws {
             let privateKey = Curve25519.Signing.PrivateKey()
@@ -338,13 +459,14 @@
             #expect(service.state.phase == .installing)
         }
 
-        @Test
-        func installerExitRestoresRetryableState() async throws {
+        @Test(arguments: [false, true])
+        func installerExitPublishesActualErrorAndChecksRetryEligibility(dialogOpened: Bool) async throws {
             let root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ctrlx-app-update-tests-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: root) }
 
             let privateKey = Curve25519.Signing.PrivateKey()
+            var blocker: String?
             let service = try CtrlXAppUpdateService(
                 buildInfo: buildInfo(version: "3.0.98", build: "31"),
                 installerURL: #require(URL(string: "https://updates.example.com/mac.sh")),
@@ -352,8 +474,14 @@
                 loadScript: { _ in
                     try signedInstaller(manifest(version: "3.0.99", build: "32"), using: privateKey)
                 },
-                installationPreflight: { nil },
-                launchInstaller: { _, _, _ in Int32.max },
+                installationPreflight: { blocker },
+                launchInstaller: { _, logURL, _ in
+                    try "Error: CtrlX did not finish its cleanup; existing app was not replaced\n".write(to: logURL, atomically: true, encoding: .utf8)
+                    if dialogOpened {
+                        blocker = "Close the New Agent dialog on the Host Mac."
+                    }
+                    return Int32.max
+                },
                 loadDownloadSize: { _ in nil },
                 now: { Date(timeIntervalSince1970: 1_000_000) },
                 updateDirectory: root.appendingPathComponent("Updates", isDirectory: true),
@@ -368,7 +496,11 @@
                 try await Task.sleep(for: .milliseconds(100))
             }
             #expect(service.state.phase == .available)
-            #expect(service.state.canInstall)
+            #expect(service.state.canInstall == !dialogOpened)
+            #expect(service.state.error?.contains("CtrlX did not finish its cleanup") == true)
+            if let blocker {
+                #expect(service.state.error?.contains(blocker) == true)
+            }
             #expect(service.state.error?.contains("installer log") == true)
             #expect(service.installationError == service.state.error)
         }
@@ -446,6 +578,14 @@
             CTRLX_BUILD_STAMP='20261024-150000'
             CTRLX_SOURCE_REVISION='\(String(repeating: "a", count: 40))'
             """
+        }
+    }
+
+    @MainActor
+    final private class UpdateDialogTestWindow: NSWindow {
+        var testSheet: NSWindow?
+        override var attachedSheet: NSWindow? {
+            testSheet
         }
     }
 #endif
