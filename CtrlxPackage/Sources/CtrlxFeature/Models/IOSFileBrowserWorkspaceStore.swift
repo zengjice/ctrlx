@@ -57,6 +57,16 @@ final class IOSFileBrowserWorkspaceStore {
         workspaces[Key(hostID: hostID, sessionName: sessionName)]
     }
 
+    func prepareForEntry(_ workspace: IOSFileBrowserWorkspace, restoresSelection: Bool) {
+        guard !restoresSelection else { return }
+        workspace.selectedID = nil
+        // An ordinary entry supersedes even a saved Files ID still awaiting its descriptor.
+        if let index = recovery.sessions.firstIndex(where: { $0.reference == workspace.recoveryReference }) {
+            recovery.sessions[index].selectedFileID = nil
+        }
+        workspace.save()
+    }
+
     func update(_ state: SessionStateMessage, client: ViewerRelayClient) {
         captureHost(state.pairId)
         let previousCatalog = catalogs[state.pairId]
@@ -110,6 +120,8 @@ final class IOSFileBrowserWorkspaceStore {
                     }
                 }
             }
+            // Use the full Host snapshot, not a transiently empty view candidate list.
+            workspace.isResourceOnlySession = windows.isEmpty
             workspace.syncHostTabs((state.fileTabs ?? []).filter { $0.sessionName == sessionName }, retained: retained)
             workspace.restoredFileIDs.formIntersection(Set(workspace.tabs.map(\.id)))
             if let reference, let catalog {
@@ -138,6 +150,7 @@ final class IOSFileBrowserWorkspaceStore {
     func suspendHost(_ hostID: String) {
         captureHost(hostID)
         for (key, workspace) in workspaces where key.hostID == hostID {
+            workspace.isResourceOnlySession = false
             for tab in workspace.tabs {
                 tab.releasePreview()
             }

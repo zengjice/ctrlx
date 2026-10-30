@@ -37,7 +37,8 @@
                     WindowLayoutView(
                         sessionName: sessionName, hostId: destination.hostId,
                         relayClient: connection.relayClient, settings: settings, fileWorkspace: workspace,
-                        initialSessionFit: $initialSessionFit, automaticallyFitOnEntry: automaticallyFitOnEntry
+                        initialSessionFit: $initialSessionFit, automaticallyFitOnEntry: automaticallyFitOnEntry,
+                        restoresSelection: destination.restoresSelection
                     )
                     .id(workspace.recoveryID)
                 } else {

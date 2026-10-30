@@ -30,6 +30,13 @@ cannot inherit resources. Explicit Close Session confirms and closes both
 terminals and resources. The final resource removes an otherwise empty session.
 Recovery schema 2 retains independent Files identities and migrates version 1;
 Browser/Simulator runtime restoration and authorization are not persisted.
+On iOS, ordinary session entry clears the cached Files selection and uses the
+session's valid terminal selection. Explicit workspace recovery keeps its saved
+selection. Only a complete Host snapshot confirming a resource-only session may
+select the first resource automatically; a temporarily empty terminal list is
+not sufficient. Later catalog updates preserve the user's current choice.
+Confirmed resource-only selection takes precedence over stale terminal recovery
+markers left by closing the last terminal.
 Older Viewers see only the legacy pane catalog; older Host entry points retain
 their former pane behavior. The pane rules below describe that compatibility path.
 

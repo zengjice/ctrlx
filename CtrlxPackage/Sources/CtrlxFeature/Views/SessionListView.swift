@@ -10,6 +10,7 @@
         let sessionName: String
         let hostId: String
         var reference: ViewerWorkspaceReference? = nil
+        var restoresSelection = false
     }
 
     /// View displaying a list of active Claude sessions and terminals from all paired hosts.
@@ -59,7 +60,7 @@
                     let saved = fileWorkspaces.recovery.selectedSession,
                     let route = fileWorkspaces.catalogs[saved.pairID]?.resolve(saved) else { return }
                 attemptedNavigationRecovery = true
-                navigationPath.append(SessionNavigation(sessionName: route.sessionName, hostId: saved.pairID, reference: saved))
+                navigationPath.append(SessionNavigation(sessionName: route.sessionName, hostId: saved.pairID, reference: saved, restoresSelection: true))
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

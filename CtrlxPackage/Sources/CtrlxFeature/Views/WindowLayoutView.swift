@@ -17,6 +17,7 @@
         let fileWorkspace: IOSFileBrowserWorkspace
         @Binding var initialSessionFit: NewSessionSizing.InitialFit?
         let automaticallyFitOnEntry: Bool
+        let restoresSelection: Bool
 
         @Environment(SessionStore.self) private var sessionStore
         @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
@@ -27,6 +28,7 @@
 
         /// The currently selected window within the session
         @State private var selectedWindowId: String?
+        @State private var didPrepareEntrySelection = false
         @State private var pendingFileLink: TerminalFileLinkRequest?
         @State private var artifactPreview: TerminalArtifactPreview?
         @State private var previewFilesLink: TerminalFileLinkRequest?
@@ -159,7 +161,8 @@
             settings: IOSSettings,
             fileWorkspace: IOSFileBrowserWorkspace,
             initialSessionFit: Binding<NewSessionSizing.InitialFit?>,
-            automaticallyFitOnEntry: Bool = true
+            automaticallyFitOnEntry: Bool = true,
+            restoresSelection: Bool = false
         ) {
             self.sessionName = sessionName
             self.hostId = hostId
@@ -170,6 +173,7 @@
             self._activePaneId = State(initialValue: fileWorkspace.restoredPaneID)
             self._initialSessionFit = initialSessionFit
             self.automaticallyFitOnEntry = automaticallyFitOnEntry
+            self.restoresSelection = restoresSelection
             self._isKeyboardActive = State(initialValue: settings.showTerminalKeyboardOnEntry)
         }
 
@@ -915,6 +919,7 @@
         private var terminalLifecycleContent: some View {
             presentedContent
                 .task {
+                    reconcileWindowSelection(candidates: windowSelectionCandidates)
                     saveRecoverySelection()
                     fileWorkspaces.selectSession(fileWorkspace.recoveryReference)
                     if automaticallyFitOnEntry {
@@ -932,6 +937,12 @@
                         Set(sessionWindows.first(where: { $0.id == request.windowID })?.panes.map(\.paneId) ?? []) != request.paneIDs {
                         annotationHandoff.cancel(error: AgentImageError.message("The Agent window layout changed. Try Open Agent again."))
                     }
+                }
+                .onChange(of: fileWorkspace.isResourceOnlySession) {
+                    reconcileWindowSelection(candidates: windowSelectionCandidates)
+                }
+                .onChange(of: linkedTabs.topLevel(stored: fileWorkspace.topLevelTabOrder)) {
+                    reconcileWindowSelection(candidates: windowSelectionCandidates)
                 }
                 .onChange(of: viewportGrids) {
                     fitTerminalIfReady()
@@ -961,6 +972,7 @@
                         cancelCreationFollowUp()
                         annotationHandoff.cancel(error: AgentImageError.message("The Host disconnected. Reconnect and try Open Agent again."))
                     } else {
+                        reconcileWindowSelection(candidates: windowSelectionCandidates)
                         fitTerminalIfReady()
                     }
                 }
@@ -1715,15 +1727,20 @@
         private func reconcileWindowSelection(
             candidates: [WindowSelectionCandidate], previousCandidates: [WindowSelectionCandidate] = []
         ) {
+            if !didPrepareEntrySelection {
+                didPrepareEntrySelection = true
+                fileWorkspaces.prepareForEntry(fileWorkspace, restoresSelection: restoresSelection)
+            }
             if !windowCreation.validateSessionBinding(relayClient.workspaceInputState.sessionBinding(name: sessionName)) {
                 initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
             }
-            guard !fileWorkspace.hasPendingTerminalSelection else { return }
             if
                 candidates.isEmpty, selectedLinkedTab == nil,
+                relayClient.isHostConnected, fileWorkspace.isResourceOnlySession,
                 let first = linkedTabs.topLevel(stored: fileWorkspace.topLevelTabOrder).first {
                 selectTopLevel(first)
             }
+            guard !fileWorkspace.hasPendingTerminalSelection else { return }
             if
                 let restored = fileWorkspace.restoredWindowID,
                 selectedWindowId == nil || (selectedWindowId == restored && activePaneId == nil),

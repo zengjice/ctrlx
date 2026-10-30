@@ -45,6 +45,7 @@ final class IOSFileBrowserWorkspace {
     var restoredWindowID: String?
     var restoredPaneID: String?
     var hasPendingTerminalSelection = false
+    var isResourceOnlySession = false
     var unavailableFileSources: Set<UUID> = []
     var restoredFileIDs: Set<UUID> = []
     var restoresFolderDefaults = true
