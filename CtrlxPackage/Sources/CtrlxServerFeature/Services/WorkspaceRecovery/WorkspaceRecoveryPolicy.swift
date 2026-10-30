@@ -26,4 +26,15 @@ enum WorkspaceRecoveryPolicy {
         // deleted sessions. Keep the snapshot and offer an explicit recovery.
         return .offerRestore
     }
+
+    static func containsSavedStructure(_ sessions: [WorkspaceRecoverySession], live: WorkspaceTmuxState) -> Bool {
+        guard live.incompleteSessionIDs.isEmpty, live.incompleteWindowIDs.isEmpty else { return false }
+        return sessions.allSatisfy { saved in
+            guard let session = live.sessions.first(where: { $0.id == saved.id }) else { return false }
+            return saved.windows.allSatisfy { window in
+                guard let current = session.windows.first(where: { $0.id == window.id && $0.index == window.index }) else { return false }
+                return Set(window.panes.map(\.id)).isSubset(of: Set(current.panes.map(\.id)))
+            }
+        }
+    }
 }

@@ -428,8 +428,8 @@ struct VoiceInputDeliveryTests {
         }
     }
 
-    @Test("Changed corrections retain copyable evidence only in debug mode", arguments: [false, true])
-    func originalTranscriptRecovery(debugEnabled: Bool) async throws {
+    @Test("Changed corrections retain copyable JSON context only in debug mode", arguments: [false, true], ["dismiss", "cancel", "restart"])
+    func originalTranscriptRecovery(debugEnabled: Bool, cleanup: String) async throws {
         guard #available(macOS 26.0, iOS 26.0, *) else { return }
         let recorder = Recorder()
         let clipboard = ClipboardClient.previewValue
@@ -439,13 +439,19 @@ struct VoiceInputDeliveryTests {
             $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
         } operation: {
             let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { _, _, _, _, _ in
-                .init(text: "纠错结果", outcome: .accepted)
+                .init(text: "纠错结果", outcome: .accepted, modelID: "on-device")
             })
-            voice.toggleRecording(context: nil, correctionSelection: nil)
+            defer { voice.cancel() }
+            let snapshot = VoiceInputContextSnapshot(
+                paneMetadata: ["Session: ProjectAlpha", "Current path: /tmp/voice"],
+                terminalText: "Use \"Voice\".\n这是终端上下文。", inputDraft: "已有输入 👩‍💻"
+            )
+            voice.toggleRecording(context: snapshot, correctionSelection: nil)
             try await wait { voice.phase == .recording }
             voice.toggleRecording(context: nil, correctionSelection: nil)
             try await wait { voice.completedTranscript != nil }
             #expect(voice.takeCompletedTranscript() == "纠错结果")
+            #expect(voice.debugReport == nil)
             // The setting is read at delivery, even for an existing controller.
             @Dependency(PreferencesService.self) var preferences
             if debugEnabled {
@@ -459,14 +465,90 @@ struct VoiceInputDeliveryTests {
                 #expect(review.bestAvailableTranscript == "精确转写")
                 voice.copyTranscript(review.bestAvailableTranscript)
                 #expect(clipboard.getString() == "精确转写")
+                voice.copyDebugReport()
+                let json = try #require(clipboard.getString())
+                let report = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+                #expect(report["diagnosticID"] as? String == recorder.result.diagnosticID)
+                #expect(report["insertedText"] as? String == "纠错结果")
+                let transcription = try #require(report["transcription"] as? [String: Any])
+                #expect(transcription["original"] as? String == "精确转写")
+                #expect(transcription["primary"] as? String == "精确转写")
+                #expect(transcription["live"] as? String == "实时预览")
+                let context = try #require(report["context"] as? [String: Any])
+                #expect(context["paneMetadata"] as? [String] == snapshot.paneMetadata)
+                #expect(context["terminalText"] as? String == snapshot.terminalText)
+                #expect(context["inputDraft"] as? String == snapshot.inputDraft)
+                #expect((report["contextualTerms"] as? [String])?.contains("ProjectAlpha") == true)
+                let correction = try #require(report["correction"] as? [String: Any])
+                #expect(correction["text"] as? String == "纠错结果")
+                #expect(correction["outcome"] as? String == "accepted")
+                #expect(correction["modelID"] as? String == "on-device")
+                #expect(correction["didFallback"] as? Bool == false)
+                // Turning Debug Mode off prevents a retained report from being copied.
+                clipboard.setString("keep clipboard")
+                preferences.setBool(false, "debugModeEnabled")
+                voice.copyDebugReport()
+                #expect(clipboard.getString() == "keep clipboard")
             } else {
                 #expect(voice.reviewTranscripts == nil)
+                #expect(voice.debugReport == nil)
+                voice.copyDebugReport()
                 #expect(clipboard.getString() == nil)
             }
             #expect(voice.takeCompletedTranscript() == nil)
-            voice.dismissCorrectionNotice()
+            switch cleanup {
+            case "restart":
+                voice.toggleRecording(context: .init(terminalText: "New context"), correctionSelection: nil)
+                #expect(voice.debugReport == nil)
+                try await wait { voice.phase == .recording }
+                voice.cancel()
+            case "cancel": voice.cancel()
+            default: voice.dismissCorrectionNotice()
+            }
             #expect(voice.reviewTranscripts == nil)
+            #expect(voice.debugReport == nil)
             #expect(!voice.isFeedbackVisible)
+        }
+    }
+
+    @Test("Debug JSON remains available for unchanged, unavailable and rejected corrections only after delivery", arguments: [VoiceCorrectionResult.Outcome.accepted, .unavailable, .rejected], [false, true])
+    func debugReportForAllOutcomes(outcome: VoiceCorrectionResult.Outcome, enqueued: Bool) async throws {
+        guard #available(macOS 26.0, iOS 26.0, *) else { return }
+        let recorder = Recorder()
+        let clipboard = ClipboardClient.previewValue
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[ClipboardClient.self] = clipboard
+            $0[VoiceInputAuthorization.self] = .init(speech: { .authorized }, microphone: { true })
+        } operation: {
+            @Dependency(PreferencesService.self) var preferences
+            preferences.setBool(true, "debugModeEnabled")
+            let voice = VoiceInputController(ownership: .init(), makeSession: { _, _ in recorder }, correct: { result, _, _, _, _ in
+                .init(text: result.bestAvailableTranscript, outcome: outcome)
+            })
+            defer { voice.cancel() }
+            voice.toggleRecording(context: nil, correctionSelection: nil)
+            try await wait { voice.phase == .recording }
+            voice.toggleRecording(context: nil, correctionSelection: nil)
+            try await wait { voice.completedTranscript != nil }
+            #expect(voice.takeCompletedTranscript() == "精确转写")
+            #expect(voice.debugReport == nil)
+            voice.recordDelivery(enqueued: enqueued)
+            #expect((voice.debugReport != nil) == enqueued)
+            #expect(voice.isFeedbackVisible == enqueued)
+            #expect(clipboard.getString() == nil)
+            voice.copyDebugReport()
+            if enqueued {
+                let json = try #require(clipboard.getString())
+                let report = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+                let correction = try #require(report["correction"] as? [String: Any])
+                #expect(correction["outcome"] as? String == outcome.rawValue)
+                #expect(correction["text"] as? String == "精确转写")
+                #expect(report["context"] is [String: Any])
+                #expect(voice.takeCompletedTranscript() == nil)
+            } else {
+                #expect(clipboard.getString() == nil)
+            }
         }
     }
 

@@ -32,14 +32,19 @@
                         .accessibilityIdentifier("voice-preview-transcript")
                 }
                 .allowsHitTesting(false)
-                if voice.phase == .idle, let review = voice.reviewTranscripts {
+                if voice.phase == .idle, voice.debugReport != nil || voice.reviewTranscripts != nil {
                     Menu("Transcripts") {
-                        Button("Copy Original Transcription") { voice.copyTranscript(review.bestAvailableTranscript) }
-                        if !review.liveTranscript.isEmpty, review.liveTranscript != review.bestAvailableTranscript {
-                            Button("Copy Live Transcription") { voice.copyTranscript(review.liveTranscript) }
+                        if voice.debugReport != nil {
+                            Button("Copy Debug JSON") { voice.copyDebugReport() }
                         }
-                        if !review.primaryTranscript.isEmpty, review.primaryTranscript != review.bestAvailableTranscript {
-                            Button("Copy Second Pass") { voice.copyTranscript(review.primaryTranscript) }
+                        if let review = voice.reviewTranscripts {
+                            Button("Copy Original Transcription") { voice.copyTranscript(review.bestAvailableTranscript) }
+                            if !review.liveTranscript.isEmpty, review.liveTranscript != review.bestAvailableTranscript {
+                                Button("Copy Live Transcription") { voice.copyTranscript(review.liveTranscript) }
+                            }
+                            if !review.primaryTranscript.isEmpty, review.primaryTranscript != review.bestAvailableTranscript {
+                                Button("Copy Second Pass") { voice.copyTranscript(review.primaryTranscript) }
+                            }
                         }
                     }
                     .fixedSize()

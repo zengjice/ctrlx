@@ -1348,6 +1348,12 @@ enum TerminalCursorTapNavigation {
             // on `isMouseModeActive`; this guard catches the implicit
             // regex-link path SwiftTerm exposes through this delegate.
             guard !isMouseModeActive else { return }
+            if link.hasPrefix("repo:") {
+                if let path = RepositoryFileLink.path(linkTarget: link) {
+                    onOpenPath?(path)
+                }
+                return
+            }
             if let url = URL(string: link) {
                 guard !url.isFileURL else { return }
                 requestURLActions(url: url.absoluteString)

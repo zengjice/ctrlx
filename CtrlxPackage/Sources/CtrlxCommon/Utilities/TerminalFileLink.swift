@@ -127,10 +127,13 @@ public enum TerminalFileLinkDetector {
                 while index < units.count, !units[index].character.isWhitespace { index += 1 }
                 continue
             }
-            guard units[index].character == "<" else {
+            let parenthesized = units[index].character == "("
+            guard units[index].character == "<" || parenthesized else {
                 index += 1
                 continue
             }
+            let prefix = parenthesized ? "(repo:" : RepositoryFileLink.prefix
+            let closing: Character = parenthesized ? ")" : ">"
             var content: [Unit] = []
             var marker = ""
             var cursor = index
@@ -147,10 +150,12 @@ public enum TerminalFileLinkDetector {
                 marker.append(unit.character)
                 content.append(unit)
                 cursor += 1
-                if content.count <= RepositoryFileLink.prefix.count,
-                   !RepositoryFileLink.prefix.hasPrefix(marker) { break }
-                if unit.character == ">" {
-                    if let path = RepositoryFileLink.path(marker) {
+                if content.count <= prefix.count, !prefix.hasPrefix(marker) { break }
+                if unit.character == closing {
+                    let path = parenthesized
+                        ? RepositoryFileLink.path(linkTarget: String(marker.dropFirst().dropLast()))
+                        : RepositoryFileLink.path(marker)
+                    if let path {
                         var spans: [TerminalFileLink.Span] = []
                         for item in content {
                             if let last = spans.last, last.row == item.row, last.columns.upperBound == item.columns.lowerBound {
@@ -217,6 +222,7 @@ extension TerminalFileLinkDetector {
         }
         let excluded = liveEndNearby ? inputStart...inputEnd : -1 ... -1
         var inputRows: [Row] = []
+        var payloadLinks: [TerminalFileLink] = []
         for row in rows.prefix(256) {
             guard let line = bufferLine(at: row) else { continue }
             var cells: [Cell] = []
@@ -226,6 +232,20 @@ extension TerminalFileLinkDetector {
                 if let payload = payloadAt(col, row: row), payload.contains(";") {
                     let start = col
                     while col < terminal.cols, payloadAt(col, row: row) == payload { col += 1 }
+                    if let separator = payload.firstIndex(of: ";"),
+                       let path = RepositoryFileLink.path(linkTarget: String(payload[payload.index(after: separator)...])) {
+                        // SwiftTerm/tmux can extend a payload onto empty trailing cells.
+                        var end = start
+                        for column in start..<col where line[column].width > 0 {
+                            let character = terminal.getCharacter(for: line[column])
+                            if character != "\0", !character.isWhitespace {
+                                end = min(col, column + Int(line[column].width))
+                            }
+                        }
+                        if end > start {
+                            payloadLinks.append(.init(path: path, spans: [.init(row: row, columns: start..<end)]))
+                        }
+                    }
                     cells.append(.init(" ", column: start, width: col - start))
                     continue
                 }
@@ -250,8 +270,10 @@ extension TerminalFileLinkDetector {
             while inputRows.last?.wrapped == true { inputRows.removeLast() }
             if !inputRows.isEmpty { inputRows.removeLast() }
         }
-        return links(rows: inputRows, columns: terminal.cols).filter { link in
+        return (links(rows: inputRows, columns: terminal.cols) + payloadLinks).filter { link in
             !link.spans.contains { excluded.contains($0.row) }
+        }.sorted {
+            ($0.spans[0].row, $0.spans[0].columns.lowerBound) < ($1.spans[0].row, $1.spans[0].columns.lowerBound)
         }
     }
 }

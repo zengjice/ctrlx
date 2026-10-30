@@ -2365,6 +2365,12 @@
         }
 
         func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+            if link.hasPrefix("repo:") {
+                if let path = RepositoryFileLink.path(linkTarget: link) {
+                    onOpenPath?(path)
+                }
+                return
+            }
             guard let url = URL(string: link) else { return }
             // In mouse mode the matching mouseDown/mouseUp carve-out already
             // suppresses + intercepts the click before SwiftTerm gets a chance

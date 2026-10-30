@@ -22,7 +22,9 @@
         public var errorMessage: String?
         public private(set) var correctionNotice: String?
         private(set) var reviewTranscripts: VoiceRecognitionResult?
+        private(set) var debugReport: VoiceInputDebugReport?
         @ObservationIgnored private var pendingCorrectionNotice: String?
+        @ObservationIgnored private var pendingDebugReport: VoiceInputDebugReport?
 
         @ObservationIgnored private var audioEngine: AVAudioEngine?
         @ObservationIgnored @Dependency(VoiceInputAuthorization.self) private var authorization
@@ -85,9 +87,19 @@
             clipboard.setString(text)
         }
 
+        func copyDebugReport() {
+            guard preferences.optionalBool("debugModeEnabled") == true, let debugReport else { return }
+            do {
+                try copyTranscript(debugReport.json())
+            } catch {
+                errorMessage = "Could not copy voice input debug details: \(error.localizedDescription)"
+            }
+        }
+
         public func dismissCorrectionNotice() {
             correctionNotice = nil
             reviewTranscripts = nil
+            debugReport = nil
         }
 
         private func beginRecording(
@@ -99,7 +111,9 @@
             errorMessage = nil
             correctionNotice = nil
             reviewTranscripts = nil
+            debugReport = nil
             pendingCorrectionNotice = nil
+            pendingDebugReport = nil
             guard let lease = ownership.acquire() else {
                 errorMessage = "Voice input is already active in another window, or is still stopping."
                 return
@@ -185,7 +199,9 @@
             canStartRecording = { true }
             correctionNotice = nil
             reviewTranscripts = nil
+            debugReport = nil
             pendingCorrectionNotice = nil
+            pendingDebugReport = nil
             finishTiming()
             let preparation = permissionTask
             let finalization = finalizationTask
@@ -224,13 +240,15 @@
         public func recordDelivery(enqueued: Bool) {
             let showDiagnostics = enqueued && preferences.optionalBool("debugModeEnabled") == true
             correctionNotice = showDiagnostics ? pendingCorrectionNotice : nil
+            debugReport = showDiagnostics ? pendingDebugReport : nil
             if !showDiagnostics {
                 reviewTranscripts = nil
             }
-            if showDiagnostics, correctionNotice == nil, reviewTranscripts != nil {
-                correctionNotice = "Voice input inserted. Original transcripts are available to copy."
+            if showDiagnostics, correctionNotice == nil, debugReport != nil {
+                correctionNotice = "Voice input inserted. Debug details are available to copy."
             }
             pendingCorrectionNotice = nil
+            pendingDebugReport = nil
             finishTiming()
             VoiceInputDiagnostics.delivery(enqueued: enqueued, id: diagnosticID)
         }
@@ -431,9 +449,16 @@
             canStartRecording = { true }
             updateStage(.ready)
             finalizationTask = nil
+            let insertedText = VoiceInputTextComposer.terminalTranscript(result.text)
+            if !insertedText.isEmpty, let recognition = reviewTranscripts {
+                pendingDebugReport = VoiceInputDebugReport(
+                    recognition: recognition, context: recognitionContext,
+                    contextualTerms: contextualTerms, correction: result, insertedText: insertedText
+                )
+            }
             recognitionContext = nil
             correctionSelection = nil
-            transcript = VoiceInputTextComposer.terminalTranscript(result.text)
+            transcript = insertedText
             if transcript.isEmpty {
                 reviewTranscripts = nil
             } else if

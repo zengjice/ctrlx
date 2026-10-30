@@ -30,6 +30,12 @@ public enum RepositoryFileLink {
         return path
     }
 
+    /// Compatibility for explicit terminal hyperlink targets; never resolve these as system URLs.
+    public static func path(linkTarget: String) -> String? {
+        guard linkTarget.hasPrefix("repo:"), linkTarget.utf8.count <= maximumLength - 2 else { return nil }
+        return path("<\(linkTarget)>")
+    }
+
     /// Validates a decoded path once; percent signs here are literal filename characters.
     public static func isValid(path: String) -> Bool {
         guard

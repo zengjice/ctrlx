@@ -416,11 +416,20 @@ checks its native endpoint/focus revision. Switching away and back does not revi
 it. Delivery consumes the result before enqueueing, so duplicate completion
 observers or a failed enqueue cannot retry it. Ordinary shells are supported.
 Pending agent forms and external editors disable dictation into the terminal.
-There is no global hotkey or extra Host/Relay command. In Debug Mode, after a changed
-correction, a rejected correction or an incomplete second pass, the strip offers a **Transcripts**
-menu to copy the original/live/second-pass evidence. It never replaces or resends
-terminal input. Evidence stays in memory until dismissal, cancellation, leaving
-the input surface or starting another recording; it is not written to history.
+There is no global hotkey or extra Host/Relay command. After any nonempty successful
+insertion in Debug Mode, the strip offers **Transcripts → Copy Debug JSON** to export the recognition drafts
+and alternatives, the recording-start context snapshot (pane metadata, terminal
+background and native-editor draft when available), contextual vocabulary,
+correction text/outcome/model/fallback, and the final inserted text. Context is
+the captured snapshot, not the final formatted model prompt; correctors may trim
+it to fit their budgets.
+Unchanged, unavailable and rejected corrections retain this diagnostic report too.
+Separate original/live/second-pass text copies remain available after changed
+corrections, rejected corrections or an incomplete second pass.
+JSON is formatted only on explicit copy and uses the local clipboard. It never
+replaces or resends terminal input. Evidence stays in memory until dismissal,
+cancellation, leaving the input surface or starting another recording; it is not
+written to history.
 
 `CtrlxCommon` owns `VoiceInputController`, `TerminalVoiceInputSession`, the preview,
 typed context snapshot, SpeechAnalyzer/legacy recognizers, vocabulary, candidate

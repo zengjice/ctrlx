@@ -10,6 +10,7 @@ import AppKit
 @DependencyClient
 struct FileBrowserOpener: Sendable {
     var open: @MainActor @Sendable (URL) throws -> Void
+    var showInFinder: @MainActor @Sendable (URL) -> Void
 }
 
 extension FileBrowserOpener: DependencyKey {
@@ -17,6 +18,8 @@ extension FileBrowserOpener: DependencyKey {
         guard NSWorkspace.shared.open(url) else {
             throw FileBrowserError.message("No app could open this file. Install an app that supports its format.")
         }
+    }, showInFinder: { url in
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     })
 }
 #else
@@ -26,10 +29,17 @@ import UIKit
 
 @MainActor
 struct FileBrowserOpenActions: View {
+    private enum Request: Equatable {
+        case open(UUID)
+        #if os(macOS)
+        case showInFinder(UUID)
+        #endif
+    }
+
     let path: String
     let source: FileBrowserSource
     @State private var transfer = FileBrowserTransfer()
-    @State private var request: UUID?
+    @State private var request: Request?
     @State private var error: String?
     #if os(macOS)
     @Dependency(FileBrowserOpener.self) private var opener
@@ -42,10 +52,17 @@ struct FileBrowserOpenActions: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack {
-                Button { request = UUID() } label: {
+                Button { request = .open(UUID()) } label: {
                     Label(title, symbol: source.localFileURL == nil ? .arrowDownCircle : .arrowUpRightSquare)
                 }
                 .disabled(transfer.isPreparing || source.unavailableReason != nil)
+                #if os(macOS)
+                Button { request = .showInFinder(UUID()) } label: {
+                    Label(source.localFileURL == nil ? "Download and Show in Finder" : "Open in Finder", symbol: .folder)
+                }
+                .disabled(transfer.isPreparing || source.unavailableReason != nil)
+                .accessibilityIdentifier("file-show-in-finder")
+                #endif
                 #if os(iOS)
                 if let url = downloadedURL {
                     Button { sharedFile = SharedFile(url: url) } label: { Label("Share / Open in…", symbol: .squareAndArrowUp) }
@@ -64,17 +81,20 @@ struct FileBrowserOpenActions: View {
         }
         .padding(10)
         .task(id: request) {
-            guard request != nil else { return }
+            guard let request else { return }
             do {
                 let url = try await transfer.fileForOpening(path: path, source: source)
                 try Task.checkCancellation()
                 #if os(macOS)
-                try opener.open(url)
+                switch request {
+                case .open: try opener.open(url)
+                case .showInFinder: opener.showInFinder(url)
+                }
                 #else
                 downloadedURL = url
                 previewURL = url
                 #endif
-                request = nil
+                self.request = nil
             } catch is CancellationError { }
             catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }

@@ -8,6 +8,14 @@ Restore-mode/login service combinations passed isolated tests. Historical notes 
 describe earlier scopes; the latest Stage 4 evidence supersedes their references
 to pending CLI/LayoutDriver/editor work.
 
+- 2026-10-31 upgrade follow-up: unfinished journals now reuse a complete surviving
+  tmux workspace and accept ordinary live panes without requiring old conversation
+  verification. Owned placeholders and matching uncertain launches retain their
+  recovery checks. Recovery details scroll within a height limit and expose Collapse
+  and Keep All Current Terminals. The 158 focused recovery tests, isolated native
+  layout/button-action fixture and Mac Debug build passed. This adds no real reboot
+  or remote-machine acceptance beyond the deferred scope above.
+
 - The review P2 about reconstruction mutating reused tmux runtime IDs is fixed.
   Server and persistent target identities are checked in the mutation command
   queue; a changed identity stops recovery and preserves its saved source. Nine

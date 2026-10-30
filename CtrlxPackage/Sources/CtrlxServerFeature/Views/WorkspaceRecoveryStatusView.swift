@@ -18,19 +18,32 @@ struct WorkspaceRecoveryStatusView: View {
                     HStack {
                         DisclosureGroup("Workspace recovery", isExpanded: $expanded) { EmptyView() }
                         Spacer()
+                        if expanded {
+                            Button("Collapse") { expanded = false }
+                                .accessibilityIdentifier("workspace-recovery-collapse")
+                        }
                         Button("Retry") { Task { await recovery.retry() } }
                             .accessibilityIdentifier("workspace-recovery-retry-all")
                     }
                     if expanded {
-                        if let error = recovery.error {
-                            Text(error).foregroundStyle(.secondary).textSelection(.enabled)
+                        if recovery.failures.contains(where: { $0.keepCurrentTerminal && $0.canUseShell }) {
+                            Button("Keep All Current Terminals") { Task { await recovery.keepCurrentTerminals() } }
+                                .accessibilityIdentifier("workspace-recovery-keep-all")
                         }
-                        if recovery.phase == .needsRecovery, recovery.failures.isEmpty {
-                            Text("The tmux server stopped. Your saved workspace is available to restore.").foregroundStyle(.secondary)
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                if let error = recovery.error {
+                                    Text(error).foregroundStyle(.secondary).textSelection(.enabled)
+                                }
+                                if recovery.phase == .needsRecovery, recovery.failures.isEmpty {
+                                    Text("The tmux server stopped. Your saved workspace is available to restore.").foregroundStyle(.secondary)
+                                }
+                                ForEach(recovery.failures) { failure in
+                                    WorkspaceRecoveryFailureView(recovery: recovery, failure: failure)
+                                }
+                            }
                         }
-                        ForEach(recovery.failures) { failure in
-                            WorkspaceRecoveryFailureView(recovery: recovery, failure: failure)
-                        }
+                        .frame(maxHeight: 280)
                     }
                 }
                 .font(.callout)

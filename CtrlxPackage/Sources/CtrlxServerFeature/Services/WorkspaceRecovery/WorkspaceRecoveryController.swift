@@ -88,7 +88,7 @@ final class WorkspaceRecoveryController {
                 phase = .ready
                 try await save(live)
             case .restore:
-                try await recover()
+                try await recover(live: live)
             case .offerRestore:
                 if let snapshot {
                     try await present(snapshot, live)
@@ -204,6 +204,12 @@ final class WorkspaceRecoveryController {
         await retry(intent: .useShell(id))
     }
 
+    func keepCurrentTerminals() async {
+        let ids = Set(failures.filter { $0.keepCurrentTerminal && $0.canUseShell }.map(\.id))
+        guard !ids.isEmpty else { return }
+        await retry(intent: .keepTerminals(ids))
+    }
+
     func failure(for paneID: String) -> WorkspaceRecoveryFailure? {
         guard let pane = liveState?.sessions.flatMap(\.windows).flatMap(\.panes).first(where: { $0.runtimeID == paneID }) else { return nil }
         return failures.first { $0.id == pane.id }
@@ -285,9 +291,15 @@ final class WorkspaceRecoveryController {
         return next
     }
 
-    private func recover(intent: WorkspaceAgentRecoveryIntent = .automatic) async throws {
+    private func recover(intent: WorkspaceAgentRecoveryIntent = .automatic, live knownLive: WorkspaceTmuxState? = nil) async throws {
         guard var source = snapshot, let bootID else { return }
         phase = .restoring
+        let live: WorkspaceTmuxState
+        if let knownLive {
+            live = knownLive
+        } else {
+            live = try await tmux.capture()
+        }
         if source.recovery == nil {
             source.recovery = WorkspaceRecoveryAttempt(
                 bootID: bootID,
@@ -298,7 +310,14 @@ final class WorkspaceRecoveryController {
         // exact source, never a half-populated discovery result.
         snapshot = try await store.save(source)
         guard !stopping else { throw CancellationError() }
-        let result = try await tmux.restore(source.sessions)
+        let result: WorkspaceTmuxRestoreResult
+        if
+            source.bootID == bootID, source.serverID == live.serverID,
+            WorkspaceRecoveryPolicy.containsSavedStructure(source.sessions, live: live) {
+            result = .init(state: live, failures: [], createdPaneIDs: [])
+        } else {
+            result = try await tmux.restore(source.sessions)
+        }
         liveState = result.state
         guard !stopping else { throw CancellationError() }
         let shells = source.sessions.flatMap(\.windows).flatMap(\.panes)
@@ -340,16 +359,10 @@ final class WorkspaceRecoveryController {
             failures.removeAll { pending.contains($0.id) }
             failures += agentFailures
         }
-        let structuresPresent = updated.sessions.allSatisfy { saved in
-            guard let session = live.sessions.first(where: { $0.id == saved.id }) else { return false }
-            return saved.windows.allSatisfy { window in
-                guard let current = session.windows.first(where: { $0.id == window.id && $0.index == window.index }) else { return false }
-                return Set(window.panes.map(\.id)).isSubset(of: Set(current.panes.map(\.id)))
-            }
-        }
+        let structuresPresent = WorkspaceRecoveryPolicy.containsSavedStructure(updated.sessions, live: live)
         if
             failures.isEmpty, updated.recovery?.pendingAgentPaneIDs.isEmpty == true,
-            structuresPresent, live.incompleteSessionIDs.isEmpty, live.incompleteWindowIDs.isEmpty {
+            structuresPresent {
             updated.recovery = nil
             phase = .ready
         }

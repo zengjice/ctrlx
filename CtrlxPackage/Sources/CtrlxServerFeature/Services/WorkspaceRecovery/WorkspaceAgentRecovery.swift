@@ -6,6 +6,7 @@ enum WorkspaceAgentRecoveryIntent: Equatable {
     case automatic
     case resume(UUID)
     case useShell(UUID)
+    case keepTerminals(Set<UUID>)
     case reconcile
 }
 
@@ -76,9 +77,23 @@ final class WorkspaceAgentRecovery {
                 if !state.isDead {
                     canUseShell = true
                     keepCurrentTerminal = true
-                    if intent == .useShell(pane.id) {
+                    let keepRequested: Bool
+                    if case let .keepTerminals(ids) = intent {
+                        keepRequested = ids.contains(pane.id)
+                    } else {
+                        keepRequested = intent == .useShell(pane.id)
+                    }
+                    if keepRequested {
                         // Explicitly keep whatever is now running. Never replace it.
                         clearAgent(pane.id, in: &snapshot)
+                        snapshot = try await save(snapshot)
+                        continue
+                    }
+                    if !matchingLaunch, !state.isPlaceholder || state.launchID != nil {
+                        // A surviving user process is authoritative. Keep the
+                        // descriptor until normal capture verifies its conversation.
+                        // Placeholder options can outlive a completed recovery launch.
+                        snapshot.recovery?.pendingAgentPaneIDs.remove(pane.id)
                         snapshot = try await save(snapshot)
                         continue
                     }

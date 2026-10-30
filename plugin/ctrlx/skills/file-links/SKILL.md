@@ -10,6 +10,13 @@ When reporting outputs, changes or source locations, format the files/folders yo
 already need to mention as inline code: `<repo:outputs/report.pdf>`. Use this
 instead of a bare path or Markdown file link; do not add unrelated references.
 
+Write each reference as one complete inline-code marker, for example
+`<repo:outputs/report.pdf>`. Never emit bare `repo:outputs/report.pdf`, put the
+reference in a Markdown link target, or append a duplicate link in parentheses.
+Markdown link renderers can hide the delimiters or shorten the
+target. Before sending, check that every workspace reference retains both `<`
+and `>` inside its code span; fix the reply itself, not the user's files.
+
 - Link existing items inside the **current agent session's workspace** using
   `repo:` even when the directory is not a Git repository. In Git, the root is
   the current worktree root; outside Git, it is the Agent session's project/working

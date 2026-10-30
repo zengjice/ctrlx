@@ -2,7 +2,7 @@ import Foundation
 
 /// Captured once at recording start. Terminal output is background evidence,
 /// never an authoritative copy of the remote application's input draft.
-public struct VoiceInputContextSnapshot: Equatable, Sendable {
+public struct VoiceInputContextSnapshot: Equatable, Encodable, Sendable {
     public let paneMetadata: [String]
     public let terminalText: String?
     public let inputDraft: String?

@@ -13,12 +13,14 @@ package final class VoiceInputController {
     var errorMessage: String?
     var correctionNotice: String?
     var reviewTranscripts: ReviewTranscripts?
+    var debugReport: Bool?
     struct ReviewTranscripts { var bestAvailableTranscript = ""
         var liveTranscript = ""
         var primaryTranscript = ""
     }
 
-    func copyTranscript(_ text: String) { }
+    func copyTranscript(_: String) {}
+    func copyDebugReport() {}
     var isFeedbackVisible: Bool {
         phase != .idle || correctionNotice != nil
     }

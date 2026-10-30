@@ -1,6 +1,7 @@
 import CtrlxNetworking
 import CtrlxPluginProtocol
 import Foundation
+import Synchronization
 import Testing
 @testable import CtrlxServerFeature
 
@@ -339,6 +340,56 @@ struct WorkspaceAgentRecoveryTests {
         #expect(try await fixture.run(.useShell(fixture.pane.id)).isEmpty)
         #expect(fixture.launches.isEmpty)
         #expect(fixture.snapshot.recovery?.pendingAgentPaneIDs.isEmpty == true)
+    }
+
+    @Test("App upgrade reconnects live panes despite an unfinished recovery journal", arguments: [false, true])
+    func upgradeWithSurvivingTmux(previouslyRecovered: Bool) async throws {
+        let fixture = Fixture()
+        fixture.state.isDead = false
+        fixture.state.isPlaceholder = previouslyRecovered
+        fixture.state.launchID = previouslyRecovered ? UUID() : nil
+        let original = fixture.snapshot
+        let disk = WorkspaceRecoveryStore.inMemory(original)
+        let live = WorkspaceTmuxState(serverID: original.serverID, sessions: original.sessions)
+        let restores = Mutex(0)
+        let controller = WorkspaceRecoveryController(
+            store: disk,
+            tmux: .init(capture: { live }, restore: { _ in
+                restores.withLock { $0 += 1 }
+                return .init(state: live, failures: [], createdPaneIDs: [])
+            }),
+            system: .init(bootID: { original.bootID }, directoryExists: { _ in true }, pathExists: { _ in true }), mode: { .layoutAndAgents },
+            captureExtras: { $0 }, present: { _, _ in },
+            resumeAgents: { source, result, intent, save in
+                try await fixture.recovery.recover(source, result: result, intent: intent, save: save)
+            }
+        )
+        await controller.start(periodic: false)
+        #expect(controller.phase == .ready && controller.failures.isEmpty && controller.error == nil)
+        #expect(restores.withLock { $0 } == 0 && fixture.launches.isEmpty)
+        let saved = try #require(try await disk.load())
+        #expect(saved.recovery == nil)
+        #expect(saved.sessions == original.sessions)
+        #expect(saved.bootID == original.bootID && saved.serverID == original.serverID)
+        await controller.retry()
+        #expect(controller.phase == .ready && restores.withLock { $0 } == 0 && fixture.launches.isEmpty)
+        await controller.stop()
+    }
+
+    @Test("Bulk keep confirms only selected live terminals and never restarts a stopped one")
+    func keepSelectedTerminals() async throws {
+        let fixture = Fixture()
+        _ = try await fixture.run(.automatic)
+        #expect(try await fixture.run(.keepTerminals([UUID()])).count == 1)
+        #expect(fixture.snapshot.recovery?.pendingAgentPaneIDs == [fixture.pane.id])
+        fixture.state.isDead = true
+        #expect(try await fixture.run(.keepTerminals([fixture.pane.id])).count == 1)
+        #expect(fixture.launches.count == 1)
+        #expect(fixture.snapshot.recovery?.pendingAgentPaneIDs == [fixture.pane.id])
+        fixture.state.isDead = false
+        #expect(try await fixture.run(.keepTerminals([fixture.pane.id])).isEmpty)
+        #expect(fixture.snapshot.recovery?.pendingAgentPaneIDs.isEmpty == true)
+        #expect(fixture.pane.agent == nil && fixture.launches.count == 1)
     }
 
     @Test("Changed or unowned pane identities are never launched", arguments: [false, true])

@@ -367,7 +367,12 @@ This is a lightweight application convention, **not a registered URI standard**.
 There is no private CtrlX URI, CLI generation step or link registry.
 Ordinary paths, slash commands, local Markdown targets and `file://`/OSC 8
 file targets are not inferred or opened. Web links retain their own handling.
-Compatibility with previous file-link output is deliberately dropped.
+For compatibility with Agent Markdown rendering, complete `(repo:relative/path)`
+references and explicit OSC 8 `repo:relative/path` targets use the same path
+validation and source-pane routing. Bare `repo:relative/path` text without a
+closing delimiter remains ordinary text. This does not register a system URL
+scheme or enable arbitrary filesystem paths; canonical Agent output remains
+the inline-code `<repo:relative/path>` marker.
 
 Paths are relative to the **current source Agent's workspace root**. Inside Git,
 this is the worktree root: a nested launch directory resolves to its worktree,
@@ -468,8 +473,10 @@ Update the Host and each Mac/iOS Viewer, update the installed agent plugin,
 then start a new agent session with plugin hooks enabled/trusted. Updating only
 the App does not refresh a cached agent plugin. Both TUIs should receive an
 inline-code literal marker, never a Markdown link target that the renderer can
-hide or shorten. Non-Git directory support requires the updated Host and plugin
-guidance; Viewers that already understand `repo:` use the existing request without
+hide or shorten. The shared skill explicitly rejects bare `repo:` references,
+duplicate parenthesized links and Markdown link targets, and asks the Agent to
+check both delimiters before sending. Non-Git directory support requires the
+updated Host and plugin guidance; Viewers that already understand `repo:` use the existing request without
 a new wire capability. Existing cached plugins and session instructions are not
 rewritten by editing the repository's skill source.
 
@@ -658,6 +665,11 @@ Blocks yield between replies; they do not change terminal receive scheduling.
 Streaming needs the existing file-download capability, so download-capable
 older Hosts work without a new command/handshake field or Relay deployment.
 New viewers fail immediately with the existing upgrade hint on a legacy Host.
+
+On Mac, **Open in Finder** appears beside **Open in Default App** and selects
+the validated local Host file. Remote previews offer **Download and Show in Finder**,
+which downloads to the current Viewer Mac and selects that copy, without opening
+the file in another app. Both actions use the existing cancellable transfer flow.
 
 Downloads show byte progress and can be cancelled. Selecting another file,
 leaving the tab or disconnecting cancels pending work. Partial copies are removed;

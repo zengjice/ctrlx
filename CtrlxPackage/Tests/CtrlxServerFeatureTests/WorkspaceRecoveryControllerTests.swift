@@ -192,7 +192,7 @@ struct WorkspaceRecoveryControllerTests {
         gate.resume()
         await checkpoint.value
         await retried.value
-        #expect(backend.restores == 2)
+        #expect(backend.restores == 1) // The completed live structure is reused after the checkpoint.
         #expect(recovery.phase == .ready)
         await recovery.stop()
     }
@@ -209,6 +209,25 @@ struct WorkspaceRecoveryControllerTests {
         await recovery.checkpoint()
         #expect(try await backend.store.load()?.sessions.isEmpty == true)
         #expect(backend.restores == 0)
+        await recovery.stop()
+    }
+
+    @Test("Unfinished recovery still reconstructs a changed server or incomplete structure", arguments: ["server", "boot", "missing-pane", "incomplete-window"])
+    func unfinishedStructure(change: String) async {
+        var original = WorkspaceRecoveryStoreTests.snapshot()
+        original.recovery = .init(bootID: original.bootID, pendingAgentPaneIDs: [])
+        let backend = Backend(store: .inMemory(original))
+        backend.state = .init(serverID: original.serverID, sessions: original.sessions)
+        switch change {
+        case "server": backend.state.serverID = "replacement-server"
+        case "missing-pane": backend.state.sessions[0].windows[0].panes = []
+        case "incomplete-window": backend.state.incompleteWindowIDs = [original.sessions[0].windows[0].id]
+        default: break
+        }
+        let recovery = controller(backend, boot: change == "boot" ? "new-boot" : original.bootID)
+        await recovery.start(periodic: false)
+        #expect(backend.restores == 1)
+        #expect(recovery.phase == .ready && recovery.error == nil)
         await recovery.stop()
     }
 

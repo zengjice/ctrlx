@@ -20,7 +20,7 @@ struct TerminalFileLinkTests {
         "/Users/remote/output.pdf", "~/Movies/", "./output/movie.mp4", "../report.pdf",
         "docs/report.md", ".build-local/script.py", "/review", "crayon/gouache", "size/",
         "file:///tmp/file.txt", "(./output/my report.pdf)", "[Report](/tmp/report.pdf)",
-        "https://example.com/api(foo/bar)", "repo:output/file.txt",
+        "https://example.com/api(foo/bar)",
         "ctrlx://file/v1/L3RtcC9maWxl#end",
     ])
     func ordinaryText(text: String) {
@@ -31,6 +31,72 @@ struct TerminalFileLinkTests {
         terminal.feed(text: "\u{1b}]8;;\(text)\u{1b}\\Open file\u{1b}]8;;\u{1b}\\\r\n$ ")
         #expect(TerminalFileLinkDetector.links(terminal: terminal, rows: 0..<4, cellPayload: { _, _ in nil }).isEmpty)
         withExtendedLifetime(delegate) { }
+    }
+
+    @Test("Bare repo text requires delimiters; an explicit hyperlink target has its own boundary")
+    func bareRepositoryText() {
+        let text = "repo:output/file.txt"
+        #expect(TerminalFileLinkDetector.links(rows: [row(text)], columns: 160).isEmpty)
+        #expect(RepositoryFileLink.path(text) == nil)
+        #expect(RepositoryFileLink.path(linkTarget: text) == "output/file.txt")
+    }
+
+    @Test("Markdown-rendered parenthesized references use the existing Host path contract")
+    func markdownReference() async throws {
+        let text = "视频: repo:outputs/movie.mp4 (repo:outputs/movie.mp4)"
+        let links = TerminalFileLinkDetector.links(rows: [row(text)], columns: 160)
+        #expect(links.map(\.path) == ["outputs/movie.mp4"])
+        #expect(links.first?.spans == [.init(row: 0, columns: 27..<51)])
+        var requests: [FileBrowserOperation] = []
+        let source = FileBrowserSource(id: "host", paneID: "%42") { operation in
+            requests.append(operation)
+            return .info(.init(path: "/Host/project/outputs/movie.mp4", name: "movie.mp4", kind: .unsupported, size: 99, revision: "1"))
+        }
+        let link = try #require(links.first)
+        let destination = try await TerminalFileDestination.resolve(path: link.path, context: context, source: source)
+        #expect(destination.file == "/Host/project/outputs/movie.mp4")
+        #expect(requests == [.repositoryInfo(path: "outputs/movie.mp4", context: context)])
+    }
+
+    @Test("Compatibility targets retain path validation", arguments: [
+        "", "/tmp/file", "../file", "folder/../file", "./file", "~/file", "folder//file",
+        "%2Ftmp/file", "%2e%2e/file", "%00file", "%0Afile", "bad%GGfile", "bad%FFfile",
+        "bad file", "bad?query", "bad#fragment", "bad(file)", "bad<file>", "folder//",
+        String(repeating: "a", count: 4_097),
+    ])
+    func invalidCompatibilityTarget(encoded: String) {
+        let target = "repo:" + encoded
+        #expect(RepositoryFileLink.path(linkTarget: target) == nil)
+        #expect(TerminalFileLinkDetector.links(rows: [row("(\(target))")], columns: 160).isEmpty)
+        let delegate = Delegate()
+        let terminal = Terminal(delegate: delegate, options: .init(cols: 80, rows: 4))
+        terminal.feed(text: "\u{1b}]8;;\(target)\u{1b}\\Open file\u{1b}]8;;\u{1b}\\\r\n$ ")
+        #expect(TerminalFileLinkDetector.links(terminal: terminal, rows: 0..<4, cellPayload: { _, _ in nil }).isEmpty)
+        withExtendedLifetime(delegate) { }
+    }
+
+    @Test("Explicit repo OSC 8 targets preserve encoded filenames and exclude the live composer", arguments: [
+        ("Open generated movie", 20), ("查看猫图", 8),
+    ])
+    func repositoryHyperlink(label: (String, Int)) throws {
+        let delegate = Delegate()
+        let terminal = Terminal(delegate: delegate, options: .init(cols: 32, rows: 6))
+        let path = "输出/John's %27(猫).mp4"
+        let marker = try #require(RepositoryFileLink.marker(path: path))
+        let target = String(marker.dropFirst().dropLast())
+        let hyperlink = "\u{1b}]8;id=movie;\(target)\u{1b}\\\(label.0)\u{1b}]8;;\u{1b}\\"
+        terminal.feed(text: "\(hyperlink)\r\n$ \(hyperlink)")
+        let links = TerminalFileLinkDetector.links(terminal: terminal, rows: 0..<6, cellPayload: { _, _ in nil })
+        #expect(links.map(\.path) == [path])
+        #expect(links.first?.spans == [.init(row: 0, columns: 0..<label.1)])
+        withExtendedLifetime(delegate) { }
+    }
+
+    @Test("Parenthesized compatibility still needs a complete boundary")
+    func truncatedCompatibility() {
+        for text in ["(repo:outputs/movie.mp4", "https://example.com/(repo:outputs/movie.mp4)", "(repo:bad file)"] {
+            #expect(TerminalFileLinkDetector.links(rows: [row(text)], columns: 160).isEmpty)
+        }
     }
 
     @Test("Encoding preserves literal filenames without revealing an absolute path", arguments: [
@@ -91,6 +157,8 @@ struct TerminalFileLinkTests {
         ("<repo:输出/第%203%20集.mp4>", "输出/第 3 集.mp4"),
         ("<repo:outputs/final_films/>", "outputs/final_films"),
         ("<repo:输出/最终%20成片%2F>", "输出/最终 成片"),
+        ("(repo:输出/第%203%20集.mp4)", "输出/第 3 集.mp4"),
+        ("(repo:outputs/final_films/)", "outputs/final_films"),
     ])
     func everyWrapBoundary(soft: Bool, reference: (String, String)) throws {
         let (marker, path) = reference

@@ -1,5 +1,6 @@
 import CtrlxCommon
 import Dependencies
+import Foundation
 import Synchronization
 import Testing
 @testable import CtrlxServerFeature
@@ -67,5 +68,25 @@ struct WorkspaceRecoveryPolicyTests {
         snapshot.recovery = .init(bootID: snapshot.bootID, pendingAgentPaneIDs: [])
         #expect(WorkspaceRecoveryPolicy.startup(snapshot: snapshot, live: live, bootID: snapshot.bootID, mode: .layoutAndAgents) == .restore)
         #expect(WorkspaceRecoveryPolicy.startup(snapshot: nil, live: live, bootID: "new-boot", mode: .layoutAndAgents) == .observe)
+    }
+
+    @Test("Reusing existing structure requires persistent identities, window positions and complete construction", arguments: [
+        "complete", "extra-pane", "missing-session", "other-window", "other-pane", "moved-window", "incomplete-session", "incomplete-window",
+    ])
+    func existingStructure(state: String) {
+        let source = WorkspaceRecoveryStoreTests.snapshot()
+        var live = WorkspaceTmuxState(serverID: source.serverID, sessions: source.sessions)
+        switch state {
+        case "missing-session": live.sessions = []
+        case "other-window": live.sessions[0].windows[0].id = UUID()
+        case "other-pane": live.sessions[0].windows[0].panes[0].id = UUID()
+        case "moved-window": live.sessions[0].windows[0].index += 1
+        case "incomplete-session": live.incompleteSessionIDs = [source.sessions[0].id]
+        case "incomplete-window": live.incompleteWindowIDs = [source.sessions[0].windows[0].id]
+        case "extra-pane":
+            live.sessions[0].windows[0].panes.append(.init(id: UUID(), runtimeID: "%2", directory: "/tmp"))
+        default: break
+        }
+        #expect(WorkspaceRecoveryPolicy.containsSavedStructure(source.sessions, live: live) == (state == "complete" || state == "extra-pane"))
     }
 }

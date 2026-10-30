@@ -92,8 +92,8 @@ enum VoiceTranscriptCorrectionRoute: Equatable, Sendable {
     case onDevice
 }
 
-struct VoiceCorrectionResult: Equatable, Sendable {
-    enum Outcome: Equatable, Sendable {
+struct VoiceCorrectionResult: Equatable, Encodable, Sendable {
+    enum Outcome: String, Equatable, Encodable, Sendable {
         case accepted
         case unavailable
         case rejected
