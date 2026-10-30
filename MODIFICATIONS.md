@@ -7,6 +7,28 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.123 — Recovery, file actions and voice diagnostics
+
+- Show the IPA default-application reminder in a nonmodal window that leaves
+  the main window usable and allows normal quit and remote updates. Defer it
+  while the app is in the background or the screen is locked.
+- Reuse a complete surviving tmux workspace when resuming unfinished recovery,
+  preserving ordinary live terminals while retaining checks for placeholders and
+  uncertain launches. Bound recovery details in a scrolling list and provide
+  Collapse and Keep All Current Terminals actions.
+- Add Open in Finder for local Host files and Download and Show in Finder for
+  remote previews. Recognize complete parenthesized and OSC 8 repo references
+  using the existing path validation and source routing.
+- In Debug Mode, allow explicit copying of voice-input debug JSON after a
+  successful insertion, including recognition, captured context and correction
+  outcome. Evidence stays in memory and is cleared with the input surface.
+- Release validation: 272 focused Swift tests, three isolated native UI tests,
+  23 plugin tests and 112 publisher/COS/installer tests passed, along with the
+  arm64/x86_64 iOS Simulator compile and both boundary checks. SwiftFormat passes
+  for 23 of 27 changed Swift files; four retain existing formatting styles,
+  with new lines inheriting conditional-compilation indentation in two files.
+  Full Swift regression, real reboot and cross-machine acceptance were not rerun.
+
 ## 3.0.122 — Tab switching and model control responsiveness
 
 - Cache Host and Viewer session grouping until its source data changes, and
