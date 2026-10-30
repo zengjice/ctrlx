@@ -561,6 +561,14 @@ Completed single taps now have exactly one owner:
   stable redraw, active input, live-screen, IME, link and selection guards still
   apply. This only changes keyboard intent; existing terminal click/cursor
   routing remains in place and no answer is submitted automatically.
+- Expanded asynchronous **Queued follow-up inputs** also recognizes the
+  promptless `Type your answer` composer and inline custom-option answers.
+  Recognition requires the shaded input, its indentation and the distinct
+  `submit` / `skip` / `main prompt` (or `prev question`) footer, including wrapped
+  hints and remapped keys. The focused answer paragraph and adjacent blank
+  padding open the keyboard; question prose, preceding choices and footer hints
+  do not. This adds to the existing Questions layout instead of changing its
+  matching rules or terminal click routing.
 - In mouse mode, an active, focused, mounted input view on the live screen
   sends a primary-button press/release. SwiftTerm encodes the negotiated mouse
   protocol; CtrlX collects its synchronous writes into **one raw-input batch**
@@ -589,6 +597,11 @@ multiline drafts, wrapped footer hints and incomplete/unknown layouts. SwiftTerm
 ANSI regressions cover highlighted/inverse options (including wrapped labels),
 notes padding and continuations, and broken surface boundaries; the native
 selection-routing tests also cover these styles, Questions keyboard intent and input guards.
+`CodexAsyncQuestionInputAreaTests` covers the captured Codex 0.165.0 layout,
+promptless and custom answers, multiline input, footer variants and broken
+boundaries. ANSI replay exercises the real blank input margins in dark and
+light surfaces; iOS-native routing fixtures cover keyboard intent and the same
+focus, selection, redraw, link and IME guards for both layouts.
 An isolated real Codex 0.158.0/tmux probe verified insertion at clicked positions
 in unsent single-line, explicit-multiline, Chinese and soft-wrapped drafts;
 this verifies Codex's mouse handling, not end-to-end iPhone gesture delivery.

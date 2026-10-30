@@ -1,6 +1,6 @@
 import Foundation
 
-/// Bound the focused composer by its prompt and footer. Selected options can
+/// Bound the focused composer by its surface and footer. Selected options can
 /// change color or use inverse video inside the popup's two-column margins.
 enum CodexQuestionInputArea {
     typealias Navigation = TerminalMultilineCursorNavigation
@@ -21,6 +21,9 @@ enum CodexQuestionInputArea {
         }
         while top < cursor.row, lines[top].isBlank {
             top += 1
+        }
+        if containsAsyncAnswer(lines: lines, cursor: cursor, tap: tap, top: top, bottom: bottom) {
+            return true
         }
         guard
             lines[top].isShaded, isQuestionHeader(text(lines[top])), top < cursor.row, cursor.row < bottom,
@@ -51,6 +54,45 @@ enum CodexQuestionInputArea {
         // Only the composer's single top padding row belongs to the input;
         // do not include the question or the gap above the choices.
         let first = prompt > top + 1 && lines[prompt - 1].isBlank && lines[prompt - 1].isShaded ? prompt - 1 : prompt
+        return (first..<footer).contains(tap.row) && (2..<width - 2).contains(tap.column)
+    }
+
+    private static func containsAsyncAnswer(
+        lines: [Navigation.Line], cursor: Navigation.Point, tap: Navigation.Point, top: Int, bottom: Int
+    ) -> Bool {
+        guard
+            top < cursor.row, cursor.row < bottom,
+            let footer = (cursor.row + 1...bottom).last(where: {
+                text(lines[$0]).split(separator: " ").dropFirst().first == "submit"
+            }) else { return false }
+        let hints = (footer...bottom).map { text(lines[$0]) }.joined(separator: " ")
+        guard hints.contains(" skip"), hints.contains(" main prompt") || hints.contains(" prev question") else { return false }
+
+        let prompt = (top...cursor.row).last {
+            lines[$0].inputColumn == 4 && lines[$0].cells[2].character == "›"
+        }
+        var first = prompt ?? cursor.row
+        if prompt == nil {
+            // Promptless answers share the question's background. Stop at the
+            // preceding spacer rather than treating question prose as input.
+            while first > top, !lines[first - 1].isBlank {
+                first -= 1
+            }
+            guard first > top + 1, lines[first - 1].isBlank, lines[first - 1].isShaded else { return false }
+        }
+        let inputColumn = prompt == nil ? 2 : 4
+        let width = lines[cursor.row].cells.count
+        guard
+            cursor.column >= inputColumn, cursor.column < width - 2,
+            (first..<footer).allSatisfy({
+                lines[$0].cells.count == width && lines[$0].isShaded
+                    && ($0 == prompt || lines[$0].cells.prefix(inputColumn).allSatisfy(\.isBlank))
+            }) else { return false }
+        if prompt == nil {
+            while first > top + 1, lines[first - 1].isBlank, lines[first - 1].isShaded {
+                first -= 1
+            }
+        }
         return (first..<footer).contains(tap.row) && (2..<width - 2).contains(tap.column)
     }
 

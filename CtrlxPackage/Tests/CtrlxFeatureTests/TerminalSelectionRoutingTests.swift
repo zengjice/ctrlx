@@ -211,17 +211,53 @@
             }
         }
 
-        @Test("Questions keyboard requests retain cursor, redraw, IME and input guards")
-        func questionKeyboardGuards() async throws {
+        @Test("Promptless async Questions open and keep the keyboard open", arguments: [false, true])
+        func asyncQuestionKeyboard(mouseMode: Bool) async throws {
             let (window, view) = await makeView()
             defer { close(window, view) }
-            paintQuestionAnswer(view)
+            let proxy = try inputProxy(in: window)
+            var requests: [Bool] = []
+            view.onRawInput = { _ in }
+            view.onKeyboardRequest = { [weak view] value in
+                requests.append(value)
+                view?.updateInput(isEnabled: true, keyboardRequested: value)
+            }
+            for draft in ["", "Type your answer", "first line"] {
+                paintAsyncQuestionAnswer(view, draft: draft, multiline: draft == "first line")
+                if mouseMode {
+                    feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
+                }
+                view.updateInput(isEnabled: true, keyboardRequested: false)
+                await view.inputFocusUpdates.pendingTask?.value
+                requests = []
+                for row in [2, 7, 8] {
+                    view.handleContentTap(at: CGPoint(x: 20.5 * view.cellDimension.width, y: (CGFloat(row) + 0.5) * view.cellDimension.height))
+                }
+                #expect(requests.isEmpty)
+                for row in 3...6 {
+                    view.handleContentTap(at: CGPoint(x: 20.5 * view.cellDimension.width, y: (CGFloat(row) + 0.5) * view.cellDimension.height))
+                    await view.inputFocusUpdates.pendingTask?.value
+                }
+                #expect(requests == [true])
+                #expect(proxy.isFirstResponder && proxy.inputView == nil)
+            }
+        }
+
+        @Test("Questions keyboard requests retain cursor, redraw, IME and input guards", arguments: [false, true])
+        func questionKeyboardGuards(asyncLayout: Bool) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            if asyncLayout {
+                paintAsyncQuestionAnswer(view)
+            } else {
+                paintQuestionAnswer(view)
+            }
             feed(view, "\u{1b}[?1003h\u{1b}[?1006h")
             let proxy = try inputProxy(in: window)
             var requests: [Bool] = []
             view.onRawInput = { _ in }
             view.onKeyboardRequest = { requests.append($0) }
-            let point = CGPoint(x: 20.5 * view.cellDimension.width, y: 7.5 * view.cellDimension.height)
+            let point = CGPoint(x: 20.5 * view.cellDimension.width, y: (asyncLayout ? 6.5 : 7.5) * view.cellDimension.height)
             feed(view, "\u{1b}[?25l")
             view.handleContentTap(at: point)
             feed(view, "\u{1b}[?25h\u{1b}[?2026h")
@@ -239,7 +275,7 @@
             view.handleContentTap(at: point)
             view.scrollingAgentID = "codex"
             // Header, question and footer remain outside the answer.
-            for row in [2, 3, 8, 9] {
+            for row in asyncLayout ? [2, 7, 8, 9] : [2, 3, 8, 9] {
                 view.handleContentTap(at: CGPoint(x: point.x, y: (CGFloat(row) + 0.5) * view.cellDimension.height))
             }
             tap(view, count: 2, column: 2, row: 0)
@@ -248,17 +284,21 @@
             #expect(requests.isEmpty)
         }
 
-        @Test("Links inside Questions keep their local action instead of opening the keyboard")
-        func questionAnswerLink() async throws {
+        @Test("Links inside Questions keep their local action instead of opening the keyboard", arguments: [false, true])
+        func questionAnswerLink(asyncLayout: Bool) async throws {
             let (window, view) = await makeView()
             defer { close(window, view) }
-            paintQuestionAnswer(view, draft: "https://example.com")
+            if asyncLayout {
+                paintAsyncQuestionAnswer(view, draft: "https://example.com")
+            } else {
+                paintQuestionAnswer(view, draft: "https://example.com")
+            }
             let url = try #require(URL(string: "https://example.com"))
             var opened: [URL] = []
             var requests: [Bool] = []
             view.onOpenURL = { opened.append($0) }
             view.onKeyboardRequest = { requests.append($0) }
-            view.handleContentTap(at: CGPoint(x: 8.5 * view.cellDimension.width, y: 5.5 * view.cellDimension.height))
+            view.handleContentTap(at: CGPoint(x: 8.5 * view.cellDimension.width, y: (asyncLayout ? 4.5 : 5.5) * view.cellDimension.height))
             #expect(opened == [url])
             #expect(requests.isEmpty)
         }
@@ -910,6 +950,19 @@
 
         private func feed(_ view: InteractiveTerminalView, _ text: String) {
             view.feedTerminalData(Array(text.utf8)[...])
+        }
+
+        private func paintAsyncQuestionAnswer(_ view: InteractiveTerminalView, draft: String = "Type your answer", multiline: Bool = false) {
+            feed(view, "\u{1b}[0m\u{1b}[2J\u{1b}[1;1H• Queued follow-up inputs")
+            let rows = [
+                "", "  Share details.", "", "  " + draft, multiline ? "  second line" : "", "",
+                "  enter submit   ⌃] skip   ⇧→ main prompt", "",
+            ]
+            for (index, text) in rows.enumerated() {
+                feed(view, "\u{1b}[\(index + 2);1H\u{1b}[0;48;2;57;57;57m\u{1b}[2K\(text)")
+            }
+            feed(view, "\u{1b}[0m\u{1b}[\(multiline ? 6 : 5);3H\u{1b}[?25h")
+            view.scroll(toPosition: 1)
         }
 
         private func paintQuestionAnswer(_ view: InteractiveTerminalView, draft: String = "Type your answer (optional)", multiline: Bool = false, optionStyle: String? = nil) {
