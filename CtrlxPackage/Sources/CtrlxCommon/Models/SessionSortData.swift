@@ -159,9 +159,9 @@ public struct SessionSortData {
 public extension SidebarSortMode {
     /// Sort an array of items using the given sort mode and a closure to extract sort data.
     func sorted<T>(_ items: [T], by data: (T) -> SessionSortData) -> [T] {
-        items.sorted { lhs, rhs in
-            let a = data(lhs)
-            let b = data(rhs)
+        items.map { (item: $0, data: data($0)) }.sorted { lhs, rhs in
+            let a = lhs.data
+            let b = rhs.data
             switch self {
             case .alphabetical:
                 return a.primaryLabel.localizedCaseInsensitiveCompare(b.primaryLabel) == .orderedAscending
@@ -195,6 +195,6 @@ public extension SidebarSortMode {
             case .sessionName:
                 return a.sessionName.localizedCaseInsensitiveCompare(b.sessionName) == .orderedAscending
             }
-        }
+        }.map(\.item)
     }
 }

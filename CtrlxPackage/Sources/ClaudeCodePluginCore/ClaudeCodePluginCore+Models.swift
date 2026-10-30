@@ -5,13 +5,17 @@ import Dependencies
 import Foundation
 
 extension ClaudeCodePluginCore: AgentModelProviding {
+    public nonisolated var modelDiscoveryCommand: String? {
+        "claude"
+    }
+
     public nonisolated var modelComposer: AgentWorkflowComposer {
         workflowComposer
     }
 
     public nonisolated func modelRuntimeIssue(_ context: AgentModelContext) -> String? {
-        guard context.invocation.version == "2.1.310 (Claude Code)" else {
-            return "Model shortcuts require a verified Claude Code version (2.1.310)."
+        guard let version = context.discoveryVersion, version.hasSuffix(" (Claude Code)") else {
+            return "The model discovery CLI could not be identified as Claude Code. Use /model in this terminal."
         }
         if let effort = context.environment["CLAUDE_CODE_EFFORT_LEVEL"], !effort.isEmpty, effort != "auto" {
             return "CLAUDE_CODE_EFFORT_LEVEL fixes this session's effort. Use Claude Code's native controls."
@@ -23,8 +27,11 @@ extension ClaudeCodePluginCore: AgentModelProviding {
     }
 
     public func modelOptions(_ context: AgentModelContext) async throws -> [AgentModelOption] {
+        if let issue = modelRuntimeIssue(context) {
+            throw AgentModelError(issue)
+        }
         @Dependency(ProcessRunner.self) var runner
-        var args = ["-C", context.directory, context.invocation.executable, "-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--no-session-persistence"]
+        var args = ["-C", context.directory, context.discoveryExecutable, "-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--no-session-persistence"]
         // A metadata-only SDK handshake; no prompt, tools, hooks or conversation.
         let source = context.invocation.arguments
         let selectors = ["--model", "--setting-sources", "--effort"]

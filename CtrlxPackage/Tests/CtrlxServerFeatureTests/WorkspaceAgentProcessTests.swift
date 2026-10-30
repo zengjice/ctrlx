@@ -46,7 +46,7 @@ struct WorkspaceAgentProcessTests {
                 try FileManager.default.removeItem(at: executable)
                 let expected = WorkspaceRecoveryError("The Agent CLI was updated or removed while this session was running. Restart the Agent and resume this conversation.")
                 await #expect(throws: expected) { try await client.invocation(pid, runtime) }
-                await #expect(throws: expected) { try await client.modelContext(pid, runtime, directory.path) }
+                await #expect(throws: AgentModelError.self) { try await client.modelContext(pid, runtime, directory.path, "agent") }
                 #expect(process.isRunning)
             } catch {
                 await stopProcess()

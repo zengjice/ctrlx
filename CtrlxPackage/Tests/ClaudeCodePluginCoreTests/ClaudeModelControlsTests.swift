@@ -7,6 +7,22 @@ import Testing
 @testable import ClaudeCodePluginCore
 
 struct ClaudeModelControlsTests {
+    @Test("Compatible metadata is accepted across CLI updates", arguments: ["2.1.310", "2.1.311", "2.2.0"])
+    func compatibleVersions(version: String) async throws {
+        let context = AgentModelContext(invocation: .init(executable: "/removed/claude", arguments: []), environment: [:], directory: "/fixture", discoveryExecutable: "/updated/claude", discoveryVersion: "\(version) (Claude Code)")
+        #expect(context.invocation.version == nil)
+        #expect(ClaudeCodePluginCore().modelRuntimeIssue(context) == nil)
+        try await withDependencies {
+            $0[ProcessRunner.self].runWithExactEnvironment = { _, args, _, _, _, _ in
+                #expect(args.prefix(3) == ["-C", "/fixture", "/updated/claude"])
+                return .init(exitCode: 0, stdout: Data(#"{"type":"control_response","response":{"response":{"models":[{"value":"sonnet","displayName":"Sonnet","supportedEffortLevels":["high"]}]}}}"#.utf8), stderr: Data())
+            }
+        } operation: {
+            let models = try await ClaudeCodePluginCore().modelOptions(context)
+            #expect(models.map(\.id) == ["sonnet"])
+        }
+    }
+
     @Test(arguments: [
         ["--setting-sources", "project", "--model", "sonnet", "--effort", "high"],
         ["--setting-sources=project", "--model=sonnet", "--effort=high"],

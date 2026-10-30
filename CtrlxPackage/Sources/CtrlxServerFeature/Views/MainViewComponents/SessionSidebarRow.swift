@@ -3,87 +3,33 @@ import CtrlxNetworking
 import SwiftUI
 
 /// A row displaying a tmux session in the sidebar
-struct SessionSidebarRow: View {
-    @Environment(MirrorWindowManager.self) private var windowManager
+struct SessionSidebarRow: View, Equatable {
     @Environment(AppSettings.self) private var settings
+    let data: SessionSidebarData
 
-    let session: LocalTmuxSession
-
-    /// Progress state for this session. Real terminal progress from any pane
-    /// wins; a working agent supplies an indeterminate fallback only when no
-    /// pane has real progress. Mac viewer and iOS use the same shared rule.
-    /// Recomputed on each render — observation tracks `windowManager.paneStates`
-    /// and re-renders this row only when the lookup result actually changes.
-    private var sessionProgress: TerminalProgressState? {
-        session.windows
-            .flatMap(\.panes)
-            .compactMap { windowManager.paneStates[$0.paneId] }
-            .effectiveProgress
-    }
-
-    /// The active window (or first)
-    private var activeWindow: LocalTmuxWindow? {
-        session.activeWindow
-    }
-
-    /// The primary pane to show info for (active pane or first pane in active window)
-    private var primaryPane: PaneInfo? {
-        activeWindow?.activePane
-    }
-
-    private var primaryPaneState: PaneState? {
-        guard let pane = primaryPane else { return nil }
-        return windowManager.paneStates[pane.paneId]
-    }
-
-    private var activeWindowMetadata: ActiveWindowMetadata {
-        session.activeWindowMetadata(paneStates: windowManager.paneStates)
-    }
-
-    /// The highest-priority agent pane across all windows. Also
-    /// the source of its OTEL telemetry / permission mode (#597).
-    private var primaryAgentPaneState: PaneState? {
-        session.windows.flatMap(\.panes)
-            .compactMap { windowManager.paneStates[$0.paneId] }
-            .representativeAgentPane
-    }
-
-    /// The agent whose state represents this session.
-    private var claudeSession: AgentSession? {
-        primaryAgentPaneState?.agentSession
-    }
-
-    /// CLI-driven state override, if any pane in the session has one set.
-    private var cliSessionState: CLISessionState? {
-        for window in session.windows {
-            for pane in window.panes {
-                if let state = windowManager.paneStates[pane.paneId]?.cliSessionState {
-                    return state
-                }
-            }
-        }
-        return nil
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.data == rhs.data
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             SessionStatusBadge(
-                cliSessionState: cliSessionState,
-                claudeSession: claudeSession,
-                customEmoji: primaryPaneState?.customEmoji
+                cliSessionState: data.cliState,
+                claudeSession: data.agent,
+                customEmoji: data.customEmoji
             )
 
             VStack(alignment: .leading, spacing: 2) {
                 SessionFieldsView(
-                    fields: claudeSession != nil ? settings.sidebarFields : settings.sidebarTerminalFields,
-                    customDescription: primaryPaneState?.customDescription,
-                    projectName: claudeSession?.displayName,
-                    sessionName: session.sessionName,
-                    windowName: activeWindowMetadata.windowName,
-                    terminalTitle: activeWindowMetadata.terminalTitle,
-                    command: activeWindowMetadata.command,
-                    currentPath: activeWindowMetadata.currentPath,
-                    gitBranch: activeWindowMetadata.gitBranch,
+                    fields: data.agent != nil ? settings.sidebarFields : settings.sidebarTerminalFields,
+                    customDescription: data.customDescription,
+                    projectName: data.agent?.displayName,
+                    sessionName: data.sessionName,
+                    windowName: data.metadata.windowName,
+                    terminalTitle: data.metadata.terminalTitle,
+                    command: data.metadata.command,
+                    currentPath: data.metadata.currentPath,
+                    gitBranch: data.metadata.gitBranch,
                     // The plugin model dropped the per-event buffer (spec §16),
                     // so there's no "latest event" subtitle to surface.
                     latestEvent: nil,
@@ -97,8 +43,8 @@ struct SessionSidebarRow: View {
                 // default.
                 if settings.sidebarFields.contains(.tokenUsage) {
                     SessionTelemetrySummary(
-                        telemetry: primaryAgentPaneState?.telemetry,
-                        permissionMode: primaryAgentPaneState?.permissionMode
+                        telemetry: data.telemetry,
+                        permissionMode: data.permissionMode
                     )
                 }
             }
@@ -109,21 +55,21 @@ struct SessionSidebarRow: View {
         // regardless of which sidebar fields are configured (session name may not appear as
         // visible Text). Also expose status since ProgressView (working state) prevents AX
         // from reading .accessibilityValue directly on the indicator.
-        .accessibilityValue(session.sessionName)
+        .accessibilityValue(data.sessionName)
         .overlay {
             SessionAccessibilityOverlay(
-                status: cliSessionState?.statusLabel ?? claudeSession?.statusLabel,
-                projectName: claudeSession?.displayName
+                status: data.cliState?.statusLabel ?? data.agent?.statusLabel,
+                projectName: data.agent?.displayName
             )
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .overlay(alignment: .leading) {
-            SessionColorBar(color: primaryPaneState?.customColor)
+            SessionColorBar(color: data.customColor)
                 .padding(.leading, -16)
         }
         .overlay(alignment: .bottom) {
-            if let sessionProgress {
+            if let sessionProgress = data.progress {
                 TerminalProgressBar(state: sessionProgress)
                     .padding(.bottom, -4)
             }
@@ -334,7 +280,7 @@ struct SessionSidebarRow: View {
             Group {
                 if let windowManager {
                     List(previewSidebarVariants.map(\.session)) { session in
-                        SessionSidebarRow(session: session)
+                        SessionSidebarRow(data: .init(session: session, paneStates: windowManager.paneStates, includeTelemetry: true)).equatable()
                     }
                     .listStyle(.sidebar)
                     .environment(windowManager)

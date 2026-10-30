@@ -6,11 +6,16 @@ public struct AgentModelContext: Sendable {
     public let invocation: AgentResumeInvocation
     public let environment: [String: String]
     public let directory: String
+    /// Metadata can come from an updated CLI while input still targets the original process.
+    public let discoveryExecutable: String
+    public let discoveryVersion: String?
 
-    public init(invocation: AgentResumeInvocation, environment: [String: String], directory: String) {
+    public init(invocation: AgentResumeInvocation, environment: [String: String], directory: String, discoveryExecutable: String? = nil, discoveryVersion: String? = nil) {
         self.invocation = invocation
         self.environment = environment
         self.directory = directory
+        self.discoveryExecutable = discoveryExecutable ?? invocation.executable
+        self.discoveryVersion = discoveryVersion ?? invocation.version
     }
 }
 
@@ -48,6 +53,8 @@ public struct AgentModelTerminal: Sendable {
 
 /// Optional capability; sidecars and older native CLIs need not implement it.
 public protocol AgentModelProviding: PluginCore {
+    /// Installed metadata command for an already identified Agent process.
+    nonisolated var modelDiscoveryCommand: String? { get }
     nonisolated var modelComposer: AgentWorkflowComposer { get }
     nonisolated func modelRuntimeIssue(_ context: AgentModelContext) -> String?
     func modelOptions(_ context: AgentModelContext) async throws -> [AgentModelOption]
@@ -58,6 +65,10 @@ public protocol AgentModelProviding: PluginCore {
 }
 
 public extension AgentModelProviding {
+    nonisolated var modelDiscoveryCommand: String? {
+        nil
+    }
+
     nonisolated func modelSwitchIssue(lines _: [String], models _: [AgentModelOption]) -> String? {
         nil
     }

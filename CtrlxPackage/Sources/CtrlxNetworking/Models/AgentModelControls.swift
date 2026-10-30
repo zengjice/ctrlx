@@ -31,12 +31,14 @@ public struct AgentModelSnapshot: Codable, Equatable, Sendable {
     public let models: [AgentModelOption]
     public let selection: AgentModelSelection?
     public let unavailableReason: String?
+    public let catalogWarning: String?
 
-    public init(runtimeID: String, models: [AgentModelOption], selection: AgentModelSelection?, unavailableReason: String?) {
+    public init(runtimeID: String, models: [AgentModelOption], selection: AgentModelSelection?, unavailableReason: String?, catalogWarning: String? = nil) {
         self.runtimeID = runtimeID
         self.models = models
         self.selection = selection
         self.unavailableReason = unavailableReason
+        self.catalogWarning = catalogWarning
     }
 }
 

@@ -188,12 +188,7 @@ struct RemoteHostSidebarSection: View {
 
     @ViewBuilder
     private func remoteSessionButton(_ session: TmuxSession) -> some View {
-        let claudePane = session.agentPane
-        // See `sessionButton` — when the row gains a "Working" indicator the
-        // merged button becomes `AXBusyIndicator` and swallows the bar's
-        // separate accessibility element. Mirror the bar AX info on a sibling
-        // outside the Button label so `valueContains` queries keep working.
-        let sessionProgress = session.windows.flatMap(\.panes).effectiveProgress
+        let data = SessionSidebarData(session: session)
 
         Button {
             #if os(macOS)
@@ -207,14 +202,13 @@ struct RemoteHostSidebarSection: View {
             #endif
         } label: {
             RemoteSessionSidebarRow(
-                session: session,
-                claudeSession: claudePane?.agentSession,
+                data: data,
                 homeDirectory: sessionStore.homeDirectoryByHost[host.id]
-            )
+            ).equatable()
         }
         .buttonStyle(.plain)
         .accessibilityChildren {
-            SessionProgressAccessibilityProxy(progress: sessionProgress)
+            SessionProgressAccessibilityProxy(progress: data.progress)
         }
         .modifier(SessionWorktreeStatusModifier(
             repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [],
@@ -222,8 +216,8 @@ struct RemoteHostSidebarSection: View {
         ))
         .modifier(DescriptionEditingModifier(
             sessionName: session.sessionName,
-            currentDescription: session.customDescription,
-            currentEmoji: session.customEmoji,
+            currentDescription: data.customDescription,
+            currentEmoji: data.customEmoji,
             isDisabled: connection?.isHostConnected != true,
             renameRequest: Binding(
                 get: { sessionRenameRequest == session.sessionName },
@@ -245,15 +239,15 @@ struct RemoteHostSidebarSection: View {
                 .disabled(connection?.isHostConnected != true)
                 Divider()
                 ColorContextMenuButtons(
-                    currentColor: session.customColor,
+                    currentColor: data.customColor,
                     isDisabled: connection?.isHostConnected != true
                 ) { newColor in
                     onSetColor(session.sessionName, newColor)
                 }
 
                 StateContextMenuButtons(
-                    currentState: session.displayedState,
-                    hasOverride: session.cliSessionState != nil,
+                    currentState: data.displayedState,
+                    hasOverride: data.cliState != nil,
                     isDisabled: connection?.isHostConnected != true
                 ) { newState in
                     onSetState(session.sessionName, newState)
@@ -261,10 +255,10 @@ struct RemoteHostSidebarSection: View {
 
                 Divider()
 
-                if let claudePane {
+                if let agentPaneID = data.agentPaneID {
                     Toggle(isOn: Binding(
-                        get: { sessionStore.isYoloModeEnabled(paneId: claudePane.paneId, hostId: host.id) },
-                        set: { onToggleYolo(claudePane.paneId, $0) }
+                        get: { sessionStore.isYoloModeEnabled(paneId: agentPaneID, hostId: host.id) },
+                        set: { onToggleYolo(agentPaneID, $0) }
                     )) {
                         Label("Yolo Mode", symbol: .bolt)
                     }

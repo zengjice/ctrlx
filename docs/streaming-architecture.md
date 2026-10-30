@@ -166,7 +166,7 @@ session names are recorded.
   and command/snapshot boundaries.
 - `outputCallback`: synchronous output callback execution time, including local
   subscriber dispatch, separately from actor scheduling wait.
-- `windowGrouping` and `sessionGrouping`: getter calls, total and maximum grouping
+- `windowGrouping` and `sessionGrouping`: cache-miss grouping calls, total and maximum grouping
   durations. Session timing excludes its preceding window grouping to avoid
   counting the same work twice. All timing fields use `count/total us/max us`.
 

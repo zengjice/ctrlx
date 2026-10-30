@@ -134,10 +134,12 @@ Restore Defaults never changes the Agent's model.
 The optional `AgentModelProviding` plugin capability owns discovery, native input
 and confirmation. Codex CLI compatibility is checked by querying and decoding
 its `debug models` catalog, rather than requiring an exact CLI release number.
-Unknown version output, failed discovery and incompatible catalogs report distinct
-reasons; discovery errors include the detected CLI version. Isolated native
+Unknown discovery-CLI identity, failed discovery and incompatible catalogs report distinct
+reasons; discovery errors include the metadata helper's version. Isolated native
 checks cover catalog discovery and session-only model/effort switching in Codex CLI
-0.164.0 and 0.165.0. Claude Code's verified adapter is 2.1.310.
+0.164.0 and 0.165.0. Claude Code's native adapter was verified on 2.1.310;
+other versions must provide compatible metadata and recognized native picker,
+effort and session-only confirmation controls rather than match that exact version.
 Codex reads `debug models` with the running process's configuration;
 Claude performs a metadata-only SDK initialize handshake with no prompt, tools,
 hooks or persisted conversation. Claude preserves both `--flag value` and
@@ -145,20 +147,38 @@ hooks or persisted conversation. Claude preserves both `--flag value` and
 an empty setting-source value. Both use the exact target process environment
 and directory; secrets stay on the Host. A Codex `--profile` launch currently
 requires native `/model` instead. If a CLI update removes the executable of a
-still-running Agent, model shortcuts explain that restarting the Agent and resuming
-the conversation restores integration. The running conversation is not interrupted.
+still-running Agent, model discovery reads the original startup information from
+the kernel. It uses an available original launch path or the same CLI found in
+that process's PATH, with the original configuration selectors, environment and directory.
+The metadata helper's executable/version are separate from the running invocation;
+its version is never assigned to the old process. Process-instance checks remain
+in force before and after discovery. Failed refreshes retain a valid catalog
+for the same process with a nonblocking warning, cleared by a successful refresh.
+A missing/incompatible helper recommends native `/model` without requiring a
+conversation restart. Recovery launch recording retains its separate executable checks.
 Claude sessions with a forced
-`CLAUDE_CODE_EFFORT_LEVEL` or custom `--settings` also use their native controls. Unsupported versions
+`CLAUDE_CODE_EFFORT_LEVEL` or custom `--settings` also use their native controls. Unsupported interfaces
 show a reason rather than inventing a model list.
 
 Visible strips refresh current state every three seconds; **Refresh Models**
 reloads the capability catalog. Host and Viewer reads for the same pane share
 in-flight work, and ordinary polling reuses the short-lived process snapshot.
+Switching tabs displays the cached buttons immediately and waits at least 300 ms
+before reading, so tabs passed through briefly do not start discovery. A successful
+client read remains fresh for three seconds; returning to that pane waits only
+the remaining interval, without extending freshness. Occluded and minimized native
+windows pause polling; visible split columns keep polling regardless of keyboard
+focus. System process-tree parsing runs on the concurrent executor rather than
+the main actor.
 Catalogs (including unsupported-runtime reasons) are cached per running Agent;
 a later terminal-read failure does not discard a discovered catalog. Actual
 model changes still require fresh process detection and all input checks.
 The client retains the last confirmed buttons during refresh and transient errors,
-including when returning to a tab, but rechecks before enabling changes. Failures
+including when returning to a tab. Ordinary polls update only changed display
+state, without disabling buttons or showing progress. Initial discovery and manual
+catalog refresh still show progress. A click during an ordinary poll waits for the
+Host's read to finish, then performs fresh write validation; cached display data
+never bypasses process, pane, input or expected-selection checks. Failures
 show their reason in the strip/popover and retry after 15 seconds; manual refresh
 remains available. A replacement pane or plugin cannot inherit another target's
 confirmed state. Debug Mode logs identification, catalog, terminal and Viewer

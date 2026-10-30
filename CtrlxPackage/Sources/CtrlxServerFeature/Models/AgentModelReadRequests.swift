@@ -14,6 +14,19 @@ final class AgentModelReadRequests {
 
     private var pending: [String: Pending] = [:]
 
+    /// A click can arrive during a silent poll. Finish that read before fresh write validation.
+    func waitForRead(paneID: String, identity: WorkspacePaneIdentity) async throws {
+        while let current = pending[paneID] {
+            guard current.identity.isSamePane(as: identity) else { throw AgentModelError("The terminal changed. Reopen its model controls.") }
+            _ = await current.task.result
+            if pending[paneID]?.id == current.id {
+                pending[paneID] = nil
+            }
+            try Task.checkCancellation()
+        }
+        try Task.checkCancellation()
+    }
+
     func read(
         paneID: String, identity: WorkspacePaneIdentity, refresh: Bool,
         operation: @escaping @MainActor () async throws -> AgentModelSnapshot

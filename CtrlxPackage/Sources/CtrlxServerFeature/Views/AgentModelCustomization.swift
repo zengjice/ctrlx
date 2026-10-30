@@ -29,6 +29,10 @@ struct AgentModelCustomization: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    if let warning = snapshot?.catalogWarning {
+                        Text(warning).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if let unavailableReason {
                         Text(unavailableReason).font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)

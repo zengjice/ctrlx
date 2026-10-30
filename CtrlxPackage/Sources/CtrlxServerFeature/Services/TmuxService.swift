@@ -395,7 +395,15 @@ final public class TmuxService {
     private var socketPath: String?
 
     /// Current list of available panes (updated by refreshPanes)
-    public private(set) var panes: [PaneInfo] = []
+    public private(set) var panes: [PaneInfo] = [] {
+        didSet {
+            cachedWindows = nil
+            cachedSessions = nil
+        }
+    }
+
+    @ObservationIgnored private var cachedWindows: [LocalTmuxWindow]?
+    @ObservationIgnored private var cachedSessions: [LocalTmuxSession]?
 
     // Host-wide deduplication: local and remote Macs share the same opener.
     @ObservationIgnored var codexQuestionStates: [String: CodexQuestionExpansionState] = [:]
@@ -404,24 +412,61 @@ final public class TmuxService {
 
     /// Panes grouped by tmux window (derived from panes)
     public var windows: [LocalTmuxWindow] {
+        let panes = panes
+        if let cachedWindows {
+            return cachedWindows
+        }
         let sample = HostPerformanceMetrics.shared.begin()
         defer { HostPerformanceMetrics.shared.record(.windowGrouping, since: sample) }
-        return LocalTmuxWindow.groupPanes(panes)
+        let result = LocalTmuxWindow.groupPanes(panes)
+        cachedWindows = result
+        return result
     }
 
     /// Windows grouped by tmux session (derived from windows)
-    public var resourceSessions: [ResourceSession] = []
+    public var resourceSessions: [ResourceSession] = [] {
+        didSet {
+            if oldValue != resourceSessions {
+                cachedSessions = nil
+            }
+        }
+    }
 
     public var sessions: [LocalTmuxSession] {
+        // Cache hits must retain observation of both source collections.
+        _ = panes
+        let resources = resourceSessions
+        if let cachedSessions {
+            return cachedSessions
+        }
         let windows = windows
         let sample = HostPerformanceMetrics.shared.begin()
         defer { HostPerformanceMetrics.shared.record(.sessionGrouping, since: sample) }
-        return LocalTmuxSession.groupWindows(windows, resources: resourceSessions)
+        let result = LocalTmuxSession.groupWindows(windows, resources: resources)
+        cachedSessions = result
+        return result
+    }
+
+    func session(named name: String) -> LocalTmuxSession? {
+        let panes = panes
+        let resources = resourceSessions
+        if let cachedSessions {
+            return cachedSessions.first { $0.sessionName == name }
+        }
+        let selected = panes.filter { $0.sessionName == name }
+        return LocalTmuxSession.groupWindows(
+            LocalTmuxWindow.groupPanes(selected), resources: resources.filter { $0.name == name }
+        ).first
     }
 
     /// Selection-only lookups do not need to construct every window and session.
     func containsSession(named name: String) -> Bool {
-        panes.contains { $0.sessionName == name } || resourceSessions.contains { $0.name == name }
+        let panes = panes
+        let resources = resourceSessions
+        if let cachedSessions {
+            return cachedSessions.contains { $0.sessionName == name }
+        }
+        return panes.contains { $0.sessionName == name } || resources.contains { $0.name == name }
     }
 
     /// Handler called when the pane list changes (after refreshPanes detects a change)
@@ -3141,6 +3186,12 @@ final public class TmuxService {
         private let childrenOf: [String: [String]]
         private let names: [String: String]
 
+        @concurrent
+        static func parse(psOutput: String) async throws -> Self {
+            try Task.checkCancellation()
+            return Self(psOutput: psOutput)
+        }
+
         init(psOutput: String) {
             var children: [String: [String]] = [:]
             var processNames: [String: String] = [:]
@@ -3206,7 +3257,7 @@ final public class TmuxService {
             timeout: 5
         )
         guard psResult.isSuccess else { return nil }
-        return ProcessTree(psOutput: psResult.stdoutString)
+        return try await ProcessTree.parse(psOutput: psResult.stdoutString)
     }
 
     /// Detects running processes across all panes of a tmux session.

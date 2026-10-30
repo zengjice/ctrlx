@@ -6,6 +6,7 @@ import SwiftUI
 struct AgentModelStatusBar: View {
     let hostID: String?
     let paneID: String
+    let isVisible: Bool
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(AppSettings.self) private var settings
@@ -15,6 +16,8 @@ struct AgentModelStatusBar: View {
     @State private var refreshing = false
     @State private var confirmed = false
     @State private var showsCustomization = false
+    @State private var refreshGeneration = 0
+    @State private var reads = AgentModelReadRequests()
 
     private var displayKey: AgentModelDisplayCache.Key? {
         guard let identity = pane?.workspaceIdentity, let pluginID = pane?.agentSession?.pluginID else { return nil }
@@ -70,16 +73,16 @@ struct AgentModelStatusBar: View {
                 AgentModelChoices(snapshot: snapshot, hidden: hidden, unavailableReason: unavailableReason, change: change, hide: { model, effort in hide(model: model, effort: effort) })
                     .disabled(refreshing)
             } else {
-                Text(error ?? snapshot?.unavailableReason ?? (refreshing ? "Reading models…" : "Model shortcuts unavailable"))
+                Text(error ?? snapshot?.unavailableReason ?? (snapshot == nil ? "Reading models…" : "Model shortcuts unavailable"))
                     .font(.caption).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .help(error ?? "Identify the Agent in the selected pane to show its models.")
             }
             if refreshing {
                 ProgressView().controlSize(.mini).help("Refreshing models")
-            } else if error != nil, snapshot?.models.isEmpty == false {
+            } else if let warning = error ?? snapshot?.catalogWarning, snapshot?.models.isEmpty == false {
                 Symbols.exclamationmarkTriangle.image
-                    .foregroundStyle(.secondary).help(error ?? "")
+                    .foregroundStyle(.secondary).help(warning)
             }
             Button { showsCustomization = true } label: {
                 Symbols.ellipsisCircle.image
@@ -108,10 +111,15 @@ struct AgentModelStatusBar: View {
         .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: 32)
         .padding(.horizontal, 8)
-        .task(id: displayKey) {
-            snapshot = displayKey.flatMap { coordinator.agentModelDisplayCache.snapshots[$0] }
+        .task(id: isVisible ? displayKey : nil) {
+            guard isVisible, let key = displayKey else { return }
+            let cache = coordinator.agentModelDisplayCache
+            let cached = cache.entry(for: key)
+            snapshot = cached?.snapshot
             error = nil
-            confirmed = false
+            confirmed = cached != nil
+            do { try await Task.sleep(for: cache.refreshDelay(for: key)) }
+            catch { return }
             while !Task.isCancelled {
                 if !changing {
                     await refresh()
@@ -149,16 +157,35 @@ struct AgentModelStatusBar: View {
     private func refresh(force: Bool = false) async {
         guard !refreshing, !changing, let key = displayKey else { return }
         let identity = key.pane
-        refreshing = true
-        defer { refreshing = false }
+        if force {
+            refreshGeneration += 1
+        }
+        let generation = refreshGeneration
+        let showsProgress = force || snapshot == nil
+        if showsProgress {
+            refreshing = true
+        }
+        defer {
+            if showsProgress {
+                refreshing = false
+            }
+        }
         do {
-            let value = try await request(.init(workspacePane: identity, refresh: force))
+            let value = try await reads.read(paneID: paneID, identity: identity, refresh: force) {
+                try await request(.init(workspacePane: identity, refresh: force))
+            }
             try Task.checkCancellation()
-            guard key == displayKey, !changing else { return }
-            snapshot = value
-            error = nil
-            confirmed = true
-            coordinator.agentModelDisplayCache.snapshots[key] = value
+            guard key == displayKey, generation == refreshGeneration, !changing else { return }
+            if snapshot != value {
+                snapshot = value
+            }
+            if error != nil {
+                error = nil
+            }
+            if !confirmed {
+                confirmed = true
+            }
+            coordinator.agentModelDisplayCache.store(value, for: key)
             let identities: [WorkspacePaneIdentity]
             if let hostID {
                 identities = coordinator.remoteSessionStore?.paneStates.compactMap { key, pane in
@@ -172,7 +199,7 @@ struct AgentModelStatusBar: View {
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled, key == displayKey, !changing else { return }
+            guard !Task.isCancelled, key == displayKey, generation == refreshGeneration, !changing else { return }
             confirmed = false
             self.error = error.localizedDescription
         }
@@ -181,16 +208,19 @@ struct AgentModelStatusBar: View {
     private func change(_ selection: AgentModelSelection) {
         guard !changing, !refreshing, unavailableReason == nil, let key = displayKey, let snapshot else { return }
         let identity = key.pane
+        refreshGeneration += 1
         changing = true
         error = nil
         Task {
             defer { changing = false }
             do {
+                // Also wait for this client's response when connected to an older Host.
+                try await reads.waitForRead(paneID: paneID, identity: identity)
                 let value = try await request(.init(workspacePane: identity, runtimeID: snapshot.runtimeID, selection: selection, expectedSelection: snapshot.selection))
                 guard key == displayKey else { return }
                 self.snapshot = value
                 confirmed = true
-                coordinator.agentModelDisplayCache.snapshots[key] = value
+                coordinator.agentModelDisplayCache.store(value, for: key)
             } catch {
                 guard key == displayKey else { return }
                 confirmed = false

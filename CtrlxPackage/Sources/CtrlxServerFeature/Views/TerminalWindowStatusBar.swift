@@ -16,6 +16,7 @@ struct TerminalWindowStatusBar: View {
     @Environment(AppSettings.self) private var settings
     @Environment(\.terminalQuickActions) private var router
     @State private var voiceSession = TerminalVoiceInputSession()
+    @State private var isVisible = false
 
     static func modelTarget(
         hostID: String?, paneIDs: [String], activePaneID: String?,
@@ -35,7 +36,7 @@ struct TerminalWindowStatusBar: View {
         HStack(spacing: 0) {
             TerminalQuickActionStatusBarButtons(hostID: hostID, paneIDs: paneIDs, voiceSession: voiceSession)
             if let target = Self.modelTarget(hostID: hostID, paneIDs: paneIDs, activePaneID: activePaneID, focused: router?.active) {
-                AgentModelStatusBar(hostID: hostID, paneID: target.paneId)
+                AgentModelStatusBar(hostID: hostID, paneID: target.paneId, isVisible: isVisible)
                     .id(target)
             } else {
                 Spacer(minLength: 0)
@@ -79,6 +80,7 @@ struct TerminalWindowStatusBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(settings.theme.chromeBackgroundColor)
+        .background(AgentModelVisibility(isVisible: $isVisible))
         .anchorPreference(key: WorkbenchTabSwipeExclusionKey.self, value: .bounds) { [$0] }
         .modifier(MacVoiceInputOverlay(session: voiceSession))
     }

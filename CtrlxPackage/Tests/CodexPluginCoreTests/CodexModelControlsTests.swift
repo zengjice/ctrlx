@@ -7,6 +7,19 @@ import Testing
 @testable import CodexPluginCore
 
 struct CodexModelControlsTests {
+    @Test("Discovery can use a replacement CLI without assigning its version to the live process")
+    func replacementDiscovery() async throws {
+        let context = AgentModelContext(invocation: .init(executable: "/removed/codex", arguments: []), environment: [:], directory: "/fixture", discoveryExecutable: "/updated/codex", discoveryVersion: "codex-cli 0.999.0")
+        #expect(context.invocation.version == nil)
+        #expect(CodexPluginCore().modelRuntimeIssue(context) == nil)
+        try await withDependencies {
+            $0[ProcessRunner.self].runWithExactEnvironment = { _, args, _, _, _, _ in
+                #expect(args.prefix(3) == ["-C", "/fixture", "/updated/codex"])
+                return .init(exitCode: 0, stdout: Data(#"{"models":[{"slug":"test-model","display_name":"Test Model","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]}]}"#.utf8), stderr: Data())
+            }
+        } operation: { _ = try await CodexPluginCore().modelOptions(context) }
+    }
+
     private func context(version: String?) -> AgentModelContext {
         .init(invocation: .init(executable: "/fixture/codex", arguments: [], version: version), environment: [:], directory: "/fixture/project")
     }

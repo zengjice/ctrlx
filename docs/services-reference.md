@@ -115,8 +115,16 @@ See [Host-backed Files tabs](file-browser.md) for capabilities, bounds and tests
 Selection-only lookups use `containsSession(named:)` against panes and resource-only
 sessions rather than constructing the full grouped session list. Main-window
 diagnostic context reads the current tab state once per view evaluation. Complete
-`windows`/`sessions` getters still derive current values; their Debug Mode counts
-and costs are described in [Host scheduling diagnostics](streaming-architecture.md#host-scheduling-diagnostics).
+`windows`/`sessions` grouping is cached until pane metadata changes; resource-session
+changes invalidate session grouping. Cached reads still observe the source collections.
+`session(named:)` uses the cached list or groups only the requested session, including
+resource-only sessions. Debug Mode counts actual grouping work, described in
+[Host scheduling diagnostics](streaming-architecture.md#host-scheduling-diagnostics).
+
+Mac sidebar sorting computes each session's keys once per sort. Local and remote
+rows receive comparable display snapshots; status, progress and menu values share
+one aggregation. Unchanged rows skip display updates while theme and configured
+field changes remain observed by SwiftUI.
 
 **Modified arrows:** Mac Host and Viewer share `InteractiveTerminalView`. The
 SwiftTerm fork encodes Shift+arrows as legacy `ESC [ 1 ; modifier A/B/C/D`
@@ -1422,6 +1430,8 @@ shared by Mac Viewer and iOS, not an iOS-only `RelayClient`.
 - Applies session snapshots and agent-state updates; disconnect handling clears
   Host-specific live state/capabilities.
 - Keeps last-turn summaries through the handled-state transition.
+- Caches grouped windows/sessions per Host until pane or resource data is assigned.
+  Cached getters retain observation; targeted session lookups never cross Host IDs.
 
 The platform UI owns selection and viewport state; this shared store does not
 make every Viewer layout or tab selection global.

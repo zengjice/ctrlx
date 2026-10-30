@@ -1098,7 +1098,7 @@ public struct MainView: View {
             guard let selection, selection != sidebarSessionSelection.wrappedValue else { return }
             switch selection {
             case let .local(name):
-                guard let session = tmuxService.sessions.first(where: { $0.sessionName == name }) else { return }
+                guard let session = tmuxService.session(named: name) else { return }
                 selectLocalSession(session)
             case let .remote(hostID, name):
                 guard let host = settings.pairedHosts.first(where: { $0.id == hostID }) else { return }
@@ -1169,7 +1169,7 @@ public struct MainView: View {
     /// way.
     private func currentLocalSession() -> LocalTmuxSession? {
         guard let name = currentLocalSessionName else { return nil }
-        return tmuxService.sessions.first { $0.sessionName == name }
+        return tmuxService.session(named: name)
     }
 
     private var currentLocalSessionName: String? {
@@ -1195,7 +1195,7 @@ public struct MainView: View {
     /// Computes the primary sidebar label for a remote session using the same logic as `RemoteHostSidebarSection.sortedSessions`.
     private func remoteSessionPrimaryLabel(hostId: String, sessionName: String) -> String? {
         guard let sessionStore = coordinator.remoteSessionStore else { return nil }
-        guard let session = sessionStore.sessions(for: hostId).first(where: { $0.sessionName == sessionName }) else {
+        guard let session = sessionStore.session(named: sessionName, hostId: hostId) else {
             return nil
         }
         return SessionSortData.forRemoteSession(
@@ -1338,33 +1338,7 @@ public struct MainView: View {
 
     private func sessionButton(session: LocalTmuxSession, help: String? = nil) -> some View {
         let activeWindow = session.activeWindow
-        let description = activeWindow?.activePane.flatMap { windowManager.paneStates[$0.paneId]?.customDescription }
-        let color = activeWindow?.activePane.flatMap { windowManager.paneStates[$0.paneId]?.customColor }
-        let emoji = activeWindow?.activePane.flatMap { windowManager.paneStates[$0.paneId]?.customEmoji }
-        let claudePane = session.windows.flatMap(\.panes)
-            .compactMap { windowManager.paneStates[$0.paneId] }
-            .representativeAgentPane
-        // Current sidebar state for the "Set State" menu: the manual override
-        // (if any pane has one) wins, else the agent's own state. Matches how
-        // `SessionSidebarRow` picks the indicator across the session's panes.
-        let stateOverride = session.windows.lazy.flatMap(\.panes)
-            .compactMap { windowManager.paneStates[$0.paneId]?.cliSessionState }
-            .first
-        let displayedState = CLISessionState.displayed(
-            override: stateOverride,
-            agentState: claudePane?.agentSession?.state
-        )
-        // Compute effective progress here (and not just inside the row) so we can expose
-        // a sibling AX element OUTSIDE the Button label below — when the row
-        // shows a "Working" indicator, SwiftUI flips the merged button to
-        // `AXBusyIndicator` and absorbs the inner `TerminalProgressBar`'s
-        // separate accessibility element, dropping its `accessibilityValue`.
-        // The outer mirror keeps `valueContains("60%")` queries working.
-        let sessionProgress: TerminalProgressState? = session.windows
-            .flatMap(\.panes)
-            .compactMap { windowManager.paneStates[$0.paneId] }
-            .effectiveProgress
-
+        let data = SessionSidebarData(session: session, paneStates: windowManager.paneStates, includeTelemetry: settings.sidebarFields.contains(.tokenUsage))
         return Button {
             if NSApp.currentEvent?.clickCount == 2 {
                 localSessionRenameRequest = session.sessionName
@@ -1372,7 +1346,7 @@ public struct MainView: View {
                 selectLocalSession(session)
             }
         } label: {
-            SessionSidebarRow(session: session)
+            SessionSidebarRow(data: data).equatable()
         }
         .id(session.sessionName)
         .buttonStyle(.plain)
@@ -1384,7 +1358,7 @@ public struct MainView: View {
             // string `accessibilityValue`. The proxy injects an AX-only child
             // that sits outside that merge so e2e queries (and VoiceOver) can
             // read `Terminal progress` + `60%` regardless of working status.
-            SessionProgressAccessibilityProxy(progress: sessionProgress)
+            SessionProgressAccessibilityProxy(progress: data.progress)
         }
         .modifier(SessionWorktreeStatusModifier(
             repositories: windowManager.worktreeRepositories,
@@ -1392,8 +1366,8 @@ public struct MainView: View {
         ))
         .modifier(DescriptionEditingModifier(
             sessionName: session.sessionName,
-            currentDescription: description,
-            currentEmoji: emoji,
+            currentDescription: data.customDescription,
+            currentEmoji: data.customEmoji,
             renameRequest: Binding(
                 get: { localSessionRenameRequest == session.sessionName },
                 set: { requested in
@@ -1438,7 +1412,7 @@ public struct MainView: View {
                     Label("Open in New Window", symbol: .macwindow)
                 }
                 Divider()
-                ColorContextMenuButtons(currentColor: color) { newColor in
+                ColorContextMenuButtons(currentColor: data.customColor) { newColor in
                     guard let identity = session.windows.first?.panes.first?.workspaceIdentity else {
                         attachError = "The terminal is still being discovered. Try again in a moment."
                         return
@@ -1453,8 +1427,8 @@ public struct MainView: View {
                 }
 
                 StateContextMenuButtons(
-                    currentState: displayedState,
-                    hasOverride: stateOverride != nil
+                    currentState: data.displayedState,
+                    hasOverride: data.cliState != nil
                 ) { newState in
                     guard
                         let identity = session.windows.first?.panes.first?.workspaceIdentity,
@@ -1471,8 +1445,8 @@ public struct MainView: View {
 
                 Divider()
 
-                if let claudePane {
-                    Toggle(isOn: localYoloModeBinding(for: claudePane.paneId)) {
+                if let agentPaneID = data.agentPaneID {
+                    Toggle(isOn: localYoloModeBinding(for: agentPaneID)) {
                         Label("Yolo Mode", symbol: .bolt)
                     }
 
@@ -1491,9 +1465,9 @@ public struct MainView: View {
 
                 Divider()
 
-                if let claudePane {
+                if let agentPaneID = data.agentPaneID {
                     Button {
-                        sessionInfoSheet = SessionInfoSheetTarget(id: claudePane.paneId)
+                        sessionInfoSheet = SessionInfoSheetTarget(id: agentPaneID)
                     } label: {
                         Label("Session Info", symbol: .infoCircle)
                     }
@@ -2558,7 +2532,7 @@ public struct MainView: View {
                         handleTerminalURLClick(
                             url,
                             directoryPath: directoryPath,
-                            session: tmuxService.sessions.first(where: { $0.sessionName == sessionName }),
+                            session: tmuxService.session(named: sessionName),
                             window: window,
                             paneID: paneID,
                             behaviorOverride: behavior
@@ -3267,7 +3241,7 @@ public struct MainView: View {
             selectedWindow == nil, selectedRemoteSession == nil, newSessionPaneIds.count == 1,
             let newPaneId = newSessionPaneIds.first,
             let containingWindow = tmuxService.windows.first(where: { $0.panes.contains { $0.paneId == newPaneId } }),
-            let session = tmuxService.sessions.first(where: { $0.sessionName == containingWindow.sessionName }) {
+            let session = tmuxService.session(named: containingWindow.sessionName) {
             // Nothing selected and a single new session appeared - auto-select its
             // tmux-active window, mirroring the sidebar-click behavior. Selecting the
             // window that merely *contains* the agent pane would show the wrong window
@@ -3615,7 +3589,7 @@ public struct MainView: View {
                 selectRemoteSession(.init(hostId: hostID, hostName: settings.pairedHosts.first { $0.id == hostID }?.displayName ?? hostID, sessionName: pane.sessionName))
             }
         } else if selectedRemoteSession != nil || currentLocalSession()?.sessionName != pane.sessionName {
-            guard let session = tmuxService.sessions.first(where: { $0.sessionName == pane.sessionName }) else { return }
+            guard let session = tmuxService.session(named: pane.sessionName) else { return }
             selectLocalSession(session)
         }
         let onRight = currentSessionTabs?.rightSide.contains(.window(pane.stableWindowId)) == true
@@ -4061,7 +4035,7 @@ public struct MainView: View {
                 _ = handleTerminalURLClick(
                     url,
                     directoryPath: pane.currentPath ?? NSHomeDirectory(),
-                    session: tmuxService.sessions.first { $0.sessionName == sessionName },
+                    session: tmuxService.session(named: sessionName),
                     window: window,
                     paneID: paneID,
                     behaviorOverride: nil

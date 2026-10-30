@@ -5,13 +5,17 @@ import Dependencies
 import Foundation
 
 extension CodexPluginCore: AgentModelProviding {
+    public nonisolated var modelDiscoveryCommand: String? {
+        "codex"
+    }
+
     public nonisolated var modelComposer: AgentWorkflowComposer {
         workflowComposer
     }
 
     public nonisolated func modelRuntimeIssue(_ context: AgentModelContext) -> String? {
-        guard let version = context.invocation.version, !version.isEmpty else {
-            return "The Codex CLI version could not be read. Restart the Agent and resume this conversation, or use /model in this terminal."
+        guard let version = context.discoveryVersion, !version.isEmpty else {
+            return "The model discovery CLI version could not be read. Use /model in this terminal."
         }
         guard version.hasPrefix("codex-cli "), version != "codex-cli " else {
             return "Unrecognized Codex CLI version (\(version)). Use /model in this terminal."
@@ -24,7 +28,7 @@ extension CodexPluginCore: AgentModelProviding {
             throw AgentModelError(issue)
         }
         @Dependency(ProcessRunner.self) var runner
-        var args = ["-C", context.directory, context.invocation.executable, "debug", "models"]
+        var args = ["-C", context.directory, context.discoveryExecutable, "debug", "models"]
         // Copy configuration selectors, never the original prompt/resume action.
         let source = context.invocation.arguments
         var index = 0
@@ -48,15 +52,15 @@ extension CodexPluginCore: AgentModelProviding {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            throw AgentModelError("Codex model discovery failed (\(context.invocation.version ?? "unknown version")). Use /model in this terminal.")
+            throw AgentModelError("Codex model discovery failed (\(context.discoveryVersion ?? "unknown version")). Use /model in this terminal.")
         }
         guard result.isSuccess, !result.outputTruncated else {
-            throw AgentModelError("Codex model discovery failed (\(context.invocation.version ?? "unknown version")). Use /model in this terminal.")
+            throw AgentModelError("Codex model discovery failed (\(context.discoveryVersion ?? "unknown version")). Use /model in this terminal.")
         }
         do {
             return try CodexModelCatalog.parse(result.stdout)
         } catch {
-            throw AgentModelError("Codex returned an incompatible model catalog (\(context.invocation.version ?? "unknown version")). Use /model in this terminal.")
+            throw AgentModelError("Codex returned an incompatible model catalog (\(context.discoveryVersion ?? "unknown version")). Use /model in this terminal.")
         }
     }
 

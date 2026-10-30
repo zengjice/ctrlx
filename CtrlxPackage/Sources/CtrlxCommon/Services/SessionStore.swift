@@ -31,8 +31,19 @@ final public class SessionStore {
 
     /// Per-pane state keyed by `(pairId, paneId)` to disambiguate panes
     /// whose IDs collide across hosts.
-    public private(set) var resourceSessionsByHost: [String: [ResourceSession]] = [:]
-    public private(set) var paneStates: [PaneKey: PaneState] = [:]
+    public private(set) var resourceSessionsByHost: [String: [ResourceSession]] = [:] {
+        didSet { cachedSessionsByHost.removeAll(keepingCapacity: true) }
+    }
+
+    public private(set) var paneStates: [PaneKey: PaneState] = [:] {
+        didSet {
+            cachedWindowsByHost.removeAll(keepingCapacity: true)
+            cachedSessionsByHost.removeAll(keepingCapacity: true)
+        }
+    }
+
+    @ObservationIgnored private var cachedWindowsByHost: [String: [TmuxWindow]] = [:]
+    @ObservationIgnored private var cachedSessionsByHost: [String: [TmuxSession]] = [:]
     public private(set) var workspaceCatalogsByHost: [String: ViewerWorkspaceCatalog] = [:]
     private var lastWorkspaceScopeByHost: [String: WorkspaceIdentityScope] = [:]
 
@@ -147,15 +158,40 @@ final public class SessionStore {
 
     /// Get all pane states for a specific host grouped by tmux window
     public func windows(for hostId: String) -> [TmuxWindow] {
-        let hostPanes = paneStates
+        let states = paneStates
+        if let cached = cachedWindowsByHost[hostId] {
+            return cached
+        }
+        let hostPanes = states
             .filter { $0.key.pairId == hostId }
             .map(\.value)
-        return TmuxWindow.groupPanes(hostPanes)
+        let result = TmuxWindow.groupPanes(hostPanes)
+        cachedWindowsByHost[hostId] = result
+        return result
     }
 
     /// Get all pane states for a specific host grouped by tmux session
     public func sessions(for hostId: String) -> [TmuxSession] {
-        TmuxSession.groupWindows(windows(for: hostId), resources: resourceSessionsByHost[hostId] ?? [])
+        _ = paneStates
+        let resources = resourceSessionsByHost[hostId] ?? []
+        if let cached = cachedSessionsByHost[hostId] {
+            return cached
+        }
+        let result = TmuxSession.groupWindows(windows(for: hostId), resources: resources)
+        cachedSessionsByHost[hostId] = result
+        return result
+    }
+
+    public func session(named name: String, hostId: String) -> TmuxSession? {
+        let states = paneStates
+        let resources = resourceSessionsByHost[hostId] ?? []
+        if let cached = cachedSessionsByHost[hostId] {
+            return cached.first { $0.sessionName == name }
+        }
+        let selected = states.filter { $0.key.pairId == hostId && $0.value.sessionName == name }.map(\.value)
+        return TmuxSession.groupWindows(
+            TmuxWindow.groupPanes(selected), resources: resources.filter { $0.name == name }
+        ).first
     }
 
     /// Get a single window by ID for a specific host, without grouping all panes

@@ -13,6 +13,7 @@ struct AgentModelRuntimeCache {
     var selection: AgentModelSelection?
     var inputGeneration: UInt64?
     var unavailableReason: String?
+    var catalogWarning: String?
 }
 
 extension AppCoordinator {
@@ -25,6 +26,7 @@ extension AppCoordinator {
                     try await performAgentModels(request, paneID: paneID)
                 }
             } else {
+                try await agentModelReads.waitForRead(paneID: paneID, identity: request.workspacePane)
                 value = try await performAgentModels(request, paneID: paneID)
             }
             recordAgentModelDiagnostic(paneID: paneID, phase: request.selection == nil ? "read" : "switch", since: start)
@@ -68,12 +70,23 @@ extension AppCoordinator {
         var cache = agentModelCatalogs[paneID]
         if cache?.runtimeID != runtime || request.refresh {
             let catalogStart = ContinuousClock.now
-            let context = try await processes.modelContext(pid, runtime, captured.info.currentPath)
-            if let issue = provider.modelRuntimeIssue(context) {
-                cache = AgentModelRuntimeCache(runtimeID: runtime, models: [], unavailableReason: issue)
-            } else {
-                let models = try await provider.modelOptions(context)
-                cache = AgentModelRuntimeCache(runtimeID: runtime, models: models)
+            do {
+                let context = try await processes.modelContext(pid, runtime, captured.info.currentPath, provider.modelDiscoveryCommand)
+                if let issue = provider.modelRuntimeIssue(context) {
+                    if cache?.runtimeID == runtime, cache?.models.isEmpty == false {
+                        throw AgentModelError(issue)
+                    }
+                    cache = AgentModelRuntimeCache(runtimeID: runtime, models: [], unavailableReason: issue)
+                } else {
+                    let models = try await provider.modelOptions(context)
+                    cache = AgentModelRuntimeCache(runtimeID: runtime, models: models)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard cache?.runtimeID == runtime, cache?.models.isEmpty == false, identityClient.runtimeID(pid) == runtime else { throw error }
+                cache?.catalogWarning = "Could not refresh models; using this session's previous list. \(error.localizedDescription)"
+                recordAgentModelDiagnostic(paneID: paneID, phase: "catalog-refresh-failed", since: catalogStart, failure: error.localizedDescription)
             }
             guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent restarted during model discovery.") }
             // Keep a successful catalog even if the following terminal read fails.
@@ -160,7 +173,7 @@ extension AppCoordinator {
         cache.inputGeneration = tmuxService.workflowInputGate?.claim(paneID: paneID).generation
         agentModelCatalogs = agentModelCatalogs.filter { windowManager.paneStates[$0.key] != nil }
         agentModelCatalogs[paneID] = cache
-        return AgentModelSnapshot(runtimeID: runtime, models: models, selection: cache.selection, unavailableReason: reason)
+        return AgentModelSnapshot(runtimeID: runtime, models: models, selection: cache.selection, unavailableReason: reason, catalogWarning: cache.catalogWarning)
     }
 
     private func submitAgentModelCommand(

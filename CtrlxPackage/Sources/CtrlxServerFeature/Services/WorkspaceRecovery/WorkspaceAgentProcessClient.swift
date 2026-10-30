@@ -9,7 +9,7 @@ import Foundation
 struct WorkspaceAgentProcessClient: Sendable {
     var invocation: @Sendable (_ processID: String, _ runtimeID: String) async throws -> AgentResumeInvocation
     var version: @Sendable (_ executable: String) async -> String?
-    var modelContext: @Sendable (_ processID: String, _ runtimeID: String, _ directory: String) async throws -> AgentModelContext = { _, _, _ in
+    var modelContext: @Sendable (_ processID: String, _ runtimeID: String, _ directory: String, _ discoveryCommand: String?) async throws -> AgentModelContext = { _, _, _, _ in
         throw AgentModelError("The Agent's model discovery environment is unavailable.")
     }
 }
@@ -17,7 +17,7 @@ struct WorkspaceAgentProcessClient: Sendable {
 extension WorkspaceAgentProcessClient: DependencyKey {
     static let liveValue: Self = {
         let reader = WorkspaceAgentProcessReader()
-        return Self(invocation: { try await reader.invocation(processID: $0, runtimeID: $1) }, version: { await reader.version($0) }, modelContext: { try await reader.modelContext(processID: $0, runtimeID: $1, directory: $2) })
+        return Self(invocation: { try await reader.invocation(processID: $0, runtimeID: $1) }, version: { await reader.version($0) }, modelContext: { try await reader.modelContext(processID: $0, runtimeID: $1, directory: $2, discoveryCommand: $3) })
     }()
 }
 
@@ -44,26 +44,46 @@ private actor WorkspaceAgentProcessReader {
     }
 
     func invocation(processID: String, runtimeID: String) async throws -> AgentResumeInvocation {
-        try await snapshot(processID: processID, runtimeID: runtimeID).0
+        let startup = try readStartup(processID: processID, runtimeID: runtimeID, allowsRemovedExecutable: false)
+        let cliVersion = await version(startup.executable)
+        try verifyProcess(processID, runtimeID)
+        return invocation(startup, version: cliVersion)
     }
 
-    func modelContext(processID: String, runtimeID: String, directory: String) async throws -> AgentModelContext {
-        let (invocation, environment) = try await snapshot(processID: processID, runtimeID: runtimeID)
-        return AgentModelContext(invocation: invocation, environment: environment, directory: directory)
+    func modelContext(processID: String, runtimeID: String, directory: String, discoveryCommand: String?) async throws -> AgentModelContext {
+        let startup = try readStartup(processID: processID, runtimeID: runtimeID, allowsRemovedExecutable: true)
+        let executable = try discoveryExecutable(startup, directory: directory, command: discoveryCommand)
+        let cliVersion = await version(executable)
+        try Task.checkCancellation()
+        try verifyProcess(processID, runtimeID)
+        return AgentModelContext(invocation: invocation(startup, version: nil), environment: startup.parsed.environment, directory: directory, discoveryExecutable: executable, discoveryVersion: cliVersion)
     }
 
-    private func snapshot(processID: String, runtimeID: String) async throws -> (AgentResumeInvocation, [String: String]) {
-        guard let pid = Int32(processID), AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID else {
-            throw WorkspaceRecoveryError("The Agent process changed before its startup configuration could be recorded.")
+    private struct Startup {
+        let executable: String
+        let parsed: WorkspaceAgentProcessArguments.Parsed
+    }
+
+    private func invocation(_ startup: Startup, version: String?) -> AgentResumeInvocation {
+        AgentResumeInvocation(executable: startup.executable, arguments: Array(startup.parsed.arguments.dropFirst()), configurationRoots: startup.parsed.configurationRoots, providerID: startup.parsed.providerID, version: version)
+    }
+
+    private func verifyProcess(_ processID: String, _ runtimeID: String) throws {
+        guard AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID else {
+            throw WorkspaceRecoveryError("The Agent process changed while its startup configuration was being recorded.")
         }
+    }
+
+    private func readStartup(processID: String, runtimeID: String, allowsRemovedExecutable: Bool) throws -> Startup {
+        try verifyProcess(processID, runtimeID)
+        guard let pid = Int32(processID) else { throw WorkspaceRecoveryError("Invalid Agent process identity.") }
         var path = [UInt8](repeating: 0, count: 4_096)
         let count = proc_pidpath(pid, &path, UInt32(path.count))
-        if count <= 0, errno == ENOENT {
+        let removed = count <= 0 && errno == ENOENT
+        if removed && !allowsRemovedExecutable {
             throw WorkspaceRecoveryError("The Agent CLI was updated or removed while this session was running. Restart the Agent and resume this conversation.")
         }
-        guard count > 0, let executable = String(bytes: path.prefix { $0 != 0 }, encoding: .utf8), executable.hasPrefix("/") else {
-            throw WorkspaceRecoveryError("The Agent executable could not be identified.")
-        }
+        guard count > 0 || removed else { throw WorkspaceRecoveryError("The Agent executable could not be identified.") }
         var mib = [CTL_KERN, KERN_PROCARGS2, pid]
         var length = 0
         guard sysctl(&mib, UInt32(mib.count), nil, &length, nil, 0) == 0, length > 4, length <= 2 * 1_024 * 1_024 else {
@@ -74,22 +94,37 @@ private actor WorkspaceAgentProcessReader {
             throw WorkspaceRecoveryError("The Agent startup configuration could not be read.")
         }
         let parsed = try WorkspaceAgentProcessArguments.parse(Data(bytes.prefix(length)))
-        let cliVersion = await version(executable)
-        guard AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID else {
-            throw WorkspaceRecoveryError("The Agent process changed while its startup configuration was being recorded.")
+        let executable = removed ? parsed.executable : String(bytes: path.prefix { $0 != 0 }, encoding: .utf8)
+        guard let executable, executable.hasPrefix("/") else { throw WorkspaceRecoveryError("The Agent executable could not be identified.") }
+        try verifyProcess(processID, runtimeID)
+        return Startup(executable: executable, parsed: parsed)
+    }
+
+    private func discoveryExecutable(_ startup: Startup, directory: String, command: String?) throws -> String {
+        let manager = FileManager.default
+        if manager.isExecutableFile(atPath: startup.executable) {
+            return startup.executable
         }
-        return (AgentResumeInvocation(
-            executable: executable,
-            arguments: Array(parsed.arguments.dropFirst()),
-            configurationRoots: parsed.configurationRoots,
-            providerID: parsed.providerID,
-            version: cliVersion
-        ), parsed.environment)
+        guard let command else {
+            throw AgentModelError("This session's model discovery CLI is unavailable. Use /model in this terminal.")
+        }
+        if let original = startup.parsed.arguments.first, original.hasPrefix("/"), URL(fileURLWithPath: original).lastPathComponent == command, manager.isExecutableFile(atPath: original) {
+            return original
+        }
+        for component in (startup.parsed.environment["PATH"] ?? "").split(separator: ":", omittingEmptySubsequences: false) {
+            let root = component.hasPrefix("/") ? URL(fileURLWithPath: String(component)) : URL(fileURLWithPath: directory).appendingPathComponent(String(component))
+            let candidate = root.appendingPathComponent(command).path
+            if manager.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        throw AgentModelError("No installed model discovery CLI was found in this session's PATH. Use /model in this terminal.")
     }
 }
 
 enum WorkspaceAgentProcessArguments {
     struct Parsed: Equatable {
+        var executable = ""
         var arguments: [String]
         var configurationRoots: [String: String]
         var providerID: String?
@@ -111,7 +146,7 @@ enum WorkspaceAgentProcessArguments {
             offset = end + 1
             return value
         }
-        _ = try string() // Kernel executable path precedes argv and padding.
+        let executable = try string() // Kernel executable path survives removal of the running file.
         while offset < bytes.count, bytes[offset] == 0 {
             offset += 1
         }
@@ -150,6 +185,6 @@ enum WorkspaceAgentProcessArguments {
         // macOS may return only argv for protected processes. That is not
         // evidence that CODEX_HOME / CLAUDE_CONFIG_DIR was unset.
         guard hasEnvironment else { throw WorkspaceRecoveryError("The Agent process environment is unavailable; its configuration directory cannot be verified.") }
-        return Parsed(arguments: arguments, configurationRoots: roots, providerID: providerID, environment: environment)
+        return Parsed(executable: executable, arguments: arguments, configurationRoots: roots, providerID: providerID, environment: environment)
     }
 }
