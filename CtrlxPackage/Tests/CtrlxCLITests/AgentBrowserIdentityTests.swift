@@ -73,6 +73,84 @@ struct AgentBrowserIdentityTests {
         try AgentBrowserProcessClient.liveValue.validate(value)
     }
 
+    @Test(arguments: ["codex", "claude", "codex-code-mode-host", "pretender"])
+    func removedExecutablePreservesOnlyKernelVerifiedIdentity(_ name: String) async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("agent.c")
+        let binary = root.appendingPathComponent(name)
+        let ready = root.appendingPathComponent("ready")
+        // Mutating argv[0] must not turn another kernel executable into Codex.
+        try "#include <unistd.h>\n#include <string.h>\n#include <fcntl.h>\nint main(int argc, char **argv) { strcpy(argv[0], \"codex\"); close(open(argv[1], O_WRONLY|O_CREAT, 0600)); alarm(30); pause(); return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+        let compiler = Process()
+        compiler.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
+        compiler.arguments = [source.path, "-o", binary.path]
+        try compiler.run()
+        compiler.waitUntilExit()
+        try #require(compiler.terminationStatus == 0)
+        let fixture = Process()
+        fixture.executableURL = binary
+        fixture.arguments = [ready.path]
+        try fixture.run()
+        defer {
+            if fixture.isRunning {
+                fixture.terminate()
+            }
+            fixture.waitUntilExit()
+        }
+        for _ in 0..<100 {
+            if FileManager.default.fileExists(atPath: ready.path) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(FileManager.default.fileExists(atPath: ready.path))
+        let processes = AgentBrowserProcessClient.liveValue
+        let before = try processes.inspect(fixture.processIdentifier)
+        let previous = try AgentBrowserTransport.withRunContext(for: before, root: root) { _, value in value }
+        try FileManager.default.removeItem(at: binary)
+        if name == "pretender" {
+            #expect(before.agentName == nil)
+            #expect(throws: AgentBrowserTransport.Failure.self) { try processes.inspect(fixture.processIdentifier) }
+            return
+        }
+        let after = try processes.inspect(fixture.processIdentifier)
+        #expect(after.executable == name)
+        #expect(after.runtimeKey == before.runtimeKey)
+        #expect(after.agentName == before.agentName)
+        #expect(before.isSameRuntime(as: after))
+        try processes.validate(before)
+        let next = try AgentBrowserTransport.withRunContext(for: after, root: root) { _, value in value }
+        #expect(next["run"] as? String == previous["run"] as? String)
+        #expect(next["secret"] as? String == previous["secret"] as? String)
+        if name == "codex-code-mode-host" {
+            #expect(after.agentName == nil)
+            let owner = process(after.parentPID, name: "codex", uid: getuid())
+            let ancestry = AgentBrowserProcessClient(inspect: { pid in
+                pid == after.pid ? after : owner
+            })
+            #expect(try ancestry.callingAgent(from: after.pid, uid: getuid()) == owner)
+        } else {
+            #expect(try processes.callingAgent(from: after.pid, uid: getuid()).runtimeKey == before.runtimeKey)
+        }
+    }
+
+    @Test
+    func deletedFileDoesNotAllowAReusedOrForeignProcess() {
+        let original = process(10)
+        for replacement in [process(10, name: "codex", start: 101), process(10, name: "codex", uid: 502), process(10, name: "claude")] {
+            let removed = AgentBrowserProcess(
+                pid: replacement.pid,
+                parentPID: replacement.parentPID,
+                uid: replacement.uid,
+                executable: URL(fileURLWithPath: replacement.executable).lastPathComponent,
+                startSeconds: replacement.startSeconds,
+                startMicros: replacement.startMicros
+            )
+            #expect(throws: AgentBrowserTransport.Failure.self) { try client([removed]).validate(original) }
+        }
+    }
+
     private func temporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-identity-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])

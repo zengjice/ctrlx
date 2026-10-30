@@ -55,6 +55,25 @@ Host/pane/conversation can reconnect using fresh process credentials; explicit
 revocation, human pause and the original authorization session still apply. Child human
 pages require separate authorization. Existing shared-profile semantics remain.
 
+An in-place CLI update can unlink the executable of a still-running Codex. The
+CLI caller check and the shared Host browser/simulator process inspector then
+accept the exact kernel-recorded names of supported Agents and Codex's known
+`codex-code-mode-host` helper, only when path lookup reports `ENOENT`. They keep
+checking UID, process start time, parent and kernel name before/after inspection;
+an existing runtime can transition from its verified path to the same kernel
+name. No command-line name or environment variable is used as executable evidence.
+Other lookup errors and unknown names still fail. Version-number-only Claude
+installer filenames continue to require their verifiable installation path.
+Conversation ownership, human grants and pause/revocation checks still apply;
+updating a CLI does not itself require exiting the running Codex conversation.
+
+Validation: 65 focused tests and a Mac Debug build passed. A separately signed
+Host exercised both product engines after unlinking its private Codex-named
+fixture: existing-page reads, new-page opens, first use without a cached path,
+cross-Agent refusal and retained browser credentials passed. The same run retained
+the simulator caller identity without opening a device. These are native process
+fixtures, not real-Codex or Simulator UI acceptance.
+
 `supportsResourceAuthorization` is advertised only with a native runtime exposing
 the grant API. It requires rebuilding the AgentBrowser native component against
 the existing CEF SDK, not recompiling Chromium. For 3.0.114, the native component
