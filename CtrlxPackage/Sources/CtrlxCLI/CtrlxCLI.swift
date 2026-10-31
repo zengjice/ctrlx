@@ -84,7 +84,7 @@ func executeRequest(
     method: String,
     params: [String: JSONValue] = [:],
     options: GlobalOptions,
-    timeoutSeconds: Int? = nil,
+    timeoutSeconds: TimeInterval? = nil,
     responseLimit: Int? = nil
 ) throws -> JSONRPCResponse {
     let request = JSONRPCRequest(

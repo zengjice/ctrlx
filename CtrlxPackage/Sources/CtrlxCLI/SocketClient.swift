@@ -13,7 +13,10 @@ enum SocketClient {
     /// For most commands this is a simple request-response. For blocking commands
     /// like `editor.open`, the server delays its response until the user finishes,
     /// so the socket read naturally blocks until completion.
-    static func send(_ request: JSONRPCRequest, socketPath: String? = nil, timeoutSeconds: Int? = nil, responseLimit: Int? = nil) throws -> JSONRPCResponse {
+    /// An explicit timeout covers connect, writes and the complete response,
+    /// including peers that send partial data without finishing a frame.
+    static func send(_ request: JSONRPCRequest, socketPath: String? = nil, timeoutSeconds: TimeInterval? = nil, responseLimit: Int? = nil) throws -> JSONRPCResponse {
+        let deadline = timeoutSeconds.map { ContinuousClock.now.advanced(by: .seconds($0)) }
         let path = socketPath ?? self.socketPath
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -22,10 +25,11 @@ enum SocketClient {
         defer { close(fd) }
         var noSIGPIPE: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSIGPIPE, socklen_t(MemoryLayout.size(ofValue: noSIGPIPE)))
-        if let timeoutSeconds {
-            var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
-            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
-            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
+        if deadline != nil {
+            let flags = fcntl(fd, F_GETFL)
+            guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                throw CLIError.connectionFailed
+            }
         }
 
         var addr = sockaddr_un()
@@ -46,8 +50,14 @@ enum SocketClient {
                 connect(fd, sockPtr, addrLen)
             }
         }
-        guard connected == 0 else {
-            throw CLIError.connectionFailed
+        if connected != 0 {
+            guard errno == EINPROGRESS, let deadline else { throw CLIError.connectionFailed }
+            try waitForSocket(fd, events: Int16(POLLOUT), deadline: deadline)
+            var failure: Int32 = 0
+            var size = socklen_t(MemoryLayout.size(ofValue: failure))
+            guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &failure, &size) == 0, failure == 0 else {
+                throw CLIError.connectionFailed
+            }
         }
 
         // Encode and send request
@@ -55,15 +65,29 @@ enum SocketClient {
         var data = try encoder.encode(request)
         data.append(UInt8(ascii: "\n"))
 
-        try writeAll(data) { Darwin.write(fd, $0.baseAddress, $0.count) }
+        try writeAll(data) { bytes in
+            while true {
+                if let deadline {
+                    try waitForSocket(fd, events: Int16(POLLOUT), deadline: deadline)
+                }
+                let count = Darwin.write(fd, bytes.baseAddress, bytes.count)
+                if count < 0, deadline != nil, errno == EAGAIN {
+                    continue
+                }
+                return count
+            }
+        }
 
         // Read response (newline-delimited JSON)
         var responseData = Data()
-        if let responseLimit {
+        if responseLimit != nil || deadline != nil {
             var buffer = [UInt8](repeating: 0, count: 16_384)
             while true {
+                if let deadline {
+                    try waitForSocket(fd, events: Int16(POLLIN), deadline: deadline)
+                }
                 let count = Darwin.read(fd, &buffer, buffer.count)
-                if count < 0, errno == EINTR {
+                if count < 0, errno == EINTR || (deadline != nil && errno == EAGAIN) {
                     continue
                 }
                 guard count > 0 else { throw CLIError.responseTimeout }
@@ -72,9 +96,13 @@ enum SocketClient {
                     break
                 }
                 responseData.append(contentsOf: buffer.prefix(count))
-                guard responseData.count <= responseLimit else { throw CLIError.responseTooLarge }
+                if let responseLimit, responseData.count > responseLimit {
+                    throw CLIError.responseTooLarge
+                }
             }
-            guard responseData.count <= responseLimit else { throw CLIError.responseTooLarge }
+            if let responseLimit, responseData.count > responseLimit {
+                throw CLIError.responseTooLarge
+            }
         } else {
             var byte: UInt8 = 0
             while Darwin.read(fd, &byte, 1) == 1 {
@@ -92,14 +120,30 @@ enum SocketClient {
         return try JSONDecoder().decode(JSONRPCResponse.self, from: responseData)
     }
 
+    private static func waitForSocket(_ fd: Int32, events: Int16, deadline: ContinuousClock.Instant) throws {
+        while true {
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else { throw CLIError.responseTimeout }
+            let components = remaining.components
+            let milliseconds = ceil(Double(components.seconds) * 1_000 + Double(components.attoseconds) / 1E15)
+            var descriptor = pollfd(fd: fd, events: events, revents: 0)
+            let result = poll(&descriptor, 1, Int32(min(milliseconds, Double(Int32.max))))
+            if result < 0, errno == EINTR {
+                continue
+            }
+            guard result > 0 else { throw CLIError.responseTimeout }
+            return
+        }
+    }
+
     /// Large artifact chunks may require multiple writes on the same connection.
     /// Continue only the remaining bytes; never retry the whole request.
-    static func writeAll(_ data: Data, write: (UnsafeRawBufferPointer) -> Int) throws {
+    static func writeAll(_ data: Data, write: (UnsafeRawBufferPointer) throws -> Int) throws {
         try data.withUnsafeBytes { bytes in
             var offset = 0
             while offset < bytes.count {
                 let remaining = UnsafeRawBufferPointer(rebasing: bytes[offset...])
-                let count = write(remaining)
+                let count = try write(remaining)
                 if count < 0, errno == EINTR {
                     continue
                 }

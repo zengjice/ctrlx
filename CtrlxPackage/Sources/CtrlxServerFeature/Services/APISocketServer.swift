@@ -64,6 +64,11 @@
         func start(socketPath: String) throws {
             guard !isRunning else { return }
 
+            var addr = sockaddr_un()
+            guard socketPath.utf8.count < MemoryLayout.size(ofValue: addr.sun_path) else {
+                throw APISocketError.pathTooLong
+            }
+
             if isSocketActive(path: socketPath) {
                 logger.info("Another instance already owns the API socket, skipping")
                 return
@@ -75,11 +80,7 @@
                 throw APISocketError.socketCreationFailed
             }
 
-            var addr = sockaddr_un()
             addr.sun_family = sa_family_t(AF_UNIX)
-            guard socketPath.utf8.count < MemoryLayout.size(ofValue: addr.sun_path) else {
-                throw APISocketError.pathTooLong
-            }
             socketPath.withCString { ptr in
                 withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
                     let raw = UnsafeMutableRawPointer(sunPath)
@@ -128,6 +129,7 @@
             if let path = socketPath {
                 unlink(path)
             }
+            socketPath = nil
             logger.info("API socket server stopped")
         }
 
@@ -163,14 +165,16 @@
                 // number before the worker starts. shutdown still wakes the dup.
                 let listener = fcntl(serverFd, F_DUPFD_CLOEXEC, 0)
                 guard listener >= 0 else {
-                    logger.error("Could not retain API socket listener")
-                    break
+                    let failure = errno
+                    guard await recoverListenerError(failure, operation: "retain listener") else { break }
+                    continue
                 }
-                let clientFd = await withCheckedContinuation { continuation in
+                let (clientFd, failure): (Int32, Int32) = await withCheckedContinuation { continuation in
                     DispatchQueue.global().async {
                         let fd = accept(listener, nil, nil)
+                        let failure = fd < 0 ? errno : 0
                         close(listener)
-                        continuation.resume(returning: fd)
+                        continuation.resume(returning: (fd, failure))
                     }
                 }
 
@@ -182,10 +186,8 @@
                 }
 
                 guard clientFd >= 0 else {
-                    if isRunning {
-                        logger.error("accept() failed, stopping server")
-                    }
-                    break
+                    guard await recoverListenerError(failure, operation: "accept") else { break }
+                    continue
                 }
 
                 // Handle each connection in its own task so multiple clients
@@ -195,6 +197,32 @@
                 Task {
                     await Self.handleConnection(clientFd, handler: handler, logger: logger)
                 }
+            }
+        }
+
+        func recoverListenerError(_ failure: Int32, operation: String) async -> Bool {
+            guard !Task.isCancelled, isRunning else { return false }
+            switch failure {
+            case EINTR,
+                 ECONNABORTED,
+                 EAGAIN:
+                logger.debug("API socket \(operation) interrupted (errno \(failure)); retrying")
+                return true
+            case EMFILE,
+                 ENFILE,
+                 ENOBUFS,
+                 ENOMEM:
+                logger.error("API socket \(operation) hit a resource limit (errno \(failure)); backing off")
+                do {
+                    try await Task.sleep(for: .milliseconds(100))
+                    return !Task.isCancelled && isRunning
+                } catch {
+                    return false
+                }
+            default:
+                logger.error("API socket \(operation) failed (errno \(failure)); stopping server")
+                stop()
+                return false
             }
         }
 

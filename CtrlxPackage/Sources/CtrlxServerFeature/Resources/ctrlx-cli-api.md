@@ -819,6 +819,7 @@ ctrlx edit /tmp/my-prompt.txt
 #### `ping`
 
 Check whether CtrlX is running and the socket is reachable.
+Fails after at most five seconds if communication cannot complete.
 
 ```bash
 ctrlx ping
@@ -828,6 +829,11 @@ ctrlx ping
 - Method: `system.ping`
 - Params: _(none)_
 - Response: `{ "pong": true }`
+
+`ctrlx wait-ready --timeout 30 --interval 0.2` polls until ready. Its timeout is
+the total budget, including connection/response waits and pauses; each probe has
+at most one second. Both options require finite positive seconds. Only this
+read-only readiness probe retries; browser actions are never replayed.
 
 ---
 
@@ -892,6 +898,8 @@ Apply a tmux layout (preset name or hex layout string) to a window. Used interna
 #### `identify`
 
 Show the session, window, and pane context of the calling process. Uses `$TMUX_PANE` to determine context. Useful for scripts that need to know where they are running.
+Communication has a five-second deadline. Interactive commands such as
+`editor.open` retain their unbounded wait for user input.
 
 ```bash
 ctrlx identify

@@ -10,7 +10,7 @@ struct PingCommand: ParsableCommand {
     @OptionGroup var options: GlobalOptions
 
     func run() throws {
-        let response = try executeRequest(method: "system.ping", options: options)
+        let response = try executeRequest(method: "system.ping", options: options, timeoutSeconds: 5)
         if options.json {
             printResponse(response, json: true)
         } else {
@@ -37,12 +37,20 @@ struct WaitReadyCommand: ParsableCommand {
 
     @OptionGroup var options: GlobalOptions
 
+    mutating func validate() throws {
+        guard timeout.isFinite, timeout > 0, interval.isFinite, interval > 0 else {
+            throw ValidationError("Timeout and interval must be finite positive seconds.")
+        }
+    }
+
     func run() throws {
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
         let request = JSONRPCRequest(id: UUID().uuidString, method: "system.ping", params: [:])
-        while Date() < deadline {
+        while ContinuousClock.now < deadline {
+            let remaining = ContinuousClock.now.duration(to: deadline).components
+            let remainingSeconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1E18
             if
-                let response = try? SocketClient.send(request, socketPath: options.socket),
+                let response = try? SocketClient.send(request, socketPath: options.socket, timeoutSeconds: min(1, remainingSeconds)),
                 response.ok {
                 if options.json {
                     if
@@ -55,7 +63,11 @@ struct WaitReadyCommand: ParsableCommand {
                 }
                 return
             }
-            Thread.sleep(forTimeInterval: interval)
+            let pause = ContinuousClock.now.duration(to: deadline).components
+            let pauseSeconds = Double(pause.seconds) + Double(pause.attoseconds) / 1E18
+            if pauseSeconds > 0 {
+                Thread.sleep(forTimeInterval: min(interval, pauseSeconds))
+            }
         }
         // Write to stderr and exit non-zero so login-time scripts can fail fast.
         // `CleanExit.message` would print to stdout and exit 0, breaking the
@@ -105,7 +117,7 @@ struct IdentifyCommand: ParsableCommand {
         if let tmuxPane = ProcessInfo.processInfo.environment["TMUX_PANE"] {
             params["pane_id"] = .string(tmuxPane)
         }
-        let response = try executeRequest(method: "system.identify", params: params, options: options)
+        let response = try executeRequest(method: "system.identify", params: params, options: options, timeoutSeconds: 5)
         printResponse(response, json: options.json)
     }
 }

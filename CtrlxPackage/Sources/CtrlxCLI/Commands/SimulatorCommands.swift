@@ -315,7 +315,7 @@ struct SimulatorCommandClient: Sendable {
 
 extension SimulatorCommandClient: DependencyKey {
     static let liveValue = Self(send: { request, socketPath, timeoutSeconds, responseLimit in
-        try SocketClient.send(request, socketPath: socketPath, timeoutSeconds: timeoutSeconds, responseLimit: responseLimit)
+        try SocketClient.send(request, socketPath: socketPath, timeoutSeconds: TimeInterval(timeoutSeconds), responseLimit: responseLimit)
     })
 }
 
