@@ -1191,6 +1191,17 @@ a remote clear updates `SessionStore` and sends the existing `MarkHandled`
 command to its host. Dock totals and task markers continue to derive from these
 same stores. Regression coverage: `VisiblePaneAttentionTests`.
 
+**iOS completion/read handling:** `WindowLayoutView` uses one guarded entry point
+for navigation, pane changes, agent-state updates, foregrounding, reconnecting and
+returning from resource tabs. A callback synchronously checks that the page is
+visible, the terminal tab is displayed and the scene is active before acknowledging
+a completion. Files/Browser/Simulator tabs, the session list and inactive scenes keep
+the completion unread. `SessionDetailService` accepts only `doneWorking`, retaining
+permission/question/plan forms and its original pane-identity validation. Once a
+read is accepted, its synchronization can finish after the view disappears.
+Read state remains shared: a valid read on the Host or another Viewer still
+propagates to iOS.
+
 Queued `MarkHandled` and Yolo toggles retain the pane identity observed by the
 caller. Capable Viewers reject a retired binding before transport, and the Host
 checks the supplied identity before clearing attention or enabling auto-approval.

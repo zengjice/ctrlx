@@ -100,6 +100,7 @@
 
         /// Service for the active pane's Claude session (nil if no session)
         @State private var activeService: SessionDetailService?
+        @State private var isViewVisible = false
 
         /// Whether to show the session info popover
         @State private var showSessionInfo = false
@@ -335,6 +336,10 @@
 
         private var terminalIsVisible: Bool {
             selectedBrowser == nil && selectedSimulator == nil && fileWorkspace.selected == nil
+        }
+
+        private var canAcknowledgeCompletion: Bool {
+            isViewVisible && terminalIsVisible && scenePhase == .active
         }
 
         private var annotationSource: AnnotationTerminalHandoff.Source? {
@@ -919,6 +924,8 @@
         private var terminalLifecycleContent: some View {
             presentedContent
                 .task {
+                    guard !Task.isCancelled else { return }
+                    isViewVisible = true
                     reconcileWindowSelection(candidates: windowSelectionCandidates)
                     saveRecoverySelection()
                     fileWorkspaces.selectSession(fileWorkspace.recoveryReference)
@@ -926,8 +933,6 @@
                         requestAutomaticTabFit()
                     }
                     updateActiveService()
-                    // Mark session as handled when navigating into the view
-                    await activeService?.markHandledIfNeeded()
                 }
                 .onChange(of: windowSelectionCandidates, initial: true) { previous, candidates in
                     mouseReportingPaneIDs.formIntersection(candidates.flatMap(\.paneIDs))
@@ -958,6 +963,11 @@
                         automaticTabFit.cancel()
                     }
                 }
+                .onChange(of: canAcknowledgeCompletion, initial: true) { _, canAcknowledge in
+                    if canAcknowledge {
+                        markVisibleTerminalHandled()
+                    }
+                }
                 .onChange(of: isResizing) {
                     if !isResizing {
                         fitTerminalIfReady()
@@ -974,6 +984,7 @@
                     } else {
                         reconcileWindowSelection(candidates: windowSelectionCandidates)
                         fitTerminalIfReady()
+                        markVisibleTerminalHandled()
                     }
                 }
                 .onChange(of: relayClient.hostSupportsTerminalFit) {
@@ -1010,6 +1021,7 @@
                     }
                 }
                 .onDisappear {
+                    isViewVisible = false
                     // A delayed creation reply must not redirect a later visit.
                     cancelCreationFollowUp()
                     browserSelection.cancelPendingCloses()
@@ -1027,9 +1039,7 @@
                     if activeSessionHasBlockingForm {
                         isKeyboardActive = false
                     }
-                    if activeService?.session?.needsAttention == true {
-                        Task { await activeService?.markHandledIfNeeded() }
-                    }
+                    markVisibleTerminalHandled()
                 }
                 .onChange(of: clipboardContents) {
                     guard
@@ -1046,8 +1056,7 @@
                     saveRecoverySelection()
                     terminalInputRevision &+= 1
                     updateActiveService()
-                    // Mark session as handled when switching to a pane with attention
-                    Task { await activeService?.markHandledIfNeeded() }
+                    markVisibleTerminalHandled()
                     // Sync pane selection to the tmux session on the host.
                     // When oldValue is nil, it's the initial assignment from onAppear
                     // — skip it to avoid redirecting the host's tmux focus on load.
@@ -2170,6 +2179,11 @@
 
         private var activeSessionHasBlockingForm: Bool {
             activeService?.session?.state.openForm?.request.isBlocking == true
+        }
+
+        private func markVisibleTerminalHandled() {
+            guard canAcknowledgeCompletion else { return }
+            activeService?.markHandledIfNeeded()
         }
 
         /// Creates or clears the SessionDetailService when the active pane changes

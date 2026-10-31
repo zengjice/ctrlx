@@ -241,14 +241,16 @@ final public class SessionDetailService {
 
     // MARK: - Actions
 
-    /// Marks the session as handled locally and notifies the host
-    public func markHandledIfNeeded() async {
-        guard session?.needsAttention == true else { return }
+    /// A visible terminal acknowledges only completion, leaving response forms pending.
+    public func markHandledIfNeeded() {
+        guard case .doneWorking = session?.state else { return }
         do {
             _ = try inputBinding.expectedPane(current: relayClient.workspaceInputState.binding(paneID: paneId))
         } catch { return }
         sessionStore.markSessionHandled(paneId: paneId, hostId: hostId)
-        _ = await relayClient.sendCommand(MarkHandled(), paneId: paneId, inputBinding: inputBinding)
+        Task { [relayClient, paneId, inputBinding] in
+            _ = await relayClient.sendCommand(MarkHandled(), paneId: paneId, inputBinding: inputBinding)
+        }
     }
 
     /// Send a command to the host for this pane (fire-and-forget style)
