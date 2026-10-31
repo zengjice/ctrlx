@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.124 — API socket recovery and iOS completion state
+
+- Keep serving API requests after transient listener errors, back off on
+  resource exhaustion and cleanly stop on fatal errors so the server can restart.
+- Bound CLI ping and identify communication to five seconds. Readiness polling
+  uses one total deadline across connection, response and pauses; interactive
+  editor requests retain their wait for user input, and actions are not replayed.
+- On iOS, keep completions unread when their terminal is hidden behind resource
+  tabs, outside the current page or in an inactive scene. Only visible, active
+  terminals acknowledge completed work; permission, question and plan forms remain.
+- Separate custom iOS terminal buttons from built-in controls with a divider.
+- Release validation: all 46 focused Swift tests, the isolated SwiftUI completion
+  callback fixture and 112 publisher/COS/installer tests passed. The arm64/x86_64
+  iOS Simulator compile and both boundary checks passed. SwiftFormat passes for
+  ten of eleven changed Swift files; SimulatorCommands retains its existing
+  violations. Full Swift regression and paired-device UI acceptance were not rerun.
+
 ## 3.0.123 — Recovery, file actions and voice diagnostics
 
 - Show the IPA default-application reminder in a nonmodal window that leaves
