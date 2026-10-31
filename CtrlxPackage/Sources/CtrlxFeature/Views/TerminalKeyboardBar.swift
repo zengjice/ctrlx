@@ -140,6 +140,11 @@
                     .accessibilityLabel("Dollar Sign")
                     .accessibilityIdentifier("terminal-dollar-control")
 
+                    Divider()
+                        .frame(height: TerminalInputControlMetrics.buttonHeight - 8)
+                        .padding(.horizontal, 4)
+                        .accessibilityHidden(true)
+
                     ForEach(customButtonStore.buttons) { button in
                         TerminalCustomButtonControl(
                             button: button, store: customButtonStore,
