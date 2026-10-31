@@ -47,18 +47,11 @@
 
         private enum WindowShortcutScope {
             case terminal
-            case linkedTab(sourcePaneID: String?, kind: WindowTabKind)
+            case linkedTab(sourcePaneID: String?)
 
             var sourcePaneID: String? {
-                guard case let .linkedTab(sourcePaneID, _) = self else { return nil }
+                guard case let .linkedTab(sourcePaneID) = self else { return nil }
                 return sourcePaneID
-            }
-
-            var kind: WindowTabKind {
-                switch self {
-                case .terminal: .terminal
-                case let .linkedTab(_, kind): kind
-                }
             }
 
             var includesFork: Bool {
@@ -266,12 +259,7 @@
         private var selectedLinkedTabShortcuts: (window: TmuxWindow?, scope: WindowShortcutScope)? {
             guard let selectedLinkedTab else { return nil }
             let source = linkedTabSource(selectedLinkedTab)
-            let kind = switch selectedLinkedTab {
-            case .file: WindowTabKind.files
-            case .browser: WindowTabKind.browser
-            case .simulator: WindowTabKind.simulator
-            }
-            return (source?.window, .linkedTab(sourcePaneID: source?.paneID, kind: kind))
+            return (source?.window, .linkedTab(sourcePaneID: source?.paneID))
         }
 
         private func linkedTabSource(_ tab: PaneLinkedTabID) -> (paneID: String, window: TmuxWindow)? {
@@ -1248,14 +1236,8 @@
                             }
                         }
                     }
-                    if let window {
+                    if window != nil || relayClient.hostSupportsIndependentResources {
                         windowActions(window, scope: scope)
-                    } else if relayClient.hostSupportsIndependentResources {
-                        Button { performWindowTabAction(.newAgent) } label: { Label("New Agent", symbol: .sparkles) }
-                        Button { performWindowTabAction(.newTerminal) } label: { Label("New Terminal", symbol: .terminal) }
-                        Button { openResource(.files) } label: { Label("New Files", symbol: .folder) }
-                        Button { openResource(.browser) } label: { Label("New Browser", symbol: .globe) }
-                        Button { openResource(.simulator) } label: { Label("New iOS Simulator", symbol: .iphone) }
                     }
                     if case .terminal = scope {
                         Button(action: resizeWindowToFit) {
@@ -1275,23 +1257,23 @@
         }
 
         private func windowActions(
-            _ window: TmuxWindow,
+            _ window: TmuxWindow?,
             includesWindowManagement: Bool = false,
             scope: WindowShortcutScope = .terminal
         ) -> some View {
             WindowTabActions(
                 window: window,
-                focusedPaneID: activePaneId,
+                focusedPaneID: scope.sourcePaneID ?? activePaneId,
                 files: fileWorkspace.tabs,
                 browsers: sessionBrowsers,
                 simulators: sessionSimulators,
-                activeTab: scope.kind,
                 isConnected: relayClient.isHostConnected,
                 canOpenFiles: relayClient.hostSupportsPaneFiles,
                 canOpenBrowser: relayClient.hostSupportsPaneBrowser,
                 canOpenSimulator: relayClient.hostSupportsSimulatorViewing,
                 canCreateSimulator: relayClient.hostSupportsPaneSimulator,
                 canCreateNewSimulator: relayClient.hostSupportsPaneSimulatorCreation,
+                canCreateIndependentResources: relayClient.hostSupportsIndependentResources,
                 isCreatingWindow: isCreatingWindow,
                 forkUnavailableReason: agentForkUnavailableReason(),
                 canForkOtherDirectory: sessionStore.hostsSupportingAgentForkDirectory.contains(hostId),

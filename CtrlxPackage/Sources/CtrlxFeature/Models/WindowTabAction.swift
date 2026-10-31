@@ -30,22 +30,30 @@ enum WindowTabAction: Equatable, Sendable {
         guard case let .window(stableID, _) = self else { return nil }
         return windows.first { $0.stableId == stableID }
     }
-}
 
-enum WindowTabKind: Equatable, Sendable {
-    case terminal
-    case files
-    case browser
-    case simulator
-
-    enum ShortcutMode: Equatable, Sendable {
-        case reuseOrCreate
-        case create
-        case unavailable
-    }
-
-    func shortcutMode(whenActive active: WindowTabKind, canCreate: Bool = true) -> ShortcutMode {
-        guard self == active else { return .reuseOrCreate }
-        return canCreate ? .create : .unavailable
+    @MainActor
+    static func simulatorCreation(
+        window: TmuxWindow?,
+        preferredPaneID: String?,
+        simulators: [RemoteSimulatorTab],
+        supportsIndependentResources: Bool,
+        supportsPaneSimulator: Bool,
+        supportsNewSimulator: Bool
+    ) -> Self? {
+        if supportsIndependentResources {
+            return .newResource(.simulator)
+        }
+        guard
+            supportsPaneSimulator, let window,
+            let paneID = FileBrowserTab.sourcePaneID(
+                in: window.panes.map(\.paneId),
+                focusedPaneID: preferredPaneID,
+                activePaneID: window.activePane?.paneId
+            ) else { return nil }
+        if supportsNewSimulator {
+            return .window(stableID: window.stableId, operation: .openNewSimulator)
+        }
+        guard !simulators.contains(where: { $0.sourcePaneID == paneID && $0.isPrimary }) else { return nil }
+        return .window(stableID: window.stableId, operation: .openSimulator)
     }
 }

@@ -336,6 +336,24 @@ height across the live terminal. The animation never wraps the terminal or keybo
 fade only, and Reduce Transparency uses an opaque, legible surface. The phrase
 editor hides its Form background so it does not obscure the shared material.
 
+## iOS resource shortcuts
+
+The Files, Browser and Simulator shortcuts on Agent, Terminal and resource pages
+only select existing tabs. Source-linked pages list resources from their source
+window; independent pages list the session's independent resources. One tab opens
+directly; multiple tabs appear in a menu. Empty shortcuts are disabled and never
+create resources. All three icons are plain viewing icons, including the current
+page's own type. A **New Tab** (`＋`) menu before Fork offers Agent, Terminal, Browser,
+Files and iOS Simulator. Agent and Terminal creation use this menu instead of
+separate toolbar buttons. New resource tabs are independent on supported Hosts;
+older Hosts keep explicit pane-scoped creation, with unavailable actions disabled.
+Hosts that only support the default pane simulator can create its first device
+through this menu; another device requires the separate creation capability.
+The first-device check uses the actual target pane and its primary simulator,
+so another pane's device or a non-primary device does not hide the entry.
+The Tabs panel retains its explicit creation actions. Resource pages keep their
+Return to Source and Close controls and use the same five-item creation menu.
+
 ## iOS settings organization
 
 The Settings home groups connection, preferences, background activity and other

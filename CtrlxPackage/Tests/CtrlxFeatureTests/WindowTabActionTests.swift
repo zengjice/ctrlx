@@ -72,17 +72,56 @@ struct WindowTabActionTests {
         #expect(WindowTabAction.newTerminal.targetWindow(in: windows()) == nil)
     }
 
-    @Test("Only the active linked tab creates its own kind")
-    func shortcutModes() {
-        #expect(WindowTabKind.terminal.shortcutMode(whenActive: .terminal) == .create)
-        #expect(WindowTabKind.files.shortcutMode(whenActive: .terminal) == .reuseOrCreate)
-        #expect(WindowTabKind.browser.shortcutMode(whenActive: .terminal) == .reuseOrCreate)
-        #expect(WindowTabKind.simulator.shortcutMode(whenActive: .terminal) == .reuseOrCreate)
-        #expect(WindowTabKind.files.shortcutMode(whenActive: .files) == .create)
-        #expect(WindowTabKind.files.shortcutMode(whenActive: .browser) == .reuseOrCreate)
-        #expect(WindowTabKind.browser.shortcutMode(whenActive: .browser) == .create)
-        #expect(WindowTabKind.simulator.shortcutMode(whenActive: .simulator) == .create)
-        #expect(WindowTabKind.simulator.shortcutMode(whenActive: .simulator, canCreate: false) == .unavailable)
-        #expect(WindowTabKind.simulator.shortcutMode(whenActive: .files, canCreate: false) == .reuseOrCreate)
+    @Test("A legacy Host can create the first default simulator but not a second", arguments: [false, true])
+    func legacySimulatorCreation(hasDefault: Bool) {
+        let existing = hasDefault ? [simulator(pane: "%3", primary: true)] : []
+        let action = WindowTabAction.simulatorCreation(
+            window: windows()[1], preferredPaneID: "%3", simulators: existing,
+            supportsIndependentResources: false, supportsPaneSimulator: true, supportsNewSimulator: false
+        )
+        #expect(action == (hasDefault ? nil : .window(stableID: "@2", operation: .openSimulator)))
+    }
+
+    @Test("Other panes and non-primary devices do not block first creation", arguments: [false, true])
+    func firstSimulatorUsesExactPane(otherPane: Bool) {
+        let action = WindowTabAction.simulatorCreation(
+            window: windows()[1], preferredPaneID: "%3",
+            simulators: [simulator(pane: otherPane ? "%2" : "%3", primary: otherPane)],
+            supportsIndependentResources: false, supportsPaneSimulator: true, supportsNewSimulator: false
+        )
+        #expect(action == .window(stableID: "@2", operation: .openSimulator))
+    }
+
+    @Test("A stale preferred pane uses the same active-pane fallback as dispatch")
+    func legacySimulatorFallback() {
+        let action = WindowTabAction.simulatorCreation(
+            window: windows()[1], preferredPaneID: "%retired", simulators: [simulator(pane: "%2", primary: true)],
+            supportsIndependentResources: false, supportsPaneSimulator: true, supportsNewSimulator: false
+        )
+        #expect(action == nil)
+    }
+
+    @Test("New simulator capability and independent resources keep explicit creation")
+    func explicitSimulatorCreation() {
+        #expect(WindowTabAction.simulatorCreation(
+            window: windows()[1], preferredPaneID: "%3", simulators: [simulator(pane: "%3", primary: true)],
+            supportsIndependentResources: false, supportsPaneSimulator: true, supportsNewSimulator: true
+        ) == .window(stableID: "@2", operation: .openNewSimulator))
+        #expect(WindowTabAction.simulatorCreation(
+            window: nil, preferredPaneID: nil, simulators: [],
+            supportsIndependentResources: true, supportsPaneSimulator: false, supportsNewSimulator: false
+        ) == .newResource(.simulator))
+    }
+
+    @Test("Legacy creation needs a source window and pane-simulator capability", arguments: [false, true])
+    func unavailableSimulatorCreation(missingWindow: Bool) {
+        #expect(WindowTabAction.simulatorCreation(
+            window: missingWindow ? nil : windows()[1], preferredPaneID: "%3", simulators: [],
+            supportsIndependentResources: false, supportsPaneSimulator: missingWindow, supportsNewSimulator: true
+        ) == nil)
+    }
+
+    private func simulator(pane: String, primary: Bool) -> RemoteSimulatorTab {
+        .init(id: UUID(), sessionName: "work", sourcePaneID: pane, title: "iPhone", runtime: "iOS", isPrimary: primary)
     }
 }
