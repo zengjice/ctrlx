@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.125 — In-session Codex hook approval and iOS tab actions
+
+- Add Trust All Pending Hooks to Codex tab menus on Mac Host, Mac Viewer and
+  iOS. An explicit action approves all pending hooks, including other plugins
+  and configuration sources, through Codex's native controls and confirms
+  persisted trust. It requires verified process/pane identity, idle empty input
+  and supported tmux controls; older Hosts hide the action.
+- Unify iOS creation under New Tab for Agent, Terminal, Browser, Files and iOS
+  Simulator. Resource shortcuts select existing tabs, and unavailable shortcuts
+  stay disabled. Independent resources and older pane-scoped Hosts retain their
+  respective capability checks.
+- On iOS, follow a newly opened child browser page when its parent is visible
+  and controlled. Initial/reconnect catalogs, existing pages and read-only or
+  background parents preserve the current selection.
+- Release validation: focused regression passed with 37 tests reported; its
+  initially skipped native Hook test then passed separately at 48, 60 and 140
+  columns on Codex CLI 0.165.0, using private configuration and tmux servers.
+  All 112 publisher/COS/installer tests, 26 Swift format checks, both boundary
+  checks and arm64/x86_64 iOS Simulator compilation passed. Full Swift regression
+  and paired-device UI acceptance were not rerun.
+
 ## 3.0.124 — API socket recovery and iOS completion state
 
 - Keep serving API requests after transient listener errors, back off on
