@@ -280,6 +280,14 @@
                     onOpenBrowser: onOpenBrowser
                 )
             }
+            #if os(iOS)
+            .onChange(of: client.browserTabs) { previous, current in
+                guard
+                    scenePhase == .active, client.isHostConnected, extensionRequest == nil,
+                    let child = session.newlyOpenedChild(from: previous, in: current) else { return }
+                onOpenBrowser(child)
+            }
+            #endif
         }
 
         private func bookmarkRequest(_ operation: BrowserBookmarkOperation) async throws -> [BrowserBookmark] {

@@ -142,6 +142,16 @@ final public class RemoteBrowserSession {
         openedStoreTab = opened
     }
 
+    func newlyOpenedChild(from previous: [RemoteBrowserTab], in current: [RemoteBrowserTab]) -> RemoteBrowserTab? {
+        guard watching, controlID != nil, !managesExtensions else { return nil }
+        let knownIDs = Set(previous.map(\.id))
+        guard knownIDs.contains(tab.id) else { return nil }
+        return current.first {
+            $0.parentID == tab.id && $0.sessionName == tab.sessionName
+                && $0.isExtensionWindow != true && !knownIDs.contains($0.id)
+        }
+    }
+
     public func watch() async {
         stop()
         watching = true

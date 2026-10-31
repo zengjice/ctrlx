@@ -593,6 +593,12 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   coalesce with higher-budget requests even when their dimensions match.
   Size changes update the next poll without restarting viewing or control.
 - Selection is per Viewer. Agent-created tabs do not steal Viewer focus.
+  On iOS, a newly reported child page of the currently controlled, visible page
+  is selected automatically, including children of Agent-owned pages under human
+  control. Existing tabs, initial/reconnect catalogs and children opened from
+  read-only/background pages do not change selection. Native extension windows
+  retain their separate presentation. This uses the existing parent ID metadata;
+  no Host or Relay protocol update is required.
   Disappearing/background surfaces stop polling and release control; they do not
   close the Host page. Only explicit Close closes it.
 - Agent pages start read-only. **Take Control** acquires one lease per page;
