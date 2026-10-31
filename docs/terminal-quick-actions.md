@@ -7,6 +7,10 @@ and Mac Viewer, and in the iOS tab's More menu. It approves all pending hooks,
 including other plugins and configuration sources. The Host drives Codex's native
 `/hooks` → `t` interaction only from an idle empty composer and recognized panel,
 then reopens the panel to verify persisted trust and returns to the conversation.
+Feedback distinguishes new approval from an already-trusted configuration. The
+latter includes same-conversation refresh instructions for approval saved by
+another Codex process; it does not claim the current runtime was refreshed.
+Generic success from older Hosts is shown as unconfirmed.
 See [Codex hook approval](plugins/codex.md#approving-changed-hooks-without-leaving-the-conversation)
 for input checks and compatibility limits.
 

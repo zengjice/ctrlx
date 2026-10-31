@@ -1,3 +1,4 @@
+import CtrlxNetworking
 import CtrlxPluginProtocol
 import Testing
 @testable import CodexPluginCore
@@ -37,6 +38,7 @@ struct CodexHookTrustTests {
         var actions: [AgentHookTrustAction] = []
         var opens = 0
         var approved = false
+        var runtimeRefreshed = false
         let persists: Bool
         let unknown: Bool
         let width: Int
@@ -54,6 +56,7 @@ struct CodexHookTrustTests {
             }
             if action == .trustAll {
                 approved = true
+                runtimeRefreshed = true
             }
         }
 
@@ -72,34 +75,38 @@ struct CodexHookTrustTests {
     @Test("Success requires reopening the panel to verify persisted approval", arguments: [140, 60, 48])
     func approvesAndReadsBack(width: Int) async throws {
         let replay = Replay(width: width)
-        try await CodexPluginCore().trustHooks(terminal: await replay.terminal)
+        let result = try await CodexPluginCore().trustHooks(terminal: await replay.terminal)
+        #expect(result == .approved)
+        #expect(await replay.runtimeRefreshed)
         #expect(await replay.actions == [.open, .trustAll, .close, .open, .close])
     }
 
-    @Test("Already trusted hooks do not receive a trust keystroke")
-    func alreadyTrusted() async throws {
-        let replay = Replay(approved: true)
-        try await CodexPluginCore().trustHooks(terminal: await replay.terminal)
+    @Test("Approval saved by another conversation does not confirm this runtime refreshed", arguments: [140, 60, 48])
+    func alreadyTrusted(width: Int) async throws {
+        let replay = Replay(approved: true, width: width)
+        let result = try await CodexPluginCore().trustHooks(terminal: await replay.terminal)
+        #expect(result == .alreadyTrusted)
+        #expect(await !replay.runtimeRefreshed)
         #expect(await replay.actions == [.open, .close])
     }
 
     @Test("An optimistic repaint is not approval confirmation and is not retried")
     func failedPersistence() async {
         let replay = Replay(persists: false)
-        await #expect(throws: AgentHookTrustError.self) { try await CodexPluginCore().trustHooks(terminal: await replay.terminal) }
+        await #expect(throws: AgentHookTrustError.self) { _ = try await CodexPluginCore().trustHooks(terminal: await replay.terminal) }
         #expect(await replay.actions == [.open, .trustAll, .close, .open])
     }
 
     @Test("Unknown layouts never receive t")
     func unknownControls() async {
         let replay = Replay(unknown: true)
-        await #expect(throws: AgentHookTrustError.self) { try await CodexPluginCore().trustHooks(terminal: await replay.terminal) }
+        await #expect(throws: AgentHookTrustError.self) { _ = try await CodexPluginCore().trustHooks(terminal: await replay.terminal) }
         #expect(await replay.actions == [.open])
     }
 
     @Test
     func takeoverStopsTheSequence() async {
         let terminal = AgentHookTrustTerminal(read: { throw CancellationError() }, perform: { action in #expect(action == .open) })
-        await #expect(throws: CancellationError.self) { try await CodexPluginCore().trustHooks(terminal: terminal) }
+        await #expect(throws: CancellationError.self) { _ = try await CodexPluginCore().trustHooks(terminal: terminal) }
     }
 }

@@ -141,6 +141,7 @@
 
         /// Error message from failed window commands
         @State private var commandError: String?
+        @State private var hookTrustMessage: String?
 
         /// Rename-window alert state: the window being renamed (if any).
         @State private var renamingWindow: TmuxWindow?
@@ -746,6 +747,20 @@
                 } message: {
                     if let error = commandError {
                         Text(error)
+                    }
+                }
+                .alert("Hook Approval", isPresented: .init(
+                    get: { hookTrustMessage != nil },
+                    set: {
+                        if !$0 {
+                            hookTrustMessage = nil
+                        }
+                    }
+                )) {
+                    Button("OK") { hookTrustMessage = nil }
+                } message: {
+                    if let hookTrustMessage {
+                        Text(hookTrustMessage)
                     }
                 }
                 // Intentionally inline rather than using `WindowRenamingModifier`:
@@ -1633,7 +1648,9 @@
                 defer { isApprovingHooks = false }
                 do {
                     let response = try await relayClient.sendCommand(TrustAgentHooks(workspacePane: identity), paneId: pane.paneId, timeout: 20).get()
-                    if !response.success {
+                    if response.success {
+                        hookTrustMessage = "\(pane.sessionName) / \(pane.windowName) · \(pane.paneId)\n\n" + AgentHookTrustMenu.feedbackMessage(for: response.agentHookTrust)
+                    } else {
                         commandError = response.error ?? "Hook approval failed. Check the terminal before trying again."
                     }
                 } catch { commandError = error.localizedDescription }

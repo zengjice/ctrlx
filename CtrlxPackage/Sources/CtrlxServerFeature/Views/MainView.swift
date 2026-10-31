@@ -264,6 +264,7 @@ public struct MainView: View {
     @State private var localSessionRenameRequest: String?
     @State private var attachError: String?
     @State private var approvingHookPanes: Set<String> = []
+    @State private var hookTrustMessage: String?
     @State private var pendingFileLink: TerminalFileLinkRequest?
     @State private var artifactPreviewWindow: TerminalArtifactPreviewWindowController?
     @State private var browserOpenTask: Task<Void, Never>?
@@ -667,6 +668,7 @@ public struct MainView: View {
         }
         .modifier(AlertsModifier(
             attachError: $attachError,
+            hookTrustMessage: $hookTrustMessage,
             closeConfirmation: $closeConfirmation,
             onPerformClose: { performClose($0) }
         ))
@@ -1220,8 +1222,7 @@ public struct MainView: View {
         )
     }
 
-    @ViewBuilder
-    private var remoteHostSections: some View {
+    @ViewBuilder private var remoteHostSections: some View {
         if settings.hasRemoteHosts, let sessionStore = coordinator.remoteSessionStore {
             ForEach(settings.pairedHosts) { host in
                 RemoteHostSidebarSection(
@@ -1535,8 +1536,7 @@ public struct MainView: View {
         selectedRemoteWindowId = current.first { $0.stableId == id }?.id
     }
 
-    @ViewBuilder
-    private var detailContent: some View {
+    @ViewBuilder private var detailContent: some View {
         if
             let remote = selectedRemoteSession,
             let connection = coordinator.viewerConnectionManager?.connection(for: remote.hostId) {
@@ -2648,8 +2648,7 @@ public struct MainView: View {
         return detachedWorkspace == nil ? title : "\(title) — Workspace"
     }
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
+    @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
         if detachedWorkspace == nil {
             ToolbarItem(id: "ctrlx.toolbar.workflows", placement: .automatic) {
                 Button { openWindow(id: "workflows") } label: { Label("Workflows", symbol: .flowchart) }
@@ -2794,8 +2793,7 @@ public struct MainView: View {
         }
     }
 
-    @ViewBuilder
-    private var connectionStatusIcon: some View {
+    @ViewBuilder private var connectionStatusIcon: some View {
         let connectionManager = coordinator.connectedViewerManager
         let combinedState = connectionManager?.combinedState ?? .disconnected
         let anyViewerConnected = connectionManager?.anyViewerConnected ?? false
@@ -2828,8 +2826,7 @@ public struct MainView: View {
         }
     }
 
-    @ViewBuilder
-    private var connectionActionButton: some View {
+    @ViewBuilder private var connectionActionButton: some View {
         let connectionManager = coordinator.connectedViewerManager
         let combinedState = connectionManager?.combinedState ?? .disconnected
 
@@ -6863,15 +6860,18 @@ public struct MainView: View {
             defer { approvingHookPanes.remove(key) }
             do {
                 let request = TrustAgentHooks(workspacePane: identity)
+                let result: AgentHookTrustResult?
                 if let hostID {
                     guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient else {
                         throw AgentHookTrustError("Reconnect to the Host to approve hooks.")
                     }
                     let response = try await client.sendCommand(request, paneId: pane.paneId, timeout: 20).get()
                     guard response.success else { throw AgentHookTrustError(response.error ?? "Hook approval failed. Check the terminal before trying again.") }
+                    result = response.agentHookTrust
                 } else {
-                    try await coordinator.handleTrustAgentHooks(request, paneID: pane.paneId)
+                    result = try await coordinator.handleTrustAgentHooks(request, paneID: pane.paneId)
                 }
+                hookTrustMessage = "\(pane.sessionName) / \(pane.windowName) · \(pane.paneId)\n\n" + AgentHookTrustMenu.feedbackMessage(for: result)
             } catch { attachError = error.localizedDescription }
         }
     }

@@ -111,6 +111,7 @@ struct SharedTerminalLayoutObserversModifier<Local: Equatable, Remote: Equatable
 /// affordances stay co-located.
 struct AlertsModifier: ViewModifier {
     @Binding var attachError: String?
+    @Binding var hookTrustMessage: String?
     @Binding var closeConfirmation: CloseConfirmation?
     let onPerformClose: (CloseConfirmation.Target) -> Void
 
@@ -138,6 +139,20 @@ struct AlertsModifier: ViewModifier {
             } message: {
                 if let error = attachError {
                     Text(error)
+                }
+            }
+            .alert("Hook Approval", isPresented: .init(
+                get: { hookTrustMessage != nil },
+                set: {
+                    if !$0 {
+                        hookTrustMessage = nil
+                    }
+                }
+            )) {
+                Button("OK") { hookTrustMessage = nil }
+            } message: {
+                if let hookTrustMessage {
+                    Text(hookTrustMessage)
                 }
             }
             .alert(item: $closeConfirmation) { confirmation in

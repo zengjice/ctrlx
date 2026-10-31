@@ -5,7 +5,7 @@ import Dependencies
 import Foundation
 
 extension AppCoordinator {
-    func handleTrustAgentHooks(_ request: TrustAgentHooks, paneID: String) async throws {
+    func handleTrustAgentHooks(_ request: TrustAgentHooks, paneID: String) async throws -> AgentHookTrustResult {
         @Dependency(AgentSessionIdentityClient.self) var identities
         let identityClient = identities
         guard !agentHookTrustRequests.contains(paneID) else {
@@ -23,7 +23,7 @@ extension AppCoordinator {
             throw AgentHookTrustError("No supported Agent is ready in this pane.")
         }
         let identity = request.workspacePane
-        try await gate.human(paneID: paneID) { [self] in
+        return try await gate.human(paneID: paneID) { [self] in
             let claim = gate.claim(paneID: paneID)
             let terminal = AgentHookTrustTerminal(read: { [self] in
                 try await MainActor.run {
@@ -35,9 +35,10 @@ extension AppCoordinator {
                 try await performHookTrustAction(action, paneID: paneID, identity: identity, processID: pid, runtimeID: runtime, provider: provider, gate: gate, claim: claim)
             })
             do {
-                try await provider.trustHooks(terminal: terminal)
+                let result = try await provider.trustHooks(terminal: terminal)
                 try gate.validate(claim)
                 guard identityClient.runtimeID(pid) == runtime else { throw AgentHookTrustError("The Agent process changed.") }
+                return result
             } catch {
                 // Release queued human input into the composer, only closing a
                 // recognized hooks panel that still belongs to this process.

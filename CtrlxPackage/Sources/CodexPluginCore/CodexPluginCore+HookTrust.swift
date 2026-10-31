@@ -1,3 +1,4 @@
+import CtrlxNetworking
 import CtrlxPluginProtocol
 import Foundation
 
@@ -23,7 +24,7 @@ extension CodexPluginCore: AgentHookTrustProviding {
         }
     }
 
-    public func trustHooks(terminal: AgentHookTrustTerminal) async throws {
+    public func trustHooks(terminal: AgentHookTrustTerminal) async throws -> AgentHookTrustResult {
         try await terminal.perform(.open)
         let panel = try await waitForHookTrustPanel(terminal)
         if panel == .needsReview {
@@ -38,6 +39,8 @@ extension CodexPluginCore: AgentHookTrustProviding {
             }
         }
         try await terminal.perform(.close)
+        // Listing reads shared approval state; it does not reload this runtime.
+        return panel == .needsReview ? .approved : .alreadyTrusted
     }
 
     private func waitForHookTrustPanel(_ terminal: AgentHookTrustTerminal, expected: AgentHookTrustPanel? = nil) async throws -> AgentHookTrustPanel {

@@ -1,3 +1,4 @@
+import CtrlxNetworking
 import Foundation
 
 public enum AgentHookTrustPanel: Equatable, Sendable {
@@ -24,7 +25,7 @@ public struct AgentHookTrustTerminal: Sendable {
 public protocol AgentHookTrustProviding: PluginCore {
     nonisolated var hookTrustComposer: AgentWorkflowComposer { get }
     nonisolated func hookTrustPanel(lines: [String]) -> AgentHookTrustPanel?
-    func trustHooks(terminal: AgentHookTrustTerminal) async throws
+    func trustHooks(terminal: AgentHookTrustTerminal) async throws -> AgentHookTrustResult
 }
 
 public struct AgentHookTrustError: Error, LocalizedError, Sendable {

@@ -33,7 +33,9 @@ launches through the shell integration described below.
 An already-running Codex process does not acquire this invocation flag. After a
 plugin update, if it reports `plugin contents changed; hook approval required`,
 use `/hooks` to review and trust the updated hooks in that session. This reloads
-hook configuration without requiring the user to exit the conversation. Settings
+hook configuration when new approval is saved, without requiring the user to exit
+the conversation. Already-saved approval alone does not refresh every running
+conversation; see the multi-conversation case below. Settings
 shows this guidance after a successful Codex install/reinstall; uninstall and
 other agents retain the restart reminder.
 
@@ -59,6 +61,23 @@ replacement, or failure to confirm produce an error without retrying approval.
 Only a recognized hooks panel is closed during cleanup. Existing hook enablement
 is preserved by Codex's trust action. New Viewers hide this action on Hosts that
 do not advertise `supportsAgentHookTrust`.
+
+The result distinguishes **new approval performed** from **already trusted**.
+Mac Host, Mac Viewer and iOS show feedback after the panel closes. New approval
+is reported only after sending `t` and reading back persisted trust. This confirms
+approval, not a subsequent successful hook execution. An already-trusted result
+does not claim that the current conversation's running configuration was refreshed.
+Older Hosts omit the result; new Viewers show an unconfirmed-result message rather
+than treating their generic command success as new approval.
+
+In Codex CLI 0.165.0, approval saved by one conversation can leave another running
+conversation using its previous hook configuration, while `/hooks` in that older
+conversation reads the shared file and shows **Trusted**. The already-trusted
+feedback explains the same-conversation workaround: `/hooks` → `UserPromptSubmit`,
+turn an **already-enabled CtrlX hook** off and back on, waiting for each change to
+appear, then close the panel. Native config writes refresh that conversation;
+no conversation restart is needed. CtrlX does not toggle hooks automatically or
+change their enablement as part of approval.
 
 Maintenance commands (plugin installation, version/catalog queries), `exec` and
 `review` are not automatically given this flag. Outside the supported shell
