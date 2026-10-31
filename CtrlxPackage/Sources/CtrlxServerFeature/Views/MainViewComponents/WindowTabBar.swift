@@ -64,6 +64,7 @@ struct WindowTabBar: View {
     let linkedTabActions: LinkedTabSourceActions
     var onNewResource: ((ResourceTabKind) -> Void)?
     var onViewWorkflow: ((PaneState) -> Void)?
+    var onTrustAgentHooks: ((PaneState) -> Void)?
     var onDetachWindow: ((LocalTmuxWindow, CGPoint?) -> Void)?
 
     @Environment(MirrorWindowManager.self) private var windowManager
@@ -567,7 +568,7 @@ struct WindowTabBar: View {
                 allowsOtherDirectory: true,
                 choose: { onForkWindow(window, $0) }
             ).contextMenuItem,
-        ] + AgentWorkflowMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, open: onViewWorkflow)
+        ] + AgentHookTrustMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, approve: onTrustAgentHooks) + AgentWorkflowMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, open: onViewWorkflow)
     }
 
     @ViewBuilder

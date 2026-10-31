@@ -96,6 +96,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// Older Hosts ignore OpenPaneSimulator's explicit "new" request.
     public let supportsPaneSimulatorCreation: Bool?
     public let supportsSimulatorClosing: Bool?
+    public let supportsAgentHookTrust: Bool?
     public let supportsAgentModelControls: Bool?
     public let supportsDashboard: Bool?
     public let agentWorkflowVersion: Int?
@@ -165,6 +166,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case supportsPaneSimulator
         case supportsPaneSimulatorCreation
         case supportsSimulatorClosing
+        case supportsAgentHookTrust
         case supportsAgentModelControls
         case supportsDashboard
         case agentWorkflowVersion
@@ -210,6 +212,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsPaneSimulator: Bool? = nil,
         supportsPaneSimulatorCreation: Bool? = nil,
         supportsSimulatorClosing: Bool? = nil,
+        supportsAgentHookTrust: Bool? = nil,
         supportsAgentModelControls: Bool? = nil,
         supportsDashboard: Bool? = nil,
         agentWorkflowVersion: Int? = nil,
@@ -266,6 +269,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsPaneSimulator = supportsPaneSimulator
         self.supportsPaneSimulatorCreation = supportsPaneSimulatorCreation
         self.supportsSimulatorClosing = supportsSimulatorClosing
+        self.supportsAgentHookTrust = supportsAgentHookTrust
         self.supportsAgentModelControls = supportsAgentModelControls
         self.supportsDashboard = supportsDashboard
         self.agentWorkflowVersion = agentWorkflowVersion
@@ -316,6 +320,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsPaneSimulator: supportsPaneSimulator,
             supportsPaneSimulatorCreation: supportsPaneSimulatorCreation,
             supportsSimulatorClosing: supportsSimulatorClosing,
+            supportsAgentHookTrust: supportsAgentHookTrust,
             supportsAgentModelControls: supportsAgentModelControls,
             supportsDashboard: supportsDashboard,
             agentWorkflowVersion: agentWorkflowVersion,

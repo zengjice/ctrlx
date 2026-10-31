@@ -97,6 +97,7 @@
 
         /// Whether to show the session info popover
         @State private var showSessionInfo = false
+        @State private var isApprovingHooks = false
 
         @State private var isResizing = false
         @State private var viewportGrids: [String: TerminalViewportSizing.Grid] = [:]
@@ -1110,6 +1111,18 @@
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if
+                            relayClient.hostSupportsAgentHookTrust,
+                            let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane,
+                            pane.agentSession?.pluginID == "codex" {
+                            Button { trustAgentHooks(pane) } label: {
+                                Label(AgentHookTrustMenu.title, symbol: .shield)
+                            }
+                            .disabled(isApprovingHooks || !relayClient.isHostConnected || !AgentHookTrustMenu.isReady(pane))
+                            .accessibilityHint(AgentHookTrustMenu.explanation)
+                            .accessibilityIdentifier("trust-all-pending-hooks")
+                            Divider()
+                        }
+                        if
                             workflowNavigation != nil, relayClient.hostAgentWorkflowVersion == AgentWorkflowWire.version,
                             let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane,
                             pane.agentSession != nil {
@@ -1610,6 +1623,20 @@
                 } catch {
                     commandError = error.localizedDescription
                 }
+            }
+        }
+
+        private func trustAgentHooks(_ pane: PaneState) {
+            guard !isApprovingHooks, AgentHookTrustMenu.isReady(pane), let identity = pane.workspaceIdentity else { return }
+            isApprovingHooks = true
+            Task {
+                defer { isApprovingHooks = false }
+                do {
+                    let response = try await relayClient.sendCommand(TrustAgentHooks(workspacePane: identity), paneId: pane.paneId, timeout: 20).get()
+                    if !response.success {
+                        commandError = response.error ?? "Hook approval failed. Check the terminal before trying again."
+                    }
+                } catch { commandError = error.localizedDescription }
             }
         }
 

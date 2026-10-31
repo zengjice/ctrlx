@@ -1,5 +1,15 @@
 # Terminal quick actions
 
+## Codex hook approval
+
+**Trust All Pending Hooks** is available in Codex tab context menus on Mac Host
+and Mac Viewer, and in the iOS tab's More menu. It approves all pending hooks,
+including other plugins and configuration sources. The Host drives Codex's native
+`/hooks` → `t` interaction only from an idle empty composer and recognized panel,
+then reopens the panel to verify persisted trust and returns to the conversation.
+See [Codex hook approval](plugins/codex.md#approving-changed-hooks-without-leaving-the-conversation)
+for input checks and compatibility limits.
+
 ## Mac keyboard shortcuts
 
 The File, Edit, View and Window menus show the fixed shortcuts. New-session,

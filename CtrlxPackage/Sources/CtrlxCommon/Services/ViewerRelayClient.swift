@@ -128,6 +128,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsPaneSimulator = false
     public private(set) var hostSupportsPaneSimulatorCreation = false
     public private(set) var hostSupportsSimulatorClosing = false
+    public private(set) var hostSupportsAgentHookTrust = false
     public private(set) var hostSupportsAgentModelControls = false
     public private(set) var hostSupportsDashboard = false
     public private(set) var hostAgentWorkflowVersion: Int?
@@ -582,6 +583,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to use independent resource tabs."))
         case .manageAgentWorkflows where hostAgentWorkflowVersion != AgentWorkflowWire.version:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage Agent workflows."))
+        case .trustAgentHooks where !hostSupportsAgentHookTrust:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to approve hooks from CtrlX."))
         case .agentModelControls where !hostSupportsAgentModelControls:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to use model shortcuts."))
         case .readDashboard where !hostSupportsDashboard:
@@ -808,6 +811,8 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: "").get())?.success == true
         case let .manageAgentWorkflows(spec):
             return (try? await sendCommand(spec, paneId: "").get())?.success == true
+        case let .trustAgentHooks(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get())?.success == true
         case let .agentModelControls(spec):
             return (try? await sendCommand(spec, paneId: paneId).get())?.success == true
         case let .readDashboard(spec):
@@ -1277,6 +1282,7 @@ final public class ViewerRelayClient {
             hostSupportsPaneSimulator = sessionState.supportsPaneSimulator == true
             hostSupportsPaneSimulatorCreation = sessionState.supportsPaneSimulatorCreation == true
             hostSupportsSimulatorClosing = sessionState.supportsSimulatorClosing == true
+            hostSupportsAgentHookTrust = sessionState.supportsAgentHookTrust == true
             hostSupportsAgentModelControls = sessionState.supportsAgentModelControls == true
             hostSupportsDashboard = sessionState.supportsDashboard == true
             hostAgentWorkflowVersion = sessionState.agentWorkflowVersion
@@ -1792,6 +1798,7 @@ final public class ViewerRelayClient {
         hostSupportsPaneSimulator = false
         hostSupportsPaneSimulatorCreation = false
         hostSupportsSimulatorClosing = false
+        hostSupportsAgentHookTrust = false
         hostSupportsAgentModelControls = false
         hostSupportsDashboard = false
         hostAgentWorkflowVersion = nil

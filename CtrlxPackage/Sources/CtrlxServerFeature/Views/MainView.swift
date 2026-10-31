@@ -2,6 +2,7 @@ import AppKit
 import CtrlxCommon
 import CtrlxEncryption
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import GitWorkbench
 import SwiftUI
@@ -262,6 +263,7 @@ public struct MainView: View {
     @State private var selectedRemoteWindowId: String?
     @State private var localSessionRenameRequest: String?
     @State private var attachError: String?
+    @State private var approvingHookPanes: Set<String> = []
     @State private var pendingFileLink: TerminalFileLinkRequest?
     @State private var artifactPreviewWindow: TerminalArtifactPreviewWindowController?
     @State private var browserOpenTask: Task<Void, Never>?
@@ -1663,6 +1665,7 @@ public struct MainView: View {
                     linkedTabActions: linkedTabActions(hostID: remote.hostId, sessionName: remote.sessionName),
                     onNewResource: supportsIndependentResources(hostID: remote.hostId) ? { openIndependentResource($0, hostID: remote.hostId, sessionName: remote.sessionName) } : nil,
                     onViewWorkflow: { pane in openWorkflow(for: pane, hostID: remote.hostId) },
+                    onTrustAgentHooks: connection.relayClient.hostSupportsAgentHookTrust ? { pane in trustAgentHooks(pane, hostID: remote.hostId) } : nil,
                     onDetachWindow: { sourceWindow, point in
                         detachTerminal(hostID: remote.hostId, windowID: sourceWindow.stableId, position: point)
                     }
@@ -1884,6 +1887,7 @@ public struct MainView: View {
                         linkedTabActions: linkedTabActions(hostID: nil, sessionName: session.sessionName),
                         onNewResource: { openIndependentResource($0, hostID: nil, sessionName: session.sessionName) },
                         onViewWorkflow: { pane in openWorkflow(for: pane, hostID: nil) },
+                        onTrustAgentHooks: { pane in trustAgentHooks(pane, hostID: nil) },
                         onDetachWindow: { sourceWindow, point in
                             detachTerminal(hostID: nil, windowID: sourceWindow.stableId, position: point)
                         }
@@ -6849,6 +6853,27 @@ public struct MainView: View {
             hostID: hostID,
             isConnected: coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true
         )
+    }
+
+    private func trustAgentHooks(_ pane: PaneState, hostID: String?) {
+        guard AgentHookTrustMenu.isReady(pane), let identity = pane.workspaceIdentity else { return }
+        let key = "\(hostID ?? "local"):\(pane.paneId)"
+        guard approvingHookPanes.insert(key).inserted else { return }
+        Task {
+            defer { approvingHookPanes.remove(key) }
+            do {
+                let request = TrustAgentHooks(workspacePane: identity)
+                if let hostID {
+                    guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient else {
+                        throw AgentHookTrustError("Reconnect to the Host to approve hooks.")
+                    }
+                    let response = try await client.sendCommand(request, paneId: pane.paneId, timeout: 20).get()
+                    guard response.success else { throw AgentHookTrustError(response.error ?? "Hook approval failed. Check the terminal before trying again.") }
+                } else {
+                    try await coordinator.handleTrustAgentHooks(request, paneID: pane.paneId)
+                }
+            } catch { attachError = error.localizedDescription }
+        }
     }
 
     private func agentForkUnavailableReason(hostID: String, requiresDirectory: Bool = false) -> String? {

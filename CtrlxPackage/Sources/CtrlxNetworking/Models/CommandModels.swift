@@ -1158,6 +1158,7 @@ public struct PasteTerminalText: CommandSpec, Equatable {
 /// This enum is the wire format - it's what gets encoded and sent over the network.
 /// Each case holds its corresponding CommandSpec struct.
 public enum CommandType: Codable, Sendable, Equatable {
+    case trustAgentHooks(TrustAgentHooks)
     case agentModelControls(AgentModelControls)
     case readDashboard(ReadDashboard)
     /// Check the fixed Host-owned CtrlX app update feed now.

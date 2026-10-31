@@ -37,6 +37,29 @@ hook configuration without requiring the user to exit the conversation. Settings
 shows this guidance after a successful Codex install/reinstall; uninstall and
 other agents retain the restart reminder.
 
+### Approving changed hooks without leaving the conversation
+
+Mac Host and Mac Viewer expose **Trust All Pending Hooks** in a Codex tab's
+context menu. iOS exposes it in the tab's **More** menu. Windows with multiple
+Codex panes list each source pane explicitly. The action approves every pending
+hook in that Codex runtime, including hooks from other plugins and configuration
+sources; it does not restrict approval to CtrlX.
+
+The Host requires an unambiguous supported Agent process, matching workspace
+pane identity, an idle empty composer, no pending question or editor/draft, and a
+running tmux server that reports bracketed-paste mode (tmux 3.7+). It serializes
+input through the shared terminal gate and rechecks the process and screen before
+each mutation. It opens `/hooks`, sends `t` only after recognizing the root
+`trust all` controls, then reopens the panel to read back persisted approval.
+Both wide and compact `Active/Installed` tables are recognized, including a
+wrapped panel description on narrow terminals. Recognition is shared by approval
+and error cleanup; handler-detail pages and unknown controls remain unsupported.
+Successful operations return to the composer. Unknown layouts, takeover, process
+replacement, or failure to confirm produce an error without retrying approval.
+Only a recognized hooks panel is closed during cleanup. Existing hook enablement
+is preserved by Codex's trust action. New Viewers hide this action on Hosts that
+do not advertise `supportsAgentHookTrust`.
+
 Maintenance commands (plugin installation, version/catalog queries), `exec` and
 `review` are not automatically given this flag. Outside the supported shell
 integration, users can pass `--dangerously-bypass-hook-trust` explicitly when desired.

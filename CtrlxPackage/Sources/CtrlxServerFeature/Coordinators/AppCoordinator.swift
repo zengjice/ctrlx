@@ -147,6 +147,7 @@
         /// pre-configured `PluginRegistry` without calling `setupAllServices()`.
         @ObservationIgnored var pluginRegistry: PluginRegistry?
         @ObservationIgnored var agentModelCatalogs: [String: AgentModelRuntimeCache] = [:]
+        @ObservationIgnored var agentHookTrustRequests: Set<String> = []
         @ObservationIgnored var agentModelRequests: Set<String> = []
         @ObservationIgnored let agentModelReads = AgentModelReadRequests()
         @ObservationIgnored let agentModelDisplayCache = AgentModelDisplayCache()
@@ -3458,6 +3459,13 @@
                         return try await CommandResponseMessage(commandId: command.id, success: true, agentWorkflow: service.handle(spec))
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
+                if case let .trustAgentHooks(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        try await self.handleTrustAgentHooks(spec, paneID: command.paneId)
+                        return .success(for: command.id)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .agentModelControls(spec) = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
                     do {
@@ -3984,6 +3992,7 @@
                     supportsPaneSimulator: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsPaneSimulatorCreation: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsSimulatorClosing: await self?.agentSimulator.supportsSimulatorViewing,
+                    supportsAgentHookTrust: true,
                     supportsAgentModelControls: true,
                     supportsDashboard: true,
                     agentWorkflowVersion: workflowVersion,
