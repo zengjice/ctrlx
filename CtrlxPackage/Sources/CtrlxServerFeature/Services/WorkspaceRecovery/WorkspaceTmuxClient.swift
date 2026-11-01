@@ -55,6 +55,8 @@ actor WorkspaceTmuxRecovery {
     static let placeholderDirectoryKey = "@ctrlx-recovery-directory"
     static let sessionIncompleteKey = "@ctrlx-recovery-session-incomplete"
     static let windowIncompleteKey = "@ctrlx-recovery-window-incomplete"
+    /// Dead panes have no process cwd. Discovery and recovery must agree on their directory.
+    static let paneDirectoryFormat = "#{?pane_dead,#{pane_start_path},#{pane_current_path}}"
 
     private let run: @Sendable ([String]) async throws -> ProcessResult
     private let shell: @Sendable () async -> (command: String, environment: [String])
@@ -94,7 +96,7 @@ actor WorkspaceTmuxRecovery {
         "#{pid}:#{start_time}", "#{session_id}", "#{session_name}", "#{\(sessionKey)}",
         "#{@ctrlx-description}", "#{@ctrlx-color}", "#{@ctrlx-emoji}",
         "#{window_id}", "#{window_index}", "#{window_name}", "#{window_active}",
-        "#{window_layout}", "#{\(windowKey)}", "#{pane_id}", "#{?pane_dead,#{pane_start_path},#{pane_current_path}}",
+        "#{window_layout}", "#{\(windowKey)}", "#{pane_id}", paneDirectoryFormat,
         "#{pane_active}", "#{\(paneKey)}", "#{\(sessionIncompleteKey)}", "#{\(windowIncompleteKey)}",
         "#{\(agentPendingKey)}", "#{pane_dead}", "#{\(placeholderDirectoryKey)}", "#{\(agentLaunchKey)}",
     ].joined(separator: "\u{1f}")
