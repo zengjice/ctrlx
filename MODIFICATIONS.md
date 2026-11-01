@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.126 — Shared quota history and Codex hook feedback
+
+- Retain the latest confirmed shared-account quota when another Host changes
+  accounts or routes, and persist account switches immediately. Dashboard pages
+  and summaries use the same history without duplicating current Host bindings.
+  Historical observations retain their original time, do not trigger current
+  quota alerts and yield to fresh provider readings, including quota resets.
+- Distinguish newly approved Codex hooks from hooks already trusted by another
+  conversation. Explain when the running configuration has not refreshed and
+  offer manual in-conversation refresh guidance; older Hosts report unconfirmed
+  results rather than implying that their running configuration was refreshed.
+- Release validation: 78 focused Swift tests and two opt-in native Hook tests
+  passed. Private Codex CLI 0.166.0 fixtures verified approval readback and the
+  shared-trust/stale-runtime case, including manual refresh. All 112 publisher,
+  COS and installer tests, 19 Swift format checks, both boundary checks and
+  arm64/x86_64 iOS Simulator compilation passed. Full Swift regression and
+  paired-device UI acceptance were not rerun.
+
 ## 3.0.125 — In-session Codex hook approval and iOS tab actions
 
 - Add Trust All Pending Hooks to Codex tab menus on Mac Host, Mac Viewer and
