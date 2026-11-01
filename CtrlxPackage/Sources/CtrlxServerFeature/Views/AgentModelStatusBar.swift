@@ -12,6 +12,7 @@ struct AgentModelStatusBar: View {
     @Environment(AppSettings.self) private var settings
     @State private var snapshot: AgentModelSnapshot?
     @State private var error: String?
+    @State private var changeError: String?
     @State private var changing = false
     @State private var refreshing = false
     @State private var confirmed = false
@@ -70,7 +71,9 @@ struct AgentModelStatusBar: View {
     private var content: some View {
         HStack(spacing: 4) {
             if let snapshot, !snapshot.models.isEmpty {
-                AgentModelChoices(snapshot: snapshot, hidden: hidden, unavailableReason: unavailableReason, change: change, hide: { model, effort in hide(model: model, effort: effort) })
+                // Cached readiness can lag behind a cleared draft or a completed
+                // turn. Let the Host validate the click against the live terminal.
+                AgentModelChoices(snapshot: snapshot, hidden: hidden, unavailableReason: changing ? "Switching model and effort…" : nil, change: change, hide: { model, effort in hide(model: model, effort: effort) })
                     .disabled(refreshing)
             } else {
                 Text(error ?? snapshot?.unavailableReason ?? (snapshot == nil ? "Reading models…" : "Model shortcuts unavailable"))
@@ -78,11 +81,22 @@ struct AgentModelStatusBar: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .help(error ?? "Identify the Agent in the selected pane to show its models.")
             }
-            if refreshing {
+            if changing {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.mini)
+                    Text("Switching…").font(.caption)
+                }
+                .fixedSize()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Switching model and effort")
+                .accessibilityIdentifier("model-shortcuts-switching")
+            } else if refreshing {
                 ProgressView().controlSize(.mini).help("Refreshing models")
             } else if let warning = error ?? snapshot?.catalogWarning, snapshot?.models.isEmpty == false {
                 Symbols.exclamationmarkTriangle.image
                     .foregroundStyle(.secondary).help(warning)
+                    .accessibilityLabel(warning)
+                    .accessibilityIdentifier("model-shortcuts-warning")
             }
             Button { showsCustomization = true } label: {
                 Symbols.ellipsisCircle.image
@@ -111,6 +125,17 @@ struct AgentModelStatusBar: View {
         .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: 32)
         .padding(.horizontal, 8)
+        .alert("Model Change Failed", isPresented: Binding(
+            get: { changeError != nil }, set: {
+                if !$0 {
+                    changeError = nil
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) { changeError = nil }
+        } message: {
+            Text(changeError ?? "")
+        }
         .task(id: isVisible ? displayKey : nil) {
             guard isVisible, let key = displayKey else { return }
             let cache = coordinator.agentModelDisplayCache
@@ -206,11 +231,16 @@ struct AgentModelStatusBar: View {
     }
 
     private func change(_ selection: AgentModelSelection) {
-        guard !changing, !refreshing, unavailableReason == nil, let key = displayKey, let snapshot else { return }
+        guard !changing, !refreshing else { return }
+        guard let key = displayKey, let snapshot else {
+            changeError = "The terminal changed. Reopen this tab's model controls."
+            return
+        }
         let identity = key.pane
         refreshGeneration += 1
         changing = true
         error = nil
+        changeError = nil
         Task {
             defer { changing = false }
             do {
@@ -225,6 +255,7 @@ struct AgentModelStatusBar: View {
                 guard key == displayKey else { return }
                 confirmed = false
                 self.error = error.localizedDescription
+                changeError = error.localizedDescription
             }
         }
     }
@@ -280,6 +311,7 @@ struct AgentModelChoices: View {
                         let effort = snapshot.selection?.effort.flatMap { model.efforts.contains($0) ? $0 : nil } ?? model.defaultEffort
                         change(.init(model: model.id, effort: effort))
                     }
+                    .accessibilityIdentifier("model-shortcut-model-\(model.id)")
                     .contextMenu {
                         Button("Hide \(model.name) in This Tab") { hide(model.id, nil) }
                             .disabled(model.id == snapshot.selection?.model)
@@ -294,6 +326,7 @@ struct AgentModelChoices: View {
                             }
                         }
                         .disabled(snapshot.selection == nil)
+                        .accessibilityIdentifier("model-shortcut-effort-\(effort)")
                         .contextMenu {
                             Button("Hide \(effort) in This Tab") { hide(nil, effort) }
                                 .disabled(effort == snapshot.selection?.effort)

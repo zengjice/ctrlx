@@ -192,22 +192,28 @@ including when returning to a tab. Ordinary polls update only changed display
 state, without disabling buttons or showing progress. Initial discovery and manual
 catalog refresh still show progress. A click during an ordinary poll waits for the
 Host's read to finish, then performs fresh write validation; cached display data
-never bypasses process, pane, input or expected-selection checks. Failures
-show their reason in the strip/popover and retry after 15 seconds; manual refresh
-remains available. A replacement pane or plugin cannot inherit another target's
-confirmed state. Debug Mode logs identification, catalog, terminal and Viewer
+never bypasses process, pane, input or expected-selection checks. Cached readiness
+and earlier read errors do not disable known choices: clicking rechecks the live
+Host state, shows **Switching…** immediately, and disables further switches until
+the request finishes. A rejected or failed switch opens **Model Change Failed**
+with the reason; the user can retry after resolving it. Background refreshes do
+not open or dismiss this alert. Read failures show their reason in the
+strip/popover and retry after 15 seconds; manual refresh remains available.
+Switch requests are never retried automatically. A replacement pane or plugin
+cannot inherit another target's confirmed state. Debug Mode logs identification,
+catalog, terminal and Viewer
 response durations/errors under `com.jicezeng.ctrlx.agent-models`, without process
 environments or terminal contents. Last-turn telemetry is never treated as current
 selection. Codex shortcuts require a readable model and effort in its native
-status line. If a custom status line hides them, the strip disables switching
-with an explanation; the Host rechecks before sending any command. Restore the
+status line. If a custom status line hides them, the Host rejects switching
+with an explanation before sending any command. Restore the
 status fields or use native `/model`. Claude can establish an unknown selection
 through its native picker. Native manual changes are reflected when their
 current state is visible.
 
 Safe shortcut switching also requires the running Host tmux server to expose
 `bracket_paste_flag` (tmux 3.7+). On older servers, including 3.6a, the model list
-and any readable current selection still appear, while switching is disabled
+and any readable current selection still appear, while switch requests are rejected
 with an upgrade explanation. A missing field remains unknown and cannot enable
 automatic terminal input. Updating the tmux executable or resuming an Agent does
 not upgrade an already-running tmux server.
