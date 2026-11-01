@@ -3463,7 +3463,12 @@
                     guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
                     do {
                         let result = try await self.handleTrustAgentHooks(spec, paneID: command.paneId)
-                        return CommandResponseMessage(commandId: command.id, success: true, agentHookTrust: result)
+                        return CommandResponseMessage(
+                            commandId: command.id,
+                            success: true,
+                            agentHookTrust: result,
+                            agentHooksRefreshed: spec.refreshIfTrusted == true && result == .alreadyTrusted
+                        )
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .agentModelControls(spec) = command.command {

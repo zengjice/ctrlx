@@ -35,23 +35,43 @@ extension AppCoordinator {
                 try await performHookTrustAction(action, paneID: paneID, identity: identity, processID: pid, runtimeID: runtime, provider: provider, gate: gate, claim: claim)
             })
             do {
-                let result = try await provider.trustHooks(terminal: terminal)
+                let result = try await provider.trustHooks(terminal: terminal, refreshIfTrusted: request.refreshIfTrusted == true)
                 try gate.validate(claim)
                 guard identityClient.runtimeID(pid) == runtime else { throw AgentHookTrustError("The Agent process changed.") }
                 return result
             } catch {
-                // Release queued human input into the composer, only closing a
-                // recognized hooks panel that still belongs to this process.
-                if
-                    identityClient.runtimeID(pid) == runtime,
-                    let screen = try? await tmuxService.captureAgentTerminal(paneID: paneID, identity: identity),
-                    provider.hookTrustPanel(lines: screen.plainLines) != nil {
-                    _ = try? await tmuxService.runWorkspaceCommand([["send-keys", "-t", paneID, "Escape"]], target: paneID, identity: identity) { launch in
-                        guard identityClient.runtimeID(pid) == runtime else { throw AgentHookTrustError("The Agent process changed.") }
-                        try launch()
-                    }
+                // A newer human claim is still queued behind us. Close our
+                // recognized panel before releasing it, so Return cannot toggle
+                // a hook. With no queued takeover, keep failed restoration visible.
+                if (error as? AgentHookTrustError)?.preservePanel != true || gate.claim(paneID: paneID).generation != claim.generation {
+                    await closeHookTrustPanels(paneID: paneID, identity: identity, processID: pid, runtimeID: runtime, provider: provider)
                 }
                 throw error
+            }
+        }
+    }
+
+    private func closeHookTrustPanels(paneID: String, identity: WorkspacePaneIdentity, processID: String, runtimeID: String, provider: any AgentHookTrustProviding) async {
+        @Dependency(AgentSessionIdentityClient.self) var identities
+        for _ in 0..<2 {
+            guard
+                identities.runtimeID(processID) == runtimeID,
+                let screen = try? await tmuxService.captureAgentTerminal(paneID: paneID, identity: identity) else { return }
+            let isDetail = provider.hookTrustAllows(.back, lines: screen.plainLines)
+            guard isDetail || provider.hookTrustPanel(lines: screen.plainLines) != nil else { return }
+            let result = try? await tmuxService.runWorkspaceCommand([["send-keys", "-t", paneID, "Escape"]], target: paneID, identity: identity) { launch in
+                guard identities.runtimeID(processID) == runtimeID else { throw AgentHookTrustError("The Agent process changed.") }
+                try launch()
+            }
+            guard result != nil else { return }
+            for _ in 0..<30 {
+                guard
+                    identities.runtimeID(processID) == runtimeID,
+                    let current = try? await tmuxService.captureAgentTerminal(paneID: paneID, identity: identity) else { return }
+                if isDetail ? provider.hookTrustPanel(lines: current.plainLines) != nil : AgentWorkflowComposerInspection.readiness(current, composer: provider.hookTrustComposer) == .ready {
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(100))
             }
         }
     }
@@ -102,6 +122,11 @@ extension AppCoordinator {
                 throw AgentHookTrustError("The hooks panel changed. Check the terminal.")
             }
             input = ["send-keys", "-t", paneID, "Escape"]
+        case let .press(key, expected):
+            guard screen.plainLines == expected, provider.hookTrustAllows(key, lines: screen.plainLines) else {
+                throw AgentHookTrustError("The hooks selection changed. Nothing was sent.")
+            }
+            input = ["send-keys", "-t", paneID, key.rawValue]
         }
         let conditions = [
             "#{bracket_paste_flag}", "#{==:#{pane_in_mode},0}",

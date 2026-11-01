@@ -41,7 +41,7 @@ other agents retain the restart reminder.
 
 ### Approving changed hooks without leaving the conversation
 
-Mac Host and Mac Viewer expose **Trust All Pending Hooks** in a Codex tab's
+Mac Host and Mac Viewer expose **Trust and Refresh Hooks** in a Codex tab's
 context menu. iOS exposes it in the tab's **More** menu. Windows with multiple
 Codex panes list each source pane explicitly. The action approves every pending
 hook in that Codex runtime, including hooks from other plugins and configuration
@@ -54,30 +54,44 @@ input through the shared terminal gate and rechecks the process and screen befor
 each mutation. It opens `/hooks`, sends `t` only after recognizing the root
 `trust all` controls, then reopens the panel to read back persisted approval.
 Both wide and compact `Active/Installed` tables are recognized, including a
-wrapped panel description on narrow terminals. Recognition is shared by approval
-and error cleanup; handler-detail pages and unknown controls remain unsupported.
+wrapped panel description on narrow terminals. Refresh also recognizes the native
+`UserPromptSubmit` detail page, selected index, source, command, trust and toggle
+controls. Every navigation/toggle revalidates the exact captured screen before
+sending its key; unknown layouts remain unsupported.
 Successful operations return to the composer. Unknown layouts, takeover, process
 replacement, or failure to confirm produce an error without retrying approval.
-Only a recognized hooks panel is closed during cleanup. Existing hook enablement
-is preserved by Codex's trust action. New Viewers hide this action on Hosts that
+Only a recognized hooks panel in the same process is closed during cleanup.
+Queued human input invalidates further toggles, but cleanup closes the native
+panel before releasing that input, preventing an accidental hook toggle by Return.
+Existing hook enablement is preserved by Codex's trust action.
+New Viewers hide this action on Hosts that
 do not advertise `supportsAgentHookTrust`.
 
 The result distinguishes **new approval performed** from **already trusted**.
 Mac Host, Mac Viewer and iOS show feedback after the panel closes. New approval
 is reported only after sending `t` and reading back persisted trust. This confirms
-approval, not a subsequent successful hook execution. An already-trusted result
-does not claim that the current conversation's running configuration was refreshed.
-Older Hosts omit the result; new Viewers show an unconfirmed-result message rather
-than treating their generic command success as new approval.
+approval, not a subsequent successful hook execution. New clients additionally
+request `refreshIfTrusted`; after a verified refresh the Host returns
+`agentHooksRefreshed: true` alongside the existing `already_trusted` approval
+status. Missing refresh confirmation never means success. Older Viewers omit the
+request and retain approval-only behavior; older Hosts ignore it and new Viewers
+show unconfirmed-refresh guidance. No new enum value breaks legacy responses.
 
-In Codex CLI 0.165.0, approval saved by one conversation can leave another running
+In Codex CLI 0.165.0 and 0.166.0, approval saved by one conversation can leave another running
 conversation using its previous hook configuration, while `/hooks` in that older
-conversation reads the shared file and shows **Trusted**. The already-trusted
-feedback explains the same-conversation workaround: `/hooks` → `UserPromptSubmit`,
-turn an **already-enabled CtrlX hook** off and back on, waiting for each change to
-appear, then close the panel. Native config writes refresh that conversation;
-no conversation restart is needed. CtrlX does not toggle hooks automatically or
-change their enablement as part of approval.
+conversation reads the shared file and shows **Trusted**. For an explicit refresh
+request, CtrlX navigates `/hooks` → `UserPromptSubmit`, finds an **already-enabled,
+trusted CtrlX hook**, turns it off and back on, and reopens the panel after each
+change to confirm both saved states before returning to the composer.
+Native config writes refresh that conversation without restarting it. This does
+not toggle foreign, managed, untrusted or initially disabled hooks. If no eligible
+hook exists, the action reports why it cannot refresh.
+
+After a failed or ambiguous toggle, restoration first reads the persisted state
+and only re-enables the same hook if it is disabled. Human takeover, changed
+selection/process, an unknown panel, or unconfirmed restoration leaves a clear
+manual-recovery error instead of sending blind keys or claiming success. Mac and
+iOS Viewer requests allow 60 seconds for the native navigation and readback.
 
 Maintenance commands (plugin installation, version/catalog queries), `exec` and
 `review` are not automatically given this flag. Outside the supported shell

@@ -1487,6 +1487,8 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let agentModelShortcuts: AgentModelShortcutInitialization?
     /// Missing on older Hosts; command success alone does not confirm new approval.
     public let agentHookTrust: AgentHookTrustResult?
+    /// Explicit confirmation of a requested refresh; older peers omit this field.
+    public let agentHooksRefreshed: Bool?
     /// True only after the Host sent the opener or already handled this queue.
     /// Missing on older Hosts; a generic success is not an acknowledgement.
     public let codexQuestionsHandled: Bool?
@@ -1514,6 +1516,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         agentModels: AgentModelSnapshot? = nil,
         agentModelShortcuts: AgentModelShortcutInitialization? = nil,
         agentHookTrust: AgentHookTrustResult? = nil,
+        agentHooksRefreshed: Bool? = nil,
         codexQuestionsHandled: Bool? = nil
     ) {
         self.commandId = commandId
@@ -1538,6 +1541,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.agentModels = agentModels
         self.agentModelShortcuts = agentModelShortcuts
         self.agentHookTrust = agentHookTrust
+        self.agentHooksRefreshed = agentHooksRefreshed
         self.codexQuestionsHandled = codexQuestionsHandled
     }
 

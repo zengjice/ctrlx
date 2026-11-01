@@ -1647,9 +1647,9 @@
             Task {
                 defer { isApprovingHooks = false }
                 do {
-                    let response = try await relayClient.sendCommand(TrustAgentHooks(workspacePane: identity), paneId: pane.paneId, timeout: 20).get()
+                    let response = try await relayClient.sendCommand(TrustAgentHooks(workspacePane: identity), paneId: pane.paneId, timeout: 60).get()
                     if response.success {
-                        hookTrustMessage = "\(pane.sessionName) / \(pane.windowName) · \(pane.paneId)\n\n" + AgentHookTrustMenu.feedbackMessage(for: response.agentHookTrust)
+                        hookTrustMessage = "\(pane.sessionName) / \(pane.windowName) · \(pane.paneId)\n\n" + AgentHookTrustMenu.feedbackMessage(for: response.agentHookTrust, refreshed: response.agentHooksRefreshed == true)
                     } else {
                         commandError = response.error ?? "Hook approval failed. Check the terminal before trying again."
                     }

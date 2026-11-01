@@ -1,15 +1,17 @@
 import CtrlxNetworking
 
 public enum AgentHookTrustMenu {
-    public static let title = "Trust All Pending Hooks"
-    public static let explanation = "Approves all pending hooks, including other plugins and configuration sources."
+    public static let title = "Trust and Refresh Hooks"
+    public static let explanation = "Approves all pending hooks, including other plugins and configuration sources. If already trusted, refreshes this conversation by briefly turning an enabled CtrlX hook off and back on."
 
-    public static func feedbackMessage(for result: AgentHookTrustResult?) -> String {
+    public static func feedbackMessage(for result: AgentHookTrustResult?, refreshed: Bool = false) -> String {
         switch result {
         case .approved:
             "Pending hooks were approved in this conversation. Hook on/off settings were kept."
         case .alreadyTrusted:
-            "Codex already reports all hooks as trusted. This action did not refresh the running configuration.\n\nIf hooks still fail, open /hooks → UserPromptSubmit in the tab shown above. Turn an already-enabled CtrlX hook off, then back on. Wait for each change to appear, then close the panel. No conversation restart is needed."
+            refreshed
+                ? "Hooks were already trusted. This conversation's hook configuration was refreshed, and the original hook on/off settings were restored."
+                : "Codex already reports all hooks as trusted. This Host did not confirm refreshing the running configuration.\n\nUpdate the Host, or open /hooks → UserPromptSubmit in this tab and turn an already-enabled CtrlX hook off, then back on. Wait for each change to appear before closing the panel."
         case nil:
             "This Host did not report whether new approval was performed. Update the Host for detailed results. Check /hooks in this conversation; a success response alone does not confirm that its running configuration was refreshed."
         }

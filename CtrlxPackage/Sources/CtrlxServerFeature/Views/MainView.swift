@@ -6861,17 +6861,20 @@ public struct MainView: View {
             do {
                 let request = TrustAgentHooks(workspacePane: identity)
                 let result: AgentHookTrustResult?
+                let refreshed: Bool
                 if let hostID {
                     guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient else {
                         throw AgentHookTrustError("Reconnect to the Host to approve hooks.")
                     }
-                    let response = try await client.sendCommand(request, paneId: pane.paneId, timeout: 20).get()
+                    let response = try await client.sendCommand(request, paneId: pane.paneId, timeout: 60).get()
                     guard response.success else { throw AgentHookTrustError(response.error ?? "Hook approval failed. Check the terminal before trying again.") }
                     result = response.agentHookTrust
+                    refreshed = response.agentHooksRefreshed == true
                 } else {
                     result = try await coordinator.handleTrustAgentHooks(request, paneID: pane.paneId)
+                    refreshed = request.refreshIfTrusted == true && result == .alreadyTrusted
                 }
-                hookTrustMessage = "\(pane.sessionName) / \(pane.windowName) · \(pane.paneId)\n\n" + AgentHookTrustMenu.feedbackMessage(for: result)
+                hookTrustMessage = "\(pane.sessionName) / \(pane.windowName) · \(pane.paneId)\n\n" + AgentHookTrustMenu.feedbackMessage(for: result, refreshed: refreshed)
             } catch { attachError = error.localizedDescription }
         }
     }

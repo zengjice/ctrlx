@@ -29,7 +29,7 @@ struct AgentHookTrustMenuTests {
                 Issue.record("Multiple Codex panes require an explicit source choice")
                 return
             }
-            #expect(title == "Trust All Pending Hooks")
+            #expect(title == "Trust and Refresh Hooks")
             #expect(children.count == 2)
             guard case let .button(_, _, _, hint, action) = children[1] else { return }
             #expect(hint?.contains("other plugins") == true)

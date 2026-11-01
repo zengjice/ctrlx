@@ -78,7 +78,7 @@ struct AgentHookTrustNativeTests {
                 let config = try String(contentsOf: directory.appendingPathComponent("codex/config.toml"), encoding: .utf8)
                 #expect(config.components(separatedBy: "trusted_hash").count - 1 == 2)
                 #expect(config.contains("enabled = false"))
-                let repeated = try await coordinator.handleTrustAgentHooks(.init(workspacePane: target.identity), paneID: paneID)
+                let repeated = try await coordinator.handleTrustAgentHooks(.init(workspacePane: target.identity, refreshIfTrusted: false), paneID: paneID)
                 #expect(repeated == .alreadyTrusted)
                 #expect(try await pid() == beforePID)
             } catch {
@@ -91,8 +91,21 @@ struct AgentHookTrustNativeTests {
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CTRLX_HOOK_TRUST_SHARED_SOCKET"] != nil))
     func nativeSharedApprovalNeedsRefresh() async throws {
+        let onToggle = LockIsolated<(@MainActor @Sendable () async -> Void)?>(nil)
         try await withDependencies {
             $0[ProcessRunner.self] = .liveValue
+            $0[ProcessRunner.self].runWithLaunch = { executable, arguments, environment, timeout, launch in
+                let result = try await ProcessRunner.liveValue.runWithLaunch(executable, arguments, environment, timeout, launch)
+                let command = arguments.joined(separator: " ")
+                if
+                    command.contains("send-keys"), command.contains("Space"),
+                    let inject = onToggle.withValue({ value in let action = value
+                        value = nil
+                        return action }) {
+                    await inject()
+                }
+                return result
+            }
             $0.continuousClock = ContinuousClock()
             $0[PreferencesService.self] = .inMemory()
             $0[SecretsService.self] = .inMemory()
@@ -109,7 +122,8 @@ struct AgentHookTrustNativeTests {
             settings.tmuxPath = "/opt/homebrew/bin/tmux"
             settings.tmuxSocket = socket
             let coordinator = AppCoordinator(settings: settings)
-            coordinator.tmuxService.workflowInputGate = AgentWorkflowInputGate(onHumanInput: { _ in })
+            let inputGate = AgentWorkflowInputGate(onHumanInput: { _ in })
+            coordinator.tmuxService.workflowInputGate = inputGate
             let target = try await coordinator.tmuxService.captureWorkspacePane(target: "probe:first")
             let paneID = target.info.paneId
             coordinator.windowManager.setPaneStatesForPreview([.init(paneId: paneID, agentSession: .init(paneId: paneID, pluginID: "codex"), workspaceIdentity: target.identity)])
@@ -117,10 +131,40 @@ struct AgentHookTrustNativeTests {
             let root = directory.appendingPathComponent("plugin-state")
             try await registry.enable("codex", host: MockPluginHost(), env: .init(pluginRoot: root, stateDir: root, appVersion: "test", settings: JSONEncoder().encode(CodexSettings(exportTelemetry: false)), marketplaceSource: root))
             coordinator.pluginRegistry = registry
+            let takeover = ProcessInfo.processInfo.environment["CTRLX_HOOK_TRUST_TAKEOVER"] == "1"
+            let humanTask = LockIsolated<Task<Bool, Error>?>(nil)
+            if takeover {
+                onToggle.setValue {
+                    let generation = inputGate.claim(paneID: paneID).generation
+                    humanTask.setValue(Task { @MainActor in
+                        try await inputGate.human(paneID: paneID) {
+                            let screen = try await coordinator.tmuxService.captureAgentTerminal(paneID: paneID, identity: target.identity)
+                            return AgentWorkflowComposerInspection.readiness(screen, composer: CodexPluginCore().hookTrustComposer) == .ready
+                        }
+                    })
+                    while inputGate.claim(paneID: paneID).generation == generation {
+                        await Task.yield()
+                    }
+                }
+            }
             do {
-                let result = try await coordinator.handleTrustAgentHooks(.init(workspacePane: target.identity), paneID: paneID)
-                #expect(result == .alreadyTrusted)
-                #expect(try Data(contentsOf: config) == before)
+                let refresh = ProcessInfo.processInfo.environment["CTRLX_HOOK_TRUST_REFRESH"] == "1"
+                if takeover {
+                    do {
+                        _ = try await coordinator.handleTrustAgentHooks(.init(workspacePane: target.identity), paneID: paneID)
+                        Issue.record("Human takeover must stop refresh")
+                    } catch let error as AgentHookTrustError {
+                        #expect(error.preservePanel)
+                    }
+                    let task = try #require(humanTask.value)
+                    #expect(try await task.value, "Queued human input must reach the composer, not a hook toggle")
+                } else {
+                    let result = try await coordinator.handleTrustAgentHooks(.init(workspacePane: target.identity, refreshIfTrusted: refresh), paneID: paneID)
+                    #expect(result == .alreadyTrusted)
+                }
+                if !refresh {
+                    #expect(try Data(contentsOf: config) == before)
+                }
                 let screen = try await coordinator.tmuxService.captureAgentTerminal(paneID: paneID, identity: target.identity)
                 #expect(AgentWorkflowComposerInspection.readiness(screen, composer: CodexPluginCore().hookTrustComposer) == .ready)
             } catch {

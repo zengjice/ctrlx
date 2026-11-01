@@ -2,15 +2,20 @@
 
 ## Codex hook approval
 
-**Trust All Pending Hooks** is available in Codex tab context menus on Mac Host
+**Trust and Refresh Hooks** is available in Codex tab context menus on Mac Host
 and Mac Viewer, and in the iOS tab's More menu. It approves all pending hooks,
 including other plugins and configuration sources. The Host drives Codex's native
 `/hooks` → `t` interaction only from an idle empty composer and recognized panel,
 then reopens the panel to verify persisted trust and returns to the conversation.
-Feedback distinguishes new approval from an already-trusted configuration. The
-latter includes same-conversation refresh instructions for approval saved by
-another Codex process; it does not claim the current runtime was refreshed.
-Generic success from older Hosts is shown as unconfirmed.
+If already trusted, it refreshes this conversation through an enabled, trusted
+CtrlX `UserPromptSubmit` hook: off, then back on, reopening the native panel after
+each change to confirm both saved states. Disabled and other plugins' hooks are not
+toggled. An interrupted refresh attempts restoration while the same process,
+selection and human-input ownership remain valid; otherwise it reports the hook
+to check. Recognized panels close before queued human input is released, so
+Return cannot accidentally toggle a hook. Feedback distinguishes new approval,
+confirmed refresh, and older Hosts' unconfirmed results. The optional refresh
+request/result fields preserve approval-only behavior for older Viewers.
 See [Codex hook approval](plugins/codex.md#approving-changed-hooks-without-leaving-the-conversation)
 for input checks and compatibility limits.
 

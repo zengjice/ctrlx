@@ -10,6 +10,14 @@ public enum AgentHookTrustAction: Equatable, Sendable {
     case open
     case trustAll
     case close
+    case press(AgentHookTrustKey, screen: [String])
+}
+
+public enum AgentHookTrustKey: String, Sendable {
+    case next = "Down"
+    case details = "Enter"
+    case back = "Escape"
+    case toggle = "Space"
 }
 
 public struct AgentHookTrustTerminal: Sendable {
@@ -25,13 +33,16 @@ public struct AgentHookTrustTerminal: Sendable {
 public protocol AgentHookTrustProviding: PluginCore {
     nonisolated var hookTrustComposer: AgentWorkflowComposer { get }
     nonisolated func hookTrustPanel(lines: [String]) -> AgentHookTrustPanel?
-    func trustHooks(terminal: AgentHookTrustTerminal) async throws -> AgentHookTrustResult
+    nonisolated func hookTrustAllows(_ key: AgentHookTrustKey, lines: [String]) -> Bool
+    func trustHooks(terminal: AgentHookTrustTerminal, refreshIfTrusted: Bool) async throws -> AgentHookTrustResult
 }
 
 public struct AgentHookTrustError: Error, LocalizedError, Sendable {
     public let message: String
-    public init(_ message: String) {
+    public let preservePanel: Bool
+    public init(_ message: String, preservePanel: Bool = false) {
         self.message = message
+        self.preservePanel = preservePanel
     }
 
     public var errorDescription: String? {

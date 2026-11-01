@@ -24,7 +24,7 @@ extension CodexPluginCore: AgentHookTrustProviding {
         }
     }
 
-    public func trustHooks(terminal: AgentHookTrustTerminal) async throws -> AgentHookTrustResult {
+    public func trustHooks(terminal: AgentHookTrustTerminal, refreshIfTrusted: Bool = false) async throws -> AgentHookTrustResult {
         try await terminal.perform(.open)
         let panel = try await waitForHookTrustPanel(terminal)
         if panel == .needsReview {
@@ -37,9 +37,11 @@ extension CodexPluginCore: AgentHookTrustProviding {
             guard try await waitForHookTrustPanel(terminal) == .trusted else {
                 throw AgentHookTrustError("Codex still reports hooks requiring review. Check /hooks before trying again.")
             }
+        } else if refreshIfTrusted {
+            try await refreshTrustedHooks(terminal)
         }
         try await terminal.perform(.close)
-        // Listing reads shared approval state; it does not reload this runtime.
+        // Approval and runtime refresh are reported separately on the wire.
         return panel == .needsReview ? .approved : .alreadyTrusted
     }
 
