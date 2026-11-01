@@ -7,6 +7,20 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.129 — Checkpoints for stopped terminals
+
+- Use stopped tmux panes' launch directory consistently in live discovery and
+  recovery capture. A stopped terminal no longer blocks saving the complete
+  workspace checkpoint, including independent Files tabs and model shortcuts.
+- Prefer an available absolute directory from the session's live panes, then
+  retain a known directory only for the same persistent session identity.
+  Sessions without a reliable directory wait for discovery or saved identity;
+  they never publish an empty path or inherit another same-named session's path.
+- Release validation: all 176 focused Swift tests passed, including a private
+  native tmux stopped-pane checkpoint and reload. All 117 publisher/COS/installer
+  tests, five Swift format checks and both boundary checks passed. Full Swift
+  regression and end-to-end App reboot acceptance were not rerun; macOS only.
+
 ## 3.0.128 — Workspace recovery across CLI updates
 
 - Retain the last verified Agent conversation and process evidence through
