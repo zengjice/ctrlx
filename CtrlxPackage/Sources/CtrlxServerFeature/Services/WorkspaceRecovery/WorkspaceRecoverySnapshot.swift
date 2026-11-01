@@ -109,6 +109,7 @@ struct WorkspaceRecoverySnapshot: Codable, Equatable, Sendable {
                 Set(files.map(\.id)).count == files.count, Set(browsers.map(\.id)).count == browsers.count,
                 Set(presentation.ownedWindowIDs).count == presentation.ownedWindowIDs.count,
                 Set(presentation.ownedWindowIDs).isSubset(of: Set(presentation.windowIDs.values)),
+                Set(presentation.modelShortcuts?.keys.map { $0 } ?? []).isSubset(of: Set(presentation.ownedWindowIDs)),
                 presentation.selectedWindowID.map({ presentation.ownedWindowIDs.contains($0) }) ?? true,
                 presentation.layout.splitRatio.isFinite else {
                 throw WorkspaceRecoveryError("Invalid saved workbench tabs.")
@@ -347,6 +348,7 @@ struct WorkspaceRecoveryPresentation: Codable, Equatable, Sendable {
     var selectedWindowID: UUID?
     var remoteReference: ViewerWorkspaceReference?
     var fileSources: [UUID: ViewerWorkspaceReference]?
+    var modelShortcuts: [UUID: AgentModelPreferences.Snapshot]?
 }
 
 struct WorkspaceRecoveryDraft: Codable, Equatable, Sendable, Identifiable {

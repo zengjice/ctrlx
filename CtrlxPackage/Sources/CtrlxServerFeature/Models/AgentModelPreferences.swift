@@ -1,7 +1,7 @@
 import CtrlxNetworking
 import Foundation
 
-/// Display preferences belong to this client's live tab, not the Agent or disk.
+/// Display preferences belong to this client's tab; workspace recovery persists them.
 @Observable
 @MainActor
 final class AgentModelPreferences {
@@ -13,6 +13,11 @@ final class AgentModelPreferences {
 
     typealias Hidden = AgentModelShortcuts
 
+    struct Snapshot: Codable, Equatable, Sendable {
+        var hidden: Hidden
+        var defaults: Hidden?
+    }
+
     var tabs: [Key: Hidden] = [:]
     private(set) var defaults: [Key: Hidden] = [:]
 
@@ -22,6 +27,31 @@ final class AgentModelPreferences {
         defaults[key] = snapshot.defaults
         if tabs[key] == nil {
             tabs[key] = snapshot.defaults
+        }
+    }
+
+    func capture(hostID: String, serverID: String?, windowIDs: [UUID]) -> [UUID: Snapshot]? {
+        guard let serverID else { return nil }
+        let saved = Dictionary(uniqueKeysWithValues: windowIDs.compactMap { id -> (UUID, Snapshot)? in
+            let key = Key(hostID: hostID, serverID: serverID, windowID: id)
+            guard let hidden = tabs[key] else { return nil }
+            return (id, Snapshot(hidden: hidden, defaults: defaults[key]))
+        })
+        return saved.isEmpty ? nil : saved
+    }
+
+    func restore(_ saved: [UUID: Snapshot]?, hostID: String, serverID: String?, windowIDs: [UUID]) {
+        guard let serverID, let saved else { return }
+        for id in windowIDs {
+            guard let snapshot = saved[id] else { continue }
+            let key = Key(hostID: hostID, serverID: serverID, windowID: id)
+            // A retry must not overwrite edits made after the tab became available.
+            if tabs[key] == nil {
+                tabs[key] = snapshot.hidden
+            }
+            if defaults[key] == nil, let original = snapshot.defaults {
+                defaults[key] = original
+            }
         }
     }
 

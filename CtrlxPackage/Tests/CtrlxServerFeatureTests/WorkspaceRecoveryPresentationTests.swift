@@ -8,6 +8,93 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct WorkspaceRecoveryPresentationTests {
+    @Test("Model shortcuts and creation defaults survive App restart and tmux reconstruction", arguments: [false, true])
+    func modelShortcutsRestart(rebuild: Bool) async throws {
+        let old = sessions(), owner = DetachedTerminalWindows(), preferences = AgentModelPreferences()
+        let target = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@2"))
+        _ = try #require(owner.detach(target, position: nil, session: { _ in "two" }))
+        for session in old {
+            let window = session.windows[0]
+            let pane = WorkspacePaneIdentity(serverID: "old", sessionID: session.id, windowID: window.id, paneID: window.panes[0].id)
+            preferences.initialize(.init(pane: pane, defaults: .init(models: ["provider-default"], efforts: ["low"])), hostID: "local")
+            let key = AgentModelPreferences.Key(hostID: "local", serverID: "old", windowID: window.id)
+            preferences.tabs[key]?.models.insert(session.name)
+        }
+        var snapshot = WorkspaceRecoveryStoreTests.snapshot()
+        snapshot.sessions = old
+        snapshot.scenes = WorkspaceRecoveryPresentationMapper.captureLocal(windows: owner, sessions: old, mainID: owner.mainSceneID, modelPreferences: preferences, serverID: "old")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-model-recovery-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await WorkspaceRecoveryStore.diskBacked(directory: directory).save(snapshot)
+        let saved = try #require(try await WorkspaceRecoveryStore.diskBacked(directory: directory).load())
+        var live = WorkspaceTmuxState(serverID: rebuild ? "new" : "old", sessions: old)
+        if rebuild {
+            live.sessions[0].windows[0].runtimeID = "@2"
+            live.sessions[1].windows[0].runtimeID = "@1"
+        }
+        let restored = AgentModelPreferences(), windows = DetachedTerminalWindows()
+        WorkspaceRecoveryPresentationMapper.restoreLocal(saved.scenes, live: live, windows: windows, files: [], modelPreferences: restored)
+        for session in old {
+            let key = AgentModelPreferences.Key(hostID: "local", serverID: rebuild ? "new" : "old", windowID: session.windows[0].id)
+            #expect(restored.tabs[key]?.models == ["provider-default", session.name])
+            #expect(restored.tabs[key]?.efforts == ["low"])
+            #expect(restored.defaults[key]?.models == ["provider-default"])
+            restored.tabs[key]?.models.insert("after-restore")
+        }
+        WorkspaceRecoveryPresentationMapper.restoreLocal(saved.scenes, live: live, windows: windows, files: [], modelPreferences: restored)
+        #expect(restored.tabs.values.allSatisfy { $0.models.contains("after-restore") })
+        let next = WorkspaceRecoveryPresentationMapper.captureLocal(windows: windows, sessions: live.sessions, mainID: windows.mainSceneID, modelPreferences: restored, serverID: live.serverID)
+        #expect(next.flatMap(\.sessions).compactMap(\.modelShortcuts).flatMap(\.values).allSatisfy { $0.hidden.models.contains("after-restore") })
+    }
+
+    @Test("Partial recovery retains missing window shortcuts and ignores recycled runtime IDs")
+    func pendingModelShortcuts() {
+        var source = WorkspaceRecoveryStoreTests.snapshot()
+        var second = WorkspaceRecoveryStoreTests.snapshot().sessions[0].windows[0]
+        second.index = 1
+        second.runtimeID = "@2"
+        source.sessions[0].windows.append(second)
+        source.recovery = .init(bootID: "boot", pendingAgentPaneIDs: [])
+        var saved = presentation(source.sessions[0])
+        let record = AgentModelPreferences.Snapshot(hidden: .init(models: ["hidden"], efforts: ["low"]), defaults: .init(efforts: ["low"]))
+        saved.modelShortcuts = [second.id: record]
+        let windows = DetachedTerminalWindows(), preferences = AgentModelPreferences()
+        source.scenes = [.init(id: windows.mainSceneID, isMain: true, sessions: [saved])]
+        var live = WorkspaceTmuxState(serverID: "new", sessions: source.sessions)
+        live.sessions[0].windows.removeLast()
+        let captured = WorkspaceRecoveryPresentationMapper.captureLocal(windows: windows, sessions: live.sessions, mainID: windows.mainSceneID, modelPreferences: preferences, serverID: live.serverID)
+        let retained = WorkspaceRecoveryPresentationMapper.preservingUnavailable(captured: captured, source: source, live: live)
+        #expect(retained.first?.sessions.first?.modelShortcuts?[second.id] == record)
+        WorkspaceRecoveryPresentationMapper.restoreLocal(retained, live: live, windows: windows, files: [], modelPreferences: preferences)
+        #expect(preferences.tabs.isEmpty)
+        live.sessions = source.sessions
+        WorkspaceRecoveryPresentationMapper.restoreLocal(retained, live: live, windows: windows, files: [], modelPreferences: preferences)
+        #expect(preferences.tabs[.init(hostID: "local", serverID: "new", windowID: second.id)] == record.hidden)
+
+        // A new window can reuse the old tmux number, but not the closed tab's configuration.
+        live.sessions[0].windows[1].id = UUID()
+        let replacement = AgentModelPreferences()
+        WorkspaceRecoveryPresentationMapper.restoreLocal(retained, live: live, windows: DetachedTerminalWindows(), files: [], modelPreferences: replacement)
+        #expect(replacement.tabs.isEmpty)
+        let afterClose = WorkspaceRecoveryPresentationMapper.captureLocal(windows: windows, sessions: live.sessions, mainID: windows.mainSceneID, modelPreferences: preferences, serverID: live.serverID)
+        #expect(afterClose.flatMap(\.sessions).allSatisfy { $0.modelShortcuts?[second.id] == nil })
+    }
+
+    @Test("Legacy workspace snapshots omit shortcuts; saved preferences must belong to an owned window")
+    func modelShortcutCompatibility() throws {
+        var snapshot = WorkspaceRecoveryStoreTests.snapshot()
+        let windows = DetachedTerminalWindows()
+        snapshot.scenes = WorkspaceRecoveryPresentationMapper.captureLocal(windows: windows, sessions: snapshot.sessions, mainID: windows.mainSceneID)
+        let data = try JSONEncoder().encode(snapshot)
+        #expect(!String(decoding: data, as: UTF8.self).contains("modelShortcuts"))
+        let legacy = try JSONDecoder().decode(WorkspaceRecoverySnapshot.self, from: data)
+        let preferences = AgentModelPreferences()
+        WorkspaceRecoveryPresentationMapper.restoreLocal(legacy.scenes, live: .init(serverID: "new", sessions: legacy.sessions), windows: DetachedTerminalWindows(), files: [], modelPreferences: preferences)
+        #expect(preferences.tabs.isEmpty && preferences.defaults.isEmpty)
+        snapshot.scenes[0].sessions[0].modelShortcuts = [UUID(): .init(hidden: .init(), defaults: nil)]
+        #expect(throws: WorkspaceRecoveryError.self) { try snapshot.validate() }
+    }
+
     @Test("A saved frame on an unavailable display is clamped to the current screen", arguments: [false, true])
     func missingDisplay(oversized: Bool) throws {
         _ = NSApplication.shared

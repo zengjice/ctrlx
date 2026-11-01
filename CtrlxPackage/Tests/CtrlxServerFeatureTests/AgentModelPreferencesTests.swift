@@ -12,6 +12,20 @@ import Testing
 
 @MainActor
 struct AgentModelPreferencesTests {
+    @Test("Repeated workspace updates do not republish restored shortcut preferences", arguments: [false, true])
+    func restoredPreferencesDoNotPublish(hasDefaults: Bool) {
+        let store = AgentModelPreferences(), id = UUID()
+        let saved = [id: AgentModelPreferences.Snapshot(hidden: .init(models: ["hidden"]), defaults: hasDefaults ? .init(efforts: ["low"]) : nil)]
+        store.restore(saved, hostID: "pair", serverID: "new", windowIDs: [id])
+        let invalidations = LockIsolated(0)
+        withObservationTracking {
+            _ = store.tabs
+            _ = store.defaults
+        } onChange: { invalidations.withValue { $0 += 1 } }
+        store.restore(saved, hostID: "pair", serverID: "new", windowIDs: [id])
+        #expect(invalidations.value == 0)
+    }
+
     @Test("Pruning unchanged model preferences does not invalidate observers")
     func unchangedPruneDoesNotPublish() {
         let store = AgentModelPreferences()

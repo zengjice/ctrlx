@@ -70,7 +70,7 @@
         let resourceSessions = HostResourceSessionStore()
         var workspaceRecovery: WorkspaceRecoveryController?
         let recoveredWorkspaceDrafts = WorkspaceRecoveryDrafts()
-        let viewerWorkspaceRecovery = WorkspaceViewerRecovery()
+        let viewerWorkspaceRecovery: WorkspaceViewerRecovery
         var workspaceRecoveryReady = false
         var workspaceAgentDiscoveryComplete = false
         @ObservationIgnored var recoveryAgentDescriptors: [UUID: (source: AgentForkSource, runtimeID: String, descriptor: AgentResumeDescriptor)] = [:]
@@ -151,7 +151,7 @@
         @ObservationIgnored var agentModelRequests: Set<String> = []
         @ObservationIgnored let agentModelReads = AgentModelReadRequests()
         @ObservationIgnored let agentModelDisplayCache = AgentModelDisplayCache()
-        let agentModelPreferences = AgentModelPreferences()
+        let agentModelPreferences: AgentModelPreferences
 
         @ObservationIgnored var agentWorkflowStore: AgentWorkflowStore?
 
@@ -352,6 +352,9 @@
         /// Synchronous initialization sets up core services. Call `setupAllServices()` asynchronously
         /// to complete service initialization and start connections.
         public init(settings: AppSettings = AppSettings(), agentBrowser: AgentBrowserService = AgentBrowserService()) {
+            let modelPreferences = AgentModelPreferences()
+            self.agentModelPreferences = modelPreferences
+            self.viewerWorkspaceRecovery = WorkspaceViewerRecovery(modelPreferences: modelPreferences)
             self.settings = settings
             self.agentBrowser = agentBrowser
             self.licenseManager = LicenseManager(settings: settings)

@@ -88,7 +88,7 @@ extension AppCoordinator {
         let presentationSessions = WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)
         snapshot.resourceSessions = resourceSessions.sessions
         snapshot.independentFileTabs = hostFileTabs.tabs.filter { $0.resourceSessionID != nil }
-        let captured = WorkspaceRecoveryPresentationMapper.captureLocal(windows: detachedWindows, sessions: presentationSessions, mainID: detachedWindows.mainSceneID)
+        let captured = WorkspaceRecoveryPresentationMapper.captureLocal(windows: detachedWindows, sessions: presentationSessions, mainID: detachedWindows.mainSceneID, modelPreferences: agentModelPreferences, serverID: live.serverID)
         snapshot.scenes = WorkspaceRecoveryPresentationMapper.preservingUnavailable(captured: captured, source: source, live: live)
         snapshot.fileTabs = WorkspaceRecoveryPresentationMapper.captureFiles(hostFileTabs.tabs, sessions: live.sessions)
         if source.recovery != nil {
@@ -203,7 +203,7 @@ extension AppCoordinator {
         hostFileTabs.restore(snapshot.fileTabs, sessions: live.sessions, serverID: live.serverID)
         hostFileTabs.migrateRestoredHumanTabs(snapshot.fileTabs, sessions: resourceSessions.sessions)
         let alreadyPresented = detachedWindows.mainTabs.restoredRecoveryWindowIDs
-        WorkspaceRecoveryPresentationMapper.restoreLocal(snapshot.scenes, live: .init(serverID: live.serverID, sessions: WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)), windows: detachedWindows, files: hostFileTabs.tabs)
+        WorkspaceRecoveryPresentationMapper.restoreLocal(snapshot.scenes, live: .init(serverID: live.serverID, sessions: WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)), windows: detachedWindows, files: hostFileTabs.tabs, modelPreferences: agentModelPreferences)
         viewerWorkspaceRecovery.restore(snapshot.viewerScenes, windows: detachedWindows)
         for session in live.sessions {
             guard

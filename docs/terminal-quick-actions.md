@@ -127,9 +127,14 @@ Right-click a button to hide it, or open the adjacent customization popover to
 change several checkboxes without reopening it. Changes apply immediately; Done,
 Escape or clicking outside closes the popover. It scrolls vertically when needed.
 The current choices are labelled Current and cannot be hidden. Display settings
-remain editable while the Agent is working. These display preferences are in-memory,
+remain editable while the Agent is working. These display preferences are
 per-client and per-stable-window, survive split/detach, and expire when the tab
-closes. Successful refresh prunes closed tabs without publishing an observation
+closes. With workspace recovery enabled, Mac Host and Viewer save the current
+hidden IDs and the tab's creation-time defaults in their own presentation snapshots.
+Recovery maps the persistent window identity to the current tmux server, including
+partial discovery, without overwriting edits to already restored tabs. Offline
+Viewer records remain scoped to their pairing and persistent Host identity.
+Successful refresh prunes closed tabs without publishing an observation
 change when no entries were removed. The current choice always remains visible.
 
 **Provider defaults:** Settings → Agents → Codex/Claude Code → Providers has a
@@ -144,6 +149,9 @@ when that also follows the CLI, it uses the current CLI configuration's defaults
 Later Provider edits affect future tabs only. Each tab keeps its own creation
 snapshot for Restore Defaults (all buttons when no defaults were configured).
 Fork, resume and existing tabs keep their existing display behavior.
+Workspace recovery restores the saved tab settings rather than reading today's
+Provider defaults. Older snapshots without display settings retain the existing
+all-buttons behavior; recovery does not change the Agent's active model or effort.
 The Host applies defaults locally and includes an optional, stable-pane-scoped
 snapshot in the creation response for the creating Mac Viewer. Preferences are
 never polled or broadcast with terminal state; other clients retain their own tab
