@@ -1,5 +1,6 @@
 import CtrlxEncryption
 import CtrlxNetworking
+import Dependencies
 import Foundation
 
 /// Keeps JSONDecoder and its CPU work off MainActor while preserving the
@@ -209,6 +210,8 @@ final public class ViewerRelayClient {
     /// Whether we should attempt reconnection
     private var shouldReconnect = false
 
+    public private(set) var relayAccessRestriction: RelayAccessFailure?
+
     /// Current reconnection attempt
     private var reconnectionAttempt = 0
 
@@ -412,6 +415,7 @@ final public class ViewerRelayClient {
         self.e2eeService = e2eeService
         self.partnerPublicKey = partnerPublicKey
         self.partnerPublicKeyId = partnerPublicKeyId
+        relayAccessRestriction = nil
         shouldReconnect = true
         reconnectionAttempt = 0
         versionMismatch = nil
@@ -450,6 +454,7 @@ final public class ViewerRelayClient {
 
     /// Disconnect from the relay server
     public func disconnect() async {
+        relayAccessRestriction = nil
         shouldReconnect = false
         await cleanupConnection()
         setState(.disconnected)
@@ -457,6 +462,10 @@ final public class ViewerRelayClient {
 
     /// Reset reconnection backoff and immediately attempt to reconnect.
     public func reconnectImmediately() async {
+        if relayAccessRestriction != nil {
+            await retryRelayAccessIfAvailable()
+            return
+        }
         guard shouldReconnect else {
             logger.debug("Not configured to reconnect, ignoring reconnectImmediately()")
             return
@@ -543,6 +552,7 @@ final public class ViewerRelayClient {
     /// expect the connection to recover call this to flip the flag back on and
     /// trigger a fresh `performConnect`.
     public func enableReconnectAndRetry() async {
+        relayAccessRestriction = nil
         shouldReconnect = true
         reconnectionTask?.cancel()
         reconnectionTask = nil
@@ -555,6 +565,36 @@ final public class ViewerRelayClient {
         }
 
         await performConnect()
+    }
+
+    private func scheduleRelayAccessRecovery(_ failure: RelayAccessFailure) {
+        guard RelayAccessRecovery.canPoll(failure) else { return }
+        reconnectionTask?.cancel()
+        reconnectionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(30)) }
+                catch { return }
+                guard let self, self.relayAccessRestriction == failure else { return }
+                await self.retryRelayAccessIfAvailable()
+            }
+        }
+    }
+
+    private func retryRelayAccessIfAvailable() async {
+        guard let failure = relayAccessRestriction, RelayAccessRecovery.canPoll(failure), let serverURL, let pairId else { return }
+        let generation = connectionGeneration.current
+        do {
+            @Dependency(RelayAccessClient.self) var access
+            let status = try await access.status(serverURL.absoluteString, pairId, "viewer")
+            guard
+                connectionGeneration.isCurrent(generation), relayAccessRestriction == failure,
+                RelayAccessRecovery.canResume(failure, status: status) else { return }
+            reconnectionTask?.cancel()
+            reconnectionTask = nil
+            await enableReconnectAndRetry()
+        } catch {
+            logger.debug("Relay quota recovery check failed: \(error)")
+        }
     }
 
     // MARK: - Sending Messages
@@ -1040,7 +1080,17 @@ final public class ViewerRelayClient {
         let session = URLSession(configuration: .default)
         urlSession = session
 
-        let task = session.webSocketTask(with: wsURL)
+        var request = URLRequest(url: wsURL)
+        let credentialGeneration = connectionGeneration.current
+        do {
+            @Dependency(RelayCredentials.self) var credentials
+            try await credentials.authorize(&request, server: serverURL.absoluteString, pairID: pairId, role: "viewer")
+        } catch {
+            setState(.error(error.localizedDescription))
+            return
+        }
+        guard connectionGeneration.isCurrent(credentialGeneration) else { return }
+        let task = session.webSocketTask(with: request)
         webSocketTask = task
         lastInboundAt = ContinuousClock.now
         task.resume()
@@ -1467,7 +1517,16 @@ final public class ViewerRelayClient {
             }
 
         case let .error(errorMessage):
-            if errorMessage.code == ErrorMessage.invalidPairCode {
+            if let failure = errorMessage.relayAccess {
+                shouldReconnect = false
+                isHostConnected = false
+                connectedHostName = nil
+                await cleanupConnection()
+                await onTransportInterrupted?()
+                setState(.error(failure.message))
+                relayAccessRestriction = failure
+                scheduleRelayAccessRecovery(failure)
+            } else if errorMessage.code == ErrorMessage.invalidPairCode {
                 logger.info("Received INVALID_PAIR error, treating as unpair")
                 shouldReconnect = false
                 await cleanupConnection()

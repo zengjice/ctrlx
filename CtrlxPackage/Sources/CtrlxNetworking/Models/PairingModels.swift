@@ -95,14 +95,17 @@ public enum PairingResponse: Codable, Sendable, Equatable {
 /// Info returned when host successfully registers a pairing code
 public struct RegistrationInfo: Codable, Sendable, Equatable {
     public let pairId: String
+    public let relayCredential: String?
 
-    public init(pairId: String) {
+    public init(pairId: String, relayCredential: String? = nil) {
         self.pairId = pairId
+        self.relayCredential = relayCredential
     }
 }
 
 /// Info returned when pairing is completed successfully
 public struct PairedViewerInfo: Codable, Sendable, Equatable {
+    public let relayCredential: String?
     public let pairId: String
     public let partnerDeviceName: String
     /// Base64-encoded public key of the partner for E2EE
@@ -117,8 +120,10 @@ public struct PairedViewerInfo: Codable, Sendable, Equatable {
         partnerDeviceName: String,
         partnerPublicKey: String,
         partnerPublicKeyId: String,
-        partnerUsername: String
+        partnerUsername: String,
+        relayCredential: String? = nil
     ) {
+        self.relayCredential = relayCredential
         self.pairId = pairId
         self.partnerDeviceName = partnerDeviceName
         self.partnerPublicKey = partnerPublicKey
@@ -257,6 +262,8 @@ public struct ViewerRegisteredMessage: Codable, Sendable {
 /// Status of a device pair
 public struct PairingStatus: Codable, Sendable {
     public let valid: Bool
+    /// Pairing completion is independent of connection state and traffic quota.
+    public let pairingCompleted: Bool?
     public let hostConnected: Bool
     public let viewerConnected: Bool
     /// Device name the viewer reported when it completed pairing. `nil` until
@@ -268,9 +275,11 @@ public struct PairingStatus: Codable, Sendable {
         valid: Bool,
         hostConnected: Bool,
         viewerConnected: Bool,
-        viewerDeviceName: String? = nil
+        viewerDeviceName: String? = nil,
+        pairingCompleted: Bool? = nil
     ) {
         self.valid = valid
+        self.pairingCompleted = pairingCompleted
         self.hostConnected = hostConnected
         self.viewerConnected = viewerConnected
         self.viewerDeviceName = viewerDeviceName

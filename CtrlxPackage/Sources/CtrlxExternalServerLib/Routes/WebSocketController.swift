@@ -115,21 +115,46 @@ struct WebSocketController: RouteCollection {
 
         guard !Task.isCancelled, !inbound.isFinished, !ws.isClosed else { return }
 
-        // Register exactly once. The FIFO keeps early frames buffered until this
-        // socket is registered and validated, so message handling never needs to
-        // mutate connection ownership.
-        let connection = Connection(
-            pairId: pairId,
-            deviceType: deviceType,
-            deviceId: deviceId,
-            webSocket: ws,
-            stopReceiving: { inbound.finish() }
-        )
-        await connectionHub.register(connection)
-        req.logger.info("WebSocket connected: \(deviceType) for pair \(pairId)")
+        let access = req.application.relayAccess
+        let principal: RelayPrincipal?
+        do {
+            if let access {
+                principal = try await req.application.relayAccessLimits.authenticate(
+                    req, using: access, operation: "connect", limit: 120,
+                    pairID: pairId, role: deviceType.rawValue, deviceID: deviceId
+                )
+            } else {
+                principal = nil
+            }
+            if let access, let principal {
+                let quota = try await access.admit(principal, bytes: 0)
+                if quota.remainingBytes == 0 {
+                    throw RelayAccessFailure(code: .quotaExceeded, message: "Relay monthly traffic quota is exhausted.", quota: quota)
+                }
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled, !inbound.isFinished, !ws.isClosed else { return }
+            let failure = relayAccessFailure(error)
+            let message = WebSocketMessage.error(ErrorMessage(
+                code: failure.code.rawValue,
+                message: failure.message,
+                recoverable: false,
+                relayAccess: failure
+            ))
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            if let data = try? encoder.encode(message) {
+                try? await ws.send(raw: data, opcode: .text)
+            }
+            try? await ws.close(code: .policyViolation)
+            return
+        }
 
-        // Validate the pair (after registration so messages aren't lost)
-        guard await pairingService.isValidPair(pairId: pairId) else {
+        // Validate before replacing any existing connection.
+        let validPair = await pairingService.isValidPair(pairId: pairId)
+        guard principal != nil || validPair else {
             req.logger.warning("WebSocket connection rejected: invalid pairId \(pairId)")
             _ = await connectionHub.unregisterIfCurrent(
                 pairId: pairId,
@@ -144,6 +169,20 @@ struct WebSocketController: RouteCollection {
             return
         }
         guard !Task.isCancelled, !inbound.isFinished, !ws.isClosed else { return }
+
+        // Register exactly once. The FIFO keeps early frames buffered until this
+        // socket is registered and validated, so message handling never needs to
+        // mutate connection ownership.
+        let connection = Connection(
+            pairId: pairId,
+            deviceType: deviceType,
+            deviceId: deviceId,
+            webSocket: ws,
+            principal: principal,
+            stopReceiving: { inbound.finish() }
+        )
+        await connectionHub.register(connection)
+        req.logger.info("WebSocket connected: \(deviceType) for pair \(pairId)")
 
         // Hosted-relay gate for hosts (viewers are never gated). Mirrors the
         // invalidPair rejection flow above.
@@ -196,6 +235,10 @@ struct WebSocketController: RouteCollection {
                     deviceType: deviceType,
                     connectionHub: connectionHub,
                     relayService: relayService,
+                    access: access,
+                    principal: principal,
+                    pairingService: pairingService,
+                    limits: req.application.relayAccessLimits,
                     logger: req.logger
                 )
             case .connected:
@@ -215,6 +258,10 @@ private func handleIncomingMessage(
     deviceType: DeviceType,
     connectionHub: ConnectionHub,
     relayService: RelayService,
+    access: RelayAccessService?,
+    principal: RelayPrincipal?,
+    pairingService: PairingService,
+    limits: RelayAccessLimits,
     logger: Logger
 ) async {
     // A replaced half-open socket may still deliver a frame after its successor
@@ -232,6 +279,12 @@ private func handleIncomingMessage(
             in: data,
             using: decoder
         ) {
+            var chargedQuota: RelayQuotaStatus?
+            if let access, let principal {
+                let target: DeviceType = deviceType == .host ? .viewer : .host
+                guard await connectionHub.getConnection(pairId: pairId, deviceType: target) != nil else { return }
+                chargedQuota = try await access.admit(principal, bytes: data.count)
+            }
             await relayService.handleEncryptedFrame(
                 rawEncryptedFrame,
                 kind: frame.kind,
@@ -239,9 +292,32 @@ private func handleIncomingMessage(
                 sender: deviceType,
                 sourceWebSocket: ws
             )
+            if let quota = chargedQuota, quota.remainingBytes == 0, let principal {
+                await connectionHub.rejectAccess(
+                    RelayAccessFailure(code: .quotaExceeded, message: "Relay monthly traffic quota is exhausted.", quota: quota),
+                    pairID: pairId,
+                    accountID: principal.accountID,
+                    sourceWebSocket: ws
+                )
+            }
             return
         }
+        if access != nil, data.count > 4_096 {
+            throw RelayAccessFailure(code: .accessDenied, message: "Relay control message is too large.")
+        }
+        if access != nil {
+            try await limits.check("control:" + pairId + deviceType.rawValue, limit: 120)
+        }
         let message = try decoder.decode(WebSocketMessage.self, from: data)
+        if let access, let principal {
+            let quota = try await access.admit(principal, bytes: 0)
+            if quota.remainingBytes == 0 {
+                throw RelayAccessFailure(code: .quotaExceeded, message: "Relay monthly traffic quota is exhausted.", quota: quota)
+            }
+            if let pair = try await access.updatePair(principal, message: message) {
+                await pairingService.installPair(pair)
+            }
+        }
 
         switch deviceType {
         case .host:
@@ -249,8 +325,15 @@ private func handleIncomingMessage(
         case .viewer:
             await relayService.handleViewerMessage(message, pairId: pairId)
         }
+    } catch is CancellationError {
+        return
     } catch {
-        logger.error("Failed to decode WebSocket message: \(error)")
+        guard !Task.isCancelled, !ws.isClosed else { return }
+        if let principal {
+            guard await connectionHub.isCurrent(pairId: pairId, deviceType: deviceType, webSocket: ws) else { return }
+            await connectionHub.rejectAccess(relayAccessFailure(error), pairID: pairId, accountID: principal.accountID, sourceWebSocket: ws)
+        }
+        logger.error("Failed to handle WebSocket message: \(error)")
     }
 }
 

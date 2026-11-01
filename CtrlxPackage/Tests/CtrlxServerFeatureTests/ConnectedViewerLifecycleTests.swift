@@ -1,5 +1,6 @@
 #if os(macOS)
     import Dependencies
+    import DependenciesTestSupport
     import Foundation
     import Testing
     import Vapor
@@ -8,7 +9,11 @@
     @testable import CtrlxNetworking
     @testable import CtrlxServerFeature
 
-    @Suite("Connected viewer lifecycle")
+    @Suite(
+        "Connected viewer lifecycle",
+        .dependency(SecretsService.inMemory()),
+        .dependency(RelayCredentials.inMemory())
+    )
     @MainActor
     struct ConnectedViewerLifecycleTests {
         @Test("Invalidation rejects work captured by an older connection")
@@ -50,11 +55,7 @@
             let relay = try await RegisteringMuteHostRelay.start(countingUpgradesInto: upgrades)
             defer { relay.stop() }
 
-            let e2eeService = try await withDependencies {
-                $0[SecretsService.self] = .inMemory()
-            } operation: {
-                try await E2EEService()
-            }
+            let e2eeService = try await E2EEService()
             let pairedViewer = PairedViewer(
                 id: "test-pair",
                 deviceName: "Test Viewer",

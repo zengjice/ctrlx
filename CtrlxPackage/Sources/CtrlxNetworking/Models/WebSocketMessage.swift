@@ -142,10 +142,12 @@ public struct ErrorMessage: Codable, Sendable {
     public let code: String
     public let message: String
     public let recoverable: Bool
+    public let relayAccess: RelayAccessFailure?
 
-    public init(code: String, message: String, recoverable: Bool = true) {
+    public init(code: String, message: String, recoverable: Bool = true, relayAccess: RelayAccessFailure? = nil) {
         self.code = code
         self.message = message
+        self.relayAccess = relayAccess
         self.recoverable = recoverable
     }
 

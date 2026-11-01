@@ -72,12 +72,94 @@ the same version and commit, starts the container, then validates `/health` and
 | `GET /metrics` | Authenticated Prometheus metrics; disabled without token |
 | `POST /api/pairing/register` | Register a Mac pairing code |
 | `POST /api/pairing/complete` | Complete pairing from a viewer |
+| `GET /api/access/status` | Authenticated account allowance in metered mode; mode discovery in open mode |
 | `WS /api/ws` | Encrypted relay stream |
 
 WebSocket frames and complete messages are limited to 1 MiB, with at most 1024
 fragments per message. The Relay pings every 30 seconds to detect unresponsive
 peers. Reconnecting closes the previous socket; a peer that does not acknowledge
 a close frame is forcibly disconnected after 5 seconds.
+
+## Optional account authentication and traffic quotas
+
+`RELAY_ACCESS_MODE=open` remains the default. To enable account access keys and
+shared monthly allowances, explicitly select `metered` and mount a writable,
+persistent `DATA_DIRECTORY`. Metered mode cannot be combined with the existing
+Lemon Squeezy licensing configuration. Invalid mode or storage configuration
+fails startup; storage failures during service reject traffic.
+
+Create an account using the Relay executable inside that instance's container:
+
+```bash
+docker exec <relay-container> ./CtrlxExternalServer relay-admin account create \
+  --name alice --monthly-quota 50GiB
+```
+
+The command returns the account ID and a newly generated key. Deliver the key
+privately; it cannot be read back from the database. In Mac Host settings, open
+Remote Access → Relay Traffic and save the key. Pair each Viewer normally.
+Pair-specific Host/Viewer credentials are then saved separately in Keychain.
+Authenticated network access requires HTTPS/WSS; loopback HTTP is permitted
+for local development and SSH tunnels.
+
+Authenticated registration, pairing status and WebSocket attempts are limited
+per verified credential; allowance queries are limited per verified account.
+Invalid or missing credentials consume separate anonymous buckets. For anonymous
+pairing attempts behind a reverse proxy, set `RELAY_TRUSTED_PROXY_IPS` to the
+comma-separated **socket peer IPs** of your proxies. The default is empty and
+trusts no forwarding headers. A host-local Caddy connecting directly to a native
+Relay typically uses `127.0.0.1,::1`; with Docker, configure the proxy/gateway
+address actually seen inside the Relay container. Do not list public clients or
+an entire private subnet. Unlisted peers cannot change buckets with forged
+headers. The Relay walks `X-Forwarded-For` from right to left through only the
+listed proxies, stopping at the first untrusted hop. Ensure your edge proxy
+overwrites untrusted incoming forwarding headers; see
+[Caddy's forwarding-header behavior](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#headers).
+
+Monthly traffic is shared across the account's Hosts and paired Viewers. Months
+start at 00:00 in Asia/Shanghai. Each admitted encrypted forwarding counts its
+complete application envelope once; both directions and each Viewer count.
+APNs delivery counts the encoded notification body. Controlled pairing, status
+and heartbeat traffic is free and rate-limited. These bytes exclude TCP/TLS
+overhead and do not equal the cloud provider's network bill.
+
+```bash
+docker exec <relay-container> ./CtrlxExternalServer relay-admin usage show --account alice
+docker exec <relay-container> ./CtrlxExternalServer relay-admin quota add \
+  --account alice --month 2026-11 --amount 20GiB \
+  --request-id support-20261101-001 --reason 'Temporary allowance'
+docker exec <relay-container> ./CtrlxExternalServer relay-admin account set \
+  --account alice --monthly-quota 60GiB
+docker exec <relay-container> ./CtrlxExternalServer relay-admin account disable --account alice
+docker exec <relay-container> ./CtrlxExternalServer relay-admin account enable --account alice
+docker exec <relay-container> ./CtrlxExternalServer relay-admin key rotate --account alice
+docker exec <relay-container> ./CtrlxExternalServer relay-admin pair revoke --pair <pair-id>
+```
+
+Use a unique request ID before each new top-up; retry with the same parameters
+and ID to avoid adding twice. New top-ups must target the current billing month; retries of an existing ID
+retain the original month. Top-ups expire at month end. Base
+allowance changes apply next month. Key rotation normally preserves pair
+credentials; `key rotate --revoke-pairs` also revokes them. Administration is
+local-only; no public management API is exposed.
+
+The Relay commits each debit before forwarding. A disconnect afterward may
+leave admitted bytes charged without delivery. An insufficient allowance
+rejects the whole next message, preserves the actual remainder and closes the
+affected stream. Clients retain their pairing and show the restriction. Active
+clients check for recovery every 30 seconds and on foreground entry; users can
+also choose Check and Reconnect. Recovery requests fresh snapshots and never
+replays uncertain write operations. Local Host tasks continue.
+
+The authoritative store is `DATA_DIRECTORY/relay-access.sqlite` with SQLite
+WAL and FULL synchronization. Back up the stopped isolated instance's complete
+data directory, or use SQLite's online backup facilities; copying just the main
+file while running can omit committed WAL data. Legacy `pairs.json` remains
+untouched and is not granted account authority. Enabling metered mode requires
+new authentication and pairing. Deploy compatible clients first, then set an
+appropriate `MIN_CLIENT_VERSION` with unknown versions rejected before switching
+the service. Returning to open mode restores open admission and is not a quota
+recovery procedure. See [design and acceptance status](relay-access-quota-design.md).
 
 ## APNs
 

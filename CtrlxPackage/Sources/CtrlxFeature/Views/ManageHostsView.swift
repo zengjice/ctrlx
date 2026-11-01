@@ -105,9 +105,11 @@
             await connectionManager.disconnect(from: host.id)
 
             // Notify relay server so it removes the pairing record and notifies the host (best effort)
+            let server = settings.externalServerURL
             Task {
                 do {
-                    try await deletePairingFromServer(pairId: host.id)
+                    @Dependency(RelayAccessClient.self) var access
+                    try await access.removePair(server, host.id, "viewer")
                 } catch {
                     // Best effort — server will clean up stale pairings eventually
                     logger.debug("Failed to notify server of unpair: \(error)")
@@ -124,18 +126,7 @@
             hostToDelete = nil
         }
 
-        private func deletePairingFromServer(pairId: String) async throws {
-            let serverURL = settings.externalServerURL.httpURL
 
-            guard let url = URL(string: "\(serverURL)/api/pairing/\(pairId)") else {
-                return
-            }
-
-            var request = URLRequest(url: url)
-            request.httpMethod = "DELETE"
-
-            _ = try await URLSession.shared.data(for: request)
-        }
     }
 
     // MARK: - Host Row View

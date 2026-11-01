@@ -74,6 +74,11 @@ struct RemoteHostSidebarSection: View {
                 RemoteHostVersionMismatchRow(host: host, mismatch: mismatch) {
                     Task { await connection?.enableReconnectAndRetry() }
                 }
+            } else if let restriction = connection?.relayClient.relayAccessRestriction {
+                Label(restriction.message, symbol: .exclamationmarkTriangle)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("relay-access-restriction")
             } else if hasContent {
                 WorktreeStatusButton(repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [])
                 // The remote host's cross-session usage rollup (issue #598),

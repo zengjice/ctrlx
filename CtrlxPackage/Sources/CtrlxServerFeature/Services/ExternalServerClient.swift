@@ -1,6 +1,7 @@
 import CtrlxCommon
 import CtrlxEncryption
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Logging
 
@@ -361,7 +362,16 @@ final public class ExternalServerClient {
         urlSession = session
 
         // Create and start WebSocket task
-        let task = session.webSocketTask(with: wsURL)
+        var request = URLRequest(url: wsURL)
+        do {
+            @Dependency(RelayCredentials.self) var credentials
+            try await credentials.authorize(&request, server: serverURL.absoluteString, pairID: pairId, role: "host")
+        } catch {
+            state = .error(error.localizedDescription)
+            return
+        }
+        guard state == .connecting, self.serverURL == serverURL, self.pairId == pairId else { return }
+        let task = session.webSocketTask(with: request)
         webSocketTask = task
         task.resume()
 

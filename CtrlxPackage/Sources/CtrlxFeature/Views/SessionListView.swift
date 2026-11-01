@@ -503,6 +503,10 @@
                         Task { await connection?.enableReconnectAndRetry() }
                     }
                     .accessibilityIdentifier("host-version-mismatch-row")
+                } else if let restriction = connection?.relayClient.relayAccessRestriction {
+                    Label(restriction.message, symbol: .exclamationmarkTriangle)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("relay-access-restriction")
                 } else if hasContent {
                     WorktreeStatusButton(repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [])
                     // Cross-session usage rollup for this host (issue #598).

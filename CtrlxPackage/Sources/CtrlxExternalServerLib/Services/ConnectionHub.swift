@@ -147,6 +147,37 @@ actor ConnectionHub {
 
     // MARK: - Connection Status
 
+    func rejectAccess(_ failure: RelayAccessFailure, pairID: String, accountID: String, sourceWebSocket: WebSocket? = nil) async {
+        if let sourceWebSocket {
+            guard
+                !Task.isCancelled, !sourceWebSocket.isClosed,
+                connections[pairID]?.values.contains(where: { $0.webSocket === sourceWebSocket }) == true else { return }
+        }
+        let exhausted = failure.quota?.remainingBytes == 0 || failure.code == .accountDisabled
+        let targets = connections.flatMap { pair, devices in
+            devices.values.filter { pair == pairID || (exhausted && $0.principal?.accountID == accountID) }
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let message = WebSocketMessage.error(ErrorMessage(
+            code: failure.code.rawValue,
+            message: failure.message,
+            recoverable: false,
+            relayAccess: failure
+        ))
+        for connection in targets {
+            do {
+                let data = try encoder.encode(message)
+                try await connection.webSocket.send(raw: data, opcode: .text)
+            } catch {
+                logger.debug("Could not deliver Relay access rejection: \(error)")
+            }
+            if unregisterIfCurrent(pairId: connection.pairId, deviceType: connection.deviceType, webSocket: connection.webSocket) {
+                connection.close()
+            }
+        }
+    }
+
     /// Check if host is connected for a pair
     func isHostConnected(pairId: String) -> Bool {
         connections[pairId]?[.host] != nil

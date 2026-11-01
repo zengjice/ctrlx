@@ -2,13 +2,14 @@ import CtrlxCommon
 import CtrlxEncryption
 import CtrlxNetworking
 import Dependencies
+import DependenciesTestSupport
 import Foundation
 import Testing
 import Vapor
 @testable import CtrlxServerFeature
 
 @MainActor
-@Suite("Quick phrases over real encrypted WebSockets")
+@Suite("Quick phrases over real encrypted WebSockets", .dependency(SecretsService.inMemory()), .dependency(RelayCredentials.inMemory()))
 struct QuickPhraseSyncTransportTests {
     @Test("Host and shared iOS/Mac viewer exchange libraries without plaintext or terminal commands")
     func transport() async throws {

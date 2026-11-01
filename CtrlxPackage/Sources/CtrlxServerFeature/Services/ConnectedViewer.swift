@@ -120,6 +120,8 @@ final public class ConnectedViewer: Identifiable {
     /// Whether we should attempt reconnection
     private var shouldReconnect = false
 
+    public private(set) var relayAccessRestriction: RelayAccessFailure?
+
     /// Current reconnection attempt
     private var reconnectionAttempt = 0
 
@@ -296,6 +298,7 @@ final public class ConnectedViewer: Identifiable {
         self.username = username
         self.publicKey = publicKey
         self.publicKeyId = publicKeyId
+        relayAccessRestriction = nil
         shouldReconnect = true
         reconnectionAttempt = 0
         versionMismatch = nil
@@ -310,6 +313,7 @@ final public class ConnectedViewer: Identifiable {
 
     /// Disconnect from the relay server
     public func disconnect() async {
+        relayAccessRestriction = nil
         shouldReconnect = false
         reconnectionDelayTask?.cancel()
         reconnectionDelayTask = nil
@@ -319,6 +323,10 @@ final public class ConnectedViewer: Identifiable {
 
     /// Immediately attempt to reconnect
     public func reconnectImmediately() async {
+        if relayAccessRestriction != nil {
+            await retryRelayAccessIfAvailable()
+            return
+        }
         guard shouldReconnect, !state.isConnected, state != .connecting else {
             return
         }
@@ -340,6 +348,7 @@ final public class ConnectedViewer: Identifiable {
     /// expect the connection to recover call this to flip the flag back on and
     /// kick a fresh `performConnect`.
     public func enableReconnectAndRetry() async {
+        relayAccessRestriction = nil
         shouldReconnect = true
         reconnectionDelayTask?.cancel()
         reconnectionDelayTask = nil
@@ -647,7 +656,17 @@ final public class ConnectedViewer: Identifiable {
         let session = URLSession(configuration: .default)
         urlSession = session
 
-        let task = session.webSocketTask(with: wsURL)
+        var request = URLRequest(url: wsURL)
+        let credentialGeneration = connectionGeneration.current
+        do {
+            @Dependency(RelayCredentials.self) var credentials
+            try await credentials.authorize(&request, server: serverURL.absoluteString, pairID: id, role: "host")
+        } catch {
+            await updateState(.error(error.localizedDescription))
+            return
+        }
+        guard connectionGeneration.isCurrent(credentialGeneration) else { return }
+        let task = session.webSocketTask(with: request)
         webSocketTask = task
         task.resume()
 
@@ -979,7 +998,13 @@ final public class ConnectedViewer: Identifiable {
             break
 
         case let .error(errorMessage):
-            if errorMessage.code == ErrorMessage.invalidPairCode {
+            if let failure = errorMessage.relayAccess {
+                shouldReconnect = false
+                await cleanupConnection()
+                await updateState(.error(failure.message))
+                relayAccessRestriction = failure
+                scheduleRelayAccessRecovery(failure)
+            } else if errorMessage.code == ErrorMessage.invalidPairCode {
                 logger.info("Received INVALID_PAIR error, treating as unpair")
                 shouldReconnect = false
                 await cleanupConnection()
@@ -1007,6 +1032,36 @@ final public class ConnectedViewer: Identifiable {
 
         default:
             logger.debug("Received unhandled message type")
+        }
+    }
+
+    private func scheduleRelayAccessRecovery(_ failure: RelayAccessFailure) {
+        guard RelayAccessRecovery.canPoll(failure) else { return }
+        reconnectionDelayTask?.cancel()
+        reconnectionDelayTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(30)) }
+                catch { return }
+                guard let self, self.relayAccessRestriction == failure else { return }
+                await self.retryRelayAccessIfAvailable()
+            }
+        }
+    }
+
+    private func retryRelayAccessIfAvailable() async {
+        guard let failure = relayAccessRestriction, RelayAccessRecovery.canPoll(failure), let serverURL else { return }
+        let generation = connectionGeneration.current
+        do {
+            @Dependency(RelayAccessClient.self) var access
+            let status = try await access.status(serverURL.absoluteString, id, "host")
+            guard
+                connectionGeneration.isCurrent(generation), relayAccessRestriction == failure,
+                RelayAccessRecovery.canResume(failure, status: status) else { return }
+            reconnectionDelayTask?.cancel()
+            reconnectionDelayTask = nil
+            await enableReconnectAndRetry()
+        } catch {
+            logger.debug("Relay quota recovery check failed: \(error)")
         }
     }
 

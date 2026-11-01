@@ -3,13 +3,14 @@
     import CtrlxEncryption
     import CtrlxNetworking
     import Dependencies
+    import DependenciesTestSupport
     import Foundation
     import SwiftTerm
     import Testing
     import Vapor
     @testable import CtrlxServerFeature
 
-    @Suite("Ordered terminal stream transport", .serialized)
+    @Suite("Ordered terminal stream transport", .serialized, .dependency(SecretsService.inMemory()), .dependency(RelayCredentials.inMemory()))
     @MainActor
     struct TerminalStreamTransportTests {
         @Test("Concurrent fan-out preserves Shell redraw bytes for every viewer", arguments: [1, 2, 7, 8_192])

@@ -30,6 +30,16 @@ struct PairingController: RouteCollection {
 
         let registration = try req.content.decode(PairingRegistration.self)
 
+        if let access = req.application.relayAccess {
+            do {
+                _ = try await req.application.relayAccessLimits.authenticate(req, using: access, operation: "register", limit: 30, role: "account")
+                return try .registered(await access.register(registration, token: req.headers.bearerAuthorization?.token))
+            } catch {
+                let failure = relayAccessFailure(error)
+                return .error(ErrorInfo(message: failure.message, code: failure.code.rawValue))
+            }
+        }
+
         // Hosted-relay gate: hosts need a trial or active license. A fresh host
         // has no trial yet, so it reads as `.preTrial` (allowed) — the trial
         // clock itself doesn't start until a viewer completes pairing.
@@ -59,6 +69,18 @@ struct PairingController: RouteCollection {
     func completePairing(req: Request) async throws -> PairingResponse {
         let completion = try req.content.decode(PairingCompletion.self)
 
+        if let access = req.application.relayAccess {
+            do {
+                try await req.application.relayAccessLimits.checkAnonymous(req, operation: "pair", limit: 12)
+                let (pair, info) = try await access.complete(completion)
+                await req.application.pairingService.installPair(pair)
+                return .paired(info)
+            } catch {
+                let failure = relayAccessFailure(error)
+                return .error(ErrorInfo(message: failure.message, code: failure.code.rawValue))
+            }
+        }
+
         let response = await req.application.pairingService.completePairing(
             code: completion.pairingCode,
             deviceId: completion.deviceId,
@@ -86,10 +108,18 @@ struct PairingController: RouteCollection {
             throw Abort(.badRequest, reason: "Missing pairId parameter")
         }
 
+        if let access = req.application.relayAccess {
+            do {
+                _ = try await req.application.relayAccessLimits.authenticate(req, using: access, operation: "pair-access", limit: 120, pairID: pairId)
+            } catch { throw Abort(.unauthorized, reason: relayAccessFailure(error).message) }
+        }
+
         let connectionHub = req.application.connectionHub
         let pairingService = req.application.pairingService
 
-        let isValid = await pairingService.isValidPair(pairId: pairId)
+        let legacyValid = await pairingService.isValidPair(pairId: pairId)
+        let isValid = req.application.relayAccess != nil || legacyValid
+        let completed = await pairingService.getPair(pairId: pairId) != nil
         let hostConnected = await connectionHub.isHostConnected(pairId: pairId)
         let viewerConnected = await connectionHub.isViewerConnected(pairId: pairId)
         let viewerDeviceName = await pairingService.getViewerDeviceName(pairId: pairId)
@@ -98,7 +128,8 @@ struct PairingController: RouteCollection {
             valid: isValid,
             hostConnected: hostConnected,
             viewerConnected: viewerConnected,
-            viewerDeviceName: viewerDeviceName
+            viewerDeviceName: viewerDeviceName,
+            pairingCompleted: completed
         )
     }
 
@@ -108,6 +139,13 @@ struct PairingController: RouteCollection {
     func deletePairing(req: Request) async throws -> HTTPStatus {
         guard let pairId = req.parameters.get("pairId") else {
             throw Abort(.badRequest, reason: "Missing pairId parameter")
+        }
+
+        if let access = req.application.relayAccess {
+            do {
+                _ = try await access.authenticate(req.headers.bearerAuthorization?.token, pairID: pairId)
+                try await access.removePair(pairId)
+            } catch { throw Abort(.unauthorized, reason: relayAccessFailure(error).message) }
         }
 
         // Notify both sides that the pairing has been removed before disconnecting

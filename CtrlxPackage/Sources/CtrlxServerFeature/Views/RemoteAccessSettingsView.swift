@@ -13,6 +13,7 @@ public struct RemoteAccessSettingsView: View {
     @Environment(\.e2eeService) private var e2eeService: E2EEService?
 
     @State private var showCopiedFeedback = false
+    @State private var meteredRelay = false
 
     public init() { }
 
@@ -48,15 +49,20 @@ public struct RemoteAccessSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Relay authorization
-            Section {
-                licenseSection
-            } header: {
-                Text("Relay Authorization")
-            } footer: {
-                Text("Self-hosted relays do not require a key. If a custom relay requires one, obtain it from that relay's operator.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            RelayAccessSettingsSection(server: settings.externalServerURL, onMeteredChange: { meteredRelay = $0 }) {
+                await coordinator.connectedViewerManager?.enableReconnectAndRetryAll()
+            }
+            if !meteredRelay {
+                // Relay authorization
+                Section {
+                    licenseSection
+                } header: {
+                    Text("Relay Authorization")
+                } footer: {
+                    Text("Self-hosted relays do not require a key. If a custom relay requires one, obtain it from that relay's operator.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)

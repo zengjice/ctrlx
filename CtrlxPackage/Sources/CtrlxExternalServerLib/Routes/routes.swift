@@ -22,6 +22,7 @@ func routes(_ app: Application) throws {
 
     // API routes group
     let api = app.grouped("api")
+    try api.register(collection: RelayAccessController())
 
     // Register controllers
     try api.register(collection: PairingController())

@@ -120,6 +120,13 @@ public actor MacOSDriver {
     public func activate() async throws {
         let pid = try requirePID()
         logger.info("Activating app (pid \(pid))")
+        try await runAppleScript("""
+        tell application "System Events"
+            tell (first process whose unix id is \(pid))
+                set frontmost to true
+            end tell
+        end tell
+        """)
         MacOSAccessibility.focusApp(appPID: pid)
         try await Polling.waitUntil(
             description: "isolated test app PID \(pid) to become frontmost",

@@ -3,6 +3,7 @@ import CtrlxCommon
 import CtrlxEncryption
 import CtrlxNetworking
 import Dependencies
+import Logging
 import SwiftUI
 
 /// Settings view for managing paired hosts (other hosts this host can view)
@@ -39,6 +40,18 @@ public struct RemoteHostsSettingsView: View {
                 Text("Hosts you can connect to for viewing their Claude sessions remotely.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            ForEach(settings.pairedHosts) { host in
+                RelayAccessSettingsSection(
+                    server: settings.externalServerURL,
+                    pairID: host.id,
+                    role: "viewer",
+                    title: "Relay Traffic · \(host.displayName)",
+                    restriction: coordinator.viewerConnectionManager?.connection(for: host.id)?.relayClient.relayAccessRestriction
+                ) {
+                    await coordinator.viewerConnectionManager?.enableReconnectAndRetryAll()
+                }
             }
 
             // Server Configuration
@@ -207,6 +220,13 @@ public struct RemoteHostsSettingsView: View {
     private func removeHost(_ host: PairedHost) async {
         // Disconnect from this host
         await coordinator.viewerConnectionManager?.disconnect(from: host.id)
+
+        let server = settings.externalServerURL
+        Task {
+            @Dependency(RelayAccessClient.self) var access
+            do { try await access.removePair(server, host.id, "viewer") }
+            catch { Logger(label: "ctrlx.remote-hosts").debug("Server unpair failed: \(error)") }
+        }
 
         // Clear cached session data for this host
         coordinator.remoteSessionStore?.clearSessions(for: host.id)
@@ -590,7 +610,12 @@ private struct AddHostSheet: View {
             throw HostPairingError.serverError(statusCode: httpResponse.statusCode)
         }
 
-        return try JSONDecoder().decode(PairingResponse.self, from: data)
+        let result = try JSONDecoder().decode(PairingResponse.self, from: data)
+        if case let .paired(info) = result, let token = info.relayCredential {
+            @Dependency(RelayCredentials.self) var credentials
+            try await credentials.save(token, serverURL, info.pairId, "viewer")
+        }
+        return result
     }
 }
 

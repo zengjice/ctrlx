@@ -86,6 +86,18 @@
                     }
                 }
 
+                ForEach(settings.pairedHosts) { host in
+                    RelayAccessSettingsSection(
+                        server: settings.externalServerURL,
+                        pairID: host.id,
+                        role: "viewer",
+                        title: "Relay Traffic · \(host.displayName)",
+                        restriction: connectionManager.connection(for: host.id)?.relayClient.relayAccessRestriction
+                    ) {
+                        await connectionManager.enableReconnectAndRetryAll()
+                    }
+                }
+
                 // Server Section
                 Section("Relay Server") {
                     @Bindable var settings = settings

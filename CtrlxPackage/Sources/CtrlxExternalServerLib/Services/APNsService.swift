@@ -12,6 +12,7 @@ actor APNsService {
     private let client: APNSClient<JSONDecoder, JSONEncoder>?
     private let pairingService: PairingService
     private let connectionHub: ConnectionHub
+    private let access: RelayAccessService?
     private let metricsService: MetricsService
     private let logger = Logger(label: "apns-service")
     private let bundleId: String
@@ -41,6 +42,7 @@ actor APNsService {
         pairingService: PairingService,
         connectionHub: ConnectionHub,
         metricsService: MetricsService,
+        access: RelayAccessService? = nil,
         keyPath: String? = nil,
         keyId: String? = nil,
         teamId: String? = nil,
@@ -52,6 +54,7 @@ actor APNsService {
         self.pairingService = pairingService
         self.connectionHub = connectionHub
         self.metricsService = metricsService
+        self.access = access
         self.bundleId = bundleId
             ?? processEnvironment["APNS_BUNDLE_ID"]
             ?? "com.jicezeng.ctrlx"
@@ -172,6 +175,23 @@ actor APNsService {
         }
 
         if isE2EMode {
+            do {
+                if payload.silent {
+                    try await authorizePush(EncryptedBackgroundNotification(badge: aggregatedBadge, payload: encryptedPayload), pairID: pairId)
+                } else {
+                    let notification = APNSAlertNotification(
+                        alert: APNSAlertNotificationContent(title: .raw("CtrlX"), body: .raw("New activity")),
+                        expiration: .immediately,
+                        priority: .immediately,
+                        topic: bundleId,
+                        payload: encryptedPayload,
+                        badge: aggregatedBadge,
+                        sound: nil,
+                        mutableContent: 1
+                    )
+                    try await authorizePush(notification, pairID: pairId)
+                }
+            } catch { return }
             recordE2EPush(
                 pairId: pairId,
                 deviceToken: deviceToken,
@@ -207,6 +227,7 @@ actor APNsService {
                     topic: bundleId,
                     collapseID: nil
                 )
+                try await authorizePush(bgMessage, pairID: pairId)
                 _ = try await client.send(request)
             } else {
                 let alert = APNSAlertNotificationContent(
@@ -225,6 +246,7 @@ actor APNsService {
                     sound: nil,
                     mutableContent: 1 // Triggers Notification Service Extension
                 )
+                try await authorizePush(notification, pairID: pairId)
                 _ = try await client.sendAlertNotification(
                     notification,
                     deviceToken: deviceToken
@@ -241,6 +263,22 @@ actor APNsService {
             handleAPNsError(error, pairId: pairId, deviceToken: deviceToken)
         } catch {
             logger.error("Failed to send encrypted push notification: \(error)")
+        }
+    }
+
+    private func authorizePush(_ notification: some Encodable, pairID: String) async throws {
+        guard let access else { return }
+        guard
+            let connection = await connectionHub.getConnection(pairId: pairID, deviceType: .host),
+            let principal = connection.principal else {
+            throw RelayAccessFailure(code: .authenticationRequired, message: "An authenticated Host is required for push delivery.")
+        }
+        do {
+            let data = try JSONEncoder().encode(notification)
+            _ = try await access.admit(principal, bytes: data.count)
+        } catch {
+            await connectionHub.rejectAccess(relayAccessFailure(error), pairID: pairID, accountID: principal.accountID)
+            throw error
         }
     }
 

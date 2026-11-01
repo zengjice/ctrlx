@@ -39,6 +39,13 @@ Mac workbench splits and detached windows. It is not implemented or scheduled;
 compatibility and migration decisions remain open. Its isolated tmux check does
 not establish end-to-end CtrlX migration acceptance.
 
+The [Relay access and monthly traffic quota design](relay-access-quota-design.md)
+records account authentication, shared monthly Host/Viewer traffic quotas,
+manual top-ups, enforcement and recovery. Monthly resets and account-wide
+sharing are confirmed requirements. The first version is implemented; the report
+separates focused tests and isolated runtime evidence from remaining acceptance,
+including follow-up review fixes. No production deployment has occurred.
+
 The [multi-agent collaboration design](multi-agent-design.md) includes preset-content
 nodes that join upstream outputs and forward them without an Agent, alongside manual
 single-Host workflows managed from Mac Host, Mac Viewer and iOS. Users choose

@@ -15,6 +15,8 @@ struct Connection: Sendable {
     /// The WebSocket connection
     let webSocket: WebSocket
 
+    var principal: RelayPrincipal? = nil
+
     /// Stop and discard the old inbound FIFO when a reconnect replaces it.
     var stopReceiving: (@Sendable () -> Void)?
 

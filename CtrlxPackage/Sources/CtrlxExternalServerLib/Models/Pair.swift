@@ -1,7 +1,7 @@
 import Foundation
 
 /// Represents a paired host and viewer device
-struct Pair: Codable {
+struct Pair: Codable, Sendable {
     /// Unique identifier for this pairing
     let id: String
 

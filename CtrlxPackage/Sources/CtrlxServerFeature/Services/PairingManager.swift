@@ -115,7 +115,7 @@ final public class PairingManager {
                 // Start polling for pairing completion
                 startPollingForCompletion(pairId: info.pairId)
 
-                logger.info("Pairing code registered", metadata: ["code": "\(code)"])
+                logger.info("Pairing code registered")
             case .paired:
                 // Unexpected - registration shouldn't return paired status
                 state = .error("Unexpected response from server")
@@ -268,7 +268,7 @@ final public class PairingManager {
                 do {
                     let status = try await checkPairingStatus(pairId: pairId)
 
-                    if status.viewerConnected {
+                    if status.pairingCompleted == true || status.viewerConnected {
                         // Viewer has completed pairing!
                         await completePairing(pairId: pairId, viewerDeviceName: status.viewerDeviceName)
                         break

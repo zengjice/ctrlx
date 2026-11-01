@@ -15,6 +15,7 @@ actor PairingService {
 
     /// Directory where pairs.json is stored
     private let dataDirectory: URL
+    private let persistsLegacyPairs: Bool
 
     /// Logger for persistence operations
     private let logger = Logger(label: "pairing-service")
@@ -32,7 +33,7 @@ actor PairingService {
 
     // MARK: - Initialization
 
-    init(dataDirectory: URL? = nil) {
+    init(dataDirectory: URL? = nil, initialPairs: [Pair]? = nil) {
         // Use provided directory, or fall back to environment variable, or current directory
         let resolvedDirectory: URL
         if let dir = dataDirectory {
@@ -43,12 +44,17 @@ actor PairingService {
             resolvedDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         }
         self.dataDirectory = resolvedDirectory
+        self.persistsLegacyPairs = initialPairs == nil
 
         // Compute file URL before actor isolation kicks in
         let fileURL = resolvedDirectory.appendingPathComponent("pairs.json")
 
         // Load pairs synchronously during init
-        self.activePairs = Self.loadPairsSync(from: fileURL, logger: logger)
+        if let initialPairs {
+            self.activePairs = Dictionary(uniqueKeysWithValues: initialPairs.map { ($0.id, $0) })
+        } else {
+            self.activePairs = Self.loadPairsSync(from: fileURL, logger: logger)
+        }
     }
 
     /// Synchronous load for use during init (actors can't call async in init)
@@ -171,6 +177,11 @@ actor PairingService {
     /// IDs of all active pairs (for E2E test inspection)
     var activePairIds: [String] {
         Array(activePairs.keys)
+    }
+
+    /// Install metadata whose authority and persistence belong to the access ledger.
+    func installPair(_ pair: Pair) {
+        activePairs[pair.id] = pair
     }
 
     /// Get pair information
@@ -314,6 +325,7 @@ actor PairingService {
 
     /// Save pairs to disk
     private func savePairs() {
+        guard persistsLegacyPairs else { return }
         do {
             // Ensure directory exists
             try FileManager.default.createDirectory(

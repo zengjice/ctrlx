@@ -1,15 +1,16 @@
+import ConcurrencyExtras
 import CtrlxCommon
 import CtrlxEncryption
 import CtrlxNetworking
-import ConcurrencyExtras
 import Dependencies
+import DependenciesTestSupport
 import Foundation
 import Testing
 import Vapor
 @testable import CtrlxServerFeature
 
 @MainActor
-@Suite("Terminal paste over encrypted WebSockets", .serialized)
+@Suite("Terminal paste over encrypted WebSockets", .serialized, .dependency(SecretsService.inMemory()), .dependency(RelayCredentials.inMemory()))
 struct TerminalPasteTransportTests {
     @Test("Acknowledged paste and question intents preserve Host input order", arguments: [false, true])
     func hostInputFIFO(questions: Bool) async throws {

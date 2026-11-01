@@ -283,6 +283,7 @@ var products: [Product] = [
 ]
 
 let packageDependencies: [Package.Dependency] = [
+    .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
     .package(url: "https://github.com/vapor/vapor", from: "4.0.0"),
     .package(url: "https://github.com/vapor/apns.git", from: "5.0.0"),
     .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.21.0"),
@@ -303,6 +304,7 @@ let packageDependencies: [Package.Dependency] = [
 ] + macOnlyDependencies()
 
 var targets: [Target] = [
+    .systemLibrary(name: "CSQLite", providers: [.apt(["libsqlite3-dev"])]),
     // Targets are the basic building blocks of a package, defining a module or a test suite.
     // Targets can depend on other targets in this package and products from dependencies.
 
@@ -413,6 +415,10 @@ var targets: [Target] = [
     .target(
         name: "CtrlxExternalServerLib",
         dependencies: [
+            "CSQLite",
+            .crypto,
+            .product(name: "NIOCore", package: "swift-nio"),
+            .product(name: "NIOPosix", package: "swift-nio"),
             .ctrlxNetworking,
             .ctrlxEncryption,
             .vapor,
@@ -596,12 +602,14 @@ var targets: [Target] = [
         name: "CtrlxExternalServerTests",
         dependencies: [
             .ctrlxExternalServerLib,
+            .product(name: "NIOCore", package: "swift-nio"),
             .product(name: "VaporTesting", package: "vapor"),
         ] + macOnlyTargetDependencies(for: "CtrlxExternalServerTests")
     ),
     .testTarget(
         name: "CtrlxE2ETests",
         dependencies: [
+            .ctrlxNetworking,
             .ctrlxE2ELib,
         ]
     ),

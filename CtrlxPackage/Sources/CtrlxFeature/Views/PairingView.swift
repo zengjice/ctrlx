@@ -1,6 +1,7 @@
 #if os(iOS)
     import CtrlxCommon
     import CtrlxEncryption
+    import Dependencies
     import SwiftUI
 
     /// View for entering a pairing code to connect with a host.
@@ -354,7 +355,12 @@
             }
 
             let decoder = JSONDecoder()
-            return try decoder.decode(PairingResponse.self, from: data)
+            let result = try decoder.decode(PairingResponse.self, from: data)
+            if case let .paired(info) = result, let token = info.relayCredential {
+                @Dependency(RelayCredentials.self) var credentials
+                try await credentials.save(token, serverURL, info.pairId, "viewer")
+            }
+            return result
         }
     }
 

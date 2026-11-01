@@ -1,3 +1,4 @@
+import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
 import DependenciesMacros
@@ -19,9 +20,10 @@ public struct PairingAPIClient: Sendable {
 
 extension PairingAPIClient: DependencyKey {
     public static var liveValue: PairingAPIClient {
+        @Dependency(RelayCredentials.self) var credentials
         @Sendable
         func request(
-            serverURL: String, path: String, method: String, body: Data? = nil
+            serverURL: String, path: String, method: String, body: Data? = nil, pairID: String? = nil
         ) async throws -> Data {
             guard let url = URL(string: "\(serverURL.httpURL)\(path)") else {
                 throw PairingError.invalidURL
@@ -32,11 +34,12 @@ extension PairingAPIClient: DependencyKey {
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = body
             }
+            try await credentials.authorize(&request, server: serverURL, pairID: pairID, role: pairID == nil ? nil : "host")
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw PairingError.invalidResponse
             }
-            guard httpResponse.statusCode == 200 else {
+            guard (200...299).contains(httpResponse.statusCode) else {
                 throw PairingError.serverError(statusCode: httpResponse.statusCode)
             }
             return data
@@ -48,18 +51,23 @@ extension PairingAPIClient: DependencyKey {
                 let data = try await request(
                     serverURL: serverURL, path: "/api/pairing/register", method: "POST", body: body
                 )
-                return try JSONDecoder().decode(PairingResponse.self, from: data)
+                let response = try JSONDecoder().decode(PairingResponse.self, from: data)
+                if case let .registered(info) = response, let token = info.relayCredential {
+                    try await credentials.save(token, serverURL, info.pairId, "host")
+                }
+                return response
             },
             status: { serverURL, pairId in
                 let data = try await request(
-                    serverURL: serverURL, path: "/api/pairing/\(pairId)/status", method: "GET"
+                    serverURL: serverURL, path: "/api/pairing/\(pairId)/status", method: "GET", pairID: pairId
                 )
                 return try JSONDecoder().decode(PairingStatus.self, from: data)
             },
             delete: { serverURL, pairId in
                 _ = try await request(
-                    serverURL: serverURL, path: "/api/pairing/\(pairId)", method: "DELETE"
+                    serverURL: serverURL, path: "/api/pairing/\(pairId)", method: "DELETE", pairID: pairId
                 )
+                try await credentials.delete(serverURL, pairId, "host")
             }
         )
     }

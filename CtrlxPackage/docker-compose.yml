@@ -30,6 +30,8 @@ services:
       - LICENSE_REVALIDATE_HOURS=${LICENSE_REVALIDATE_HOURS:-24}
       - LICENSE_GRACE_DAYS=${LICENSE_GRACE_DAYS:-7}
       - DATA_DIRECTORY=/data
+      - RELAY_ACCESS_MODE=${RELAY_ACCESS_MODE:-open}
+      - RELAY_TRUSTED_PROXY_IPS=${RELAY_TRUSTED_PROXY_IPS:-}
       - METRICS_TOKEN=${METRICS_TOKEN:-}
       # APNs configuration - set these for push notification support
       # Get these values from your Apple Developer account

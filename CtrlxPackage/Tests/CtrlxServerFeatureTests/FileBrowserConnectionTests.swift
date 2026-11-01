@@ -3,6 +3,7 @@ import CryptoKit
 import CtrlxEncryption
 import CtrlxNetworking
 import Dependencies
+import DependenciesTestSupport
 import Foundation
 import Testing
 import Vapor
@@ -10,7 +11,7 @@ import Vapor
 @testable import CtrlxServerFeature
 
 @MainActor
-@Suite("File requests across Viewer reconnects", .serialized)
+@Suite("File requests across Viewer reconnects", .serialized, .dependency(SecretsService.inMemory()), .dependency(RelayCredentials.inMemory()))
 struct FileBrowserConnectionTests {
     @Test("Source-bound Files replies are rejected after Host reconstruction", arguments: [
         FileBrowserOperation.tabs(.open(sessionName: "test", new: false)),

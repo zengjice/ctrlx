@@ -35,7 +35,23 @@ public func configure(_ app: Application, env: [String: String]? = nil) async th
 
     // Initialize core services
     let dataDirectory = env["DATA_DIRECTORY"].map { URL(fileURLWithPath: $0) }
-    let pairingService = PairingService(dataDirectory: dataDirectory)
+    let accessMode = env["RELAY_ACCESS_MODE"] ?? "open"
+    guard accessMode == "open" || accessMode == "metered" else {
+        throw RelayConfigurationError.invalidAccessMode
+    }
+    app.storage[RelayAccessLimitsKey.self] = try RelayAccessLimits(trustedProxyIPs: env["RELAY_TRUSTED_PROXY_IPS"] ?? "")
+    var accessPairs: [Pair]?
+    if accessMode == "metered" {
+        guard
+            let dataDirectory, env["DATA_DIRECTORY"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+            try LicensingConfiguration.fromEnvironment(env) == nil else {
+            throw RelayConfigurationError.invalidAccessMode
+        }
+        let access = try await RelayAccessService.open(directory: dataDirectory)
+        await app.storage.setWithAsyncShutdown(RelayAccessStorageKey.self, to: access, onShutdown: { try await $0.shutdown() })
+        accessPairs = try await access.pairs()
+    }
+    let pairingService = PairingService(dataDirectory: dataDirectory, initialPairs: accessPairs)
     let connectionHub = ConnectionHub()
     let metricsService = MetricsService()
     app.storage[RelayBuildInfoKey.self] = RelayBuildInfo.fromEnvironment(env)
@@ -95,6 +111,7 @@ public func configure(_ app: Application, env: [String: String]? = nil) async th
         pairingService: pairingService,
         connectionHub: connectionHub,
         metricsService: metricsService,
+        access: app.relayAccess,
         keyPath: env["APNS_KEY_PATH"],
         keyId: env["APNS_KEY_ID"],
         teamId: env["APNS_TEAM_ID"],
@@ -238,6 +255,8 @@ struct RelayBuildInfoKey: StorageKey {
 
 enum RelayConfigurationError: Error {
     case invalidPort(String)
+    case invalidAccessMode
+    case invalidTrustedProxyIP(String)
 }
 
 // MARK: - Application Extensions (Internal)

@@ -7,7 +7,9 @@
 FROM swift:6.3-jammy AS server-lock-resolver
 
 WORKDIR /lock
-COPY Package.swift ./
+COPY Package.swift Package.server.resolved ./
+RUN cp Package.server.resolved Package.resolved
+COPY Sources/CSQLite ./Sources/CSQLite
 RUN git config --global http.version HTTP/1.1
 RUN mkdir -p Sources/CtrlxNetworking Sources/CtrlxExternalServer && \
     echo 'public struct Placeholder {}' > Sources/CtrlxNetworking/Placeholder.swift && \
@@ -24,10 +26,12 @@ COPY --from=server-lock-resolver /server-lock/ /
 FROM swift:6.3-jammy AS builder
 
 WORKDIR /build
+RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev pkg-config && rm -rf /var/lib/apt/lists/*
 RUN git config --global http.version HTTP/1.1
 
 # Step 1: Copy ONLY the manifest and Linux Relay lock file.
 COPY Package.swift Package.server.resolved ./
+COPY Sources/CSQLite ./Sources/CSQLite
 RUN cp Package.server.resolved Package.resolved
 
 # Step 2: Create minimal directory structure for package resolution
@@ -64,7 +68,7 @@ WORKDIR /app
 
 # Install curl so the docker-compose healthcheck can call /health. The slim
 # image otherwise lacks any HTTP client, so the healthcheck would always fail.
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+RUN apt-get update && apt-get install -y --no-install-recommends curl libsqlite3-0 && \
     rm -rf /var/lib/apt/lists/*
 
 # Source metadata changes on every release. Declare it after OS dependencies so
