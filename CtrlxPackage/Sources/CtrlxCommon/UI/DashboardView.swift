@@ -39,11 +39,17 @@ public struct DashboardView: View {
         DashboardOverview.uniqueHosts(store.hosts)
     }
 
+    var accountGroups: [DashboardAccountGroup] {
+        // Superseded routes may hold the newest quota observation. Account
+        // aggregation deduplicates current bindings without dropping that history.
+        DashboardOverview.accounts(in: store.hosts)
+    }
+
     public var body: some View {
         NavigationStack(path: $path) {
             List {
                 Section("Accounts") {
-                    let accounts = DashboardOverview.accounts(in: hosts)
+                    let accounts = accountGroups
                     if accounts.isEmpty {
                         Text("Account information appears when a supported Host is reachable.").foregroundStyle(.secondary)
                     }
@@ -157,7 +163,7 @@ public struct DashboardView: View {
                 }
             }
             Section("Accounts · shared quotas") {
-                ForEach(DashboardOverview.accounts(in: hosts).filter { $0.sources.contains(where: { $0.host.id == host.id }) }) { group in
+                ForEach(accountGroups.filter { $0.sources.contains(where: { $0.host.id == host.id }) }) { group in
                     DashboardAccountRow(group: group)
                 }
             }
@@ -185,10 +191,14 @@ private struct DashboardAccountRow: View {
             let source = selected.source
             let account = source.account
             DisclosureGroup {
-                ForEach(Array(group.sources.enumerated()), id: \.offset) { _, item in
+                ForEach(Array((group.sources + group.previousSources).enumerated()), id: \.offset) { _, item in
                     VStack(alignment: .leading, spacing: 4) {
                         Text("\(item.host.name) · \(item.account.configurationLabel)").font(.headline)
-                        Text(authentication(item.account.authentication)).foregroundStyle(.secondary)
+                        if item.isHistorical {
+                            Text("Previous quota observation · Current sign-in unconfirmed").foregroundStyle(.secondary)
+                        } else {
+                            Text(authentication(item.account.authentication)).foregroundStyle(.secondary)
+                        }
                         if item.account.identity == nil {
                             Text("Account identity unconfirmed; shown separately.").font(.caption).foregroundStyle(.secondary)
                         }
@@ -225,7 +235,9 @@ private struct DashboardAccountRow: View {
                     if selected.uncertain {
                         Text("Sources differ; expand to compare observations.").font(.caption).foregroundStyle(.orange)
                     }
-                    if account.availability == .failed || !source.host.isConnected {
+                    if source.isHistorical {
+                        Text("Last observation from \(source.host.name) · Current quota unconfirmed").font(.caption).foregroundStyle(.secondary)
+                    } else if account.availability == .failed || !source.host.isConnected {
                         Text("Last observation · refresh unavailable").font(.caption).foregroundStyle(.secondary)
                     } else if let interval = source.interval, Date().timeIntervalSince(interval.upperBound) > 300 {
                         Text("Last observed \(interval.upperBound, style: .relative) ago").font(.caption).foregroundStyle(.secondary)

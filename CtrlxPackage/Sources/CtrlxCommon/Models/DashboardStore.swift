@@ -150,6 +150,7 @@ final public class DashboardStore {
                 host.snapshot = cached.snapshot
                 host.requestedAt = cached.requestedAt
                 host.receivedAt = cached.receivedAt
+                host.quotaObservations = rememberingQuotas(from: cached)
                 if host.legacyUsage == nil {
                     host.legacyUsage = cached.legacyUsage
                 }
@@ -163,13 +164,16 @@ final public class DashboardStore {
             for await host in group {
                 guard !Task.isCancelled, let index = hosts.firstIndex(where: { $0.id == host.id }) else { continue }
                 if host.snapshot != nil {
-                    hosts[index] = host
+                    var updated = host
+                    updated.quotaObservations = hosts[index].quotaObservations
+                    hosts[index] = updated
                 } else {
                     hosts[index].error = host.error
                 }
             }
         }
         guard !Task.isCancelled else { return }
+        pruneQuotaObservations()
         if lowQuotaAlertsEnabled {
             let tracking = quotaAlerts.updateDetailed(hosts: hosts, at: Date())
             for alert in tracking.alerts {
@@ -181,12 +185,43 @@ final public class DashboardStore {
             recordQuotaRecoveries(tracking.recoveries)
         }
         reconcileQuotaRecoveries()
-        if lastSavedAt.map({ Date().timeIntervalSince($0) >= 60 }) ?? true {
+        let accountBindingsChanged = hosts.contains { host in
+            let old = previous[host.id]?.snapshot?.accounts ?? []
+            let current = host.snapshot?.accounts ?? []
+            return old.map(\.id) != current.map(\.id) || old.map(\.identity) != current.map(\.identity)
+        }
+        if accountBindingsChanged || (lastSavedAt.map { Date().timeIntervalSince($0) >= 60 } ?? true) {
             do {
                 try preferences.setData(JSONEncoder().encode(hosts), Self.key)
                 lastSavedAt = Date()
                 cacheError = nil
             } catch { cacheError = "Dashboard data could not be saved for offline viewing." }
+        }
+    }
+
+    private func rememberingQuotas(from host: DashboardHost) -> [DashboardQuotaObservation]? {
+        var observations = host.quotaObservations ?? []
+        for account in host.snapshot?.accounts ?? [] {
+            let source = DashboardAccountGroup.Source(host: host, account: account)
+            guard account.hasQuotaData, let identity = account.verifiedQuotaIdentity, let interval = source.interval else { continue }
+            guard
+                !observations.contains(where: {
+                    $0.account.verifiedQuotaIdentity == identity && ($0.account == account || $0.interval.lowerBound > interval.upperBound)
+                }) else { continue }
+            // Keep overlapping readings for the existing uncertainty rules;
+            // only a provably newer observation may discard an older one.
+            observations.removeAll { $0.account.verifiedQuotaIdentity == identity && interval.lowerBound > $0.interval.upperBound }
+            observations.append(.init(account: account, interval: interval))
+        }
+        return observations.isEmpty ? nil : observations
+    }
+
+    private func pruneQuotaObservations() {
+        guard !hasUnresolvedQuotaAccounts else { return }
+        let identities = Set(DashboardOverview.uniqueHosts(hosts).flatMap { $0.snapshot?.accounts ?? [] }.compactMap(\.verifiedQuotaIdentity))
+        for index in hosts.indices {
+            let retained = hosts[index].quotaObservations?.filter { $0.account.verifiedQuotaIdentity.map { identities.contains($0) } == true } ?? []
+            hosts[index].quotaObservations = retained.isEmpty ? nil : retained
         }
     }
 

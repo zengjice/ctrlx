@@ -21,7 +21,9 @@ public struct DashboardToolbarAccount: Identifiable, Sendable {
     }
 
     public init?(group: DashboardAccountGroup, at now: Date) {
-        guard let selection = group.selection, selection.source.account.availability != .unsupported else { return nil }
+        guard
+            let selection = group.selection, selection.source.account.availability != .unsupported,
+            group.sources.contains(where: { $0.account.availability != .unsupported }) else { return nil }
         self.group = group
         self.account = selection.source.account
         self.observedAt = selection.source.interval?.upperBound
@@ -35,6 +37,8 @@ public struct DashboardToolbarAccount: Identifiable, Sendable {
 
         if selection.uncertain {
             self.status = "Sources disagree. Open Dashboard to compare observations."
+        } else if source.isHistorical {
+            self.status = "Last observation from \(source.host.name) · Current quota unconfirmed"
         } else if !source.host.isConnected {
             self.status = "Host offline · Last observation"
         } else if source.host.error != nil {

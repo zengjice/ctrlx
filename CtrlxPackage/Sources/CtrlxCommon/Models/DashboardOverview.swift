@@ -1,6 +1,11 @@
 import CtrlxNetworking
 import Foundation
 
+struct DashboardQuotaObservation: Codable, Equatable, Sendable {
+    var account: DashboardAccount
+    var interval: ClosedRange<Date>
+}
+
 public struct DashboardHost: Identifiable, Codable, Sendable {
     public var id: String
     public var name: String
@@ -12,6 +17,8 @@ public struct DashboardHost: Identifiable, Codable, Sendable {
     public var requestedAt: Date?
     public var receivedAt: Date?
     public var error: String?
+    /// Quota readings retained independently of the Host's current account bindings.
+    var quotaObservations: [DashboardQuotaObservation]?
 
     public init(
         id: String, name: String, isLocal: Bool = false, isConnected: Bool = false,
@@ -55,10 +62,18 @@ public struct DashboardAccountGroup: Identifiable, Sendable {
     public struct Source: Sendable {
         public var host: DashboardHost
         public var account: DashboardAccount
+        var observationInterval: ClosedRange<Date>?
+
+        public var isHistorical: Bool {
+            observationInterval != nil
+        }
 
         /// Normalize the Host's sample age to this Viewer's clock. Request time
         /// bounds network uncertainty; overlapping observations cannot be ordered.
         var interval: ClosedRange<Date>? {
+            if let observationInterval {
+                return observationInterval
+            }
             guard
                 let observed = account.quotaObservedAt,
                 let generated = host.snapshot?.generatedAt,
@@ -71,9 +86,10 @@ public struct DashboardAccountGroup: Identifiable, Sendable {
 
     public var id: ID
     public var sources: [Source]
+    public var previousSources: [Source] = []
 
     public var selection: (source: Source, uncertain: Bool)? {
-        let candidates = sources.filter { (!$0.account.windows.isEmpty || $0.account.credits != nil || $0.account.limitReached != nil) && $0.interval != nil }
+        let candidates = (sources + previousSources).filter { $0.account.hasQuotaData && $0.interval != nil }
         guard var selected = candidates.first else { return sources.first.map { ($0, false) } }
         for source in candidates.dropFirst() {
             if
@@ -118,9 +134,7 @@ public enum DashboardOverview {
         var positions: [DashboardAccountGroup.ID: Int] = [:]
         for host in uniqueHosts(hosts) {
             for account in host.snapshot?.accounts ?? [] {
-                let identity = account.identity.flatMap { value in
-                    [value.providerID, value.accountID, value.workspaceID, value.poolID].allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ? value : nil
-                }
+                let identity = account.verifiedQuotaIdentity
                 let key: DashboardAccountGroup.ID = identity.map { .verified($0) }
                     ?? .source(hostID: host.id, sourceID: account.id)
                 let source = DashboardAccountGroup.Source(host: host, account: account)
@@ -130,6 +144,17 @@ public enum DashboardOverview {
                     positions[key] = groups.count
                     groups.append(.init(id: key, sources: [source]))
                 }
+            }
+        }
+        // Previous readings may supply quota, but cannot create an account or
+        // make a former configuration look like a current sign-in source.
+        for host in hosts {
+            for observation in host.quotaObservations ?? [] {
+                guard
+                    let identity = observation.account.verifiedQuotaIdentity,
+                    let index = positions[.verified(identity)],
+                    !groups[index].sources.contains(where: { $0.host.id == host.id && $0.account == observation.account }) else { continue }
+                groups[index].previousSources.append(.init(host: host, account: observation.account, observationInterval: observation.interval))
             }
         }
         return groups
@@ -144,5 +169,17 @@ public enum DashboardOverview {
                 result.currentHosts += 1
             }
         }
+    }
+}
+
+extension DashboardAccount {
+    var verifiedQuotaIdentity: DashboardAccountIdentity? {
+        identity.flatMap { value in
+            [value.providerID, value.accountID, value.workspaceID, value.poolID].allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ? value : nil
+        }
+    }
+
+    var hasQuotaData: Bool {
+        !windows.isEmpty || credits != nil || limitReached != nil
     }
 }

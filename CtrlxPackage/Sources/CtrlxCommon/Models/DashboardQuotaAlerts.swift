@@ -40,7 +40,7 @@ extension DashboardAccountGroup {
         guard case .verified = id, let selected = selection, !selected.uncertain else { return nil }
         let source = selected.source
         guard
-            source.host.isConnected, source.host.error == nil,
+            !source.isHistorical, source.host.isConnected, source.host.error == nil,
             source.account.authentication == .signedIn, source.account.availability == .available,
             let received = source.host.receivedAt, now.timeIntervalSince(received) <= 120,
             let interval = source.interval,
@@ -67,7 +67,9 @@ public struct DashboardQuotaRecoveryNotice: Identifiable, Codable, Sendable, Equ
     public let hosts: String
     public let recoveredAt: Date
 
-    public var id: String { accountID }
+    public var id: String {
+        accountID
+    }
 
     public var detail: String {
         "\(windows.joined(separator: "; ")) · \(hosts)"
@@ -143,8 +145,7 @@ public struct DashboardQuotaAlertTracker {
                 } ?? false
                 if
                     let old, !limitReached, remaining > 10,
-                    old.remaining <= 10 || old.limitReached
-                {
+                    old.remaining <= 10 || old.limitReached {
                     recovered.append("\(window.title): \(remaining.formatted(.number.precision(.fractionLength(0))))% remaining")
                 }
                 var warned = advanced ? false : (old?.warned ?? (remaining <= 10))
