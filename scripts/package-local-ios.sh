@@ -11,7 +11,7 @@ LOCAL_CONFIG="$PROJECT_ROOT/Config/Local.xcconfig"
 source "$SCRIPT_DIR/common.sh"
 
 CONFIGURATION=Release
-SAVE_SPACE=false
+SAVE_SPACE=true
 APP_ONLY=false
 LOCAL_BUILD_ARGUMENTS=("$@")
 while [ "$#" -gt 0 ]; do
@@ -29,11 +29,16 @@ while [ "$#" -gt 0 ]; do
             SAVE_SPACE=true
             shift
             ;;
+        --keep-build-cache)
+            SAVE_SPACE=false
+            shift
+            ;;
         --help|-h)
-            printf '%s\n' 'Usage: package-local-ios.sh [--configuration Release|Debug] [--app-only] [--save-space]' \
+            printf '%s\n' 'Usage: package-local-ios.sh [--configuration Release|Debug] [--app-only] [--save-space|--keep-build-cache]' \
                 '--app-only: build and verify the signed device App without producing an IPA.' \
-                'Default: Release. Debug writes a separate -Debug.ipa for comparison.' \
-                '--save-space: after success, remove compilation caches; keep App, IPA and downloads. Next build is slower.'
+                'Default: Release; remove compilation caches after success. Debug writes a separate -Debug.ipa for comparison.' \
+                '--save-space: explicitly select the default; keep App, IPA and downloads. Next build is slower.' \
+                '--keep-build-cache: retain compilation caches for repeated iOS builds.'
             exit 0
             ;;
         *) log_error "Unknown argument: $1" ;;

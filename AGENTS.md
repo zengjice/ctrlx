@@ -109,6 +109,8 @@ the `.xcodeproj`, so local packages and shared schemes resolve consistently.
 
 - macOS scheme: `CtrlxServer`
 - iOS scheme: `Ctrlx`
+- For macOS-only packaging/publication, build macOS only by default. Run an iOS
+  Simulator build only when the user explicitly requests iOS validation.
 - Before direct Mac workspace builds, prepare the native components in order:
   `bash scripts/build-device-installer.sh`, `bash scripts/build-agent-browser.sh`,
   then `bash scripts/build-agent-simulator.sh`. Local Mac packaging does this
@@ -175,10 +177,13 @@ creating a DMG/IPA. Successful builds write `CtrlX.app.build.json` beside the Ap
 rebuilding invalidates the previous record. Packaging validates staged artifacts
 before replacing packages and their sidecars.
 
-Keep incremental caches by default. Successful packaging retains two packages per
-platform/configuration and prunes completed artifacts. `--save-space` removes
-compilation caches only after success, retaining signed apps and downloads.
-The next build is slower; this flag cannot make room for the current build.
+Mac packaging and installation keep incremental caches by default, as do package
+tests. iOS packaging and installation default to `--save-space`: remove only iOS
+compilation caches after success, retaining signed apps, IPA files and downloads.
+Use `--keep-build-cache` for repeated iOS builds. Failed builds/installs keep caches;
+installation defers cleanup until install and launch succeed. Successful packaging
+retains two packages per platform/configuration and prunes completed artifacts.
+Cache removal makes the next build slower and cannot make room for the current build.
 Packaging warns below 20 GiB free, without deleting caches before building.
 
 Script-managed builds, tests, installation and **worktree cleanup** share an
@@ -227,7 +232,7 @@ without a record need one fresh build. iOS accepts `--configuration Debug`
 Mac installation gracefully quits the exact installed App and retains a managed
 rollback backup; it never force-kills CtrlX or touches tmux sessions. iOS installs
 in place without uninstalling the App or data. Installation locks the destination
-across worktrees. Cleanup, including optional `--save-space`, runs only after
+across worktrees. Cleanup, including the default iOS cache removal, runs only after
 install/launch succeeds. See [installation and rollback](RELEASE.md#local-overwrite-installation).
 
 Prefer the CoreDevice UUID from `devicectl list devices` over a device name.

@@ -130,8 +130,11 @@ def parser():
     for platform in ("macos", "ios"):
         command = platforms.add_parser(platform)
         command.add_argument("--skip-build", action="store_true", help="Install a recorded, signed App build; no DMG/IPA required")
-        command.add_argument("--save-space", action="store_true", help="Remove compilation caches only after installation/launch succeeds")
+        caches = command.add_mutually_exclusive_group()
+        caches.add_argument("--save-space", action="store_true", help="Remove compilation caches only after installation/launch succeeds (default for iOS)")
+        command.set_defaults(save_space=platform == "ios")
         if platform == "ios":
+            caches.add_argument("--keep-build-cache", dest="save_space", action="store_false", help="Retain compilation caches for repeated iOS builds")
             command.add_argument("--device", required=True, type=uuid.UUID, help="CoreDevice UUID from xcrun devicectl list devices")
             command.add_argument("--configuration", choices=("Release", "Debug"), default="Release")
         else:
@@ -159,6 +162,8 @@ def main(argv=None):
             command = ["bash", root / "scripts" / f"package-local-{args.platform}.sh", "--app-only"]
             if args.platform == "ios":
                 command += ["--configuration", args.configuration]
+                if not args.save_space:
+                    command.append("--keep-build-cache")
             # Keep compile caches on install failure, even with --save-space.
             build.run_child(command, descriptor, defer_cleanup=True, cwd=root)
         app, info = build.built_app(root, args.platform, args.configuration)

@@ -62,6 +62,9 @@ For the existing Qcloud private-distribution channel, follow the sibling
 ../publish-ctrlx-macos.py --yes
 ```
 
+For macOS-only packaging/publication, build macOS only by default. Do not add an
+iOS Simulator build unless the user explicitly requests iOS validation.
+
 Prepare a tested, clean commit published as remote `main` and matching
 `v<version>` tag first. A linked worktree and its local branch are supported;
 the exact commit must still match both remote release refs. Select it explicitly:
@@ -160,8 +163,8 @@ python3 scripts/install-local.py ios --device '<CoreDevice UUID>'
 python3 scripts/install-local.py macos --skip-build
 python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --skip-build
 
-# Optional Debug device build and post-install cache cleanup:
-python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --configuration Debug --save-space
+# Repeated Debug device builds: retain compilation caches explicitly.
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --configuration Debug --keep-build-cache
 ```
 
 Default behavior calls `package-local-macos.sh --app-only` /
@@ -193,9 +196,10 @@ the signed device App directly with `devicectl`, then launches its bundle ID; it
 does not uninstall, clear App data, or create another host-side App copy.
 
 After a successful install/launch, the existing worktree-local pruning runs even
-with `--skip-build`. Incremental caches remain by default. `--save-space` defers
-compiler-cache removal until install/launch succeeds; failure keeps those caches
-and diagnostic backups. The nested App build defers retention to this outer success
+with `--skip-build`. Mac keeps incremental caches by default. iOS defaults to
+`--save-space`; use `--keep-build-cache` to retain them for repeated device builds.
+Compiler-cache removal waits until install/launch succeeds; failure keeps those
+caches and diagnostic backups. The nested App build defers retention to this outer success
 boundary, so cleanup runs once, after installation and launch.
 Local packaging, formal release, native-browser preparation, package tests,
 installation and worktree cleanup share `.build-local/operation.lock`; a
@@ -253,10 +257,13 @@ Release and Debug packages are retained independently. This also applies to
 formal Mac releases, but never prunes Qcloud or Inbox files.
 
 Command-line packaging disables index generation. After success, local Mac/iOS
-packaging removes only that platform's old `Index.noindex` and duplicate DerivedData
+packaging removes that platform's old `Index.noindex` and duplicate DerivedData
 `SourcePackages` directory (when the shared dependency directory exists).
-By default, build intermediates, compilation/module caches and installable apps
-are kept.
+Mac keeps build intermediates and compilation/module caches by default. iOS
+removes its compilation caches after successful packaging or installation;
+`--keep-build-cache` opts out for repeated device builds. Signed installable apps,
+IPA/DMG files and shared downloads are kept in either case. Mac publication does
+not build an iOS Simulator unless the user explicitly requests iOS validation.
 Do not run concurrent builds or installs against the same DerivedData directory.
 
 Successful packaging also prunes **managed, completed** local verification copies
@@ -290,16 +297,19 @@ below 20 GiB. This is an advisory threshold, not a guarantee or a hard minimum;
 packaging still proceeds and never deletes caches to make room before a build.
 Formal releases also check their temporary build volume.
 
-For low-storage machines, opt in per invocation:
+Mac and package tests keep incremental caches for frequent releases and regression
+runs. iOS device packaging defaults to post-success cache removal for occasional
+IPA builds and phone installs. Control the policy per invocation:
 
 ```bash
 ./scripts/package-local-macos.sh --save-space
-./scripts/package-local-ios.sh --save-space
-./scripts/package-local-ios.sh --configuration Debug --save-space
+./scripts/package-local-ios.sh                         # Default: clear iOS caches after success
+./scripts/package-local-ios.sh --keep-build-cache      # Repeated device builds
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --keep-build-cache
 ```
 
 Only after the requested workflow succeeds (verified App, package, or install/launch),
-this mode removes the selected platform's `Build/Intermediates.noindex`, compilation/module caches,
+this policy removes the selected platform's `Build/Intermediates.noindex`, compilation/module caches,
 explicit precompiled SDK modules and SDK stat caches. It keeps `Build/Products`
 (including the signed installable App), IPA/DMG files, shared dependencies,
 Chromium SDKs/runtime and logs. The next build recompiles and will be slower;

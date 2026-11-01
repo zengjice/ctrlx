@@ -319,9 +319,38 @@ class LocalInstallTests(unittest.TestCase):
         self.assertIn("prune", calls[-1].args[0])
         self.assertNotIn("--save-space", calls[-1].args[0])
 
+    def test_ios_defaults_to_cleanup_only_after_install_and_launch(self):
+        for skip_build in ([], ["--skip-build"]):
+            with self.subTest(skip_build=skip_build):
+                self.children.reset_mock()
+                self.workflow(["ios", "--device", DEVICE, *skip_build])
+                calls = self.children.call_args_list
+                if not skip_build:
+                    self.assertTrue(calls[0].kwargs["defer_cleanup"])
+                self.assertIn("--save-space", calls[-1].args[0])
+                self.assertIn("iOS", calls[-1].args[0])
+
+    def test_ios_can_keep_caches_including_after_skip_build(self):
+        for skip_build in ([], ["--skip-build"]):
+            with self.subTest(skip_build=skip_build):
+                self.children.reset_mock()
+                self.workflow(["ios", "--device", DEVICE, "--keep-build-cache", *skip_build])
+                calls = self.children.call_args_list
+                self.assertNotIn("--save-space", calls[-1].args[0])
+                self.assertEqual(len(calls), 1 if skip_build else 2)
+                if not skip_build:
+                    self.assertIn("--keep-build-cache", calls[0].args[0])
+
+    def test_failed_ios_build_does_not_prune(self):
+        self.children.side_effect = RuntimeError("build failure")
+        with self.assertRaisesRegex(RuntimeError, "build failure"):
+            self.workflow(["ios", "--device", DEVICE])
+        self.assertEqual(self.children.call_count, 1)
+        self.assertNotIn("prune", self.children.call_args.args[0])
+
     def test_install_failure_does_not_prune_caches_or_packages(self):
         with self.assertRaisesRegex(RuntimeError, "install failure"):
-            self.workflow(["ios", "--device", DEVICE, "--save-space"], RuntimeError("install failure"))
+            self.workflow(["ios", "--device", DEVICE], RuntimeError("install failure"))
         self.assertFalse(any("prune" in call.args[0] for call in self.children.call_args_list))
 
 
