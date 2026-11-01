@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.127 — In-session hook refresh and model switch feedback
+
+- Let model and effort shortcuts revalidate live Host state after cached
+  readiness or earlier read failures. Show Switching immediately, prevent
+  duplicate requests and explain rejected switches in a failure alert. Background
+  polling stays nonmodal, and late failures cannot open an alert in another tab.
+- Replace the Codex menu action with Trust and Refresh Hooks. Pending hooks
+  still use native approval; already-trusted conversations refresh through an
+  enabled, trusted CtrlX UserPromptSubmit hook, confirming its saved off/on
+  states without restarting the session. Disabled and foreign hooks stay intact.
+- Stop refresh on human takeover or changed process/selection. Attempt verified
+  restoration after an ambiguous toggle, and report manual recovery when it
+  cannot be confirmed. Close recognized panels before releasing queued input.
+  Optional request/result fields keep older Viewers on approval-only behavior
+  and prevent older Hosts from implying a confirmed refresh.
+- Release validation: 58 focused Swift tests and four private Codex CLI 0.166.0
+  Hook runs passed, covering approval, legacy behavior, execution restored by
+  refresh and human takeover. Model controls passed native SwiftUI interaction
+  tests. All 112 publisher/COS/installer tests, 16 Swift format checks, both
+  boundary checks and arm64/x86_64 iOS Simulator compilation passed. Full Swift
+  regression, native model CLI fixtures and paired-device UI acceptance were
+  not rerun.
+
 ## 3.0.126 — Shared quota history and Codex hook feedback
 
 - Retain the latest confirmed shared-account quota when another Host changes
