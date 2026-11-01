@@ -7,6 +7,32 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.128 — Workspace recovery across CLI updates
+
+- Retain the last verified Agent conversation and process evidence through
+  transient discovery failures. Invalidate it when a different conversation or
+  process is confirmed, and explain manual history recovery when no reliable
+  descriptor was saved.
+- Resume through the configured CLI when its old executable was removed by an
+  update, preserving the recorded conversation, configuration root and allowed
+  options. Recheck the selected CLI's version; Codex 0.162.1 and 0.166.0 support
+  verified automatic resume, while other versions require explicit Resume.
+- Restore each Mac Host/Viewer tab's hidden model/effort choices and original
+  defaults with its workspace. Keep preferences through partial recovery and
+  offline Viewer state, without overwriting restored edits or changing the
+  Agent's active model. Older snapshots retain the existing all-buttons behavior.
+- Preserve Mac and test compilation caches for frequent releases. iOS packaging
+  and installation now clear only iOS compilation caches after success; use
+  --keep-build-cache for repeated device builds. Failed workflows keep caches,
+  and installation waits for launch success. Mac-only releases omit iOS
+  Simulator builds unless explicitly requested.
+- Release validation: all 580 selected Swift tests passed on the unchanged
+  filter's rerun. One account timeout test initially exceeded its deadline,
+  then passed both alone and in that rerun. Three isolated Codex CLI 0.166.0
+  resume scenarios, 251 script/publisher/COS/installer tests, 23 Swift format
+  checks and both boundary checks passed. Full Swift regression and end-to-end
+  App reboot/recovery acceptance were not rerun; this release builds macOS only.
+
 ## 3.0.127 — In-session hook refresh and model switch feedback
 
 - Let model and effort shortcuts revalidate live Host state after cached
