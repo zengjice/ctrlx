@@ -7,6 +7,47 @@ import Testing
 
 @MainActor
 struct WorkspaceAgentRecoveryTests {
+    @Test("A transient capture failure retains explicit Resume, without silently launching stale state")
+    func retainedCaptureFailure() async throws {
+        let fixture = Fixture()
+        fixture.snapshot.sessions[0].windows[0].panes[0].unavailableAgentReason = "Identity unavailable at capture"
+        let original = fixture.pane.agent
+        let failure = try #require(try await fixture.run(.automatic).first)
+        #expect(failure.canResume && failure.canUseShell && fixture.launches.isEmpty)
+        #expect(fixture.pane.agent == original)
+        _ = try await fixture.run(.resume(fixture.pane.id))
+        #expect(fixture.launches.count == 1)
+        #expect(fixture.commands.first??.command.args == ["resume", original?.sessionID ?? ""])
+    }
+
+    @Test("Missing saved identity explains manual history recovery instead of promising a live process", arguments: ["Waiting for verified Agent process identity.", "The Agent CLI was updated or removed while this session was running. Restart the Agent and resume this conversation."])
+    func missingDescriptor(reason: String) async throws {
+        let fixture = Fixture()
+        fixture.snapshot.sessions[0].windows[0].panes[0].agent = nil
+        fixture.snapshot.sessions[0].windows[0].panes[0].unavailableAgentReason = reason
+        let failure = try #require(try await fixture.run(.automatic).first)
+        #expect(!failure.canResume && failure.canUseShell && fixture.launches.isEmpty)
+        #expect(failure.reason.hasPrefix("No verified conversation was saved"))
+        #expect(failure.reason.contains("Last capture:"))
+    }
+
+    @Test("Automatic recovery reevaluates old warnings against the selected launch executable")
+    func rechecksCurrentExecutable() async throws {
+        let fixture = Fixture(verified: false)
+        await fixture.core.useCurrentVersionPolicy()
+        var checked: [String] = []
+        let recovery = WorkspaceAgentRecovery(
+            core: { _ in fixture.core }, mode: { .layoutAndAgents }, refresh: { },
+            version: { executable in checked.append(executable)
+                return "current-verified"
+            }, directoryExists: { _ in true }, inspect: { _ in fixture.state },
+            launch: { _, _, record, _ in fixture.launches.append(record) }
+        )
+        _ = try await recovery.recover(fixture.snapshot, result: fixture.result, intent: .automatic, save: { $0 })
+        #expect(checked == ["/replacement/agent"])
+        #expect(fixture.launches.count == 1)
+    }
+
     @Test("Visible split and detached panes resume before hidden tabs; focused pane goes first")
     func visibleLaunchOrder() async throws {
         let fixture = Fixture()
@@ -87,12 +128,27 @@ struct WorkspaceAgentRecoveryTests {
     }
 
     private actor Core: AgentSessionResuming {
+        var currentVersionPolicy = false
+        func useCurrentVersionPolicy() {
+            currentVersionPolicy = true
+        }
+
+        func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String? {
+            if currentVersionPolicy {
+                return currentVersion == "current-verified" ? nil : "Unsupported current version"
+            }
+            if let reason = descriptor.automaticResumeUnavailableReason {
+                return reason
+            }
+            return currentVersion == descriptor.cliVersion ? nil : "The Agent CLI changed or is unavailable. Choose Resume to reopen it explicitly."
+        }
+
         func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation?) throws -> AgentResumeDescriptor {
             throw WorkspaceRecoveryError("Not used")
         }
 
         func commandForResume(_ descriptor: AgentResumeDescriptor) -> AgentForkLaunch {
-            AgentForkLaunch(command: LaunchCommand(command: "/fixture/agent", args: ["resume", descriptor.sessionID]))
+            AgentForkLaunch(command: LaunchCommand(command: currentVersionPolicy ? "/replacement/agent" : "/fixture/agent", args: ["resume", descriptor.sessionID]))
         }
 
         func initialize(_ env: PluginEnv, host: any PluginHost) { }

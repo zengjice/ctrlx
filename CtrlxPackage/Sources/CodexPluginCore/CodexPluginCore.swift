@@ -492,7 +492,15 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     }
 
     /// Verified with scripts/verify-workspace-agent-resume.py (idle/interrupted/approval).
-    private static let verifiedResumeVersion = "codex-cli 0.162.1"
+    private static let verifiedResumeVersions: Set = ["codex-cli 0.162.1", "codex-cli 0.166.0"]
+
+    public func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String? {
+        guard descriptor.executable != nil else { return "The original process invocation was not recorded. Choose Resume to reopen it explicitly." }
+        guard let currentVersion, Self.verifiedResumeVersions.contains(currentVersion) else {
+            return "Automatic resume has not been verified for Codex \(currentVersion ?? "unknown version"). Choose Resume to reopen it explicitly."
+        }
+        return nil
+    }
 
     public func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation? = nil) async throws -> AgentResumeDescriptor {
         guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Codex conversation ID.") }
@@ -517,7 +525,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             executable: invocation?.executable,
             cliVersion: invocation?.version,
             arguments: arguments,
-            automaticResumeUnavailableReason: invocation?.version == Self.verifiedResumeVersion ? nil : (invocation.map { "Automatic resume has not been verified for Codex \($0.version ?? "unknown version")." })
+            automaticResumeUnavailableReason: Self.verifiedResumeVersions.contains(invocation?.version ?? "") ? nil : (invocation.map { "Automatic resume has not been verified for Codex \($0.version ?? "unknown version")." })
                 ?? "The original process invocation was not recorded.",
             providerID: invocation?.providerID
         )
@@ -550,9 +558,11 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         guard try Self.resumeArguments(descriptor.arguments, allowsProviderOverrides: descriptor.providerID != nil) == descriptor.arguments else {
             throw AgentForkError("Invalid Codex recovery options.")
         }
+        @Dependency(AgentResumeExecutableClient.self) var executables
+        let executable = try await executables.resolve(descriptor.executable, settings.commandPath)
         let provider = try await providerConfiguration(
             descriptor.providerID,
-            catalogCommand: descriptor.executable
+            catalogCommand: executable
         )
         var arguments = descriptor.providerID == nil ? descriptor.arguments : Self.removingProviderOverrides(descriptor.arguments)
         if !arguments.contains(Self.bypassHookTrustArgument) {
@@ -560,11 +570,11 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         }
         // A recovered TUI owns its process lifetime; no shared daemon keeps an
         // interrupted launch running after its pane disappears.
-        if descriptor.cliVersion == Self.verifiedResumeVersion, !arguments.contains("--no-daemon") {
+        if !arguments.contains("--no-daemon") {
             arguments.append("--no-daemon")
         }
         return AgentForkLaunch(command: LaunchCommand(
-            command: descriptor.executable ?? settings.commandPath,
+            command: executable,
             args: ["resume", descriptor.sessionID, "-C", descriptor.projectPath] + arguments + provider.arguments + terminalTelemetryArguments(),
             env: provider.environment.merging(["CODEX_HOME": root]) { _, root in root }
         ))

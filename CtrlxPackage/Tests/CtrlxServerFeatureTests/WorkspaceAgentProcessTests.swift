@@ -6,7 +6,7 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct WorkspaceAgentProcessTests {
-    @Test("A running Agent whose executable was removed explains how to restore CLI integration")
+    @Test("Removing the running executable preserves verified startup identity and configuration")
     func removedExecutable() async throws {
         try await withDependencies {
             $0[ProcessRunner.self] = .liveValue
@@ -22,7 +22,7 @@ struct WorkspaceAgentProcessTests {
             try #require(result.isSuccess, "\(result.stderrString)")
             let process = Process()
             process.executableURL = executable
-            process.environment = ["PATH": "/usr/bin"]
+            process.environment = ["PATH": "/usr/bin", "CODEX_HOME": directory.appendingPathComponent("codex").path]
             let exits = AsyncStream<Int32> { continuation in
                 process.terminationHandler = { process in
                     continuation.yield(process.terminationStatus)
@@ -44,8 +44,13 @@ struct WorkspaceAgentProcessTests {
                 let invocation = try await client.invocation(pid, runtime)
                 #expect(invocation.version == "fixture-cli 1")
                 try FileManager.default.removeItem(at: executable)
-                let expected = WorkspaceRecoveryError("The Agent CLI was updated or removed while this session was running. Restart the Agent and resume this conversation.")
-                await #expect(throws: expected) { try await client.invocation(pid, runtime) }
+                let removed = try await client.invocation(pid, runtime)
+                // Kernel argv retains the launch path; proc_pidpath can canonicalize /var.
+                #expect(removed.executable == executable.path)
+                #expect(removed.arguments == invocation.arguments)
+                #expect(removed.configurationRoots == invocation.configurationRoots)
+                #expect(removed.version == nil)
+                await #expect(throws: WorkspaceRecoveryError.self) { try await client.invocation(pid, "replacement-process") }
                 await #expect(throws: AgentModelError.self) { try await client.modelContext(pid, runtime, directory.path, "agent") }
                 #expect(process.isRunning)
             } catch {

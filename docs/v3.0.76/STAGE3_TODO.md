@@ -96,3 +96,45 @@ These tests use real CLIs but synthetic model replies; they do not validate a
 provider account, arbitrary user startup hooks, remote clients or a real system
 reboot. Native startup hooks may still run as documented in the design. The full
 recovery goal remains in progress.
+
+CLI update and capture-retention follow-up (2026-11-01):
+
+- [x] Reevaluate Codex compatibility against the executable selected at resume,
+  including verified `0.166.0`, rather than retaining an old version warning.
+- [x] Retain the last verified descriptor and process-instance provenance across
+  transient capture failures; offer explicit Resume when the latest observation
+  is uncertain. Confirmed conversation/process replacement or Agent exit clears
+  the old association. Legacy snapshots without provenance remain readable.
+- [x] Read startup configuration after the running executable is removed, and
+  resolve the configured CLI at resume if the recorded executable is unavailable.
+  Preserve the conversation ID, configuration root and supported startup options.
+- [x] Explain missing saved conversation mappings as manual history recovery,
+  rather than waiting for a process that has already stopped. Existing snapshots
+  that lost the mapping cannot be repaired by guessing from the directory.
+- `.build-local/diagnostics/workspace-resume-0166-fix-20261101/report.json`:
+  all three native **Codex 0.166.0** scenarios passed (idle, interrupted, approval).
+  Each retained the same history, stayed alive, made zero new model requests
+  during the eight-second observation, and did not execute the old approval.
+  Private configuration roots, tmux sockets and synthetic replies were used;
+  this is not remote-Host or real-reboot acceptance.
+- `.build-local/workspace-resume-fix/tests.log`: **495 tests in 42 suites passed**
+  across the selected recovery, executable-resolution and Codex/Claude test
+  products. Coverage includes persisted provenance, transient read failures,
+  process/conversation replacement, a real running executable removed from disk,
+  legacy version warnings and exact-ID resume using a replacement CLI.
+- `.build-local/workspace-resume-fix/capture-followup-tests.log`: all seven capture
+  tests passed again after checking that a still-verified live process prevents
+  transient missing classification from being treated as an Agent exit.
+- SwiftFormat lint for all 16 changed Swift files, both repository boundary
+  checks and `git diff --check` passed.
+- Mac workspace Debug and iOS Simulator Debug builds passed; logs are
+  `.build-local/workspace-resume-fix/macos-build.log` and
+  `.build-local/workspace-resume-fix/ios-build.log`. These were unsigned compile
+  checks. No App was installed and no user session was used as a fixture.
+- PATH fallback review follow-up: resume command lookup now shares
+  `ProcessRunner.effectivePath`. `.build-local/workspace-resume-fix/path-fallback-tests.log`
+  records **10 passing tests in three suites**, including a removed executable,
+  minimal GUI PATH and nil/empty login-shell results with a replacement found
+  only in Homebrew. The executable checks are injected; this regression does not
+  depend on installed CLIs or modify the user's PATH. Formatting, both boundary
+  checks and diff checks passed; full App builds were not repeated for this follow-up.

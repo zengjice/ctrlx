@@ -97,6 +97,9 @@ extension AppCoordinator {
             snapshot.fileTabs += source.fileTabs.filter { savedPanes.contains($0.paneID) && !livePanes.contains($0.paneID) }
         }
         guard workspaceAgentDiscoveryComplete else { return snapshot }
+        @Dependency(AgentSessionIdentityClient.self) var identities
+        let processNames = pluginRegistry?.processNamesByPlugin ?? [:]
+        let detected = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: processNames)
         var capturedPanes: [UUID: WorkspaceRecoveryPane] = [:]
         for sessionIndex in snapshot.sessions.indices {
             for windowIndex in snapshot.sessions[sessionIndex].windows.indices {
@@ -114,50 +117,53 @@ extension AppCoordinator {
                         continue
                     }
                     guard let state = windowManager.paneStates[pane.runtimeID] else { continue }
+                    guard state.workspaceIdentity?.paneID == pane.id else {
+                        if pane.agent != nil || state.agentSession != nil {
+                            WorkspaceAgentCapture.recordFailure("The persistent terminal identity could not be verified at the last capture.", in: &pane)
+                        }
+                        continue
+                    }
+                    let scannedPlugin = pane.agent.map { processNames[$0.pluginID] != nil } ?? true
+                    if WorkspaceAgentCapture.invalidateChangedAgent(&pane, state: state, detected: detected?[pane.runtimeID], scanAvailable: detected != nil && scannedPlugin, runtimeID: identities.runtimeID) {
+                        recoveryAgentDescriptors.removeValue(forKey: pane.id)
+                    }
                     if let identity = AgentForkSource(pane: state), let core = pluginRegistry?.core(identity.pluginID) as? any AgentSessionResuming {
-                        @Dependency(AgentSessionIdentityClient.self) var identities
                         guard
                             let proof = await identities.load(pane.runtimeID), proof.source == identity,
                             identities.runtimeID(proof.processID) == proof.runtimeID else {
-                            pane.agent = nil
-                            pane.unavailableAgentReason = "Waiting for verified Agent process identity."
+                            WorkspaceAgentCapture.recordFailure("The Agent process identity could not be verified at the last capture.", in: &pane)
                             continue
                         }
                         do {
+                            guard
+                                windowManager.paneStates[pane.runtimeID].flatMap(AgentForkSource.init(pane:)) == identity,
+                                let detected = detected?[identity.paneID],
+                                proof.matches(pane: state, detected: detected, runtimeID: identities.runtimeID(proof.processID)) else {
+                                throw WorkspaceRecoveryError("The Agent process ownership could not be verified at the last capture.")
+                            }
                             if let cached = recoveryAgentDescriptors[pane.id], cached.source == identity, cached.runtimeID == proof.runtimeID {
-                                pane.agent = cached.descriptor
-                                pane.unavailableAgentReason = nil
+                                WorkspaceAgentCapture.record(cached.descriptor, identity: proof, in: &pane)
                             } else {
                                 @Dependency(WorkspaceAgentProcessClient.self) var processes
-                                guard
-                                    let names = pluginRegistry?.processNamesByPlugin[identity.pluginID],
-                                    let detected = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: [identity.pluginID: names], refreshSnapshot: true)?[identity.paneID],
-                                    proof.matches(pane: state, detected: detected, runtimeID: identities.runtimeID(proof.processID)) else {
-                                    throw WorkspaceRecoveryError("The Agent process no longer belongs to this pane.")
-                                }
                                 let invocation = try await processes.invocation(proof.processID, proof.runtimeID)
                                 let descriptor = try await core.recoveryDescriptor(sessionID: identity.sessionID, projectPath: identity.workingDirectory, invocation: invocation)
-                                guard windowManager.paneStates[pane.runtimeID].flatMap(AgentForkSource.init(pane:)) == identity else { continue }
+                                guard
+                                    windowManager.paneStates[pane.runtimeID].flatMap(AgentForkSource.init(pane:)) == identity,
+                                    identities.runtimeID(proof.processID) == proof.runtimeID else { continue }
                                 recoveryAgentDescriptors[pane.id] = (identity, proof.runtimeID, descriptor)
-                                pane.agent = descriptor
-                                pane.unavailableAgentReason = nil
+                                WorkspaceAgentCapture.record(descriptor, identity: proof, in: &pane)
                             }
                         } catch is CancellationError {
                             throw CancellationError()
                         } catch {
                             // Native history can appear after SessionStart. A failed
                             // read must be retried by the next checkpoint.
-                            recoveryAgentDescriptors.removeValue(forKey: pane.id)
-                            pane.agent = nil
-                            pane.unavailableAgentReason = error.localizedDescription
+                            WorkspaceAgentCapture.recordFailure(error.localizedDescription, in: &pane)
                         }
                     } else if state.agentSession != nil {
-                        pane.agent = nil
-                        pane.unavailableAgentReason = "The Agent conversation or recovery capability could not be verified."
-                    } else {
-                        pane.agent = nil
-                        pane.unavailableAgentReason = nil
-                        recoveryAgentDescriptors.removeValue(forKey: pane.id)
+                        WorkspaceAgentCapture.recordFailure("The Agent conversation or recovery capability could not be verified at the last capture.", in: &pane)
+                    } else if pane.agent != nil || detected?[pane.runtimeID] != nil {
+                        WorkspaceAgentCapture.recordFailure("Agent discovery was incomplete at the last capture.", in: &pane)
                     }
                 }
             }

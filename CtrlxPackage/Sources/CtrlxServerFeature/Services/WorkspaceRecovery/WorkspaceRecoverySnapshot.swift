@@ -175,6 +175,8 @@ struct WorkspaceRecoveryPane: Codable, Equatable, Sendable {
     var runtimeID: String
     var directory: String
     var agent: AgentResumeDescriptor?
+    /// Provenance of the last verified descriptor; absent in older snapshots.
+    var agentIdentity: AgentSessionIdentity?
     /// A recognized Agent whose conversation could not be verified must never silently
     /// become an auto-launched new conversation at the same directory.
     var unavailableAgentReason: String?

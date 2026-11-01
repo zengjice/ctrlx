@@ -346,6 +346,8 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
             throw AgentForkError("The recorded default Claude configuration directory has changed.")
         }
         guard try Self.resumeArguments(descriptor.arguments) == descriptor.arguments else { throw AgentForkError("Invalid Claude Code recovery options.") }
+        @Dependency(AgentResumeExecutableClient.self) var executables
+        let executable = try await executables.resolve(descriptor.executable, settings.commandPath)
         let provider = try await providerConfiguration(descriptor.providerID)
         var environment = provider.environment
         if !descriptor.usesDefaultConfiguration {
@@ -353,7 +355,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         }
         return AgentForkLaunch(
             command: LaunchCommand(
-                command: descriptor.executable ?? settings.commandPath,
+                command: executable,
                 args: ["--resume", descriptor.sessionID] + descriptor.arguments,
                 env: environment
             ),

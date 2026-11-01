@@ -44,14 +44,14 @@ private actor WorkspaceAgentProcessReader {
     }
 
     func invocation(processID: String, runtimeID: String) async throws -> AgentResumeInvocation {
-        let startup = try readStartup(processID: processID, runtimeID: runtimeID, allowsRemovedExecutable: false)
+        let startup = try readStartup(processID: processID, runtimeID: runtimeID)
         let cliVersion = await version(startup.executable)
         try verifyProcess(processID, runtimeID)
         return invocation(startup, version: cliVersion)
     }
 
     func modelContext(processID: String, runtimeID: String, directory: String, discoveryCommand: String?) async throws -> AgentModelContext {
-        let startup = try readStartup(processID: processID, runtimeID: runtimeID, allowsRemovedExecutable: true)
+        let startup = try readStartup(processID: processID, runtimeID: runtimeID)
         let executable = try discoveryExecutable(startup, directory: directory, command: discoveryCommand)
         let cliVersion = await version(executable)
         try Task.checkCancellation()
@@ -74,15 +74,12 @@ private actor WorkspaceAgentProcessReader {
         }
     }
 
-    private func readStartup(processID: String, runtimeID: String, allowsRemovedExecutable: Bool) throws -> Startup {
+    private func readStartup(processID: String, runtimeID: String) throws -> Startup {
         try verifyProcess(processID, runtimeID)
         guard let pid = Int32(processID) else { throw WorkspaceRecoveryError("Invalid Agent process identity.") }
         var path = [UInt8](repeating: 0, count: 4_096)
         let count = proc_pidpath(pid, &path, UInt32(path.count))
         let removed = count <= 0 && errno == ENOENT
-        if removed && !allowsRemovedExecutable {
-            throw WorkspaceRecoveryError("The Agent CLI was updated or removed while this session was running. Restart the Agent and resume this conversation.")
-        }
         guard count > 0 || removed else { throw WorkspaceRecoveryError("The Agent executable could not be identified.") }
         var mib = [CTL_KERN, KERN_PROCARGS2, pid]
         var length = 0

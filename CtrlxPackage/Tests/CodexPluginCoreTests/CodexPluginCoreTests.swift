@@ -10,15 +10,15 @@ import Testing
 /// Lifecycle + auto-launch behavior of the core itself (the pieces not covered
 /// by the translator / keystroke / scanner / installer / correlation suites).
 struct CodexPluginCoreTests {
-    @Test("Verified Codex recovery binds automatic support to the recorded CLI version and disables shared daemon")
-    func nativeResumeVerifiedVersion() async throws {
+    @Test("Verified Codex recovery disables the shared daemon", arguments: ["codex-cli 0.162.1", "codex-cli 0.166.0"])
+    func nativeResumeVerifiedVersion(version: String) async throws {
         try await withDependencies {
             $0[AgentForkHistoryClient.self].root = { _, roots, _ in try #require(roots.first) }
         } operation: {
             let core = makeCore()
-            let descriptor = try await core.recoveryDescriptor(sessionID: UUID().uuidString, projectPath: "/project", invocation: .init(executable: "/tools/codex", arguments: [], version: "codex-cli 0.162.1"))
+            let descriptor = try await core.recoveryDescriptor(sessionID: UUID().uuidString, projectPath: "/project", invocation: .init(executable: "/tools/codex", arguments: [], version: version))
             #expect(descriptor.automaticResumeUnavailableReason == nil)
-            #expect(descriptor.cliVersion == "codex-cli 0.162.1")
+            #expect(descriptor.cliVersion == version)
             #expect(try await core.commandForResume(descriptor).command.args.last == "--no-daemon")
         }
     }
@@ -42,7 +42,7 @@ struct CodexPluginCoreTests {
             #expect(!encoded.contains("secret") && !encoded.contains("old-id") && !encoded.contains("otel"))
             let launch = try await core.commandForResume(descriptor)
             #expect(launch.command.command == "/tools/codex")
-            #expect(launch.command.args == ["resume", id, "-C", "/project"] + descriptor.arguments + (includesHookBypass ? [] : ["--dangerously-bypass-hook-trust"]))
+            #expect(launch.command.args == ["resume", id, "-C", "/project"] + descriptor.arguments + (includesHookBypass ? [] : ["--dangerously-bypass-hook-trust"]) + ["--no-daemon"])
             #expect(launch.command.args.filter { $0 == "--dangerously-bypass-hook-trust" }.count == 1)
             await #expect(throws: AgentResumeConfigurationError.self) {
                 try await core.recoveryDescriptor(sessionID: id, projectPath: "/project", invocation: .init(executable: "/tools/codex", arguments: ["--remote", "unix:///private/agent.sock"], configurationRoots: ["CODEX_HOME": "/original/account"]))
@@ -70,7 +70,7 @@ struct CodexPluginCoreTests {
                 }
             } operation: { try await core.commandForResume(descriptor) }
             #expect(resumed.command.command == "/tools/codex")
-            #expect(resumed.command.args == ["resume", id, "-C", "/Host/project", "--dangerously-bypass-hook-trust"])
+            #expect(resumed.command.args == ["resume", id, "-C", "/Host/project", "--dangerously-bypass-hook-trust", "--no-daemon"])
             #expect(resumed.command.env == ["CODEX_HOME": "/Host/original codex"])
             await #expect(throws: AgentForkError.self) {
                 try await withDependencies {

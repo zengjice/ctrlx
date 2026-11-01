@@ -4,6 +4,19 @@ import Foundation
 public protocol AgentSessionResuming: PluginCore {
     func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation?) async throws -> AgentResumeDescriptor
     func commandForResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch
+    func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String?
+}
+
+public extension AgentSessionResuming {
+    func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String? {
+        if let reason = descriptor.automaticResumeUnavailableReason {
+            return reason
+        }
+        guard let recorded = descriptor.cliVersion, currentVersion == recorded else {
+            return "The Agent CLI changed or is unavailable. Choose Resume to reopen it explicitly."
+        }
+        return nil
+    }
 }
 
 /// Transient process evidence. Raw argv may contain a prompt; never persist this value.
@@ -39,6 +52,7 @@ public struct AgentResumeDescriptor: Codable, Equatable, Sendable {
     public let executable: String?
     public let cliVersion: String?
     public let arguments: [String]
+    /// Capture-time hint. Native plugins may reevaluate compatibility at resume.
     public let automaticResumeUnavailableReason: String?
     /// Non-sensitive Provider identity recorded by the launch environment.
     public let providerID: String?

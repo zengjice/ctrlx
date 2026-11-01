@@ -131,24 +131,24 @@ final class WorkspaceAgentRecovery {
                 if isShell {
                     throw WorkspaceRecoveryError("The original terminal is saved. Choose Retry to reopen it.")
                 }
-                guard let descriptor = pane.agent else { throw WorkspaceRecoveryError(pane.unavailableAgentReason ?? "The original Agent conversation could not be verified.") }
+                guard let descriptor = pane.agent else {
+                    throw WorkspaceRecoveryError("No verified conversation was saved before this terminal stopped. Use Shell, then select the original conversation from the Agent's history.\n\nLast capture: \(pane.unavailableAgentReason ?? "The conversation could not be identified.")")
+                }
                 guard let agent = core(descriptor.pluginID) else { throw WorkspaceRecoveryError("The Agent plugin is disabled or unavailable. Enable it before resuming.") }
                 let manual = intent == .resume(pane.id)
                 guard manual || (intent == .automatic && mode() == .layoutAndAgents) else {
                     throw WorkspaceRecoveryError("Conversation is saved. Choose Resume to reopen it.")
                 }
                 if !manual {
-                    if let reason = descriptor.automaticResumeUnavailableReason {
-                        throw WorkspaceRecoveryError(reason)
-                    }
-                    guard
-                        let executable = descriptor.executable, let recordedVersion = descriptor.cliVersion,
-                        await version(executable) == recordedVersion else {
-                        throw WorkspaceRecoveryError("The Agent CLI changed or is unavailable. Choose Resume to reopen it explicitly.")
+                    if let reason = pane.unavailableAgentReason {
+                        throw WorkspaceRecoveryError("The last verified conversation is saved, but its latest state could not be confirmed. Choose Resume to reopen it explicitly.\n\nLast capture: \(reason)")
                     }
                     guard !matchingLaunch else { throw WorkspaceRecoveryError("The previous resume ended. Choose Resume to retry it explicitly.") }
                 }
                 let command = try await agent.commandForResume(descriptor)
+                if !manual, let reason = await agent.automaticResumeUnavailableReason(descriptor, currentVersion: version(command.command.command)) {
+                    throw WorkspaceRecoveryError(reason)
+                }
                 let next = WorkspaceRecoveryAgentLaunch(serverID: serverID, runtimePaneID: live.runtimeID, kind: .resume)
                 snapshot.recovery?.agentLaunches[pane.id] = next
                 snapshot = try await save(snapshot)
@@ -206,6 +206,7 @@ final class WorkspaceAgentRecovery {
             for window in snapshot.sessions[session].windows.indices {
                 for pane in snapshot.sessions[session].windows[window].panes.indices where snapshot.sessions[session].windows[window].panes[pane].id == id {
                     snapshot.sessions[session].windows[window].panes[pane].agent = nil
+                    snapshot.sessions[session].windows[window].panes[pane].agentIdentity = nil
                     snapshot.sessions[session].windows[window].panes[pane].unavailableAgentReason = nil
                 }
             }
